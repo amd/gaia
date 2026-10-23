@@ -975,22 +975,41 @@ export interface SetupCheck {
     cloud_steps?: SetupStep[];
 }
 
+/** A failed setup with a known fix: the user's Lemonade Server isn't answering. */
+export interface SetupProblem {
+    kind: 'server_unreachable';
+    /** One plain sentence: what is wrong. */
+    message: string;
+    /** How to start that server, or null when this PC has none to start. */
+    start: string | null;
+    /** Setup can switch to GAIA's own server instead. */
+    use_gaia: boolean;
+    /** Set when it can't switch from here (LEMONADE_BASE_URL), and what does. */
+    switch_hint: string | null;
+}
+
 export interface SetupRunStatus {
     state: 'idle' | 'running' | 'verifying' | 'ready' | 'failed' | 'cancelled';
     steps?: SetupStep[];
     text?: string;
     percent?: number | null;
+    /** How much of the current download is done, e.g. "1.20 GB of 5.60 GB". */
+    size?: string | null;
     error?: string | null;
+    problem?: SetupProblem | null;
     command?: string;
     log_tail?: string[];
     skip_chat_model?: boolean;
+    /** The run is switching to GAIA's own server; a retry must keep switching. */
+    gaia_lemonade?: boolean;
     /** The chat model setup chose, once it has said. */
     chat_model?: string | null;
 }
 
 /** GET /api/setup/plan: what setup will use and download, before it starts. */
 export interface SetupPlan {
-    lemonade: { mode: 'gaia' | 'external'; url: string; reachable: boolean };
+    /** `url` is null while GAIA's own server isn't running: it has no address yet. */
+    lemonade: { mode: 'gaia' | 'external'; url: string | null; reachable: boolean };
     chat_model: { id: string; user_set: boolean; size_gb: number | null; downloaded: boolean | null };
     recommended_model: string | null;
     /** GAIA's own server isn't running yet, so the final pick comes once it is. */
