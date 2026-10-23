@@ -246,6 +246,43 @@ def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, 
     return view
 
 
+def check_gateway_reachable(base_url: Optional[str] = None) -> None:
+    """Raise ``GatewayUnreachable`` unless the AMD gateway's host answers."""
+    from gaia.llm.gateway import check_reachable
+
+    check_reachable(base_url)
+
+
+def _gateway_check_applies() -> bool:
+    """A dial from this PC only says something when Lemonade, which sends the
+    gateway's requests, runs here and no proxy carries this PC's traffic."""
+    import urllib.request
+
+    try:
+        local = _is_local_url(_base_url())
+    except ProviderError as e:
+        # An unreadable Lemonade address is reported by the provider list itself.
+        logger.info("Not checking the AMD gateway's network: %s", e)
+        return False
+    return local and not urllib.request.getproxies()
+
+
+def _with_network(view: Dict[str, Any]) -> Dict[str, Any]:
+    """Say whether the AMD gateway can be reached, before anyone picks it."""
+    from gaia.llm.gateway import GatewayUnreachable
+
+    if not _gateway_check_applies():
+        view["network"] = {"reachable": None, "detail": None}
+        return view
+    try:
+        check_gateway_reachable(view.get("base_url"))
+    except (GatewayUnreachable, ValueError) as e:
+        view["network"] = {"reachable": False, "detail": str(e)}
+    else:
+        view["network"] = {"reachable": True, "detail": None}
+    return view
+
+
 def _is_chat_model(model: Dict[str, Any]) -> bool:
     labels = {str(label).lower() for label in model.get("labels") or []}
     # ``chat`` wins: FLM omni models are labeled both ``chat`` and ``audio``.
@@ -612,6 +649,7 @@ def list_providers(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
         providers += [
             _provider_view(p, None) for p in (FIREWORKS, AMD) if p not in listed
         ]
+    providers = [_with_network(v) if v["id"] == AMD else v for v in providers]
     return {
         "providers": providers,
         "active": _active_view(db),
@@ -674,6 +712,18 @@ def connect_provider(
             status_code=403,
             detail="Enter provider keys on the PC running GAIA, not over mobile access.",
         )
+    if provider == AMD and _gateway_check_applies():
+        from gaia.llm.gateway import GatewayUnreachable
+
+        try:
+            check_gateway_reachable(_registration(provider, body)["base_url"])
+        except GatewayUnreachable as e:
+            raise HTTPException(
+                status_code=503,
+                detail=f"{e}. Connect to it, then try again.",
+            ) from e
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
     if _uses_users_server():
         return _connect_on_users_server(provider)
     try:

@@ -1069,6 +1069,15 @@ export interface ProviderInfo {
     env_var?: string;
     base_url?: string | null;
     error?: string;
+    /** AMD gateway only: whether its host answers from this network. */
+    network?: ProviderNetwork;
+}
+
+export interface ProviderNetwork {
+    /** Null when this PC can't tell: Lemonade runs elsewhere, or a proxy carries the traffic. */
+    reachable: boolean | null;
+    /** Why it can't be reached; null when it can. */
+    detail: string | null;
 }
 
 export interface ActiveModel {

@@ -22,11 +22,13 @@ secret could occupy.
 
 import json
 import os
+import socket
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import requests
 
@@ -116,6 +118,37 @@ _DISCOVERY_TIMEOUT = 60
 # Bounds the wait on a mistyped host: a DNS failure to a non-existent domain
 # can otherwise take ~30s, which reads as a hang rather than an answer.
 _PROBE_TIMEOUT = 12
+
+
+# One reachability check: long enough for a slow link, short enough that an
+# offline network answers before the user gives up on the list.
+REACH_TIMEOUT = 4.0
+
+
+class GatewayUnreachable(Exception):
+    """The gateway's host does not resolve or does not answer. No key was sent."""
+
+    def __init__(self, host: str, reason: str):
+        self.host = host
+        self.reason = reason
+        super().__init__(
+            f"No network available — can't reach {host} (needs AMD's network or VPN)"
+        )
+
+
+def check_reachable(base_url: Optional[str] = None) -> None:
+    """Raise :class:`GatewayUnreachable` unless ``base_url``'s host answers.
+
+    ``None`` checks :data:`DEFAULT_GATEWAY_BASE_URL`.
+    """
+    url = urlparse(base_url or DEFAULT_GATEWAY_BASE_URL)
+    if not url.hostname:
+        raise ValueError(f"gateway URL {base_url!r} has no host to check")
+    port = url.port or (80 if url.scheme == "http" else 443)
+    try:
+        socket.create_connection((url.hostname, port), timeout=REACH_TIMEOUT).close()
+    except OSError as e:
+        raise GatewayUnreachable(url.hostname, str(e)) from e
 
 
 class GatewayError(Exception):
