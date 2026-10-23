@@ -226,7 +226,7 @@ class CanonicalTranslator:
         etype = event.get("type")
 
         # tool_args merges into the buffered tool_call; every other event first
-        # flushes any pending tool_call (an argument-less tool), then maps.
+        # flushes any pending tool_call (its producer sent no tool_args), then maps.
         if etype == "tool_args":
             return self._on_tool_args(event)
 
@@ -289,7 +289,7 @@ class CanonicalTranslator:
         }
 
     def _on_tool_start(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
-        # Flush a previous, arg-less pending tool_call before buffering this one.
+        # Flush a previous pending tool_call that never got its tool_args.
         out = self._flush_pending()
         self._pending_tool = {"tool": event.get("tool") or "unknown", "args": {}}
         return out
