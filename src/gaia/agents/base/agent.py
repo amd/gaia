@@ -681,6 +681,8 @@ TOOLS_REQUIRING_CONFIRMATION = {
     # tool name, not host, and a platform-conditional entry would silently stop
     # applying the day a non-Windows backend (plyer) becomes reachable.
     "notify_desktop",
+    # Erases all memory and past conversations; nothing brings them back.
+    "forget_everything",
 }
 
 #: Put on a call the user declined, so the model stops instead of rerouting.

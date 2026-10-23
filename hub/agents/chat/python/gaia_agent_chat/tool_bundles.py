@@ -39,6 +39,7 @@ DOC_CORE_TOOLS = frozenset(
         "recall",
         "update_memory",
         "forget",
+        "forget_everything",
         "search_past_conversations",
         # file-read + RAG-query entry points — the doc profile's reason to exist
         "read_file",
@@ -175,6 +176,7 @@ DOC_BUNDLES = [
                 "recall",
                 "update_memory",
                 "forget",
+                "forget_everything",
                 "search_past_conversations",
             }
         ),
@@ -217,6 +219,7 @@ FULL_CORE_TOOLS = frozenset(
         "recall",
         "update_memory",
         "forget",
+        "forget_everything",
         "search_past_conversations",
         # universal entry points
         "read_file",
@@ -499,6 +502,7 @@ FULL_BUNDLES = [
                 "recall",
                 "update_memory",
                 "forget",
+                "forget_everything",
                 "search_past_conversations",
             }
         ),
@@ -599,6 +603,7 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "recall",
         "update_memory",
         "forget",
+        "forget_everything",
         "search_past_conversations",
         "index_codebase",
         "search_code_index",
