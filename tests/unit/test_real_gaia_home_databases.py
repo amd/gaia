@@ -67,6 +67,17 @@ def test_opening_one_by_uri_fails_the_test():
     probe = REAL_GAIA_HOME / f"missing-{uuid.uuid4().hex}" / "probe.db"
     with pytest.raises(pytest.fail.Exception, match="real home"):
         sqlite3.connect(f"{probe.as_uri()}?mode=ro", uri=True)
+    with pytest.raises(pytest.fail.Exception, match="real home"):
+        sqlite3.connect(
+            f"{probe.as_uri()}?mode=ro",
+            5.0,
+            0,
+            None,
+            True,
+            sqlite3.Connection,
+            128,
+            True,
+        )
 
 
 def test_in_memory_and_tmp_databases_still_open(tmp_path):

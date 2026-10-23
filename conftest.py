@@ -392,7 +392,9 @@ def _guard_connect(real_connect):
 
     @functools.wraps(real_connect)
     def guarded(database, *args, **kwargs):
-        target = _sqlite_target(database, bool(kwargs.get("uri")))
+        # uri is sqlite3.connect's eighth positional parameter.
+        uri = kwargs["uri"] if "uri" in kwargs else len(args) > 6 and args[6]
+        target = _sqlite_target(database, bool(uri))
         if target is not None and _is_real_gaia_home(target):
             pytest.fail(
                 _REAL_HOME_MESSAGE.format(
