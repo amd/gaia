@@ -733,9 +733,10 @@ PROMPT_ONLY_ARGS = frozenset({RISK_NOTE_ARG, SCRATCH_ARG})
 def _model_call_args(event: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
     """The gated call's arguments as the model sent them.
 
-    ``call_args`` is set when the agent noted them; a prompt GAIA raises on its
-    own (a path-access question) has none, and its ``args`` lose only the
-    prompt-only keys.
+    ``call_args`` is set when the prompt adds to the noted call. Without it,
+    ``args`` lose only the prompt-only keys: the one path that adds a folder
+    (``Agent._execute_tool``) always notes the call, so any other folder is
+    the model's own, or part of a prompt GAIA raised itself (path access).
     """
     call_args = event.get("call_args")
     if isinstance(call_args, dict):
