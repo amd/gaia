@@ -297,8 +297,8 @@ def test_a_current_agent_is_told_the_mode(monkeypatch):
 # ── what the turn made ─────────────────────────────────────────────────────
 
 
-def _relayed_outputs(tool, args, result):
-    """The Outputs a relayed tool call adds, from the sidecar's own events."""
+def _relayed_summary(tool, args, result):
+    """The turn summary a relayed tool call yields, from the sidecar's own events."""
     sidecar = SSEOutputHandler()
     sidecar.print_tool_usage(tool)
     sidecar.pretty_print_json(args, "Arguments")
@@ -317,7 +317,12 @@ def _relayed_outputs(tool, args, result):
             ledger.tool_args(event["args"])
         elif event["type"] == "tool_result":
             ledger.tool_result(event["data"], event["success"])
-    return ledger.summary(location=None)["outputs"]
+    return ledger.summary(location=None)
+
+
+def _relayed_outputs(tool, args, result):
+    """The Outputs a relayed tool call adds."""
+    return _relayed_summary(tool, args, result)["outputs"]
 
 
 _FACT = "my locker combination hint is heron-plum-604"
@@ -342,6 +347,16 @@ def test_a_memory_the_relayed_turn_saved_is_listed():
         {"status": "stored", "stored": 1, "knowledge_id": "k1", "message": "ok"},
     )
     assert [(o["kind"], o["name"]) for o in outputs] == [("memory", _FACT)]
+
+
+def test_a_relayed_call_the_user_denied_contacted_nothing():
+    summary = _relayed_summary(
+        "fetch_page",
+        {"url": "https://example.com/page"},
+        {"status": "denied", "message": "The user declined this action."},
+    )
+    assert summary["sites"] == []
+    assert summary["live_data"] == {"attempted": 0, "failed": 0}
 
 
 # ── automatic memory writes ────────────────────────────────────────────────
