@@ -192,7 +192,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: test_map.json
-          key: unit-test-map-${{ github.sha }}
+          key: unit-test-map-${{ github.sha }}-${{ github.run_id }}
           restore-keys: unit-test-map-
 
       - name: Pick the test files this change can reach
@@ -351,7 +351,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: test_map.json
-          key: unit-test-map-${{ github.sha }}
+          key: unit-test-map-${{ github.sha }}-${{ github.run_id }}
 
       - name: Run CLI tool-confirmation integration tests
         env:

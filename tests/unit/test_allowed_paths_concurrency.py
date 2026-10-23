@@ -52,11 +52,17 @@ def test_concurrent_grants_from_several_processes_all_persist(tmp_path):
                     stderr=subprocess.STDOUT,
                 )
             )
-    for proc, log in zip(procs, logs):
-        proc.wait(timeout=120)
-        output = log.read_text("utf-8", errors="replace")
-        assert proc.returncode == 0, output
-        assert "Failed to save allowed path" not in output, output
+    try:
+        for proc, log in zip(procs, logs):
+            proc.wait(timeout=120)
+            output = log.read_text("utf-8", errors="replace")
+            assert proc.returncode == 0, output
+            assert "Failed to save allowed path" not in output, output
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=30)
 
     saved = json.loads((home / "cache" / "allowed_paths.json").read_text("utf-8"))
     expected = {

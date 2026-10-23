@@ -749,9 +749,15 @@ class PathValidator:
                 self.config_file,
             )
             return
+        from gaia.utils.file_lock import file_lock
+
         if self.config_file.exists():
             try:
-                with open(self.config_file, "r", encoding="utf-8") as f:
+                # Windows refuses an open while another process swaps the file in.
+                with (
+                    file_lock(self.config_file),
+                    open(self.config_file, "r", encoding="utf-8") as f,
+                ):
                     data = json.load(f)
                     for p in data.get("paths", []):
                         try:
