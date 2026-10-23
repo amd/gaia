@@ -24,6 +24,7 @@ from gaia.agents.tools.path_access import missing_file_error, read_access_error
 from gaia.agents.tools.protected_folders import ProtectedFolders
 from gaia.agents.tools.search_scope import (
     confine_roots,
+    hidden_granted_roots,
     in_env_scope,
     root_depth,
     search_roots,
@@ -894,6 +895,12 @@ class FileSystemToolsMixin:
                 # Determine search roots based on scope
                 search_roots = [
                     str(r) for r in confine_roots(self, _get_search_roots(scope))
+                ]
+                search_roots += [
+                    str(r)
+                    for r in hidden_granted_roots(
+                        self, search_roots, mixin._get_default_excludes()
+                    )
                 ]
                 guard = ProtectedFolders(
                     self,
