@@ -369,6 +369,30 @@ export async function connectProvider(
     return apiFetch('POST', `/providers/${encodeURIComponent(provider)}/connect`, body);
 }
 
+/** How often a connect held up by an OS credential prompt asks again. */
+export const CONNECT_RETRY_MS = 2000;
+
+/**
+ * Connect, waiting out an OS credential-store prompt: a 409 means the OS is
+ * still asking the user, so say so and ask again until they answer.
+ */
+export async function connectProviderWaitingForOs(
+    provider: string,
+    body: ConnectProviderBody,
+    onWaiting: (message: string) => void,
+    stopped: () => boolean = () => false,
+): Promise<ProviderInfo & { remembered: boolean; remember_error: string | null }> {
+    for (;;) {
+        try {
+            return await connectProvider(provider, body);
+        } catch (err) {
+            if (!(err instanceof ApiError) || err.httpStatus !== 409 || stopped()) throw err;
+            onWaiting(err.detail);
+            await new Promise((resolve) => setTimeout(resolve, CONNECT_RETRY_MS));
+        }
+    }
+}
+
 export async function forgetProviderKey(provider: string): Promise<{ removed: boolean }> {
     return apiFetch('DELETE', `/providers/${encodeURIComponent(provider)}/key`);
 }

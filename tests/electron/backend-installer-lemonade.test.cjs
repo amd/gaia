@@ -7,6 +7,9 @@
 const { PassThrough } = require("stream");
 const {
   lemonadeInitArgs,
+  STAGES,
+  GAIA_INIT_MESSAGE,
+  WAITING_FOR_LEMONADE_CHOICE_MESSAGE,
 } = require("../../src/gaia/apps/webui/services/backend-installer.cjs");
 const {
   chooseLemonadeOnTerminal,
@@ -111,6 +114,44 @@ describe("lemonadeInitArgs", () => {
     });
     expect(await lemonadeInitArgs(BIN, jest.fn(), run)).toEqual([]);
     expect(logged()).toMatch(/gaia lemonade detect --json printed no JSON/);
+  });
+
+  test("the progress window says it is waiting on the user while the question is open", async () => {
+    const run = fakeRun({ [STATUS.join(" ")]: UNCHOSEN, [DETECT.join(" ")]: FOUND });
+    const report = jest.fn();
+    const choose = jest.fn(async () => {
+      expect(report).toHaveBeenCalledTimes(1);
+      return "external";
+    });
+
+    await lemonadeInitArgs(BIN, choose, run, report);
+
+    expect(report.mock.calls).toEqual([
+      [STAGES.GAIA_INIT, 0, WAITING_FOR_LEMONADE_CHOICE_MESSAGE],
+      [STAGES.GAIA_INIT, 0, GAIA_INIT_MESSAGE],
+    ]);
+    expect(WAITING_FOR_LEMONADE_CHOICE_MESSAGE).toMatch(/^Waiting for your answer/);
+  });
+
+  test("the waiting text is cleared even when asking fails", async () => {
+    const run = fakeRun({ [STATUS.join(" ")]: UNCHOSEN, [DETECT.join(" ")]: FOUND });
+    const report = jest.fn();
+    const choose = jest.fn(async () => {
+      throw new Error("window closed");
+    });
+
+    expect(await lemonadeInitArgs(BIN, choose, run, report)).toEqual([]);
+
+    expect(report).toHaveBeenLastCalledWith(STAGES.GAIA_INIT, 0, GAIA_INIT_MESSAGE);
+  });
+
+  test("nothing to ask: the progress text is left alone", async () => {
+    const run = fakeRun({ [STATUS.join(" ")]: UNCHOSEN, [DETECT.join(" ")]: null });
+    const report = jest.fn();
+
+    await lemonadeInitArgs(BIN, jest.fn(), run, report);
+
+    expect(report).not.toHaveBeenCalled();
   });
 
   test("JSON on the last line wins over earlier log lines", async () => {

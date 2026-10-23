@@ -21,8 +21,17 @@ import pytest
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.file_tools import FileSearchToolsMixin
 from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
+from gaia.agents.tools.protected_folders import ProtectedFolders
 
-_GUARDED = ("Desktop", "Documents", "Downloads", "Library/Mobile Documents")
+_GUARDED = (
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Library/Mobile Documents",
+    "Movies/TV",
+    "Music",
+    "Pictures/Photos Library.photoslibrary",
+)
 
 
 class _Sandbox:
@@ -151,8 +160,10 @@ class TestFindFilesOnMacOS:
 
         assert out.splitlines()[-1] == (
             "Skipped ~/Desktop, ~/Documents, ~/Downloads, "
-            "~/Library/Mobile Documents: macOS asks for permission before GAIA "
-            "can read them; ask the user to name the folder to search it."
+            "~/Library/Mobile Documents, ~/Movies/TV, ~/Music, "
+            "~/Pictures/Photos Library.photoslibrary: macOS asks for permission "
+            "before GAIA can read them; ask the user to name the folder to "
+            "search it."
         ), out
 
     def test_a_miss_still_carries_the_note(self, home, on_macos):
@@ -236,3 +247,28 @@ class TestSearchDirectoryOnMacOS:
         # The project is reached from both roots; what matters is Documents is not.
         assert set(result["directories"]) == {str(home / "code" / "proj" / "reports")}
         assert "skipped_folders" in result, result
+
+
+class TestAnAliasOfAGuardedFolder:
+    """A walk of / reaches ~/Music as /System/Volumes/Data/Users/<u>/Music."""
+
+    def test_is_skipped_under_its_other_path(self, home, on_macos, tmp_path):
+        alias = tmp_path / "Data"
+        alias.symlink_to(home.parent)
+        guard = ProtectedFolders(_FakeHost(home))
+
+        assert guard.blocks(alias / home.name / "Music")
+        assert guard.skipped == [home / "Music"]
+
+    def test_a_different_folder_with_the_same_name_is_walked(
+        self, home, on_macos, tmp_path
+    ):
+        other = tmp_path / "elsewhere" / "Music"
+        other.mkdir(parents=True)
+
+        assert not ProtectedFolders(_FakeHost(home)).blocks(other)
+
+
+class _FakeHost:
+    def __init__(self, *allowed):
+        self._path_validator = _Sandbox(*allowed)
