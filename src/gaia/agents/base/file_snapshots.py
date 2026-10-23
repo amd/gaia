@@ -35,7 +35,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 MANIFEST = "manifest.json"
 MANIFEST_VERSION = 1
@@ -577,11 +577,13 @@ def _raise_conflicts(checks: List[tuple], since: str) -> None:
     )
 
 
-def _apply(steps: List[_Step], rollback_dir: Path) -> List[str]:
+def _apply(
+    steps: List[_Step], rollback_dir: Path, extra_dirs: Iterable[str] = ()
+) -> List[str]:
     """Write every step, or none: a failure puts back the files already written.
 
-    Returns the folders a removed file's turn created that could not be
-    removed because something else is in them.
+    Returns the folders a removed file's turn created (plus *extra_dirs*) that
+    could not be removed because something else is in them.
     """
     # Copy what is on disk now, so a failure part-way can be rolled back.
     shutil.rmtree(rollback_dir, ignore_errors=True)
@@ -642,7 +644,7 @@ def _apply(steps: List[_Step], rollback_dir: Path) -> List[str]:
     shutil.rmtree(rollback_dir, ignore_errors=True)
 
     kept_dirs = []
-    created = {d for step in steps for d in step.created_dirs}
+    created = {d for step in steps for d in step.created_dirs} | set(extra_dirs)
     for folder in sorted(created, key=lambda d: len(Path(d).parts), reverse=True):
         path = Path(folder)
         if not path.is_dir():
@@ -868,19 +870,14 @@ def restore_session(
             "this chat last changed them",
         )
     session_dir = turns[0].dir.parent
-    kept_dirs = _apply(steps, session_dir / "rollback")
     # A file made and then deleted within the chat leaves only its folders.
-    for span in _spans(turns, include_unchanged=True):
-        if span.change != "unchanged" or span.first["existed"]:
-            continue
-        for folder in reversed(span.first.get("created_dirs") or []):
-            path = Path(folder)
-            if not path.is_dir():
-                continue
-            try:
-                path.rmdir()
-            except OSError:
-                kept_dirs.append(folder)
+    leftover = [
+        d
+        for span in _spans(turns, include_unchanged=True)
+        if span.change == "unchanged" and not span.first["existed"]
+        for d in span.first.get("created_dirs") or []
+    ]
+    kept_dirs = _apply(steps, session_dir / "rollback", extra_dirs=leftover)
 
     restored_at = _now_iso()
     for turn in turns:
