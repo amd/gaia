@@ -1122,8 +1122,8 @@ class TestSessionTitleRequest:
         assert sent["max_tokens"] > 24
 
     def test_a_cloud_reasoning_model_gets_room_to_think(self):
-        """DeepSeek V4.1 Flash on Fireworks spent 24 tokens reasoning, returned
-        no content, and Lemonade answered HTTP 500 (#5592)."""
+        """DeepSeek V4.1 Flash reasons before it titles: on a 24-token budget it
+        returned no content and Lemonade answered HTTP 500."""
         from gaia.ui import _chat_helpers as ch
 
         sent = self._sent_kwargs("fireworks.deepseek-v4p1-flash")
