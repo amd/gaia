@@ -5982,12 +5982,19 @@ Do NOT wrap conversational replies in JSON.
         # Time spent on a question the body raised (e.g. path access) is the
         # user's, not the tool's: abandoning there strands a live prompt. Time
         # the PC sleeps is nobody's: the awake clock leaves it out.
-        started = awake_clock.monotonic()
-        while worker.is_alive():
-            remaining = started + timeout + user_wait.waited() - awake_clock.monotonic()
-            if remaining <= 0:
-                break
-            worker.join(min(remaining, 0.5))
+        try:
+            started = awake_clock.monotonic()
+            while worker.is_alive():
+                remaining = (
+                    started + timeout + user_wait.waited() - awake_clock.monotonic()
+                )
+                if remaining <= 0:
+                    break
+                worker.join(min(remaining, 0.5))
+        except BaseException:
+            # The clock (or a Ctrl+C) failed the call: the tool must not run on.
+            cancel.set()
+            raise
         if worker.is_alive():
             cancel.set()
             raise ToolExecutionTimeout(tool_name, timeout)
@@ -6591,6 +6598,10 @@ Do NOT wrap conversational replies in JSON.
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
         ):
+            # A policy client matches on what the model sent, not what the prompt adds.
+            noting = getattr(self.console, "note_call_args", None)
+            if callable(noting) and isinstance(tool_args, dict):
+                noting(tool_name, tool_args)
             # Blocking on a human is not tool cost. Timed separately so a turn
             # where approval took five minutes does not report the tool as
             # having taken five minutes.

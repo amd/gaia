@@ -9,6 +9,25 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A mailbox another GAIA operation is saving is reported as busy, not as
+  missing permissions.** While the daemon, the Agent UI or the CLI is mid-save
+  on a connection, the connection listing returns it marked `"error": "busy"`
+  with no scopes. Mailbox onboarding used to read that as "missing N
+  permissions" and send the user to reconnect; it now reports the `error` state
+  with "being saved by another GAIA operation right now. Retry in a moment."
+  The calendar pick raises `ConnectionBusyError` instead of asking for a
+  calendar grant, and `GET /v1/email/connectors` adds a per-provider `busy`
+  flag so a client knows `can_send: false` is not final. A mailbox route that
+  hits a busy connection used to answer `403`, as if the account needed
+  reconnecting; it now answers `502` with a detail saying the connection is
+  being saved by another GAIA operation, so treat that 502 as transient and
+  retry. The agent routes answer `503` with `Retry-After`. A calendar that was
+  busy when a session started now works once the save finishes, instead of
+  staying unavailable for the whole session. While a higher-ranked calendar
+  account is busy, the agent now waits for it instead of using another
+  account's calendar. A calendar error that needs a reconnect now says so,
+  instead of a generic configuration error.
+
 - **A `/query` run waiting for the model streams that it is waiting.** The run
   thread runs as the user's turn: `status` events with `phase: "model_queue"`
   and a `queue` object (see the npm `SPEC.md`), interactive lease priority, and

@@ -337,6 +337,20 @@ the turn as untracked. Omit the field to record nothing. Pre-2.19 binaries
 }
 ```
 
+#### `needs_confirmation` arguments
+
+A `needs_confirmation` event carries the gated call in `args`: exactly the
+arguments the model sent, each value capped at 64,000 characters with a note
+saying how much was cut, and `args_truncated: true` when any was. `summary`
+shortens long code, so show `args` when the user should read all of it; a
+policy client matches its rules on `args` and should not auto-approve a call
+with `args_truncated`. The agent never adds a key to `args`. What it adds to
+its own prompt is in `prompt_context`: `working_directory` (where a shell call
+runs, when the model's arguments don't say it) and `risk_note` (why the
+agent's checks don't cover the call, which is then approved once). A prompt
+the agent raises on its own, such as `allow_path_access`, has the path it asks
+about in `args`.
+
 `/health` is liveness only. It says nothing about whether Lemonade is up or a
 model is loaded — `/v1/gaia/init` answers that.
 
