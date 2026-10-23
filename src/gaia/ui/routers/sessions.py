@@ -518,26 +518,36 @@ async def export_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    messages = db.get_messages(session_id, limit=10000)
-
-    if export_format == "markdown":
-        lines = [f"# {session['title']}\n"]
-        lines.append(f"*Created: {session['created_at']}*\n")
-        lines.append(f"*Model: {session['model']}*\n\n---\n")
-
-        for msg in messages:
-            role_label = "User" if msg["role"] == "user" else "Assistant"
-            lines.append(f"**{role_label}:**\n\n{msg['content']}\n\n---\n")
-
-        content = "\n".join(lines)
-        return {"content": content, "format": "markdown"}
-    elif export_format == "json":
-        return {"session": session, "messages": messages, "format": "json"}
-    else:
+    if export_format not in ("markdown", "json"):
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported format: {export_format}",
         )
+
+    messages = db.get_messages(session_id, limit=10000)
+    # The stored model stays at the install default when a custom model answers.
+    effective_model = (await _session_response(db, session)).effective_model
+
+    if export_format == "markdown":
+        lines = [f"# {session['title']}\n"]
+        lines.append(f"*Created: {session['created_at']}*\n")
+        lines.append(f"*Model: {effective_model}*\n\n---\n")
+
+        for msg in messages:
+            role_label = "User" if msg["role"] == "user" else "Assistant"
+            stats = msg.get("inference_stats")
+            answer_model = stats.get("model") if isinstance(stats, dict) else None
+            if answer_model:
+                role_label = f"{role_label} ({answer_model})"
+            lines.append(f"**{role_label}:**\n\n{msg['content']}\n\n---\n")
+
+        content = "\n".join(lines)
+        return {"content": content, "format": "markdown"}
+    return {
+        "session": {**session, "effective_model": effective_model},
+        "messages": messages,
+        "format": "json",
+    }
 
 
 # ── Session-Document Attachments ─────────────────────────────────────────────

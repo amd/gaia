@@ -259,6 +259,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
     const [policyToast, setPolicyToast] = useState<{ tool: string; receiptId?: string } | null>(null);
+    const [exportError, setExportError] = useState<string | null>(null);
     // A chat made by a retired agent (chat/doc/file) can be read but not continued.
     const retiredAgent = session?.agent_type && session.agent_type !== FLAGSHIP_AGENT_ID ? session.agent_type : null;
 
@@ -523,6 +524,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 reconnectTimerRef.current = null;
             }
             setPolicyToast(null);
+            setExportError(null);
             streamBufferRef.current = '';
         };
     }, [sessionId]);
@@ -1574,6 +1576,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     // Export
     const handleExport = async () => {
+        setExportError(null);
         try {
             const data = await api.exportSession(sessionId);
             const blob = new Blob([data.content], { type: 'text/markdown' });
@@ -1587,6 +1590,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
             URL.revokeObjectURL(url);
         } catch (err) {
             log.chat.error('Export failed', err);
+            setExportError(err instanceof api.ApiError
+                ? `Couldn't export this chat: GAIA's backend returned an error (HTTP ${err.httpStatus}). Try Export again; if it keeps failing, check the backend log.`
+                : "Couldn't export this chat because GAIA's backend isn't reachable. Check that GAIA is running, then try Export again.");
         }
     };
 
@@ -1738,6 +1744,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <SessionPanelToggle messages={messages} busy={isStreaming} />
                 </div>
             </header>
+
+            {exportError && (
+                <div className="export-error-bar" role="alert">
+                    <span>{exportError}</span>
+                    <button type="button" className="btn-icon-sm" onClick={() => setExportError(null)} aria-label="Dismiss export error">
+                        <X size={13} />
+                    </button>
+                </div>
+            )}
 
             {sessionDocs.length > 0 && (() => {
                 const sorted = [...sessionDocs].sort((a, b) => {

@@ -755,7 +755,10 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/export">
-    Export a session to Markdown or JSON.
+    Export a session to Markdown or JSON. Both name the model a turn runs on
+    (the `custom_model` setting wins over the session's stored `model`): the
+    Markdown header, and `effective_model` on the JSON `session` object. An
+    answer kept from "Retry with…" is labelled with the model that wrote it.
 
     **Query params:** `format` ("markdown" or "json", default "markdown")
   </Accordion>

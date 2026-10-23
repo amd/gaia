@@ -1508,6 +1508,25 @@ class TestExportEndpoint:
         assert "*Created:" in content
         assert "*Model:" in content
 
+    def test_export_names_the_model_that_answers(self, client, db):
+        sid = client.post("/api/sessions", json={"model": "Stored-GGUF"}).json()["id"]
+        client.put("/api/settings", json={"custom_model": "My-Override-GGUF"})
+        db.add_message(sid, "user", "Hi")
+        db.add_message(sid, "assistant", "Hello")
+        db.add_message(
+            sid, "assistant", "Retried", inference_stats={"model": "Retry-GGUF"}
+        )
+
+        md = client.get(f"/api/sessions/{sid}/export?format=markdown").json()
+        assert "*Model: My-Override-GGUF*" in md["content"]
+        assert "Stored-GGUF" not in md["content"]
+        assert "**Assistant:**\n\nHello" in md["content"]
+        assert "**Assistant (Retry-GGUF):**\n\nRetried" in md["content"]
+
+        js = client.get(f"/api/sessions/{sid}/export?format=json").json()
+        assert js["session"]["model"] == "Stored-GGUF"
+        assert js["session"]["effective_model"] == "My-Override-GGUF"
+
     def test_export_json(self, client, db):
         create_resp = client.post("/api/sessions", json={"title": "JSON Export"})
         session_id = create_resp.json()["id"]
