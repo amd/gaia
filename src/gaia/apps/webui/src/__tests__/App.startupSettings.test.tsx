@@ -228,6 +228,26 @@ describe('the GAIA agent is not installed', () => {
         expect(screen.queryByText(/GAIA agent isn't installed/)).not.toBeInTheDocument();
     });
 
+    it('ignores a startup read that answers after the post-setup one', async () => {
+        mocked.checkSetup.mockResolvedValue({ ready: false, steps: [] });
+        let answerStartup!: (v: { agents: AgentInfo[]; total: number }) => void;
+        mocked.listAgents
+            .mockReturnValueOnce(new Promise((r) => { answerStartup = r; }))
+            .mockResolvedValueOnce({ agents: [GAIA_AGENT], total: 1 });
+        render(<App />);
+        await advance(0);
+
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start chatting' })); });
+        await advance(0);
+        expect(mocked.listAgents).toHaveBeenCalledTimes(2);
+
+        // The startup read was sent before setup installed the agent.
+        await act(async () => { answerStartup({ agents: [], total: 0 }); });
+        await advance(0);
+        expect(screen.getByLabelText('Message')).toBeInTheDocument();
+        expect(screen.queryByText(/GAIA agent isn't installed/)).not.toBeInTheDocument();
+    });
+
     it('still says so after setup when the re-read fails', async () => {
         mocked.checkSetup.mockResolvedValue({ ready: false, steps: [] });
         mocked.listAgents
