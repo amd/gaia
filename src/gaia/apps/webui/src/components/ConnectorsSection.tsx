@@ -931,7 +931,7 @@ function MCPServerConfigureBody({
                         {busy ? (
                             <Loader2 size={12} className="spin" />
                         ) : saved ? (
-                            <><CheckCircle2 size={12} /> {keyless ? 'Connected' : 'Saved'}</>
+                            <><CheckCircle2 size={12} /> Saved</>
                         ) : keyless ? (
                             'Connect'
                         ) : (
