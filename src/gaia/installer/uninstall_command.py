@@ -184,6 +184,8 @@ _USER_DATA_NAMES = (
     "config.json.lock",
     "config.json.lock.d",
     "sessions",
+    # Undo copies of files the agent changed — the user's own file contents.
+    "snapshots",
     "agents",
     "tui",
     "ui",
@@ -214,6 +216,7 @@ def _purge_paths(home: Optional[Path] = None) -> List[Path]:
         gaia / "gaia.log.lock",
         gaia / "electron-install-state.json",
         gaia / "electron-install.log",
+        gaia / "electron-install.log.prev",
         gaia / "electron-main.log",
         gaia / "electron-updater.log",
         gaia / "electron-startup-failures.json",

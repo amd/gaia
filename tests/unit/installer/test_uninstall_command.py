@@ -185,6 +185,7 @@ class TestBuildPlan:
             gaia / "gaia.log.lock",
             gaia / "electron-install-state.json",
             gaia / "electron-install.log",
+            gaia / "electron-install.log.prev",
             gaia / "electron-main.log",
             gaia / "electron-updater.log",
             gaia / "electron-startup-failures.json",
@@ -194,6 +195,22 @@ class TestBuildPlan:
         ]
         assert plan.stop_daemon
         assert plan.clear_credentials
+
+    def test_purge_removes_file_snapshots_and_the_previous_install_log(
+        self, fake_home
+    ):
+        """Undo snapshots are copies of the user's own files; purge leaves none."""
+        plan = uc.build_plan(
+            venv=False,
+            purge=True,
+            purge_lemonade=False,
+            purge_models=False,
+            home=fake_home,
+        )
+        gaia = fake_home / ".gaia"
+        paths = plan.unique_paths()
+        assert gaia / "snapshots" in paths
+        assert gaia / "electron-install.log.prev" in paths
 
     def test_purge_includes_rotated_gaia_logs(self, fake_home, fs):
         gaia = fake_home / ".gaia"
