@@ -483,12 +483,16 @@ class TestPrettyPrintJsonArguments:
         assert len(events) == 1
         assert events[0]["type"] == "tool_args"
 
-    def test_non_dict_data_with_arguments_title_emits_tool_result(self, handler):
-        """If data is not a dict, even with title='Arguments', fall through."""
-        handler.pretty_print_json("just a string", title="Arguments")
+    def test_non_dict_arguments_are_still_arguments_not_a_result(self, handler, caplog):
+        """Malformed arguments must not pose as the tool's result before it runs."""
+        handler._last_tool_name = "test_tool"
+        with caplog.at_level("WARNING", logger="gaia.ui.sse_handler"):
+            handler.pretty_print_json("just a string", title="Arguments")
         events = _drain(handler)
         assert len(events) == 1
-        assert events[0]["type"] == "tool_result"
+        assert events[0]["type"] == "tool_args"
+        assert events[0]["args"] == {}
+        assert "test_tool" in caplog.text and "just a string" in caplog.text
 
 
 # ===========================================================================

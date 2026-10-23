@@ -82,7 +82,8 @@ AGENT_ID = "gaia"
 #: 2.17 added ``GET /skills`` for the Agent UI's Skills settings.
 #: 2.18 added ``/query``'s ``allowed_paths`` and ``memory`` fields.
 #: 2.19 added ``/query``'s ``changes_turn_id`` field.
-API_VERSION = "2.19"
+#: 2.20 added ``/query``'s ``surface`` field.
+API_VERSION = "2.20"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -232,6 +233,16 @@ class QueryRequest(_Strict):
             "agent's GAIA home, keyed by session_id and this id, and the "
             "recording is complete before the terminal event is sent. Use "
             "file_snapshots.new_turn_id() to make one. Omit it to record nothing."
+        ),
+    )
+
+    surface: Optional[Literal["agent_ui", "tui", "cli"]] = Field(
+        default=None,
+        description=(
+            "The front-end this turn comes from (contract >= 2.20). 'agent_ui' "
+            "tells the agent that features like Scheduled tasks are in the "
+            "caller's sidebar. Fixed when a session is built; omit it when "
+            "unknown."
         ),
     )
 
@@ -545,6 +556,10 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
     Surfacing that message beats inventing a generic error.
     """
     if isinstance(result, dict):
+        if result.get("status") == "cancelled":
+            # Stopped mid-generation: the loop returns no text by design, and
+            # the stdio transport ends the same turn with an empty final.
+            return {"type": "final", "answer": ""}
         for key in ("answer", "response", "result", "output"):
             value = result.get(key)
             if isinstance(value, str) and value.strip():
@@ -1069,7 +1084,45 @@ async def _finish_changes(run: _QueryRun) -> List[Dict[str, Any]]:
     return []
 
 
-@router.post("/query")
+#: The documented stream, so the OpenAPI contract names the SSE events rather
+#: than an empty application/json body.
+_QUERY_SSE_RESPONSES = {
+    200: {
+        "description": (
+            "Server-Sent Events stream (text/event-stream). Each `data:` line is "
+            "one canonical event discriminated on `type`: status {message, "
+            "phase?, queue?} | token {delta} | tool_call {tool, args} | "
+            "tool_result {tool, data, render?} | needs_confirmation {run_id, "
+            "action, summary, confirm_id?, always_scope?, risk?, tool_label?, "
+            "args?, args_truncated?, prompt_context?} | needs_input {run_id, "
+            "request_id, question, options, allow_free_text, sensitive, "
+            "respond_url, timeout_seconds?} | final {answer, usage?, failed?} | "
+            "error {detail, status}. A needs_confirmation's `args` are exactly "
+            "the arguments the model sent for the gated call, each value capped "
+            "at 64,000 characters (`args_truncated: true` when one was cut); "
+            "what the agent adds to its prompt is in `prompt_context` "
+            "{working_directory?, risk_note?}, never in `args`. The stream ends "
+            "with exactly one `final` or `error`. `:`-prefixed heartbeat "
+            "comments carry no payload."
+        ),
+        "content": {
+            "text/event-stream": {
+                "schema": {
+                    "type": "string",
+                    "example": (
+                        'data: {"type": "needs_confirmation", "run_id": "…", '
+                        '"action": "run_shell_command", "summary": "git push", '
+                        '"confirm_id": "…", "risk": "execute", '
+                        '"args": {"command": "git push"}}\n\n'
+                    ),
+                }
+            }
+        },
+    }
+}
+
+
+@router.post("/query", response_class=StreamingResponse, responses=_QUERY_SSE_RESPONSES)
 async def query(request: QueryRequest):
     """Run the flagship agent loop for one request, streaming canonical SSE."""
     from gaia.ui.sse_handler import SSEOutputHandler
@@ -1127,6 +1180,8 @@ async def query(request: QueryRequest):
             kwargs["model_id"] = request.model
         if request.allowed_paths is not None:
             kwargs["allowed_paths"] = request.allowed_paths
+        if request.surface is not None:
+            kwargs["surface"] = request.surface
         if request.session_id:
             # Cross-turn document retention: ChatAgent persists its indexed-doc
             # set per UI session, so dropping this makes the agent forget a
@@ -1220,6 +1275,9 @@ async def query(request: QueryRequest):
             )
             one_shot_agent = agent
         agent.console = handler
+        # Streamed model calls are what put ``token`` events on this wire and let
+        # Stop cut a call short. Set per turn so a retained agent can't drift.
+        agent.streaming = True
         # A confirmation can only be carried when somebody is there to answer it
         # AND there is a session to hold the grant. ``can_answer_questions`` is
         # the caller's own declaration that a human is watching (spec >= 2.6); a
@@ -1383,6 +1441,10 @@ async def query(request: QueryRequest):
 
                 for canonical in translator.translate(event):
                     ctype = canonical.get("type")
+                    if ctype == "token" and run.cancel_event.is_set():
+                        # A stopped answer's tail, e.g. a half-written JSON
+                        # reply flushed at teardown, is not answer text.
+                        continue
                     if ctype in TERMINAL_TYPES:
                         for warning in await _finish_changes(run):
                             yield _sse(warning)

@@ -955,6 +955,9 @@ type connectorEntry struct {
 	AccountEmail *string  `json:"account_email"`
 	Scopes       []string `json:"scopes"`
 	CanSend      bool     `json:"can_send"`
+	// Busy: another GAIA operation is saving the connection, so its scopes and
+	// can_send are unknown for the moment, not false.
+	Busy bool `json:"busy"`
 }
 
 type connectorsBody struct {
@@ -1115,7 +1118,7 @@ func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
 	// Prefer a mailbox whose metadata says it should work; fall back to reporting
 	// the connected-but-not-granted one, which is a distinct failure with a
 	// distinct remedy.
-	var sendable, connected *connectorEntry
+	var sendable, connected, busy *connectorEntry
 	connectedCount := 0
 	for i := range body.Providers {
 		p := &body.Providers[i]
@@ -1125,6 +1128,9 @@ func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
 		connectedCount++
 		if p.CanSend && sendable == nil {
 			sendable = p
+		}
+		if p.Busy && busy == nil {
+			busy = p
 		}
 		if connected == nil {
 			connected = p
@@ -1136,6 +1142,8 @@ func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
 		// Metadata says linked + granted. That is exactly the state that used to
 		// go green on a mailbox nothing had ever read, so PROVE it.
 		return finishMailboxRow(row, probeMailbox(ctx, t, cfg, connectedCount), sendable, cfg)
+	case busy != nil:
+		return busyMailboxRow(row, busy)
 	case connected != nil:
 		return notGrantedRow(row, connected, cfg)
 	}
@@ -1152,6 +1160,23 @@ func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
 	row.Remedy = Remedy{
 		Action:  "Connect Gmail, Outlook, or Microsoft 365 — press f to choose. For Outlook swap `google` for `microsoft` below, or `microsoft_work` for a work account.",
 		Command: connectCommand("google"),
+		Where:   "https://amd-gaia.ai/docs/guides/email",
+	}
+	return row
+}
+
+// busyMailboxRow reports a mailbox another GAIA operation is saving right now.
+// Its scopes are unknown, not missing, so this is never a sign-in remedy.
+func busyMailboxRow(row Row, p *connectorEntry) Row {
+	row.State = StateUnknown
+	row.Disposition = status.DispositionNotify
+	row.Line = fmt.Sprintf("%s · being saved, not verified",
+		accountOr(p.AccountEmail, providerName(p.Provider)))
+	row.Detail = "Another GAIA operation is saving this mailbox connection right now, " +
+		"so whether it can read and send can't be checked yet."
+	row.Remedy = Remedy{
+		Action:  "Press r — this clears on its own in a moment.",
+		Command: "gaia connectors list",
 		Where:   "https://amd-gaia.ai/docs/guides/email",
 	}
 	return row
@@ -1307,6 +1332,20 @@ func probeMailbox(ctx context.Context, t Transport, cfg Config, connectedCount i
 	case resp.Status == http.StatusOK:
 		return probeResult{verdict: probeUsable, trace: trace(outcome)}
 
+	// Another GAIA operation held the connection mid-save; it clears in a moment.
+	case connectionBeingSaved(detail):
+		return probeResult{
+			verdict: probeInconclusive,
+			cause: "Another GAIA operation was saving the mailbox connection at that moment, " +
+				"so the mailbox could not be verified. " + detailSuffix(firstSentence(detail)),
+			remedy: Remedy{
+				Action:  "Press r — this clears on its own in a moment.",
+				Command: "gaia connectors list",
+				Where:   "https://amd-gaia.ai/docs/guides/email",
+			},
+			trace: trace(outcome),
+		}
+
 	// The sidecar told us its forwarded token lapsed and the daemon has not
 	// re-sent one YET (forwarded_credentials: "Retry in a moment"). Blocking a
 	// launch on that would send the user through a browser sign-in for something
@@ -1442,6 +1481,13 @@ func relayGaveUp(detail string) bool {
 	return strings.Contains(d, "sidecar for agent") ||
 		strings.Contains(d, "no running sidecar") ||
 		strings.Contains(d, "is alive but did not answer")
+}
+
+// connectionBeingSaved reports whether gaia.connectors refused because another
+// GAIA operation held the connection mid-save (ConnectionBusyError), which clears
+// itself in a moment.
+func connectionBeingSaved(detail string) bool {
+	return strings.Contains(strings.ToLower(detail), "being saved by another gaia operation")
 }
 
 // transientCredentialGap reports whether the sidecar said the forwarded token

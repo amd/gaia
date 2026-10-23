@@ -267,6 +267,14 @@ boundary, since `python` and `make` in this same set reach git by shelling out.
 Omitting it would have left bypass *stricter* than the default tier, where git's
 read-only floor still answers `git status`.
 
+**Except installs outside the project.** Naming `python` and `npm` let
+`python -m pip install x` and `npm install -g x` change the user's system
+Python or global packages unasked — an agent did exactly that to work around a
+broken `run_python`. A command that installs into an environment outside a
+virtual environment or the project (`gaia.agents.tools.package_installs`) is
+refused under bypass, with guidance to tell the user the command or use a
+project venv, and is a one-time approval (never "always") otherwise.
+
 `rm` is deliberately excluded. This is not a security boundary — anything in the
 set can delete a file — it is a tripwire against an accidental recursive delete.
 `cp` and `mv` are in, because a build or test run reasonably needs them.
