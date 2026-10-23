@@ -468,7 +468,7 @@ gaia uninstall [OPTIONS]
 | Option | Type | Description |
 |--------|------|-------------|
 | `--venv` | flag | Remove the Python environment (`~/.gaia/venv/`) |
-| `--purge` | flag | Remove venv + chats + documents + embedded Lemonade + config + logs + installer binaries (`~/.gaia/bin`) + traces + daemon state (`~/.gaia/host`), and undo the installer's PATH edits |
+| `--purge` | flag | Remove venv + chats + documents + memory + sessions + config + installed agents + caches + embedded Lemonade + logs + installer binaries (`~/.gaia/bin`) + traces + daemon state (`~/.gaia/host`) + saved sign-ins and API keys + the desktop app's `gaia` shim, and undo the installer's PATH edits |
 | `--purge-lemonade` | flag | Also remove Lemonade Server (requires `--purge`) |
 | `--purge-models` | flag | Also remove downloaded Lemonade models (requires `--purge`) |
 | `--purge-hf-cache` | flag | Also remove `~/.cache/huggingface/` (requires `--purge`) |
@@ -486,7 +486,7 @@ gaia uninstall --purge --dry-run
 gaia uninstall --venv
 ```
 
-```bash Full Purge (venv + chats + documents + embedded Lemonade + config + installer leftovers)
+```bash Full Purge (venv + your data + embedded Lemonade + saved keys + installer leftovers)
 gaia uninstall --purge
 ```
 
@@ -500,10 +500,25 @@ gaia uninstall --purge --purge-lemonade --yes
 </CodeGroup>
 
 <Warning>
-`--purge` permanently deletes your chat history, uploaded documents, configuration,
-embedded Lemonade downloads, agent traces, and the daemon's state in `~/.gaia/host` —
-including its custody database (agent memory, sessions, and audit history). Use `--purge --dry-run` first to preview the purge tier; pair other cleanup tiers with `--dry-run` to preview those instead.
+`--purge` permanently deletes your chat history, uploaded documents, what GAIA
+remembers about you (`memory.db`), its file and scratchpad indexes, goals, sessions,
+`config.json`, installed agents (`~/.gaia/agents`), caches, embedded Lemonade downloads,
+agent traces, and the daemon's state in `~/.gaia/host` — including its custody database
+(agent memory, sessions, and audit history). It also deletes GAIA's sign-ins and API keys
+from the OS credential store (service `gaia.connections`) — only when it purges the default
+`~/.gaia`, since that store is shared by every GAIA home. Use `--purge --dry-run` first to
+preview the purge tier; it lists only what exists. Pair other cleanup tiers with `--dry-run`
+to preview those instead.
 </Warning>
+
+<Note>
+`--purge` keeps `~/.gaia` itself and what is not GAIA's to delete: your connector setup
+(`mcp_servers.json`, `connectors/`, and the MCP server secrets that file names), your own
+skills in `~/.gaia/skills`, and any file another tool put there. The plan and the end of the
+run list each kept entry. The desktop app's `~/.local/bin/gaia` shim (or `$XDG_BIN_HOME/gaia`)
+is removed only when it is the app's exact wrapper around this GAIA home's venv; any other
+`gaia` there is left alone and named.
+</Note>
 
 <Note>
 `--purge` also undoes what the one-line installer set up. It stops a running GAIA daemon
