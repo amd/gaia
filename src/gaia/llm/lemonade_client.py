@@ -68,6 +68,7 @@ from gaia.llm.retry import (
     current_cancel_check,
     current_retry_listener,
     hosted_reply_timeout,
+    http_body_text,
     retry_state_of,
     sleep_unless_cancelled,
     tag_http_failure,
@@ -4829,24 +4830,25 @@ class LemonadeClient:
                 )
 
             if response.status_code != 200:
+                body = http_body_text(response)
                 # The retry verdict is read from the body here, before the
                 # cloud branch drops it (provider bodies are never reflected).
                 if self.cloud_model_provider(model):
                     raise tag_http_failure(
                         self._cloud_failure(response.status_code, model),
                         response.status_code,
-                        response.text,
+                        body,
                         response.headers,
                     )
                 error_msg = (
                     f"Error in chat completions "
-                    f"(status {response.status_code}): {response.text}"
+                    f"(status {response.status_code}): {body}"
                 )
                 self.log.error(error_msg)
                 raise tag_http_failure(
                     LemonadeClientError(error_msg),
                     response.status_code,
-                    response.text,
+                    body,
                     response.headers,
                 )
 
@@ -5413,12 +5415,15 @@ class LemonadeClient:
                 )
 
             if response.status_code != 200:
-                error_msg = f"Error in completions (status {response.status_code}): {response.text}"
+                body = http_body_text(response)
+                error_msg = (
+                    f"Error in completions (status {response.status_code}): {body}"
+                )
                 self.log.error(error_msg)
                 raise tag_http_failure(
                     LemonadeClientError(error_msg),
                     response.status_code,
-                    response.text,
+                    body,
                     response.headers,
                 )
 
@@ -6285,7 +6290,7 @@ class LemonadeClient:
                 )
 
             if response.status_code != 200:
-                error_msg = f"Error pulling model (status {response.status_code}): {response.text}"
+                error_msg = f"Error pulling model (status {response.status_code}): {http_body_text(response)}"
                 self.log.error(error_msg)
                 raise LemonadeClientError(error_msg)
 
@@ -6599,7 +6604,7 @@ class LemonadeClient:
                 )
 
             if response.status_code != 200:
-                error_msg = f"Error in responses (status {response.status_code}): {response.text}"
+                error_msg = f"Error in responses (status {response.status_code}): {http_body_text(response)}"
                 self.log.error(error_msg)
                 raise LemonadeClientError(error_msg)
 
@@ -6630,7 +6635,9 @@ class LemonadeClient:
         This is a simplified implementation that may need enhancement
         for full SSE specification compliance.
         """
-        for line in response.iter_lines(decode_unicode=True):
+        # Decoded here: requests reads text/event-stream as ISO-8859-1.
+        for raw in response.iter_lines():
+            line = raw.decode("utf-8", errors="replace")
             if line.startswith("data: "):
                 try:
                     data = line[6:]  # Remove "data: " prefix
@@ -8538,7 +8545,8 @@ class LemonadeClient:
 
             if response.status_code >= 400:
                 raise LemonadeClientError(
-                    f"Request failed with status {response.status_code}: {response.text}"
+                    f"Request failed with status {response.status_code}: "
+                    f"{http_body_text(response)}"
                 )
 
             return response.json()
@@ -8557,7 +8565,7 @@ class LemonadeClient:
             raise LemonadeClientError(f"Request failed: {str(e)}") from e
         except json.JSONDecodeError as e:
             raise LemonadeClientError(
-                f"Failed to parse response as JSON: {response.text}"
+                f"Failed to parse response as JSON: {http_body_text(response)}"
             ) from e
 
 

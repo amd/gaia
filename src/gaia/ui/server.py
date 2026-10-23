@@ -124,6 +124,40 @@ class _SpaPathConvertor(PathConvertor):
 register_url_convertor("spa_path", _SpaPathConvertor())
 
 
+class Utf8JsonMiddleware:
+    """Declare ``charset=utf-8`` on every ``application/json`` response.
+
+    Without it, clients that apply HTTP's Latin-1 default (Windows PowerShell
+    5.1's ``Invoke-RestMethod``) show a stored "—" as "â€”".
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_charset(message):
+            if message["type"] == "http.response.start":
+                message = {
+                    **message,
+                    "headers": [
+                        (
+                            (name, b"application/json; charset=utf-8")
+                            if name.lower() == b"content-type"
+                            and value.strip().lower() == b"application/json"
+                            else (name, value)
+                        )
+                        for name, value in message.get("headers", [])
+                    ],
+                }
+            await send(message)
+
+        await self.app(scope, receive, send_with_charset)
+
+
 # ── Tunnel Auth Middleware ──────────────────────────────────────────────────
 
 
@@ -757,11 +791,15 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     # that CORS preflight (OPTIONS) responses are handled first.
     app.add_middleware(TunnelAuthMiddleware)
 
-    # Host / Origin / X-Gaia-UI guard. Added last so it is the OUTERMOST
-    # middleware: it runs before tunnel auth (which passes everything
+    # Host / Origin / X-Gaia-UI guard. Added after tunnel auth so it wraps
+    # it: it runs before tunnel auth (which passes everything
     # through while the tunnel is off) and its rejections carry no CORS
     # headers, so a cross-site page cannot read why it failed.
     app.add_middleware(UIRequestGuardMiddleware)
+
+    # Outermost, so the guard's and tunnel auth's own rejections get the
+    # charset too. It only rewrites a header, so the guard still runs first.
+    app.add_middleware(Utf8JsonMiddleware)
 
     # Store shared state on app.state so routers can access via Depends
     app.state.db = db
@@ -800,9 +838,11 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             exc,
             traceback.format_exc(),
         )
+        # Served outside every middleware, so it names its own charset.
         return JSONResponse(
             status_code=500,
             content={"detail": "Internal server error"},
+            media_type="application/json; charset=utf-8",
         )
 
     # ── Include Routers ──────────────────────────────────────────────────
