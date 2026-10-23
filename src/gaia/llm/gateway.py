@@ -22,11 +22,13 @@ secret could occupy.
 
 import json
 import os
+import socket
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlparse
 
 import requests
 
@@ -35,10 +37,12 @@ from gaia.llm.lemonade_client import (
     CLOUD_RECIPE,
     LemonadeClient,
     LemonadeClientError,
+    catalog_context_window,
     lemonade_auth_headers,
     resolve_lemonade_api_key,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
+from gaia.llm.retry import http_body_text
 from gaia.logger import get_logger
 from gaia.version import LEMONADE_GATEWAY_MIN_VERSION
 
@@ -116,6 +120,37 @@ _DISCOVERY_TIMEOUT = 60
 # Bounds the wait on a mistyped host: a DNS failure to a non-existent domain
 # can otherwise take ~30s, which reads as a hang rather than an answer.
 _PROBE_TIMEOUT = 12
+
+
+# One reachability check: long enough for a slow link, short enough that an
+# offline network answers before the user gives up on the list.
+REACH_TIMEOUT = 4.0
+
+
+class GatewayUnreachable(Exception):
+    """The gateway's host does not resolve or does not answer. No key was sent."""
+
+    def __init__(self, host: str, reason: str):
+        self.host = host
+        self.reason = reason
+        super().__init__(
+            f"No network available — can't reach {host} (needs AMD's network or VPN)"
+        )
+
+
+def check_reachable(base_url: Optional[str] = None) -> None:
+    """Raise :class:`GatewayUnreachable` unless ``base_url``'s host answers.
+
+    ``None`` checks :data:`DEFAULT_GATEWAY_BASE_URL`.
+    """
+    url = urlparse(base_url or DEFAULT_GATEWAY_BASE_URL)
+    if not url.hostname:
+        raise ValueError(f"gateway URL {base_url!r} has no host to check")
+    port = url.port or (80 if url.scheme == "http" else 443)
+    try:
+        socket.create_connection((url.hostname, port), timeout=REACH_TIMEOUT).close()
+    except OSError as e:
+        raise GatewayUnreachable(url.hostname, str(e)) from e
 
 
 class GatewayError(Exception):
@@ -503,7 +538,7 @@ class GatewayManager:
             parsed = response.json()
         except ValueError:
             parsed = None
-            detail = response.text.strip()[:400]
+            detail = http_body_text(response).strip()[:400]
         # Lemonade's 401 says {"error": "<text>"}; its other errors nest an object.
         body = parsed.get("error", {}) if isinstance(parsed, dict) else parsed
         if isinstance(body, dict):
@@ -730,7 +765,9 @@ class GatewayManager:
         """Drop the session token. Does not affect the env var."""
         return self._request("DELETE", f"cloud/auth/{GATEWAY_PROVIDER}")
 
-    def ensure_authenticated(self) -> bool:
+    def ensure_authenticated(
+        self, recall: Optional[Callable[[], Optional[str]]] = None
+    ) -> bool:
         """Give Lemonade the remembered token if it has none.
 
         Lemonade forgets its token on restart, so without this every restart
@@ -740,6 +777,9 @@ class GatewayManager:
         key: it stores one without validating it, so a revoked token reports
         authenticated and discovers nothing. Reporting that as success sends the
         caller looking for a missing model instead of an expired key.
+
+        *recall* replaces :func:`recall_token`, so a caller that must not block
+        on the credential store can bound the read.
 
         Raises:
             GatewayError: GAIA uses the user's own server and its gateway
@@ -767,7 +807,7 @@ class GatewayManager:
                 f"auth`, or unset {GATEWAY_ENV_VAR} if it is stale."
             )
             return False
-        token = recall_token()
+        token = (recall or recall_token)()
         if not token:
             return False
         try:
@@ -815,7 +855,7 @@ class GatewayManager:
             GatewayModel(
                 id=entry["id"],
                 labels=list(entry.get("labels") or []),
-                ctx_size=entry.get("context_length"),
+                ctx_size=catalog_context_window(entry),
             )
             for entry in payload.get("data", [])
             if isinstance(entry, dict)

@@ -16,6 +16,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   line from a document it read, or call it something you had saved. It now
   saves text from a file, page or tool result only when you ask it to keep
   something, and an empty memory search says that file text is not saved.
+- **Token counts are exact in the published binary, offline too.** The binary
+  could not load its tokenizer, so every turn trimmed history and sized
+  context from an estimate that overcounts, and logged `Unknown encoding
+  cl100k_base`. The tokenizer and its data now ship inside the binary, so it
+  no longer downloads anything to count tokens.
+
+### For integrators
+
+- **A tool result keeps the tool's own status.** When a tool's result had no
+  structured payload, the `tool_result` event's `data` carried only `summary`
+  and `success`, so a client could not tell a skipped `remember` (a private
+  chat saves nothing) from a saved one, and the Agent UI listed it as saved.
+  `data` now also carries `status` when the tool returned one. Additive, so
+  the contract version is unchanged.
+
 ### For integrators: contract 2.19
 
 - **`/query` can record a turn's file changes for undo** (contract **2.19**).
@@ -25,6 +40,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   changing it into the snapshot store the Agent UI reads, and finishes the
   recording before the terminal event. Older binaries refuse the field with
   `422`, so probe `/version` before sending it.
+- **A confirmation's `args` are only what the model sent.** `needs_confirmation`
+  `args` also carried keys the agent adds to its own prompt — a risk note, a
+  scratch-folder marker, and the folder a shell call runs in — so a policy
+  client auto-approving on `args` matched fields the model never sent. `args`
+  is now exactly the call's arguments; the folder and risk note moved to a new
+  `prompt_context` object.
 - **A tool result names the file it wrote.** When a tool's result carries
   `file_path` or `image_path`, the `tool_result` event's `data` now keeps it, so
   a client can list the files a turn produced.

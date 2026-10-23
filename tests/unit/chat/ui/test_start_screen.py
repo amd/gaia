@@ -154,6 +154,41 @@ def test_an_unreadable_keyring_still_serves_the_start_screen(monkeypatch, tmp_pa
     assert not body.get("skills_error")
 
 
+def test_a_keychain_prompt_does_not_hold_the_start_screen(monkeypatch, caplog):
+    import threading
+    import time
+
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    import gaia.connectors.store as store
+    from gaia.connectors import credential_wait
+
+    answered = threading.Event()
+    reads = []
+
+    def prompting(ref):
+        reads.append(ref)
+        answered.wait(timeout=30)
+        return None
+
+    monkeypatch.setattr(store, "peek_connection", prompting)
+    monkeypatch.setattr(credential_wait, "WAIT_SECONDS", 0.2)
+    try:
+        with caplog.at_level("WARNING"):
+            for _ in range(3):
+                started = time.monotonic()
+                assert ss._mail_connected() is False
+                assert time.monotonic() - started < 2
+        assert "Look for a system dialog" in caplog.text
+        assert len(reads) == 1  # one read in flight, not one per call
+    finally:
+        answered.set()
+    deadline = time.monotonic() + 5
+    while credential_wait.in_flight_count() and time.monotonic() < deadline:
+        ss._mail_connected()
+        time.sleep(0.01)
+    assert credential_wait.in_flight_count() == 0
+
+
 def test_a_non_keyring_error_still_fails_loudly(monkeypatch):
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
     import gaia.connectors.store as store
