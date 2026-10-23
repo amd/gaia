@@ -2636,8 +2636,8 @@ Do NOT wrap conversational replies in JSON.
             return LOCAL_MAX_OUTPUT_TOKENS
         if backend.cloud_model_provider(self.chat.effective_model):
             return CLOUD_MAX_OUTPUT_TOKENS
-        # The same window history budgets against, re-read each call: it can
-        # shrink to free memory, and a client may pin it. Its sizing is cached
+        # The same window history budgets against, re-read each call: the user
+        # may pick another size, or a client may pin it. Its sizing is cached
         # per process in lemonade_client, so this does not re-probe Lemonade.
         return local_max_output_tokens(context_window(self))
 

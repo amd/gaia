@@ -186,6 +186,26 @@ def test_history_reserves_the_cap_actually_sent(no_local_model_management, monke
     assert _reply_reserve(agent) == 16384
 
 
+def test_a_client_cap_the_size_of_the_window_keeps_history(
+    no_local_model_management, monkeypatch
+):
+    """An API client sending max_tokens equal to a 32K window must not lose its
+    history: the reserve is bounded, the cap sent on the wire is not."""
+    from gaia.agents.base.history import _reply_reserve, history_budget
+
+    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", lambda *a, **k: 32768)
+    agent = _Agent(
+        model_id=LOCAL_MODEL,
+        base_url=BASE_URL,
+        skip_lemonade=True,
+        silent_mode=True,
+        max_output_tokens=32768,
+    )
+    assert agent._max_output_tokens() == 32768
+    assert _reply_reserve(agent) == 16384
+    assert history_budget(agent, "hi") > 0
+
+
 @pytest.mark.parametrize("bad", [0, -1, 1.5, "32768", True])
 def test_invalid_cap_fails_loudly(bad):
     with pytest.raises(ValueError, match="max_output_tokens"):

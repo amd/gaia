@@ -300,8 +300,8 @@ def _is_cloud(agent: Any) -> bool:
 def context_window(agent: Any) -> int:
     """The context window, in tokens, the agent's model is admitted with.
 
-    Re-read each call: the local window can shrink to the memory free now, and
-    the reply cap (``Agent._max_output_tokens``) is sized from this same value.
+    Re-read each call: the user or a client pin can change it, and the reply
+    cap (``Agent._max_output_tokens``) is sized from this same value.
     """
     from gaia.llm.lemonade_client import GPU_CTX_SIZE, LemonadeClient, resolve_ctx_size
 
@@ -341,7 +341,8 @@ def _reply_reserve(agent: Any) -> int:
         value = max_output()
         # Only a real positive count; a stand-in agent falls back to the config.
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-            return value
+            # A client cap near the window size must not leave history no room.
+            return min(value, context_window(agent) // 2)
     config = getattr(getattr(agent, "chat", None), "config", None)
     return getattr(config, "max_tokens", 8192)
 
