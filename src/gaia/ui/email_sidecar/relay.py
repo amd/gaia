@@ -60,15 +60,6 @@ from gaia.ui.sse_translation import SUMMARY_VIEW_KEYS
 
 logger = get_logger(__name__)
 
-#: Terminal error surfaced when the sidecar stream closes unexpectedly — a
-#: crash, a dropped connection, a forced close from the cancel path, or the
-#: stream simply ending without ever producing a ``final``/``error`` event
-#: (the canonical contract's "exactly one terminal event" guarantee broken).
-#: The user sees it via ``profile.stream_ended_text()``, which adds the log
-#: folder when one exists.
-STREAM_ENDED_UNEXPECTEDLY = EMAIL_PROFILE.stream_ended_message
-
-
 #: Surfaced both by the dispatch layer's pre-flight version gate (a pre-2.4
 #: Hub binary passes the manager's MAJOR-only handshake, see
 #: ``profiles.api_version_supported``) AND here, as the
@@ -562,7 +553,7 @@ def relay_query(
                 # Surface the sidecar's own actionable detail (e.g. the
                 # zero-connector 502) instead of masking it as a generic
                 # crash — #2419. Bodyless transport failures still fall
-                # through to STREAM_ENDED_UNEXPECTEDLY.
+                # through to profile.stream_ended_text().
                 crash_message = _augment_error_detail(detail, profile)
             logger.warning(
                 "%s relay: stream failed for run_id=%s: %s",
@@ -608,7 +599,6 @@ def relay_query(
 __all__ = [
     "relay_query",
     "RelayProfile",
-    "STREAM_ENDED_UNEXPECTEDLY",
     "EMAIL_QUERY_VERSION_UPGRADE_MESSAGE",
     "LEMONADE_CONNECTION_HINT",
 ]

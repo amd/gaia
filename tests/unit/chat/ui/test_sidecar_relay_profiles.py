@@ -626,9 +626,9 @@ class TestCopyIsAgentSpecific:
             "GAIA stopped unexpectedly while answering."
         )
 
-    def test_email_keeps_its_pinned_string(self):
-        assert EMAIL_PROFILE.stream_ended_message == (
-            relay_module.STREAM_ENDED_UNEXPECTEDLY
+    def test_email_crash_copy_names_the_email_agent(self):
+        assert EMAIL_PROFILE.stream_ended_message.startswith(
+            "The email agent stopped unexpectedly while working."
         )
 
     def test_the_lemonade_hint_names_the_right_agent(self):
@@ -681,7 +681,7 @@ class TestPlainUserCopy:
     @pytest.mark.parametrize("field_name", _USER_COPY_FIELDS)
     def test_no_internal_jargon_or_hub(self, profile, field_name):
         text = getattr(profile, field_name).lower()
-        for word in ("sidecar", "stream", "hub", "~/"):
+        for word in ("sidecar", "stream", "hub", "contract", "~/"):
             assert word not in text, f"{profile.agent_id}.{field_name}: {text!r}"
 
     @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])

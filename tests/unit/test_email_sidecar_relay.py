@@ -3,7 +3,7 @@
 """Contract tests for ``gaia.ui.email_sidecar.relay`` (#2109 query relay).
 
 ``relay.py`` does not exist yet — this file pins its designed public surface
-(``relay.relay_query`` + the ``STREAM_ENDED_UNEXPECTEDLY`` constant) as a
+(``relay.relay_query`` + the crash text from ``stream_ended_text()``) as a
 red-phase TDD contract. Every test in this file is expected to fail at
 collection with ``ModuleNotFoundError`` / ``ImportError`` until the module
 lands.

@@ -441,24 +441,24 @@ GAIA_PROFILE = RelayProfile(
     min_documents_api_version=(2, 16),
     documents_upgrade_message=(
         "This chat has attached documents, but the installed GAIA agent can't "
-        "read them (needs contract 2.16+). Update GAIA to the latest version, "
-        "or remove the documents from this chat, then retry."
+        "read them. Update GAIA to the latest version, or remove the documents "
+        "from this chat, then try again."
     ),
     # 2.17 added GET /skills.
     min_skills_api_version=(2, 17),
     # 2.18 added /query's allowed_paths field.
     min_scope_api_version=(2, 18),
     skills_upgrade_message=(
-        "The installed GAIA agent is too old to list its skills here (needs "
-        "contract 2.17+). Update GAIA to the latest version, then reopen this "
-        "page. Its skills still work in chat."
+        "The installed GAIA agent is too old to list its skills here. Update "
+        "GAIA to the latest version, then reopen this page. Its skills still "
+        "work in chat."
     ),
     # 2.18 added /query's memory field.
     min_memory_api_version=(2, 18),
     memory_upgrade_message=(
         "Memory is off for this chat, but the installed GAIA agent can't be "
-        "told so and would save to memory (needs contract 2.18+). Update GAIA "
-        "to the latest version and retry, or turn memory back on for this chat."
+        "told so and would save to memory. Update GAIA to the latest version, "
+        "then try again, or turn memory back on for this chat."
     ),
 )
 
