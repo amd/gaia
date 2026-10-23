@@ -626,7 +626,7 @@ def _should_retitle(current_title: str, title_is_custom: bool = False) -> bool:
     return not title or title.lower() in _AUTO_TITLE_DEFAULTS
 
 
-#: A cloud reasoning model spent 24 tokens thinking and returned no title (#5592).
+#: Room for a cloud reasoning model to finish thinking before it titles.
 _CLOUD_TITLE_MAX_TOKENS = 1024
 
 
