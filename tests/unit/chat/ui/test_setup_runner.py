@@ -483,6 +483,59 @@ def test_json_progress_names_the_model_bytes_speed_and_time_left(monkeypatch):
     _wait_done(runner)
 
 
+def test_what_gaia_init_prints_is_what_the_screen_reads(capsys):
+    """The real producer feeds the real consumer, so a renamed field fails here."""
+    from unittest.mock import MagicMock, patch
+
+    from gaia.installer.init_command import ChatModelChoice, InitCommand
+
+    gemma, qwen = "Gemma-4-E4B-it-GGUF", "Qwen3.6-35B-A3B-GGUF"
+    choice = ChatModelChoice(
+        model_id=gemma,
+        user_set=False,
+        skipped=[(qwen, "not enough free memory right now: it needs about 26.1 GB")],
+    )
+    cmd = InitCommand(profile="minimal", yes=True, progress_json=True)
+    with patch(
+        "gaia.installer.init_command.resolve_init_chat_model", return_value=choice
+    ):
+        cmd._chat_model(MagicMock())
+
+    def pull(_model_id, on_progress, **_kwargs):
+        on_progress(
+            {
+                "event": "progress",
+                "bytes_downloaded": 1_000_000_000,
+                "bytes_total": 4_000_000_000,
+            }
+        )
+        return True
+
+    with patch("gaia.llm.lemonade_client.LemonadeClient") as client_class:
+        client = MagicMock()
+        client.list_models.return_value = {
+            "data": [{"id": gemma, "size": 5.6, "downloaded": False}]
+        }
+        client.ensure_model_downloaded.side_effect = pull
+        client_class.return_value = client
+        assert cmd._download_models()
+
+    run = sr.SetupRun(skip_chat_model=False)
+    for line in capsys.readouterr().out.splitlines():
+        event = sr.parse_event(line)
+        if event is not None:
+            run.apply(event)
+    view = run.view()
+    assert view["chat_model"] == gemma
+    assert [p["id"] for p in view["passed_over"]] == [qwen]
+    assert view["download_gb"] == 5.6
+    assert view["download"]["model"] == gemma
+    assert (view["download"]["index"], view["download"]["count"]) == (1, 1)
+    assert view["download"]["bytes_done"] == 1_000_000_000
+    assert view["download"]["bytes_total"] == 4_000_000_000
+    assert view["percent"] == 25
+
+
 def _download(done, total, speed):
     return {
         "event": "download",
