@@ -425,7 +425,7 @@ def _off_real_home(path: Path) -> Path:
 
 @pytest.fixture(scope="session", autouse=True)
 def _redirect_default_databases():
-    """Open the file index and scratchpad under ``_TEST_GAIA_HOME``, not ``~/.gaia``.
+    """Open the file index, scratchpad and email stores under ``_TEST_GAIA_HOME``, not ``~/.gaia``.
 
     Both default to ``gaia_home()``, and GAIA_HOME stays unset (see
     _STATE_ENV). ``ChatAgentConfig`` passes that same default in explicitly, so
@@ -447,6 +447,13 @@ def _redirect_default_databases():
 
         return init
 
+    def redirect_path(real_resolve):
+        @functools.wraps(real_resolve)
+        def resolve(self):
+            return str(_off_real_home(Path(real_resolve(self)).expanduser()))
+
+        return resolve
+
     with pytest.MonkeyPatch.context() as mp:
         for module, cls in (
             (index, index.FileSystemIndexService),
@@ -454,6 +461,15 @@ def _redirect_default_databases():
         ):
             mp.setattr(module, "gaia_home", redirected_home)
             mp.setattr(cls, "__init__", redirect_init(cls.__init__))
+        # The email agent keeps state.db and memory.db under ~/.gaia/email; its
+        # package is absent from jobs that don't install it.
+        if importlib.util.find_spec("gaia_agent_email") is not None:
+            from gaia_agent_email.config import EmailAgentConfig
+
+            for name in ("resolved_db_path", "resolved_memory_db_path"):
+                mp.setattr(
+                    EmailAgentConfig, name, redirect_path(getattr(EmailAgentConfig, name))
+                )
         yield
 
 
