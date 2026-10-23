@@ -729,6 +729,35 @@ error. To run the chat model in the cloud instead, see
     ```
   </Accordion>
 
+  <Accordion title="App crashes at launch, or the window looks wrong on Wayland" icon="display">
+    Both are Chromium startup problems on GPU or desktop setups outside the
+    Ubuntu 24.04 test matrix (Fedora, Kinoite, ROCm overlays, GNOME on
+    Wayland), and each has a switch that fixes it.
+
+    **The app aborts right after launch** (a `SIGTRAP` or core dump with no
+    window): the Chromium GPU process is crashing on your graphics stack.
+    Turn GPU acceleration off:
+    ```bash
+    GAIA_DISABLE_GPU=1 ./gaia-agent-ui-*.AppImage
+    ```
+    To make it stick, export `GAIA_DISABLE_GPU=1` in your shell profile, or
+    add it to the `.desktop` entry's `Exec=` line
+    (`Exec=env GAIA_DISABLE_GPU=1 /path/to/gaia-agent-ui.AppImage %U`). It
+    accepts `1`, `true`, or `yes`, and also works on Windows and macOS.
+    The UI still works without the GPU; scrolling and animations may be
+    less smooth.
+
+    **The window is missing its frame, draws wrong, or won't resize on
+    Wayland:** run the app under XWayland instead:
+    ```bash
+    ./gaia-agent-ui-*.AppImage --ozone-platform=x11
+    ```
+    Add `--ozone-platform=x11` to the `.desktop` entry's `Exec=` line to
+    keep it. Pass it on the command line: the
+    `ELECTRON_OZONE_PLATFORM_HINT` environment variable no longer has any
+    effect in current Electron releases.
+  </Accordion>
+
   <Accordion title="Resetting a broken bootstrap" icon="rotate-left">
     If the Python backend bootstrap (uv, virtualenv, `amd-gaia[ui]` install)
     got interrupted or is in a half-installed state, clear the cached state

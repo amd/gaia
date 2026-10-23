@@ -102,27 +102,12 @@ const {
 const { createStartupDeepLinkQueue } = require("./services/deep-link-queue.cjs");
 const { installWindowKeys } = require("./services/window-keys.cjs");
 const { installQuitCleanup } = require("./services/quit-cleanup.cjs");
+const { chromiumSwitches } = require("./services/chromium-switches.cjs");
 
-// ── F7: Ozone hint (issue #782) ─────────────────────────────────────────────
-// Electron-recommended switch for distro-agnostic Linux behaviour: picks
-// Wayland on Wayland sessions, X11 elsewhere. Must be set before
-// app.whenReady() fires.
-app.commandLine.appendSwitch("ozone-platform-hint", "auto");
-
-// ── F7: --no-sandbox on Linux (issue #782) ───────────────────────────────────
-// chrome-sandbox is deleted from the packaged tree by after-pack.cjs so
-// Chromium must use its unprivileged user-namespace sandbox on every launch
-// path. The .desktop Exec= line already carries --no-sandbox via
-// electron-builder.yml linux.executableArgs, but direct `./GAIA.AppImage`
-// invocations bypass the .desktop entry. Appending the switch here makes
-// all Linux launch paths behave identically.
-if (process.platform === "linux") {
-  app.commandLine.appendSwitch("no-sandbox");
-
-  // Workaround: disable Chromium's Wayland color management which crashes on
-  // some Wayland compositors that implement the wp_color_manager protocol
-  // partially. See issue reports about wayland_wp_color_manager.cc SIGTRAP.
-  app.commandLine.appendSwitch("disable-features", "WaylandColorManagement");
+// No ozone switch: Electron 38+ already picks Wayland or X11, and users override with --ozone-platform=x11.
+for (const [name, value] of chromiumSwitches({ platform: process.platform, env: process.env })) {
+  if (value === undefined) app.commandLine.appendSwitch(name);
+  else app.commandLine.appendSwitch(name, value);
 }
 
 // ── F7: Log tee to ~/.gaia/electron-main.log (issue #782) ───────────────────
