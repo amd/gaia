@@ -9,6 +9,14 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Outlook messages show their real age and the newest one is replied to.**
+  The Outlook backend handed downstream Graph's ISO-8601 `receivedDateTime` in
+  the `internalDate` field, which every consumer reads as epoch milliseconds
+  and turned into 0. Every message looked like it arrived at the epoch, so the
+  needs-you ages were empty, the "newest message in the thread" reply target
+  never fired, and the recency order of the needs-review list was lost. The
+  backend now emits epoch milliseconds, using one timestamp parser shared with
+  the follow-up tools.
 - **A mailbox another GAIA operation is saving is reported as busy, not as
   missing permissions.** While the daemon, the Agent UI or the CLI is mid-save
   on a connection, the connection listing returns it marked `"error": "busy"`
