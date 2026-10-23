@@ -176,11 +176,20 @@ def _serve():
 
     def _start(bridge):
         httpd = mcp_bridge.create_server(bridge, "127.0.0.1", 0)
+        print_error = httpd.handle_error
+
+        def handle_error(request, client_address):
+            # Kept per server: stderr is shared with servers other tests leaked.
+            _start.handler_errors.append(sys.exc_info()[1])
+            print_error(request, client_address)
+
+        httpd.handle_error = handle_error
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         servers.append((httpd, thread))
         return f"http://127.0.0.1:{httpd.server_port}"
 
+    _start.handler_errors = []
     yield _start
     for httpd, thread in servers:
         httpd.shutdown()
@@ -260,7 +269,7 @@ def test_stalled_headers_are_answered_408(serve, monkeypatch):
 
 
 @pytest.mark.parametrize("verbose", [False, True])
-def test_a_dropped_idle_connection_is_logged(serve, monkeypatch, capsys, verbose):
+def test_a_dropped_idle_connection_is_logged(serve, monkeypatch, verbose):
     monkeypatch.setattr(MCPHTTPHandler, "timeout", 0.5)
     log = _RecordingLogger()
     monkeypatch.setattr(mcp_bridge, "logger", log)
@@ -272,7 +281,7 @@ def test_a_dropped_idle_connection_is_logged(serve, monkeypatch, capsys, verbose
     _get(f"{base}/health", timeout=2)  # the dropped handler has finished logging
 
     assert any("timed out" in w for w in log.warnings), log.warnings
-    assert "Traceback" not in capsys.readouterr().err
+    assert serve.handler_errors == []
 
 
 def test_an_oversized_body_is_refused_413_before_it_is_read(serve, monkeypatch):
