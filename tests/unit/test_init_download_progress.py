@@ -234,6 +234,28 @@ def test_without_the_flag_init_prints_no_json(capsys):
     assert _events(capsys.readouterr().out) == []
 
 
+def test_the_cli_passes_the_planned_chat_model_to_init(monkeypatch):
+    """Setup downloads the model the screen showed (--chat-model), not a re-pick."""
+    import sys
+
+    from gaia import cli
+    from gaia.installer import init_command
+
+    seen = {}
+
+    def run_init(**kwargs):
+        seen.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(init_command, "run_init", run_init)
+    argv = ["gaia", "init", "--yes", "--chat-model", "Gemma-4-E4B-it-GGUF"]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as done:
+        cli.main()
+    assert done.value.code == 0
+    assert seen["chat_model"] == "Gemma-4-E4B-it-GGUF"
+
+
 def test_the_cli_flag_reaches_init():
     from gaia.cli import build_parser
     from gaia.installer import init_command

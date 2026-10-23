@@ -3645,8 +3645,19 @@
     "type": "object"
   },
   "SetupRunRequest": {
-    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``server_only`` to start the model server and download nothing yet.",
+    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``server_only`` to start the model server and download nothing yet;\n``chat_model`` the model the plan showed, so the run sets up that one.",
     "properties": {
+      "chat_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Chat Model"
+      },
       "server_only": {
         "default": false,
         "title": "Server Only",

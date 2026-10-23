@@ -66,6 +66,28 @@ def test_run_args_ask_for_machine_readable_progress():
     assert "--progress-json" not in sr.run_command(False)
 
 
+def test_a_run_sets_up_the_chat_model_the_screen_showed():
+    args = sr.run_args(False, chat_model="Gemma-4-E4B-it-GGUF")
+    assert args[-2:] == ["--chat-model", "Gemma-4-E4B-it-GGUF"]
+    assert sr.run_command(False, chat_model="Gemma-4-E4B-it-GGUF") == (
+        "gaia init --profile gaia --chat-model Gemma-4-E4B-it-GGUF"
+    )
+
+
+def test_run_route_pins_the_planned_chat_model(client, monkeypatch):
+    test_client, _ = client
+    calls = []
+    _popen(monkeypatch, _FakeProc(_BlockingStdout()), calls)
+    started = test_client.post(
+        "/api/setup/run", json={"chat_model": "Gemma-4-E4B-it-GGUF"}
+    )
+    assert started.status_code == 200
+    assert started.json()["chat_model"] == "Gemma-4-E4B-it-GGUF"
+    argv = calls[0][0]
+    assert argv[argv.index("--chat-model") + 1] == "Gemma-4-E4B-it-GGUF"
+    test_client.post("/api/setup/cancel")
+
+
 def test_a_server_only_run_downloads_no_models():
     args = sr.run_args(False, server_only=True)
     assert "--skip-models" in args

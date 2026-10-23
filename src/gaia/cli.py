@@ -3874,8 +3874,10 @@ Examples:
     init_parser.add_argument(
         "--chat-model",
         default=None,
-        help="With --check --load: the local chat model to load instead of the "
-        "profile default.",
+        help="The local chat model to use instead of the profile default. With "
+        "--check --load: the one to load. Without --check: the one to set up, "
+        "as a setup screen showed it (one of setup's chat models); refused if "
+        "it no longer fits this PC.",
     )
     init_parser.add_argument(
         "--json",
@@ -5951,7 +5953,6 @@ Let me know your answer!
             for flag, value in (
                 ("--load", getattr(args, "load", False)),
                 ("--json", getattr(args, "json", False)),
-                ("--chat-model", getattr(args, "chat_model", None)),
             )
             if value
         ]
@@ -6016,6 +6017,7 @@ Let me know your answer!
             lemonade_url=getattr(args, "lemonade_url", None),
             gaia_lemonade=getattr(args, "gaia_lemonade", False),
             progress_json=getattr(args, "progress_json", False),
+            chat_model=getattr(args, "chat_model", None),
         )
         sys.exit(exit_code)
 

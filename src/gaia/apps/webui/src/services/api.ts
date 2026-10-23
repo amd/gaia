@@ -270,9 +270,14 @@ export async function checkSetup(skipChatModel = false): Promise<SetupCheck> {
     return apiFetch('GET', `/setup/check?skip_chat_model=${skipChatModel}`);
 }
 
-/** `serverOnly` installs and starts the model server and downloads no model. */
-export async function startSetup(skipChatModel: boolean, serverOnly = false): Promise<SetupRunStatus> {
-    return apiFetch('POST', '/setup/run', { skip_chat_model: skipChatModel, server_only: serverOnly });
+/**
+ * `serverOnly` installs and starts the model server and downloads no model.
+ * `chatModel` is the model the plan showed, so the run sets up that one.
+ */
+export async function startSetup(
+    skipChatModel: boolean, serverOnly = false, chatModel: string | null = null,
+): Promise<SetupRunStatus> {
+    return apiFetch('POST', '/setup/run', { skip_chat_model: skipChatModel, server_only: serverOnly, chat_model: chatModel });
 }
 
 export async function getSetupStatus(): Promise<SetupRunStatus> {

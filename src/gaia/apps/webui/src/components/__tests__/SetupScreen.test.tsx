@@ -132,7 +132,8 @@ describe('SetupScreen', () => {
         expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
 
         fireEvent.click(download);
-        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false));
+        // The model the screen named is the one setup downloads; it can't re-pick.
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, false, 'Qwen3.6-35B-A3B-GGUF'));
         expect(await screen.findByRole('button', { name: 'Start chatting' })).toBeInTheDocument();
         expect(screen.queryByLabelText('API key')).not.toBeInTheDocument();
     });

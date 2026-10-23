@@ -1059,9 +1059,11 @@ export interface SettingsUpdateRequest {
 }
 /**
  * ``skip_chat_model`` when the chat runs on a cloud provider;
- * ``server_only`` to start the model server and download nothing yet.
+ * ``server_only`` to start the model server and download nothing yet;
+ * ``chat_model`` the model the plan showed, so the run sets up that one.
  */
 export interface SetupRunRequest {
+  chat_model?: string | null;
   server_only?: boolean;
   skip_chat_model?: boolean;
 }

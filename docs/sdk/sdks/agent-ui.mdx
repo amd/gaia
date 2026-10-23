@@ -2270,7 +2270,9 @@ so the two can never disagree about whether GAIA is set up.
   <Accordion title="POST /api/setup/run">
     Start `gaia init --profile gaia --yes --progress-json` in the background;
     follow it with `/api/setup/status`. Body:
-    `{"skip_chat_model": false, "server_only": false}`. `skip_chat_model` is for
+    `{"skip_chat_model": false, "server_only": false, "chat_model": null}`.
+    `chat_model` is the plan's chat model, passed as `--chat-model` so the run
+    sets up the model the screen named. `skip_chat_model` is for
     a cloud chat model (only the embedding model downloads); `server_only`
     (`--skip-models`) installs and starts the model server and downloads
     nothing, so the plan can name the model that fits before the download.

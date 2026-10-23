@@ -306,10 +306,19 @@ class ChatModelChoice:
     skipped: list
     #: What the machine was judged against; None when the user chose.
     capacity: Optional[MachineCapacity] = None
+    #: The model the PC's total memory alone gives. When it differs from
+    #: ``model_id``, free memory (or a pinned pick) decided, and setup saves
+    #: ``model_id`` so a later check doesn't expect the other one.
+    capacity_pick: Optional[str] = None
+
+    @property
+    def keep(self) -> bool:
+        """Whether this pick must be saved as ``default_model`` to stay the pick."""
+        return bool(self.capacity_pick) and self.capacity_pick != self.model_id
 
 
 def resolve_init_chat_model(
-    client, *, reset_corrupt: bool, enforce_fit: bool
+    client, *, reset_corrupt: bool, enforce_fit: bool, pinned: Optional[str] = None
 ) -> ChatModelChoice:
     """The chat model `gaia init` sets up: the user's ``default_model`` when it
     is a local Lemonade model, else the largest default that fits this machine
@@ -320,12 +329,18 @@ def resolve_init_chat_model(
     policy (it rewrites a corrupt config); the read-only check raises instead.
     ``enforce_fit`` refuses a user's model that cannot fit — only run(), which
     would download it, needs that; ``--check`` just reports it missing.
+    ``pinned`` is the model the setup screen showed the user (``--chat-model``):
+    it is set up even if free memory moved since, and refused when it no longer
+    fits, so the screen and the download never disagree.
     """
     from gaia.config import GaiaConfig, GaiaConfigError
     from gaia.llm.lemonade_client import (
+        DEFAULT_MODEL_LADDER,
+        _model_ids_match,
         cloud_model_provider,
         recommend_default_chat_model,
     )
+    from gaia.llm.model_fit import ModelFitError
 
     try:
         configured = GaiaConfig.load().default_model
@@ -342,12 +357,42 @@ def resolve_init_chat_model(
         and not cloud_model_provider(configured)
     )
     if is_local:
+        if pinned and not _model_ids_match(pinned, configured):
+            raise ModelFitError(
+                f"Setup was asked to set up {pinned}, but default_model is "
+                f"{configured}. Open setup again, or run `gaia init` without "
+                "--chat-model."
+            )
         if enforce_fit:
             _refuse_if_it_does_not_fit(client, configured)
         return ChatModelChoice(model_id=configured, user_set=True, skipped=[])
     model_id, skipped, capacity = recommend_default_chat_model(client)
+    capacity_pick = (
+        recommend_default_chat_model(client, free_memory=False)[0]
+        if capacity is not None
+        else None
+    )
+    if pinned and not _model_ids_match(pinned, model_id):
+        # The floor always qualifies; a larger model must still be the pick now.
+        if pinned not in DEFAULT_MODEL_LADDER:
+            raise ModelFitError(
+                f"--chat-model {pinned} is not one of setup's chat models "
+                f"({', '.join(DEFAULT_MODEL_LADDER)}). Set it with "
+                f"`gaia config set default_model {pinned}` instead."
+            )
+        if pinned != DEFAULT_MODEL_LADDER[-1]:
+            reason = dict(skipped).get(pinned, f"setup now picks {model_id}")
+            raise ModelFitError(
+                f"{pinned} no longer fits this PC: {reason}. Open setup again "
+                "to see the model that fits now."
+            )
+        model_id, skipped = pinned, []
     return ChatModelChoice(
-        model_id=model_id, user_set=False, skipped=skipped, capacity=capacity
+        model_id=model_id,
+        user_set=False,
+        skipped=skipped,
+        capacity=capacity,
+        capacity_pick=capacity_pick,
     )
 
 
@@ -818,6 +863,7 @@ class InitCommand:
         lemonade_url: Optional[str] = None,
         gaia_lemonade: bool = False,
         progress_json: bool = False,
+        chat_model: Optional[str] = None,
     ):
         """
         Initialize the init command.
@@ -848,7 +894,15 @@ class InitCommand:
             progress_json: Also print the chat model choice, the planned
                 downloads and download progress as JSON lines on stdout (see
                 :meth:`_emit`), for the Agent UI's setup screen.
+            chat_model: The chat model to set up, as the setup screen showed it
+                (see :func:`resolve_init_chat_model`'s ``pinned``).
         """
+        if chat_model and (skip_chat_model or skip_models):
+            raise ValueError(
+                "--chat-model names the chat model to download; it can't be "
+                "combined with --skip-chat-model or --skip-models."
+            )
+        self.chat_model = chat_model
         if lemonade_url and gaia_lemonade:
             raise ValueError(
                 "Choose one: --lemonade-url uses your Lemonade Server, "
@@ -1711,7 +1765,10 @@ class InitCommand:
         """Save a hardware-picked chat model as ``default_model`` so every agent
         resolves to it. Never overwrites a model the user chose, and records
         nothing when the pick is the floor model every agent already defaults to
-        or when setup did not download it (declined, or ``--skip-models``).
+        or when setup did not download it (declined, or ``--skip-models``). A
+        floor pick that free memory (or the setup screen) made on a PC whose
+        total memory holds a larger model is recorded too: otherwise the next
+        ``--check``, with more memory free, would expect the larger model.
         """
         from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
@@ -1721,7 +1778,7 @@ class InitCommand:
         # An undownloaded default would make every agent's first load fail.
         if not self._chat_model_ready:
             return
-        if choice.model_id != DEFAULT_MODEL_NAME:
+        if choice.model_id != DEFAULT_MODEL_NAME or choice.keep:
             config.default_model = choice.model_id
 
     def _chat_model_choice(self, client) -> "ChatModelChoice":
@@ -1733,7 +1790,7 @@ class InitCommand:
         """This machine's chat model; says why on first resolution."""
         if self._chat_choice is None:
             choice = resolve_init_chat_model(
-                client, reset_corrupt=True, enforce_fit=True
+                client, reset_corrupt=True, enforce_fit=True, pinned=self.chat_model
             )
             self._chat_choice = choice
             if choice.user_set:
@@ -1751,6 +1808,14 @@ class InitCommand:
                 self._print(f"   Chat model: {choice.model_id}{where}")
                 for skipped_id, reason in choice.skipped:
                     self._print(f"   Not using {skipped_id}: {reason}")
+                if choice.keep:
+                    self._print(
+                        f"   GAIA keeps using {choice.model_id} once it is set up "
+                        "(saved as default_model). To switch to "
+                        f"{choice.capacity_pick} later, free memory and run "
+                        f"`gaia config set default_model {choice.capacity_pick}`, "
+                        "then `gaia init`."
+                    )
             self._emit(
                 "chat_model",
                 model=choice.model_id,
@@ -2745,6 +2810,7 @@ def run_init(
     lemonade_url: Optional[str] = None,
     gaia_lemonade: bool = False,
     progress_json: bool = False,
+    chat_model: Optional[str] = None,
 ) -> int:
     """
     Entry point for `gaia init` command.
@@ -2763,6 +2829,7 @@ def run_init(
         lemonade_url: Use (and save) the Lemonade Server the user runs here
         gaia_lemonade: Use (and save) GAIA's own Lemonade Server
         progress_json: Also print progress as JSON lines (see InitCommand._emit)
+        chat_model: The chat model to set up instead of re-picking one
 
     Returns:
         Exit code (0 for success, non-zero for failure)
@@ -2781,6 +2848,7 @@ def run_init(
             lemonade_url=lemonade_url,
             gaia_lemonade=gaia_lemonade,
             progress_json=progress_json,
+            chat_model=chat_model,
         )
         return cmd.run()
     except ValueError as e:

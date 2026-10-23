@@ -340,13 +340,16 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
         setStartError(null);
         try {
             saveChoice(choice);
+            // The model the screen named, so the download can't be a different one.
+            const named = plan && !plan.decided_after_server ? plan.chat_model.id : null;
             setRun(await (cloud ? api.startSetup(true)
                 : serverFirst ? api.startSetup(false, true)
-                    : api.startSetup(false)));
+                    : named ? api.startSetup(false, false, named)
+                        : api.startSetup(false)));
         } catch (err) {
             setStartError(err instanceof Error ? err.message : String(err));
         }
-    }, [cloud, choice, serverFirst]);
+    }, [cloud, choice, serverFirst, plan]);
 
     const connect = useCallback(async () => {
         setKeyState({ busy: true, error: null, done: false });

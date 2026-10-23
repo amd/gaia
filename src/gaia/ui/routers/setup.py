@@ -9,7 +9,7 @@ with the same ``gaia init --check``, so they can never disagree.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -66,17 +66,23 @@ def setup_chat_model(body: ChatModelRequest) -> Dict[str, Any]:
 
 class SetupRunRequest(BaseModel):
     """``skip_chat_model`` when the chat runs on a cloud provider;
-    ``server_only`` to start the model server and download nothing yet."""
+    ``server_only`` to start the model server and download nothing yet;
+    ``chat_model`` the model the plan showed, so the run sets up that one."""
 
     skip_chat_model: bool = False
     server_only: bool = False
+    chat_model: Optional[str] = None
 
 
 @router.post("/api/setup/run")
 def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
     """Start ``gaia init --profile gaia --yes``; follow it with ``/api/setup/status``."""
     try:
-        return runner.start(body.skip_chat_model, server_only=body.server_only)
+        return runner.start(
+            body.skip_chat_model,
+            server_only=body.server_only,
+            chat_model=body.chat_model,
+        )
     except SetupError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
 

@@ -2038,14 +2038,17 @@ def free_memory_verdict(base_url: str, requirement: "ModelRequirement", capacity
     )
 
 
-def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
+def recommend_default_chat_model(
+    client: "LemonadeClient", free_memory: bool = True
+) -> Tuple[str, list, Any]:
     """Pick the default chat model this machine can run, from Lemonade's view of it.
 
     Returns ``(model_id, skipped, capacity)``: ``skipped`` lists
     ``(model_id, reason)`` for each larger model passed over, so the caller can
     say why a big machine did not get the big model. A larger model must also
     fit the memory free right now (:func:`free_memory_verdict`), or setup would
-    download one that won't load. When Lemonade's report
+    download one that won't load; ``free_memory=False`` judges total memory
+    only, to tell whether free memory changed the pick. When Lemonade's report
     does not say how much memory this PC has, the floor model is picked —
     the model every PC ran before this choice existed — with that as the
     reason, and ``capacity`` is None.
@@ -2095,7 +2098,11 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
             if not verdict.fits:
                 unsupported.append((model_id, verdict.reason))
                 continue
-            free = free_memory_verdict(client.base_url, mr, capacity)
+            free = (
+                free_memory_verdict(client.base_url, mr, capacity)
+                if free_memory
+                else None
+            )
             if free is not None and not free.fits:
                 unsupported.append((model_id, free.reason))
                 continue

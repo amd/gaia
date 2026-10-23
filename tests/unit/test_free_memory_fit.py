@@ -309,6 +309,26 @@ class _Lemonade:
         return {"version": "2026.40.0"}
 
 
+class _Machine(_Lemonade):
+    """A whole GAIA Lemonade: what setup, the check and the free-memory read ask."""
+
+    def __init__(self, info):
+        super().__init__(info)
+        self.downloaded = set()
+
+    def get_system_info(self, timeout=None, verbose=False):
+        return self.info
+
+    def health_check(self, timeout=None):
+        return {"status": "ok", "version": "2026.40.0", "all_models_loaded": []}
+
+    def check_model_available(self, model_id):
+        return model_id in self.downloaded
+
+    def list_models(self, show_all=False):
+        return {"data": [{"id": m, "downloaded": True} for m in self.downloaded]}
+
+
 class TestDefaultModelFollowsFreeMemory:
     """#5582: the pick was made on total memory, then the 23 GB download failed
     to load because only 20.4 GB was free."""
@@ -330,6 +350,70 @@ class TestDefaultModelFollowsFreeMemory:
         machine(MAC_48, _ram(48, 4), loaded={QWEN: 32768})
         model_id, _, _ = lc.recommend_default_chat_model(_Lemonade(MAC_48))
         assert model_id == QWEN
+
+    def test_a_finished_setup_stays_finished_when_more_memory_is_free_later(
+        self, machine, monkeypatch
+    ):
+        """Set up at 20 GB free (Gemma); a later launch with 40 GB free must not
+        expect Qwen3.6 and send a working user back to a 23 GB download."""
+        from unittest.mock import MagicMock, patch
+
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import InitCommand, check_setup_status
+
+        lemonade = _Machine(MAC_48)
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+        machine(MAC_48, _ram(48, 20.4))
+        cmd = InitCommand(profile="gaia", yes=True)
+        assert cmd._chat_model(lemonade) == GEMMA
+        lemonade.downloaded |= {GEMMA, EMBEDDER}
+        cmd._chat_model_ready = True
+        GaiaConfig.update(cmd._record_chat_choice)
+
+        machine(MAC_48, _ram(48, 40))
+        embedded = MagicMock()
+        embedded.status.return_value = MagicMock(
+            installed=True,
+            running=True,
+            unresponsive_pid=None,
+            version=embedded.version,
+            base_url=URL,
+        )
+        with (
+            patch("gaia.llm.lemonade_embedded.EmbeddedLemonade", return_value=embedded),
+            patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.start_embedded_if_stopped"
+            ),
+            patch("gaia.llm.lemonade_client.LemonadeClient", return_value=lemonade),
+        ):
+            status = check_setup_status(profile="gaia")
+        assert status.ready, status.reasons
+
+    def test_setup_says_the_downgraded_pick_is_kept(self, machine, capsys):
+        from gaia.installer.init_command import InitCommand
+
+        machine(MAC_48, _ram(48, 20.4))
+        InitCommand(profile="gaia", yes=True)._chat_model(_Machine(MAC_48))
+        out = " ".join(capsys.readouterr().out.split())
+        assert f"gaia config set default_model {QWEN}" in out
+
+    def test_a_planned_model_is_the_one_set_up_even_with_more_memory_free(
+        self, machine
+    ):
+        """The screen named Gemma at 20 GB free; the run must not switch to Qwen3.6."""
+        from gaia.installer.init_command import InitCommand
+
+        machine(MAC_48, _ram(48, 40))
+        cmd = InitCommand(profile="gaia", yes=True, chat_model=GEMMA)
+        assert cmd._chat_model(_Machine(MAC_48)) == GEMMA
+
+    def test_a_planned_model_that_no_longer_fits_free_memory_is_refused(self, machine):
+        from gaia.installer.init_command import InitCommand
+
+        machine(MAC_48, _ram(48, 10))
+        cmd = InitCommand(profile="gaia", yes=True, chat_model=QWEN)
+        with pytest.raises(model_fit.ModelFitError, match="10.0 GB is free"):
+            cmd._chat_model(_Machine(MAC_48))
 
     def test_a_remote_server_is_not_judged_by_this_pcs_memory(self, machine):
         machine(MAC_48, _ram(48, 2))

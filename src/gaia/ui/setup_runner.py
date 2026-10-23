@@ -90,13 +90,20 @@ def check_args(skip_chat_model: bool, load: bool) -> List[str]:
     return args
 
 
-def _choice_flags(skip_chat_model: bool, server_only: bool) -> List[str]:
+def _choice_flags(
+    skip_chat_model: bool, server_only: bool, chat_model: Optional[str]
+) -> List[str]:
     if server_only:
         return ["--skip-models"]
-    return ["--skip-chat-model"] if skip_chat_model else []
+    if skip_chat_model:
+        return ["--skip-chat-model"]
+    # The model the screen showed, so the run can't re-pick a different one.
+    return ["--chat-model", chat_model] if chat_model else []
 
 
-def run_args(skip_chat_model: bool, server_only: bool = False) -> List[str]:
+def run_args(
+    skip_chat_model: bool, server_only: bool = False, chat_model: Optional[str] = None
+) -> List[str]:
     # --yes: nobody can answer a prompt on a pipe. --skip-webui-build: a source
     # checkout would otherwise rebuild the very UI that is running this.
     return [
@@ -106,14 +113,19 @@ def run_args(skip_chat_model: bool, server_only: bool = False) -> List[str]:
         "--yes",
         "--skip-webui-build",
         "--progress-json",
-        *_choice_flags(skip_chat_model, server_only),
+        *_choice_flags(skip_chat_model, server_only, chat_model),
     ]
 
 
-def run_command(skip_chat_model: bool, server_only: bool = False) -> str:
+def run_command(
+    skip_chat_model: bool, server_only: bool = False, chat_model: Optional[str] = None
+) -> str:
     """What a person would type to do this themselves."""
     return " ".join(
-        ["gaia init --profile gaia", *_choice_flags(skip_chat_model, server_only)]
+        [
+            "gaia init --profile gaia",
+            *_choice_flags(skip_chat_model, server_only, chat_model),
+        ]
     )
 
 
@@ -303,6 +315,8 @@ class SetupRun:
     chat_model: Optional[str] = None
     #: Only the model server; no model is downloaded.
     server_only: bool = False
+    #: The chat model the screen showed, passed as `--chat-model`.
+    pinned_model: Optional[str] = None
     state: str = "running"  # running | verifying | ready | failed | cancelled
     phase: Optional[str] = None
     text: str = "Starting setup"
@@ -317,6 +331,9 @@ class SetupRun:
     download_gb: Optional[float] = None
     #: The pull in progress: model, its place in the queue, bytes, speed, time left.
     download: Optional[Dict[str, Any]] = None
+
+    def command(self) -> str:
+        return run_command(self.skip_chat_model, self.server_only, self.pinned_model)
 
     def _step_status(self, i: int, reached: int) -> str:
         if self.state == "ready":
@@ -374,7 +391,7 @@ class SetupRun:
             "text": self.text,
             "percent": self.percent,
             "error": self.error,
-            "command": run_command(self.skip_chat_model, self.server_only),
+            "command": self.command(),
             "log_tail": self.log[-40:],
             "skip_chat_model": self.skip_chat_model,
             "server_only": self.server_only,
@@ -397,18 +414,26 @@ class SetupRunner:
         with self._lock:
             return self._run.view() if self._run else None
 
-    def start(self, skip_chat_model: bool, server_only: bool = False) -> Dict[str, Any]:
+    def start(
+        self,
+        skip_chat_model: bool,
+        server_only: bool = False,
+        chat_model: Optional[str] = None,
+    ) -> Dict[str, Any]:
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
                 raise SetupError("Setup is already running.")
+            pinned = None if skip_chat_model or server_only else chat_model
             run = SetupRun(
                 skip_chat_model=skip_chat_model,
                 users_server=users_lemonade_url(),
+                chat_model=pinned,
                 server_only=server_only,
+                pinned_model=pinned,
             )
             try:
                 self._proc = subprocess.Popen(
-                    _gaia_argv(*run_args(skip_chat_model, server_only)),
+                    _gaia_argv(*run_args(skip_chat_model, server_only, pinned)),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL,
@@ -419,7 +444,7 @@ class SetupRunner:
                 )
             except OSError as e:
                 raise SetupError(
-                    f"Could not start `{run_command(skip_chat_model, server_only)}`: "
+                    f"Could not start `{run.command()}`: "
                     f"{e}. Run it in a terminal instead."
                 ) from e
             self._run = run
@@ -477,7 +502,7 @@ class SetupRunner:
             if code != 0:
                 run.state = "failed"
                 run.error = (
-                    f"`{run_command(run.skip_chat_model, run.server_only)}` failed "
+                    f"`{run.command()}` failed "
                     f"(exit {code}): {run.error or _last_line(chr(10).join(run.log))}"
                 )
                 return
