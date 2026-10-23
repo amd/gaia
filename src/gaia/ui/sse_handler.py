@@ -602,6 +602,8 @@ class SSEOutputHandler(OutputHandler):
         self.active_relay_run_id: Optional[str] = None
         # Only this id may be answered, so a late click cannot approve a newer one.
         self._relay_confirm_id = None
+        # A relayed needs_input question the sidecar run is parked on.
+        self._relay_question_id: Optional[str] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
@@ -1942,7 +1944,9 @@ class SSEOutputHandler(OutputHandler):
             ) or self._relay_confirm_id is not None:
                 return "permission"
         with self._user_input_lock:
-            if any(not evt.is_set() for evt in self._user_input_events.values()):
+            if self._relay_question_id is not None or any(
+                not evt.is_set() for evt in self._user_input_events.values()
+            ):
                 return "question"
         return None
 
@@ -2110,7 +2114,7 @@ class SSEOutputHandler(OutputHandler):
         if self._confirm_id is not None or self._relay_confirm_id is not None:
             return True
         with self._user_input_lock:
-            return bool(self._user_input_queue)
+            return bool(self._user_input_queue) or self._relay_question_id is not None
 
     def request_user_input_blocking(
         self,
@@ -2259,7 +2263,16 @@ class SSEOutputHandler(OutputHandler):
         if proxy is None or run_id is None:
             return False
         proxy.respond_query(run_id, request_id, value)
+        with self._user_input_lock:
+            # A newer question may already be pending; only this one is answered.
+            if self._relay_question_id == request_id:
+                self._relay_question_id = None
         return True
+
+    def set_relay_question(self, request_id: Optional[str]) -> None:
+        """Record (or clear, with ``None``) the relayed question now pending."""
+        with self._user_input_lock:
+            self._relay_question_id = request_id
 
     def set_relay_confirmation(self, confirm_id: Optional[str]) -> None:
         """Record (or clear, with ``None``) the sidecar prompt now pending."""
