@@ -64,6 +64,7 @@ export interface ApiSchemas {
   InternetRequest: InternetRequest;
   KnowledgeCreate: KnowledgeCreate;
   KnowledgeUpdate: KnowledgeUpdate;
+  LearningConfigUpdate: LearningConfigUpdate;
   LimitRequest: LimitRequest;
   LoadModelRequest: LoadModelRequest;
   LoadedModelInfo: LoadedModelInfo;
@@ -674,6 +675,15 @@ export interface KnowledgeUpdate {
   entity?: string | null;
   reminded_at?: string | null;
   sensitive?: boolean | null;
+}
+export interface LearningConfigUpdate {
+  base_model?: string | null;
+  enabled?: boolean | null;
+  keep_adapters?: number | null;
+  min_idle_minutes?: number | null;
+  require_ac_power?: boolean | null;
+  window_end?: string | null;
+  window_start?: string | null;
 }
 /**
  * ``limit_usd`` None removes the limit.

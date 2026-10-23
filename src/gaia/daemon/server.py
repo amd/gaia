@@ -136,14 +136,31 @@ def _build_clock(
 ) -> DaemonClock:
     """The daemon's single scheduled-job clock (#2379).
 
-    *executors* ships EMPTY in production — ``run()`` below calls this with no
-    ``executors`` argument at all. This lands the clock machinery only; no job
-    kind has a registered executor yet. Wiring a real one (email briefing/send
-    and beyond) is a deliberate follow-up (see the PR description), not an
-    oversight — reconciling jobs before an executor exists would permanently
-    fail-mark every one of them on first fire.
+    Production passes :func:`_production_executors`. A recurring job whose
+    ``source`` has no executor is marked failed, never skipped.
     """
     return DaemonClock(db_path, executors=executors or {})
+
+
+def _by_source(executors: Dict[str, JobExecutor]) -> JobExecutor:
+    """One executor for a cadence kind that hands each job to its source's."""
+
+    def dispatch(job, db):
+        executor = executors.get(job["source"])
+        if executor is None:
+            raise RuntimeError(
+                f"no executor for {job['kind']} jobs from source {job['source']!r}"
+            )
+        executor(job, db)
+
+    return dispatch
+
+
+def _production_executors() -> Dict[str, JobExecutor]:
+    from gaia.daemon.scheduler.models import KIND_RECURRING
+    from gaia.learning.launcher import JOB_SOURCE, scheduled_executor
+
+    return {KIND_RECURRING: _by_source({JOB_SOURCE: scheduled_executor})}
 
 
 def _build_register(
@@ -325,10 +342,8 @@ def run(host: str = HOST) -> None:
     os.environ[BROKER_URL_ENV_VAR] = f"http://{host}:{port}"
 
     # The daemon's single scheduled-job clock (#2379): built here so both the
-    # register/deregister hooks and the status route share one instance. Ships
-    # with NO executors — see _build_clock's docstring for why that is
-    # deliberate, not an oversight.
-    clock = _build_clock(str(scheduler_db_path()))
+    # register/deregister hooks and the status route share one instance.
+    clock = _build_clock(str(scheduler_db_path()), executors=_production_executors())
 
     # GAIA's own private, self-contained Lemonade instance (#3121), which the
     # daemon starts at boot and stops at shutdown.

@@ -121,6 +121,8 @@ _STATE_ENV = {
     "GAIA_MEMORY_DB": ("memory", "memory.db"),
     # Cloud calls record model availability here.
     "GAIA_GATEWAY_FILE": ("gateway", "gateway.json"),
+    # An active nightly-learning adapter adds --lora to every chat load.
+    "GAIA_LEARNING_HOME": ("learning", "home"),
 }
 _STATE_ROOT = Path(tempfile.mkdtemp(prefix="gaia-test-state-"))
 atexit.register(shutil.rmtree, _STATE_ROOT, ignore_errors=True)

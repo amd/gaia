@@ -2169,6 +2169,73 @@ Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.
   </Accordion>
 </AccordionGroup>
 
+### Nightly learning
+
+Settings, adapters, learned items and runs for nightly on-device learning — see the [Nightly Learning guide](/guides/nightly-learning) and [`gaia learn`](/reference/cli#learn). Errors are 400 with an actionable `detail` (404 for an unknown adapter, item or run).
+
+<AccordionGroup>
+  <Accordion title="GET /api/learning/status">
+    Settings, the model being personalised and whether it's supported, the
+    last toolchain check, the active adapter and the latest run (with live
+    training progress). A run whose process died is reported as `failed`.
+  </Accordion>
+
+  <Accordion title="PUT /api/learning/config">
+    Change any of `enabled`, `window_start`, `window_end` (`HH:MM`),
+    `min_idle_minutes`, `require_ac_power`, `base_model`, `keep_adapters`.
+    Turning learning on registers the nightly job with the GAIA daemon.
+  </Accordion>
+
+  <Accordion title="GET /api/learning/adapters">
+    Every adapter, newest first, with status (`active`, `archived`,
+    `rejected`, `candidate`), probe scores for the base model and the adapter,
+    the decision and what it learned.
+  </Accordion>
+
+  <Accordion title="GET /api/learning/adapters/{adapter_id}">
+    One adapter's full record, including every probe's reply.
+  </Accordion>
+
+  <Accordion title="DELETE /api/learning/adapters/{adapter_id}">
+    Delete an adapter. Refused (400) for the active one.
+  </Accordion>
+
+  <Accordion title="POST /api/learning/adapters/{adapter_id}/activate">
+    Make an adapter active (also how you roll back) and reload the chat model
+    with it.
+  </Accordion>
+
+  <Accordion title="POST /api/learning/deactivate">
+    Serve the base model with no adapter; the adapter is archived, not deleted.
+  </Accordion>
+
+  <Accordion title="GET /api/learning/items">
+    Everything learned so far: kind, title, evidence and example counts.
+  </Accordion>
+
+  <Accordion title="DELETE /api/learning/items/{item_id}">
+    Forget a learned item. The next adapter is trained without it.
+  </Accordion>
+
+  <Accordion title="GET /api/learning/runs">
+    Recent learning cycles, newest first (`?limit=`, at most 100).
+  </Accordion>
+
+  <Accordion title="GET /api/learning/runs/{run_id}/report">
+    What a cycle found: every learning opportunity with its examples and
+    probes, and what it skipped and why.
+  </Accordion>
+
+  <Accordion title="POST /api/learning/run">
+    Start a cycle now in the background. 409 while one is running.
+  </Accordion>
+
+  <Accordion title="POST /api/learning/stop">
+    Ask the running cycle to stop; it stops at its next training step and
+    restores the active adapter.
+  </Accordion>
+</AccordionGroup>
+
 ### Schedules
 
 Recurring prompts run on a cron-like interval — see [`gaia schedule`](/reference/cli#schedule) for the CLI equivalent. The scheduler runs *prompts* only; it cannot yet run a *skill* directly (`gaia schedule add --skill` is rejected — [#1019](https://github.com/amd/gaia/issues/1019)).

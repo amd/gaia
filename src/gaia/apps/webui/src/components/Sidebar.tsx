@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Bell, Brain, Clock, EyeOff, FileText, PanelLeftClose, PanelLeftOpen,
+    Bell, Brain, Clock, EyeOff, FileText, GraduationCap, PanelLeftClose, PanelLeftOpen,
     Pin, PinOff, Search, Settings, Smartphone, SquarePen, Trash2, X,
 } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
@@ -143,6 +143,8 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const openSettings = useChatStore((s) => s.openSettings);
     const setShowMemoryDashboard = useChatStore((s) => s.setShowMemoryDashboard);
     const setShowSchedules = useChatStore((s) => s.setShowSchedules);
+    const setShowLearning = useChatStore((s) => s.setShowLearning);
+    const showLearning = useChatStore((s) => s.showLearning);
     const setShowDocLibrary = useChatStore((s) => s.setShowDocLibrary);
     const showMemory = useChatStore((s) => s.showMemoryDashboard);
     const showSchedules = useChatStore((s) => s.showSchedules);
@@ -265,6 +267,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const nav = [
         { key: 'memory', label: 'Memory', icon: Brain, on: showMemory, onClick: () => { setShowMemoryDashboard(true); closeOnMobile(); } },
         { key: 'schedules', label: 'Scheduled tasks', icon: Clock, on: showSchedules, onClick: () => { setShowSchedules(true); closeOnMobile(); } },
+        { key: 'learning', label: 'Nightly learning', icon: GraduationCap, on: showLearning, onClick: () => { setShowLearning(true); closeOnMobile(); } },
         { key: 'documents', label: 'Documents', icon: FileText, on: false, onClick: () => { setShowDocLibrary(true); closeOnMobile(); } },
     ];
 

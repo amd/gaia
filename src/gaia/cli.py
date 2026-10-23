@@ -1831,6 +1831,10 @@ def build_parser():
 
     schedule_parser.set_defaults(action="schedule")
 
+    from gaia.learning.cli import add_learn_parser
+
+    add_learn_parser(subparsers, parent_parser)
+
     # Knowledge command — web research via the Tavily wrapper
     knowledge_parser = subparsers.add_parser(
         "knowledge",
@@ -4862,6 +4866,14 @@ def main():
 
     if args.action == "schedule":
         _handle_schedule(args)
+        return
+
+    if args.action == "learn":
+        from gaia.learning.cli import handle_learn
+
+        code = handle_learn(args)
+        if code:
+            sys.exit(code)
         return
 
     # Handle core Gaia CLI commands
