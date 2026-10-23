@@ -156,6 +156,11 @@ Pick the install path that fits you best:
     the default model are downloaded automatically on first launch. This is
     the simplest path for non-developer end users.
 
+    If that first-launch setup fails (for example, too little free memory to
+    load the model), the new-chat screen shows GAIA's error and a **Choose a
+    model** button, so you can switch to a cloud model or a smaller one before
+    your first message. Setup runs again on the next launch.
+
     **Artifact naming** (`electron-builder.yml`):
     `gaia-agent-ui-<version>-<arch>-setup.<ext>` — e.g. `gaia-agent-ui-0.17.2-x64-setup.exe`
     and `gaia-agent-ui-0.17.2-amd64.deb`.

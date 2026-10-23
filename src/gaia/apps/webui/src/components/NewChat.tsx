@@ -11,7 +11,7 @@ import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
-import { displayModelName, useModelNames } from '../stores/modelStore';
+import { displayModelName, useModelNames, useModelStore } from '../stores/modelStore';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { STARTING_REASON } from '../utils/constants';
 import { log } from '../utils/logger';
@@ -60,9 +60,27 @@ function SuggestionsUnavailable({ detail, onRetry }: { detail: string; onRetry: 
     );
 }
 
+/** First-run setup failed: say so before the first message fails with the same error. */
+function SetupFailed({ error }: { error: string }) {
+    const openSettings = useChatStore((s) => s.openSettings);
+    return (
+        <div className="new-chat-setup-failed" role="alert">
+            <p className="new-chat-setup-failed-title">GAIA&rsquo;s first-run setup didn&rsquo;t finish, so a chat on this PC&rsquo;s model will fail.</p>
+            <p className="new-chat-setup-failed-error">{error}</p>
+            <p>
+                Use a cloud model, or pick a smaller one.{' '}
+                <button type="button" className="link-btn" onClick={() => openSettings('model')}>Choose a model</button>
+            </p>
+        </div>
+    );
+}
+
 /** An empty chat: a greeting, the composer, tasks to start from. Created on the first message. */
 export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatProps) {
     const starting = useChatStore((s) => s.systemStatus?.init_state === 'initializing');
+    // Moot once chats run in the cloud or a local model has loaded after all.
+    const setupError = useChatStore((s) => (s.systemStatus?.model_loaded ? null : s.systemStatus?.setup_error ?? null));
+    const remote = useModelStore((s) => !!s.active?.remote);
     const [text, setText] = useState(initialText);
     const [error, setError] = useState<string | null>(null);
     const [sending, setSending] = useState(false);
@@ -137,6 +155,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         <main className="new-chat" aria-label="New chat">
             <div className="new-chat-inner">
                 <h1 className="new-chat-greeting">{greeting()}</h1>
+                {setupError && !remote && <SetupFailed error={setupError} />}
                 <Composer
                     value={text}
                     onChange={setText}
