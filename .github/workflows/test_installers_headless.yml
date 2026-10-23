@@ -20,9 +20,11 @@
 #
 # "Healthy" means:
 #   desktop app   its Python backend answers GET /api/health and is the
-#                 release's version. The installer downloads no model; the
-#                 app's first-run setup does, which needs real hardware and
-#                 is covered by the eval and hardware lanes.
+#                 release's version. A release before #5629 runs `gaia init`
+#                 (Lemonade + several GB of models) on first launch, so
+#                 GAIA_SKIP_GAIA_INIT stays set; later apps download no model
+#                 until first-run setup, which needs real hardware and is
+#                 covered by the eval and hardware lanes.
 #   terminal      `gaia-tui version` reports the release, and one non-interactive
 #                 turn (`gaia-tui chat --agent gaia --query ...`) completes
 #                 through the installed gaia-agent against a fake model server
