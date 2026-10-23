@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- An MCP server tool can name the arguments the repeat-call guard compares, in
+  its `_meta` under `ai.amd-gaia/dedup_key`. A server with a bad declaration
+  is refused on its own: it is disconnected, its tools are neither registered
+  nor counted toward `mcp_tool_limit`, the load summary names it with the
+  error, and the servers after it still load. Uses `_admit_mcp_server`, new in
+  core 0.25.1.
 - A `run_python` snippet or `execute_python_file` script whose code only reads
   files no longer marks the turn's undo as incomplete, unless files changed in
   the folders it ran in. The check fails closed: an import it doesn't know,

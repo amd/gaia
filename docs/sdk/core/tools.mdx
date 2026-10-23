@@ -993,6 +993,9 @@ Notable implementation details:
   `TypeError`. An MCP server declares the same list in a tool's `_meta` under
   `"ai.amd-gaia/dedup_key"`; a bad declaration refuses that server's tools
   with an error naming the server, tool and key, and other servers still load.
+  The key applies under the tool name the model emits: a call the agent
+  resolves from another name (an unprefixed MCP name, different casing) is
+  compared on every argument.
 - Unsupported decorator keywords raise `TypeError` at decoration time and
   identify the invalid argument, tool name, and accepted keyword set.
 
