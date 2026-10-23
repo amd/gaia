@@ -797,6 +797,8 @@ Each schedule runs in its own chat session, so the full history of runs (prompt 
 Behavior notes:
 
 - Scheduled runs use the GAIA agent and the model you picked; with a local model nothing leaves your machine.
+- Nobody is there to approve a tool call during a scheduled run, so tools that need approval (shell commands, file writes) are refused.
+- A run that fails shows its error on the schedule card and raises a notification in the notification center's **Errors** tab.
 - Runs are **suspended while mobile access (tunnel) is active**, matching the autonomous agent loop's security posture. Set `GAIA_AUTONOMOUS_ALLOW_TUNNEL=1` to override.
 - One run executes at a time; overlapping schedules queue.
 - Per-run timeout defaults to 300 s; override with `GAIA_SCHEDULE_TIMEOUT`.

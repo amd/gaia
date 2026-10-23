@@ -1994,6 +1994,7 @@ def _dispatch_sidecar_query(
     allowed_paths: list | None = None,
     memory: str = "on",
     recording: TurnRecording | None = None,
+    max_steps: int | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
 
@@ -2197,6 +2198,7 @@ def _dispatch_sidecar_query(
             and changes_supported(profile, handle.api_version)
             else None
         ),
+        max_steps=max_steps,
     )
 
 
