@@ -6,14 +6,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### For integrators
-
-- **A tool result keeps the tool's own status.** When a tool's result had no
-  structured payload, the `tool_result` event's `data` carried only `summary`
-  and `success`, so a client could not tell a skipped `remember` (a private
-  chat saves nothing) from a saved one, and the Agent UI listed it as saved.
-  `data` now also carries `status` when the tool returned one. Additive, so
-  the contract version is unchanged.
+- **Token counts are exact in the published binary, offline too.** The binary
+  could not load its tokenizer, so every turn trimmed history and sized
+  context from an estimate that overcounts, and logged `Unknown encoding
+  cl100k_base`. The tokenizer and its data now ship inside the binary, so it
+  no longer downloads anything to count tokens.
 
 ### For integrators: contract 2.20
 
@@ -26,6 +23,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the session's folders and labels GAIA's documents folder, so "summarize X in
   my documents folder" looks there first instead of trying `~/Documents` and
   the home folder.
+
+### For integrators
+
+- **A tool result keeps the tool's own status.** When a tool's result had no
+  structured payload, the `tool_result` event's `data` carried only `summary`
+  and `success`, so a client could not tell a skipped `remember` (a private
+  chat saves nothing) from a saved one, and the Agent UI listed it as saved.
+  `data` now also carries `status` when the tool returned one. Additive, so
+  the contract version is unchanged.
+
+### For integrators: contract 2.19
+
 - **`/query` can record a turn's file changes for undo** (contract **2.19**).
   Desktop chats run in this agent and the Agent UI relays them, so a file the
   agent wrote never reached the chat's Changes view or its Undo. With

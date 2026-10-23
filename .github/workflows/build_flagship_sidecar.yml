@@ -145,6 +145,9 @@ jobs:
           # pandas and matplotlib are for run_python scripts: the binary is the
           # only Python a release user has (#5088). freeze.py refuses to build
           # without them (SCRIPT_LIBRARIES).
+          #
+          # tiktoken is named rather than left to arrive through tavily-python:
+          # freeze.py bundles its cl100k_base data and fails the build without it.
           uv pip install --python .venv-freeze \
             -e ".[api,rag,diarize,browser]" \
             -e hub/agents/chat/python \
@@ -152,6 +155,7 @@ jobs:
             anthropic \
             pandas \
             matplotlib \
+            tiktoken \
             pyinstaller
 
       - name: Freeze one-file binary
