@@ -27,7 +27,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
 import requests
@@ -765,7 +765,9 @@ class GatewayManager:
         """Drop the session token. Does not affect the env var."""
         return self._request("DELETE", f"cloud/auth/{GATEWAY_PROVIDER}")
 
-    def ensure_authenticated(self) -> bool:
+    def ensure_authenticated(
+        self, recall: Optional[Callable[[], Optional[str]]] = None
+    ) -> bool:
         """Give Lemonade the remembered token if it has none.
 
         Lemonade forgets its token on restart, so without this every restart
@@ -775,6 +777,9 @@ class GatewayManager:
         key: it stores one without validating it, so a revoked token reports
         authenticated and discovers nothing. Reporting that as success sends the
         caller looking for a missing model instead of an expired key.
+
+        *recall* replaces :func:`recall_token`, so a caller that must not block
+        on the credential store can bound the read.
 
         Raises:
             GatewayError: GAIA uses the user's own server and its gateway
@@ -802,7 +807,7 @@ class GatewayManager:
                 f"auth`, or unset {GATEWAY_ENV_VAR} if it is stale."
             )
             return False
-        token = recall_token()
+        token = (recall or recall_token)()
         if not token:
             return False
         try:

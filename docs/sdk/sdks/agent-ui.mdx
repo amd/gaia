@@ -2175,7 +2175,8 @@ Recurring prompts run on a cron-like interval — see [`gaia schedule`](/referen
 
 <AccordionGroup>
   <Accordion title="GET /api/schedules">
-    List all scheduled tasks.
+    List all scheduled tasks. Each carries `last_error`: why its last run
+    failed, or `null` when that run succeeded.
   </Accordion>
 
   <Accordion title="POST /api/schedules">

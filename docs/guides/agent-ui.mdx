@@ -400,6 +400,10 @@ Open **Settings → Model** (or the model chip in the message box):
   store, and are refused over mobile access. When a key is already set (in the
   environment or from the TUI) the screen says so; leave the field blank to keep
   using it. **Forget key** removes it here and for future sessions.
+- On macOS, the first read of a saved key after reinstalling GAIA opens a
+  Keychain dialog. Until you answer it, the model list says macOS is asking for
+  keychain access instead of offering to add a key. Click **Always Allow** and
+  the list fills in on its own.
 - The AMD LLM Gateway is greyed out, here and on the first-run setup screen,
   when its host can't be reached from this network. It reads "No network
   available — can't reach llm-api.amd.com (needs AMD's network or VPN)". Connect
@@ -793,6 +797,8 @@ Each schedule runs in its own chat session, so the full history of runs (prompt 
 Behavior notes:
 
 - Scheduled runs use the GAIA agent and the model you picked; with a local model nothing leaves your machine.
+- Nobody is there to approve a tool call during a scheduled run, so tools that need approval (shell commands, file writes) are refused.
+- A run that fails shows its error on the schedule card and raises a notification in the notification center's **Errors** tab.
 - Runs are **suspended while mobile access (tunnel) is active**, matching the autonomous agent loop's security posture. Set `GAIA_AUTONOMOUS_ALLOW_TUNNEL=1` to override.
 - One run executes at a time; overlapping schedules queue.
 - Per-run timeout defaults to 300 s; override with `GAIA_SCHEDULE_TIMEOUT`.
