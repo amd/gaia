@@ -692,6 +692,8 @@ export interface Schedule {
     session_id: string | null;
     /** Parsed natural-language schedule as JSON; null for plain-interval schedules. */
     schedule_config: string | null;
+    /** The last run's error; null when it succeeded. */
+    last_error: string | null;
 }
 
 /** A single execution result for a scheduled task. */
