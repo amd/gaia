@@ -805,14 +805,21 @@ def _short_location(path: str, workspace: str) -> str:
 
 
 def _strip_base(command: str, base: str) -> str:
-    """Drop ``base`` + separator where it starts a path token. Never a root."""
+    """Drop ``base`` + separator where it starts a path token. Never a root.
+
+    The home folder becomes ``~`` rather than nothing: stripped bare, ``ls ~/src``
+    reads as ``ls src``, which names a folder the user may be sitting in.
+    """
     base = os.path.normpath(base).rstrip("\\/") if base else ""
     if not base or os.path.dirname(base) == base or len(base) < 3:
         return command
+    flags = re.IGNORECASE if os.name == "nt" else 0
+    home = os.path.normpath(os.path.expanduser("~"))
+    if os.path.normcase(base) == os.path.normcase(home):
+        pattern = r"(^|[\s\"'=])" + re.escape(base) + r"([\\/])"
+        return re.sub(pattern, r"\1~\2", command, flags=flags)
     pattern = r"(^|[\s\"'=])" + re.escape(base) + r"[\\/]"
-    return re.sub(
-        pattern, r"\1", command, flags=re.IGNORECASE if os.name == "nt" else 0
-    )
+    return re.sub(pattern, r"\1", command, flags=flags)
 
 
 def _split_leading_cd(command: str) -> "tuple[str, str]":
