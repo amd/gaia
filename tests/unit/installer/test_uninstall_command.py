@@ -196,9 +196,7 @@ class TestBuildPlan:
         assert plan.stop_daemon
         assert plan.clear_credentials
 
-    def test_purge_removes_file_snapshots_and_the_previous_install_log(
-        self, fake_home
-    ):
+    def test_purge_removes_file_snapshots_and_the_previous_install_log(self, fake_home):
         """Undo snapshots are copies of the user's own files; purge leaves none."""
         plan = uc.build_plan(
             venv=False,
