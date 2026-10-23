@@ -9,6 +9,7 @@ import { log } from '../utils/logger';
 import type { Schedule, ScheduleResult, ParsedSchedule } from '../types';
 import { parseScheduleInput } from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import './ScheduleManager.css';
 
 /** Format an interval in seconds to a human-readable string. */
@@ -220,6 +221,8 @@ export function ScheduleManager() {
     const { schedules, loading, error, loadSchedules, createSchedule } = useScheduleStore();
     const close = useCallback(() => setShowSchedules(false), [setShowSchedules]);
     useEscapeToClose(true, close);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useFocusTrap(dialogRef, true);
 
     // Create form state
     const [showCreate, setShowCreate] = useState(false);
@@ -293,7 +296,7 @@ export function ScheduleManager() {
     }, [canCreate, scheduleName, nlInput, schedulePrompt, createSchedule]);
 
     return (
-        <div className="modal-overlay" onClick={() => setShowSchedules(false)} role="dialog" aria-modal="true" aria-label="Scheduled tasks">
+        <div ref={dialogRef} className="modal-overlay" onClick={() => setShowSchedules(false)} role="dialog" aria-modal="true" aria-label="Scheduled tasks">
             <div className="modal-panel schedule-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
                     <h3>Scheduled tasks</h3>
