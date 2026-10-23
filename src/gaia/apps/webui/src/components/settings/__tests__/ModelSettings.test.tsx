@@ -87,19 +87,19 @@ describe('ModelSettings provider keys', () => {
     });
 
     it('connects with the typed key and clears the field', async () => {
-        mockedApi.connectProvider.mockResolvedValue({ ...fireworks(), remembered: true, remember_error: null });
+        mockedApi.connectProviderWaitingForOs.mockResolvedValue({ ...fireworks(), remembered: true, remember_error: null });
         const card = await openFireworks();
         const field = within(card).getByLabelText('Fireworks AI API key');
         fireEvent.change(field, { target: { value: 'fw-secret' } });
         fireEvent.click(within(card).getByRole('button', { name: 'Connect' }));
 
-        await waitFor(() => expect(mockedApi.connectProvider).toHaveBeenCalledWith('fireworks', { api_key: 'fw-secret' }));
+        await waitFor(() => expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('fireworks', { api_key: 'fw-secret' }, expect.any(Function)));
         expect(await within(card).findByRole('status')).toHaveTextContent('The key is kept for next time.');
         expect(field).toHaveValue('');
     });
 
     it('shows why the connection was refused', async () => {
-        mockedApi.connectProvider.mockRejectedValue(new Error('Fireworks rejected the key (401)'));
+        mockedApi.connectProviderWaitingForOs.mockRejectedValue(new Error('Fireworks rejected the key (401)'));
         const card = await openFireworks();
         fireEvent.change(within(card).getByLabelText('Fireworks AI API key'), { target: { value: 'bad' } });
         fireEvent.click(within(card).getByRole('button', { name: 'Connect' }));

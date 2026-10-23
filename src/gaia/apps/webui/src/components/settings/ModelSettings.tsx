@@ -109,7 +109,11 @@ export function ModelSettings() {
             const body = chosen === 'amd'
                 ? { api_key: key || undefined, ...Object.fromEntries(Object.entries(amd).filter(([, v]) => v !== '')) }
                 : { api_key: key || undefined };
-            const r = await api.connectProvider(chosen, body);
+            const r = await api.connectProviderWaitingForOs(
+                chosen,
+                body,
+                (waiting) => setNotice({ ok: true, text: waiting }),
+            );
             setKey('');
             setNotice({
                 ok: true,
