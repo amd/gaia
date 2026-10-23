@@ -109,10 +109,14 @@ SUMMARY_VIEW_KEYS = (
     "summary_truncated",
     "command_output",
     "latency_ms",
+    "mcp_output",
     # What the tool wrote (``RESULT_PATH_KEYS`` in ``gaia.ui.sse_handler``).
     "file_path",
     "image_path",
 )
+
+#: Which connector an MCP tool call belongs to, carried from ``tool_start``.
+MCP_TOOL_FIELDS = ("mcp_server", "mcp_server_label", "mcp_tool")
 
 #: Counts a ``status`` carrying a ``phase`` may report alongside it: reasoning
 #: words so far, or characters of a tool call's arguments so far.
@@ -274,24 +278,38 @@ class CanonicalTranslator:
             return []
         pending = self._pending_tool
         self._pending_tool = None
-        return [self._emit_tool_call(pending["tool"], pending.get("args") or {})]
+        return [
+            self._emit_tool_call(
+                pending["tool"], pending.get("args") or {}, pending.get("mcp")
+            )
+        ]
 
-    def _emit_tool_call(self, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _emit_tool_call(
+        self,
+        tool: str,
+        args: Dict[str, Any],
+        mcp: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         self._last_tool = tool
         self._result_seen_since_call = False
-        # ``narration`` is additive — ``tool`` and ``args`` keep their shape for
-        # clients that predate it (spec §4.1, additive-MINOR).
+        # ``narration`` and the MCP fields are additive — ``tool`` and ``args``
+        # keep their shape for clients that predate them (spec §4.1, additive-MINOR).
         return {
             "type": "tool_call",
             "tool": tool,
             "args": args,
             "narration": derive_narration(tool, args),
+            **(mcp or {}),
         }
 
     def _on_tool_start(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Flush a previous pending tool_call that never got its tool_args.
         out = self._flush_pending()
-        self._pending_tool = {"tool": event.get("tool") or "unknown", "args": {}}
+        self._pending_tool = {
+            "tool": event.get("tool") or "unknown",
+            "args": {},
+            "mcp": {k: event[k] for k in MCP_TOOL_FIELDS if event.get(k)},
+        }
         return out
 
     def _on_tool_args(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -299,9 +317,9 @@ class CanonicalTranslator:
         if not isinstance(args, dict):
             args = {}
         if self._pending_tool is not None:
-            tool = self._pending_tool["tool"]
+            pending = self._pending_tool
             self._pending_tool = None
-            return [self._emit_tool_call(tool, args)]
+            return [self._emit_tool_call(pending["tool"], args, pending.get("mcp"))]
         # tool_args with no buffered tool_start (defensive) — emit a standalone
         # tool_call keyed on whatever name the args event carries.
         return [self._emit_tool_call(event.get("tool") or "unknown", args)]
