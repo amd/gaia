@@ -222,10 +222,10 @@ def _dispatch_one(
         tool = str(event.get("tool") or "unknown")
         args = event.get("args") or {}
         label = _tool_label(tool, profile)
-        # The ledger is what the turn's summary, and so the chat's Outputs, is
-        # built from; the in-process handler feeds it from print_tool_usage.
-        handler.turn_ledger.tool_started(tool)
-        handler.turn_ledger.tool_args(args)
+        # The turn summary and the heartbeat read this state, not the events.
+        handler.record_tool_started(tool)
+        if isinstance(args, dict):
+            handler.record_tool_args(args)
         handler._emit({"type": "tool_start", "tool": tool, "detail": label})
         handler._emit(
             {
@@ -247,7 +247,7 @@ def _dispatch_one(
         tool = str(event.get("tool") or "unknown")
         data = event.get("data")
         success = _derive_success(data)
-        handler.turn_ledger.tool_result(data, success)
+        handler.record_tool_result(data, success)
         out: Dict[str, Any] = {
             "type": "tool_result",
             "tool": tool,

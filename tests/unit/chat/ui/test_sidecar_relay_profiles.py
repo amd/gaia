@@ -220,6 +220,15 @@ class _FakeSSEHandler:
     def _emit(self, event):
         self.events.append(event)
 
+    def record_tool_started(self, tool_name):
+        pass
+
+    def record_tool_args(self, args):
+        pass
+
+    def record_tool_result(self, data, success):
+        pass
+
 
 class _FakeProxy:
     def __init__(self, init_result=(200, {})):
