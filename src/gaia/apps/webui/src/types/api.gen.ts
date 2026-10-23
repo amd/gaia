@@ -958,6 +958,7 @@ export interface ScheduleListResponse {
  */
 export interface ScheduleResponse {
   created_at?: string | null;
+  description: string;
   error_count?: number;
   id: string;
   interval_seconds: number;

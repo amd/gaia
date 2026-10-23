@@ -848,8 +848,15 @@ class ScheduledTask:
             "error_count": self.error_count,
             "session_id": self.session_id,
             "schedule_config": self.schedule_config,
+            "description": self.describe(),
             "last_error": self.last_error,
         }
+
+    def describe(self) -> str:
+        """When it runs, in the words the schedule form's preview uses."""
+        if self.schedule_config:
+            return _build_description(ScheduleConfig.from_json(self.schedule_config))
+        return _format_every(self.interval_seconds)
 
 
 class Scheduler:

@@ -14,6 +14,7 @@ const base: Schedule = {
     id: 's1',
     name: 'news',
     interval_seconds: 3600,
+    description: 'Every hour',
     prompt: 'summarise the news',
     status: 'active',
     created_at: null,

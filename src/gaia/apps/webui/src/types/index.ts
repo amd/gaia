@@ -696,6 +696,8 @@ export interface Schedule {
     session_id: string | null;
     /** Parsed natural-language schedule as JSON; null for plain-interval schedules. */
     schedule_config: string | null;
+    /** When it runs, e.g. "Weekdays at 8:00 AM" — the same words the form preview shows. */
+    description: string;
     /** The last run's error; null when it succeeded. */
     last_error: string | null;
 }
