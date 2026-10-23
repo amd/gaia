@@ -1074,7 +1074,8 @@ export interface ProviderInfo {
 }
 
 export interface ProviderNetwork {
-    reachable: boolean;
+    /** Null when this PC can't tell: Lemonade runs elsewhere, or a proxy carries the traffic. */
+    reachable: boolean | null;
     /** Why it can't be reached; null when it can. */
     detail: string | null;
 }

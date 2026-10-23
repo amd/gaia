@@ -398,7 +398,9 @@ Open **Settings → Model** (or the model chip in the message box):
 - The AMD LLM Gateway is greyed out, here and on the first-run setup screen,
   when its host can't be reached from this network. It reads "No network
   available — can't reach llm-api.amd.com (needs AMD's network or VPN)". Connect
-  to AMD's network or VPN, then press **Check again**.
+  to AMD's network or VPN, then press **Check again**. When Lemonade runs on
+  another machine, or a proxy carries this PC's traffic, the check is skipped and
+  the gateway stays choosable.
 - Recommended Fireworks models are ranked first, each with the benchmark result
   behind the pick.
 - The model you choose is remembered across restarts (shared with the TUI). If

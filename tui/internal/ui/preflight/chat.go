@@ -94,7 +94,7 @@ func chatOption(provider, localSize, localFit string) ChatOption {
 }
 
 // probeChatGateway is a var so tests reach no network.
-var probeChatGateway = lemonade.ProbeGateway
+var probeChatGateway = lemonade.ProbeGatewayFrom
 
 // withGatewayReach marks the AMD gateway unavailable when its host does not
 // answer, so the choice says "no network" before anyone picks it.
@@ -104,7 +104,8 @@ func withGatewayReach(ctx context.Context, options []ChatOption) []ChatOption {
 			continue
 		}
 		var u *lemonade.UnreachableError
-		if err := probeChatGateway(ctx, ""); errors.As(err, &u) {
+		// The first run has no gateway set up yet, so the default is the one asked about.
+		if err := probeChatGateway(ctx, "", ""); errors.As(err, &u) {
 			options[i].Unavailable = u.Brief()
 		}
 	}

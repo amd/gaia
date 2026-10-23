@@ -5,9 +5,11 @@ package lemonade
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"time"
 )
 
@@ -28,6 +30,28 @@ func (e *UnreachableError) Unwrap() error { return e.Err }
 // Brief is the one line a provider list shows for it.
 func (e *UnreachableError) Brief() string {
 	return "No network available — can't reach " + e.Host + " (needs AMD's network or VPN)"
+}
+
+// ErrCannotCheck means a dial from here would not prove anything: Lemonade,
+// which makes the gateway's requests, runs elsewhere, or traffic leaves through
+// a proxy. The option then stays choosable.
+var ErrCannotCheck = errors.New("the gateway is reached through Lemonade on another machine or a proxy, so it is not checked from here")
+
+// proxyEnv names the variables that send this machine's traffic through a proxy.
+var proxyEnv = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"}
+
+// ProbeGatewayFrom checks the gateway only where the answer holds for the
+// requests Lemonade at lemonadeBase will make.
+func ProbeGatewayFrom(ctx context.Context, lemonadeBase, base string) error {
+	if !isLoopbackHTTP(ResolveBaseURL(lemonadeBase)) {
+		return ErrCannotCheck
+	}
+	for _, name := range proxyEnv {
+		if os.Getenv(name) != "" {
+			return ErrCannotCheck
+		}
+	}
+	return ProbeGateway(ctx, base)
 }
 
 // dialGateway is a var so tests reach no network.

@@ -46,6 +46,9 @@ organization's network, or without its VPN, the option is greyed out and reads
 "No network available — can't reach llm-api.amd.com (needs AMD's network or VPN)",
 and it can't be chosen. Connect, then press **r** to check again. This shows both
 in the provider panel and at the first-run "where should chat run?" question.
+The check is skipped, and the option stays choosable, when Lemonade runs on
+another machine or an `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` proxy is set: those
+requests don't take this PC's direct route.
 
 For **Local**, the list shows every chat model Lemonade offers, downloaded or not.
 On a new machine, the list becomes available once the setup step that installs

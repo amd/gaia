@@ -62,14 +62,17 @@ type clearedMsg struct {
 	err    error
 }
 
-// gatewayProbedMsg is whether the AMD gateway's host answered.
+// gatewayProbedMsg is whether the AMD gateway's host answered. seq orders
+// checks; connect is set when the read that scheduled it may open the key form.
 type gatewayProbedMsg struct {
-	source *lemonade.Client
-	err    error
+	source  *lemonade.Client
+	err     error
+	seq     int
+	connect bool
 }
 
 // probeGateway is a var so tests reach no network.
-var probeGateway = lemonade.ProbeGateway
+var probeGateway = lemonade.ProbeGatewayFrom
 
 type Model struct {
 	spin          spinner.Model
@@ -119,6 +122,8 @@ type Model struct {
 	// answered; gatewayErr is what it found (nil: the host answered).
 	gatewayChecked bool
 	gatewayErr     error
+	// gatewaySeq is the newest check sent; an older answer is dropped.
+	gatewaySeq int
 }
 
 var names = lemonade.ChatProviders
@@ -189,15 +194,19 @@ func (m Model) WithConnect(provider string) Model {
 func (m Model) chosen() string { return names[m.selected] }
 
 // checkGateway asks whether the AMD gateway this Lemonade is set up for
-// answers, so the list can say so before anyone picks it.
-func (m Model) checkGateway() tea.Cmd {
-	c, ctx, base := m.client, m.ctx, ""
+// answers, so the list can say so before anyone picks it. connect lets the
+// answer open the key form.
+func (m Model) checkGateway(connect bool) (Model, tea.Cmd) {
+	m.gatewaySeq++
+	c, ctx, base, seq := m.client, m.ctx, "", m.gatewaySeq
 	for _, p := range m.providers {
 		if p.Name == "amd" {
 			base = p.BaseURL
 		}
 	}
-	return func() tea.Msg { return gatewayProbedMsg{source: c, err: probeGateway(ctx, base)} }
+	return m, func() tea.Msg {
+		return gatewayProbedMsg{source: c, err: probeGateway(ctx, c.BaseURL, base), seq: seq, connect: connect}
+	}
 }
 
 // gatewayDisabled reports whether the AMD gateway was found unreachable.
@@ -507,20 +516,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.stage == "setup" {
 			m.fields[3].Placeholder = m.keyPlaceholder()
 		}
-		probe := m.checkGateway()
+		ready := m.autoConnect && m.stage == "providers" && v.err == nil
+		var probe tea.Cmd
+		m, probe = m.checkGateway(ready && m.chosen() == "amd")
 		// The gateway's key form waits for its network check.
-		if m.autoConnect && m.stage == "providers" && v.err == nil && m.chosen() != "amd" {
+		if ready && m.chosen() != "amd" {
 			m.autoConnect = false
 			next, cmd := m.openSetup()
 			return next, tea.Batch(cmd, probe)
 		}
 		return m, probe
 	case gatewayProbedMsg:
-		if v.source != nil && v.source != m.client {
+		if (v.source != nil && v.source != m.client) || v.seq != m.gatewaySeq {
 			return m, nil
 		}
 		m.gatewayChecked, m.gatewayErr = true, v.err
-		if m.autoConnect && m.stage == "providers" && m.chosen() == "amd" {
+		if v.connect && m.autoConnect && m.stage == "providers" && m.chosen() == "amd" {
 			m.autoConnect = false
 			if m.gatewayDisabled() {
 				m = m.withDetail(m.gatewayNote(), v.err.Error())
@@ -814,6 +825,8 @@ func (m Model) gatewayDesc(keyDesc string) string {
 	switch {
 	case !m.gatewayChecked:
 		return keyDesc + " · checking the network"
+	case errors.Is(m.gatewayErr, lemonade.ErrCannotCheck):
+		return keyDesc
 	case errors.As(m.gatewayErr, &u):
 		return u.Brief()
 	case m.gatewayErr != nil:

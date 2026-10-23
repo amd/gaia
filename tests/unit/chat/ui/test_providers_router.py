@@ -152,6 +152,7 @@ def reach(monkeypatch):
             raise state["error"]
 
     monkeypatch.setattr(providers, "check_gateway_reachable", check_reachable)
+    monkeypatch.setattr("urllib.request.getproxies", lambda: {})
     return state
 
 
@@ -1054,3 +1055,35 @@ def test_connecting_an_unreachable_gateway_says_no_network_not_key(
     # Nothing was registered or sent: the key never left this machine.
     assert lemonade.paths("POST") == []
     assert keys["remembered"] == []
+
+
+@pytest.mark.parametrize("setup", ["remote_lemonade", "proxy"])
+def test_the_gateway_is_not_checked_where_a_dial_from_here_proves_nothing(
+    client, lemonade, keys, reach, monkeypatch, setup
+):
+    """Lemonade sends the gateway's requests; a remote one, or a proxy, takes another path."""
+    if setup == "remote_lemonade":
+        monkeypatch.setattr(providers, "_is_local_url", lambda url: False)
+    else:
+        monkeypatch.setattr(
+            "urllib.request.getproxies", lambda: {"https": "http://proxy.test:3128"}
+        )
+    reach["error"] = _offline()
+    amd = _amd(client.get("/api/providers").json())
+    assert amd["network"] == {"reachable": None, "detail": None}
+    assert reach["asked"] == []
+    if setup == "proxy":
+        resp = client.post("/api/providers/amd/connect", json={"api_key": KEY})
+        assert resp.status_code == 200, resp.text
+
+
+def test_an_unreadable_lemonade_address_skips_the_gateway_check(
+    client, lemonade, keys, reach, monkeypatch
+):
+    def unreadable():
+        raise providers.ProviderError("LEMONADE_BASE_URL is not a URL", 503)
+
+    monkeypatch.setattr(providers, "_base_url", unreadable)
+    reach["error"] = _offline()
+    amd = _amd(client.get("/api/providers").json())
+    assert amd["network"] == {"reachable": None, "detail": None}

@@ -17,7 +17,7 @@ import (
 func stubChatGateway(t *testing.T, err error) {
 	t.Helper()
 	old := probeChatGateway
-	probeChatGateway = func(context.Context, string) error { return err }
+	probeChatGateway = func(context.Context, string, string) error { return err }
 	t.Cleanup(func() { probeChatGateway = old })
 }
 

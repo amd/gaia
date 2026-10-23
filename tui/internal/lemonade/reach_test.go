@@ -61,3 +61,27 @@ func TestAGatewayURLWithNoHostIsRefused(t *testing.T) {
 		t.Fatalf("err = %v, want a URL error, not unreachable", err)
 	}
 }
+
+// A dial from here proves nothing when Lemonade, which sends the requests, is
+// elsewhere, or when traffic leaves through a proxy.
+func TestTheGatewayIsNotCheckedFromHereForARemoteLemonadeOrAProxy(t *testing.T) {
+	for _, name := range proxyEnv {
+		t.Setenv(name, "")
+	}
+	addr := stubDial(t, errors.New("no such host"))
+	if err := ProbeGatewayFrom(context.Background(), "http://lemonade.example.test:8000/api/v1", ""); !errors.Is(err, ErrCannotCheck) {
+		t.Fatalf("remote Lemonade: err = %v", err)
+	}
+	t.Setenv("HTTPS_PROXY", "http://proxy.example.test:3128")
+	if err := ProbeGatewayFrom(context.Background(), "http://localhost:13305/api/v1", ""); !errors.Is(err, ErrCannotCheck) {
+		t.Fatalf("proxy: err = %v", err)
+	}
+	if *addr != "" {
+		t.Fatalf("dialed %q though the answer could not count", *addr)
+	}
+	t.Setenv("HTTPS_PROXY", "")
+	var u *UnreachableError
+	if err := ProbeGatewayFrom(context.Background(), "http://localhost:13305/api/v1", ""); !errors.As(err, &u) {
+		t.Fatalf("local Lemonade, no proxy: err = %v", err)
+	}
+}

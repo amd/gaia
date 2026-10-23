@@ -253,10 +253,27 @@ def check_gateway_reachable(base_url: Optional[str] = None) -> None:
     check_reachable(base_url)
 
 
+def _gateway_check_applies() -> bool:
+    """A dial from this PC only says something when Lemonade, which sends the
+    gateway's requests, runs here and no proxy carries this PC's traffic."""
+    import urllib.request
+
+    try:
+        local = _is_local_url(_base_url())
+    except ProviderError as e:
+        # An unreadable Lemonade address is reported by the provider list itself.
+        logger.info("Not checking the AMD gateway's network: %s", e)
+        return False
+    return local and not urllib.request.getproxies()
+
+
 def _with_network(view: Dict[str, Any]) -> Dict[str, Any]:
     """Say whether the AMD gateway can be reached, before anyone picks it."""
     from gaia.llm.gateway import GatewayUnreachable
 
+    if not _gateway_check_applies():
+        view["network"] = {"reachable": None, "detail": None}
+        return view
     try:
         check_gateway_reachable(view.get("base_url"))
     except (GatewayUnreachable, ValueError) as e:
@@ -695,7 +712,7 @@ def connect_provider(
             status_code=403,
             detail="Enter provider keys on the PC running GAIA, not over mobile access.",
         )
-    if provider == AMD:
+    if provider == AMD and _gateway_check_applies():
         from gaia.llm.gateway import GatewayUnreachable
 
         try:

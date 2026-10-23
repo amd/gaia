@@ -21,7 +21,7 @@ func stubProbe(t *testing.T, err error) *[]string {
 	t.Helper()
 	var asked []string
 	old := probeGateway
-	probeGateway = func(_ context.Context, base string) error { asked = append(asked, base); return err }
+	probeGateway = func(_ context.Context, _, base string) error { asked = append(asked, base); return err }
 	t.Cleanup(func() { probeGateway = old })
 	return &asked
 }
@@ -152,5 +152,53 @@ func TestRecheckingReenablesAGatewayThatCameBack(t *testing.T) {
 	next, cmd = m.Update(loadedMsg{source: m.client, providers: []lemonade.Provider{{Name: "amd"}}})
 	if m = probed(t, next.(Model), cmd); m.gatewayDisabled() {
 		t.Fatal("the gateway stayed greyed out after the network came back")
+	}
+}
+
+// When the check can't be made from here, the gateway stays choosable.
+func TestAGatewayThatCannotBeCheckedFromHereStaysChoosable(t *testing.T) {
+	stubProbe(t, lemonade.ErrCannotCheck)
+	m := New("", 100, 30)
+	next, cmd := m.Update(loadedMsg{source: m.client, providers: []lemonade.Provider{{Name: "amd", RuntimeKey: true}}})
+	m = probed(t, next.(Model), cmd)
+	if m.gatewayDisabled() {
+		t.Fatal("an unchecked gateway was greyed out")
+	}
+	if row := amdRow(t, m); row != "Via Lemonade · key configured" {
+		t.Fatalf("AMD row = %q", row)
+	}
+	m.selected = 2
+	if m = key(m, tea.KeyEnter); m.stage != "setup" {
+		t.Fatalf("enter on an unchecked gateway opened %q", m.stage)
+	}
+}
+
+// A read that failed keeps its note and never opens the key form.
+func TestConnectingTheGatewayWaitsForAGoodRead(t *testing.T) {
+	stubProbe(t, nil)
+	m := New("", 100, 30).WithSetupStep(2).WithConnect("amd")
+	next, cmd := m.Update(loadedMsg{source: m.client, err: lemonade.ErrUnreachable})
+	m = probed(t, next.(Model), cmd)
+	if m.stage != "providers" || !strings.Contains(m.note, "isn't installed yet") {
+		t.Fatalf("stage %q note %q", m.stage, m.note)
+	}
+	next, cmd = m.Update(loadedMsg{source: m.client, providers: []lemonade.Provider{{Name: "amd"}}})
+	if m = probed(t, next.(Model), cmd); m.stage != "setup" {
+		t.Fatalf("the good read did not open the key form: %q", m.stage)
+	}
+}
+
+// An answer to an older check must not overwrite a newer one.
+func TestAnOlderGatewayCheckIsIgnored(t *testing.T) {
+	stubProbe(t, offline)
+	m := New("", 100, 30)
+	next, stale := m.Update(loadedMsg{source: m.client, providers: []lemonade.Provider{{Name: "amd"}}})
+	m = next.(Model)
+	stubProbe(t, nil)
+	next, fresh := m.Update(loadedMsg{source: m.client, providers: []lemonade.Provider{{Name: "amd"}}})
+	m = probed(t, next.(Model), fresh)
+	next, _ = m.Update(stale())
+	if m = next.(Model); m.gatewayDisabled() {
+		t.Fatal("a late answer to an older check greyed out a reachable gateway")
 	}
 }

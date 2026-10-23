@@ -57,7 +57,7 @@ func TestMain(m *testing.M) {
 		return store.restoreErr
 	}
 	// Nor may a test reach the network to check the AMD gateway.
-	probeGateway = func(context.Context, string) error { return nil }
+	probeGateway = func(context.Context, string, string) error { return nil }
 	// The user's own GAIA Lemonade would otherwise be where a pasted key goes.
 	home, err := os.MkdirTemp("", "gaia-providers-test-")
 	if err != nil {
