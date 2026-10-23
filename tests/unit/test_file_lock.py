@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from gaia.utils import file_lock as file_lock_module
 from gaia.utils.file_lock import (
     FileLockError,
     FileLockTimeout,
@@ -421,27 +422,41 @@ def test_an_uncontended_lock_does_not_slow_down_in_a_crowded_folder(tmp_path):
     assert statistics.median(times) < 0.002, f"median {statistics.median(times)}"
 
 
-def test_the_next_waiter_takes_the_lock_within_milliseconds(tmp_path):
+def test_the_next_waiter_takes_the_lock_within_milliseconds(tmp_path, monkeypatch):
     """The waiter at the front notices a release fast, not on a 20 ms poll."""
     target = tmp_path / "state.json"
+    intervals, polling = [], threading.Event()
+    real_poll_interval = file_lock_module._poll_interval
+
+    def recorded_poll_interval(listed_ahead):
+        interval = real_poll_interval(listed_ahead)
+        intervals.append(interval)
+        polling.set()
+        return interval
+
+    monkeypatch.setattr(file_lock_module, "_poll_interval", recorded_poll_interval)
     delays = []
     for _ in range(30):
-        queued, took = threading.Event(), []
+        polling.clear()
+        took = []
 
         def waiter():
-            queued.set()
             with file_lock(target, timeout=10):
                 took.append(time.perf_counter())
 
         with file_lock(target):
             thread = threading.Thread(target=waiter)
             thread.start()
-            assert queued.wait(10)
-            time.sleep(0.03)  # it has queued and settled into polling
+            # Released as the waiter starts a poll's sleep: the whole interval
+            # stands between it and the lock.
+            assert polling.wait(10), "the waiter never polled"
             released = time.perf_counter()
         thread.join()
         delays.append(took[0] - released)
-    assert statistics.median(delays) < 0.005, f"median {statistics.median(delays)}"
+    assert max(intervals) <= 0.002, f"the front waiter polled every {max(intervals)}s"
+    # A 20 ms poll waits at least 20 ms every time; a 1 ms one stays well
+    # under this even where a busy macOS runner stretches each sleep.
+    assert statistics.median(delays) < 0.015, f"median {statistics.median(delays)}"
 
 
 def test_a_busy_lock_keeps_its_throughput(tmp_path):
