@@ -28,6 +28,7 @@ from gaia.ui.email_sidecar.errors import SidecarError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, api_version_supported
 from gaia.ui.email_sidecar.relay import EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
 from gaia.ui.models import ChatRequest
+from gaia.ui.turn_summary import TurnLedger
 
 # ── api_version_supported (email floor) ──────────────────────────────────────────
 
@@ -125,6 +126,7 @@ class _FakeSSEHandler:
     def __init__(self):
         self.events = []
         self.cancelled = threading.Event()
+        self.turn_ledger = TurnLedger()
 
     def _emit(self, event):
         self.events.append(event)

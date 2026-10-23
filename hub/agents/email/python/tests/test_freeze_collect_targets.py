@@ -12,6 +12,9 @@ workflow's freeze env in step.
 from __future__ import annotations
 
 import importlib.util
+import os
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -72,3 +75,33 @@ def test_release_freeze_env_installs_collect_target(module):
         f"step does not install {distribution}, so the release build would refuse "
         "to run."
     )
+
+
+def test_build_bundles_the_tokenizer_plugin_and_data(tmp_path, monkeypatch):
+    """tiktoken's plugin is a hidden import and its staged cache is bundled (#5066)."""
+    captured = []
+    pyinstaller = types.ModuleType("PyInstaller")
+    pyinstaller_main = types.ModuleType("PyInstaller.__main__")
+    pyinstaller_main.run = captured.extend
+    pyinstaller.__main__ = pyinstaller_main
+    monkeypatch.setitem(sys.modules, "PyInstaller", pyinstaller)
+    monkeypatch.setitem(sys.modules, "PyInstaller.__main__", pyinstaller_main)
+    monkeypatch.setattr(freeze, "HERE", tmp_path)
+    monkeypatch.setattr(freeze, "_verify_collect_targets", lambda: None)
+
+    def fake_stage(dest):
+        dest.mkdir(parents=True)
+        return dest
+
+    monkeypatch.setattr(freeze.tiktoken_bundle, "stage_cache", fake_stage)
+
+    freeze.build(onefile=True)
+
+    tiktoken_bundle = freeze.tiktoken_bundle
+    pairs = list(zip(captured, captured[1:]))
+    assert ("--hidden-import", tiktoken_bundle.PLUGIN_MODULE) in pairs
+    staged = tmp_path / "build" / tiktoken_bundle.BUNDLE_DIR
+    assert (
+        "--add-data",
+        f"{staged}{os.pathsep}{tiktoken_bundle.BUNDLE_DIR}",
+    ) in pairs

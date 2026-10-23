@@ -386,11 +386,11 @@ def test_only_an_rc_requests_the_website_redeploy_from_publish(publish):
 
 
 def test_an_rc_builds_the_windows_setup_for_its_own_prerelease_only(publish):
-    tui = publish["rc-tui-binaries"]
+    tui = publish["rc-tui"]
     assert IS_RC in tui["if"]
     assert tui["uses"] == "./.github/workflows/tui_installers.yml"
-    # rpm cannot carry -rc.N, so the macOS/Linux packages stay with the final.
-    assert tui["with"]["installers"] is False
+    # The macOS/Linux packages too (tests/unit/test_rc_terminal_installers.py).
+    assert tui["with"].get("installers", True) is True
 
     setup = publish["rc-windows-setup"]
     assert IS_RC in setup["if"] and "!cancelled()" in setup["if"]
@@ -423,7 +423,7 @@ def test_the_windows_setup_attaches_only_after_its_smoke_test(publish):
 
 
 def test_terminal_binaries_on_the_release_exclude_the_setups_input(publish):
-    # rc-tui-binaries uploads `tui-binaries`; on the release it would duplicate
+    # rc-tui uploads `tui-binaries`; on the release it would duplicate
     # the six raw binaries under other names and enter their checksum file.
     (step,) = _steps(publish["github-release"], "Download TUI binaries")
     assert step["with"]["pattern"] == "tui-{linux,darwin,windows}-*"

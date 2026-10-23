@@ -1,11 +1,13 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import React, { useCallback, useRef, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useCallback, useContext, useId, useRef, useState, useEffect, useMemo } from 'react';
+import type { Components } from 'react-markdown';
 import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen, Square } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
+import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
 import { AgentActivity } from './AgentActivity';
 import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
 import { RenderCard } from './render/RenderCard';
@@ -17,6 +19,7 @@ import { LOCAL_MODEL_WAIT_HINT, MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitL
 import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
+import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
@@ -151,6 +154,20 @@ export function isErrorContent(content: string): boolean {
         lower.includes('connection refused') ||
         lower.includes('failed to fetch')
     );
+}
+
+const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
+
+/**
+ * Drop an error step the answer is, word for word. A run that fails before
+ * answering saves its error as the whole answer; it is shown once, there, with
+ * its links. An answer that only quotes a tool's error keeps the step.
+ */
+export function dropErrorsEchoedInAnswer(steps: AgentStep[], content: string): { steps: AgentStep[]; echoed: boolean } {
+    const answer = squash(content);
+    if (!answer) return { steps, echoed: false };
+    const kept = steps.filter((s) => !(s.type === 'error' && s.detail && squash(s.detail) === answer));
+    return { steps: kept, echoed: kept.length < steps.length };
 }
 
 /**
@@ -430,7 +447,13 @@ export function turnEnding(content: string, stopState: Message['stopState']): Tu
 
 export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, agentStepCount, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
     useModelNames();
-    const isError = message.role === 'assistant' && isErrorContent(message.content);
+    const echo = useMemo(
+        () => (message.role === 'assistant' && !isStreaming && agentSteps
+            ? dropErrorsEchoedInAnswer(agentSteps, message.content)
+            : { steps: agentSteps, echoed: false }),
+        [agentSteps, message.content, message.role, isStreaming],
+    );
+    const isError = message.role === 'assistant' && (echo.echoed || isErrorContent(message.content));
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
         : undefined;
@@ -444,6 +467,21 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     );
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
+    const collapsibleUser = message.role === 'user' && isLongUserMessage(message.content);
+    const [userExpanded, setUserExpanded] = useState(false);
+    const userBodyId = useId();
+    const userBodyRef = useRef<HTMLDivElement>(null);
+    const scrollAfterCollapseRef = useRef(false);
+    const toggleUserExpanded = useCallback(() => {
+        if (userExpanded) scrollAfterCollapseRef.current = true;
+        setUserExpanded(!userExpanded);
+    }, [userExpanded]);
+    useEffect(() => {
+        // Collapsing from far down the page would leave the reader past the message.
+        if (userExpanded || !scrollAfterCollapseRef.current) return;
+        scrollAfterCollapseRef.current = false;
+        userBodyRef.current?.scrollIntoView?.({ block: 'nearest' });
+    }, [userExpanded]);
     const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -549,9 +587,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                 </div>
                 <div className="msg-body">
                     {/* Agent activity inside the message bubble */}
-                    {agentSteps && agentSteps.length > 0 && (
+                    {echo.steps && echo.steps.length > 0 && (
                         <AgentActivity
-                            steps={agentSteps}
+                            steps={echo.steps}
                             isActive={agentStepsActive ?? false}
                             variant={agentStepsActive ? 'inline' : 'summary'}
                             agentStepCount={agentStepCount ?? message.stats?.steps ?? undefined}
@@ -571,8 +609,26 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     ))}
                     {/* The cursor is a streaming indicator, not decoration — it never
                         outlives the write. See docs/spec/gaia-design-language.mdx. */}
-                    {!(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
-                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} />
+                    {collapsibleUser ? (
+                        <>
+                            <div
+                                ref={userBodyRef}
+                                id={userBodyId}
+                                className={`msg-collapsible${userExpanded ? '' : ' is-collapsed'}`}
+                            >
+                                <RenderedContent content={cleanedContent} />
+                            </div>
+                            <ExpandToggle
+                                expanded={userExpanded}
+                                onToggle={toggleUserExpanded}
+                                controls={userBodyId}
+                                collapsedLabel={`Show all (${sizeLabel(message.content)})`}
+                                expandedLabel="Show less"
+                                className="msg-expand-toggle"
+                            />
+                        </>
+                    ) : !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
+                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} />
                     )}
                     {stopState && (
                         <div className={`msg-stopped${stopState === 'unconfirmed' || message.stopError ? ' is-unconfirmed' : ''}`} role="note">
@@ -613,9 +669,19 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     );
 }
 
-/** Custom code block with copy button. */
+/** Whether the markdown being rendered is still streaming in. */
+const StreamingContext = createContext(false);
+
+/** Custom code block with copy button; a long one opens collapsed to a preview. */
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
     const [copied, setCopied] = useState(false);
+    const [expanded, setExpanded] = useState(false);
+    const streaming = useContext(StreamingContext);
+    const bodyId = useId();
+    const lines = countLines(code);
+    // While streaming, cap as soon as the preview fills so the block never grows and then shrinks.
+    const collapsible = lines > (streaming ? CODE_PREVIEW_LINES : CODE_COLLAPSE_LINES);
+    const collapsed = collapsible && !expanded;
     const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
@@ -644,7 +710,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     }, [code]);
 
     return (
-        <div className="code-block">
+        <div className={`code-block${collapsed ? ' is-collapsed' : ''}`}>
             <div className="code-header">
                 <span className="code-lang">{lang || 'code'}</span>
                 <button
@@ -657,7 +723,17 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
                     <span>{copied ? 'Copied' : 'Copy'}</span>
                 </button>
             </div>
-            <pre><code>{code}</code></pre>
+            <pre id={bodyId}><code>{code}</code></pre>
+            {collapsible && (
+                <ExpandToggle
+                    expanded={expanded}
+                    onToggle={() => setExpanded((v) => !v)}
+                    controls={bodyId}
+                    collapsedLabel={`Expand (${lines.toLocaleString('en-US')} lines)`}
+                    expandedLabel="Collapse"
+                    className="code-expand-toggle"
+                />
+            )}
         </div>
     );
 }
@@ -744,123 +820,129 @@ function linkifyChildren(children: React.ReactNode): React.ReactNode {
     );
 }
 
-export function RenderedContent({ content, showCursor }: { content: string; showCursor?: boolean }) {
+// Module-level so each element type is stable: an inline object remounts every
+// CodeBlock on each render, which would reset its expand state mid-stream.
+const MARKDOWN_COMPONENTS: Components = {
+    // Code block vs inline code detection.
+    // react-markdown calls `code` for both inline `code` and
+    // fenced ```code``` blocks. Fenced blocks are wrapped in
+    // <pre><code>, inline in just <code>. We use our `pre`
+    // override to render fenced blocks as CodeBlock, so the
+    // `code` component only handles inline code.
+    code({ className, children, ...props }) {
+        // If we get here, it's inline code (fenced blocks are
+        // handled by the `pre` override below).
+        const path = inlineCodePath(children);
+        if (path) return <FilePathLink path={path} />;
+        return (
+            <code className="inline-code" {...props}>
+                {children}
+            </code>
+        );
+    },
+    // Fenced code blocks: react-markdown wraps them in <pre><code>.
+    // Extract the language and code text, render as CodeBlock.
+    // (The fence→card mount for email_pre_scan was retired at the
+    // #2109 cutover — cards arrive via tool_result.render now;
+    // pre-cutover history renders those fences as code blocks.)
+    pre({ children }) {
+        // children is <code className="language-xxx">...</code>
+        const codeChild = React.Children.toArray(children)[0];
+        if (React.isValidElement(codeChild) && (codeChild.type === 'code' || (codeChild.props as any)?.className !== undefined || typeof (codeChild.props as any)?.children === 'string')) {
+            const codeProps = codeChild.props as any;
+            const className = codeProps?.className || '';
+            const match = /language-([\w-]+)/.exec(className);
+            const codeString = String(codeProps?.children || '').replace(/\n$/, '');
+            const lang = match?.[1] || '';
+            return (
+                <CodeBlock
+                    lang={lang}
+                    code={codeString}
+                />
+            );
+        }
+        // Fallback: render as-is
+        return <pre>{children}</pre>;
+    },
+    // Custom table styling
+    table({ children }) {
+        return (
+            <div className="md-table-wrap">
+                <table className="md-table">{children}</table>
+            </div>
+        );
+    },
+    // Links open in new tab
+    a({ href, children }) {
+        return (
+            <a
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="md-link"
+            >
+                {children}
+            </a>
+        );
+    },
+    // Paragraphs — linkify file paths in text children
+    p({ children }) {
+        return <p className="md-p">{linkifyChildren(children)}</p>;
+    },
+    // Headers
+    h1({ children }) {
+        return <h2 className="md-h2">{linkifyChildren(children)}</h2>;
+    },
+    h2({ children }) {
+        return <h3 className="md-h3">{linkifyChildren(children)}</h3>;
+    },
+    h3({ children }) {
+        return <h4 className="md-h4">{linkifyChildren(children)}</h4>;
+    },
+    // Lists
+    ul({ children }) {
+        return <ul className="md-ul">{children}</ul>;
+    },
+    ol({ children, start }) {
+        return <ol className="md-ol" start={start}>{children}</ol>;
+    },
+    li({ children }) {
+        return <li className="md-li">{linkifyChildren(children)}</li>;
+    },
+    // Blockquote
+    blockquote({ children }) {
+        return <blockquote className="md-blockquote">{linkifyChildren(children)}</blockquote>;
+    },
+    // Horizontal rule
+    hr() {
+        return <hr className="md-hr" />;
+    },
+    // Table cells
+    td({ children }) {
+        return <td>{linkifyChildren(children)}</td>;
+    },
+    th({ children }) {
+        return <th>{linkifyChildren(children)}</th>;
+    },
+};
+
+export function RenderedContent({ content, showCursor, isStreaming = false }: { content: string; showCursor?: boolean; isStreaming?: boolean }) {
     if (!content && !showCursor) return null;
     if (!content && showCursor) return <span className="cursor" />;
 
     return (
+        <StreamingContext.Provider value={isStreaming}>
         <div className="md-content">
             <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={[remarkGfm, remarkSoftBreaks]}
                 disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
                 urlTransform={safeUrlTransform}
-                components={{
-                    // Code block vs inline code detection.
-                    // react-markdown calls `code` for both inline `code` and
-                    // fenced ```code``` blocks. Fenced blocks are wrapped in
-                    // <pre><code>, inline in just <code>. We use our `pre`
-                    // override to render fenced blocks as CodeBlock, so the
-                    // `code` component only handles inline code.
-                    code({ className, children, ...props }) {
-                        // If we get here, it's inline code (fenced blocks are
-                        // handled by the `pre` override below).
-                        const path = inlineCodePath(children);
-                        if (path) return <FilePathLink path={path} />;
-                        return (
-                            <code className="inline-code" {...props}>
-                                {children}
-                            </code>
-                        );
-                    },
-                    // Fenced code blocks: react-markdown wraps them in <pre><code>.
-                    // Extract the language and code text, render as CodeBlock.
-                    // (The fence→card mount for email_pre_scan was retired at the
-                    // #2109 cutover — cards arrive via tool_result.render now;
-                    // pre-cutover history renders those fences as code blocks.)
-                    pre({ children }) {
-                        // children is <code className="language-xxx">...</code>
-                        const codeChild = React.Children.toArray(children)[0];
-                        if (React.isValidElement(codeChild) && (codeChild.type === 'code' || (codeChild.props as any)?.className !== undefined || typeof (codeChild.props as any)?.children === 'string')) {
-                            const codeProps = codeChild.props as any;
-                            const className = codeProps?.className || '';
-                            const match = /language-([\w-]+)/.exec(className);
-                            const codeString = String(codeProps?.children || '').replace(/\n$/, '');
-                            const lang = match?.[1] || '';
-                            return (
-                                <CodeBlock
-                                    lang={lang}
-                                    code={codeString}
-                                />
-                            );
-                        }
-                        // Fallback: render as-is
-                        return <pre>{children}</pre>;
-                    },
-                    // Custom table styling
-                    table({ children }) {
-                        return (
-                            <div className="md-table-wrap">
-                                <table className="md-table">{children}</table>
-                            </div>
-                        );
-                    },
-                    // Links open in new tab
-                    a({ href, children }) {
-                        return (
-                            <a
-                                href={href}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="md-link"
-                            >
-                                {children}
-                            </a>
-                        );
-                    },
-                    // Paragraphs — linkify file paths in text children
-                    p({ children }) {
-                        return <p className="md-p">{linkifyChildren(children)}</p>;
-                    },
-                    // Headers
-                    h1({ children }) {
-                        return <h2 className="md-h2">{linkifyChildren(children)}</h2>;
-                    },
-                    h2({ children }) {
-                        return <h3 className="md-h3">{linkifyChildren(children)}</h3>;
-                    },
-                    h3({ children }) {
-                        return <h4 className="md-h4">{linkifyChildren(children)}</h4>;
-                    },
-                    // Lists
-                    ul({ children }) {
-                        return <ul className="md-ul">{children}</ul>;
-                    },
-                    ol({ children, start }) {
-                        return <ol className="md-ol" start={start}>{children}</ol>;
-                    },
-                    li({ children }) {
-                        return <li className="md-li">{linkifyChildren(children)}</li>;
-                    },
-                    // Blockquote
-                    blockquote({ children }) {
-                        return <blockquote className="md-blockquote">{linkifyChildren(children)}</blockquote>;
-                    },
-                    // Horizontal rule
-                    hr() {
-                        return <hr className="md-hr" />;
-                    },
-                    // Table cells
-                    td({ children }) {
-                        return <td>{linkifyChildren(children)}</td>;
-                    },
-                    th({ children }) {
-                        return <th>{linkifyChildren(children)}</th>;
-                    },
-                }}
+                components={MARKDOWN_COMPONENTS}
             >
                 {content}
             </ReactMarkdown>
             {showCursor && <span className="cursor" />}
         </div>
+        </StreamingContext.Provider>
     );
 }

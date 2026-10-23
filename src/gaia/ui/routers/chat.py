@@ -27,7 +27,13 @@ from gaia.agents.base.tool_grants import grant_scope
 
 from .. import answer_retry, followups
 from .. import permissions as session_permissions
-from .._chat_helpers import _spawn_background, model_context_messages, stuck_producer
+from .._chat_helpers import (
+    _set_provisional_title,
+    _spawn_background,
+    model_context_messages,
+    stuck_producer,
+    turn_takes_the_line,
+)
 from ..database import ChatDatabase
 from ..dependencies import get_db
 from ..models import ChatRequest, ChatResponse
@@ -88,7 +94,8 @@ async def send_message(
     """Send a message and get a response (streaming or non-streaming).
 
     Concurrency is controlled at two levels:
-    1. Every turn waits in one visible line for the model (``turn_queue``).
+    1. Every turn on a local model waits in one visible line for it
+       (``turn_queue``); a cloud turn doesn't.
        A streamed turn waits inside its detached run and reports its place
        in line; a non-streamed one waits here, its message already saved,
        until it reaches the model or is stopped with ``/api/chat/cancel``.
@@ -139,8 +146,10 @@ async def send_message(
     if not request.stream:
         try:
             question_id = db.begin_turn(sid, request.message)
-            await turn_queue.acquire(sid)
-            holds_turn = True
+            _set_provisional_title(db, sid, request.message)
+            if turn_takes_the_line(db, session, request.agent_type):
+                await turn_queue.acquire(sid)
+                holds_turn = True
         except TurnCancelled:
             db.add_message(sid, "assistant", "Cancelled.", ends_turn=True)
             session_lock.release()
@@ -197,6 +206,7 @@ async def send_message(
             async def _stream():
                 try:
                     db.begin_turn(request.session_id, request.message)
+                    _set_provisional_title(db, request.session_id, request.message)
                     # The detached lifecycle owns producer + persistence;
                     # this subscriber only relays buffered and live events.
                     async for chunk in srv._stream_chat_response(
@@ -263,12 +273,8 @@ async def send_message(
                 # Notify AgentLoop after the non-streaming response completes
                 _notify_loop(request.session_id)
 
-                # Fire-and-forget auto-titling — same hook the streaming
-                # path uses. GAIA renames its own session after the first
-                # answer, and never again; see
-                # _maybe_update_session_title for the rules. We pass
-                # model_id from the loaded session so the title call uses
-                # whichever LLM is actually live in Lemonade.
+                # Fire-and-forget auto-titling, on the model this turn ran on;
+                # see _maybe_update_session_title for the rules.
                 from gaia.ui._chat_helpers import _maybe_update_session_title
 
                 _spawn_background(
@@ -277,7 +283,7 @@ async def send_message(
                         session_id=request.session_id,
                         user_msg=request.message,
                         assistant_msg=response_text or "",
-                        model_id=session.get("model"),
+                        model_id=turn_box.get("model"),
                     )
                 )
                 run_status = "done"

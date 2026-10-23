@@ -350,6 +350,165 @@ def test_an_auto_approving_run_refuses_rather_than_widening(repo, monkeypatch):
     assert _staged(repo) == {"tracked.txt"}
 
 
+# ---------------------------------------------------------------------------
+# Full access in a relayed Agent UI chat: gated commands are asked about
+# ---------------------------------------------------------------------------
+
+
+def _full_access_chat(*, watched: bool = True) -> SSEOutputHandler:
+    """The handler a sidecar ``/query`` builds for a Full access chat.
+
+    Over the socket Full access pre-approves prompts but keeps the shell gates
+    on (#3373); ``watched`` is the caller declaring a person can answer.
+    """
+    stdio = pytest.importorskip("gaia_agent.stdio")
+    handler = SSEOutputHandler()
+    stdio.PermissionState(full_access=True, lifts_shell_gates=False).attach(handler)
+    handler.answers_confirmations = watched
+    assert handler.auto_approve_gated_tools and not handler.full_access
+    return handler
+
+
+def test_a_full_access_chat_asks_before_a_gated_command_and_runs_it_on_allow(repo):
+    handler = _full_access_chat()
+    agent = _agent(handler)
+
+    result, events = _drive(
+        agent, handler, _shell("git add a.txt", repo), on_prompt=_answer(handler)
+    )
+
+    [request] = _prompts(events)
+    assert request["args"] == _shell("git add a.txt", repo)  # no marker on the wire
+    [wire] = CanonicalTranslator(run_id="r", agent_id="gaia").translate(request)
+    assert wire["type"] == "needs_confirmation"
+    assert wire["summary"].splitlines()[0] == "git add a.txt"
+    assert result["status"] == "success", result
+    assert _staged(repo) == {"tracked.txt", "a.txt"}
+
+
+def test_a_full_access_chat_runs_nothing_the_person_denies(repo):
+    handler = _full_access_chat()
+    agent = _agent(handler)
+
+    result, events = _drive(
+        agent,
+        handler,
+        _shell("git add a.txt", repo),
+        on_prompt=_answer(handler, approved=False),
+    )
+
+    assert len(_prompts(events)) == 1
+    assert result["status"] == "denied"
+    assert _staged(repo) == {"tracked.txt"}
+
+
+def test_a_full_access_chat_asks_once_for_a_one_time_line(repo):
+    python = _python()
+    command = f"{python} -c \"open('ran.txt', 'a').write('x')\""
+    handler = _full_access_chat()
+    agent = _agent(handler)
+
+    first, first_events = _drive(
+        agent, handler, _shell(command, repo), on_prompt=_answer(handler)
+    )
+    second, second_events = _drive(
+        agent,
+        handler,
+        _shell(command, repo),
+        on_prompt=_answer(handler, approved=False),
+    )
+
+    [request] = _prompts(first_events)
+    assert request["args"][RISK_NOTE_ARG] == NOTE_UNINSPECTABLE
+    assert first["approved_once"] is True
+    assert len(_prompts(second_events)) == 1
+    assert second["status"] == "denied"
+    assert (repo / "ran.txt").read_text() == "x"
+
+
+def test_a_full_access_chat_runs_a_safe_command_unasked(repo):
+    handler = _full_access_chat()
+    agent = _agent(handler)
+
+    result, events = _drive(agent, handler, _shell("git status", repo))
+
+    assert _prompts(events) == []
+    assert result["status"] == "success", result
+    assert any("didn't ask first" in str(e.get("message")) for e in events)
+
+
+def test_an_unwatched_full_access_run_still_refuses_unasked(repo):
+    handler = _full_access_chat(watched=False)
+    agent = _agent(handler)
+
+    result, events = _drive(agent, handler, _shell("git add a.txt", repo))
+
+    assert _prompts(events) == []
+    assert result["status"] == "error"
+    assert result["executed"] is False
+    assert "needs your approval" in result["error"]
+    assert _staged(repo) == {"tracked.txt"}
+
+
+def test_the_auto_approve_env_still_refuses_even_on_a_watched_chat(repo, monkeypatch):
+    monkeypatch.setattr(
+        "gaia.agents.base.console.auto_approve_env_enabled", lambda: True
+    )
+    handler = _full_access_chat()
+    agent = _agent(handler)
+
+    result, events = _drive(agent, handler, _shell("git add a.txt", repo))
+
+    assert _prompts(events) == []
+    assert result["status"] == "error"
+    assert result["executed"] is False
+    assert _staged(repo) == {"tracked.txt"}
+
+
+def test_a_direct_call_on_a_full_access_chat_never_runs_a_gated_command(repo):
+    """The execution path still refuses a call no prompt stood behind."""
+    from gaia.agents.base.tools import get_tool_metadata
+
+    handler = _full_access_chat()
+    _agent(handler)
+    run = get_tool_metadata("run_shell_command")["function"]
+
+    result = run(command="git add a.txt", working_directory=str(repo))
+
+    assert result["status"] == "error"
+    assert result["executed"] is False
+    assert handler.event_queue.empty()
+    assert _staged(repo) == {"tracked.txt"}
+
+
+def test_the_model_cannot_pass_the_needs_person_marker(repo):
+    from gaia.agents.base.call_risk import NEEDS_PERSON_ARG
+
+    handler = _full_access_chat()
+    agent = _agent(handler)
+
+    result = agent._execute_tool(
+        "run_shell_command", {**_shell("git add a.txt", repo), NEEDS_PERSON_ARG: True}
+    )
+
+    assert result["error_type"] == "invalid_arguments"
+    assert _staged(repo) == {"tracked.txt"}
+
+
+def test_a_marked_call_on_an_unwatched_handler_is_denied_not_approved():
+    from gaia.agents.base.call_risk import NEEDS_PERSON_ARG
+
+    handler = SSEOutputHandler()
+    handler.auto_approve_gated_tools = True
+
+    approved = handler.confirm_tool_execution(
+        "run_shell_command", {"command": "git add a.txt", NEEDS_PERSON_ARG: True}
+    )
+
+    assert approved is False
+    assert handler.event_queue.empty()
+
+
 def test_a_prompt_nobody_answers_refuses(repo):
     handler = SSEOutputHandler()
     handler.confirm_timeout_seconds = 0.3
