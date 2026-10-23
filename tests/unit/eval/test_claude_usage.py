@@ -157,7 +157,9 @@ def test_the_driver_cannot_report_its_own_usage(tmp_path, monkeypatch):
 
 def test_a_failed_driver_keeps_its_usage(tmp_path, monkeypatch):
     result = _run(tmp_path, monkeypatch, json.dumps(ZERO), returncode=1)
-    assert result["status"] == "ERRORED"
+    # Zero tokens on a failure means Claude never answered: an outage, not a result.
+    assert result["status"] == "INFRA_ERROR"
+    assert result["claude_outage"]["kind"] == "claude_unreachable"
     assert result["claude_usage"]["roles"]["driver"]["calls"] == 0
     # The integrity gate's existing field is unchanged.
     assert result["driver_usage"]["input_tokens"] == 0
