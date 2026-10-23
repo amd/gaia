@@ -115,6 +115,12 @@ class TestFit:
             QWEN.size_gb, capacity_from_system_info(STRIX_HALO_64), QWEN_KV
         ).fits
 
+    @pytest.mark.parametrize(
+        "gb, shown", [(0.5, "0.5"), (0.0, "0"), (1.0, "1"), (63.6, "64")]
+    )
+    def test_a_pool_under_1gb_never_reads_as_0gb(self, gb, shown):
+        assert model_fit.format_gb(gb) == shown
+
     def test_qwen_does_not_fit_the_smallest_machines(self):
         verdict = check_fit(QWEN.size_gb, capacity_from_system_info(MAC_M4), QWEN_KV)
         assert not verdict.fits and "memory" in verdict.reason
@@ -318,6 +324,10 @@ class TestTuiDrift:
     def test_fit_constants_match(self, doc):
         assert doc["fit"]["memory_overhead_factor"] == model_fit.MEMORY_OVERHEAD_FACTOR
         assert doc["fit"]["memory_overhead_gb"] == model_fit.MEMORY_OVERHEAD_GB
+        assert (
+            doc["fit"]["windows_igpu_shared_ram_fraction"]
+            == model_fit.WINDOWS_IGPU_SHARED_RAM_FRACTION
+        )
 
     def test_custom_registrations_match_the_python_registry(self, doc):
         custom = [m for m in doc["models"] if m.get("register_as")]
@@ -437,7 +447,8 @@ class TestRealLemonadeReports:
         cap = capacity_from_system_info(self._WINDOWS_STRIX_HALO)
 
         assert asked == ["AMD Radeon(TM) 8060S Graphics"]
-        assert (cap.memory_source, cap.memory_gb) == ("AMD iGPU", pytest.approx(64.0))
+        # The carve-out plus the half of RAM Windows shares with the GPU.
+        assert (cap.memory_source, cap.memory_gb) == ("AMD iGPU", pytest.approx(128.0))
         assert check_fit(QWEN.size_gb, cap, QWEN_KV).fits
 
     def test_windows_igpu_from_the_driver_loads_qwen_at_its_native_window(
@@ -459,6 +470,75 @@ class TestRealLemonadeReports:
         monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 0.0)
         with pytest.raises(ModelFitError, match="not its memory"):
             capacity_from_system_info(self._WINDOWS_STRIX_HALO)
+
+    @staticmethod
+    def _windows_igpu(physical):
+        info = json.loads(json.dumps(TestRealLemonadeReports._WINDOWS_STRIX_HALO))
+        if physical is None:
+            del info["Physical Memory"]
+        else:
+            info["Physical Memory"] = physical
+        return info
+
+    @pytest.mark.parametrize(
+        "carve_out, physical, pool",
+        [
+            # #5050: BIOS GPU memory on Auto reserves a token 512 MB.
+            (0.5, "127.28 GB", 0.5 + 127.28 / 2),
+            # #5050: an HP ZBook Ultra G1a reserves 4 GB.
+            (4.0, "123.8 GB", 4.0 + 123.8 / 2),
+            # A fixed 96 GB carve-out leaves Windows 32 GB to share half of.
+            (96.0, "32 GB", 96.0 + 16.0),
+        ],
+    )
+    def test_windows_igpu_small_carve_out_still_fits_qwen(
+        self, monkeypatch, carve_out, physical, pool
+    ):
+        monkeypatch.setattr(
+            model_fit, "_windows_adapter_memory_gb", lambda name: carve_out
+        )
+        cap = capacity_from_system_info(self._windows_igpu(physical))
+        assert (cap.memory_source, cap.memory_gb) == ("AMD iGPU", pytest.approx(pool))
+        assert check_fit(QWEN.size_gb, cap, QWEN_KV).fits
+        model_id, _ = pick_default_model(
+            [(QWEN.model_id, QWEN.size_gb, QWEN_KV), (lc.DEFAULT_MODEL_NAME, 6.0)],
+            cap,
+        )
+        assert model_id == QWEN.model_id
+
+    def test_windows_igpu_on_a_16gb_pc_does_not_fit_qwen(self, monkeypatch):
+        monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 0.5)
+        cap = capacity_from_system_info(self._windows_igpu("15.3 GB"))
+        assert cap.memory_gb == pytest.approx(0.5 + 15.3 / 2)
+        verdict = check_fit(QWEN.size_gb, cap, QWEN_KV)
+        assert not verdict.fits
+        assert "this PC has 8 GB (AMD iGPU)" in verdict.reason
+
+    def test_windows_igpu_never_fits_flash_on_its_shared_half(self, monkeypatch):
+        # ~90 GB is more than 0.5 GB + half of 128 GB; it needs a big carve-out.
+        monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 0.5)
+        cap = capacity_from_system_info(self._windows_igpu("127.28 GB"))
+        assert not check_fit(FLASH.size_gb, cap, FLASH_KV).fits
+
+    @pytest.mark.parametrize("physical", [None, "", "unknown", "0 GB"])
+    def test_windows_igpu_carve_out_without_ram_fails_loudly(
+        self, monkeypatch, physical
+    ):
+        """The carve-out alone is never the pool, at any size."""
+        monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 4.0)
+        with pytest.raises(ModelFitError) as err:
+            capacity_from_system_info(self._windows_igpu(physical))
+        assert "Physical Memory" in str(err.value)
+        assert "gaia config set default_model" in str(err.value)
+
+    def test_reported_vram_never_reads_the_registry(self, monkeypatch):
+        monkeypatch.setattr(
+            model_fit,
+            "_windows_adapter_memory_gb",
+            lambda name: pytest.fail("asked the registry with vram_gb reported"),
+        )
+        cap = capacity_from_system_info(STRIX_HALO_128)
+        assert cap.memory_gb == pytest.approx(96.0 + 15.8)
 
     def test_a_discrete_gpu_never_reads_the_driver_carve_out(self, monkeypatch):
         monkeypatch.setattr(

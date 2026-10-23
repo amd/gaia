@@ -43,7 +43,7 @@ from gaia.agents.install_hints import (
     resolve_pip_frontend,
 )
 from gaia.installer._stdin import stdin_is_tty
-from gaia.llm.model_fit import MachineCapacity
+from gaia.llm.model_fit import MachineCapacity, format_gb
 from gaia.logger import get_logger
 from gaia.ui.build import WebuiBuildStatus
 from gaia.version import LEMONADE_MIN_VERSION
@@ -1716,7 +1716,7 @@ class InitCommand:
             else:
                 cap = choice.capacity
                 where = (
-                    f" — this PC has {cap.memory_gb:.0f} GB for models "
+                    f" — this PC has {format_gb(cap.memory_gb)} GB for models "
                     f"({cap.memory_source})"
                     if cap
                     else ""
