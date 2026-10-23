@@ -245,9 +245,14 @@ export function selectChipModel(
     return session?.effective_model || active?.model || null;
 }
 
+/** The model id without its cloud provider prefix ("fireworks." or "amd."). */
+function stripProviderPrefix(model: string): string {
+    return /^(fireworks|amd)\./.test(model) ? model.slice(model.indexOf('.') + 1) : model;
+}
+
 /** The model name without its provider prefix or catalogue path. */
 export function shortModelName(model: string): string {
-    const withoutProvider = /^(fireworks|amd)\./.test(model) ? model.slice(model.indexOf('.') + 1) : model;
+    const withoutProvider = stripProviderPrefix(model);
     return withoutProvider.slice(withoutProvider.lastIndexOf('/') + 1);
 }
 
@@ -262,7 +267,7 @@ export function distinctModelLabels(models: Array<{ id: string; display_name?: s
     for (const m of models) byLabel.set(labels[m.id], [...(byLabel.get(labels[m.id]) ?? []), m.id]);
     for (const ids of byLabel.values()) {
         if (ids.length < 2) continue;
-        const paths = ids.map((id) => (/^(fireworks|amd)\./.test(id) ? id.slice(id.indexOf('.') + 1) : id).split('/'));
+        const paths = ids.map((id) => stripProviderPrefix(id).split('/'));
         let tails = ids;
         for (let n = 1; n <= Math.max(...paths.map((p) => p.length)); n++) {
             const candidate = paths.map((p) => p.slice(-n).join('/'));
