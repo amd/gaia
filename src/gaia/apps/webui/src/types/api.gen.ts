@@ -67,6 +67,7 @@ export interface ApiSchemas {
   LimitRequest: LimitRequest;
   LoadModelRequest: LoadModelRequest;
   LoadedModelInfo: LoadedModelInfo;
+  McpOutputResponse: McpOutputResponse;
   MemorySettingsBody: MemorySettingsBody;
   MessageListResponse: MessageListResponse;
   MessageResponse: MessageResponse;
@@ -215,7 +216,10 @@ export interface AgentStepResponse {
   id: number;
   label: string;
   latencyMs?: number | null;
+  mcpOutput?: McpOutputResponse | null;
   mcpServer?: string | null;
+  mcpServerLabel?: string | null;
+  mcpTool?: string | null;
   narration?: string | null;
   planNarrations?: string[] | null;
   planSteps?: string[] | null;
@@ -250,6 +254,13 @@ export interface FileListResponse {
     [k: string]: unknown | undefined;
   }[];
   total?: number;
+}
+/**
+ * The text an MCP tool returned, capped for the tool row.
+ */
+export interface McpOutputResponse {
+  text?: string;
+  truncated?: boolean;
 }
 /**
  * Request to attach a document to a session.
@@ -417,6 +428,7 @@ export interface DocumentListResponse {
  */
 export interface DocumentResponse {
   chunk_count: number;
+  error_kind?: string | null;
   file_size: number;
   filename: string;
   filepath: string;
@@ -607,6 +619,7 @@ export interface IndexFolderResponse {
   errors?: string[];
   failed?: number;
   indexed?: number;
+  skipped?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];
@@ -956,6 +969,7 @@ export interface ScheduleListResponse {
  */
 export interface ScheduleResponse {
   created_at?: string | null;
+  description: string;
   error_count?: number;
   id: string;
   interval_seconds: number;
@@ -1059,9 +1073,11 @@ export interface SettingsUpdateRequest {
   dynamic_tools?: boolean | null;
 }
 /**
- * ``skip_chat_model`` when the chat runs on a cloud provider.
+ * ``skip_chat_model`` when the chat runs on a cloud provider;
+ * ``gaia_lemonade`` to set up GAIA's own server instead of the user's.
  */
 export interface SetupRunRequest {
+  gaia_lemonade?: boolean;
   skip_chat_model?: boolean;
 }
 export interface StartAgentServerRequest {

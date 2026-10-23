@@ -82,7 +82,8 @@ AGENT_ID = "gaia"
 #: 2.17 added ``GET /skills`` for the Agent UI's Skills settings.
 #: 2.18 added ``/query``'s ``allowed_paths`` and ``memory`` fields.
 #: 2.19 added ``/query``'s ``changes_turn_id`` field.
-API_VERSION = "2.19"
+#: 2.20 added ``/query``'s ``surface`` field.
+API_VERSION = "2.20"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -232,6 +233,16 @@ class QueryRequest(_Strict):
             "agent's GAIA home, keyed by session_id and this id, and the "
             "recording is complete before the terminal event is sent. Use "
             "file_snapshots.new_turn_id() to make one. Omit it to record nothing."
+        ),
+    )
+
+    surface: Optional[Literal["agent_ui", "tui", "cli"]] = Field(
+        default=None,
+        description=(
+            "The front-end this turn comes from (contract >= 2.20). 'agent_ui' "
+            "tells the agent that features like Scheduled tasks are in the "
+            "caller's sidebar. Fixed when a session is built; omit it when "
+            "unknown."
         ),
     )
 
@@ -545,6 +556,10 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
     Surfacing that message beats inventing a generic error.
     """
     if isinstance(result, dict):
+        if result.get("status") == "cancelled":
+            # Stopped mid-generation: the loop returns no text by design, and
+            # the stdio transport ends the same turn with an empty final.
+            return {"type": "final", "answer": ""}
         for key in ("answer", "response", "result", "output"):
             value = result.get(key)
             if isinstance(value, str) and value.strip():
@@ -1165,6 +1180,8 @@ async def query(request: QueryRequest):
             kwargs["model_id"] = request.model
         if request.allowed_paths is not None:
             kwargs["allowed_paths"] = request.allowed_paths
+        if request.surface is not None:
+            kwargs["surface"] = request.surface
         if request.session_id:
             # Cross-turn document retention: ChatAgent persists its indexed-doc
             # set per UI session, so dropping this makes the agent forget a
@@ -1258,6 +1275,9 @@ async def query(request: QueryRequest):
             )
             one_shot_agent = agent
         agent.console = handler
+        # Streamed model calls are what put ``token`` events on this wire and let
+        # Stop cut a call short. Set per turn so a retained agent can't drift.
+        agent.streaming = True
         # A confirmation can only be carried when somebody is there to answer it
         # AND there is a session to hold the grant. ``can_answer_questions`` is
         # the caller's own declaration that a human is watching (spec >= 2.6); a
@@ -1421,6 +1441,10 @@ async def query(request: QueryRequest):
 
                 for canonical in translator.translate(event):
                     ctype = canonical.get("type")
+                    if ctype == "token" and run.cancel_event.is_set():
+                        # A stopped answer's tail, e.g. a half-written JSON
+                        # reply flushed at teardown, is not answer text.
+                        continue
                     if ctype in TERMINAL_TYPES:
                         for warning in await _finish_changes(run):
                             yield _sse(warning)

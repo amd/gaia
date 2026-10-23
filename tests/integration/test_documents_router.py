@@ -177,7 +177,8 @@ def test_upload_blob_empty_returns_400(
         files={"file": ("empty.txt", b"", "text/plain")},
     )
     assert response.status_code == 400
-    assert "empty" in response.json()["detail"].lower()
+    assert response.json()["detail"]["status"] == "empty_file"
+    assert "empty" in response.json()["detail"]["message"].lower()
 
     # No orphan files left behind
     assert not any(managed_docs_sandbox.iterdir())
@@ -232,6 +233,22 @@ def test_upload_blob_indexing_failure_cleans_up_file(client, managed_docs_sandbo
     # File should NOT be left on disk
     leftover = list(managed_docs_sandbox.iterdir())
     assert leftover == [], f"Orphaned files after indexing failure: {leftover}"
+
+
+def test_upload_blob_truncated_pdf_is_a_user_error_with_its_kind(
+    client, managed_docs_sandbox
+):
+    """A dropped damaged PDF is the file's fault: 4xx with the kind, not a 500."""
+    response = client.post(
+        "/api/documents/upload",
+        files={"file": ("broken.pdf", b"%PDF-1.4\n1 0 obj\n<<", "application/pdf")},
+    )
+
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["status"] == "corrupted"
+    assert "broken" in detail["message"]
+    assert list(managed_docs_sandbox.iterdir()) == []
 
 
 # ── Delete endpoint cleanup ──────────────────────────────────────────────────
@@ -407,8 +424,10 @@ def test_upload_corrupt_pdf_error_names_original_file(client, managed_docs_sandb
         files={"file": ("broken.pdf", _CORRUPT_PDF, "application/pdf")},
     )
 
-    assert r.status_code == 500
-    _assert_names_user_file(r.json()["detail"])
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert detail["status"] == "corrupted"
+    _assert_names_user_file(detail["message"])
 
 
 def test_upload_path_corrupt_pdf_error_names_original_file(client, home_tmp_dir):

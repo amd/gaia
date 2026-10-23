@@ -96,7 +96,7 @@ class TestSafeOpenDocument:
         # An expected limit, so it says what to do rather than "access denied".
         detail = exc_info.value.detail
         assert detail.startswith(f"GAIA can only read documents under {Path.home()}")
-        assert "Move or copy the file there" in detail
+        assert "move or copy it under one of those folders" in detail
         assert DOCUMENT_ROOTS_ENV in detail
 
     def test_safe_open_rejects_directory(self, home_tmp_dir):

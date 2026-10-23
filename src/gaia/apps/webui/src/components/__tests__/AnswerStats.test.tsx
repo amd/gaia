@@ -47,6 +47,19 @@ describe('answerSummary', () => {
     it('is null with nothing measured', () => {
         expect(answerSummary(undefined, undefined)).toBeNull();
     });
+
+    it('says a stopped turn stopped, not that it answered', () => {
+        expect(answerSummary(16_000, stats, 'stopped')).toBe('Stopped after 16 s on your GPU · first word in 1 s');
+    });
+
+    it('says a cut-off turn was interrupted', () => {
+        expect(answerSummary(16_000, undefined, 'interrupted')).toBe('Interrupted after 16 s');
+    });
+
+    it('says only where an unfinished turn ran when its time is unknown', () => {
+        const cloud = { ...stats, time_to_first_token: 0, place: 'via Fireworks AI' };
+        expect(answerSummary(undefined, cloud, 'stopped')).toBe('Ran via Fireworks AI');
+    });
 });
 
 describe('AnswerStats', () => {
