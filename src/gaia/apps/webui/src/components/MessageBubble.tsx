@@ -7,6 +7,7 @@ import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen, Square } fro
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
+import remarkWindowsPaths from '../utils/remarkWindowsPaths';
 import { AgentActivity } from './AgentActivity';
 import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
 import { RenderCard } from './render/RenderCard';
@@ -919,7 +920,7 @@ export function RenderedContent({ content, showCursor, isStreaming = false }: { 
         <StreamingContext.Provider value={isStreaming}>
         <div className="md-content">
             <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={[remarkGfm, remarkWindowsPaths]}
                 disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
                 urlTransform={safeUrlTransform}
                 components={MARKDOWN_COMPONENTS}
