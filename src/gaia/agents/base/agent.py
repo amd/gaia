@@ -48,6 +48,7 @@ from gaia.agents.base.completion import (
     caveated_answer,
     incomplete_answer,
     mentioned_paths,
+    saved_before_error,
 )
 from gaia.agents.base.console import (
     AgentConsole,
@@ -1959,6 +1960,19 @@ def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
     return ""
 
 
+# A sentence break: ". " before a capital, not inside "e.g. " / "i.e. ".
+_SENTENCE_BREAK_RE = re.compile(r"(?<!e\.g)(?<!i\.e)\.\s+(?=[A-Z])")
+
+
+def _split_cause_and_advice(message: str) -> Tuple[str, Optional[str]]:
+    """Split a provider's error message into what happened and what to do."""
+    text = message.strip()
+    match = _SENTENCE_BREAK_RE.search(text)
+    if match is None:
+        return text, None
+    return text[: match.start()], text[match.end() :].strip() or None
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -2363,6 +2377,8 @@ Do NOT wrap conversational replies in JSON.
             "request_retries": 0,
             "step_retries": 0,
             "unreachable": False,
+            # The turn ended because a model call failed (any cause).
+            "failed": False,
         }
         # Earlier turns' user and tool text, for the grounding checks.
         self._grounding_history = ""
@@ -2889,6 +2905,16 @@ Do NOT wrap conversational replies in JSON.
             hook(record)
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
             logger.warning("console rejected turn metrics: %s", e)
+
+    def _announce_turn_failed(self) -> None:
+        """Tell the console the answer about to print ends a failed turn.
+
+        Optional hook, like ``print_turn_metrics``: a console that does not
+        define ``mark_turn_failed`` still prints the answer, just unmarked.
+        """
+        hook = getattr(self.console, "mark_turn_failed", None)
+        if hook is not None:
+            hook()
 
     def _uses_native_tool_calls(self) -> bool:
         """True when this agent's backend takes tools via ``tools=``.
@@ -7753,6 +7779,7 @@ Do NOT wrap conversational replies in JSON.
             {"step": steps_taken, "error": str(exc), "type": "llm_unreachable"}
         )
         tally["unreachable"] = True
+        tally["failed"] = True
         return "unreachable", self._model_unreachable_answer(
             conversation, steps_taken, state, retries_used
         )
@@ -7771,32 +7798,106 @@ Do NOT wrap conversational replies in JSON.
         Never phrased as a result — the run is also marked failed — so it
         cannot be read as the task's answer.
         """
+        tries = f", then {step_retries} more after waiting" if step_retries else ""
+        return self._model_failure_answer(
+            conversation,
+            steps_taken,
+            stopped_responding=True,
+            cause=f"{describe_retry_state(state)}{tries}",
+            advice=None,
+        )
+
+    def _model_service_label(self) -> Optional[str]:
+        """Who serves the chat model ("Fireworks AI"), for failure messages.
+
+        ``None`` when this agent cannot tell; subclasses that know override it.
+        """
+        return None
+
+    def _model_call_failed_answer(
+        self,
+        exc: BaseException,
+        typed_msg: Optional[str],
+        steps_taken: int,
+        conversation: List[Dict[str, Any]],
+    ) -> str:
+        """The final answer when a model call failed for good mid-turn.
+
+        Built from the real failure: the provider's own message when it gave
+        one (split into what happened and what to do), else the raw error.
+        """
+        stalled = False
+        cur: Optional[BaseException] = exc
+        seen: set = set()
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            if isinstance(cur, StreamStalledError):
+                stalled = True
+                break
+            cur = cur.__cause__ or cur.__context__
+        if typed_msg:
+            cause, advice = _split_cause_and_advice(typed_msg)
+        else:
+            cause, advice = str(exc).strip()[:300] or type(exc).__name__, None
+        return self._model_failure_answer(
+            conversation,
+            steps_taken,
+            stopped_responding=stalled or retry_state_of(exc) is not None,
+            cause=cause,
+            advice=advice,
+        )
+
+    def _model_failure_answer(
+        self,
+        conversation: List[Dict[str, Any]],
+        steps_taken: int,
+        *,
+        stopped_responding: bool,
+        cause: str,
+        advice: Optional[str],
+    ) -> str:
+        """Say the turn is unfinished, why, what already ran, and what next."""
         from collections import Counter
 
+        what = "stopped responding" if stopped_responding else "call failed"
+        cause = cause.strip().rstrip(".")
+        cause = cause[:1].upper() + cause[1:]
+        # pylint: disable-next=assignment-from-none
+        label = self._model_service_label()
+        lines = [
+            f"The model {what} at step {steps_taken}, so this request is "
+            f"unfinished. {label + ': ' if label else ''}{cause}."
+        ]
         tools_used = Counter(
             msg["name"]
             for msg in conversation
             if msg.get("role") == "tool" and msg.get("name")
         )
-        tries = f", then {step_retries} more after waiting" if step_retries else ""
-        stopped = (
-            f"I stopped at step {steps_taken} because the model service stayed "
-            f"unavailable ({describe_retry_state(state)}{tries})"
-        )
-        if not tools_used:
-            return (
-                f"{stopped}, before any tool ran. "
-                "Send your request again once the service is back."
+        if tools_used:
+            calls = sum(tools_used.values())
+            done = ", ".join(
+                f"{tool} {count}x" for tool, count in tools_used.most_common(5)
             )
-        calls = sum(tools_used.values())
-        done = ", ".join(
-            f"{tool} {count}x" for tool, count in tools_used.most_common(5)
-        )
-        return (
-            f"{stopped}; the {calls} tool call{'s' if calls != 1 else ''} already "
-            f"made ({done}) and what they changed are kept. "
-            'Say "continue" once the service is back and I\'ll pick up from here.'
-        )
+            lines.append(
+                f"Done before it stopped: {calls} tool call"
+                f"{'s' if calls != 1 else ''} ({done}); what they changed is kept."
+            )
+        else:
+            lines.append("Nothing had run yet.")
+        if advice:
+            lines.append(advice)
+        elif not stopped_responding:
+            lines.append(
+                "Send the message again to retry. If it fails the same way, "
+                "pick another model or check its provider."
+            )
+        elif tools_used:
+            lines.append(
+                'Say "continue" once the service is back and I\'ll pick up from here.'
+            )
+        else:
+            lines.append("Send the message again once the service is back.")
+        return "\n\n".join(lines)
 
     def _shrink_messages_for_overflow(
         self, messages: List[Dict[str, Any]], store=None
@@ -8688,7 +8789,7 @@ Do NOT wrap conversational replies in JSON.
         }
 
     def _gate_unsealed_answer(
-        self, answer: Optional[str]
+        self, answer: Optional[str], model_failed: bool = False
     ) -> Tuple[Optional[str], List[str]]:
         """Judge an answer that never passed the loop's own completion gate.
 
@@ -8698,9 +8799,15 @@ Do NOT wrap conversational replies in JSON.
         nothing is unverified: the caller's max-steps fallback owns that text.
         A non-empty *answer* always stays ahead of the report: it is often the
         only place the turn's findings exist.
+
+        *model_failed*: a model call ended the turn, so the model never had the
+        chance to read its writes back. Files a write tool reported saved are
+        listed as saved instead of calling the whole turn unconfirmed.
         """
         self._check_extraction_sources()
-        gaps = self._completion_evidence.gaps(answer or "", _claims_file_write)
+        gaps = self._completion_evidence.gaps(
+            answer or "", _claims_file_write, readback=not model_failed
+        )
         gaps.extend(self._extraction_ledger.gaps(self._turn_outputs()))
         unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
         if unsupported:
@@ -8716,6 +8823,12 @@ Do NOT wrap conversational replies in JSON.
         inventory = self._extraction_ledger.render()
         if inventory and answer:
             answer += "\n\n" + inventory
+        evidence = self._completion_evidence
+        saved = evidence.written_files() if model_failed else []
+        if saved and answer:
+            answer += "\n\n" + saved_before_error(
+                [evidence.written_as.get(key, key) for key in saved]
+            )
         return answer, gaps
 
     #: What warm_up primes with. Short and fixed, so the priming call itself
@@ -9144,6 +9257,8 @@ Do NOT wrap conversational replies in JSON.
         loop_break_answer_unprinted = False
         # A refused cloud account ends the turn with nothing to verify.
         account_refused = False
+        # The model call failed, so the model never got to check its own work.
+        model_call_failed = False
         # Model-call retries this turn: client-level (inside one request) and
         # step-level (the agent waiting and asking again), plus whether the
         # model stayed unreachable. Reported on the result.
@@ -9151,6 +9266,8 @@ Do NOT wrap conversational replies in JSON.
             "request_retries": 0,
             "step_retries": 0,
             "unreachable": False,
+            # The turn ended because a model call failed (any cause).
+            "failed": False,
         }
         if self._context_evictor is not None:
             self._context_evictor.begin_turn()
@@ -9748,6 +9865,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                         logger.error(error_msg)
                         self.console.print_error(error_msg)
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -9755,6 +9873,7 @@ Do NOT wrap conversational replies in JSON.
                                 "type": "llm_connection_error",
                             }
                         )
+                        self._turn_model_retries["failed"] = True
                         final_answer = (
                             f"I'm having trouble reaching the language model right now. "
                             f"Please make sure Lemonade Server is running.\n\n"
@@ -9824,6 +9943,7 @@ Do NOT wrap conversational replies in JSON.
                             loop_break_answer_unprinted = True
                             break
 
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -9831,30 +9951,31 @@ Do NOT wrap conversational replies in JSON.
                                 "type": "llm_streaming_error",
                             }
                         )
+                        self._turn_model_retries["failed"] = True
                         if is_ctx_overflow:
                             # Name the actual constraint and a next step
                             # (#2763) -- "re-ask with just the essentials" told
                             # the user nothing about WHAT was too big or HOW to
                             # shrink it, so every retry looked identical.
                             final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
+                            loop_break_answer_unprinted = True
                         else:
                             # Streaming is the TUI's path; it must surface the
                             # same typed messages the non-streaming path does.
                             refusal = self._cloud_account_refusal(e)
                             if refusal is not None:
+                                # Already printed as the turn's error.
                                 self.console.print_error(refusal)
                                 account_refused = True
-                            typed_msg = refusal or self._extract_lemonade_user_message(
-                                e
-                            )
-                            if typed_msg is not None:
-                                final_answer = typed_msg
+                                final_answer = refusal
                             else:
-                                final_answer = (
-                                    f"Sorry, I ran into a problem while processing your request. "
-                                    f"This might be a temporary issue — try again in a moment.\n\n"
-                                    f"*Technical details: {str(e)}*"
+                                final_answer = self._model_call_failed_answer(
+                                    e,
+                                    self._extract_lemonade_user_message(e),
+                                    steps_taken,
+                                    conversation,
                                 )
+                                loop_break_answer_unprinted = True
                         break
                 if final_answer is not None or cancelled_by_console:
                     break
@@ -9933,6 +10054,7 @@ Do NOT wrap conversational replies in JSON.
                         error_msg = f"LLM Server Connection Failed: {str(e)}"
                         logger.error(error_msg)
                         self.console.print_error(error_msg)
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -9940,6 +10062,7 @@ Do NOT wrap conversational replies in JSON.
                                 "type": "llm_connection_error",
                             }
                         )
+                        self._turn_model_retries["failed"] = True
                         final_answer = (
                             f"I'm having trouble reaching the language model right now. "
                             f"Please make sure Lemonade Server is running.\n\n"
@@ -10018,6 +10141,7 @@ Do NOT wrap conversational replies in JSON.
 
                         # Either context-overflow after trim, or unrelated.
                         # Give up gracefully.
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -10025,12 +10149,14 @@ Do NOT wrap conversational replies in JSON.
                                 "type": "llm_error",
                             }
                         )
+                        self._turn_model_retries["failed"] = True
                         if is_ctx_overflow:
                             # Name the actual constraint and a next step
                             # (#2763) -- "re-ask with just the essentials" told
                             # the user nothing about WHAT was too big or HOW to
                             # shrink it, so every retry looked identical.
                             final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
+                            loop_break_answer_unprinted = True
                         else:
                             # If we have a typed Lemonade error in the
                             # cause-chain (e.g. ``LemonadeUpstreamTimeoutError``
@@ -10041,20 +10167,18 @@ Do NOT wrap conversational replies in JSON.
                             # non-retryable failures.
                             refusal = self._cloud_account_refusal(e)
                             if refusal is not None:
+                                # Already printed as the turn's error.
                                 self.console.print_error(refusal)
                                 account_refused = True
-                            typed_msg = refusal or self._extract_lemonade_user_message(
-                                e
-                            )
-                            if typed_msg is not None:
-                                final_answer = typed_msg
+                                final_answer = refusal
                             else:
-                                final_answer = (
-                                    f"Sorry, I ran into an unexpected problem. "
-                                    f"This might be a temporary issue — try "
-                                    f"again in a moment.\n\n"
-                                    f"*Technical details: {str(e)}*"
+                                final_answer = self._model_call_failed_answer(
+                                    e,
+                                    self._extract_lemonade_user_message(e),
+                                    steps_taken,
+                                    conversation,
                                 )
+                                loop_break_answer_unprinted = True
                         break
                 if final_answer is not None or cancelled_by_console:
                     break
@@ -11824,9 +11948,16 @@ Do NOT wrap conversational replies in JSON.
         # only thing that prints, so without this the turn ends on the repeat
         # warning and the answer is never shown.
         if loop_break_answer_unprinted and final_answer is not None:
-            final_answer = self._with_verification_scope(
-                self.finalize_answer(_without_tool_markup(final_answer), conversation)
+            final_answer = self.finalize_answer(
+                _without_tool_markup(final_answer), conversation
             )
+            if self._turn_model_retries["failed"]:
+                # Name what the cut-off turn left undone (an unwritten file…).
+                final_answer, completion_gaps = self._gate_unsealed_answer(
+                    final_answer, model_failed=True
+                )
+                self._announce_turn_failed()
+            final_answer = self._with_verification_scope(final_answer)
             verification_scope_applied = True
             _break_input_tokens, break_output_tokens = _sum_conversation_tokens(
                 conversation, self._tool_reported_usage
@@ -11859,7 +11990,9 @@ Do NOT wrap conversational replies in JSON.
         )
 
         if not verification_scope_applied and not account_refused:
-            final_answer, completion_gaps = self._gate_unsealed_answer(final_answer)
+            final_answer, completion_gaps = self._gate_unsealed_answer(
+                final_answer, model_failed=model_call_failed
+            )
 
         # Every exit other than the parsed-answer seam sets ``final_answer``
         # directly — cancel-event timeout, LLM connection error, context
@@ -11925,6 +12058,8 @@ Do NOT wrap conversational replies in JSON.
                 "step_retries": self._turn_model_retries["step_retries"],
             },
             "model_unreachable": self._turn_model_retries["unreachable"],
+            # Any model-call failure ended the turn; front-ends report it failed.
+            "model_failed": self._turn_model_retries["failed"],
             "extraction_sources": sorted(self._extraction_ledger.results),
             "verification": self.verification_state(),
         }

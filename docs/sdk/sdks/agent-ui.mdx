@@ -809,7 +809,7 @@ Deleting a chat deletes its copies.
           "finished_at": "2026-10-16T15:30:40+00:00",
           "restored_at": null,
           "files": [{"path": "C:\\notes\\todo.md", "change": "edited", "tool": "edit_file"}],
-          "untracked": [{"kind": "shell", "detail": "npm run build", "paths": []}],
+          "untracked": [{"kind": "shell", "detail": "npm run build", "paths": [], "may_write": true}],
           "incomplete": true
         }
       ]
@@ -821,7 +821,12 @@ Deleting a chat deletes its copies.
     something GAIA can't copy ahead of time — a shell command outside the
     read-only tier, a Python snippet or script, or an MCP tool not marked
     read-only — and `untracked` lists each one. Undo does not cover what those
-    changed.
+    changed. A Python snippet or script is left out only when a static check
+    finds nothing in its code that could write (it fails closed: an unknown
+    import or dynamic code counts as a write) and a scan of the folders it ran
+    in finds no changed files and was not cut short; `detail` is its first
+    docstring or comment line, else its first line of code, and `paths` the
+    files seen changing.
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/changes/{turn_id}/diff">
@@ -979,7 +984,7 @@ Deleting a chat deletes its copies.
     | `tool_start` | `tool` (string), `detail` (string), `narration` (string) | Tool invocation started. `tool` is the tool function name (e.g., `"query_documents"`, `"search_file"`). `detail` is a human-readable description of the operation. `narration` is what the call does in plain words (`"Searching your documents"`). |
     | `tool_args` | `tool` (string), `args` (object), `detail` (string), `narration` (string) | Tool arguments. `args` is the raw arguments dict passed to the tool. `detail` is a formatted human-readable summary of the arguments, one `key: value` per line when there are more than two or a value holds a list. `narration` repeats the call's plain line with its main argument (`"Searching your documents: database init"`). |
     | `tool_end` | `success` (boolean) | Tool invocation completed. |
-    | `tool_result` | `title` (string or null), `summary` (string), `success` (boolean), `result_data` (object or null), `command_output` (object or null) | Tool result with structured data. `summary` is a human-readable result. `result_data` contains typed results (see below). `command_output` contains shell command output (see below). |
+    | `tool_result` | `title` (string or null), `summary` (string), `success` (boolean), `result_data` (object or null), `command_output` (object or null), `file_path` / `image_path` (string, optional) | Tool result with structured data. `summary` is a human-readable result. `result_data` contains typed results (see below). `command_output` contains shell command output (see below). `file_path` and `image_path` are the resolved path a tool wrote, when its result names one. |
     | `policy_alert` | `tool` (string), `decision` (`"BLOCK"`), `reason` (string), `rule_ids` (string[]), `policy_version` (string), `receipt_id` (string, optional) | Governance policy blocked a tool before execution. No user action is required; use this to show a visible policy refusal instead of treating the denial as a generic tool failure. |
 
     `result_data` variants in `tool_result`:
@@ -2803,11 +2808,11 @@ The npm package includes:
 The package version is sourced from `src/gaia/version.py` (single source of truth for all of GAIA):
 
 ```bash
-# Check version consistency (package.json matches version.py)
-node installer/version/bump-ui-version.mjs --check
+# Check every version field, package.json included, matches its source (lint runs this)
+python util/release_versions.py --check
 
-# Sync package.json to version.py
-node installer/version/bump-ui-version.mjs
+# Sync package.json, and every other version field, to version.py
+python util/release_versions.py --stamp
 
 # Full release (sync, commit, tag, push)
 node installer/version/release-ui.mjs

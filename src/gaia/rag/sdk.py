@@ -42,6 +42,7 @@ except Exception:  # pylint: disable=broad-except
 
 from gaia import config as gaia_config
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MODEL_NAME,
@@ -54,6 +55,8 @@ from gaia.utils.file_lock import (
     FileLockError,
     FileLockTimeout,
     file_lock,
+    held_by_another_program,
+    lock_dir_unwritable,
     write_bytes_atomic,
     write_text_atomic,
 )
@@ -129,6 +132,22 @@ class IndexingStopped(Exception):
     It leaves ``index_document`` as raised: the document is not indexed, and
     any cache it had is kept.
     """
+
+
+def _stop_behind(error: BaseException) -> Optional[Exception]:
+    """The stop *error* was raised from, if any.
+
+    A stop (:class:`IndexingStopped`, or :class:`LeaseWaitCancelled` from a
+    cancelled model-slot wait) can be wrapped by the client on the way out.
+    """
+    seen = set()
+    current: Optional[BaseException] = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, (IndexingStopped, LeaseWaitCancelled)):
+            return current
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return None
 
 
 # The running index_document's ``heartbeat`` on this thread, called once per
@@ -502,7 +521,10 @@ class RAGSDK:
         except OSError as e:
             if e.errno == errno.ELOOP:  # too many symbolic links
                 raise PermissionError(f"Symlinks not allowed: {file_path}")
-            raise IOError(f"Cannot open file {file_path}: {e}")
+            # Keep the errno: it is how a caller tells a locked file apart.
+            raise OSError(
+                e.errno, f"Cannot open file: {e.strerror}", str(file_path)
+            ) from e
 
         # Verify it's a regular file (not directory or special file)
         try:
@@ -637,13 +659,18 @@ class RAGSDK:
         )
         return hashlib.sha256(spec.encode("utf-8")).hexdigest()[:8]
 
-    def _content_key(self, file_path: str) -> str:
+    def _content_key(self, file_path: str, raise_locked: bool = False) -> str:
         """``<path hash>_<content hash>``: the shared stem of a document's cache files.
 
         The content hash (not mtime/size) makes same-size edits and sub-second
         rewrites invalidate; the path hash keeps identical files apart. An
         unreadable file gets a path-only ``<hash>_notfound`` key, and indexing
         then fails at extraction.
+
+        Raises:
+            PermissionError: With ``raise_locked``, when the read is refused as
+                :func:`held_by_another_program`. Hashing reads every byte, so
+                this sees a lock in any format before a parser misreports it.
         """
         path = Path(file_path).absolute()
         try:
@@ -653,6 +680,8 @@ class RAGSDK:
                 while chunk := f.read(8192):
                     hasher.update(chunk)
         except OSError as e:
+            if raise_locked and held_by_another_program(e):
+                raise
             self.log.warning(f"Cannot read file for cache key: {e}")
             return f"{hashlib.sha256(str(path).encode()).hexdigest()}_notfound"
         path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
@@ -690,6 +719,9 @@ class RAGSDK:
             except EmbeddingUnavailableError:
                 raise
             except Exception as e:
+                stop = _stop_behind(e)
+                if stop is not None:
+                    raise stop from e
                 raise EmbeddingUnavailableError(self.config.embedding_model, e) from e
 
     def _start_embedder(self):
@@ -849,6 +881,9 @@ class RAGSDK:
             try:
                 response = self._request_embeddings(batch_texts, wait_callback)
             except Exception as e:  # noqa: BLE001 — classified, then re-raised
+                stop = _stop_behind(e)
+                if stop is not None:
+                    raise stop from e
                 if "physical batch size" in str(e) and not reloaded:
                     self.log.warning(
                         f"   ⚠️  Batch {batch_num}: the embedder was reloaded with a "
@@ -1190,6 +1225,8 @@ class RAGSDK:
                             if image_texts:
                                 vlm_pages_count += 1
                                 total_images_processed += len(image_texts)
+                    except LeaseWaitCancelled:
+                        raise
                     except Exception as img_error:
                         page_warning = (
                             f"image extraction failed on page {i}: {img_error}"
@@ -1572,6 +1609,8 @@ class RAGSDK:
                             if image_texts:
                                 vlm_slides_count += 1
                                 total_images_processed += len(image_texts)
+                    except LeaseWaitCancelled:
+                        raise
                     except Exception as img_error:
                         self.log.warning(
                             f"Image extraction failed on slide {i}: {img_error}"
@@ -1877,7 +1916,8 @@ These positions indicate where to split the text."""
             self.log.info(f"📝 Extracted {len(text):,} characters from text file")
             return text.strip()
         except Exception as e:
-            self.log.error(f"Error reading text file {file_path}: {e}")
+            log = self.log.warning if held_by_another_program(e) else self.log.error
+            log(f"Error reading text file {file_path}: {e}")
             raise
 
     def _extract_text_from_csv(self, csv_path: str) -> str:
@@ -2249,10 +2289,14 @@ These positions indicate where to split the text."""
         protected_text = text
         for i, match in enumerate(re.finditer(vlm_pattern, text, re.DOTALL)):
             placeholder = f"<<<VLM_BLOCK_{i}>>>"
-            vlm_blocks.append(
-                {"placeholder": placeholder, "content": match.group(0).strip()}
+            block = match.group(0)
+            content = block.rstrip()
+            vlm_blocks.append({"placeholder": placeholder, "content": content})
+            # Keep the whitespace after the block, or restoring it fuses its last
+            # word to the next image or page marker.
+            protected_text = protected_text.replace(
+                block, placeholder + block[len(content) :], 1
             )
-            protected_text = protected_text.replace(match.group(0), placeholder, 1)
 
         # STEP 2: Identify natural document boundaries
         # Look for markdown headers, section breaks, or significant whitespace
@@ -2919,7 +2963,9 @@ These positions indicate where to split the text."""
                 "num_chunks": int,
                 "total_indexed_files": int,
                 "total_chunks": int,
-                "error": str (if failed)
+                "error": str (if failed),
+                "error_type": str (some failures: "file_locked",
+                    "cache_busy" or "embedding_unavailable")
             }
 
         Raises:
@@ -3030,7 +3076,10 @@ These positions indicate where to split the text."""
                 return stats
 
         # Check cache - the cache key is based on file content hash
-        content_key = self._content_key(file_path)
+        try:
+            content_key = self._content_key(file_path, raise_locked=True)
+        except PermissionError as e:
+            return self._document_locked(stats, file_path, e)
         cache_path = self._get_cache_path(file_path, content_key)
         md_cache_path = self._extracted_markdown_path(content_key)
 
@@ -3172,14 +3221,15 @@ These positions indicate where to split the text."""
                 if not limits_ok:
                     stats["memory_limit_warning"] = True
                 return stats
-            except IndexingStopped:
+            except (IndexingStopped, LeaseWaitCancelled):
                 raise
             except EmbeddingUnavailableError as e:
                 # The cache is fine; the embedder is not. Keep the cache.
                 return self._embedding_failed(stats, file_path, e)
             except FileLockError as e:
-                # Busy, not corrupt: re-extracting would redo another process's work.
-                return self._cache_busy(stats, file_path, e)
+                # Not corrupt: re-extracting would redo another process's work,
+                # or fail the same way saving into an unwritable cache.
+                return self._cache_lock_failed(stats, file_path, e)
             except Exception as e:
                 # A miss, not a delete: re-indexing replaces the entry atomically,
                 # and deleting here could destroy a fresh cache another process
@@ -3197,7 +3247,13 @@ These positions indicate where to split the text."""
 
         try:
             # Extract text based on file type
-            text, file_metadata = self._extract_text_from_file(file_path)
+            try:
+                text, file_metadata = self._extract_text_from_file(file_path)
+            except PermissionError as e:
+                # Only the document's own read: a cache write can fail with EACCES too.
+                if held_by_another_program(e):
+                    return self._document_locked(stats, file_path, e)
+                raise
 
             # Store metadata in stats if available (for PDFs)
             if file_metadata.get("num_pages"):
@@ -3378,35 +3434,74 @@ These positions indicate where to split the text."""
             stats["error"] = str(e)
             stats["pdf_status"] = e.status
             return stats
-        except IndexingStopped:
+        except (IndexingStopped, LeaseWaitCancelled):
             raise
         except EmbeddingUnavailableError as e:
             return self._embedding_failed(stats, file_path, e)
+        except FileLockError as e:
+            return self._cache_lock_failed(stats, file_path, e)
         except Exception as e:
-            if self.config.show_stats:
-                print(f"❌ Failed to index {Path(file_path).name}: {e}")
-            self.log.error(
-                f"Failed to index {file_path}: {type(e).__name__}: {e}",
-                exc_info=True,
-            )
-            stats["error"] = str(e)
-            return stats
+            return self._index_failed(stats, file_path, e)
 
-    def _cache_busy(
+    def _document_locked(
+        self, stats: Dict[str, Any], file_path: str, error: PermissionError
+    ) -> Dict[str, Any]:
+        """Index stats for a document Windows would not let us read."""
+        message = (
+            f"Could not read {Path(file_path).name}: another program may have it "
+            "open, or you may not have permission to read it. Close any program "
+            "using it and index the document again."
+        )
+        if self.config.show_stats:
+            print(f"❌ {message}")
+        # A warning: the caller gets error_type and decides whether to retry.
+        self.log.warning(f"{message} ({error})")
+        stats["error"] = message
+        stats["error_type"] = "file_locked"
+        return stats
+
+    def _index_failed(
+        self, stats: Dict[str, Any], file_path: str, e: Exception
+    ) -> Dict[str, Any]:
+        """Index stats for a document that failed for any other reason."""
+        if self.config.show_stats:
+            print(f"❌ Failed to index {Path(file_path).name}: {e}")
+        self.log.error(
+            f"Failed to index {file_path}: {type(e).__name__}: {e}",
+            exc_info=True,
+        )
+        stats["error"] = str(e)
+        return stats
+
+    def _cache_lock_failed(
         self, stats: Dict[str, Any], file_path: str, error: FileLockError
     ) -> Dict[str, Any]:
-        """Index stats for a document whose cache another process holds locked."""
-        message = f"Could not read the cached index for {Path(file_path).name}: {error}"
+        """Index stats for a document whose cache lock could not be taken.
+
+        ``error_type`` is ``cache_busy`` when another process held the lock,
+        ``cache_unwritable`` when this user cannot create files in the cache
+        folder, and ``cache_lock_error`` when the lock file itself is unusable.
+        """
+        folder = error.lock_path.parent
+        name = Path(file_path).name
         if isinstance(error, FileLockTimeout):
-            message += (
-                " Another GAIA process is probably indexing into the same cache; "
-                "index the document again once it finishes."
+            error_type = "cache_busy"
+            message = f"Could not use the cached index for {name} in {folder}: {error}"
+        elif lock_dir_unwritable(error):
+            error_type = "cache_unwritable"
+            message = (
+                f"Cannot use the RAG cache folder {folder} for {name}: {error} "
+                "The document itself is fine."
             )
+        else:
+            error_type = "cache_lock_error"
+            message = f"Cannot open the RAG cache lock in {folder} for {name}: {error}"
         if self.config.show_stats:
             print(f"❌ {message}")
         self.log.error(message)
         stats["error"] = message
-        stats["error_type"] = "cache_busy"
+        stats["error_type"] = error_type
+        stats["cache_dir"] = str(folder)
         return stats
 
     def _embedding_failed(

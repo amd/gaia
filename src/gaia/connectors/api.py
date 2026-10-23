@@ -59,17 +59,15 @@ from gaia.connectors.grants import (
     load_grants,
     revoke_agent_grant,
 )
-from gaia.connectors.providers import get as get_provider
 from gaia.connectors.store import (
     DEFAULT_ACCOUNT,
     delete_connection,
 )
 from gaia.connectors.store import list_connections as _store_list
 from gaia.connectors.store import (
-    load_connection,
     peek_connection,
 )
-from gaia.connectors.tokens import get_or_refresh
+from gaia.connectors.tokens import get_or_refresh, load_current_connection
 
 logger = logging.getLogger(__name__)
 
@@ -225,14 +223,7 @@ def _authorize_access(
     # Eager check for OAuth scope coverage — once we know the agent is
     # granted, look at what the underlying OAuth connection actually
     # carries. The store load also fires the client_id_hash tripwire.
-    prov = get_provider(provider)
-
-    stored = load_connection(
-        provider,
-        current_client_id_hash=prov.client_id_hash,
-        current_tenant=getattr(prov, "tenant", None),
-        account_email=account_email,
-    )
+    _, stored = load_current_connection(provider, account_email=account_email)
     if stored is None:
         raise AuthRequiredError(
             AuthRequiredError.Reason.NOT_CONNECTED, provider=provider
@@ -431,7 +422,7 @@ def list_connections() -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for provider in _store_list():
         try:
-            prov = get_provider(provider)
+            _, blob = load_current_connection(provider)
         except ConfigurationError:
             # Provider configured to point at this store but the env
             # var isn't set right now. Surface the row with a
@@ -446,14 +437,9 @@ def list_connections() -> List[Dict[str, Any]]:
                 }
             )
             continue
-        try:
-            blob = load_connection(
-                provider,
-                current_client_id_hash=prov.client_id_hash,
-                current_tenant=getattr(prov, "tenant", None),
-            )
         except AuthRequiredError:
-            # Tripwire fired (hash OR tenant) — the entry has been cleared. Skip.
+            # Tripwire fired (hash OR tenant): cleared, or left in place while
+            # another process holds the lock. Skip either way.
             continue
         if blob is None:
             continue
@@ -572,7 +558,7 @@ def import_forwarded_connection(
     """
     # Local imports keep the module-level dependency graph (and the lazy
     # keyring import contract in connectors/__init__.py) unchanged.
-    from gaia.connectors.providers import _registry as _provider_registry
+    from gaia.connectors.providers import reload as reload_provider
     from gaia.connectors.store import (
         save_connection,
         save_provider_credentials,
@@ -625,23 +611,25 @@ def import_forwarded_connection(
 
     account = account_email or DEFAULT_ACCOUNT
 
-    # 4. Persist the forwarded OAuth client → ``provider:<provider>`` slot.
-    save_provider_credentials(
-        provider, client_id=client_id, client_secret=client_secret
-    )
-
-    # 5. Evict the cached provider instance so the next ``get_provider`` reads
-    #    the forwarded client and recomputes ``client_id_hash`` from it.
-    _provider_registry.pop(provider, None)
-    prov = get_provider(provider)
-
-    # 6. Persist the connection (refresh_token + metadata) → ``<provider>:default``
-    #    keyed by the forwarded client's hash so the tripwire passes coherently.
-    #    ``save_connection`` rewrites the whole blob, so the account kind must be
-    #    threaded through explicitly or a forwarded grant silently downgrades an
-    #    already-classified mailbox to unknown (#2466). A caller that knows the
-    #    kind passes it; otherwise the stored value carries over.
+    # Steps 4-6 share one lock hold, so a refresh in another process never
+    # sees the new client next to the old connection and clears it.
     with held_sync(provider):
+        # 4. Persist the forwarded OAuth client → ``provider:<provider>`` slot.
+        save_provider_credentials(
+            provider, client_id=client_id, client_secret=client_secret
+        )
+
+        # 5. Rebuild the cached provider from the forwarded client so
+        #    ``client_id_hash`` is recomputed from it.
+        prov = reload_provider(provider)
+
+        # 6. Persist the connection (refresh_token + metadata) →
+        #    ``<provider>:default`` keyed by the forwarded client's hash so the
+        #    tripwire passes coherently. ``save_connection`` rewrites the whole
+        #    blob, so the account kind must be threaded through explicitly or a
+        #    forwarded grant silently downgrades an already-classified mailbox
+        #    to unknown (#2466). A caller that knows the kind passes it;
+        #    otherwise the stored value carries over.
         resolved_account_type = account_type or (
             (peek_connection(provider) or {}).get("account_type")
         )
@@ -819,20 +807,13 @@ def tripwire_check() -> None:
     """
     for provider_id in _store_list():
         try:
-            prov = get_provider(provider_id)
+            load_current_connection(provider_id)
         except ConfigurationError as e:
             logger.warning("tripwire: provider %s misconfigured: %s", provider_id, e)
             continue
-        try:
-            load_connection(
-                provider_id,
-                current_client_id_hash=prov.client_id_hash,
-                current_tenant=getattr(prov, "tenant", None),
-            )
-        except AuthRequiredError:
-            # Tripwire fired (hash OR tenant) — load_connection already
-            # cleared the entry; nothing else to do here.
-            logger.info("tripwire: provider %s entry cleared by tripwire", provider_id)
+        except AuthRequiredError as e:
+            # Cleared, or left in place while another process holds the lock.
+            logger.info("tripwire: provider %s tripwire fired: %s", provider_id, e)
         except Exception as e:
             logger.warning("tripwire: provider %s check failed: %s", provider_id, e)
 

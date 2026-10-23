@@ -8,11 +8,10 @@
 // download stays the one primary button. Renders nothing unless there is a
 // candidate newer than the latest stable release (pickReleaseCandidate).
 //
-// The links come from the GitHub pre-release, not the hub catalog: the catalog
-// has no pre-release channel, and release candidates are never published to it.
+// The links are the GitHub pre-release's own assets, as the stable buttons
+// above link the stable release's.
 
-import { formatBytes } from '../data/catalog';
-import type { ReleaseCandidate } from '../data/github';
+import { formatBytes, type ReleaseCandidate } from '../data/github';
 
 interface Props {
   candidate: ReleaseCandidate | null;

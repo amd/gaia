@@ -107,6 +107,9 @@ SUMMARY_VIEW_KEYS = (
     "summary_truncated",
     "command_output",
     "latency_ms",
+    # What the tool wrote (``RESULT_PATH_KEYS`` in ``gaia.ui.sse_handler``).
+    "file_path",
+    "image_path",
 )
 
 #: Counts a ``status`` carrying a ``phase`` may report alongside it: reasoning
@@ -445,6 +448,9 @@ class CanonicalTranslator:
         }
         if usage:
             final["usage"] = usage
+        if event.get("failed"):
+            # The answer explains a turn a model failure ended; not a result.
+            final["failed"] = True
         return [final]
 
     def _on_agent_error(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:

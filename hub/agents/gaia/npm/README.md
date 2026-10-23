@@ -39,7 +39,7 @@ however you arrive at the terminal UI, it behaves identically.
 - **Node.js 18+** (for the built-in `fetch`).
 - **[Lemonade Server](https://amd-gaia.ai/docs/reference/dev)** running locally —
   it hosts the model the agent thinks with. GAIA tells you if it isn't up.
-- The `gaia` Python CLI **0.25.0 or newer** on `PATH` for the daemon the terminal
+- The `gaia` Python CLI **0.25.1 or newer** on `PATH` for the daemon the terminal
   UI starts. An earlier core cannot run this agent, so the UI comes up with
   nothing behind it. Install it with
   `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
@@ -193,6 +193,21 @@ and eviction behavior.
 2.16): the absolute paths, the whole set on every turn. The agent indexes any it
 has not read yet before answering, and can read those exact files and nothing
 else beside them. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Private chat, or memory off? Send `memory` every turn** (contract ≥ 2.18):
+`"private"` or `"off"` stops the turn saving anything to memory, including the
+errors and lessons the agent records on its own; omit it and memory stays as the
+agent has it. Send `allowed_paths` with the folders your UI shows the chat can
+read, so the agent works in the same scope. Binaries older than 2.18 reject both
+fields with `422`, so probe `/version` first. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Showing what a turn changed, with undo? Send `changes_turn_id`** (contract ≥
+2.19) along with `session_id`: the agent copies each file before it writes it,
+into the snapshot store under its GAIA home, keyed by the session and that turn
+id. The copies are complete before the stream's terminal event, so you can read
+and restore them as soon as the stream ends. Omit it and nothing is copied. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message

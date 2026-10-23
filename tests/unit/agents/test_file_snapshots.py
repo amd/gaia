@@ -315,6 +315,60 @@ class TestListingAndReview:
         assert turn["incomplete"] is True
         assert turn["untracked"][0]["detail"] == "npm run build"
 
+    def test_read_only_work_alone_records_no_turn(self, root):
+        with _record(root):
+            fs.note_untracked("run_python", "count errors", may_write=False)
+        assert fs.list_turns(SID, root=root) == []
+        assert fs.session_changes(SID, root=root)["incomplete"] is False
+
+    def test_only_work_that_may_write_marks_the_turn(self, root, work):
+        target = work / "a.txt"
+        target.write_text("old")
+        with _record(root):
+            fs.before_change(target)
+            target.write_text("new")
+            fs.note_untracked("run_python", "count errors", may_write=False)
+        (turn,) = fs.list_turns(SID, root=root)
+        assert turn["incomplete"] is False
+        assert turn["untracked"] == []
+        # Kept in the record, just not reported as a gap in undo.
+        manifest = json.loads(
+            (root / SID / turn["turn_id"] / fs.MANIFEST).read_text(encoding="utf-8")
+        )
+        assert manifest["untracked"][0]["may_write"] is False
+
+        with _record(root) as rec:
+            fs.note_untracked("run_python", "count", may_write=False)
+            fs.note_untracked("run_python", "save totals", ["C:\t.csv"])
+        (turn,) = [
+            t for t in fs.list_turns(SID, root=root) if t["turn_id"] == rec.turn_id
+        ]
+        assert turn["incomplete"] is True
+        assert [u["detail"] for u in turn["untracked"]] == ["save totals"]
+        changes = fs.session_changes(SID, root=root)
+        assert changes["incomplete"] is True
+        assert [u["detail"] for u in changes["untracked"]] == ["save totals"]
+
+    def test_entries_saved_before_may_write_existed_count_as_writes(self, root):
+        with _record(root) as rec:
+            fs.note_untracked("shell", "npm run build")
+        path = root / SID / rec.turn_id / fs.MANIFEST
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        del manifest["untracked"][0]["may_write"]
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        (turn,) = fs.list_turns(SID, root=root)
+        assert turn["incomplete"] is True
+
+    def test_read_only_work_after_the_turn_ended_is_not_noted(self, root, work):
+        target = work / "a.txt"
+        target.write_text("old")
+        with _record(root) as rec:
+            fs.before_change(target)
+            target.write_text("new")
+        rec.note_untracked("run_python", "late read", may_write=False)
+        (turn,) = fs.list_turns(SID, root=root)
+        assert turn["incomplete"] is False
+
     def test_outside_a_turn_nothing_is_recorded(self, root, work):
         fs.before_change(work / "x.txt")
         fs.note_untracked("shell", "rm x")
@@ -653,3 +707,77 @@ class TestSecondReviewFixes:
             u["kind"] == "mcp" for u in fs.list_turns(SID, root=root)[0]["untracked"]
         )
         assert marked is expected
+
+
+# ---------------------------------------------------------------------------
+# A turn recorded by another process (the agent's sidecar)
+# ---------------------------------------------------------------------------
+
+
+class TestRecordedElsewhere:
+    def test_turn_ids_sort_in_the_order_they_ran(self):
+        import re
+
+        first = fs.new_turn_id()
+        time.sleep(1.1)
+        second = fs.new_turn_id()
+        assert re.match(fs.TURN_ID_PATTERN, first)
+        assert first < second
+
+    def test_the_answer_is_linked_beside_the_manifest(self, root, work):
+        target = work / "notes.txt"
+        with fs.recording_turn(SID, fs.new_turn_id(), root=root) as rec:
+            fs.before_change(target, "write_file")
+            target.write_bytes(b"new")
+            manifest = (rec.dir / fs.MANIFEST).read_bytes()
+            # Linked while the recording process may still be saving.
+            assert fs.link_turn_message(SID, rec.turn_id, 7, root=root)
+            assert (rec.dir / fs.MANIFEST).read_bytes() == manifest
+        (turn,) = fs.list_turns(SID, root=root)
+        assert turn["message_id"] == 7
+        assert turn["files"] == [
+            {"path": str(target), "change": "created", "tool": "write_file"}
+        ]
+
+    def test_a_turn_that_changed_nothing_is_not_linked(self, root):
+        with fs.recording_turn(SID, fs.new_turn_id(), root=root) as rec:
+            pass
+        assert fs.link_turn_message(SID, rec.turn_id, 7, root=root) is False
+        assert fs.list_turns(SID, root=root) == []
+
+    def test_a_damaged_link_is_reported(self, root, work):
+        with _record(root) as rec:
+            fs.before_change(work / "a.txt", "write_file")
+            (work / "a.txt").write_bytes(b"x")
+        (rec.dir / fs.MESSAGE_LINK).write_text("{", encoding="utf-8")
+        with pytest.raises(fs.SnapshotError, match="Cannot read"):
+            fs.list_turns(SID, root=root)
+
+    def test_finishing_twice_keeps_an_undo_made_in_between(self, root, work):
+        target = work / "notes.txt"
+        target.write_bytes(b"before")
+        with _record(root) as rec:
+            fs.before_change(target, "edit_file")
+            target.write_bytes(b"after")
+            # The sidecar finishes before its last event; the UI then undoes.
+            rec.finish()
+            fs.restore_turn(SID, rec.turn_id, root=root)
+        (turn,) = fs.list_turns(SID, root=root)
+        assert turn["restored_at"] is not None
+        assert target.read_bytes() == b"before"
+
+    def test_a_finish_that_failed_is_tried_again(self, root, work, monkeypatch):
+        target = work / "notes.txt"
+        with _record(root) as rec:
+            fs.before_change(target, "write_file")
+            target.write_bytes(b"new")
+            real_copy = fs.shutil.copyfile
+            monkeypatch.setattr(
+                fs.shutil, "copyfile", lambda *a: (_ for _ in ()).throw(OSError("full"))
+            )
+            with pytest.raises(OSError, match="full"):
+                rec.finish()
+            monkeypatch.setattr(fs.shutil, "copyfile", real_copy)
+        (turn,) = fs.list_turns(SID, root=root)
+        assert turn["finished_at"] is not None
+        assert turn["files"][0]["change"] == "created"

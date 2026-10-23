@@ -622,7 +622,16 @@ def _search_duckduckgo(self, query: str, num_results: int = 5) -> list[dict]:
     return results
 ```
 
-**Fallback:** If DuckDuckGo blocks or changes their HTML structure, the tool returns a clear error message suggesting the user try a direct URL instead.
+**When DuckDuckGo turns searches away:** DDG answers bursts of automated searches with HTTP 202 (or 403/429/503, or a 200 bot-check page). `search_duckduckgo` then:
+
+1. Tries the lite endpoint (`lite.duckduckgo.com/lite/`) after the HTML one refuses.
+2. Retries up to `max_attempts` rounds (default 3) with jittered exponential backoff from 2 s, honouring `Retry-After`. A wait over 20 s is not slept; it is returned to the caller.
+3. Paces every search in the process through one gate (at least 1.5 s apart), so parallel searches do not burst, and holds all of them back after a block. The gate is process-wide on purpose: DuckDuckGo throttles the IP, so in the Agent UI server one session's block also delays the others. Do not make it per-client.
+4. Stops waiting when the user presses Stop: `search_web` passes a stop check, and a pacing or backoff wait ends within 0.25 s of it.
+
+Each switch is logged: a refused endpoint, an endpoint that answered after a refusal, and a search answered by Tavily all log a warning.
+
+If every round is refused it raises `SearchUnavailableError`. `search_web` then uses the `mcp-tavily` connector when the user configured one, and labels those results as Tavily's. If Tavily is not configured it is never called. Otherwise it returns a `rate_limited` result: the agent loop waits it out instead of counting it as a repeated call or a tool failure, and the model is told to search again shortly, narrow the query, or fetch a known URL. After 3 refusals in a row the result drops `rate_limited` and says to stop searching, so the failure breaker can end a search loop that will not recover. When no Tavily connector is set up, that result also tells the model to let the user know `gaia connectors configure mcp-tavily --set TAVILY_API_KEY=...` adds a backup provider. A rate limit is never stored in memory as a known error. Other non-200 answers raise at once and are not retried.
 
 ---
 

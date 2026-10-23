@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- A `run_python` snippet or `execute_python_file` script whose code only reads
+  files no longer marks the turn's undo as incomplete, unless files changed in
+  the folders it ran in. The check fails closed: an import it doesn't know,
+  dynamic code, a mode it can't read, a folder scan cut short or a run that
+  fails part-way all still count as a write. A snippet is recorded by its docstring or first
+  comment line instead of its first line of code. Uses `may_write` on
+  `note_untracked`, new in core 0.25.1.
+- On Windows, a watched document that another program holds for exclusive
+  access, or has partly locked, is now retried until it can be read, including
+  one saved by renaming a temp file onto it. This covers every format the agent
+  indexes, Word and PowerPoint included, which used to be reported as
+  corrupted. Before, the agent tried a locked file once and never reindexed it.
+  `reindex_file` now raises `PermissionError` for a locked file so the file
+  watcher retries it 1, 2 and 4 windows later. If the file is still locked
+  after that, the watcher logs one error telling the user to close the program
+  and save the file again. Any other failure is still logged: an exception
+  with its traceback, a failed index with RAG's error.
+- Needs core 0.25.1, whose file watcher retries, whose RAG reports a locked
+  read as `error_type: "file_locked"`, and which ships
+  `gaia.utils.file_lock.held_by_another_program`, imported at start;
+  `tests/test_chat_dependency_floor.py` fails the 0.25.1 release until the
+  floor rises.
 - gpt-oss 20B and 120B get `set_reasoning_effort` (low, medium or high), so the
   agent chooses how hard the model reasons for the rest of a request; each new
   message starts again at the default. It registers per agent and only on a
