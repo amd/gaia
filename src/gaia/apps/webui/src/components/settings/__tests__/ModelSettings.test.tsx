@@ -87,19 +87,39 @@ describe('ModelSettings provider keys', () => {
     });
 
     it('connects with the typed key and clears the field', async () => {
-        mockedApi.connectProvider.mockResolvedValue({ ...fireworks(), remembered: true, remember_error: null });
+        mockedApi.connectProviderWaitingForOs.mockResolvedValue({ ...fireworks(), remembered: true, remember_error: null });
         const card = await openFireworks();
         const field = within(card).getByLabelText('Fireworks AI API key');
         fireEvent.change(field, { target: { value: 'fw-secret' } });
         fireEvent.click(within(card).getByRole('button', { name: 'Connect' }));
 
-        await waitFor(() => expect(mockedApi.connectProvider).toHaveBeenCalledWith('fireworks', { api_key: 'fw-secret' }));
+        await waitFor(() => expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('fireworks', { api_key: 'fw-secret' }, expect.any(Function), expect.any(Function)));
         expect(await within(card).findByRole('status')).toHaveTextContent('The key is kept for next time.');
         expect(field).toHaveValue('');
     });
 
+    it('stops waiting on the keychain prompt once the user picks another provider', async () => {
+        let stopped: (() => boolean) | undefined;
+        let answer!: (v: Awaited<ReturnType<typeof api.connectProviderWaitingForOs>>) => void;
+        mockedApi.connectProviderWaitingForOs.mockImplementation((_p, _b, onWaiting, stop) => {
+            stopped = stop;
+            onWaiting('macOS is asking GAIA for keychain access. Look for a system dialog and click Always Allow.');
+            return new Promise((r) => { answer = r; });
+        });
+        withProviders(fireworks({ key_source: 'stored' }));
+        const card = await openFireworks();
+        fireEvent.click(within(card).getByRole('button', { name: 'Connect' }));
+        expect(await within(card).findByText(/Look for a system dialog/)).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('radio', { name: /Local/ }));
+        expect(stopped?.()).toBe(true);
+        answer({ ...fireworks(), models_discovered: true, remembered: false, remember_error: null });
+        await waitFor(() => expect(mockedApi.listProviders).toHaveBeenCalled());
+        expect(screen.queryByText('Connected.')).not.toBeInTheDocument();
+    });
+
     it('shows why the connection was refused', async () => {
-        mockedApi.connectProvider.mockRejectedValue(new Error('Fireworks rejected the key (401)'));
+        mockedApi.connectProviderWaitingForOs.mockRejectedValue(new Error('Fireworks rejected the key (401)'));
         const card = await openFireworks();
         fireEvent.change(within(card).getByLabelText('Fireworks AI API key'), { target: { value: 'bad' } });
         fireEvent.click(within(card).getByRole('button', { name: 'Connect' }));

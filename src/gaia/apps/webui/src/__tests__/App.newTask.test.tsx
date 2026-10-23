@@ -3,7 +3,7 @@
 
 // Pins what the shell sends when a chat starts, and when it shows first-run setup.
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -174,6 +174,61 @@ describe('a new chat', () => {
 
         expect(await screen.findByRole('alert')).toHaveTextContent(/permission mode could not be set.*backend said no/);
         expect(mocked.sendMessageStream).not.toHaveBeenCalled();
+    });
+});
+
+describe('a new chat sent several times before it opens', () => {
+    async function typeFirstMessage(text: string) {
+        const box = await screen.findByLabelText('Message');
+        await waitFor(() => expect(box).toBeEnabled());
+        await userEvent.type(box, text);
+        return box;
+    }
+
+    // One act: all three presses land before React re-renders, like a bouncy key.
+    it('creates one chat and sends the message once on three quick Enters', async () => {
+        render(<App />);
+        const box = await typeFirstMessage('hello there');
+        act(() => {
+            for (let i = 0; i < 3; i++) fireEvent.keyDown(box, { key: 'Enter' });
+        });
+
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
+        expect(mocked.createSession).toHaveBeenCalledOnce();
+        expect(mocked.sendMessageStream).toHaveBeenCalledOnce();
+        expect(useChatStore.getState().sessions).toHaveLength(1);
+    });
+
+    it('creates one chat and sends the message once on three quick Send clicks', async () => {
+        render(<App />);
+        await typeFirstMessage('hello there');
+        const send = screen.getByRole('button', { name: 'Send' });
+        act(() => {
+            for (let i = 0; i < 3; i++) fireEvent.click(send);
+        });
+
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
+        expect(mocked.createSession).toHaveBeenCalledOnce();
+        expect(mocked.sendMessageStream).toHaveBeenCalledOnce();
+        expect(useChatStore.getState().sessions).toHaveLength(1);
+    });
+
+    it('lets the message be sent again, still typed, when the chat could not be created', async () => {
+        mocked.createSession.mockRejectedValueOnce(new Error('backend unreachable'));
+        render(<App />);
+        const box = await typeFirstMessage('hello there');
+        fireEvent.keyDown(box, { key: 'Enter' });
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('backend unreachable');
+        expect(box).toHaveValue('hello there');
+        expect(box).toBeEnabled();
+        const send = screen.getByRole('button', { name: 'Send' });
+        expect(send).toBeEnabled();
+
+        await userEvent.click(send);
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalledOnce());
+        expect(mocked.createSession).toHaveBeenCalledTimes(2);
+        expect(mocked.sendMessageStream.mock.calls[0].slice(0, 2)).toEqual(['sess-new-0001', 'hello there']);
     });
 });
 

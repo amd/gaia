@@ -145,6 +145,8 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
                 narration: event.narration,
                 active: true, timestamp: ts,
                 mcpServer: event.mcp_server,
+                mcpServerLabel: event.mcp_server_label,
+                mcpTool: event.mcp_tool,
             };
         case 'plan':
             return {
@@ -1025,6 +1027,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             truncated: event.command_output.truncated,
                         };
                     }
+                    if (event.mcp_output?.text) updates.mcpOutput = event.mcp_output;
                     // Pass through retrieval chunks if available
                     if (event.result_data?.chunks && event.result_data.chunks.length > 0) {
                         updates.retrievalChunks = event.result_data.chunks.map((c) => ({
@@ -1138,7 +1141,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.type === 'tool_start') {
                         toolOccurredRef.current = true;
                         // The model's phase ended with the call; say a tool runs, not the model.
-                        useChatStore.getState().setLiveStatus(toolActiveLabel(event.tool), 'tool');
+                        useChatStore.getState().setLiveStatus(toolActiveLabel(event.tool, step), 'tool');
                     }
                 }
             },
