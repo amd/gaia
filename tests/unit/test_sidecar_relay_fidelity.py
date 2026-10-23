@@ -235,6 +235,17 @@ def test_a_noted_call_is_used_once_and_only_for_its_tool():
     assert prompt["call_args"] == {"command": "ls"}
 
 
+def test_a_noted_call_matching_the_prompt_is_not_sent_twice():
+    handler = SSEOutputHandler()
+    code = {"file_path": "C:\\a.py", "content": "x" * 10_000}
+    handler.note_call_args("write_file", code)
+    handler.confirm_tool_execution("write_file", dict(code), timeout=0.01)
+    [prompt] = [e for e in _drain(handler) if e["type"] == "permission_request"]
+    assert "call_args" not in prompt
+    [wire] = CanonicalTranslator("r1", agent_id="gaia").translate(prompt)
+    assert wire["args"] == code
+
+
 def test_the_relay_puts_gaias_context_back_on_the_ui_prompt():
     handler = SSEOutputHandler()
     handler.set_relay_confirmation = lambda _cid: None

@@ -1695,8 +1695,8 @@ class SSEOutputHandler(OutputHandler):
         """Record what the model sent for the call the next prompt asks about.
 
         The prompt's arguments can carry what GAIA adds for display (the folder
-        a shell call runs in, a risk note), so the ``permission_request`` also
-        carries these as ``call_args``. Consumed by the next
+        a shell call runs in, a risk note), so when they differ the
+        ``permission_request`` also carries these as ``call_args``. Consumed by the next
         :meth:`confirm_tool_execution`, and only for the same tool.
         """
         self._noted_call = (tool_name, dict(call_args))
@@ -1826,7 +1826,7 @@ class SSEOutputHandler(OutputHandler):
             "args": tool_args,
             "confirm_id": confirm_id,
         }
-        if call_args is not None:
+        if call_args is not None and call_args != tool_args:
             request["call_args"] = call_args
         # Present only when an "always" answer would create a grant, and it
         # names exactly what that grant covers. A front-end must not offer the
