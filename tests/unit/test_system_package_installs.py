@@ -18,7 +18,6 @@ import pytest
 from gaia.agents.tools import package_installs
 from gaia.agents.tools.package_installs import system_install_target
 from gaia.agents.tools.shell_tools import (
-    TIER_CONFIRM,
     TIER_CONFIRM_ONCE,
     TIER_REFUSE,
     ShellToolsMixin,
@@ -217,7 +216,5 @@ class TestAskModeAsksOnceWithARiskNote:
     def test_system_pip_install_is_never_an_always(self, system_python):
         error, _ = _Host(False)._line_verdict("python -m pip install openpyxl")
         assert error is not None
-        assert error["tier"] in (TIER_CONFIRM_ONCE, TIER_REFUSE)
-        assert error["tier"] != TIER_CONFIRM
-        if error["tier"] == TIER_CONFIRM_ONCE:
-            assert "share" in error["risk_note"]
+        assert error["tier"] == TIER_CONFIRM_ONCE
+        assert "share" in error["risk_note"]

@@ -3301,7 +3301,8 @@ class ShellToolsMixin:
         Each step is judged in the folder it runs in, so ``cd app &&
         .venv/bin/python -m pip install x`` finds the project's own venv.
         """
-        located = self._call_cwd(working_directory)
+        # Read-only: repairing the session folder waits until the call runs.
+        located = self._call_cwd(working_directory) if working_directory else None
         cwd = located[0] if located else self.shell_session.cwd
         for step in steps:
             if step.is_cd:

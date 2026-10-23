@@ -3179,7 +3179,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         held = getattr(self, "_scratch_held", None)
         if held is not None:
             self._scratch_held = None
-            if not release_scratch_dir(held) and scratch_dir == held:
+            if not release_scratch_dir(held):
                 # Another chat in this process still runs in it.
                 logger.debug("Scratch directory %s still in use; kept", held)
                 self.scratch_dir = None

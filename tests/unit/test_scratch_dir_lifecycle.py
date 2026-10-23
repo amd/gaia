@@ -12,6 +12,7 @@ directory name is invalid" for the rest of that chat.
 from __future__ import annotations
 
 import shutil
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -139,6 +140,32 @@ class TestRunPythonSurvivesADeletedScratchDir:
             shared.resolve()
         )
 
+        second.__del__()
+        assert not shared.exists()
+
+    def test_two_chats_share_it_through_a_linked_temp_dir(
+        self, make_agent, sidecar_cwd, tmp_path, monkeypatch
+    ):
+        """macOS ``/var`` -> ``/private/var``: the held and resolved paths differ."""
+        real_temp = tmp_path / "real-temp"
+        real_temp.mkdir()
+        linked_temp = tmp_path / "linked-temp"
+        try:
+            linked_temp.symlink_to(real_temp, target_is_directory=True)
+        except OSError:
+            if sys.platform != "win32":
+                raise
+            import _winapi
+
+            _winapi.CreateJunction(str(real_temp), str(linked_temp))
+        monkeypatch.setattr("tempfile.gettempdir", lambda: str(linked_temp))
+        first, _ = make_agent(sidecar_cwd)
+        second, _ = make_agent(sidecar_cwd)
+        shared = Path(second.scratch_dir)
+
+        first.__del__()
+
+        assert shared.is_dir()
         second.__del__()
         assert not shared.exists()
 
