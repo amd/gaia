@@ -790,6 +790,10 @@ class SSEOutputHandler(OutputHandler):
             "summary": summary,
             "success": success,
         }
+        # A relayed result is reduced to this event, and a "skipped" save
+        # must not reach the chat's Outputs as made.
+        if isinstance(data, dict) and isinstance(data.get("status"), str):
+            event["status"] = data["status"]
         # String-returning tools (notably email envelopes) are summarized by a
         # hard character cap. Tell downstream classifiers that an unparsable
         # summary may be incomplete instead of making them infer truncation.

@@ -104,6 +104,8 @@ TERMINAL_TYPES = frozenset({"final", "error"})
 SUMMARY_VIEW_KEYS = (
     "summary",
     "success",
+    # The tool's own outcome word, e.g. "skipped" when a private chat saves nothing.
+    "status",
     "summary_truncated",
     "command_output",
     "latency_ms",
