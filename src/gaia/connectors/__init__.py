@@ -35,6 +35,7 @@ from gaia.connectors.context import agent_runtime_active, current_agent_id
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectionRevokedError,
     ConnectorsError,
     ConsentDeniedError,
@@ -111,6 +112,7 @@ __all__ = [
     # Errors
     "AuthRequiredError",
     "ConfigurationError",
+    "ConnectionBusyError",
     "ConnectionRevokedError",
     "ConnectorsError",
     "ConsentDeniedError",

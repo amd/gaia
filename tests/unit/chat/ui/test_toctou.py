@@ -93,6 +93,11 @@ class TestSafeOpenDocument:
             with safe_open_document("/etc/passwd"):
                 pass
         assert exc_info.value.status_code == 403
+        # An expected limit, so it says what to do rather than "access denied".
+        detail = exc_info.value.detail
+        assert detail.startswith(f"GAIA can only read documents under {Path.home()}")
+        assert "Move or copy the file there" in detail
+        assert DOCUMENT_ROOTS_ENV in detail
 
     def test_safe_open_rejects_directory(self, home_tmp_dir):
         """Directory path must return 400 (not a regular file)."""
@@ -228,7 +233,7 @@ class TestUploadByPathTOCTOU:
         doc_file.write_text("hello world")
         received_paths = []
 
-        async def mock_index(path):
+        async def mock_index(path, display_name=None):
             received_paths.append(str(path))
             return 1
 
@@ -251,7 +256,7 @@ class TestUploadByPathTOCTOU:
         doc_file.write_text("hello world")
         temp_paths = []
 
-        async def mock_index(path):
+        async def mock_index(path, display_name=None):
             temp_paths.append(Path(str(path)))
             return 1
 
@@ -272,7 +277,7 @@ class TestUploadByPathTOCTOU:
         doc_file.write_text("hello world")
         temp_paths = []
 
-        async def mock_index_fail(path):
+        async def mock_index_fail(path, display_name=None):
             temp_paths.append(Path(str(path)))
             raise RuntimeError("indexing failed")
 

@@ -30,7 +30,11 @@ from gaia.agents.base.call_risk import (
 )
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.errors import exit_error
-from gaia.agents.base.file_snapshots import note_untracked
+from gaia.agents.base.file_snapshots import (
+    SnapshotError,
+    before_change,
+    note_untracked,
+)
 from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
@@ -41,6 +45,11 @@ from gaia.agents.tools.command_timeouts import (
 from gaia.agents.tools.package_installs import (
     install_refusal_hint,
     system_install_target,
+)
+from gaia.agents.tools.shell_deletes import (
+    MAX_SHELL_DELETE_COPY_BYTES,
+    delete_operands,
+    split_exact,
 )
 from gaia.agents.tools.shell_session import ShellSession
 from gaia.env import child_env
@@ -3374,6 +3383,46 @@ class ShellToolsMixin:
             "has_errors": True,
         }
 
+    def _snapshot_shell_deletes(self, steps: list, step_cwds: list) -> bool:
+        """Copy each file a plain delete on this line names, for the turn's undo.
+
+        Returns True only when that accounts for everything the line can
+        change: every step is a ``cd`` or a delete whose operands are all
+        regular files inside the allowed paths, each one copied. Anything else
+        keeps the line as untracked shell work, though the files it did copy
+        still show as deleted.
+        """
+        covered = True
+        for step, step_cwd in zip(steps, step_cwds):
+            if step.is_cd:
+                continue
+            argv = (
+                split_exact(step.text)
+                if len(step.segments) == 1 and not any(step.envs or ())
+                else None
+            )
+            operands = delete_operands(argv) if argv else None
+            if operands is None:
+                covered = False
+                continue
+            for operand in operands:
+                path = os.path.join(step_cwd, operand)
+                if not self._restorable_delete_target(path):
+                    covered = False
+                    continue
+                before_change(path, "run_shell_command")
+        return covered
+
+    def _restorable_delete_target(self, path: str) -> bool:
+        """Whether *path* is a file a shell delete can be undone for."""
+        if os.path.islink(path) or not os.path.isfile(path):
+            return False
+        if os.path.getsize(path) > MAX_SHELL_DELETE_COPY_BYTES:
+            return False
+        if _protected_folder(os.path.realpath(path)):
+            return False
+        return self._path_allowed(path, prompt_user=False)
+
     def _path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         """Whether *path* is inside this agent's allowed paths.
 
@@ -4585,7 +4634,18 @@ class ShellToolsMixin:
                     }
 
                 if may_write:
-                    note_untracked("shell", command)
+                    try:
+                        covered = self._snapshot_shell_deletes(steps, step_cwds)
+                    except SnapshotError as e:
+                        return {
+                            **NOT_EXECUTED,
+                            "status": "error",
+                            "error": str(e),
+                            "command": command,
+                            "has_errors": True,
+                        }
+                    if not covered:
+                        note_untracked("shell", command)
 
                 start_time = time.monotonic()
                 deadline = start_time + timeout

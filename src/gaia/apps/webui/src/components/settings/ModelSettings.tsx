@@ -17,6 +17,7 @@ import type { ProviderId, ProviderInfo, ProviderModel } from '../../types';
 const DOWNLOAD_POLL_MS = 2000;
 
 function keyStatus(p: ProviderInfo): string {
+    if (p.key_state === 'waiting_for_os_permission') return p.key_message ?? 'Waiting for the OS to allow reading the saved key.';
     switch (p.key_source) {
         case 'environment': return `A key is set in ${p.env_var} and is in use.`;
         case 'lemonade': return 'A key is already configured on the local model server.';
@@ -51,6 +52,7 @@ export function ModelSettings() {
     const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
     const provider = providers?.find((p) => p.id === chosen) ?? null;
+    const offline = (p: ProviderInfo | null) => p?.network?.reachable === false;
     const connected = !!provider && (!provider.remote || !!provider.models_discovered);
 
     const loadProviders = useCallback(async () => {
@@ -80,6 +82,13 @@ export function ModelSettings() {
     }, [rememberNames]);
 
     useEffect(() => { void loadProviders(); }, [loadProviders]);
+    // Ask again while the OS keychain dialog is open, so answering it is enough.
+    const awaitingPermission = !!providers?.some((p) => p.key_state === 'waiting_for_os_permission');
+    useEffect(() => {
+        if (!awaitingPermission) return;
+        const t = setInterval(() => { void loadProviders(); }, DOWNLOAD_POLL_MS);
+        return () => clearInterval(t);
+    }, [awaitingPermission, loadProviders]);
     const activeProvider = active?.provider;
     useEffect(() => { if (activeProvider) setChosen(activeProvider); }, [activeProvider]);
     useEffect(() => {
@@ -236,8 +245,10 @@ export function ModelSettings() {
                         type="button"
                         role="radio"
                         aria-checked={chosen === p.id}
-                        className={`provider-tab${chosen === p.id ? ' is-active' : ''}`}
+                        className={`provider-tab${chosen === p.id ? ' is-active' : ''}${offline(p) ? ' is-disabled' : ''}`}
                         onClick={() => setChosen(p.id)}
+                        disabled={offline(p) && chosen !== p.id}
+                        title={offline(p) ? p.network?.detail ?? undefined : undefined}
                     >
                         {p.remote ? <Cloud size={14} aria-hidden="true" /> : <Cpu size={14} aria-hidden="true" />}
                         <span>{p.name}</span>
@@ -266,7 +277,16 @@ export function ModelSettings() {
                         </div>
                     )}
 
-                    {provider.remote && (
+                    {offline(provider) && (
+                        <div className="settings-field">
+                            <p className="settings-error" role="alert">{provider.network?.detail}</p>
+                            <button type="button" className="btn-secondary" onClick={() => void loadProviders()}>
+                                Check again
+                            </button>
+                        </div>
+                    )}
+
+                    {provider.remote && !offline(provider) && (
                         <form
                             className="settings-field"
                             onSubmit={(e) => { e.preventDefault(); void connect(); }}

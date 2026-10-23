@@ -216,6 +216,8 @@ interface UploadErrorToastProps {
     filename: string;
     /** The error message from the backend. */
     error: string;
+    /** HTTP status of the failed request, when there was one. */
+    status?: number;
     /** Called when the user dismisses the toast. */
     onDismiss: () => void;
     /** Auto-dismiss timeout in ms (default: 15000). 0 = no auto-dismiss. */
@@ -226,7 +228,7 @@ interface UploadErrorToastProps {
  * A dismissible error toast for document upload failures.
  * Parses the backend error to show helpful context and a GitHub link.
  */
-export function UploadErrorToast({ filename, error, onDismiss, timeout = 15000 }: UploadErrorToastProps) {
+export function UploadErrorToast({ filename, error, status, onDismiss, timeout = 15000 }: UploadErrorToastProps) {
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
@@ -253,10 +255,16 @@ export function UploadErrorToast({ filename, error, onDismiss, timeout = 15000 }
 
     let title: string;
     let detail: string;
-    let issueUrl: string;
+    let issueUrl: string | null;
     let Icon = AlertCircle;
 
-    if (isFileTypeError && category) {
+    // A file outside the readable folders is an expected limit, not a bug to report.
+    if (status === 403) {
+        title = `GAIA can't read "${filename}" where it is`;
+        detail = `${error} Or drop the file here instead (up to 20 MB) and GAIA keeps its own copy.`;
+        issueUrl = null;
+        Icon = AlertTriangle;
+    } else if (isFileTypeError && category) {
         title = `${category.label} files not supported`;
         detail = category.message;
         issueUrl = featureRequestUrl(category.featureTitle);
@@ -285,8 +293,8 @@ export function UploadErrorToast({ filename, error, onDismiss, timeout = 15000 }
                 <div className="upload-error-title">{title}</div>
                 <div className="upload-error-detail">
                     {detail}
-                    {' '}
-                    {isFileTypeError ? (
+                    {issueUrl && ' '}
+                    {issueUrl === null ? null : isFileTypeError ? (
                         <a href={issueUrl} target="_blank" rel="noopener noreferrer">
                             Request this feature →
                         </a>
