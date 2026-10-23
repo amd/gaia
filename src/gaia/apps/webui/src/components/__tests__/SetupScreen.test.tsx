@@ -179,7 +179,7 @@ describe('SetupScreen', () => {
         fireEvent.click(screen.getByRole('button', { name: /Connect/ }));
 
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('fireworks.m1'));
-        expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('fireworks', { api_key: 'fw-key' }, expect.any(Function));
+        expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('fireworks', { api_key: 'fw-key' }, expect.any(Function), expect.any(Function));
         expect(await screen.findByRole('button', { name: 'Start chatting' })).toBeInTheDocument();
     });
 
@@ -215,7 +215,7 @@ describe('SetupScreen', () => {
 
         fireEvent.click(screen.getByRole('button', { name: /Connect/ }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('amd.m1'));
-        expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('amd', { api_key: undefined }, expect.any(Function));
+        expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('amd', { api_key: undefined }, expect.any(Function), expect.any(Function));
     });
 
     it('still asks for the key when LEMONADE_BASE_URL picks the server', async () => {

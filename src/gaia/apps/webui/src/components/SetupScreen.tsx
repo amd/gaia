@@ -245,6 +245,9 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     // GAIA uses a Lemonade the user runs, so the Connect step changes nothing there.
     const [usersServer, setUsersServer] = useState(false);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    // A connect waiting on an OS prompt stops asking once setup is gone.
+    const mounted = useRef(true);
+    useEffect(() => () => { mounted.current = false; }, []);
     const { network: gateway, recheck: recheckGateway } = useGatewayNetwork();
     const unreachable = (id: ProviderId) => id === 'amd' && gateway?.reachable === false;
 
@@ -330,6 +333,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                 choice,
                 { api_key: (!usersServer && key) || undefined },
                 (waiting) => setKeyState({ busy: true, error: null, done: false, waiting }),
+                () => !mounted.current,
             );
             const { models } = await api.listProviderModels(choice);
             const pick = models.find((m) => m.rank === 1) ?? models[0];

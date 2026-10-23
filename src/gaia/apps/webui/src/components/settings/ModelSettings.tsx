@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Cloud, Cpu, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useModelStore, displayModelName } from '../../stores/modelStore';
@@ -50,6 +50,12 @@ export function ModelSettings() {
     const [busy, setBusy] = useState<string | null>(null);
     const [memory, setMemory] = useState<string | null>(null);
     const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+
+    // A connect waiting on an OS prompt stops once the user picks another provider or leaves.
+    const chosenRef = useRef(chosen);
+    chosenRef.current = chosen;
+    const mounted = useRef(true);
+    useEffect(() => () => { mounted.current = false; }, []);
 
     const provider = providers?.find((p) => p.id === chosen) ?? null;
     const offline = (p: ProviderInfo | null) => p?.network?.reachable === false;
@@ -109,11 +115,14 @@ export function ModelSettings() {
             const body = chosen === 'amd'
                 ? { api_key: key || undefined, ...Object.fromEntries(Object.entries(amd).filter(([, v]) => v !== '')) }
                 : { api_key: key || undefined };
+            const movedOn = () => !mounted.current || chosenRef.current !== chosen;
             const r = await api.connectProviderWaitingForOs(
                 chosen,
                 body,
-                (waiting) => setNotice({ ok: true, text: waiting }),
+                (waiting) => { if (!movedOn()) setNotice({ ok: true, text: waiting }); },
+                movedOn,
             );
+            if (movedOn()) return;
             setKey('');
             setNotice({
                 ok: true,
@@ -123,9 +132,11 @@ export function ModelSettings() {
             });
             await loadProviders();
         } catch (err) {
-            setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
+            if (mounted.current && chosenRef.current === chosen) {
+                setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
+            }
         } finally {
-            setBusy(null);
+            if (mounted.current) setBusy(null);
         }
     }, [amd, chosen, key, loadProviders, provider]);
 
