@@ -80,3 +80,14 @@ func TestOneShotModel(t *testing.T) {
 		}
 	})
 }
+
+// A --query turn on a cloud model must not be refused for a local model it
+// never loads.
+func TestOneShotReadinessChecksTheChosenModel(t *testing.T) {
+	if got := oneShotConfig("gaia", "GAIA", "fireworks.deepseek-v4p1-flash").Model; got != "fireworks.deepseek-v4p1-flash" {
+		t.Fatalf("readiness checks model %q, want the one the turn runs on", got)
+	}
+	if got := oneShotConfig("gaia", "GAIA", "").Model; got != "" {
+		t.Fatalf("with no model chosen, readiness checks %q, want the agent default", got)
+	}
+}
