@@ -12,13 +12,16 @@ import math
 import os
 from typing import Any, Dict, Optional, Tuple
 
+from gaia.utils.document_formats import (
+    UNSUPPORTED_DOCUMENTS,
+    unsupported_document_message,
+)
+
 #: Extensions read_file extracts text from, and the file_type it reports.
 READABLE_DOCUMENTS = {".docx": "docx", ".pdf": "pdf", ".xlsx": "xlsx"}
 
-#: Binary document formats only index_document can read.
-INDEX_ONLY_DOCUMENTS = frozenset(
-    {".doc", ".pptx", ".ppt", ".xls", ".odt", ".ods", ".odp", ".epub"}
-)
+#: Document formats only index_document can read.
+INDEX_ONLY_DOCUMENTS = frozenset({".pptx", ".epub"})
 
 #: Chars one read returns when the host has no model-sized budget.
 DEFAULT_READ_CHARS = 20000
@@ -50,6 +53,8 @@ def document_type(path: str) -> Optional[str]:
 def index_only_error(path: str) -> Optional[Dict[str, Any]]:
     """The error for a binary document read_file cannot extract, else ``None``."""
     ext = os.path.splitext(path)[1].lower()
+    if ext in UNSUPPORTED_DOCUMENTS:
+        return {"status": "error", "error": unsupported_document_message(path, ext)}
     if ext not in INDEX_ONLY_DOCUMENTS:
         return None
     return {
