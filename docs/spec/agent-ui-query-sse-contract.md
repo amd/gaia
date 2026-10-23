@@ -538,8 +538,12 @@ The in-process handler emits `tool_start` (name only) and then, separately,
 `tool_args` (arguments) once they're known. The canonical `tool_call` carries
 `{tool, args}` **together**. The translation layer buffers the `tool_start`,
 attaches `args` from the following `tool_args`, and emits a single `tool_call`.
-If no `tool_args` arrives (argument-less tool), it emits `tool_call{tool,
-args:{}}`.
+Every call the agent loop makes sends `tool_args` before the tool runs, with
+`args: {}` for a tool that takes no arguments, so the `tool_call` is on the
+wire while the tool is still running. A host must treat that `tool_call` as a
+running tool: the messaging bridge stops counting idle time from it until the
+`tool_result`. If a producer sends `tool_start` with no `tool_args` at all,
+the next event (or stream close) flushes it as `tool_call{tool, args:{}}`.
 
 ---
 
