@@ -81,6 +81,7 @@ registry entry looks like this (source: `src/gaia/agents/base/tools.py:79-87`):
     "display_label": None,  # optional user-facing label for UI progress strips
     "timeout": None,        # optional per-tool timeout (seconds); None = global default
     "preflight": None,      # optional check run before the confirmation prompt
+    "dedup_key": None,      # optional argument names the repeat-call guard compares
 }
 ```
 
@@ -983,6 +984,14 @@ Notable implementation details:
   the confirmation prompt, so nobody is asked to approve a call that is going to
   be refused. The tool body must enforce the same rule itself; the file-editing
   tools use this for their read-before-edit check.
+- `@tool(dedup_key=["path", "query"])` names the arguments the repeat-call
+  guard compares. By default it compares every argument, so a free-text
+  argument such as `reason` makes each retry look new and the guard never
+  stops the loop. With a key, calls that agree on those arguments count as
+  repeats whatever the others say. A name that is not a parameter of the tool
+  raises `ValueError`; anything but a non-empty list of names raises
+  `TypeError`. An MCP server declares the same list in a tool's `_meta` under
+  `"ai.amd-gaia/dedup_key"`.
 - Unsupported decorator keywords raise `TypeError` at decoration time and
   identify the invalid argument, tool name, and accepted keyword set.
 

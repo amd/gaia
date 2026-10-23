@@ -5,13 +5,16 @@
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.tools import _TOOL_REGISTRY, validate_dedup_key
 from gaia.logger import get_logger
 from gaia.mcp.client.config import MCPConfig
 from gaia.mcp.client.mcp_client import MCPClient, mcp_tool_error
 from gaia.mcp.client.mcp_client_manager import MCPClientManager
 
 logger = get_logger(__name__)
+
+#: ``_meta`` key through which an MCP tool declares its ``@tool(dedup_key=...)``.
+MCP_DEDUP_KEY_META = "ai.amd-gaia/dedup_key"
 
 
 class MCPClientMixin:
@@ -337,14 +340,25 @@ class MCPClientMixin:
         """
         tools = client.list_tools()
 
+        # Convert to GAIA format. Use the sanitised ``prefix`` so the
+        # registered name matches what every other consumer
+        # (unregister, prompt fragments, error suggestions) will
+        # see. ``client.name`` (raw) is passed alongside so the
+        # ``_mcp_server`` metadata still round-trips to the config.
+        converted = []
         for tool in tools:
-            # Convert to GAIA format. Use the sanitised ``prefix`` so the
-            # registered name matches what every other consumer
-            # (unregister, prompt fragments, error suggestions) will
-            # see. ``client.name`` (raw) is passed alongside so the
-            # ``_mcp_server`` metadata still round-trips to the config.
             gaia_tool = tool.to_gaia_format(client.prefix, client.name)
+            declared = tool.meta.get(MCP_DEDUP_KEY_META)
+            if declared is not None:
+                gaia_tool["dedup_key"] = validate_dedup_key(
+                    f"{tool.name} (MCP server {client.name!r})",
+                    declared,
+                    gaia_tool["parameters"],
+                )
+            converted.append((tool, gaia_tool))
 
+        # Registered only after every tool converted, so a bad one adds none.
+        for tool, gaia_tool in converted:
             # Create base wrapper function
             base_wrapper = client.create_tool_wrapper(tool)
             tool_name = tool.name
