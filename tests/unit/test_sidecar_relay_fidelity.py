@@ -18,7 +18,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.memory import MemoryMixin
+from gaia.agents.base.tool_grants import SCRATCH_ARG
 from gaia.llm.inference_location import InferenceLocation
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui.email_sidecar import daemon_client as daemon_client_module
@@ -176,6 +178,109 @@ def test_the_relay_hands_the_ui_prompt_its_args_and_label():
     assert prompt["tool_label"] == "using a file"
     # Still no "always": the grant would live where this chat can't see it.
     assert "always_scope" not in prompt
+
+
+def test_prompt_only_keys_never_reach_the_wire_args():
+    event = _permission(
+        "run_shell_command",
+        {
+            "command": "git push",
+            RISK_NOTE_ARG: "Sends your commits to the remote repository.",
+            SCRATCH_ARG: "C:\\scratch",
+        },
+    )
+    assert event["args"] == {"command": "git push"}
+    assert event["prompt_context"] == {
+        "risk_note": "Sends your commits to the remote repository."
+    }
+
+
+def test_a_folder_gaia_added_is_context_not_an_argument():
+    event = _permission(
+        "run_shell_command",
+        {"command": "git status", "working_directory": "C:\\repo"},
+        call_args={"command": "git status"},
+    )
+    assert event["args"] == {"command": "git status"}
+    assert event["prompt_context"] == {"working_directory": "C:\\repo"}
+
+    sent = _permission(
+        "run_shell_command",
+        {"command": "ls", "working_directory": "C:\\repo"},
+        call_args={"command": "ls", "working_directory": "C:\\repo"},
+    )
+    assert sent["args"] == {"command": "ls", "working_directory": "C:\\repo"}
+    assert "prompt_context" not in sent
+
+
+def test_without_a_noted_call_the_folder_is_the_models():
+    # Only Agent._execute_tool adds a folder, and it always notes the call
+    # first; every other prompt passes the model's arguments through as-is.
+    event = _permission(
+        "run_shell_command", {"command": "ls", "working_directory": "C:\\repo"}
+    )
+    assert event["args"] == {"command": "ls", "working_directory": "C:\\repo"}
+    assert "prompt_context" not in event
+
+
+def test_a_noted_call_is_used_once_and_only_for_its_tool():
+    handler = SSEOutputHandler()
+    handler.note_call_args("run_shell_command", {"command": "ls"})
+    handler.confirm_tool_execution("run_python", {"code": "1"}, timeout=0.01)
+    handler.confirm_tool_execution(
+        "run_shell_command",
+        {"command": "ls", "working_directory": "C:\\r"},
+        timeout=0.01,
+    )
+    prompts = [e for e in _drain(handler) if e["type"] == "permission_request"]
+    assert [("call_args" in p) for p in prompts] == [False, False]
+
+    handler.note_call_args("run_shell_command", {"command": "ls"})
+    handler.confirm_tool_execution(
+        "run_shell_command",
+        {"command": "ls", "working_directory": "C:\\r"},
+        timeout=0.01,
+    )
+    [prompt] = [e for e in _drain(handler) if e["type"] == "permission_request"]
+    assert prompt["call_args"] == {"command": "ls"}
+
+
+def test_a_noted_call_matching_the_prompt_is_not_sent_twice():
+    handler = SSEOutputHandler()
+    code = {"file_path": "C:\\a.py", "content": "x" * 10_000}
+    handler.note_call_args("write_file", code)
+    handler.confirm_tool_execution("write_file", dict(code), timeout=0.01)
+    [prompt] = [e for e in _drain(handler) if e["type"] == "permission_request"]
+    assert "call_args" not in prompt
+    [wire] = CanonicalTranslator("r1", agent_id="gaia").translate(prompt)
+    assert wire["args"] == code
+
+
+def test_the_relay_puts_gaias_context_back_on_the_ui_prompt():
+    handler = SSEOutputHandler()
+    handler.set_relay_confirmation = lambda _cid: None
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "needs_confirmation",
+            "action": "run_shell_command",
+            "summary": "git push\nin C:\\repo\nSends your commits.",
+            "confirm_id": "c-1",
+            "args": {"command": "git push"},
+            "prompt_context": {
+                "working_directory": "C:\\repo",
+                "risk_note": "Sends your commits.",
+            },
+        },
+        GAIA_PROFILE,
+        answers_confirmations=True,
+    )
+    (prompt,) = _drain(handler)
+    assert prompt["args"] == {
+        "command": "git push",
+        "working_directory": "C:\\repo",
+        RISK_NOTE_ARG: "Sends your commits.",
+    }
 
 
 # ── memory mode ────────────────────────────────────────────────────────────
