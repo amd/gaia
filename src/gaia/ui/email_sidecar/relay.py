@@ -184,6 +184,8 @@ def _dispatch_one(
     if answers_confirmations:
         # Any event after a prompt means the sidecar has stopped waiting on it.
         handler.set_relay_confirmation(None)
+    # Likewise for a question: the run is parked until it is answered.
+    handler.set_relay_question(None)
 
     if etype == "needs_confirmation" and answers_confirmations:
         confirm_id = str(event.get("confirm_id") or "")
@@ -288,6 +290,8 @@ def _dispatch_one(
         # answer, so every field the frontend needs to build and submit the
         # prompt must cross this hop; run continues on the same stream.
         options = event.get("options")
+        # Recorded so the chat list shows the chat as waiting on the user.
+        handler.set_relay_question(str(event.get("request_id") or "") or None)
         handler._emit(
             {
                 "type": "needs_input",
@@ -606,6 +610,7 @@ def relay_query(
     finally:
         if answers_confirmations:
             handler.set_relay_confirmation(None)
+        handler.set_relay_question(None)
         handler.active_relay_response = None
         handler.active_relay_proxy = None
         handler.active_relay_run_id = None
