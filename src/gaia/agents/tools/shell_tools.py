@@ -43,6 +43,10 @@ from gaia.agents.tools.command_timeouts import (
     resolve_timeout,
     terminate_process_tree,
 )
+from gaia.agents.tools.package_installs import (
+    install_refusal_hint,
+    system_install_target,
+)
 from gaia.agents.tools.shell_deletes import (
     MAX_SHELL_DELETE_COPY_BYTES,
     delete_operands,
@@ -3231,7 +3235,41 @@ class ShellToolsMixin:
             ):
                 return None
             return str(Path(working_directory).resolve()), True
-        return self.shell_session.cwd, False
+        return self._live_session_cwd(), False
+
+    def _live_session_cwd(self) -> str:
+        """The session's folder, repaired if it was deleted since the last call.
+
+        The scratch directory sits in the shared temp folder, where another
+        GAIA process or a temp cleaner can remove it; it is re-created in
+        place. Any other vanished folder sends the session back to where it
+        started, and the next result says so (``_shell_cwd_note``).
+        """
+        session = self.shell_session
+        cwd = session.cwd
+        if os.path.isdir(cwd):
+            return cwd
+        validator = getattr(self, "path_validator", None)
+        scratch = getattr(validator, "scratch_dir", None)
+        if scratch is not None and os.path.normcase(str(scratch)) == os.path.normcase(
+            cwd
+        ):
+            from gaia.security import ensure_scratch_dir
+
+            try:
+                ensure_scratch_dir(Path(cwd))
+                return cwd
+            except OSError as exc:
+                logger.error("Could not re-create scratch dir %s: %s", cwd, exc)
+        session.reset()
+        logger.warning(
+            "Shell session folder %s no longer exists; back to %s", cwd, session.cwd
+        )
+        self._shell_cwd_note = (
+            f"The folder this session was in ({cwd}) no longer exists, so this "
+            f"ran in {session.cwd} instead."
+        )
+        return session.cwd
 
     def _line_verdict(self, command: str, working_directory: Any = None) -> tuple:
         """``(error, steps)`` for this call, path scope included.
@@ -3243,8 +3281,28 @@ class ShellToolsMixin:
         A credential folder, or one no approval may grant, is refused outright.
 
         Full access keeps its own rules: its path checks run at execution.
+        An install into an environment outside the project (the system Python,
+        ``npm -g``) is the exception: it is a one-time approval normally, and
+        refused under full access, where nobody is asked.
         """
         error, steps = self._validate_shell_command(command)
+        if error is None or _reaches_the_prompt(error):
+            install = self._system_install_block(steps, working_directory)
+            if install is not None:
+                if self.full_access_active():
+                    logger.warning(
+                        "Refusing %r under full access: %s", command, install["error"]
+                    )
+                    return {**install, "tier": TIER_REFUSE, **NOT_EXECUTED}, steps
+                error = _hard_if_unofferable(
+                    {
+                        **_confirm_once(
+                            {**(error or {}), **install}, install["risk_note"]
+                        ),
+                        **NOT_EXECUTED,
+                    },
+                    command,
+                )
         if self.full_access_active():
             return error, steps
         if error is not None and not _reaches_the_prompt(error):
@@ -3307,6 +3365,43 @@ class ShellToolsMixin:
             if refusal is not None:
                 return {"tier": TIER_REFUSE, **refusal, **NOT_EXECUTED}, steps
         return error, steps
+
+    def _system_install_block(
+        self, steps: list, working_directory: Any
+    ) -> Optional[Dict[str, Any]]:
+        """The block for a step that installs outside the project, or None.
+
+        Each step is judged in the folder it runs in, so ``cd app &&
+        .venv/bin/python -m pip install x`` finds the project's own venv.
+        """
+        # Read-only: repairing the session folder waits until the call runs.
+        located = self._call_cwd(working_directory) if working_directory else None
+        cwd = located[0] if located else self.shell_session.cwd
+        for step in steps:
+            if step.is_cd:
+                cwd = os.path.normpath(
+                    os.path.join(cwd, os.path.expanduser(step.cd_target))
+                )
+                continue
+            for segment in step.segments:
+                target = system_install_target(segment, cwd)
+                if target is None:
+                    continue
+                return {
+                    "status": "error",
+                    "error": (
+                        f"`{' '.join(segment)}` installs packages into {target}, "
+                        "not into this project."
+                    ),
+                    "has_errors": True,
+                    "hint": install_refusal_hint(target),
+                    "risk_note": (
+                        f"Changes {target}, which other programs on this "
+                        "computer share."
+                    ),
+                    "system_install": True,
+                }
+        return None
 
     #: Slice length for the pacing wait. Short enough that a Stop lands
     #: promptly, long enough not to spin.
@@ -4490,8 +4585,20 @@ class ShellToolsMixin:
                     # An explicit working_directory is a one-shot override that
                     # never touches the session; with none, resume where the
                     # last call's cd left off.
-                    cwd = self.shell_session.cwd
+                    cwd = self._live_session_cwd()
                     session_scoped = True
+                    if not os.path.isdir(cwd):
+                        return {
+                            **NOT_EXECUTED,
+                            "status": "error",
+                            "error": (
+                                f"Nothing ran: the shell's starting folder {cwd} "
+                                "no longer exists. Pass an existing "
+                                "working_directory, or ask the user to re-open "
+                                "the project folder."
+                            ),
+                            "has_errors": True,
+                        }
 
                 # A folder the user removed from the chat is refused even under
                 # full access, and even as the folder a new session starts in.
@@ -4845,6 +4952,10 @@ class ShellToolsMixin:
                     "output_truncated": truncated,
                     "steps": ran,
                 }
+                moved = getattr(self, "_shell_cwd_note", None)
+                if moved:
+                    self._shell_cwd_note = None
+                    outcome["note"] = moved
                 if failure:
                     outcome["error"] = failure
                 elif last_answer:

@@ -103,7 +103,13 @@ from gaia.llm.lemonade_client import (
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
-from gaia.security import PathValidator, narrow_allowed_paths, stable_scratch_dir
+from gaia.security import (
+    PathValidator,
+    acquire_scratch_dir,
+    ensure_scratch_dir,
+    narrow_allowed_paths,
+    release_scratch_dir,
+)
 from gaia.utils.file_lock import held_by_another_program
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.vlm.mixin import VLMToolsMixin
@@ -216,6 +222,40 @@ def _python_script_run_context(
         os.pathsep.join([str(project), existing]) if existing else str(project)
     )
     return project, env
+
+
+def _start_failure(program: str, run_dir: Path, exc: OSError) -> Dict[str, Any]:
+    """The result for a Python run that never started.
+
+    A missing working folder is the agent's environment, not the model's
+    call: it is marked ``transient`` so the turn's failure breaker does not
+    count it. Either way the message says what to do instead of reaching for
+    a different Python.
+    """
+    # WinError 267 / ENOTDIR name the folder even when it reappeared since.
+    folder = isinstance(exc, NotADirectoryError) or getattr(exc, "winerror", 0) == 267
+    transient = folder or not run_dir.is_dir()
+    if transient:
+        error = (
+            f"Could not start Python: its working folder {run_dir} was missing "
+            f"({exc}). Nothing ran. Retry the call once; if it fails "
+            "again, tell the user the folder is missing. Do not install "
+            "packages or switch to another Python to work around this."
+        )
+    else:
+        error = (
+            f"Could not start {program}: {exc}. Nothing ran. Tell the user "
+            "GAIA's Python could not be started; do not install packages or "
+            "switch to another Python to work around this."
+        )
+    return {
+        "status": "error",
+        "error": error,
+        "has_errors": True,
+        "executed": False,
+        "transient": transient,
+        "cwd": str(run_dir),
+    }
 
 
 @dataclass
@@ -628,13 +668,13 @@ class ChatAgent(
         # Without this, throwaway scripts land in the user's project. One path
         # per project, so the prompt line naming it is stable across sessions.
         if any(name in self._tools_registry for name in _FILE_CREATING_TOOLS):
-            self.path_validator.set_scratch_dir(
-                str(
-                    stable_scratch_dir(
-                        getattr(config, "project_root", None) or os.getcwd()
-                    )
-                )
+            # Held, not owned: every chat on this project in a long-lived
+            # sidecar gets the same path, so cleanup deletes it only when the
+            # last of them lets go.
+            self._scratch_held = acquire_scratch_dir(
+                getattr(config, "project_root", None) or os.getcwd()
             )
+            self.path_validator.set_scratch_dir(str(self._scratch_held))
             self.scratch_dir = self.path_validator.scratch_dir
             # A prompt cached during init predates the scratch line.
             self.__dict__.pop("_system_prompt_cache", None)
@@ -1519,6 +1559,40 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         """
         return self.path_validator.validate_read(path, prompt_user=False)[0]
 
+    def _live_scratch_dir(self) -> Path:
+        """This agent's scratch directory, re-created if it was deleted.
+
+        It lives in the shared temp folder, so another GAIA process on the
+        same project, or a temp cleaner, can remove it under a live chat. A
+        path that can no longer be made private (now a file or a link) is
+        replaced with a fresh one, and the change is logged.
+
+        Raises:
+            OSError: If no scratch directory can be created at all.
+        """
+        scratch = Path(self.scratch_dir)
+        try:
+            ensure_scratch_dir(scratch)
+            return scratch
+        except OSError as exc:
+            import tempfile
+
+            fresh = Path(tempfile.mkdtemp(prefix="gaia-scratch-"))
+            logger.warning(
+                "Scratch directory %s is unusable (%s); switching to %s",
+                scratch,
+                exc,
+                fresh,
+            )
+            held = getattr(self, "_scratch_held", None)
+            if held is not None:
+                release_scratch_dir(held)
+                self._scratch_held = None
+            self.path_validator.set_scratch_dir(str(fresh))
+            self.scratch_dir = self.path_validator.scratch_dir
+            self.__dict__.pop("_system_prompt_cache", None)
+            return self.scratch_dir
+
     def _script_project_root(self) -> Optional[str]:
         """This session's project root, or ``None`` when there is no project.
 
@@ -1816,9 +1890,19 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "has_errors": True,
                     }
                 start = time.monotonic()
+                run_dir = p.resolve().parent
                 try:
                     project = self._script_project_root()
                     run_dir, env = _python_script_run_context(p, project)
+                    if not run_dir.is_dir():
+                        # The project folder went away; the script's own
+                        # folder exists, since the script was just read.
+                        logger.warning(
+                            "execute_python_file: %s is gone; running from %s",
+                            run_dir,
+                            p.resolve().parent,
+                        )
+                        run_dir = p.resolve().parent
                     writes = may_write_files(source)
                     if writes:
                         note_untracked("execute_python_file", str(p))
@@ -1871,11 +1955,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         ),
                     )
                 except OSError as e:
-                    return {
-                        "status": "error",
-                        "error": f"Could not start {cmd[0]}: {e}",
-                        "has_errors": True,
-                    }
+                    logger.error("execute_python_file could not start: %s", e)
+                    return _start_failure(cmd[0], run_dir, e)
                 except Exception as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
 
@@ -1935,22 +2016,48 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         )
                 except ValueError as e:  # GAIA_PROJECT_ROOT names no directory
                     return {"status": "error", "error": str(e), "has_errors": True}
-                run_dir = Path(project) if project else Path.cwd()
+                try:
+                    run_dir = Path(project) if project else Path.cwd()
+                except FileNotFoundError:  # POSIX: the process cwd was deleted
+                    run_dir = None
                 scratch = getattr(self, "scratch_dir", None)
                 in_scratch = False
-                if (
+                moved_from = None
+                if run_dir is not None and not run_dir.is_dir():
+                    moved_from, run_dir = run_dir, None
+                if run_dir is None or (
                     not project
                     and scratch is not None
                     and not self.path_validator.is_path_allowed(str(run_dir))
                 ):
+                    if scratch is None:
+                        return {
+                            "status": "error",
+                            "error": (
+                                "Cannot run Python: its working folder "
+                                f"{moved_from or 'the current directory'} no "
+                                "longer exists. Ask the user to re-open the "
+                                "project folder, or set GAIA_PROJECT_ROOT."
+                            ),
+                            "has_errors": True,
+                            "executed": False,
+                        }
                     # A UI server's cwd is its install dir; the scratch dir is ours.
                     logger.info(
-                        "run_python: %s is not allowed; running in scratch dir %s",
-                        run_dir,
+                        "run_python: %s is not usable; running in scratch dir %s",
+                        moved_from or run_dir,
                         scratch,
                     )
                     run_dir = scratch
                     in_scratch = True
+                if in_scratch:
+                    # Shared temp space: another process's cleanup or a temp
+                    # cleaner can delete it under a live chat.
+                    try:
+                        run_dir = self._live_scratch_dir()
+                    except OSError as e:
+                        logger.error("run_python: scratch dir unusable: %s", e)
+                        return _start_failure("Python", Path(run_dir), e)
                 if not self.path_validator.is_path_allowed(str(run_dir)):
                     return {
                         "status": "error",
@@ -2016,15 +2123,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         return stopped_job_result(job, timeout)
                     r = job.run
                 except OSError as e:
-                    return {
-                        "status": "error",
-                        "error": f"Could not start {cmd[0]}: {e}",
-                        "has_errors": True,
-                    }
+                    logger.error("run_python could not start in %s: %s", run_dir, e)
+                    return _start_failure(cmd[0], Path(run_dir), e)
                 finally:
                     snippet.unlink(missing_ok=True)
                 notes = [finished_job_note(job)]
-                if in_scratch:
+                if moved_from is not None:
+                    notes.append(
+                        f"The working folder {moved_from} no longer exists, so "
+                        f"this ran in your scratch directory {run_dir} instead. "
+                        "Relative paths resolve there; use absolute paths."
+                    )
+                elif in_scratch:
                     notes.append(
                         f"Ran in your scratch directory {run_dir}: the working "
                         "directory is not in the allowed paths. Relative paths "
@@ -3078,6 +3188,14 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         except Exception as e:
             logger.error(f"Error closing scratchpad during cleanup: {e}")
         scratch_dir = getattr(self, "scratch_dir", None)
+        held = getattr(self, "_scratch_held", None)
+        if held is not None:
+            self._scratch_held = None
+            if not release_scratch_dir(held):
+                # Another chat in this process still runs in it.
+                logger.debug("Scratch directory %s still in use; kept", held)
+                self.scratch_dir = None
+                scratch_dir = None
         if scratch_dir is not None:
             try:
                 shutil.rmtree(scratch_dir)

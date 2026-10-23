@@ -17,15 +17,22 @@
   comment line instead of its first line of code. Uses `may_write` on
   `note_untracked`, new in core 0.25.1.
 - On Windows, a watched document that another program holds for exclusive
-  access, or has partly locked, is now retried until it can be read, including
-  one saved by renaming a temp file onto it. This covers every format the agent
-  indexes, Word and PowerPoint included, which used to be reported as
-  corrupted. Before, the agent tried a locked file once and never reindexed it.
-  `reindex_file` now raises `PermissionError` for a locked file so the file
-  watcher retries it 1, 2 and 4 windows later. If the file is still locked
-  after that, the watcher logs one error telling the user to close the program
-  and save the file again. Any other failure is still logged: an exception
-  with its traceback, a failed index with RAG's error.
+  access, or has partly locked, is now retried, including one saved by
+  renaming a temp file onto it. Before, the agent tried it once and never
+  reindexed it. `reindex_file` now raises `PermissionError` for a locked file,
+  so the file watcher retries it 1, 2 and 4 windows later. If it is still
+  locked after those three retries, the watcher gives up and logs one error
+  telling the user to close the program and save the file again. This covers
+  the extensions the watcher watches: `.pdf`, `.txt`, `.md`, `.markdown`,
+  `.rst`, `.log`, `.csv`, `.json`, `.xml`, `.yaml`, `.yml`, `.py`, `.js`,
+  `.ts`, `.java`, `.cpp`, `.c`, `.html` and `.css`. Word, PowerPoint and Excel
+  files are not watched (#5478).
+- Indexing a locked document directly, in any format, now reports it as locked
+  (`error_type: "file_locked"`). A Word or PowerPoint file used to be reported
+  as corrupted, with advice to re-download it, and an Excel file could fail
+  with "File is not a zip file".
+- Any other reindex failure is still logged: an exception with its traceback,
+  a failed index with RAG's error.
 - Needs core 0.25.1, whose file watcher retries, whose RAG reports a locked
   read as `error_type: "file_locked"`, and which ships
   `gaia.utils.file_lock.held_by_another_program`, imported at start;

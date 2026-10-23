@@ -1128,6 +1128,9 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                     continue
             return "<non-serializable>"
 
+        if title == "Arguments" and not data:
+            return  # a call with no arguments has nothing to show
+
         if self.rich_available:
             # Check if this is a command execution result
             if "command" in data and "stdout" in data:
