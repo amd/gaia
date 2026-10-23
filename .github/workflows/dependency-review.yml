@@ -51,4 +51,6 @@ jobs:
         with:
           fail-on-severity: high
           deny-licenses: GPL-3.0, AGPL-3.0
+          # Intel Macs only: cryptography <49 is the last with an x86_64 wheel (#5529).
+          allow-ghsas: GHSA-jwv3-5hgf-82ww
           comment-summary-in-pr: on-failure

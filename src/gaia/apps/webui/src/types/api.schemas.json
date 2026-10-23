@@ -3198,6 +3198,17 @@
         "title": "Interval Seconds",
         "type": "integer"
       },
+      "last_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Last Error"
+      },
       "last_result": {
         "anyOf": [
           {
@@ -4005,6 +4016,17 @@
           }
         ],
         "title": "Processor Name"
+      },
+      "setup_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Setup Error"
       },
       "start_command": {
         "anyOf": [

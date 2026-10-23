@@ -1387,13 +1387,14 @@ function shouldSkipGaiaInit(opts) {
  * `chooseLemonade` is asked about a Lemonade Server already running here; see
  * lemonadeInitArgs.
  *
- * Returns "done", "failed" or "skipped". The state file records it: a backend
- * whose setup never finished is not installed, and the next launch runs it.
+ * Returns `{ init }`, "done", "failed" or "skipped", plus `initError` when it
+ * failed. The state file records both: a backend whose setup never finished is
+ * not installed, so the next launch runs it, and the app shows the error.
  */
 async function runGaiaInit(gaiaBin, report, version, skipGaiaInit, chooseLemonade) {
   if (skipGaiaInit) {
     log("Skipping gaia init (skipGaiaInit=true or GAIA_SKIP_GAIA_INIT set)");
-    return "skipped";
+    return { init: "skipped" };
   }
   setState(STATES.INSTALLING, { stage: STAGES.GAIA_INIT, version });
   report(
@@ -1405,19 +1406,33 @@ async function runGaiaInit(gaiaBin, report, version, skipGaiaInit, chooseLemonad
   const initResult = await runCommand(
     gaiaBin,
     ["init", "--profile", "gaia", "--yes", "--skip-webui-build", ...lemonadeArgs],
-    { stageLabel: "gaia-init" }
+    // Unwrapped, so an error line reaches initFailureReason whole.
+    { stageLabel: "gaia-init", env: { ...process.env, COLUMNS: "1000" } }
   );
   if (initResult.code !== 0) {
-    // Non-fatal: the app opens and its setup screen retries, and so does the
-    // next launch, because the state file records that setup did not finish.
+    // Non-fatal: the app opens and its start screen shows initError, and the
+    // next launch runs setup again, because the state file records the failure.
     log(
       `Warning: gaia init exited with code ${initResult.code}. Continuing; setup runs again next launch.`
     );
     report(STAGES.GAIA_INIT, 100, "Lemonade Server setup did not finish");
-    return "failed";
+    return { init: "failed", initError: initFailureReason(initResult) };
   }
   report(STAGES.GAIA_INIT, 100, "Lemonade Server setup complete");
-  return "done";
+  return { init: "done" };
+}
+
+/** Why `gaia init` failed, in its own words: its last ❌ line, else its last line. */
+function initFailureReason({ code, stdout, stderr }) {
+  const lines = `${stdout || ""}\n${stderr || ""}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const marked = lines.filter((line) => line.startsWith("❌"));
+  const reason = marked.length
+    ? marked[marked.length - 1].replace(/^❌\s*/, "")
+    : lines[lines.length - 1];
+  return reason || `gaia init exited with code ${code} and printed nothing.`;
 }
 
 /**
@@ -1708,7 +1723,7 @@ async function installBackend(opts = {}) {
   report(STAGES.INSTALL_PACKAGE, 100, "GAIA package installed");
 
   // Stage 4: gaia init
-  const init = await runGaiaInit(
+  const setup = await runGaiaInit(
     GAIA_BIN,
     report,
     version,
@@ -1774,7 +1789,7 @@ async function installBackend(opts = {}) {
     log(`Shim creation check failed: ${err.message}`);
   }
 
-  setState(STATES.READY, { stage: null, version, installedVersion, init });
+  setState(STATES.READY, { stage: null, version, installedVersion, ...setup });
   log("Backend install complete");
 }
 
@@ -1914,14 +1929,14 @@ async function ensureBackend(opts = {}) {
             `(state=${prev.state}, stage=${prev.stage || "-"}) — running gaia init`
         );
         const report = makeProgressReporter(opts.onProgress);
-        const init = await runGaiaInit(
+        const setup = await runGaiaInit(
           existingBin,
           report,
           expectedVersion,
           shouldSkipGaiaInit(opts),
           opts.chooseLemonade
         );
-        setState(STATES.READY, { version: expectedVersion, installedVersion, init });
+        setState(STATES.READY, { version: expectedVersion, installedVersion, ...setup });
         report(STAGES.VERIFY, 100, `GAIA ${installedVersion} ready`);
         return existingBin;
       }
@@ -1997,6 +2012,7 @@ module.exports = {
   findGaiaBin,
   toPep440,
   lemonadeInitArgs,
+  initFailureReason,
 
   // Pre-checks
   runPreChecks,

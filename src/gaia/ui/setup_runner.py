@@ -74,6 +74,34 @@ def mark_initialized() -> None:
     marker.write_text("ready", encoding="utf-8")
 
 
+#: Written by the desktop app's installer (``services/backend-installer.cjs``).
+DESKTOP_INSTALL_STATE = "electron-install-state.json"
+
+
+def desktop_setup_error() -> Optional[str]:
+    """Why the desktop app's first-run ``gaia init`` failed, or None.
+
+    The desktop app opens even when that run failed, so the UI says why
+    before the first message does.
+    """
+    from gaia.config import gaia_home
+
+    path = gaia_home() / DESKTOP_INSTALL_STATE
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        return f"GAIA could not read the desktop app's setup record at {path}: {e}"
+    if not isinstance(state, dict) or state.get("init") != "failed":
+        return None
+    reason = str(state.get("initError") or "").strip()
+    return reason or (
+        f"`{run_command(False)}` did not finish. Its output is in "
+        f"{path.parent / 'electron-install.log'}."
+    )
+
+
 def _gaia_argv(*args: str) -> List[str]:
     # This interpreter, so setup acts on the same GAIA install that serves the UI.
     return [sys.executable, "-m", "gaia.cli", *args]

@@ -327,8 +327,8 @@ def test_quota_exhaustion_fails_the_gate_even_in_report_mode(tmp_path, capsys):
     assert main(argv + ["--fail-on-zero-token-errors"]) == 1
     out = capsys.readouterr().out
     assert (
-        "::error::Integrity: 1 scenario(s) ERRORED before Claude spent a single token: b"
-        in out
+        "::error::Integrity: 1 scenario(s) were cut off or never started because "
+        "Claude was unavailable: b" in out
     )
 
 

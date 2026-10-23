@@ -22,6 +22,13 @@
 #           between releases, so a PR cannot fetch one. Packaging, install, PATH,
 #           shortcuts and uninstall are all still exercised; only the sidecar's
 #           identity is not, and nothing built this way is ever published.
+#   artifact (release-train dry run) the gaia-agent-<platform> artifacts the
+#           caller's own build_flagship_sidecar.yml run uploaded, verified
+#           against the hash each freeze leg recorded.
+#
+# `artifact_prefix` lets one run build twice (a release candidate and its
+# final-stamped twin) without the artifacts colliding. It defaults to empty,
+# which is exactly the behaviour every other caller gets.
 #
 # Outputs let a caller treat the installers as optional without treating the
 # binaries as optional -- release_components.yml publishes the six raw binaries
@@ -34,18 +41,22 @@ on:
   workflow_call:
     inputs:
       version:
-        description: 'Version stamped into the binaries and the installer filenames (x.y.z; x.y.z-rc.N needs installers: false).'
+        description: 'Version stamped into the binaries and the installer filenames: x.y.z, or x.y.z-rc.N for a release candidate (its .deb/.rpm carry x.y.z~rc.N).'
         required: true
         type: string
       sidecar:
-        description: 'pinned (fetch + verify the real gaia-agent) or stub (PR gate).'
+        description: 'pinned (fetch + verify the real gaia-agent), stub (PR gate), or artifact (this run''s gaia-agent-<platform> builds).'
         required: false
         default: pinned
         type: string
+      artifact_prefix:
+        description: 'Prefix for every artifact this uploads or reads. Empty (the default) keeps today''s names.'
+        required: false
+        default: ''
+        type: string
       installers:
         description: >-
-          Also build and smoke-test the macOS and Linux packages. A release
-          candidate builds only the binaries: an rpm Version cannot carry -rc.N.
+          Also build and smoke-test the macOS and Linux packages.
         required: false
         default: true
         type: boolean
@@ -153,7 +164,7 @@ jobs:
       - name: Upload binaries
         uses: actions/upload-artifact@v7
         with:
-          name: tui-binaries
+          name: ${{ inputs.artifact_prefix }}tui-binaries
           path: bin/
           retention-days: 7
 
@@ -199,8 +210,14 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: tui-binaries
+          name: ${{ inputs.artifact_prefix }}tui-binaries
           path: bin
+
+      - uses: actions/download-artifact@v8
+        if: inputs.sidecar == 'artifact'
+        with:
+          pattern: gaia-agent-*
+          path: flagship
 
       # One staging directory per target, holding what both build scripts
       # consume: gaia-tui, gaia-agent, LICENSE.md. A staging directory that is
@@ -229,6 +246,20 @@ jobs:
               # nothing built here is ever published.
               cp "stage/${p}/gaia-tui" "stage/${p}/gaia-agent"
               chmod +x "stage/${p}/gaia-agent"
+            elif [ "${SIDECAR}" = "artifact" ]; then
+              # This run's own freeze, checked against the hash its leg recorded.
+              # A best-effort platform whose leg did not upload gets no
+              # installer, exactly as a lock with no entry for it does below.
+              if ! ls flagship/*/"sidecar-${p}.meta.json" >/dev/null 2>&1; then
+                if python -c "import sys; sys.path.insert(0, 'util'); import flagship_rc_assets as f; sys.exit(0 if sys.argv[1] in f.OPTIONAL_PLATFORMS else 1)" "${p}"; then
+                  echo "::warning::no installer will be built for ${p} — this run froze no gaia-agent sidecar for it (best-effort platform)."
+                  rm -rf "stage/${p}"
+                  continue
+                fi
+                echo "::error::no gaia-agent sidecar was built for ${p}, a required platform."
+                exit 1
+              fi
+              python util/flagship_rc_assets.py stage --artifacts flagship --platform "${p}" --out "stage/${p}"
             else
               # Exit 3 is the ONE tolerated outcome: the lock carries no entry for
               # this platform, so the flagship publishes no sidecar for it. A
@@ -307,7 +338,7 @@ jobs:
       - name: Upload installers
         uses: actions/upload-artifact@v7
         with:
-          name: tui-installers-${{ matrix.label }}
+          name: ${{ inputs.artifact_prefix }}tui-installers-${{ matrix.label }}
           path: dist/
           if-no-files-found: error
           retention-days: 7
@@ -342,7 +373,7 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: tui-installers-${{ matrix.label }}
+          name: ${{ inputs.artifact_prefix }}tui-installers-${{ matrix.label }}
           path: dist
 
       - name: macOS — install, verify, uninstall
@@ -439,6 +470,13 @@ jobs:
           set -euo pipefail
           DEB="$(python3 installer/tui/artifacts.py names --version "${VERSION}" --platform linux-x64 --ext deb)"
           RPM="$(python3 installer/tui/artifacts.py names --version "${VERSION}" --platform linux-x64 --ext rpm)"
+          # The version INSIDE the packages: X.Y.Z~rc.N for a candidate, so the
+          # final sorts after it and installs over it as an upgrade.
+          PKG_VERSION="$(installer/tui/linux/build-packages.sh --version "${VERSION}" --print-package-version)"
+          BASE="${VERSION%%-*}"
+          # dpkg operator and rpm.vercmp result against the bare X.Y.Z.
+          if [ "${VERSION}" = "${BASE}" ]; then ORDER=eq; RPMCMP=0; else ORDER=lt; RPMCMP=-1; fi
+          echo "package version ${PKG_VERSION} (files say ${VERSION}); ${ORDER} ${BASE}"
           # One assertion per line, never `test A && test B`: a failing
           # left-hand side of an && list is exempt from errexit, so the list
           # returns 1 and the script sails on. That silently disarms the only
@@ -447,6 +485,8 @@ jobs:
           docker run --rm -v "${PWD}/dist:/pkg:ro" debian:bookworm bash -euo pipefail -c "
             test ! -e /usr/bin/gaia-tui
             dpkg -i /pkg/${DEB}
+            test \"\$(dpkg-query -W -f='\${Version}' gaia)\" = '${PKG_VERSION}'
+            dpkg --compare-versions '${PKG_VERSION}' ${ORDER} '${BASE}'
             test -x /usr/bin/gaia-tui
             test -x /usr/bin/gaia-agent
             command -v gaia-tui
@@ -464,6 +504,8 @@ jobs:
           docker run --rm -v "${PWD}/dist:/pkg:ro" fedora:latest bash -euo pipefail -c "
             test ! -e /usr/bin/gaia-tui
             rpm -i /pkg/${RPM}
+            test \"\$(rpm -q --qf '%{VERSION}' gaia)\" = '${PKG_VERSION}'
+            test \"\$(rpm --eval '%{lua: print(rpm.vercmp(\"${PKG_VERSION}\", \"${BASE}\"))}')\" = '${RPMCMP}'
             test -x /usr/bin/gaia-tui
             test -x /usr/bin/gaia-agent
             command -v gaia-tui

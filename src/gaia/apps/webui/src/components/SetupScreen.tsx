@@ -11,6 +11,7 @@ import './settings/CloudSpending.css';
 import { formatGb } from '../utils/modelLabels';
 import { ChatModelChoice, SystemCheck } from './SetupSteps';
 import { StartCards } from './StartCards';
+import { useGatewayNetwork } from '../hooks/useGatewayNetwork';
 import type { LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCheck, SetupPlan, SetupProblem, SetupRunStatus, SetupStep, StartCard } from '../types';
 import './SetupScreen.css';
 
@@ -244,6 +245,8 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     // GAIA uses a Lemonade the user runs, so the Connect step changes nothing there.
     const [usersServer, setUsersServer] = useState(false);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const { network: gateway, recheck: recheckGateway } = useGatewayNetwork();
+    const unreachable = (id: ProviderId) => id === 'amd' && gateway?.reachable === false;
 
     const cloud = choice !== 'local';
     const steps: SetupStep[] = run?.steps
@@ -397,17 +400,23 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                             type="button"
                                             role="radio"
                                             aria-checked={choice === c.id}
-                                            className={`setup-choice${choice === c.id ? ' is-active' : ''}`}
+                                            className={`setup-choice${choice === c.id ? ' is-active' : ''}${unreachable(c.id) ? ' is-disabled' : ''}`}
                                             onClick={() => setChoice(c.id)}
+                                            disabled={unreachable(c.id)}
                                         >
                                             {c.id === 'local' ? <Cpu size={16} aria-hidden="true" /> : <Cloud size={16} aria-hidden="true" />}
                                             <span>
                                                 <span className="setup-choice-title">{c.title}</span>
-                                                <span className="setup-choice-note">{c.note}</span>
+                                                <span className="setup-choice-note">{unreachable(c.id) ? gateway?.detail : c.note}</span>
                                             </span>
                                         </button>
                                     ))}
                                 </div>
+                                {gateway?.reachable === false && (
+                                    <button type="button" className="btn-secondary" onClick={recheckGateway}>
+                                        Check the AMD gateway again
+                                    </button>
+                                )}
                             </div>
                         )}
                     </li>
@@ -432,9 +441,10 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
 
                     {!run && (
                         <li className="setup-step-action">
-                            <button type="button" className="btn-primary setup-start" onClick={() => void start()}>
+                            <button type="button" className="btn-primary setup-start" onClick={() => void start()} disabled={unreachable(choice)}>
                                 Start setup
                             </button>
+                            {unreachable(choice) && <p className="setup-error" role="alert">{gateway?.detail}. Choose another option, or connect and check again.</p>}
                             {startError && <p className="setup-error" role="alert">{startError}</p>}
                         </li>
                     )}
@@ -498,7 +508,8 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                                 aria-checked={choice === c.id}
                                                 className={choice === c.id ? 'btn-primary' : 'btn-secondary'}
                                                 onClick={() => switchCloud(c.id)}
-                                                disabled={keyState.busy}
+                                                disabled={keyState.busy || unreachable(c.id)}
+                                                title={unreachable(c.id) ? gateway?.detail ?? undefined : undefined}
                                             >
                                                 {c.title}
                                             </button>

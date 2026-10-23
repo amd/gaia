@@ -512,6 +512,34 @@ def peek_connection(
         return None
 
 
+def snapshot_connection_slots(provider: str) -> dict:
+    """The stored client config and connection values for ``provider``.
+
+    For :func:`restore_connection_slots`, to undo a multi-slot write that
+    failed partway. A torn chunked value reads as absent. Holds secrets:
+    never log it.
+    """
+    verify_keyring_backend()
+    return {
+        username: _kr_get(username)
+        for username in (
+            _provider_credentials_username(provider),
+            _connection_username(provider, DEFAULT_ACCOUNT),
+        )
+    }
+
+
+def restore_connection_slots(snapshot: dict) -> None:
+    """Put back the values :func:`snapshot_connection_slots` read; an absent
+    one (including a torn one) is deleted."""
+    verify_keyring_backend()
+    for username, raw in snapshot.items():
+        if raw is None:
+            _kr_delete(username)
+        else:
+            _kr_set(username, raw)
+
+
 def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) -> None:
     """Remove the keyring entry for ``provider`` if present. Idempotent."""
     verify_keyring_backend()

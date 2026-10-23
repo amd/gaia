@@ -46,6 +46,7 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional
 
+from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.logger import get_logger
 from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
@@ -59,15 +60,6 @@ from gaia.ui.sse_handler import (
 from gaia.ui.sse_translation import SUMMARY_VIEW_KEYS
 
 logger = get_logger(__name__)
-
-#: Terminal error surfaced when the sidecar stream closes unexpectedly — a
-#: crash, a dropped connection, a forced close from the cancel path, or the
-#: stream simply ending without ever producing a ``final``/``error`` event
-#: (the canonical contract's "exactly one terminal event" guarantee broken).
-#: Pinned as a module constant so tests can assert equality and the copy the
-#: user sees stays stable.
-STREAM_ENDED_UNEXPECTEDLY = EMAIL_PROFILE.stream_ended_message
-
 
 #: Surfaced both by the dispatch layer's pre-flight version gate (a pre-2.4
 #: Hub binary passes the manager's MAJOR-only handshake, see
@@ -84,6 +76,10 @@ EMAIL_QUERY_VERSION_UPGRADE_MESSAGE = EMAIL_PROFILE.version_upgrade_message
 #: Root fix (actionable copy sidecar-side) ships via the agent release
 #: pipeline, not this repo — see the #2109 PR notes.
 LEMONADE_CONNECTION_HINT = EMAIL_PROFILE.lemonade_hint
+
+#: ``source`` on the terminal ``error`` the daemon synthesizes when an agent's
+#: stream ends with no terminal event (``gaia.daemon.relay``).
+_DAEMON_RELAY_SOURCE = "daemon_relay"
 
 #: Connection/timeout-shaped fragments of requests/urllib3 error reprs.
 #: Deliberately narrow: a non-match passes through untouched.
@@ -207,12 +203,24 @@ def _dispatch_one(
             if event.get("tool_label"):
                 request["tool_label"] = str(event["tool_label"])
             # The whole call: the summary shortens code, and a path prompt is
-            # worded from the path's kind.
-            if isinstance(event.get("args"), dict):
-                request["args"] = event["args"]
+            # worded from the path's kind. The card reads GAIA's folder and risk
+            # note from args, as in-process, so prompt_context goes back there.
+            args = dict(event["args"]) if isinstance(event.get("args"), dict) else {}
+            context = event.get("prompt_context")
+            if isinstance(context, dict):
+                if context.get("working_directory"):
+                    args["working_directory"] = str(context["working_directory"])
+                if context.get("risk_note"):
+                    args[RISK_NOTE_ARG] = str(context["risk_note"])
+            if args:
+                request["args"] = args
                 if event.get("args_truncated"):
                     request["args_truncated"] = True
             handler._emit(request)
+            if getattr(handler, "background_mode", False) is True:
+                # Unattended run (a schedule): nobody can answer, so deny now
+                # rather than park the sidecar until it times out.
+                handler.resolve_relay_confirmation(False, confirm_id)
             return False
 
     if etype == "status":
@@ -227,6 +235,10 @@ def _dispatch_one(
         tool = str(event.get("tool") or "unknown")
         args = event.get("args") or {}
         label = _tool_label(tool, profile)
+        # The turn summary and the heartbeat read this state, not the events.
+        handler.record_tool_started(tool)
+        if isinstance(args, dict):
+            handler.record_tool_args(args)
         handler._emit({"type": "tool_start", "tool": tool, "detail": label})
         handler._emit(
             {
@@ -247,11 +259,13 @@ def _dispatch_one(
     elif etype == "tool_result":
         tool = str(event.get("tool") or "unknown")
         data = event.get("data")
+        success = _derive_success(data)
+        handler.record_tool_result(data, success)
         out: Dict[str, Any] = {
             "type": "tool_result",
             "tool": tool,
             "summary": _derive_summary(tool, data, profile),
-            "success": _derive_success(data),
+            "success": success,
             "data": data if data is not None else {},
         }
         render = event.get("render")
@@ -302,14 +316,24 @@ def _dispatch_one(
         return True
 
     elif etype == "error":
-        detail = (
-            event.get("detail")
-            or f"Unknown error from the {profile.display_name} agent."
-        )
+        if event.get("source") == _DAEMON_RELAY_SOURCE:
+            # The daemon's crash frame is worded for API callers, not chat users.
+            logger.warning(
+                "%s relay: daemon reported the agent ended mid-run: %s",
+                profile.agent_id,
+                event.get("detail"),
+            )
+            content = profile.stream_ended_text()
+        else:
+            detail = (
+                event.get("detail")
+                or f"Unknown error from the {profile.display_name} agent."
+            )
+            content = _augment_error_detail(str(detail), profile)
         handler._emit(
             {
                 "type": "agent_error",
-                "content": _augment_error_detail(str(detail), profile),
+                "content": content,
                 # Ends the turn, unlike an in-process tool's agent_error.
                 "fatal": True,
             }
@@ -380,8 +404,13 @@ def relay_query(
     documents: Optional[List[str]] = None,
     allowed_paths: Optional[List[str]] = None,
     memory: Optional[str] = None,
+    changes_turn_id: Optional[str] = None,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
+
+    *changes_turn_id* — the undo-history turn the sidecar records this run's
+    file changes under, for a sidecar the caller has established takes it
+    (``profiles.changes_supported``).
 
     *allowed_paths* — the chat's file scope, for a sidecar the caller has
     established takes it (``profiles.scope_supported``); ``None`` leaves the
@@ -461,6 +490,8 @@ def relay_query(
         body["allowed_paths"] = list(allowed_paths)
     if memory is not None:
         body["memory"] = memory
+    if changes_turn_id is not None:
+        body["changes_turn_id"] = changes_turn_id
 
     syncs_mode = full_access is not None and bool(session_id)
     enable_after_start = False
@@ -504,7 +535,7 @@ def relay_query(
 
     terminated = False
     crashed = False
-    crash_message = profile.stream_ended_message
+    crash_message = profile.stream_ended_text()
     try:
         events = proxy.query_stream(
             body, read_timeout=read_timeout, on_response=_register_response
@@ -548,7 +579,7 @@ def relay_query(
                 # Surface the sidecar's own actionable detail (e.g. the
                 # zero-connector 502) instead of masking it as a generic
                 # crash — #2419. Bodyless transport failures still fall
-                # through to STREAM_ENDED_UNEXPECTEDLY.
+                # through to profile.stream_ended_text().
                 crash_message = _augment_error_detail(detail, profile)
             logger.warning(
                 "%s relay: stream failed for run_id=%s: %s",
@@ -594,7 +625,6 @@ def relay_query(
 __all__ = [
     "relay_query",
     "RelayProfile",
-    "STREAM_ENDED_UNEXPECTEDLY",
     "EMAIL_QUERY_VERSION_UPGRADE_MESSAGE",
     "LEMONADE_CONNECTION_HINT",
 ]
