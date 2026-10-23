@@ -346,7 +346,10 @@ Rules a client must respect:
 - **Cancel with `POST /v1/gaia/query/{run_id}/cancel`.** It returns
   `{ run_id, cancelled }` — an unknown id reports `cancelled: false` with a
   **200**, not a 404, because a cancel racing a normal completion is expected.
-  Dropping the HTTP connection also cancels the run.
+  Dropping the HTTP connection also cancels the run. A run stopped mid-answer
+  ends with an empty `final`, and no `token` follows the cancel, so keep the
+  text the `token` events already delivered. Text not yet sent when the
+  cancel lands is dropped, not delivered late.
 - **Add to a running turn with `POST /v1/gaia/query/{run_id}/followup`**
   (contract ≥ 2.15, body `{ text }`). The run is not interrupted and no second
   turn starts: the agent folds the text in at its next step boundary and

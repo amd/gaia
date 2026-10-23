@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Answers stream over `/query`.** The HTTP sidecar ran its agent with
+  streaming off, so a relayed turn (the Agent UI, and the TUI's later sessions)
+  showed "Waiting on the model" until the whole answer landed at once, Stop could
+  not cut a model call short, and a stopped turn kept no text. Every `/query`
+  turn now streams its model calls and sends the answer as `token` events before
+  `final`, the same as the stdio transport. A run cancelled mid-answer stops
+  within a token and ends with an empty `final`, as stdio does; text not yet
+  sent when the cancel lands is dropped.
 ### Fixed
 
 - **Full access in the Agent UI asks before a gated shell command instead of
