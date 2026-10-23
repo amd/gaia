@@ -590,24 +590,27 @@ def catalog(
             )
         )
 
-    # rpm cannot carry -rc.N, so only the twin has the native packages today.
-    for platform, label in (
-        ("darwin-arm64", "macos"),
-        ("darwin-x64", "macos"),
-        ("linux-x64", "linux"),
-    ):
-        for n, _key in tui_table.artifacts_for(platform, final.npm):
-            items.append(
-                Artifact(
-                    "final",
-                    n,
-                    "tui-installer",
-                    _find(art, f"final-tui-installers-{label}", n),
-                    final.npm,
-                    [_gh(final)],
-                    required=platform in rc_assets.REQUIRED_PLATFORMS,
+        # Named with f.npm for both flavors; a candidate's .deb/.rpm carry
+        # X.Y.Z~rc.N inside, which the build's own smoke test checks. A
+        # candidate needs all four (publish.yml's rc-tui-complete), so its
+        # Intel .pkg is required even though the Intel agent is best-effort.
+        for platform, label in (
+            ("darwin-arm64", "macos"),
+            ("darwin-x64", "macos"),
+            ("linux-x64", "linux"),
+        ):
+            for n, _key in tui_table.artifacts_for(platform, f.npm):
+                items.append(
+                    Artifact(
+                        p,
+                        n,
+                        "tui-installer",
+                        _find(art, f"{p}-tui-installers-{label}", n),
+                        f.npm,
+                        [_gh(f)],
+                        required=p == "rc" or platform in rc_assets.REQUIRED_PLATFORMS,
+                    )
                 )
-            )
 
     # One sidecar build serves both: it embeds the agent's own version, not core's.
     for platform in rc_assets.REQUIRED_PLATFORMS + rc_assets.OPTIONAL_PLATFORMS:
