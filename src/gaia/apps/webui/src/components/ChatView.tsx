@@ -31,11 +31,13 @@ import * as messageQueue from '../utils/messageQueue';
 import type { QueuedMessage } from '../utils/messageQueue';
 import { SessionPanel, SessionPanelToggle } from './session-panel/SessionPanel';
 import { OfflineNotice } from './session-panel/OfflineNotice';
+import { ExportErrorBar } from './ExportErrorBar';
 import { useSessionPanelStore } from '../stores/sessionPanelStore';
 import { useAttachments } from '../hooks/useAttachments';
 import { useAnswerComparison } from '../hooks/useAnswerComparison';
 import { useContextUsage } from '../hooks/useContextUsage';
 import { useJumpToMessage } from '../hooks/useJumpToMessage';
+import { useChatExport } from '../hooks/useChatExport';
 import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
@@ -259,7 +261,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
     const [policyToast, setPolicyToast] = useState<{ tool: string; receiptId?: string } | null>(null);
-    const [exportError, setExportError] = useState<string | null>(null);
+    const { exportChat, exportError, clearExportError } = useChatExport(sessionId, session?.title);
     // A chat made by a retired agent (chat/doc/file) can be read but not continued.
     const retiredAgent = session?.agent_type && session.agent_type !== FLAGSHIP_AGENT_ID ? session.agent_type : null;
 
@@ -524,7 +526,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 reconnectTimerRef.current = null;
             }
             setPolicyToast(null);
-            setExportError(null);
             streamBufferRef.current = '';
         };
     }, [sessionId]);
@@ -1574,28 +1575,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     }, [sessionId, updateSessionInList]);
 
-    // Export
-    const handleExport = async () => {
-        setExportError(null);
-        try {
-            const data = await api.exportSession(sessionId);
-            const blob = new Blob([data.content], { type: 'text/markdown' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            // Sanitize title for use as filename: remove path separators and special chars
-            const safeTitle = (session?.title || 'chat').replace(/[/\\:*?"<>|]/g, '_').slice(0, 100);
-            a.download = `${safeTitle}.md`;
-            a.click();
-            URL.revokeObjectURL(url);
-        } catch (err) {
-            log.chat.error('Export failed', err);
-            setExportError(err instanceof api.ApiError
-                ? `Couldn't export this chat: GAIA's backend returned an error (HTTP ${err.httpStatus}). Try Export again; if it keeps failing, check the backend log.`
-                : "Couldn't export this chat because GAIA's backend isn't reachable. Check that GAIA is running, then try Export again.");
-        }
-    };
-
     /** Detach a document from this session via the context bar (does not delete from library). */
     const handleRemoveDocument = useCallback(async (e: React.MouseEvent, docId: string) => {
         e.stopPropagation(); // Don't trigger the context bar click
@@ -1738,21 +1717,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files on this PC" aria-label="Browse files on this PC">
                         <FolderSearch size={15} />
                     </button>
-                    <button className="btn-icon-sm" onClick={handleExport} title="Export as Markdown" aria-label="Export chat">
+                    <button className="btn-icon-sm" onClick={exportChat} title="Export as Markdown" aria-label="Export chat">
                         <Download size={15} />
                     </button>
                     <SessionPanelToggle messages={messages} busy={isStreaming} />
                 </div>
             </header>
-
-            {exportError && (
-                <div className="export-error-bar" role="alert">
-                    <span>{exportError}</span>
-                    <button type="button" className="btn-icon-sm" onClick={() => setExportError(null)} aria-label="Dismiss export error">
-                        <X size={13} />
-                    </button>
-                </div>
-            )}
 
             {sessionDocs.length > 0 && (() => {
                 const sorted = [...sessionDocs].sort((a, b) => {
@@ -1941,6 +1911,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
             <div className="input-area">
                 <div className="input-column">
+                    <ExportErrorBar message={exportError} onDismiss={clearExportError} />
                     {lastIsConnectorError && lastMessage && (
                         <ConnectorRetryBanner content={lastMessage.content} onRetry={handleRetryLast} />
                     )}

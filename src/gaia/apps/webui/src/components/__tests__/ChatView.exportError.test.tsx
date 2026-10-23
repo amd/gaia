@@ -61,6 +61,10 @@ describe('a failed export says so', () => {
         const alert = await screen.findByRole('alert');
         expect(alert).toHaveTextContent("Couldn't export this chat");
         expect(alert).toHaveTextContent('HTTP 500');
+        // In the composer's column, which a docked session panel narrows; a
+        // full-width bar under the header put the dismiss button under the panel.
+        expect(alert.closest('.input-column')).not.toBeNull();
+        expect(alert.closest('.task-header')).toBeNull();
 
         fireEvent.click(screen.getByRole('button', { name: 'Dismiss export error' }));
         await waitFor(() => expect(screen.queryByText(/Couldn't export this chat/)).not.toBeInTheDocument());
