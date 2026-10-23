@@ -468,7 +468,7 @@ gaia uninstall [OPTIONS]
 | Option | Type | Description |
 |--------|------|-------------|
 | `--venv` | flag | Remove the Python environment (`~/.gaia/venv/`) |
-| `--purge` | flag | Remove venv + chats + documents + memory + sessions + config + installed agents + caches + embedded Lemonade + logs + installer binaries (`~/.gaia/bin`) + traces + daemon state (`~/.gaia/host`) + saved sign-ins and API keys + the desktop app's `gaia` shim, and undo the installer's PATH edits |
+| `--purge` | flag | Remove venv + chats + documents + memory + sessions + undo snapshots of changed files + config + installed agents + caches + embedded Lemonade + logs + installer binaries (`~/.gaia/bin`) + traces + daemon state (`~/.gaia/host`) + saved sign-ins and API keys + the desktop app's `gaia` shim, and undo the installer's PATH edits |
 | `--purge-lemonade` | flag | Also remove Lemonade Server (requires `--purge`) |
 | `--purge-models` | flag | Also remove downloaded Lemonade models (requires `--purge`) |
 | `--purge-hf-cache` | flag | Also remove `~/.cache/huggingface/` (requires `--purge`) |

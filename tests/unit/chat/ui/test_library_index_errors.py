@@ -315,9 +315,10 @@ class TestIndexDocumentKinds:
 
         empty = tmp_path / "empty.txt"
         empty.write_bytes(b"")
-        rag = RAGSDK(RAGConfig(allowed_paths=[str(tmp_path)], show_stats=False))
-
-        result = rag.index_document(str(empty))
+        # The empty-file check runs before faiss/pypdf are touched.
+        with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+            rag = RAGSDK(RAGConfig(allowed_paths=[str(tmp_path)], show_stats=False))
+            result = rag.index_document(str(empty))
 
         assert result["error"] == "File is empty"
         assert result["empty_file"] is True

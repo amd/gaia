@@ -70,6 +70,8 @@ on:
       - 'docs/sdk/sdks/agent-ui.mdx'
       - 'docs/sdk/sdks/rag.mdx'
       - 'docs/sdk/sdks/skills.mdx'
+      - 'docs/sdk/utils/file-watcher.mdx'
+      - 'docs/spec/chat-agent.mdx'
       - 'hub/agents/*/npm/SKILL.md'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
@@ -132,6 +134,8 @@ on:
       - 'docs/sdk/sdks/agent-ui.mdx'
       - 'docs/sdk/sdks/rag.mdx'
       - 'docs/sdk/sdks/skills.mdx'
+      - 'docs/sdk/utils/file-watcher.mdx'
+      - 'docs/spec/chat-agent.mdx'
       - 'hub/agents/*/npm/SKILL.md'
   merge_group:
   workflow_dispatch:
