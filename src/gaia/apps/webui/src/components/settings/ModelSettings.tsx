@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Cloud, Cpu, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
-import { useModelStore, displayModelName } from '../../stores/modelStore';
+import { useModelStore, displayModelName, distinctModelLabels } from '../../stores/modelStore';
 import { ModelContextSize } from './ModelContextSize';
 import { STATE_LABELS, isDownloading, placementText } from '../modelMeta';
 import '../ModelPicker.css';
@@ -197,6 +197,7 @@ export function ModelSettings() {
     }, [models, query]);
     const runnable = filtered.filter((m) => m.available !== false);
     const unavailable = filtered.filter((m) => m.available === false);
+    const labels = distinctModelLabels(models ?? []);
     const activeLocal = active && !active.remote && active.model ? active.model : null;
 
     const renderRow = (m: ProviderModel) => {
@@ -212,7 +213,7 @@ export function ModelSettings() {
             <li key={m.id} className={`model-row${current ? ' is-current' : ''}`}>
                 <div className="model-row-text">
                     <span className="model-row-name" title={m.id}>
-                        {m.display_name ?? displayModelName(m.id)}
+                        {labels[m.id]}
                         {m.rank && <span className="model-row-rank">#{m.rank} {m.note}</span>}
                         {m.state === 'loaded' && <span className="model-badge is-loaded">{STATE_LABELS.loaded}</span>}
                         {m.fits === true && m.available !== false && <span className="model-badge is-fit">Fits this PC</span>}
@@ -226,7 +227,7 @@ export function ModelSettings() {
                     {m.unavailable_reason && <span className="model-row-meta">Can't run here: {m.unavailable_reason}</span>}
                     {m.evidence && <span className="model-row-meta">Measured: {m.evidence}</span>}
                     {progress && (
-                        <progress max={100} value={progress.percent} aria-label={`Downloading ${m.display_name ?? m.id}`} />
+                        <progress max={100} value={progress.percent} aria-label={`Downloading ${labels[m.id]}`} />
                     )}
                 </div>
                 {current ? (
@@ -234,11 +235,11 @@ export function ModelSettings() {
                 ) : m.available === false ? null : progress ? (
                     <span className="model-row-current"><Loader2 size={13} className="spin" /> {Math.round(progress.percent)}%</span>
                 ) : !m.downloaded ? (
-                    <button type="button" className="btn-secondary" onClick={() => void download(m.id)} disabled={busy !== null} aria-label={`Download ${m.display_name ?? displayModelName(m.id)}`}>
+                    <button type="button" className="btn-secondary" onClick={() => void download(m.id)} disabled={busy !== null} aria-label={`Download ${labels[m.id]}`}>
                         {busy === `dl:${m.id}` ? <Loader2 size={13} className="spin" /> : null} Download
                     </button>
                 ) : (
-                    <button type="button" className="btn-secondary" onClick={() => void use(m.id)} disabled={busy !== null} aria-label={`Use ${m.display_name ?? displayModelName(m.id)}`}>
+                    <button type="button" className="btn-secondary" onClick={() => void use(m.id)} disabled={busy !== null} aria-label={`Use ${labels[m.id]}`}>
                         {busy === m.id ? <Loader2 size={13} className="spin" /> : null} Use
                     </button>
                 )}
