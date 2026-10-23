@@ -6,6 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Full access in the Agent UI asks before a gated shell command instead of
+  refusing it.** With `/sessions/{id}/bypass` on, a command such as a delete or
+  `git add` was refused outright, so a Full access chat could not run it at
+  all. On a run someone can answer it now emits `needs_confirmation` and runs
+  only on an allow from `/tool_decision`. The shell gates still stay on over
+  HTTP, commands that need no approval still run unasked, and a run nobody can
+  answer still refuses.
 - **Local models with a large window can write longer replies.** The output
   cap is a quarter of the loaded window (16K at 64K, between 8K and 32K)
   instead of a flat 8K, and a reply cut off at the cap is told to write the

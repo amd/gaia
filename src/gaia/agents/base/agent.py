@@ -42,7 +42,7 @@ from typing import (
 )
 
 from gaia.agents.base import turn_metrics
-from gaia.agents.base.call_risk import RISK_NOTE_ARG, SHELL_TOOLS
+from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, RISK_NOTE_ARG, SHELL_TOOLS
 from gaia.agents.base.completion import (
     CompletionEvidence,
     caveated_answer,
@@ -6575,7 +6575,7 @@ Do NOT wrap conversational replies in JSON.
         reserved = sorted(
             key
             for key in (tool_args if isinstance(tool_args, dict) else {})
-            if key in (RISK_NOTE_ARG, SCRATCH_ARG)
+            if key in (RISK_NOTE_ARG, SCRATCH_ARG, NEEDS_PERSON_ARG)
         )
         if reserved:
             return {
@@ -6629,9 +6629,10 @@ Do NOT wrap conversational replies in JSON.
         if scratch:
             prompt_args = {**prompt_args, SCRATCH_ARG: scratch}
         # A one-time call is approved on its own prompt, which carries its
-        # risk note — never through the reroute question above.
+        # risk note — never through the reroute question above. So is a call
+        # only a person may approve.
         one_time = isinstance(prompt_args, dict) and bool(
-            prompt_args.get(RISK_NOTE_ARG)
+            prompt_args.get(RISK_NOTE_ARG) or prompt_args.get(NEEDS_PERSON_ARG)
         )
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args

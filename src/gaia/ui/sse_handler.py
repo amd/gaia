@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
-from gaia.agents.base.call_risk import call_risk
+from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, call_risk
 from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
 from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, grant_scope
 from gaia.agents.base.tool_outcome import FAILED_STATUSES
@@ -490,6 +490,7 @@ class SSEOutputHandler(OutputHandler):
     """
 
     blocking_confirmation = True
+    asks_past_preapproval = True
 
     #: How long to wait for a decision. A host that can actually deliver one
     #: raises this — a person reading a prompt routinely takes longer than a
@@ -1774,6 +1775,20 @@ class SSEOutputHandler(OutputHandler):
         noted, self._noted_call = self._noted_call, None
         call_args = noted[1] if noted is not None and noted[0] == tool_name else None
 
+        # A call only a person may approve: pre-approval never answers it.
+        needs_person = (
+            isinstance(tool_args, dict) and tool_args.get(NEEDS_PERSON_ARG) is True
+        )
+        if needs_person:
+            tool_args = {k: v for k, v in tool_args.items() if k != NEEDS_PERSON_ARG}
+            if not self.answers_confirmations:
+                return self.deny_tool_execution(
+                    tool_name,
+                    f"'{tool_name}' needs your approval and nobody can answer on "
+                    "this run. Start the request from the GAIA terminal UI or "
+                    "Agent UI to approve it there.",
+                )
+
         # Before auto-approve: the eval runs with it on, and this is its only no.
         if scripted_user.declines(tool_name, tool_args):
             self._emit(
@@ -1795,7 +1810,11 @@ class SSEOutputHandler(OutputHandler):
         # the very next gated tool.
         # Pre-approval answers tool prompts; only full access widens the file scope.
         widens_scope = tool_name == PATH_ACCESS_PROMPT_TOOL and not self.full_access
-        if self.auto_approve_confirmations_enabled() and not widens_scope:
+        if (
+            self.auto_approve_confirmations_enabled()
+            and not widens_scope
+            and not needs_person
+        ):
             self.log_auto_approval(tool_name)
             self._emit(
                 {
