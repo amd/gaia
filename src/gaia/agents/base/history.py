@@ -4,6 +4,7 @@
 """Model-facing conversation history, budgeted without splitting tool groups."""
 
 import json
+import threading
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass
@@ -501,7 +502,11 @@ class SessionHistory(list):
             )
             if fd is not None:
                 os.close(fd)
-        self._db = sqlite3.connect(str(path) if path is not None else ":memory:")
+        # The task list is saved from the turn's worker thread.
+        self._db = sqlite3.connect(
+            str(path) if path is not None else ":memory:", check_same_thread=False
+        )
+        self._lock = threading.Lock()
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS turns (id INTEGER PRIMARY KEY, messages TEXT NOT NULL)"
         )
@@ -510,6 +515,9 @@ class SessionHistory(list):
             # The process running a stand-in turn (gaia.utils.process_owner);
             # NULL once the turn is recorded.
             self._db.execute("ALTER TABLE turns ADD COLUMN owner TEXT")
+        self._db.execute(
+            "CREATE TABLE IF NOT EXISTS task_list (id INTEGER PRIMARY KEY CHECK (id = 1), state TEXT NOT NULL)"
+        )
         self._db.commit()
         self._cuts = CutReporter()
         self._pending: Optional[int] = None
@@ -524,7 +532,7 @@ class SessionHistory(list):
         """
         from gaia.utils.process_owner import current_owner
 
-        with self._db:
+        with self._lock, self._db:
             cursor = self._db.execute(
                 "INSERT INTO turns(messages, owner) VALUES (?, ?)",
                 (json.dumps(messages, ensure_ascii=False), current_owner()),
@@ -534,7 +542,7 @@ class SessionHistory(list):
     def keep_pending(self) -> None:
         """Leave the stand-in as the turn's entry: it never finished."""
         if self._pending is not None:
-            with self._db:
+            with self._lock, self._db:
                 self._db.execute(
                     "UPDATE turns SET owner = NULL WHERE id = ?", (self._pending,)
                 )
@@ -544,14 +552,14 @@ class SessionHistory(list):
         """Drop the stand-in of a turn that ended without being recorded."""
         if self._pending is None:
             return
-        with self._db:
+        with self._lock, self._db:
             self._db.execute("DELETE FROM turns WHERE id = ?", (self._pending,))
         self._pending = None
 
     def record(self, messages: list[dict]) -> None:
         """Persist a complete turn without modifying its native tool IDs."""
         payload = json.dumps(messages, ensure_ascii=False)
-        with self._db:
+        with self._lock, self._db:
             replaced = 0
             if self._pending is not None:
                 replaced = self._db.execute(
@@ -572,13 +580,15 @@ class SessionHistory(list):
         """Rebuild the bounded view for the currently selected model."""
         from gaia.utils.process_owner import owner_is_gone
 
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, messages, owner FROM turns ORDER BY id"
+            ).fetchall()
         # A running turn's stand-in, ours or another live process's, is for
         # the transcript, not the model; a dead owner's never finished.
         turns = [
             json.loads(messages)
-            for row_id, messages, owner in self._db.execute(
-                "SELECT id, messages, owner FROM turns ORDER BY id"
-            )
+            for row_id, messages, owner in rows
             if row_id != self._pending and (owner is None or owner_is_gone(owner))
         ]
         if (
@@ -594,12 +604,29 @@ class SessionHistory(list):
             self._cuts if on_cut is not None else None,
         )
 
+    def save_task_list(self, state: dict) -> None:
+        """Keep the agent's task list with the transcript it belongs to."""
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO task_list(id, state) VALUES (1, ?)",
+                (json.dumps(state, ensure_ascii=False),),
+            )
+
+    def load_task_list(self) -> Optional[dict]:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT state FROM task_list WHERE id = 1"
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
     def clear(self) -> None:
-        with self._db:
+        with self._lock, self._db:
             self._db.execute("DELETE FROM turns")
+            self._db.execute("DELETE FROM task_list")
         super().clear()
         self._cuts = CutReporter()
         self._pending = None
 
     def close(self) -> None:
-        self._db.close()
+        with self._lock:
+            self._db.close()

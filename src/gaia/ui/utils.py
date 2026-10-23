@@ -30,6 +30,7 @@ from gaia.config import (
 )
 from gaia.llm.lemonade_embedded import gaia_home
 
+from .database import ChatDatabase
 from .models import (
     DocumentResponse,
     FileEntry,
@@ -168,7 +169,21 @@ def session_to_response(
         unread=bool(session.get("unread", 0)),
         last_run_status=session.get("last_run_status"),
         kind=session.get("kind") or "chat",
+        task_list=_listable_task_list(session),
     )
+
+
+def _listable_task_list(session: dict) -> Optional[dict]:
+    """The row's task list; an unreadable one is logged, not allowed to fail the list.
+
+    The chat turn that next opens this session clears it with a visible warning
+    (``TaskListMixin.bind_task_list_store``).
+    """
+    try:
+        return ChatDatabase.decode_task_list(session)
+    except ValueError as exc:
+        logger.error("Session list: %s", exc)
+        return None
 
 
 def _steps_to_response(msg: dict, step_model) -> Optional[list]:

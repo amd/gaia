@@ -365,6 +365,8 @@ class ChatDatabase:
             "TEXT DEFAULT 'google'",
             "UPDATE sessions SET mail_provider = 'google' WHERE mail_provider IS NULL",
         )
+        # The agent's task list (TaskList.state() as JSON), kept with the chat.
+        self._add_column("sessions", "task_list", "TEXT")
         # Existing titles may be user-set; never auto-rename them (#2165).
         placeholders = ", ".join("?" for _ in PLACEHOLDER_TITLES)
         self._add_column(
@@ -650,6 +652,48 @@ class ChatDatabase:
                     )
 
         return self.get_session(session_id)
+
+    def set_session_task_list(
+        self, session_id: str, state: Optional[Dict[str, Any]]
+    ) -> None:
+        """Save the agent's task list with the session; an empty one is forgotten.
+
+        Leaves ``updated_at`` alone: a step finishing is not a new message, and
+        must not reorder the chat list while a turn runs.
+        """
+        payload = (
+            json.dumps(state, ensure_ascii=False)
+            if state and state.get("items")
+            else None
+        )
+        with self._transaction():
+            self._conn.execute(
+                "UPDATE sessions SET task_list = ? WHERE id = ?",
+                (payload, session_id),
+            )
+
+    @staticmethod
+    def decode_task_list(session: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """The session row's task list, or ``None`` when it has none."""
+        raw = session.get("task_list")
+        if not raw:
+            return None
+        if isinstance(raw, dict):
+            return raw
+        try:
+            state = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"session {session.get('id')} has an unreadable task_list column "
+                f"({exc.msg}); clear it with set_session_task_list(id, None)"
+            ) from exc
+        if not isinstance(state, dict):
+            raise ValueError(
+                f"session {session.get('id')} has a task_list column holding "
+                f"{type(state).__name__}, not an object; clear it with "
+                "set_session_task_list(id, None)"
+            )
+        return state
 
     def delete_session(self, session_id: str) -> bool:
         """Delete a session and its messages."""

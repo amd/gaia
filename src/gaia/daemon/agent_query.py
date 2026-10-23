@@ -82,6 +82,7 @@ class ConsoleRenderer:
         # Track whether any answer token has been streamed so the terminal
         # ``final`` does not reprint the full answer on top of the live tokens.
         self._answer_streamed = False
+        self._last_task: Optional[str] = None
         self.final_answer: Optional[str] = None
         self.error_detail: Optional[str] = None
 
@@ -132,6 +133,21 @@ class ConsoleRenderer:
         if summary:
             line += f" — {summary}"
         print(line, file=self._err, flush=True)
+
+    def _on_task_list(self, event: Dict[str, Any]) -> None:
+        # Re-sent on every tool call; print a line only when a new step starts.
+        items = event.get("items") or []
+        for position, item in enumerate(items, 1):
+            if not isinstance(item, dict) or item.get("status") != "in_progress":
+                continue
+            content = str(item.get("content", ""))
+            if content != self._last_task:
+                self._last_task = content
+                print(
+                    f"  [>] {position}/{len(items)} {content}",
+                    file=self._err,
+                    flush=True,
+                )
 
     def _on_final(self, event: Dict[str, Any]) -> None:
         answer = str(event.get("answer", "") or "")

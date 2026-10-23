@@ -1014,6 +1014,9 @@ export interface SessionResponse {
   pinned?: boolean;
   private?: boolean;
   system_prompt?: string | null;
+  task_list?: {
+    [k: string]: unknown | undefined;
+  } | null;
   title: string;
   title_is_custom?: boolean;
   unread?: boolean;

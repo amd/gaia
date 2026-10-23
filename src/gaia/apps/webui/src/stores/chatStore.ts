@@ -4,7 +4,7 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
-import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode } from '../types';
+import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode, TaskListState } from '../types';
 import { applyTheme, resolveTheme, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
@@ -168,6 +168,11 @@ interface ChatState {
     /** Update the last tool step (not the absolute last step). */
     updateLastToolStep: (updates: Partial<AgentStep>) => void;
     clearAgentSteps: () => void;
+    /** Task lists streamed this session, by chat — newer than the polled `session.task_list`. */
+    liveTaskLists: Record<string, TaskListState>;
+    setLiveTaskList: (sessionId: string, state: TaskListState) => void;
+    /** Forget a chat's list everywhere the view keeps it (after a rewind). */
+    clearTaskList: (sessionId: string) => void;
     /** What the model is doing right now, from the latest phase status event; null before one arrives. */
     liveStatus: string | null;
     /** The backend's phase for `liveStatus` (`loading_model`, `reasoning`, `tool`…); null when it sent none. */
@@ -422,6 +427,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
             return state;
         }),
     clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, awaitingUser: false }),
+    liveTaskLists: {},
+    setLiveTaskList: (sessionId, taskList) =>
+        set((state) => ({ liveTaskLists: { ...state.liveTaskLists, [sessionId]: taskList } })),
+    clearTaskList: (sessionId) =>
+        set((state) => {
+            const { [sessionId]: _dropped, ...rest } = state.liveTaskLists;
+            return {
+                liveTaskLists: rest,
+                sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, task_list: null } : s)),
+            };
+        }),
     liveStatus: null,
     livePhase: null,
     setLiveStatus: (status, phase = null) => set({ liveStatus: status, livePhase: phase }),

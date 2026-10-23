@@ -20,6 +20,7 @@ import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage } fr
 
 import './ChatView.css';
 import { Composer } from './Composer';
+import { TaskListCard, parseTaskListEvent, pickTaskList } from './TaskListCard';
 import { ModelChip } from './ModelChip';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PermissionPrompt } from './PermissionPrompt';
@@ -247,6 +248,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const hasLiveQuestion = useChatStore((s) => Object.values(s.liveQuestions).some((q) => q.sessionId === sessionId));
 
     const session = sessions.find((s) => s.id === sessionId);
+    const liveTaskList = useChatStore((s) => s.liveTaskLists[sessionId]);
+    const savedTaskList = session?.task_list;
+    const taskList = useMemo(() => pickTaskList(savedTaskList, liveTaskList), [savedTaskList, liveTaskList]);
     const sessionDocIds = new Set(session?.document_ids ?? []);
     const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
     const [input, setInput] = useState('');
@@ -843,6 +847,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 if (isStale()) return;
                 if (event.type === 'context_usage') {
                     showContextUsage(event as unknown as ContextUsage);
+                    return;
+                }
+                // The pinned card, not a step: it updates in place above the composer.
+                if (event.type === 'task_list') {
+                    const parsed = parseTaskListEvent(event);
+                    if ('error' in parsed) {
+                        // Keep the last good list rather than draw a broken one.
+                        log.chat.warn(`Ignored a malformed task_list event: ${parsed.error}`);
+                    } else {
+                        useChatStore.getState().setLiveTaskList(sessionId, parsed.state);
+                    }
                     return;
                 }
                 // The agent emits nothing while it blocks on the user, so the next event ends the wait.
@@ -1468,6 +1483,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         try {
             await api.deleteMessagesFrom(sessionId, message.id);
+            // The backend dropped the list those turns wrote; so does the view.
+            useChatStore.getState().clearTaskList(sessionId);
         } catch (err) {
             log.chat.error(`Failed to delete messages from ${message.id}`, err);
             // Reload messages on error
@@ -1929,6 +1946,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     {lastIsConnectorError && lastMessage && (
                         <ConnectorRetryBanner content={lastMessage.content} onRetry={handleRetryLast} />
                     )}
+                    {taskList && <TaskListCard taskList={taskList} running={isStreaming} />}
                     <PermissionPrompt sessionId={sessionId} />
                     <ContextWarning usage={contextUsage} />
                     <OfflineNotice sessionId={sessionId} />

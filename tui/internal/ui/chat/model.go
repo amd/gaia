@@ -277,6 +277,12 @@ type ChatModel struct {
 	// screen is too short for both — see the clip in View().
 	confirmRows int
 
+	// taskList is the agent's task list (the last task_list event), nil when it
+	// has none; taskRows is what syncViewportHeight left View() to draw it in.
+	taskList   *event.CanonicalTaskListEvent
+	taskRows   int
+	taskHidden int // steps past maxTaskItems that setTaskList dropped
+
 	// confirmation is the pending needs_confirmation modal, if any. Non-nil
 	// means a destructive/external tool call is asking for approval — every
 	// key except Ctrl+C goes to it (including Esc, which means "deny" here,
@@ -2427,7 +2433,15 @@ func (m *ChatModel) syncViewportHeight(chrome int) {
 		}
 	}
 
-	vpHeight := budget - m.confirmRows
+	// The task list takes what the transcript can spare, never its last rows.
+	m.taskRows = 0
+	if spare := budget - m.confirmRows - minTranscriptRowsWithTasks; spare > 0 {
+		if card := m.renderTaskList(spare); card != "" {
+			m.taskRows = lipgloss.Height(card)
+		}
+	}
+
+	vpHeight := budget - m.confirmRows - m.taskRows
 	if vpHeight < 1 {
 		vpHeight = 1
 	}
@@ -3676,6 +3690,10 @@ func (m ChatModel) View() string {
 	// rows out of the transcript's budget, so it displaces no chrome.
 	if m.confirmation != nil && m.confirmRows > 0 {
 		rows = append(rows, clipConfirmation(m.confirmation.View(), m.confirmRows))
+	}
+	// Pinned above the composer for the same reason, out of the same budget.
+	if m.taskRows > 0 {
+		rows = append(rows, m.renderTaskList(m.taskRows))
 	}
 	rows = append(rows, divider, inputView, statusBar)
 	base := lipgloss.JoinVertical(lipgloss.Left, rows...)

@@ -500,6 +500,8 @@ async def delete_messages_from(
     count = db.delete_messages_from(session_id, message_id)
     if count == 0:
         raise HTTPException(status_code=404, detail="Message not found")
+    # The task list was written by the turns just removed.
+    db.set_session_task_list(session_id, None)
     return {"deleted": True, "count": count}
 
 

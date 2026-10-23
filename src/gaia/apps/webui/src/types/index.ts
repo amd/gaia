@@ -41,6 +41,8 @@ export interface Session {
     last_run_status?: 'done' | 'failed' | 'stopped' | null;
     /** Who started the chat: a person, the eval runner, or a schedule. */
     kind?: SessionKind;
+    /** The agent's task list, as of the last saved change; null when it has none. */
+    task_list?: TaskListState | null;
 }
 
 export type SessionKind = 'chat' | 'eval' | 'scheduled';
@@ -54,6 +56,30 @@ export interface ActiveRuns {
     /** Chats waiting for the model, first to run next first. */
     queued: string[];
     awaiting_user: Record<string, AwaitingUser>;
+}
+
+/** One step of the agent's task list. Times are epoch seconds. */
+export interface TaskListItem {
+    id: number;
+    content: string;
+    status: 'pending' | 'in_progress' | 'completed';
+    started_at: number | null;
+    completed_at: number | null;
+}
+
+/** The agent's task list — the payload of a `task_list` event. */
+export interface TaskListState {
+    items: TaskListItem[];
+    /** `agent` when the model keeps it, `plan` when derived from its plan field. */
+    source?: 'agent' | 'plan' | null;
+    /** What the agent is doing right now; meaningful only while a turn runs. */
+    current_action?: string | null;
+    action_started_at?: number | null;
+    /** Tool calls since the model last changed the list; high means it stopped keeping it. */
+    steps_since_update?: number | null;
+    updated_at?: number | null;
+    /** Steps the view dropped from an over-long list (view-only, never on the wire). */
+    hidden?: number;
 }
 
 /** Per-device configuration for an agent (CPU / GPU / NPU). */
@@ -817,6 +843,7 @@ export type StreamEventType =
     | 'step'         // Step progress
     | 'thinking'     // Agent reasoning
     | 'plan'         // Agent plan
+    | 'task_list'    // The agent's task list changed (full state)
     | 'tool_start'   // Tool execution started
     | 'tool_end'     // Tool execution completed
     | 'tool_result'  // Tool result summary
@@ -859,6 +886,13 @@ export interface StreamEvent {
     current_step?: number;
     /** What a tool call does, in plain words (for tool_start and tool_args). */
     narration?: string;
+    /** Task list fields (for task_list events) — see TaskListState. */
+    items?: TaskListItem[];
+    source?: 'agent' | 'plan' | null;
+    current_action?: string | null;
+    action_started_at?: number | null;
+    steps_since_update?: number | null;
+    updated_at?: number | null;
     title?: string;
     detail?: string;
     args?: Record<string, unknown>;

@@ -1805,6 +1805,19 @@ def _restore_model_history(
     )
 
 
+def _bind_task_list(agent, db, session_id: str) -> None:
+    """Give the agent this chat's saved task list and save its changes back."""
+    bind = getattr(agent, "bind_task_list_store", None)
+    if bind is None:
+        return
+
+    def load():
+        session = db.get_session(session_id)
+        return ChatDatabase.decode_task_list(session) if session else None
+
+    bind(load, lambda state: db.set_session_task_list(session_id, state))
+
+
 def _probe_is_only_unreachable(init_body: dict | None) -> bool:
     """True when the sidecar's ``/init`` 503 is ONLY "cannot reach Lemonade".
 
@@ -2997,6 +3010,7 @@ async def _get_chat_response(
         apply_environment(agent, session_id, db)
 
         _restore_model_history(agent, db, session_id, request.message)
+        _bind_task_list(agent, db, session_id)
 
         # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
         # omitted, the agent's __init__ set model_id via kwargs.setdefault —
@@ -3627,6 +3641,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 _restore_model_history(
                     agent, db, session_id, request.message, sse_handler
                 )
+                _bind_task_list(agent, db, session_id)
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -3894,6 +3909,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         if event.get("render"):
                             tool_step["render"] = event["render"]
                             tool_step["data"] = event.get("data")
+                elif event_type == "task_list" and _should_relay_to_sidecar(
+                    agent_type, _agent_registry
+                ):
+                    # A relayed sidecar's list reaches the session only here;
+                    # an in-process agent saves its own (_bind_task_list).
+                    state = {k: v for k, v in event.items() if k != "type"}
+                    db.set_session_task_list(request.session_id, state)
                 elif event_type == "plan":
                     # The agent re-sends its plan before every step; keep one row
                     # and move its current step. A replan still gets its own row.

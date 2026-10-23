@@ -4,8 +4,8 @@ import "encoding/json"
 
 // The canonical `/query` SSE vocabulary from
 // docs/spec/agent-ui-query-sse-contract.md §4, streamed by every v2 agent
-// sidecar through the daemon relay: the frozen seven, plus `needs_input` — the
-// additive-MINOR eighth type that resolved spec §9 Q3 (#2469).
+// sidecar through the daemon relay: the frozen seven, plus two additive-MINOR
+// types — `needs_input` (spec §9 Q3, #2469) and `task_list` (spec §4.5).
 //
 // These are NOT the legacy in-process types in types.go (step / thinking /
 // tool_start / chunk / answer / …), which the subprocess transport still uses.
@@ -22,6 +22,7 @@ const (
 	CanonicalTypeToolResult        = "tool_result"
 	CanonicalTypeNeedsConfirmation = "needs_confirmation"
 	CanonicalTypeNeedsInput        = "needs_input"
+	CanonicalTypeTaskList          = "task_list"
 	CanonicalTypeFinal             = "final"
 	CanonicalTypeError             = "error"
 )
@@ -171,6 +172,36 @@ type CanonicalInputOption struct {
 	Value       string `json:"value"`
 	Label       string `json:"label"`
 	Description string `json:"description,omitempty"`
+}
+
+// Task list step statuses.
+const (
+	TaskPending    = "pending"
+	TaskInProgress = "in_progress"
+	TaskCompleted  = "completed"
+)
+
+// CanonicalTaskListEvent — the agent's whole task list after a change. Not
+// terminal. Times are epoch seconds; CurrentAction is meaningful only while a
+// turn runs, so a receiver drops it at the turn's final or error.
+type CanonicalTaskListEvent struct {
+	Type            string         `json:"type"`
+	Items           []TaskListItem `json:"items"`
+	Source          string         `json:"source,omitempty"`
+	CurrentAction   string         `json:"current_action,omitempty"`
+	ActionStartedAt float64        `json:"action_started_at,omitempty"`
+	// StepsSinceUpdate counts tool calls since the model last changed the list.
+	StepsSinceUpdate int     `json:"steps_since_update,omitempty"`
+	UpdatedAt        float64 `json:"updated_at,omitempty"`
+}
+
+// TaskListItem is one step; StartedAt/CompletedAt are 0 until they happen.
+type TaskListItem struct {
+	ID          int     `json:"id"`
+	Content     string  `json:"content"`
+	Status      string  `json:"status"`
+	StartedAt   float64 `json:"started_at,omitempty"`
+	CompletedAt float64 `json:"completed_at,omitempty"`
 }
 
 // CanonicalFinalEvent — terminal success. Usage is an optional

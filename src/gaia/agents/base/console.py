@@ -579,6 +579,17 @@ class OutputHandler(ABC):
         """
         ...
 
+    def print_task_list(  # pylint: disable=unused-argument
+        self, state: Dict[str, Any]
+    ) -> None:
+        """Show the agent's task list after it changed. Optional no-op.
+
+        ``state`` is the whole list (``TaskList.state()``): ``items`` with
+        ``content``/``status``/``started_at``/``completed_at``, plus the
+        ``current_action`` and its ``action_started_at``.
+        """
+        ...
+
     def print_header(self, text: str):  # pylint: disable=unused-argument
         """Print header. Optional - default no-op."""
         ...
@@ -1070,6 +1081,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
         self._last_progress_message = ""  # Last message passed to start_progress
         self._last_preview_update_time = 0  # Throttle preview updates
         self._preview_update_interval = 0.25  # Minimum seconds between updates
+        self._last_task_list: Optional[tuple] = None  # Steps last printed
 
     def print(self, *args, **kwargs):
         """
@@ -1332,6 +1344,31 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                     print(f"  {i+1}. ► {step_text} ◄ (current step)")
                 else:
                     print(f"  {i+1}. {step_text}")
+
+    def print_task_list(self, state: Dict[str, Any]) -> None:
+        """Print the task list when a step starts or finishes."""
+        items = state.get("items") or []
+        # ASCII, so a cp1252 Windows console can print it.
+        marks = {"completed": "[x]", "in_progress": "[>]", "pending": "[ ]"}
+        lines = [f"  {marks.get(i['status'], '[?]')} {i['content']}" for i in items]
+        if not lines:
+            return
+        signature = tuple((i["content"], i["status"]) for i in items)
+        # The live action line changes every tool call; print only step changes.
+        if signature == self._last_task_list:
+            return
+        self._last_task_list = signature
+        if self.rich_available:
+            self.console.print("\n[bold]Tasks[/bold]")
+            for item, line in zip(items, lines):
+                style = {"completed": "dim", "in_progress": "bold cyan"}.get(
+                    item["status"]
+                )
+                # Plain text, so "[x]" is not read as markup.
+                self.console.print(line, style=style, markup=False, highlight=False)
+        else:
+            print("\nTasks")
+            print("\n".join(lines))
 
     def print_plan_progress(
         self, current_step: int, total_steps: int, completed_steps: int = None
