@@ -211,6 +211,7 @@ interface ChatState {
     settingsSection: SettingsSection | null;
     showMemoryDashboard: boolean;
     showSchedules: boolean;
+    showLearning: boolean;
     /** Permission mode picked on the new-chat screen, applied when the chat is created. */
     draftPermissionMode: PermissionMode;
     /** The user picked the draft mode on the chip; the configured default no longer moves it. */
@@ -240,6 +241,7 @@ interface ChatState {
     closeSettings: () => void;
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
+    setShowLearning: (show: boolean) => void;
     /** The user's pick on the new-chat chip. */
     setDraftPermissionMode: (mode: PermissionMode) => void;
     /** Adopt the configured default; an untouched draft follows it. */
@@ -314,7 +316,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })),
     // Opening a chat leaves any full-page view (memory, schedules).
     setCurrentSession: (id) => set(id
-        ? { currentSessionId: id, showMemoryDashboard: false, showSchedules: false }
+        ? { currentSessionId: id, showMemoryDashboard: false, showSchedules: false, showLearning: false }
         : { currentSessionId: id }),
     addSession: (session) =>
         set((state) => ({ sessions: [session, ...state.sessions] })),
@@ -476,6 +478,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     settingsSection: null,
     showMemoryDashboard: false,
     showSchedules: false,
+    showLearning: false,
     draftPermissionMode: 'ask',
     draftPermissionModeChosen: false,
     defaultPermissionMode: 'ask',
@@ -517,9 +520,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     openSettings: (section = 'general') => set({ settingsSection: section }),
     closeSettings: () => set({ settingsSection: null }),
     setShowMemoryDashboard: (show) =>
-        set(show ? { showMemoryDashboard: true, showSchedules: false } : { showMemoryDashboard: false }),
+        set(show ? { showMemoryDashboard: true, showSchedules: false, showLearning: false } : { showMemoryDashboard: false }),
     setShowSchedules: (show) =>
-        set(show ? { showSchedules: true, showMemoryDashboard: false } : { showSchedules: false }),
+        set(show ? { showSchedules: true, showMemoryDashboard: false, showLearning: false } : { showSchedules: false }),
+    setShowLearning: (show) =>
+        set(show ? { showLearning: true, showMemoryDashboard: false, showSchedules: false } : { showLearning: false }),
     setDraftPermissionMode: (mode) => set({ draftPermissionMode: mode, draftPermissionModeChosen: true }),
     setDefaultPermissionMode: (mode) =>
         set((state) => ({

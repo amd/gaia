@@ -556,6 +556,7 @@ gaia/
 │   ├── hub/            # Download-server client: fetch, verify, install agent binaries (gaia init, daemon)
 │   ├── img/            # Shared image assets
 │   ├── installer/      # Install/init commands (gaia init, lemonade installer)
+│   ├── learning/       # Nightly on-device LoRA learning (gaia learn): reflect, train, gate, serve
 │   ├── llm/            # LLM backend clients (Lemonade, Claude, OpenAI) + providers/
 │   ├── mcp/            # Model Context Protocol servers/clients
 │   ├── messaging/      # Messaging adapters (Telegram, …)
@@ -728,6 +729,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia api` - OpenAI-compatible API server
 - `gaia mcp {start|stop|status|test|agent|serve|tui|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
 - `gaia schedule {add|list|show|remove|pause|resume|run|daemon}` - Run a skill or prompt on a cron schedule
+- `gaia learn {setup|status|enable|run|list|activate|forget|...}` - Nightly on-device learning: train a LoRA from your own history, keep it only if it measurably helps
 - `gaia telegram {start|stop|status}` - Telegram messaging adapter
 - `gaia slack {setup|start|stop|connect|decline|status}` - Slack messaging adapter
 - `gaia connectors` - Manage connectors (Google/GitHub OAuth, MCP servers) and per-agent grants

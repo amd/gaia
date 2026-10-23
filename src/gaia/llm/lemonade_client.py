@@ -524,6 +524,26 @@ NPU_CTX_SIZE = 32768  # NPU — gemma4-it-e2b-FLM (FastFlowLM ceiling)
 CHAT_LLAMACPP_ARGS = (
     "--parallel 2 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5"
 )
+
+
+def _lora_path(llamacpp_args: Optional[str]) -> str:
+    """The ``--lora`` file in *llamacpp_args*, or ``""``."""
+    flags = (llamacpp_args or "").split()
+    return flags[flags.index("--lora") + 1] if "--lora" in flags[:-1] else ""
+
+
+def _chat_llamacpp_args(model_name: str) -> str:
+    """The chat flags plus ``--lora`` when nightly learning has an active
+    adapter for *model_name*."""
+    from gaia.learning.errors import LearningError
+    from gaia.learning.serving import chat_llamacpp_args
+
+    try:
+        return chat_llamacpp_args(model_name, CHAT_LLAMACPP_ARGS)
+    except LearningError as e:
+        raise LemonadeClientError(str(e)) from e
+
+
 #: Slots requests are pinned to (llama.cpp ``id_slot``). Left to LRU, a memory
 #: extraction landed on the conversation's slot and overwrote it, and the next
 #: turn re-read 28K tokens (109s). llama.cpp defers a request pinned to a slot
@@ -6955,7 +6975,24 @@ class LemonadeClient:
                     loaded_ctx = (
                         loaded_entry.get("recipe_options", {}).get("ctx_size", 0) or 0
                     )
-                    if loaded_ctx >= expected_ctx and not force:
+                    loaded_lora = _lora_path(
+                        loaded_entry.get("recipe_options", {}).get("llamacpp_args")
+                    )
+                    wanted_lora = (
+                        _lora_path(_chat_llamacpp_args(model))
+                        if loaded_entry.get("recipe") == "llamacpp"
+                        else loaded_lora
+                    )
+                    if loaded_lora != wanted_lora:
+                        # Left by a learning cycle that died mid-run, or loaded
+                        # before an adapter was activated.
+                        self.log.info(
+                            f"Model '{model}' is loaded with adapter "
+                            f"{loaded_lora or 'none'} but the active one is "
+                            f"{wanted_lora or 'none'}; reloading."
+                        )
+                        self.unload_model(model, ignore_if_not_loaded=True)
+                    elif loaded_ctx >= expected_ctx and not force:
                         self.log.debug(
                             f"Model '{model}' already loaded at ctx={loaded_ctx} "
                             f"(expected >= {expected_ctx})"
@@ -6969,12 +7006,13 @@ class LemonadeClient:
                             f"Model '{model}' reported loaded at ctx={loaded_ctx} "
                             f"but a request against it failed; reloading."
                         )
-                    # Loaded but under-sized — fall through to the reload path
-                    # which calls /load with explicit ctx_size.
-                    self.log.info(
-                        f"Model '{model}' loaded at ctx={loaded_ctx} but GAIA "
-                        f"expects ctx={expected_ctx}; reloading."
-                    )
+                    elif loaded_lora == wanted_lora:
+                        # Loaded but under-sized — fall through to the reload
+                        # path which calls /load with explicit ctx_size.
+                        self.log.info(
+                            f"Model '{model}' loaded at ctx={loaded_ctx} but GAIA "
+                            f"expects ctx={expected_ctx}; reloading."
+                        )
                 else:
                     self.log.debug(f"Model '{model}' not loaded, loading...")
             except Exception as e:  # pylint: disable=broad-except
@@ -7214,17 +7252,33 @@ class LemonadeClient:
             # Load under the user. name an auto-download registers it as.
             model_name = mr.model_id
         with self._model_slot_lease(model_name):
-            response = self._load_model_leased(
-                model_name,
-                timeout=timeout,
-                auto_download=auto_download,
-                _download_timeout=_download_timeout,
-                llamacpp_args=llamacpp_args,
-                ctx_size=ctx_size,
-                save_options=save_options,
-                prompt=prompt,
-                load_retries=load_retries,
-            )
+            try:
+                response = self._load_model_leased(
+                    model_name,
+                    timeout=timeout,
+                    auto_download=auto_download,
+                    _download_timeout=_download_timeout,
+                    llamacpp_args=llamacpp_args,
+                    ctx_size=ctx_size,
+                    save_options=save_options,
+                    prompt=prompt,
+                    load_retries=load_retries,
+                )
+            except LemonadeAuthError:
+                raise
+            except LemonadeClientError as e:
+                lora = _lora_path(llamacpp_args) or (
+                    _lora_path(_chat_llamacpp_args(model_name))
+                    if llamacpp_args is None and ctx_size is not None
+                    else ""
+                )
+                if not lora:
+                    raise
+                raise LemonadeClientError(
+                    f"{e} The load carried the nightly-learning adapter {lora}; "
+                    "if it no longer loads (for example after a Lemonade update), "
+                    "run `gaia learn deactivate` to serve the base model."
+                ) from e
         if manages_embedder_backend(model_name):
             with _PINNED_BACKENDS_LOCK:
                 _PINNED_BACKENDS.add((self.base_url, model_name))
@@ -7313,7 +7367,7 @@ class LemonadeClient:
                     "conversation cache."
                 )
             if recipe == "llamacpp":
-                llamacpp_args = CHAT_LLAMACPP_ARGS
+                llamacpp_args = _chat_llamacpp_args(model_name)
         if llamacpp_args is None and model_name in EMBEDDER_MODELS:
             llamacpp_args = EMBEDDER_LLAMACPP_ARGS
 

@@ -91,8 +91,8 @@ def test_scheduler_db_path_does_not_clobber_an_existing_file(daemon_home):
 
 def test_build_clock_uses_scheduler_db_path(daemon_home):
     """`_build_clock` opens the shared scheduler_db_path file, and with no
-    `executors` kwarg (the production call in `run()`) the mapping is empty —
-    proven black-box by a due job failing with "no executor registered"."""
+    `executors` kwarg the mapping is empty — proven black-box by a due job
+    failing with "no executor registered"."""
     from gaia.daemon.scheduler import store
     from gaia.daemon.scheduler.clock import _ClockDB
     from gaia.daemon.scheduler.models import KIND_ONE_SHOT, STATUS_FAILED

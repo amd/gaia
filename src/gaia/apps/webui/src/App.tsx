@@ -34,6 +34,7 @@ import type { SetupCheck, StartCard } from './types';
 
 // Heavy, occasional screens load on first use.
 const MemoryDashboard = lazy(() => import('./components/MemoryDashboard').then((m) => ({ default: m.MemoryDashboard })));
+const LearningPanel = lazy(() => import('./components/LearningPanel').then((m) => ({ default: m.LearningPanel })));
 const ScheduleManager = lazy(() => import('./components/ScheduleManager').then((m) => ({ default: m.ScheduleManager })));
 const DocumentLibrary = lazy(() => import('./components/DocumentLibrary').then((m) => ({ default: m.DocumentLibrary })));
 const FileBrowser = lazy(() => import('./components/FileBrowser').then((m) => ({ default: m.FileBrowser })));
@@ -68,6 +69,7 @@ function App() {
     const showDocLibrary = useChatStore((s) => s.showDocLibrary);
     const showFileBrowser = useChatStore((s) => s.showFileBrowser);
     const showMemoryDashboard = useChatStore((s) => s.showMemoryDashboard);
+    const showLearning = useChatStore((s) => s.showLearning);
     const showSchedules = useChatStore((s) => s.showSchedules);
     const sidebarOpen = useChatStore((s) => s.sidebarOpen);
     const setSidebarOpen = useChatStore((s) => s.setSidebarOpen);
@@ -403,6 +405,7 @@ function App() {
         if (outgoing && isAbandonedDraft(outgoing, store)) void cleanupAbandonedDraft(outgoing);
         store.setShowMemoryDashboard(false);
         store.setShowSchedules(false);
+        store.setShowLearning(false);
         setCurrentSession(null);
         setMessages([]);
         setNewChatFocus((n) => n + 1);
@@ -538,6 +541,8 @@ function App() {
         <Suspense fallback={<Loading />}><MemoryDashboard /></Suspense>
     ) : showSchedules ? (
         <Suspense fallback={<Loading />}><ScheduleManager /></Suspense>
+    ) : showLearning ? (
+        <Suspense fallback={<Loading />}><LearningPanel /></Suspense>
     ) : currentSessionId ? (
         <ChatView key={currentSessionId} sessionId={currentSessionId} />
     ) : (

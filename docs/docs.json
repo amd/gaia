@@ -71,6 +71,7 @@
               "guides/agent-ui",
               "guides/tui",
               "guides/memory",
+              "guides/nightly-learning",
               {
                 "group": "User Guides",
                 "pages": [

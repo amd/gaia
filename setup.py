@@ -40,6 +40,8 @@ setup(
         "gaia.audio",
         "gaia.chat",
         "gaia.schedule",
+        "gaia.learning",
+        "gaia.learning.worker",
         "gaia.daemon",
         "gaia.daemon.custody",
         "gaia.daemon.scheduler",

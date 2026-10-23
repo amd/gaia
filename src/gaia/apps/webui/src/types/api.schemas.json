@@ -2255,6 +2255,89 @@
     "title": "KnowledgeUpdate",
     "type": "object"
   },
+  "LearningConfigUpdate": {
+    "properties": {
+      "base_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Base Model"
+      },
+      "enabled": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Enabled"
+      },
+      "keep_adapters": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Keep Adapters"
+      },
+      "min_idle_minutes": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Min Idle Minutes"
+      },
+      "require_ac_power": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Require Ac Power"
+      },
+      "window_end": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Window End"
+      },
+      "window_start": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Window Start"
+      }
+    },
+    "title": "LearningConfigUpdate",
+    "type": "object"
+  },
   "LimitRequest": {
     "description": "``limit_usd`` None removes the limit.",
     "properties": {

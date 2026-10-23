@@ -2969,6 +2969,43 @@ skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 
 ---
 
+## Learn
+
+Nightly on-device learning: while you're away, GAIA turns what it learned from your chats into a LoRA adapter for the local chat model and keeps it only if it measurably answers your questions better. See the [Nightly Learning guide](/guides/nightly-learning). Everything runs on this PC.
+
+```bash
+gaia learn {setup,status,enable,disable,config,run,stop,analyze,list,show,activate,deactivate,delete,items,forget,runs} [OPTIONS]
+```
+
+| Command | Description |
+|---------|-------------|
+| `gaia learn setup [--backend peft\|unsloth] [--check]` | Install the training toolchain into `~/.gaia/train` (AMD ROCm PyTorch for your GPU, PEFT, llama.cpp's LoRA converter matched to Lemonade), or `--check` it |
+| `gaia learn status [--json]` | Settings, toolchain, active adapter and the latest run with its progress |
+| `gaia learn enable` / `gaia learn disable` | Turn nightly learning on or off. `enable` registers the nightly job with the GAIA daemon |
+| `gaia learn config` | Show or change settings (table below) |
+| `gaia learn run [--trigger manual\|scheduled] [--background]` | Run a cycle now. `scheduled` applies the nightly gates |
+| `gaia learn stop` | Stop the running cycle at its next training step; the active adapter is restored |
+| `gaia learn analyze [--days N] [--json]` | Show what the next cycle would learn, without training |
+| `gaia learn list` / `gaia learn show <id>` | Trained adapters with their probe scores; one adapter's full record |
+| `gaia learn activate <id>` | Use an adapter now, or roll back to an older one |
+| `gaia learn deactivate` | Serve the base model with no adapter |
+| `gaia learn delete <id>` | Delete an adapter (not the active one) |
+| `gaia learn items` / `gaia learn forget <id>` | Everything learned so far; remove one item so the next adapter is trained without it |
+| `gaia learn runs [--limit N]` | Recent cycles and their outcome |
+
+### `config` Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--window START-END` | `01:00-06:00` | Local time window a nightly cycle may start in; may wrap midnight |
+| `--idle-minutes N` | `30` | Minutes without a chat message before a cycle starts |
+| `--allow-battery` / `--require-ac` | mains only | Whether a laptop may train on battery |
+| `--base-model NAME` | the default chat model | Chat model to personalise. Today: `Gemma-4-E4B-it-GGUF` |
+| `--backend peft\|unsloth` | `peft` | Trainer. Unsloth on Windows needs Visual Studio Build Tools for its Triton kernels |
+| `--rank`, `--epochs`, `--max-steps` | `16`, `5`, `600` | LoRA rank and training length |
+| `--lookback-days N` | `14` | History the first cycle reads; later cycles read since the last adapter |
+| `--keep N` | `7` | Adapters kept besides the active one |
+
 ## Schedule
 
 Run a prompt on a recurring cron schedule and route its output to a sink. Schedules are stored in `~/.gaia/schedules.toml` (hand-editable). The `daemon` action runs a long-lived scheduler that fires each enabled schedule when due.
