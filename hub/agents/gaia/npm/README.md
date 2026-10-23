@@ -216,6 +216,10 @@ cut, so don't auto-approve that call. What the agent adds to its own prompt —
 the folder a shell call runs in, a risk note — comes in `prompt_context`, never
 in `args`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Serving the turn from the Agent UI? Send `surface: "agent_ui"`** (contract ≥
+2.20), and the agent points recurring requests at the **Scheduled tasks** page
+instead of saying it cannot schedule. Older binaries reject it with `422`.
+
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
 that names what failed and what to do about it.

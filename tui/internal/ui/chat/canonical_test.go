@@ -343,6 +343,35 @@ func TestCanonicalToolCallAndResult(t *testing.T) {
 	}
 }
 
+// A tool called with no arguments arrives as `"args":{}` while it is still
+// running. It must show as a live step, named in words, with no `{}` payload.
+func TestCanonicalToolCallWithNoArgumentsShowsAsRunning(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.streaming = true
+	m.dev = true
+
+	parsed := event.ParseCanonicalEvent([]byte(`{"type":"tool_call","tool":"list_skills","args":{},"narration":"Listing your skills"}`))
+	call, ok := parsed.(event.CanonicalToolCallEvent)
+	if !ok {
+		t.Fatalf("a tool_call with empty args parsed as %T, want CanonicalToolCallEvent", parsed)
+	}
+	m = feed(t, m, call)
+
+	if len(m.activity) != 1 {
+		t.Fatalf("expected one tool activity line, got %+v", m.activity)
+	}
+	item := m.activity[0]
+	if item.Done {
+		t.Error("the tool has not returned yet, so its line must not be done")
+	}
+	if item.Tool != "list_skills" || item.Content != "Listing your skills" {
+		t.Errorf("tool line = %q / %q, want list_skills / its narration", item.Tool, item.Content)
+	}
+	if item.Args != "" {
+		t.Errorf("empty arguments drew a payload in --dev: %q", item.Args)
+	}
+}
+
 func TestCanonicalToolResultFailureIsMarkedFailed(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
