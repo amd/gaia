@@ -299,7 +299,7 @@ def test_an_older_flagship_says_documents_need_an_update(
     errors = [e for e in events if e.get("type") == "agent_error"]
     assert errors, events
     assert "can't read them" in json.dumps(errors)
-    assert "Update the GAIA agent from the Hub" in json.dumps(errors)
+    assert "Update GAIA to the latest version" in json.dumps(errors)
     assert agents == []
 
 

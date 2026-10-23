@@ -21,6 +21,7 @@ from typing import Any, Optional
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools.file_edit import file_read_record, stamp_of
 from gaia.agents.tools.path_access import missing_file_error, read_access_error
+from gaia.agents.tools.protected_folders import ProtectedFolders
 from gaia.agents.tools.search_scope import (
     confine_roots,
     in_env_scope,
@@ -894,6 +895,14 @@ class FileSystemToolsMixin:
                 search_roots = [
                     str(r) for r in confine_roots(self, _get_search_roots(scope))
                 ]
+                guard = ProtectedFolders(
+                    self,
+                    named=(
+                        []
+                        if scope in ("smart", "home", "cwd", "everywhere")
+                        else [scope_root]
+                    ),
+                )
                 resolved_roots = [Path(r).expanduser().resolve() for r in search_roots]
 
                 query_lower = query.lower()
@@ -904,7 +913,7 @@ class FileSystemToolsMixin:
                         break
 
                     root = Path(root_path).expanduser().resolve()
-                    if not root.exists() or not root.is_dir():
+                    if guard.blocks(root) or not root.exists() or not root.is_dir():
                         continue
                     # A workspace scope takes its depth from the shared policy,
                     # so this tool and ``search_file`` cannot disagree on how
@@ -934,6 +943,7 @@ class FileSystemToolsMixin:
                             max_depth=(
                                 min(8, scoped_depth) if scoped_depth is not None else 8
                             ),
+                            guard=guard,
                         )
                     else:
                         # Name/metadata search
@@ -952,6 +962,7 @@ class FileSystemToolsMixin:
                             max_depth=(
                                 scoped_depth if scoped_depth is not None else 10
                             ),
+                            guard=guard,
                         )
 
                 # Sort results
@@ -963,8 +974,9 @@ class FileSystemToolsMixin:
                     results.sort(key=lambda x: x.get("name", "").lower())
                 # relevance = default order (already by search priority)
 
+                skip_note = f"\n{guard.note()}" if guard.skipped else ""
                 if not results:
-                    return f"No files found matching '{query}'."
+                    return f"No files found matching '{query}'.{skip_note}"
 
                 lines = [f"Found {len(results)} result(s):\n"]
                 for i, r in enumerate(results, 1):
@@ -982,7 +994,7 @@ class FileSystemToolsMixin:
                     else:
                         lines.append(f"  {i}. {path_str} ({size_str}, {mod_str})")
 
-                return "\n".join(lines)
+                return "\n".join(lines) + skip_note
 
             except ValueError as e:
                 return str(e)
@@ -1444,6 +1456,7 @@ class FileSystemToolsMixin:
             min_date,
             max_date,
             max_depth=10,
+            guard=None,
         ):
             """Search for files by name."""
             import fnmatch
@@ -1513,7 +1526,11 @@ class FileSystemToolsMixin:
                                     }
                                 )
 
-                            if is_dir and name not in default_excludes:
+                            if (
+                                is_dir
+                                and name not in default_excludes
+                                and not (guard and guard.blocks(entry.path))
+                            ):
                                 _walk(Path(entry.path), depth + 1)
 
                         except (PermissionError, OSError):
@@ -1534,6 +1551,7 @@ class FileSystemToolsMixin:
             _min_date,
             _max_date,
             max_depth=8,
+            guard=None,
         ):
             """Search inside file contents."""
             default_excludes = mixin._get_default_excludes()
@@ -1582,7 +1600,8 @@ class FileSystemToolsMixin:
                                 continue
 
                             if entry.is_dir(follow_symlinks=False):
-                                _walk(Path(entry.path), depth + 1)
+                                if not (guard and guard.blocks(entry.path)):
+                                    _walk(Path(entry.path), depth + 1)
                             elif entry.is_file(follow_symlinks=False):
                                 ext = Path(name).suffix.lower()
 
