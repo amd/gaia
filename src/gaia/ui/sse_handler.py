@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
-from gaia.agents.base.call_risk import call_risk
+from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, call_risk
 from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
 from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, grant_scope
 from gaia.agents.base.tool_outcome import FAILED_STATUSES
@@ -492,6 +492,7 @@ class SSEOutputHandler(OutputHandler):
     """
 
     blocking_confirmation = True
+    asks_past_preapproval = True
 
     #: How long to wait for a decision. A host that can actually deliver one
     #: raises this — a person reading a prompt routinely takes longer than a
@@ -523,6 +524,9 @@ class SSEOutputHandler(OutputHandler):
     #: The sidecar prompt a relayed run is parked on (see __init__).
     _relay_confirm_id: Optional[str] = None
 
+    #: The sidecar question a relayed run is parked on, until it is answered.
+    _relay_question_id: Optional[str] = None
+
     #: Outcome of the last ``tool_result``, echoed by the ``tool_end`` after it.
     _last_tool_success: bool = True
 
@@ -537,6 +541,7 @@ class SSEOutputHandler(OutputHandler):
         self._step_count = 0
         self._tool_count = 0
         self._last_tool_name: Optional[str] = None
+        self._last_tool_label = ""
         self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
         self._in_thinking = False  # True while inside a <think>...</think> block
         self._json_filtered = False  # True after a JSON block was suppressed; used to eat trailing } artifacts
@@ -604,6 +609,8 @@ class SSEOutputHandler(OutputHandler):
         self.active_relay_run_id: Optional[str] = None
         # Only this id may be answered, so a late click cannot approve a newer one.
         self._relay_confirm_id = None
+        # A relayed needs_input question the sidecar run is parked on.
+        self._relay_question_id: Optional[str] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
@@ -760,6 +767,7 @@ class SSEOutputHandler(OutputHandler):
         # Prefer an explicit display label from the tool registry; fall back
         # to the legacy description map in this module when none is provided.
         detail_label = get_tool_display_label(tool_name) or _tool_description(tool_name)
+        self._last_tool_label = detail_label
         event = {
             "type": "tool_start",
             "tool": tool_name,
@@ -781,9 +789,24 @@ class SSEOutputHandler(OutputHandler):
 
     def pretty_print_json(self, data: Dict[str, Any], title: str = None):
         # When title is "Arguments", emit tool args as a detail update
-        # so the frontend can show what the tool was called with.
-        if title == "Arguments" and isinstance(data, dict):
-            detail = _format_tool_args(self._last_tool_name, data)
+        # so the frontend can show what the tool was called with. Sent for an
+        # empty call too: the translator holds tool_start until this arrives.
+        if title == "Arguments":
+            if not isinstance(data, dict):
+                # The wire carries an object; log what the model really sent.
+                logger.warning(
+                    "Tool %s was called with %s arguments, not an object: %.200r",
+                    self._last_tool_name,
+                    type(data).__name__,
+                    data,
+                )
+                data = {}
+            # A call with no arguments keeps the tool_start label, not a blank.
+            detail = (
+                _format_tool_args(self._last_tool_name, data)
+                if data
+                else self._last_tool_label
+            )
             self.record_tool_args(data)
             self._emit(
                 {
@@ -1758,6 +1781,20 @@ class SSEOutputHandler(OutputHandler):
         noted, self._noted_call = self._noted_call, None
         call_args = noted[1] if noted is not None and noted[0] == tool_name else None
 
+        # A call only a person may approve: pre-approval never answers it.
+        needs_person = (
+            isinstance(tool_args, dict) and tool_args.get(NEEDS_PERSON_ARG) is True
+        )
+        if needs_person:
+            tool_args = {k: v for k, v in tool_args.items() if k != NEEDS_PERSON_ARG}
+            if not self.answers_confirmations:
+                return self.deny_tool_execution(
+                    tool_name,
+                    f"'{tool_name}' needs your approval and nobody can answer on "
+                    "this run. Start the request from the GAIA terminal UI or "
+                    "Agent UI to approve it there.",
+                )
+
         # Before auto-approve: the eval runs with it on, and this is its only no.
         if scripted_user.declines(tool_name, tool_args):
             self._emit(
@@ -1779,7 +1816,11 @@ class SSEOutputHandler(OutputHandler):
         # the very next gated tool.
         # Pre-approval answers tool prompts; only full access widens the file scope.
         widens_scope = tool_name == PATH_ACCESS_PROMPT_TOOL and not self.full_access
-        if self.auto_approve_confirmations_enabled() and not widens_scope:
+        if (
+            self.auto_approve_confirmations_enabled()
+            and not widens_scope
+            and not needs_person
+        ):
             self.log_auto_approval(tool_name)
             self._emit(
                 {
@@ -1948,7 +1989,9 @@ class SSEOutputHandler(OutputHandler):
             ) or self._relay_confirm_id is not None:
                 return "permission"
         with self._user_input_lock:
-            if any(not evt.is_set() for evt in self._user_input_events.values()):
+            if self._relay_question_id is not None or any(
+                not evt.is_set() for evt in self._user_input_events.values()
+            ):
                 return "question"
         return None
 
@@ -1959,32 +2002,49 @@ class SSEOutputHandler(OutputHandler):
         On the way back the turn retakes the model at the front of the line,
         and a Stop while it waits there ends the turn.
         """
-        slot = self.turn_slot
-        try:
-            stepped_away = slot is not None and slot.step_away()
-        except TimeoutError:
-            # The hand-back may still run later; never use the model unheld.
-            logger.error("Could not give the model up while waiting; stopping the turn")
-            self.cancelled.set()
-            stepped_away = False
-        if not stepped_away:
+        if not self.step_away_from_model():
             yield
             return
         try:
             yield
         finally:
-            if not self.cancelled.is_set() and not slot.come_back(self.cancelled):
-                # Withdrawn from the line: the turn must not use the model.
+            self.come_back_to_model()
+
+    def step_away_from_model(self) -> bool:
+        """Give the model to other chats while the turn waits on the user.
+
+        Returns whether it was given up, i.e. whether
+        :meth:`come_back_to_model` must follow once the wait ends.
+        """
+        slot = self.turn_slot
+        try:
+            return slot is not None and slot.step_away()
+        except TimeoutError:
+            # The hand-back may still run later; never use the model unheld.
+            logger.error("Could not give the model up while waiting; stopping the turn")
+            self.cancelled.set()
+            return False
+
+    def come_back_to_model(self) -> None:
+        """Retake the model at the front of the line after a wait on the user.
+
+        A Stop while the turn waits in line, or a model that can no longer be
+        loaded, sets ``cancelled``; the caller checks it before going on.
+        """
+        if self.cancelled.is_set():
+            return
+        if not self.turn_slot.come_back(self.cancelled):
+            # Withdrawn from the line: the turn must not use the model.
+            self.cancelled.set()
+        elif not self.cancelled.is_set() and self.on_model_regained is not None:
+            try:
+                self.on_model_regained()
+            except Exception as exc:  # pylint: disable=broad-except
+                # The model the turn needs is gone and can't be loaded:
+                # end the turn before the approved tool runs, and say why.
+                logger.error("Model check after the user answered failed: %s", exc)
+                self._emit({"type": "agent_error", "content": str(exc)})
                 self.cancelled.set()
-            elif not self.cancelled.is_set() and self.on_model_regained is not None:
-                try:
-                    self.on_model_regained()
-                except Exception as exc:  # pylint: disable=broad-except
-                    # The model the turn needs is gone and can't be loaded:
-                    # end the turn before the approved tool runs, and say why.
-                    logger.error("Model check after the user answered failed: %s", exc)
-                    self._emit({"type": "agent_error", "content": str(exc)})
-                    self.cancelled.set()
 
     def _clear_pending_confirmation(self) -> None:
         """Drop the live prompt's slot so a later answer cannot resolve it."""
@@ -2116,7 +2176,7 @@ class SSEOutputHandler(OutputHandler):
         if self._confirm_id is not None or self._relay_confirm_id is not None:
             return True
         with self._user_input_lock:
-            return bool(self._user_input_queue)
+            return bool(self._user_input_queue) or self._relay_question_id is not None
 
     def request_user_input_blocking(
         self,
@@ -2265,7 +2325,16 @@ class SSEOutputHandler(OutputHandler):
         if proxy is None or run_id is None:
             return False
         proxy.respond_query(run_id, request_id, value)
+        with self._user_input_lock:
+            # A newer question may already be pending; only this one is answered.
+            if self._relay_question_id == request_id:
+                self._relay_question_id = None
         return True
+
+    def set_relay_question(self, request_id: Optional[str]) -> None:
+        """Record (or clear, with ``None``) the relayed question now pending."""
+        with self._user_input_lock:
+            self._relay_question_id = request_id
 
     def set_relay_confirmation(self, confirm_id: Optional[str]) -> None:
         """Record (or clear, with ``None``) the sidecar prompt now pending."""

@@ -218,7 +218,7 @@ def test_a_relayed_run_that_ends_without_an_answer_fails_loudly(
 ):
     _sidecar_answers(monkeypatch, [{"type": "status", "message": "thinking"}])
 
-    with pytest.raises(RuntimeError, match="(?i)ended unexpectedly"):
+    with pytest.raises(RuntimeError, match="(?i)stopped unexpectedly"):
         server._run_scheduled_prompt(
             db, "weather?", console=SSEOutputHandler(background_mode=True)
         )

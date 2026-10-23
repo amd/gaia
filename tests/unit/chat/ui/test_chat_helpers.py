@@ -19,6 +19,7 @@ from fastapi import HTTPException
 
 from gaia.ui._chat_helpers import (
     _EMPTY_ANSWER_LEMONADE_MSG,
+    _NO_ANSWER_AFTER_TOOLS_MSG,
     _build_history_pairs,
     _canonical_agent_type,
     _compute_allowed_paths,
@@ -394,7 +395,7 @@ class TestEmptyAnswerOutcome:
         """A user Stop is persisted as a 'Cancelled.' marker, not a Lemonade
         error, and keeps the steps taken before the cancel."""
         content, sse_type, keep_steps = _empty_answer_outcome(
-            turn_cancelled=True, has_steps=True
+            turn_cancelled=True, has_steps=True, has_card=False
         )
         assert content == "Cancelled."
         assert sse_type == "done"
@@ -402,27 +403,39 @@ class TestEmptyAnswerOutcome:
 
     def test_cancel_without_steps_still_marks_cancelled(self):
         content, sse_type, keep_steps = _empty_answer_outcome(
-            turn_cancelled=True, has_steps=False
+            turn_cancelled=True, has_steps=False, has_card=False
         )
         assert content == "Cancelled."
         assert sse_type == "done"
         assert keep_steps is True
 
-    def test_empty_answer_with_steps_persists_empty_and_keeps_cards(self):
+    def test_empty_answer_with_a_card_persists_empty_and_keeps_cards(self):
         """A legitimately-empty final (e.g. an echoed render card stripped to
         empty) persists empty content but keeps the steps/cards."""
         content, sse_type, keep_steps = _empty_answer_outcome(
-            turn_cancelled=False, has_steps=True
+            turn_cancelled=False, has_steps=True, has_card=True
         )
         assert content == ""
         assert sse_type == "done"
+        assert keep_steps is True
+
+    def test_tools_without_an_answer_or_card_fail_loudly(self):
+        """Tools ran but nothing answered: say so, keep the steps, and don't
+        blame Lemonade."""
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=False, has_steps=True, has_card=False
+        )
+        assert content == _NO_ANSWER_AFTER_TOOLS_MSG
+        assert "Send your message again" in content
+        assert "Lemonade" not in content
+        assert sse_type == "failed"
         assert keep_steps is True
 
     def test_no_answer_no_cancel_no_steps_uses_lemonade_copy(self):
         """The Lemonade remediation copy appears ONLY when there is no answer,
         no cancel, and no steps/cards."""
         content, sse_type, keep_steps = _empty_answer_outcome(
-            turn_cancelled=False, has_steps=False
+            turn_cancelled=False, has_steps=False, has_card=False
         )
         assert content == _EMPTY_ANSWER_LEMONADE_MSG
         assert "Lemonade Server is running" in content
@@ -545,6 +558,7 @@ class TestSessionAgentKwargsShape:
             "ui_session_id",
             "dynamic_tools",
             "memory_incognito",
+            "surface",
         }
 
     def test_memory_off_reaches_the_agent_at_construction(self):

@@ -30,7 +30,9 @@ from .. import permissions as session_permissions
 from .._chat_helpers import (
     _set_provisional_title,
     _spawn_background,
+    model_context_messages,
     stuck_producer,
+    turn_takes_the_line,
 )
 from ..database import ChatDatabase
 from ..dependencies import get_db
@@ -92,7 +94,8 @@ async def send_message(
     """Send a message and get a response (streaming or non-streaming).
 
     Concurrency is controlled at two levels:
-    1. Every turn waits in one visible line for the model (``turn_queue``).
+    1. Every turn on a local model waits in one visible line for it
+       (``turn_queue``); a cloud turn doesn't.
        A streamed turn waits inside its detached run and reports its place
        in line; a non-streamed one waits here, its message already saved,
        until it reaches the model or is stopped with ``/api/chat/cancel``.
@@ -144,8 +147,9 @@ async def send_message(
         try:
             question_id = db.begin_turn(sid, request.message)
             _set_provisional_title(db, sid, request.message)
-            await turn_queue.acquire(sid)
-            holds_turn = True
+            if turn_takes_the_line(db, session, request.agent_type):
+                await turn_queue.acquire(sid)
+                holds_turn = True
         except TurnCancelled:
             db.add_message(sid, "assistant", "Cancelled.", ends_turn=True)
             session_lock.release()
@@ -868,7 +872,7 @@ async def retry_with(
         await turn_queue.acquire(sid)
         try:
             earlier, question, recorded = answer_retry.split_latest_turn(
-                db.get_context_messages(sid), record
+                model_context_messages(db, sid), record
             )
             messages = answer_retry.build_retry_messages(
                 earlier, question, resolve_ctx_size(request.model)

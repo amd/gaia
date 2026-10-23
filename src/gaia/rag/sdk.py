@@ -146,8 +146,17 @@ def _stop_behind(error: BaseException) -> Optional[Exception]:
         if isinstance(current, (IndexingStopped, LeaseWaitCancelled)):
             return current
         seen.add(id(current))
-        current = current.__cause__ or current.__context__
+        current = _next_in_chain(current)
     return None
+
+
+def _next_in_chain(error: BaseException) -> Optional[BaseException]:
+    """The exception Python's traceback shows *error* as raised from or during."""
+    if error.__cause__ is not None:
+        return error.__cause__
+    if error.__suppress_context__:
+        return None
+    return error.__context__
 
 
 def name_file_for_user(text: str, file_path: str, display_name: str) -> str:
@@ -348,6 +357,40 @@ class RAGResponse:
     query_metadata: Optional[Dict[str, Any]] = None  # Query-level metadata
 
 
+def _same_file(a: str, b: str) -> bool:
+    """Whether *a* and *b* name one file, however spelled.
+
+    Case, 8.3 short names, UNC and extended-length paths all name the same file.
+    A file that no longer exists is compared by its normalised real path.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(
+            os.path.realpath(b)
+        )
+
+
+def _locked_cause(
+    error: Optional[BaseException], file_path: str
+) -> Optional[PermissionError]:
+    """The lock on *file_path* in *error*'s chain, if any.
+
+    Parsers wrap the OS error they hit, so the chain is walked the way Python
+    prints it. A lock that names another file (a temp or cache file) is not
+    this document's; a read error carries no filename, an open names the file.
+    """
+    seen = set()
+    while error is not None and id(error) not in seen:
+        if isinstance(error, PermissionError) and held_by_another_program(error):
+            name = error.filename
+            if name is None or _same_file(os.fsdecode(name), file_path):
+                return error
+        seen.add(id(error))
+        error = _next_in_chain(error)
+    return None
+
+
 class RAGSDK:
     """
     Simple RAG SDK for document Q&A (PDF, TXT, MD, RST, LOG, CSV, JSON, XLSX,
@@ -492,6 +535,19 @@ class RAGSDK:
                 )
             raise ImportError(error_msg)
 
+    def _log_read_failure(
+        self, error: BaseException, file_path: str, message: str
+    ) -> None:
+        """A warning for a lock, which the caller may retry; *message* otherwise."""
+        locked = _locked_cause(error, file_path)
+        if locked is not None:
+            self.log.warning(
+                f"Could not read {file_path}: another program may have it locked, "
+                f"or it is not readable: {locked}"
+            )
+        else:
+            self.log.error(message)
+
     def _safe_open(self, file_path: str, mode="rb"):
         """
         Safely open file with path validation and O_NOFOLLOW to prevent symlink attacks.
@@ -565,7 +621,7 @@ class RAGSDK:
         """
         Get or create HMAC key for cache integrity verification.
 
-        The key is stored per-installation in ~/.gaia/cache/hmac.key
+        The key is stored per-installation in <gaia_home>/cache/hmac.key
         and is used to sign cache files to prevent tampering. Cached in
         memory after first load to avoid repeated disk reads.
 
@@ -575,7 +631,7 @@ class RAGSDK:
         if self._hmac_key is not None:
             return self._hmac_key
 
-        key_dir = Path.home() / ".gaia" / "cache"
+        key_dir = gaia_config.gaia_home() / "cache"
         key_path = key_dir / "hmac.key"
 
         # Locked so two first-run processes cannot each mint a key and leave
@@ -1436,11 +1492,16 @@ class RAGSDK:
                 "  2. Try opening the file in PowerPoint to confirm it is readable\n"
                 "  3. Save as PDF and index the PDF instead"
             )
-            self.log.error(f"Corrupted PPTX (bad zip): {pptx_path}: {e}")
+            self._log_read_failure(
+                e, pptx_path, f"Corrupted PPTX (bad zip): {pptx_path}: {e}"
+            )
             raise ValueError(msg) from e
 
         try:
-            prs = Presentation(pptx_path)
+            # A stream, not the path: given a path, python-pptx's is_zipfile
+            # check swallows a lock and reports the file as not a package.
+            with open(pptx_path, "rb") as stream:
+                prs = Presentation(stream)
         except Exception as e:
             msg = (
                 f"Could not read PowerPoint file: {file_name}\n"
@@ -1451,7 +1512,7 @@ class RAGSDK:
                 "  2. Try opening the file in PowerPoint to confirm it is readable\n"
                 "  3. Save as PDF and index the PDF instead"
             )
-            self.log.error(f"Corrupted PPTX {pptx_path}: {e}")
+            self._log_read_failure(e, pptx_path, f"Corrupted PPTX {pptx_path}: {e}")
             raise ValueError(msg) from e
 
         try:
@@ -1932,8 +1993,9 @@ These positions indicate where to split the text."""
             self.log.info(f"📝 Extracted {len(text):,} characters from text file")
             return text.strip()
         except Exception as e:
-            log = self.log.warning if held_by_another_program(e) else self.log.error
-            log(f"Error reading text file {file_path}: {e}")
+            self._log_read_failure(
+                e, file_path, f"Error reading text file {file_path}: {e}"
+            )
             raise
 
     def _extract_text_from_csv(self, csv_path: str) -> str:
@@ -1994,7 +2056,7 @@ These positions indicate where to split the text."""
                 "  3. Try opening and re-saving in a text editor"
             )
         except Exception as e:
-            self.log.error(f"Error reading CSV {csv_path}: {e}")
+            self._log_read_failure(e, csv_path, f"Error reading CSV {csv_path}: {e}")
             raise
 
     def _extract_text_from_json(self, json_path: str) -> str:
@@ -2037,7 +2099,7 @@ These positions indicate where to split the text."""
             self.log.info(f"📝 Extracted {len(text):,} characters from JSON")
             return text
         except Exception as e:
-            self.log.error(f"Error reading JSON {json_path}: {e}")
+            self._log_read_failure(e, json_path, f"Error reading JSON {json_path}: {e}")
             raise
 
     def _extract_text_from_xlsx(self, xlsx_path: str) -> str:
@@ -2097,7 +2159,9 @@ These positions indicate where to split the text."""
             )
             return text
         except Exception as e:
-            self.log.error(f"Error reading Excel file {xlsx_path}: {e}")
+            self._log_read_failure(
+                e, xlsx_path, f"Error reading Excel file {xlsx_path}: {e}"
+            )
             raise
 
     def _extract_text_from_docx(self, docx_path: str) -> str:
@@ -2118,7 +2182,9 @@ These positions indicate where to split the text."""
         try:
             text = extract_docx_text(docx_path)
         except (ImportError, ValueError) as e:
-            self.log.error(f"Error reading Word file {docx_path}: {e}")
+            self._log_read_failure(
+                e, docx_path, f"Error reading Word file {docx_path}: {e}"
+            )
             raise
 
         if self.config.show_stats:
@@ -3041,6 +3107,7 @@ These positions indicate where to split the text."""
                 print(f"❌ File is empty: {file_path}")
                 print("   The file has no content to index")
             stats["error"] = "File is empty"
+            stats["empty_file"] = True
             return stats
 
         # Enforce maximum file size limit (prevent OOM)
@@ -3279,10 +3346,14 @@ These positions indicate where to split the text."""
             # Extract text based on file type
             try:
                 text, file_metadata = self._extract_text_from_file(file_path)
-            except PermissionError as e:
+            except Exception as e:
+                stop = _stop_behind(e)
+                if stop is not None:
+                    raise stop from e
                 # Only the document's own read: a cache write can fail with EACCES too.
-                if held_by_another_program(e):
-                    return self._document_locked(stats, file_path, e)
+                locked = _locked_cause(e, file_path)
+                if locked is not None:
+                    return self._document_locked(stats, file_path, locked)
                 raise
 
             # Store metadata in stats if available (for PDFs)

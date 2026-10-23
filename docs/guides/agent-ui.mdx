@@ -142,6 +142,12 @@ Drag files into the chat — or just ask the agent to find them. It indexes the 
 >
 > *"What's the total spend in this expense report?"*
 
+A chat searches only the documents attached to it, never the whole Document
+library, so one chat's files don't leak into another's answers. The library
+says where the documents you add go: the open chat, or your next new chat. A
+new chat lists the library's documents and offers to attach them; picking
+**Ask about your documents** attaches them all.
+
 ---
 
 ## Install
@@ -655,7 +661,9 @@ battery it lets the PC sleep below the level you choose (20% by default).
 **One chat at a time on the model.** A second chat sent while another is
 working waits its turn and says so ("Waiting for the GPU — 1st in line", also
 on its row in the sidebar), then runs when the first finishes. **Stop** takes a
-waiting chat out of the line.
+waiting chat out of the line. A chat waiting on you (a permission prompt or a
+question) steps out of the line until you answer, then goes ahead of chats that
+arrived meanwhile. Chats on a cloud model don't wait for the line at all.
 
 **Colors** keeps the warm gray look by default. Pick one of eight palettes
 instead (Stone and ink, Blue marble, Glacier, Forest floor, Sage and mist,
@@ -676,8 +684,9 @@ your provider's bill is the final word.
 **Settings → Advanced → Model server** switches between GAIA's own Lemonade
 Server and one you already run: enter its address (and its API key, if it needs
 one) and choose **Use this server**. The setup screen offers a Lemonade it finds
-running the first time. GAIA never changes your server's setup: connecting a cloud
-provider uses the one your server already has, and says so if it has none. **Use
+running the first time. When the server you chose isn't answering, setup says
+how to start it and how to switch to GAIA's own instead. GAIA never changes
+your server's setup: connecting a cloud provider uses the one your server already has, and says so if it has none. **Use
 GAIA's own** is refused, with nothing changed, when GAIA's own server isn't
 installed; `gaia init --gaia-lemonade` installs it and switches. See
 [Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run).
@@ -756,7 +765,7 @@ Chats, documents and schedules are saved on disk as you go. What happens to work
 |---------------|-----------------------|--------------------------|
 | You switch chats or close the browser tab | Keeps going; reopen the chat to watch it finish | Keeps going |
 | You close the desktop window | Keeps going: the window hides to the tray (unless you turned that off) and GAIA keeps running | Keeps going |
-| You quit GAIA, it crashes, or the PC shuts down | Stops. On the next start the reply shows what it had written so far, which tools it had started, then "This answer was interrupted when GAIA closed. Send again to retry." A scheduled run cut short shows the same in its chat. | Stops. On the next start it shows as **Failed** with **Retry**; hover the badge for "Indexing was interrupted when GAIA closed" |
+| You quit GAIA, it crashes, or the PC shuts down | Stops. On the next start the reply shows what it had written so far, which tools it had started, then "This answer was interrupted when GAIA closed. Send again to retry." A scheduled run cut short shows the same in its chat. | Stops. On the next start it shows as **Failed** with **Retry**, and "Indexing was interrupted when GAIA closed" under the document |
 
 GAIA never re-runs an interrupted reply by itself: it may already have run tools, and running them twice is not safe. Send the message again to retry.
 
@@ -878,15 +887,21 @@ The agent supports the **Model Context Protocol** in both directions — connect
   </Accordion>
 
   <Accordion title="Document indexing fails">
+    - The reason shows under the document in the library. A damaged, password-protected or scanned (no text) PDF is marked **Can't be read**: retrying won't help until you re-export the file, remove the password or run OCR on it
     - Ensure the file is a supported format and does not need a password to open (PDFs with only permission restrictions index fine)
     - Keep file size under 100MB
     - For PDF image extraction, download the VLM model: `gaia download --agent chat`
     - Two large documents index at a time and the rest wait their turn; small files (under 20 MB) have their own two slots, so they never wait behind big ones. A document that keeps making progress indexes to the end however long it takes. One that makes no progress for 10 minutes stops with an error that says so; to allow longer stalls, set `GAIA_INDEX_TIMEOUT` (seconds without progress) before GAIA starts, e.g. `export GAIA_INDEX_TIMEOUT=1200`
   </Accordion>
 
-  <Accordion title="Access denied: path must be within one of ...">
+  <Accordion title="GAIA can only read documents under ...">
     Documents can only be read from an allowed root. By default that is your
-    home directory — a file elsewhere on disk is rejected with HTTP 403.
+    home directory — a path elsewhere on disk is rejected with HTTP 403.
+    GAIA gives the same answer whether or not a file exists there, so it can't
+    be used to probe the rest of the disk: if the path might be mistyped, check
+    it first. A missing file inside an allowed root says it doesn't exist.
+    Dropping the file onto the Document library works from anywhere: GAIA
+    keeps its own copy (up to 20 MB).
 
     This bites on service accounts and CI runners, whose home
     (`C:\Windows\System32\config\systemprofile`) is not where their files live.
