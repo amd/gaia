@@ -4589,8 +4589,11 @@ def _settled_quietly(future) -> None:
         future.exception()
 
 
-async def _index_document(filepath: Path) -> int:
+async def _index_document(filepath: Path, display_name: Optional[str] = None) -> int:
     """Index a document using RAG SDK. Returns chunk count.
+
+    ``display_name`` is the user's name for the file when *filepath* is a
+    copy; every error message names it instead of the copy.
 
     Runs on an indexing pool (``_INDEX_MAX_PARALLEL`` at once per pool; small
     files have their own, and the rest wait their turn). Cancelling the
@@ -4608,8 +4611,9 @@ async def _index_document(filepath: Path) -> int:
         RuntimeError: If indexing fails or stops making progress.
         asyncio.CancelledError: If the awaiting task was cancelled.
     """
-    from gaia.rag.sdk import IndexingStopped
+    from gaia.rag.sdk import IndexingStopped, name_file_for_user
 
+    name = display_name or filepath.name
     stop = threading.Event()
     # Monotonic time of the last page or batch; None until a worker starts.
     progress = {"at": None}
@@ -4617,7 +4621,7 @@ async def _index_document(filepath: Path) -> int:
     def _step() -> None:
         progress["at"] = _time.monotonic()
         if stop.is_set():
-            raise IndexingStopped(filepath.name)
+            raise IndexingStopped(name)
 
     def _queue_update(_event: dict) -> None:
         # Waiting in line for the embedder or vision model is not a stall.
@@ -4641,29 +4645,29 @@ async def _index_document(filepath: Path) -> int:
                     str(filepath),
                     progress_callback=lambda _done, _total: _step(),
                     heartbeat=_step,
+                    **({"display_name": display_name} if display_name else {}),
                 )
         except LeaseWaitCancelled as e:
-            raise IndexingStopped(filepath.name) from e
+            raise IndexingStopped(name) from e
         # A stop absorbed on the way (a degraded image page) is still a stop.
         if stop.is_set():
-            raise IndexingStopped(filepath.name)
-        logger.info("RAG index_document result for %s: %s", filepath, result)
+            raise IndexingStopped(name)
+        logger.info("RAG index_document result for %s (%s): %s", name, filepath, result)
 
         if not isinstance(result, dict):
             raise RuntimeError(
-                f"RAG returned unexpected type for {filepath.name}: "
-                f"{type(result).__name__}"
+                f"RAG returned unexpected type for {name}: {type(result).__name__}"
             )
 
         error = result.get("error")
         if error:
-            raise RuntimeError(f"RAG indexing failed for {filepath.name}: {error}")
+            raise RuntimeError(f"RAG indexing failed for {name}: {error}")
 
         if not result.get("success"):
-            raise RuntimeError(f"RAG indexing unsuccessful for {filepath.name}")
+            raise RuntimeError(f"RAG indexing unsuccessful for {name}")
 
         chunks = result.get("num_chunks", 0) or result.get("chunk_count", 0)
-        logger.info("Indexed %s: %d chunks", filepath, chunks)
+        logger.info("Indexed %s (%s): %d chunks", name, filepath, chunks)
         return chunks
 
     try:
@@ -4682,7 +4686,7 @@ async def _index_document(filepath: Path) -> int:
             if last is not None and _time.monotonic() - last > _INDEX_TIMEOUT_S:
                 stop.set()
                 raise RuntimeError(
-                    f"Indexing {filepath.name} made no progress for "
+                    f"Indexing {name} made no progress for "
                     f"{_INDEX_TIMEOUT_S:g} s and was stopped. Try it again; "
                     f"if it stalls again, raise {_INDEX_TIMEOUT_ENV}."
                 )
@@ -4692,4 +4696,7 @@ async def _index_document(filepath: Path) -> int:
     except (RuntimeError, IndexingStopped):
         raise
     except Exception as e:
-        raise RuntimeError(f"Failed to index {filepath.name}: {e}") from e
+        detail = str(e)
+        if display_name:
+            detail = name_file_for_user(detail, str(filepath), display_name)
+        raise RuntimeError(f"Failed to index {name}: {detail}") from e

@@ -150,6 +150,20 @@ def _stop_behind(error: BaseException) -> Optional[Exception]:
     return None
 
 
+def name_file_for_user(text: str, file_path: str, display_name: str) -> str:
+    """Replace every spelling of *file_path* in *text* with *display_name*.
+
+    Indexing often runs on a private copy of the user's file; this keeps the
+    copy's path and name out of messages the user reads.
+    """
+    path = Path(file_path)
+    spellings = {str(file_path), str(path), path.as_posix(), os.path.realpath(path)}
+    for spelling in sorted(spellings, key=len, reverse=True):
+        text = text.replace(spelling, display_name)
+    # Any other spelling of the copy's folder (8.3 names, a symlinked temp dir).
+    return re.sub(r"[^\s'\"]*" + re.escape(path.name), lambda _m: display_name, text)
+
+
 # The running index_document's ``heartbeat`` on this thread, called once per
 # extracted page, so a long extraction shows progress and can be stopped.
 _HEARTBEAT = threading.local()
@@ -2910,19 +2924,33 @@ These positions indicate where to split the text."""
         progress_callback: Optional[Callable[[int, int], None]] = None,
         wait_callback: Optional[Callable[[int], None]] = None,
         heartbeat: Optional[Callable[[], None]] = None,
+        display_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Index a document for retrieval; see :meth:`_index_document`.
 
         ``heartbeat`` is called once per extracted PDF page. Raising
         :class:`IndexingStopped` from it, or from ``progress_callback``,
         stops the index and keeps any cache the document had.
+
+        ``display_name`` is the name the user knows the file by, when
+        ``file_path`` is a copy. The returned ``file_name`` and ``error`` use
+        it in place of the copy's path.
         """
+        if display_name:
+            self.log.info(f"Indexing {display_name} (copy at {file_path})")
         previous = getattr(_HEARTBEAT, "fn", None)
         _HEARTBEAT.fn = heartbeat
         try:
-            return self._index_document(file_path, progress_callback, wait_callback)
+            stats = self._index_document(file_path, progress_callback, wait_callback)
         finally:
             _HEARTBEAT.fn = previous
+        if display_name:
+            stats["file_name"] = display_name
+            if stats.get("error"):
+                stats["error"] = name_file_for_user(
+                    str(stats["error"]), file_path, display_name
+                )
+        return stats
 
     def _index_document(
         self,
