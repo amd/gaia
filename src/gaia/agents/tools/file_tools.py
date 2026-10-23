@@ -42,6 +42,7 @@ from gaia.agents.tools.path_access import (
     read_access_error,
     readable_entry,
 )
+from gaia.agents.tools.protected_folders import ProtectedFolders
 from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
     confine_roots,
@@ -425,6 +426,8 @@ class FileSearchToolsMixin:
 
                 def with_truncation(result: Dict[str, Any]) -> Dict[str, Any]:
                     """Mark a result partial when the walk ran out of budget."""
+                    if guard.skipped:
+                        result["skipped_folders"] = guard.note()
                     if not budget.truncated:
                         return result
                     logger.info(
@@ -453,10 +456,11 @@ class FileSearchToolsMixin:
                     return result
 
                 walked = set()
+                guard = ProtectedFolders(self)
 
                 def search_location(location: Path, max_depth: int = 999):
                     """Search a specific location up to max_depth."""
-                    if not location.exists():
+                    if guard.blocks(location) or not location.exists():
                         return
                     if budget.exhausted():
                         budget.unfinished(location)
@@ -512,6 +516,7 @@ class FileSearchToolsMixin:
                                     and depth < max_depth
                                     and item not in walked
                                     and not is_link(item)
+                                    and not guard.blocks(item)
                                 ):
                                     search_recursive(item, depth + 1)
                                     if budget.truncated:
@@ -566,6 +571,7 @@ class FileSearchToolsMixin:
                     denied = self._read_access_error(str(scope))
                     if denied:
                         return denied
+                    guard = ProtectedFolders(self, named=[scope])
                     if not scope.is_dir():
                         return {
                             "status": "error",
@@ -818,6 +824,9 @@ class FileSearchToolsMixin:
                 )
 
                 matching_dirs = []
+                guard = ProtectedFolders(
+                    self, named=[] if search_root is None else roots
+                )
 
                 def search_recursive(current_path: Path, depth: int):
                     """Recursively search for matching directories."""
@@ -832,30 +841,33 @@ class FileSearchToolsMixin:
                             if directory_name.lower() in item.name.lower():
                                 matching_dirs.append(str(item))
                                 logger.debug(f"Found matching directory: {item}")
-                            if depth < max_depth:
+                            if depth < max_depth and not guard.blocks(item):
                                 search_recursive(item, depth + 1)
                     except (PermissionError, OSError) as e:
                         # Skip directories we can't access
                         logger.debug(f"Skipping {current_path}: {e}")
 
                 for root in roots:
-                    if root.exists():
+                    if not guard.blocks(root) and root.exists():
                         search_recursive(root, 0)
 
                 if matching_dirs:
-                    return {
+                    result = {
                         "status": "success",
                         "directories": matching_dirs[:10],  # Limit to 10 results
                         "count": len(matching_dirs),
                         "message": f"Found {len(matching_dirs)} matching directories",
                     }
                 else:
-                    return {
+                    result = {
                         "status": "success",
                         "directories": [],
                         "count": 0,
                         "message": f"No directories matching '{directory_name}' found",
                     }
+                if guard.skipped:
+                    result["skipped_folders"] = guard.note()
+                return result
 
             except Exception as e:
                 logger.error(f"Error searching for directory: {e}")

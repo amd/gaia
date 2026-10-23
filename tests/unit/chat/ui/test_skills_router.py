@@ -156,7 +156,8 @@ def test_an_agent_too_old_to_list_skills_says_to_update_it(client, monkeypatch):
 
     assert resp.status_code == 503
     detail = resp.json()["detail"]
-    assert "2.17" in detail and "Update the GAIA agent" in detail
+    assert "Update GAIA" in detail
+    assert "2.17" not in detail and "contract" not in detail
     assert "gaia init" not in detail
 
 
