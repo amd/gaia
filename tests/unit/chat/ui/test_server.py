@@ -1519,7 +1519,49 @@ class TestExportEndpoint:
         resp = client.get(f"/api/sessions/{session_id}/export?format=markdown")
         content = resp.json()["content"]
         assert "*Created:" in content
-        assert "*Model:" in content
+        assert "*Model (current setting):" in content
+
+    def test_export_names_the_model_that_answers(self, client, db):
+        sid = client.post("/api/sessions", json={"model": "Stored-GGUF"}).json()["id"]
+        client.put("/api/settings", json={"custom_model": "My-Override-GGUF"})
+        db.add_message(sid, "user", "Hi")
+        db.add_message(sid, "assistant", "Hello")
+        db.add_message(
+            sid, "assistant", "Retried", inference_stats={"model": "Retry-GGUF"}
+        )
+
+        md = client.get(f"/api/sessions/{sid}/export?format=markdown").json()
+        # "Hello" has no recorded model, so the header can only name the setting.
+        assert "*Model (current setting): My-Override-GGUF*" in md["content"]
+        assert "Stored-GGUF" not in md["content"]
+        assert "**Assistant:**\n\nHello" in md["content"]
+        assert "**Assistant (Retry-GGUF):**\n\nRetried" in md["content"]
+
+        js = client.get(f"/api/sessions/{sid}/export?format=json").json()
+        assert js["session"]["model"] == "Stored-GGUF"
+        assert js["session"]["effective_model"] == "My-Override-GGUF"
+
+    def test_export_names_each_answers_own_model_after_a_switch(self, client, db):
+        sid = client.post("/api/sessions", json={"model": "Old-GGUF"}).json()["id"]
+        db.add_message(sid, "user", "Q1")
+        db.add_message(sid, "assistant", "A1", inference_stats={"model": "Old-GGUF"})
+        db.add_message(sid, "user", "Q2")
+        db.add_message(sid, "assistant", "A2", inference_stats={"model": "New-GGUF"})
+        client.put("/api/settings", json={"custom_model": "Later-GGUF"})
+
+        content = client.get(f"/api/sessions/{sid}/export").json()["content"]
+        assert "*Models: Old-GGUF, New-GGUF*" in content
+        assert "Later-GGUF" not in content
+        assert "**Assistant (Old-GGUF):**\n\nA1" in content
+        assert "**Assistant (New-GGUF):**\n\nA2" in content
+
+    def test_export_single_recorded_model_is_singular(self, client, db):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        db.add_message(sid, "user", "Q")
+        db.add_message(sid, "assistant", "A", inference_stats={"model": "Only-GGUF"})
+
+        content = client.get(f"/api/sessions/{sid}/export").json()["content"]
+        assert "*Model: Only-GGUF*" in content
 
     def test_export_json(self, client, db):
         create_resp = client.post("/api/sessions", json={"title": "JSON Export"})
