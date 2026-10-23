@@ -11,6 +11,7 @@ const { EventEmitter } = require("events");
 const INSTALLER_PATH = "../../src/gaia/apps/webui/services/backend-installer.cjs";
 const DIALOG_PATH =
   "../../src/gaia/apps/webui/services/backend-installer-progress-dialog.cjs";
+const APP_ICON_PATH = "../../src/gaia/apps/webui/services/app-icon.cjs";
 
 const LOG_PATH = "/mock/home/.gaia/install.log";
 const STATE_PATH = "/mock/home/.gaia/install-state.json";
@@ -72,6 +73,13 @@ describe("createProgressWindow", () => {
     expect(prefs.nodeIntegration).toBe(false);
     expect(prefs.preload).toMatch(/preload\.cjs$/);
     expect(window.loadURL.mock.calls[0][0]).toMatch(/^data:text\/html/);
+  });
+
+  test("carries the GAIA icon, not Electron's", () => {
+    const { dialog } = load();
+    const { window } = dialog.createProgressWindow();
+
+    expect(window.options.icon).toBe(require(APP_ICON_PATH).appIconPath());
   });
 
   test("registers the install IPC handlers only once across windows", () => {
