@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -180,19 +181,29 @@ def test_a_running_executor_renews_its_lease(tmp_path):
     jid = store.register_job(_db(path), source="t", kind=KIND_ONE_SHOT, fire_at=1.0)
     seen = []
 
-    def slow(job, _db):
-        time.sleep(0.5)
-        seen.append(store.get_job(_db, job_id=job["job_id"])["claimed_at"])
+    def runs_until_renewed(job, _db):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            claimed_at = store.get_job(_db, job_id=job["job_id"])["claimed_at"]
+            if claimed_at > 1.0:
+                seen.append(claimed_at)
+                return
+            time.sleep(0.02)
 
     clock = DaemonClock(
-        str(path), {KIND_ONE_SHOT: slow}, stale_firing_seconds=60, heartbeat_seconds=0.1
+        str(path),
+        {KIND_ONE_SHOT: runs_until_renewed},
+        stale_firing_seconds=60,
+        heartbeat_seconds=0.1,
     )
     clock.fire_due(now=1.0)
     # Claimed at the fake now=1.0; renewed with the real clock while running.
-    assert seen[0] > 1.0
+    assert seen, "the lease was never renewed while the executor ran"
 
 
-def test_a_row_stuck_by_an_older_build_starts_its_window_at_upgrade(tmp_path):
+def test_a_row_stuck_by_an_older_build_starts_its_window_at_upgrade(
+    tmp_path, monkeypatch
+):
     """No claim time recorded: stale after the window, not on sight."""
     path = tmp_path / "old.db"
     db = _ClockDB()
@@ -211,18 +222,16 @@ def test_a_row_stuck_by_an_older_build_starts_its_window_at_upgrade(tmp_path):
     )
     db.close_db()
 
+    # The upgrade stamps the row with the time it ran; pin that time.
+    upgraded = 5000.0
+    monkeypatch.setattr(store, "time", SimpleNamespace(time=lambda: upgraded))
     clock = _clock(path, {KIND_ONE_SHOT: lambda job, _db: None})
-    before = time.time()
-    assert clock.fire_due(now=before) == {"fired": [], "failed": []}
-    # The upgrade stamps the row with the real time it ran, which on a slow
-    # runner can be well after `before`; measure the window from that stamp.
+    assert clock.fire_due(now=upgraded) == {"fired": [], "failed": []}
     check = _ClockDB()
     check.init_db(str(path))
-    upgraded = check.query("SELECT claimed_at FROM daemon_jobs WHERE job_id = 'old'")[
-        0
-    ]["claimed_at"]
+    stamped = check.query("SELECT claimed_at FROM daemon_jobs WHERE job_id = 'old'")
     check.close_db()
-    assert upgraded >= before
+    assert stamped[0]["claimed_at"] == upgraded
     assert clock.fire_due(now=upgraded + CONFIRM) == {"fired": [], "failed": []}
     later = upgraded + STALE + 1
     assert clock.fire_due(now=later) == {"fired": [], "failed": []}

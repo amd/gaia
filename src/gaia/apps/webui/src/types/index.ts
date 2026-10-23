@@ -696,6 +696,8 @@ export interface Schedule {
     session_id: string | null;
     /** Parsed natural-language schedule as JSON; null for plain-interval schedules. */
     schedule_config: string | null;
+    /** The last run's error; null when it succeeded. */
+    last_error: string | null;
 }
 
 /** A single execution result for a scheduled task. */
@@ -1071,6 +1073,13 @@ export interface ProviderInfo {
     registered?: boolean;
     /** Where Lemonade's key comes from; null when none is configured. */
     key_source?: 'environment' | 'lemonade' | 'stored' | null;
+    /**
+     * `waiting_for_os_permission` while the OS holds the saved-key read for the
+     * user's permission (a macOS keychain dialog): `key_source` is then unknown,
+     * not absent, and `key_message` says what to do.
+     */
+    key_state?: 'read' | 'waiting_for_os_permission';
+    key_message?: string | null;
     models_discovered?: boolean;
     env_var?: string;
     base_url?: string | null;

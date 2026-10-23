@@ -184,7 +184,7 @@ describe('UploadErrorToast', () => {
         render(
             <UploadErrorToast
                 filename="missing.pdf"
-                error="Access denied: GAIA only reads documents under C:\Users\me, and C:\nope\missing.pdf is outside them. Check the path is right."
+                error="GAIA can only read documents under C:\Users\me, and C:\nope\missing.pdf is outside them. Check the path is right."
                 status={403}
                 onDismiss={() => {}}
                 timeout={0}
@@ -192,7 +192,7 @@ describe('UploadErrorToast', () => {
         );
 
         expect(screen.getByText("GAIA can't read files in that location")).toBeInTheDocument();
-        expect(screen.getByText(/only reads documents under.*drop the file here/)).toBeInTheDocument();
+        expect(screen.getByText(/can only read documents under.*drop the file here instead \(up to 20 MB\)/)).toBeInTheDocument();
         expect(screen.queryByText(/Access denied/)).toBeNull();
         expect(screen.queryByRole('link')).toBeNull();
     });

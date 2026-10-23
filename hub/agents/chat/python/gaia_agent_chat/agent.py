@@ -1107,6 +1107,18 @@ class ChatAgent(
             use_openai=bool(getattr(config, "use_chatgpt", False)),
         )
 
+    def _no_documents_message(self) -> str:
+        # An Agent UI chat searches only its own attachments, not the library.
+        if getattr(getattr(self, "config", None), "ui_session_id", None):
+            return (
+                "No documents are attached to this chat. The user's Document "
+                "library may hold others, but a chat searches only the documents "
+                "attached to it. If the user expected documents here, say so and "
+                "ask them to attach them (Documents in the sidebar, then the link "
+                "icon), or index a file they name by its path."
+            )
+        return super()._no_documents_message()
+
     def _model_service_label(self) -> Optional[str]:
         """Names the provider in a failed turn's message: "Fireworks AI: …"."""
         return self._inference_location().display

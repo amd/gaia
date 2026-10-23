@@ -289,7 +289,7 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
         Icon = AlertTriangle;
     } else if (status === 403) {
         title = `GAIA can't read files in that location`;
-        detail = `${stripPrefix(error, 'Access denied:')} Or drop the file here instead and GAIA keeps its own copy.`;
+        detail = `${error} Or drop the file here instead (up to 20 MB) and GAIA keeps its own copy.`;
         issueUrl = null;
         Icon = AlertTriangle;
     } else if (isFileTypeError && category) {

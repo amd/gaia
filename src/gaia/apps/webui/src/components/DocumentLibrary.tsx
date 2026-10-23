@@ -102,6 +102,11 @@ export function DocumentLibrary() {
             currentSessionId, sessions, updateSessionInList,
             draftDocumentIds, addDraftDocuments, removeDraftDocument } = useChatStore();
     const currentSession = sessions.find(s => s.id === currentSessionId) ?? null;
+    // A chat searches only its own attachments, so the user picks where new documents go.
+    const [target, setTarget] = useState<'chat' | 'next'>(currentSessionId ? 'chat' : 'next');
+    const targetSessionId = target === 'chat' ? currentSessionId : null;
+    const targetChatName = `“${currentSession?.title || 'Untitled chat'}”`;
+    const [notice, setNotice] = useState('');
     const closeLibrary = useCallback(() => setShowDocLibrary(false), [setShowDocLibrary]);
     useEscapeToClose(true, closeLibrary);
     const dialogRef = useRef<HTMLDivElement>(null);
@@ -235,15 +240,30 @@ export function DocumentLibrary() {
     const totalSize = documents.reduce((sum, d) => sum + d.file_size, 0);
     const totalChunks = documents.reduce((sum, d) => sum + d.chunk_count, 0);
 
-    // Shared upload state-machine: preflight extension check, set UI state,
-    // run the caller-provided uploader, auto-attach the result to the current
-    // session, and refresh the document list. Used by both path-based and
-    // blob-based upload flows.
-    // Make newly indexed documents usable: attach to the open chat, or hold them for the next one.
+    /** Attach a document where the user chose, and say where it went. */
+    const attachToTarget = useCallback(async (docId: string, filename: string) => {
+        if (!targetSessionId) {
+            addDraftDocuments([docId]);
+            setNotice(`${filename} will be attached to your next new chat.`);
+            log.doc.info(`"${filename}" will be attached to the next new chat`);
+            return;
+        }
+        await api.attachDocument(targetSessionId, docId);
+        const freshSession = useChatStore.getState().sessions.find(s => s.id === targetSessionId);
+        const existing = freshSession?.document_ids ?? [];
+        if (!existing.includes(docId)) {
+            updateSessionInList(targetSessionId, {
+                document_ids: [...existing, docId],
+            });
+        }
+        setNotice(`Attached ${filename} to ${targetChatName}.`);
+        log.doc.info(`Attached "${filename}" to session ${targetSessionId}`);
+    }, [targetSessionId, targetChatName, updateSessionInList, addDraftDocuments]);
+
+    /** Attach a folder's newly indexed documents where the user chose. */
     const attachIndexed = useCallback(async (docIds: string[], label: string) => {
         if (docIds.length === 0) return;
-        if (!currentSessionId) {
-            // No chat is open: the agent only sees attached documents, so hold them for the next one.
+        if (!targetSessionId) {
             addDraftDocuments(docIds);
             log.doc.info(`"${label}" will be attached to the next new chat`);
             return;
@@ -251,21 +271,25 @@ export function DocumentLibrary() {
         const attached: string[] = [];
         for (const id of docIds) {
             try {
-                await api.attachDocument(currentSessionId, id);
+                await api.attachDocument(targetSessionId, id);
                 attached.push(id);
             } catch (attachErr) {
                 log.doc.warn(`Could not attach document to session: ${attachErr}`);
             }
         }
-        const freshSession = useChatStore.getState().sessions.find(s => s.id === currentSessionId);
+        const freshSession = useChatStore.getState().sessions.find(s => s.id === targetSessionId);
         const existing = freshSession?.document_ids ?? [];
         const added = attached.filter((id) => !existing.includes(id));
         if (added.length > 0) {
-            updateSessionInList(currentSessionId, { document_ids: [...existing, ...added] });
+            updateSessionInList(targetSessionId, { document_ids: [...existing, ...added] });
         }
-        log.doc.info(`Auto-attached "${label}" to session ${currentSessionId}`);
-    }, [currentSessionId, updateSessionInList, addDraftDocuments]);
+        log.doc.info(`Attached "${label}" to session ${targetSessionId}`);
+    }, [targetSessionId, updateSessionInList, addDraftDocuments]);
 
+    // Shared upload state-machine: preflight extension check, set UI state,
+    // run the caller-provided uploader, attach the result where the user
+    // chose, and refresh the document list. Used by both path-based and
+    // blob-based upload flows.
     const runUpload = useCallback(async (
         filename: string,
         uploader: () => Promise<Document>,
@@ -288,11 +312,22 @@ export function DocumentLibrary() {
         setUploadStatus(`Indexing ${filename}...`);
         setUploadError(null);
         setFolderNotice(null);
+        setNotice('');
         try {
             const doc = await uploader();
             log.doc.timed(`Indexed "${filename}": ${doc?.chunk_count || '?'} chunks`, t);
-            // Auto-attach so the agent can immediately use it
-            if (doc?.id) await attachIndexed([doc.id], filename);
+            if (doc?.id) {
+                try {
+                    await attachToTarget(doc.id, doc.filename || filename);
+                } catch (attachErr) {
+                    log.doc.error(`Could not attach "${filename}" to ${targetChatName}`, attachErr);
+                    setUploadError({
+                        filename,
+                        error: `Indexed, but not attached to ${targetChatName}: ${
+                            attachErr instanceof Error ? attachErr.message : attachErr}`,
+                    });
+                }
+            }
             // Refresh document list
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
@@ -313,7 +348,7 @@ export function DocumentLibrary() {
         } finally {
             setIsUploading(false);
         }
-    }, [attachIndexed, setDocuments]);
+    }, [attachToTarget, targetChatName, setDocuments]);
 
     /** Index the documents directly inside a folder typed into the path box. */
     const indexFolderPath = useCallback(async (folder: string, folderName: string) => {
@@ -435,27 +470,18 @@ export function DocumentLibrary() {
     }, [documents, setDocuments, reindexingIds]);
 
     const handleAttachDoc = useCallback(async (docId: string) => {
-        const doc = documents.find((d) => d.id === docId);
-        if (!currentSessionId) {
-            addDraftDocuments([docId]);
-            log.doc.info(`"${doc?.filename || docId}" will be attached to the next new chat`);
-            return;
-        }
-        log.doc.info(`Attaching document to session: ${doc?.filename || docId}`);
+        const name = documents.find((d) => d.id === docId)?.filename || docId;
+        setNotice('');
         try {
-            await api.attachDocument(currentSessionId, docId);
-            const freshSession = useChatStore.getState().sessions.find(s => s.id === currentSessionId);
-            const existing = freshSession?.document_ids ?? [];
-            if (!existing.includes(docId)) {
-                updateSessionInList(currentSessionId, {
-                    document_ids: [...existing, docId],
-                });
-            }
-            log.doc.info(`Attached "${doc?.filename || docId}" to session ${currentSessionId}`);
+            await attachToTarget(docId, name);
         } catch (err) {
-            log.doc.error(`Failed to attach document to session: ${doc?.filename || docId}`, err);
+            log.doc.error(`Failed to attach ${name} to ${targetChatName}`, err);
+            setUploadError({
+                filename: name,
+                error: `Not attached to ${targetChatName}: ${err instanceof Error ? err.message : err}`,
+            });
         }
-    }, [currentSessionId, documents, updateSessionInList, addDraftDocuments]);
+    }, [documents, attachToTarget, targetChatName]);
 
     const handleFolderSubmit = useCallback(async (e: React.FormEvent) => {
         e.preventDefault();
@@ -574,6 +600,24 @@ export function DocumentLibrary() {
                 </div>
 
                 <div className="modal-body">
+                    <div className="doc-target">
+                        {currentSessionId ? (
+                            <label className="doc-target-choice">
+                                Add documents to
+                                <select
+                                    value={target}
+                                    onChange={(e) => { setTarget(e.target.value as 'chat' | 'next'); setNotice(''); }}
+                                >
+                                    <option value="chat">This chat: {targetChatName}</option>
+                                    <option value="next">Your next new chat</option>
+                                </select>
+                            </label>
+                        ) : (
+                            <span>Documents you add here are attached to your next new chat.</span>
+                        )}
+                        <span className="doc-target-hint">A chat searches only the documents attached to it.</span>
+                    </div>
+
                     {/* Drop zone */}
                     <div
                         className={`drop-zone ${isDragOver ? 'drag-over' : ''} ${isUploading ? 'uploading' : ''}`}
@@ -619,6 +663,8 @@ export function DocumentLibrary() {
                             Browse files
                         </button>
                     </form>
+
+                    {notice && <p className="doc-target-notice" role="status">{notice}</p>}
 
                     {/* Upload error toast */}
                     {uploadError && (
@@ -679,15 +725,15 @@ export function DocumentLibrary() {
                                         </button>
                                     )}
                                     {doc.indexing_status === 'complete' &&
-                                     !(currentSessionId
+                                     !(targetSessionId
                                         ? currentSession?.document_ids?.includes(doc.id)
                                         : draftDocumentIds.includes(doc.id)) && (
                                         <button
                                             className="btn-icon-sm doc-attach"
                                             onClick={() => handleAttachDoc(doc.id)}
-                                            title={currentSessionId ? 'Use in current session' : 'Use in your next chat'}
-                                            aria-label={currentSessionId
-                                                ? `Attach ${doc.filename} to current session`
+                                            title={targetSessionId ? `Use in ${targetChatName}` : 'Use in your next chat'}
+                                            aria-label={targetSessionId
+                                                ? `Attach ${doc.filename} to ${targetChatName}`
                                                 : `Attach ${doc.filename} to your next chat`}
                                         >
                                             <Link2 size={14} />

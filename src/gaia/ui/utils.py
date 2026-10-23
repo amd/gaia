@@ -671,7 +671,7 @@ def ensure_document_path_allowed(raw: Path) -> str:
     roots = document_roots()
     # Worded so it holds whether or not the path exists: see step 1.
     denied = (
-        f"Access denied: GAIA only reads documents under "
+        f"GAIA can only read documents under "
         f"{_describe_roots(roots)}, and {raw} is outside them. Check the path "
         f"is right. If it is, move or copy it under one of those folders, "
         f"or add its folder to {DOCUMENT_ROOTS_ENV} and restart GAIA."

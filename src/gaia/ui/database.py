@@ -180,7 +180,8 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     run_count        INTEGER DEFAULT 0,
     error_count      INTEGER DEFAULT 0,
     session_id       TEXT,
-    schedule_config  TEXT
+    schedule_config  TEXT,
+    last_error       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS schedule_results (
@@ -384,6 +385,8 @@ class ChatDatabase:
         self._add_column("sessions", "pinned", "INTEGER NOT NULL DEFAULT 0")
         self._add_column("sessions", "unread", "INTEGER NOT NULL DEFAULT 0")
         self._add_column("sessions", "last_run_status", "TEXT")
+        # The last run's error text, or NULL when it succeeded.
+        self._add_column("scheduled_tasks", "last_error", "TEXT")
         self._add_column(
             "sessions",
             "kind",
@@ -1706,13 +1709,15 @@ class ChatDatabase:
         error_count: int = 0,
         session_id: str | None = None,
         schedule_config: str | None = None,
+        last_error: str | None = None,
     ) -> None:
         """Update the mutable fields of a scheduled task row."""
         with self._transaction():
             self._conn.execute(
                 """UPDATE scheduled_tasks
                    SET status = ?, last_run_at = ?, next_run_at = ?, last_result = ?,
-                       run_count = ?, error_count = ?, session_id = ?, schedule_config = ?
+                       run_count = ?, error_count = ?, session_id = ?, schedule_config = ?,
+                       last_error = ?
                    WHERE id = ?""",
                 (
                     status,
@@ -1723,6 +1728,7 @@ class ChatDatabase:
                     error_count,
                     session_id,
                     schedule_config,
+                    last_error,
                     task_id,
                 ),
             )
