@@ -294,6 +294,71 @@ def test_a_current_agent_is_told_the_mode(monkeypatch):
     assert calls[0]["memory"] == "private"
 
 
+# ── what the turn made ─────────────────────────────────────────────────────
+
+
+def _relayed_summary(tool, args, result):
+    """The turn summary a relayed tool call yields, from the sidecar's own events."""
+    sidecar = SSEOutputHandler()
+    sidecar.print_tool_usage(tool)
+    sidecar.pretty_print_json(args, "Arguments")
+    sidecar.pretty_print_json(result)
+    sidecar.print_tool_complete()
+    translator = CanonicalTranslator("r1", agent_id="gaia")
+    canonical = [c for e in _drain(sidecar) for c in translator.translate(e)]
+    ui = SSEOutputHandler()
+    for event in canonical + translator.flush():
+        relay._dispatch_one(ui, event, GAIA_PROFILE)
+    ledger = TurnLedger()
+    for event in _drain(ui):
+        if event["type"] == "tool_start":
+            ledger.tool_started(event["tool"])
+        elif event["type"] == "tool_args":
+            ledger.tool_args(event["args"])
+        elif event["type"] == "tool_result":
+            ledger.tool_result(event["data"], event["success"])
+    return ledger.summary(location=None)
+
+
+def _relayed_outputs(tool, args, result):
+    """The Outputs a relayed tool call adds."""
+    return _relayed_summary(tool, args, result)["outputs"]
+
+
+_FACT = "my locker combination hint is heron-plum-604"
+
+
+def test_a_memory_a_private_chat_refused_to_save_is_not_listed():
+    outputs = _relayed_outputs(
+        "remember",
+        {"fact": _FACT},
+        {
+            "status": "skipped",
+            "message": "This is a private chat, so nothing is saved to memory.",
+        },
+    )
+    assert outputs == []
+
+
+def test_a_memory_the_relayed_turn_saved_is_listed():
+    outputs = _relayed_outputs(
+        "remember",
+        {"fact": _FACT},
+        {"status": "stored", "stored": 1, "knowledge_id": "k1", "message": "ok"},
+    )
+    assert [(o["kind"], o["name"]) for o in outputs] == [("memory", _FACT)]
+
+
+def test_a_relayed_call_the_user_denied_contacted_nothing():
+    summary = _relayed_summary(
+        "fetch_page",
+        {"url": "https://example.com/page"},
+        {"status": "denied", "message": "The user declined this action."},
+    )
+    assert summary["sites"] == []
+    assert summary["live_data"] == {"attempted": 0, "failed": 0}
+
+
 # ── automatic memory writes ────────────────────────────────────────────────
 
 

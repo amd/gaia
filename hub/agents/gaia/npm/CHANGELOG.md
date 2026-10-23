@@ -6,6 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### For integrators
+
+- **A tool result keeps the tool's own status.** When a tool's result had no
+  structured payload, the `tool_result` event's `data` carried only `summary`
+  and `success`, so a client could not tell a skipped `remember` (a private
+  chat saves nothing) from a saved one, and the Agent UI listed it as saved.
+  `data` now also carries `status` when the tool returned one. Additive, so
+  the contract version is unchanged.
+
 ### For integrators: contract 2.19
 
 - **`/query` can record a turn's file changes for undo** (contract **2.19**).
