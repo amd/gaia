@@ -153,6 +153,19 @@
             "description": "Whether the caller can answer a mid-run question (contract >= 2.6). False for a one-shot run: the agent must not park on needs_input with nobody there to answer, which reads as a hang.",
             "title": "Can Answer Questions"
           },
+          "changes_turn_id": {
+            "anyOf": [
+              {
+                "pattern": "^\\d{14}-[0-9a-f]{8}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Record this turn's file changes for undo, under this turn of the session (contract >= 2.19). Needs session_id. A copy of each file the agent writes is saved first, in the snapshot store of the agent's GAIA home, keyed by session_id and this id, and the recording is complete before the terminal event is sent. Use file_snapshots.new_turn_id() to make one. Omit it to record nothing.",
+            "title": "Changes Turn Id"
+          },
           "context": {
             "description": "Transcript slice, pushed in the body. May be empty, never absent.",
             "items": {
@@ -429,7 +442,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.18"
+    "version": "2.19"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -533,11 +546,14 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/event-stream": {
+                "schema": {
+                  "example": "data: {\"type\": \"needs_confirmation\", \"run_id\": \"…\", \"action\": \"run_shell_command\", \"summary\": \"git push\", \"confirm_id\": \"…\", \"risk\": \"execute\", \"args\": {\"command\": \"git push\"}}\n\n",
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`: status {message, phase?, queue?} | token {delta} | tool_call {tool, args} | tool_result {tool, data, render?} | needs_confirmation {run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?} | needs_input {run_id, request_id, question, options, allow_free_text, sensitive, respond_url, timeout_seconds?} | final {answer, usage?, failed?} | error {detail, status}. A needs_confirmation's `args` are exactly the arguments the model sent for the gated call, each value capped at 64,000 characters (`args_truncated: true` when one was cut); what the agent adds to its prompt is in `prompt_context` {working_directory?, risk_note?}, never in `args`. The stream ends with exactly one `final` or `error`. `:`-prefixed heartbeat comments carry no payload."
           },
           "422": {
             "content": {

@@ -1044,19 +1044,19 @@ class TestMaybeUpdateSessionTitleHonorsPin:
             {"id": "pin-1", "title": "My Research Project", "title_is_custom": 1}
         )
         gen.assert_not_awaited()
-        db.update_session.assert_not_called()
+        db.replace_auto_title.assert_not_called()
 
     def test_auto_named_session_is_not_renamed_by_a_later_turn(self):
         db, gen = self._run(
             {"id": "auto-2", "title": "Python Sorting Help", "title_is_custom": 0}
         )
         gen.assert_not_awaited()
-        db.update_session.assert_not_called()
+        db.replace_auto_title.assert_not_called()
 
     def test_placeholder_session_is_retitled(self):
         db, gen = self._run({"id": "auto-1", "title": "New Task", "title_is_custom": 0})
         gen.assert_awaited_once()
-        db.update_session.assert_called_once_with("auto-1", title="LLM Title")
+        db.replace_auto_title.assert_called_once_with("auto-1", "New Task", "LLM Title")
 
     def test_stopped_first_turn_still_names_the_chat(self):
         """A first turn stopped before any reply still supplies the title."""
@@ -1224,7 +1224,7 @@ class TestGuardModelTitles:
         from gaia.ui import _chat_helpers as ch
 
         db = MagicMock()
-        sid = f"guard-{session_model}"  # unique: the 30 s throttle is per session
+        sid = f"guard-{session_model}"  # unique: one title request per session
         db.get_session.return_value = {"id": sid, "title": "New Chat"}
         db.get_messages.return_value = []
         gen = AsyncMock(return_value="Router Password Reset")
@@ -1244,7 +1244,9 @@ class TestGuardModelTitles:
                     db, sid, "reset my router", "ok", session_model
                 )
             )
-        db.update_session.assert_called_once_with(sid, title="Router Password Reset")
+        db.replace_auto_title.assert_called_once_with(
+            sid, "New Chat", "Router Password Reset"
+        )
         return gen.await_args.kwargs["model_id"]
 
     @pytest.mark.parametrize(

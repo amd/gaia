@@ -24,6 +24,9 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { killProcessTree } = require("./process-tree.cjs");
 
+const BACKEND_KILL_GRACE_MS = 3000;
+const BACKEND_FORCE_WAIT_MS = 1000;
+
 /**
  * Resolve the GAIA home directory lazily so tests can point it elsewhere
  * via the `GAIA_HOME_OVERRIDE` env var without re-requiring the module.
@@ -72,8 +75,8 @@ async function killBackend(procOrPid, logger) {
     return;
   }
   await killProcessTree(procOrPid, {
-    graceMs: 3000,
-    forceWaitMs: 1000,
+    graceMs: BACKEND_KILL_GRACE_MS,
+    forceWaitMs: BACKEND_FORCE_WAIT_MS,
     log,
     logError,
     label: "backend",
@@ -175,4 +178,6 @@ module.exports = PortManager;
 module.exports.PortManager = PortManager;
 module.exports.findFreePort = findFreePort;
 module.exports.killBackend = killBackend;
+module.exports.BACKEND_KILL_GRACE_MS = BACKEND_KILL_GRACE_MS;
+module.exports.BACKEND_FORCE_WAIT_MS = BACKEND_FORCE_WAIT_MS;
 module.exports.writeDiagnosticsBundle = writeDiagnosticsBundle;
