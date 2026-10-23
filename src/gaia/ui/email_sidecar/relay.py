@@ -57,7 +57,7 @@ from gaia.ui.sse_handler import (
     _summarize_tool_result,
     tool_result_failed,
 )
-from gaia.ui.sse_translation import SUMMARY_VIEW_KEYS
+from gaia.ui.sse_translation import MCP_TOOL_FIELDS, SUMMARY_VIEW_KEYS
 
 logger = get_logger(__name__)
 
@@ -251,7 +251,9 @@ def _dispatch_one(
         handler.record_tool_started(tool)
         if isinstance(args, dict):
             handler.record_tool_args(args)
-        handler._emit({"type": "tool_start", "tool": tool, "detail": label})
+        start: Dict[str, Any] = {"type": "tool_start", "tool": tool, "detail": label}
+        start.update({k: event[k] for k in MCP_TOOL_FIELDS if event.get(k)})
+        handler._emit(start)
         handler._emit(
             {
                 "type": "tool_args",
@@ -280,6 +282,8 @@ def _dispatch_one(
             "success": success,
             "data": data if data is not None else {},
         }
+        if isinstance(data, dict) and isinstance(data.get("mcp_output"), dict):
+            out["mcp_output"] = data["mcp_output"]
         render = event.get("render")
         if render:
             out["render"] = render

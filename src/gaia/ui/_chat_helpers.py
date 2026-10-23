@@ -1886,12 +1886,27 @@ def _with_final_reply(model_messages: Optional[list], reply: str) -> Optional[li
     return turn
 
 
+def _marked_stopped_reply(model_messages: Optional[list]) -> Optional[str]:
+    """The closing reply of a turn stopped mid-answer, which carries the stop note."""
+    if not model_messages:
+        return None
+    last = model_messages[-1]
+    if not isinstance(last, dict) or last.get("role") != "assistant":
+        return None
+    content = last.get("content")
+    if isinstance(content, str) and content.endswith(_STOPPED_REPLY_FOR_MODEL):
+        return content
+    return None
+
+
 def model_context_messages(db, session_id: str) -> list:
     """The session's messages as a model reads them: stopped replies withdrawn."""
     messages = []
     for message in db.get_context_messages(session_id):
         if message.get("role") == "assistant":
-            reply = _withdrawn_reply(message.get("content") or "")
+            reply = _withdrawn_reply(
+                message.get("content") or ""
+            ) or _marked_stopped_reply(message.get("model_messages"))
             if reply is not None:
                 message = {
                     **message,
@@ -2460,12 +2475,9 @@ def _canonicalize_user_input_request(event: dict) -> dict:
     }
 
 
-# Remediation copy for a turn that produced no answer at all — reserved for a
-# genuine backend failure, never a deliberate cancel or an intentionally-empty
-# final (see _empty_answer_outcome).
-_EMPTY_ANSWER_LEMONADE_MSG = (
-    "I wasn't able to generate a response. Please make sure Lemonade Server "
-    "is running and try again."
+_EMPTY_MODEL_ANSWER_MSG = (
+    "The model returned an empty answer. Send your message again, or try "
+    "another model."
 )
 
 
@@ -2475,8 +2487,71 @@ _NO_ANSWER_AFTER_TOOLS_MSG = (
 )
 
 
+async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str]:
+    """Why the backend left a turn with no answer, or None when it looks fine.
+
+    Asks Lemonade's ``/health`` so a working server is never blamed for a
+    model that simply wrote nothing. Returns user-facing copy naming the
+    cause: the server is unreachable or unhealthy, or the model isn't loaded.
+    """
+    if _eval_provider_kwargs():
+        return None
+    import httpx
+
+    from gaia.llm.lemonade_client import (
+        _model_ids_match,
+        cloud_model_provider,
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+        resolve_lemonade_base_url,
+    )
+    from gaia.llm.lemonade_launcher import describe_start_hint
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{base_url}/health", headers=headers)
+        health = resp.json() if resp.status_code == 200 else None
+    except (httpx.HTTPError, ValueError) as e:
+        logger.warning("Empty-answer health check of %s failed: %s", base_url, e)
+        return (
+            f"No answer came back because Lemonade Server at {base_url} isn't "
+            f"responding. {describe_start_hint().instruction}"
+        )
+    if resp.status_code in (401, 403):
+        # Running, so the start hint would be wrong; the key is what to fix.
+        return (
+            f"No answer came back because Lemonade Server at {base_url} "
+            f"rejected GAIA's API key (HTTP {resp.status_code}). Check that "
+            "LEMONADE_API_KEY matches the key the server was started with."
+        )
+    if not isinstance(health, dict):
+        return (
+            f"No answer came back because Lemonade Server at {base_url} failed "
+            f"its health check (HTTP {resp.status_code}). "
+            f"{describe_start_hint().instruction}"
+        )
+    if not model_id or cloud_model_provider(model_id):
+        return None
+    loaded = health.get("all_models_loaded") or []
+    if any(
+        isinstance(m, dict) and _model_ids_match(m.get("model_name"), model_id)
+        for m in loaded
+    ):
+        return None
+    return (
+        f"Lemonade Server is running, but {model_id} isn't loaded, so no answer "
+        "came back. Send your message again to reload it, or try another model."
+    )
+
+
 def _empty_answer_outcome(
-    turn_cancelled: bool, has_steps: bool, has_card: bool
+    turn_cancelled: bool,
+    has_steps: bool,
+    has_card: bool,
+    backend_problem: Optional[str] = None,
 ) -> tuple[str, str, bool]:
     """Classify a chat turn that ended with no answer text, for the shared
     persistence tail's empty-``full_response`` branch.
@@ -2491,8 +2566,10 @@ def _empty_answer_outcome(
         the steps so the card survives a reload.
       * steps but no card → ``(<no-answer copy>, "failed", True)`` — the agent
         ran tools and ended without answering; say so and keep the steps.
-      * genuinely nothing → ``(<lemonade copy>, "error", False)`` — no answer,
-        no cancel, no steps: the only case that warrants the Lemonade copy.
+      * nothing, backend at fault → ``(backend_problem, "error", False)`` —
+        the only case that names Lemonade (see _empty_answer_backend_problem).
+      * nothing, backend fine → ``(<empty-model copy>, "failed", False)`` —
+        the model answered with nothing.
     """
     if turn_cancelled:
         return _CANCELLED_REPLY, "done", True
@@ -2500,7 +2577,9 @@ def _empty_answer_outcome(
         return "", "done", True
     if has_steps:
         return _NO_ANSWER_AFTER_TOOLS_MSG, "failed", True
-    return _EMPTY_ANSWER_LEMONADE_MSG, "error", False
+    if backend_problem:
+        return backend_problem, "error", False
+    return _EMPTY_MODEL_ANSWER_MSG, "failed", False
 
 
 def _turn_inference_stats(
@@ -4056,6 +4135,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "active": True,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                             "mcpServer": event.get("mcp_server"),
+                            "mcpServerLabel": event.get("mcp_server_label"),
+                            "mcpTool": event.get("mcp_tool"),
                         }
                     )
                 elif event_type == "tool_args" and captured_steps:
@@ -4085,6 +4166,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         # Persist structured command output for terminal rendering
                         if event.get("command_output"):
                             tool_step["commandOutput"] = event["command_output"]
+                        if event.get("mcp_output"):
+                            tool_step["mcpOutput"] = event["mcp_output"]
                         # Persist file list for rich file list rendering
                         result_data = event.get("result_data", {})
                         if result_data.get("type") == "file_list":
@@ -4419,9 +4502,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             model_messages = result_holder.get("model_messages")
             if turn_cancelled:
                 # The model sees what was shown, marked as stopped, not a blank.
-                model_messages = _with_final_reply(
-                    model_messages, f"{full_response}\n\n{_STOPPED_REPLY_FOR_MODEL}"
-                )
+                stopped_reply = f"{full_response}\n\n{_STOPPED_REPLY_FOR_MODEL}"
+                model_messages = _with_final_reply(model_messages, stopped_reply)
+                if not model_messages and full_response.strip():
+                    # A relayed turn records none; keep the stop note anyway.
+                    model_messages = [
+                        {"role": "user", "content": request.message},
+                        {"role": "assistant", "content": stopped_reply},
+                    ]
             msg_id = db.upsert_message(
                 request.session_id,
                 persisted_policy_block_msg_id,
@@ -4475,10 +4563,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 result_holder.get("error"),
                 len(captured_steps),
             )
+            backend_problem = None
+            if not (turn_cancelled or captured_steps):
+                backend_problem = await _empty_answer_backend_problem(
+                    result_holder.get("model") or model_id
+                )
             content, sse_type, keep_steps = _empty_answer_outcome(
                 turn_cancelled,
                 bool(captured_steps),
                 any(step.get("render") for step in captured_steps),
+                backend_problem,
             )
             steps_to_persist = (
                 captured_steps if (keep_steps and captured_steps) else None
