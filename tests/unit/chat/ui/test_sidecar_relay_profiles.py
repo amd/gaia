@@ -30,7 +30,7 @@ import gaia.ui._chat_helpers as chat_helpers_module
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
 from gaia.ui._chat_helpers import _dispatch_sidecar_query, _query_context_from_history
-from gaia.ui.email_sidecar.errors import SidecarError
+from gaia.ui.email_sidecar.errors import SidecarError, SidecarSpawnError
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
@@ -811,7 +811,7 @@ class TestPlainUserCopy:
         )
 
         def _acquire(agent_id):
-            raise SidecarError(detail)
+            raise SidecarSpawnError(detail)
 
         monkeypatch.setattr(daemon_client_module, "acquire_handle", _acquire)
         handler = _FakeSSEHandler()
@@ -829,6 +829,59 @@ class TestPlainUserCopy:
         for word in ("sidecar", "daemon", "ensure", "traceback", "\u001b"):
             assert word not in visible, word
         assert any(detail in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.parametrize(
+        ("kind", "next_step"),
+        [
+            ("capacity", "Restart your PC to stop them"),
+            ("mode_conflict", "Close that copy, or restart your PC"),
+            ("not_installed", "update GAIA to the latest version or reinstall it"),
+            ("service_unreachable", "Restart GAIA, then send your message again."),
+            ("service_outdated", "Update GAIA to the latest version, then restart"),
+        ],
+    )
+    def test_a_start_failure_outside_the_agent_names_its_own_fix(
+        self, tmp_path, monkeypatch, kind, next_step
+    ):
+        """Resending can't fix these, and the agent's log never saw them, so
+        each gets its own next step and points at GAIA's service log."""
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        monkeypatch.setenv("GAIA_DAEMON_HOME", str(tmp_path / "host"))
+        (tmp_path / "agents" / "gaia" / "logs").mkdir(parents=True)
+        service_log = tmp_path / "host" / "daemon.log"
+        service_log.parent.mkdir()
+        service_log.write_text("", encoding="utf-8")
+
+        def _acquire(agent_id):
+            raise SidecarError("the daemon refused to ensure the sidecar", kind=kind)
+
+        monkeypatch.setattr(daemon_client_module, "acquire_handle", _acquire)
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+        _dispatch_sidecar_query(handler, request, [], "m", "gaia")
+
+        [error] = [e["content"] for e in handler.events if e["type"] == "agent_error"]
+        assert next_step.lower() in error.lower()
+        assert error.endswith(f"The details are in this log: {service_log}")
+        assert GAIA_PROFILE.start_failed_message not in error
+        message = error.split(" The details are in")[0].lower()
+        for word in ("sidecar", "daemon", "ensure"):
+            assert word not in message, word
+
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    def test_an_out_of_date_agent_says_update_gaia(self, profile):
+        assert profile.start_failed_text("out_of_date") == (
+            profile.version_upgrade_message
+        )
+
+    @pytest.mark.parametrize("kind", ["start_failed", ""])
+    def test_a_crash_or_an_unnamed_failure_keeps_the_generic_wording(
+        self, tmp_path, monkeypatch, kind
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        assert GAIA_PROFILE.start_failed_text(kind) == (
+            GAIA_PROFILE.start_failed_message
+        )
 
     def test_a_sidecar_error_detail_still_passes_through(self):
         class _P:

@@ -2122,7 +2122,7 @@ def _dispatch_sidecar_query(
         # The daemon's text names its internals and can carry a traceback.
         logger.error("chat: could not start the %s agent: %s", agent_type, exc)
         sse_handler._emit(
-            {"type": "agent_error", "content": profile.start_failed_text()}
+            {"type": "agent_error", "content": profile.start_failed_text(exc.kind)}
         )
         return
 

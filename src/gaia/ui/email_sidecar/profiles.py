@@ -21,6 +21,45 @@ from types import MappingProxyType
 from typing import Dict, FrozenSet, Mapping, Optional, Tuple
 
 from gaia.config import gaia_agents_dir
+from gaia.daemon import paths as daemon_paths
+from gaia.daemon.sidecars.errors import (
+    KIND_CAPACITY,
+    KIND_MODE_CONFLICT,
+    KIND_NOT_INSTALLED,
+    KIND_OUT_OF_DATE,
+    KIND_SERVICE_OUTDATED,
+    KIND_SERVICE_UNREACHABLE,
+)
+
+#: What to tell the user when the agent can't start for a reason of GAIA's own,
+#: not the agent's, keyed by :attr:`SidecarError.kind`. These name GAIA's
+#: service log, because the agent never ran and its own log says nothing.
+_SERVICE_START_FAILED_MESSAGES: Mapping[str, str] = MappingProxyType(
+    {
+        KIND_CAPACITY: (
+            "GAIA is already running as many agents as it can at once, so it "
+            "couldn't start another one. Restart your PC to stop them, then send "
+            "your message again."
+        ),
+        KIND_MODE_CONFLICT: (
+            "GAIA's agent is already running from another copy of GAIA on this "
+            "PC. Close that copy, or restart your PC, then send your message again."
+        ),
+        KIND_NOT_INSTALLED: (
+            "This agent isn't installed with your copy of GAIA. Update GAIA to "
+            "the latest version or reinstall it, then send your message again."
+        ),
+        KIND_SERVICE_UNREACHABLE: (
+            "GAIA's background service isn't responding, so the agent couldn't "
+            "start. Restart GAIA, then send your message again. If it still "
+            "fails, restart your PC."
+        ),
+        KIND_SERVICE_OUTDATED: (
+            "GAIA's background service is from a different version of GAIA than "
+            "this app. Update GAIA to the latest version, then restart your PC."
+        ),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -129,17 +168,30 @@ class RelayProfile:
     #: Contract version from which ``/query`` takes ``surface``, the front-end
     #: the turn comes from. ``None`` means the relay never sends it.
     min_surface_api_version: Optional[Tuple[int, int]] = None
-    #: Shown when the daemon can't start the agent for a turn. Shown through
-    #: :meth:`start_failed_text`, which adds the log folder.
+    #: Shown when the agent itself fails to start (it crashed or never got
+    #: healthy). Shown through :meth:`start_failed_text`, which adds the log folder.
     start_failed_message: str = ""
 
     def stream_ended_text(self) -> str:
         """:attr:`stream_ended_message`, plus the agent's log folder once it exists."""
         return self._with_log_folder(self.stream_ended_message)
 
-    def start_failed_text(self) -> str:
-        """:attr:`start_failed_message`, plus the agent's log folder once it exists."""
-        return self._with_log_folder(self.start_failed_message)
+    def start_failed_text(self, kind: str = "") -> str:
+        """What to tell the user when the agent can't start, for failure *kind*.
+
+        *kind* is a :attr:`SidecarError.kind`. A crash, or a kind with no
+        specific next step, gets :attr:`start_failed_message` and the agent's
+        log folder.
+        """
+        if kind == KIND_OUT_OF_DATE:
+            return self.version_upgrade_message
+        message = _SERVICE_START_FAILED_MESSAGES.get(kind)
+        if message is None:
+            return self._with_log_folder(self.start_failed_message)
+        log_path = daemon_paths.log_path()
+        if not log_path.is_file():
+            return message
+        return f"{message} The details are in this log: {log_path}"
 
     def _with_log_folder(self, message: str) -> str:
         # Resolved per call so it names the real folder under the current GAIA home.
