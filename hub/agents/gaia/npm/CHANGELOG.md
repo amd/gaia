@@ -19,6 +19,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `"service"` (the default) points at the model server the GAIA host uses; `"tui"`,
   `"agent_ui"` and `"cli"` keep their own settings screens. Older binaries
   refuse the field with `422`, so probe `/version` before sending it.
+  Version skew: a front-end older than this release never sends `surface`, so
+  against this agent it gets the headless advice (the model server's
+  `LEMONADE_BASE_URL`) instead of its own settings screen. GAIA ships the TUI,
+  the Agent UI and this agent together, so this only shows when one of them is
+  updated without the others.
 
 ### For integrators: contract 2.19
 

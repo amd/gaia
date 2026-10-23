@@ -52,6 +52,32 @@ def test_gaias_own_lemonade_keeps_its_name(monkeypatch):
     assert label == "Lemonade on this machine"
 
 
+def _failure_answer(label, cause):
+    from gaia.agents.base.agent import Agent
+
+    host = SimpleNamespace(_model_service_label=lambda: label)
+    return Agent._model_failure_answer(
+        host, [], 1, stopped_responding=False, cause=cause, advice=None
+    )
+
+
+def test_a_cause_that_names_the_server_is_not_prefixed_with_it_again():
+    answer = _failure_answer(
+        "The model server at 192.168.1.20:8080",
+        "Error in chat completions (status 502) from the model server at "
+        "192.168.1.20:8080: Bad Gateway",
+    )
+    assert answer.count("192.168.1.20:8080") == 1
+    assert "unfinished. Error in chat completions (status 502)" in answer
+
+
+def test_a_cause_without_the_server_still_gets_the_label():
+    answer = _failure_answer(
+        "The model server at 192.168.1.20:8080", "Couldn't reach the model server"
+    )
+    assert "unfinished. The model server at 192.168.1.20:8080: Couldn't" in answer
+
+
 def test_a_cloud_provider_keeps_its_name(monkeypatch):
     monkeypatch.setattr(chat_agent, "configured_lemonade_url", lambda: "http://x:1")
     label = ChatAgent._model_service_label(_agent("fireworks", "http://x:1/api/v1"))
