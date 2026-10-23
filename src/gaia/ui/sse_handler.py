@@ -57,6 +57,8 @@ from gaia.utils.json_string import (
 logger = logging.getLogger(__name__)
 
 _SUMMARY_CHAR_CAP = 300
+#: How much of an MCP tool's text output a tool row carries.
+_MCP_OUTPUT_CHAR_CAP = 16_000
 
 #: A tool result with one of these statuses did not do its job.
 FAILED_TOOL_STATUSES = FAILED_STATUSES
@@ -734,14 +736,7 @@ class SSEOutputHandler(OutputHandler):
             "detail": detail_label,
             "narration": derive_narration(tool_name),
         }
-        # Attach MCP server name if this is an MCP tool.
-        # _mcp_server is set by MCPTool.to_gaia_format() during registration
-        # in MCPClientMixin._register_mcp_tools() (see mcp/client/mcp_client.py).
-        meta = get_tool_metadata(tool_name)
-        if meta:
-            mcp_server = meta.get("_mcp_server")
-            if mcp_server:
-                event["mcp_server"] = mcp_server
+        event.update(_mcp_identity(tool_name))
         self._emit(event)
 
     def print_tool_complete(self):
@@ -795,6 +790,17 @@ class SSEOutputHandler(OutputHandler):
         # summary may be incomplete instead of making them infer truncation.
         if not isinstance(data, dict) and len(str(data)) > _SUMMARY_CHAR_CAP:
             event["summary_truncated"] = True
+
+        if success and (get_tool_metadata(self._last_tool_name) or {}).get(
+            "_mcp_server"
+        ):
+            output = _mcp_output_text(data)
+            if output:
+                event["summary"] = _first_line_summary(output)
+                event["mcp_output"] = {
+                    "text": output[:_MCP_OUTPUT_CHAR_CAP],
+                    "truncated": len(output) > _MCP_OUTPUT_CHAR_CAP,
+                }
 
         # Attach latency for tool calls (measured from print_tool_usage)
         if self._tool_start_time is not None:
@@ -2303,6 +2309,47 @@ def _count_summary(data: Dict[str, Any]) -> Optional[str]:
             continue
         return format_count(len(value), key)
     return None
+
+
+def _mcp_identity(tool_name: Optional[str]) -> Dict[str, str]:
+    """The connector an MCP tool belongs to, as tool-row fields; {} for other tools."""
+    meta = get_tool_metadata(tool_name) if tool_name else None
+    server = (meta or {}).get("_mcp_server")
+    if not server:
+        return {}
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    # A server added by hand to mcp_servers.json has no catalog entry; its
+    # config name is the only name it has.
+    label = REGISTRY.get(server).display_name if server in REGISTRY else server
+    identity = {"mcp_server": server, "mcp_server_label": label}
+    if meta.get("_mcp_tool"):
+        identity["mcp_tool"] = meta["_mcp_tool"]
+    return identity
+
+
+def _mcp_output_text(data: Any) -> Optional[str]:
+    """The text an MCP tool returned, from its wrapped ``tools/call`` result."""
+    result = data.get("data") if isinstance(data, dict) else data
+    if isinstance(result, dict) and isinstance(result.get("content"), list):
+        result = "\n".join(
+            item["text"]
+            for item in result["content"]
+            if isinstance(item, dict)
+            and item.get("type", "text") == "text"
+            and isinstance(item.get("text"), str)
+        )
+    if not isinstance(result, str) or not result.strip():
+        return None
+    return result.strip("\n")
+
+
+def _first_line_summary(text: str) -> str:
+    """``"a\\nb\\nc"`` -> ``"a (+2 more lines)"``."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    first = lines[0][:_SUMMARY_CHAR_CAP] if lines else ""
+    return f"{first} (+{len(lines) - 1} more lines)" if len(lines) > 1 else first
 
 
 def _summarize_tool_result(data: Dict[str, Any]) -> str:

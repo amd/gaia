@@ -517,6 +517,13 @@ class FileListResponse(BaseModel):
         return [{"name": f} if isinstance(f, str) else f for f in files]
 
 
+class McpOutputResponse(BaseModel):
+    """The text an MCP tool returned, capped for the tool row."""
+
+    text: str = ""
+    truncated: bool = False
+
+
 class AgentStepResponse(BaseModel):
     """A single step in the agent's execution (persisted)."""
 
@@ -541,6 +548,9 @@ class AgentStepResponse(BaseModel):
     commandOutput: Optional[CommandOutputResponse] = None
     fileList: Optional[FileListResponse] = None
     mcpServer: Optional[str] = None
+    mcpServerLabel: Optional[str] = None
+    mcpTool: Optional[str] = None
+    mcpOutput: Optional[McpOutputResponse] = None
     latencyMs: Optional[float] = None
     # Render-map card persistence (#2109): populated ONLY when the source
     # tool_result event carried a ``render`` kind (e.g. "email_pre_scan") —

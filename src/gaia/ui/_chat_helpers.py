@@ -3822,6 +3822,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "active": True,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                             "mcpServer": event.get("mcp_server"),
+                            "mcpServerLabel": event.get("mcp_server_label"),
+                            "mcpTool": event.get("mcp_tool"),
                         }
                     )
                 elif event_type == "tool_args" and captured_steps:
@@ -3851,6 +3853,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         # Persist structured command output for terminal rendering
                         if event.get("command_output"):
                             tool_step["commandOutput"] = event["command_output"]
+                        if event.get("mcp_output"):
+                            tool_step["mcpOutput"] = event["mcp_output"]
                         # Persist file list for rich file list rendering
                         result_data = event.get("result_data", {})
                         if result_data.get("type") == "file_list":

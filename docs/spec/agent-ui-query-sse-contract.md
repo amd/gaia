@@ -218,7 +218,10 @@ indistinguishable from a dead one.
   "properties": {
     "type": { "const": "tool_call" },
     "tool": { "type": "string" },
-    "args": { "type": "object" }     // {} when the tool takes no arguments
+    "args": { "type": "object" },    // {} when the tool takes no arguments
+    "mcp_server":       { "type": "string" },  // optional, MCP tools only: mcp_servers.json key
+    "mcp_server_label": { "type": "string" },  // optional: the connector's name, e.g. "Git"
+    "mcp_tool":         { "type": "string" }   // optional: the server's own tool name
   } }
 
 // tool_result
@@ -497,7 +500,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 
 | Source event | → Canonical | Transform |
 |---|---|---|
-| `tool_start` | `tool_call` | Rename; carry `tool`. `args` filled from the paired `tool_args` (§6.3). `detail`/`mcp_server` dropped (host derives its own label). |
+| `tool_start` | `tool_call` | Rename; carry `tool`. `args` filled from the paired `tool_args` (§6.3). `detail` dropped (host derives its own label). An MCP tool's `mcp_server`, `mcp_server_label` and `mcp_tool` ride along (additive): only the agent knows which connector a prefixed tool name belongs to. |
 | `chunk` | `token` | `content` → `delta`. |
 | `answer` | `final` | `content` → `answer`; `elapsed`/`steps`/`tools_used`/`tokens`/`ttft`/`tok_per_s`/`input_tokens`/`cached_tokens` → `usage`. An `answer` marked `streamed` (text pulled out of a streaming JSON reply, mid-turn) maps to a `token` instead: the agent's printed answer is the one `final`. |
 | `permission_request` | `needs_confirmation` | `tool` → `action`; render `args` as `summary` (for a shell command whose `risk` is `write` or `execute`, plus one plain line on what it can do; for a call GAIA's checks don't cover — `args._risk_note` set — the exact command unshortened, `in <folder>`, then that note, and no `always_scope`); carry `run_id`; `confirm_url` per §5. |

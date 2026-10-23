@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **An MCP tool call says which connector it used and what came back.** A Git
+  connector call reached a client as a bare `mcp_git_git_log`, and its result
+  as "Tool 'git_log' returned data". `tool_call` gains optional `mcp_server`,
+  `mcp_server_label` ("Git") and `mcp_tool` ("git_log"), and the result's
+  `data` carries the tool's text in `mcp_output` (`{ text, truncated }`, capped
+  at 16,000 characters). Clients that ignore the fields see the same events.
+
 ## [0.3.1]
 
 Released with GAIA 0.25.1, and requires it. Integrators: the sidecar
