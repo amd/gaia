@@ -7,7 +7,7 @@ import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
-import type { StartScreen, SystemStatus } from '../../types';
+import type { ActiveModel, Document, StartScreen, SystemStatus } from '../../types';
 
 vi.mock('../../services/api');
 
@@ -24,6 +24,77 @@ beforeEach(() => {
     useChatStore.setState({ systemStatus: null });
     vi.mocked(api.requestWarmUp).mockResolvedValue({ state: 'ready' });
     vi.mocked(api.getStartScreen).mockResolvedValue(START);
+    vi.mocked(api.listDocuments).mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+    useChatStore.setState({ documents: [], draftDocumentIds: [], showDocLibrary: false });
+});
+
+const libraryDoc = (id: string, filename: string): Document => ({
+    id, filename, filepath: `/home/u/${filename}`, file_size: 100, chunk_count: 2,
+    indexed_at: '', last_accessed_at: null, sessions_using: 0, indexing_status: 'complete',
+});
+
+describe('NewChat and the document library', () => {
+    const docs = [libraryDoc('d1', 'report.pdf'), libraryDoc('d2', 'notes.md')];
+
+    beforeEach(() => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        vi.mocked(api.listDocuments).mockResolvedValue({ documents: docs, total: 2, total_size_bytes: 200, total_chunks: 4 });
+    });
+
+    it('says a new chat cannot search the library until documents are attached', async () => {
+        render(<NewChat onSend={vi.fn()} />);
+
+        expect(await screen.findByText(/Your library has 2 documents; this chat can search only the ones you attach/)).toBeInTheDocument();
+    });
+
+    it('attaches the whole library to the chat it creates', async () => {
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Attach all 2' }));
+
+        expect(useChatStore.getState().draftDocumentIds).toEqual(['d1', 'd2']);
+        const attached = screen.getByRole('list', { name: 'Documents for this chat' });
+        expect(attached).toHaveTextContent('report.pdf');
+        expect(attached).toHaveTextContent('notes.md');
+    });
+
+    it('lets one attached document be dropped again', async () => {
+        useChatStore.setState({ draftDocumentIds: ['d1', 'd2'] });
+        render(<NewChat onSend={vi.fn()} />);
+
+        fireEvent.click(await screen.findByRole('button', { name: "Don't attach notes.md" }));
+
+        expect(useChatStore.getState().draftDocumentIds).toEqual(['d1']);
+        expect(screen.getByText(/1 more document in your library/)).toBeInTheDocument();
+    });
+
+    it('opens the library to choose documents', async () => {
+        render(<NewChat onSend={vi.fn()} />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Choose' }));
+
+        expect(useChatStore.getState().showDocLibrary).toBe(true);
+    });
+
+    it('attaches the library when the documents card is picked', async () => {
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+        await screen.findByText(/Your library has 2 documents/);
+
+        fireEvent.click(await screen.findByText('Ask about your documents'));
+
+        await waitFor(() => expect(onSend).toHaveBeenCalled());
+        expect(useChatStore.getState().draftDocumentIds).toEqual(['d1', 'd2']);
+    });
+
+    it('offers nothing when the library is empty', async () => {
+        vi.mocked(api.listDocuments).mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+        render(<NewChat onSend={vi.fn()} />);
+
+        await waitFor(() => expect(api.listDocuments).toHaveBeenCalled());
+        expect(screen.queryByText(/Your library has/)).toBeNull();
+    });
 });
 
 describe('NewChat while GAIA is starting', () => {
@@ -233,5 +304,47 @@ describe('NewChat warm-up line', () => {
         useModelStore.setState({ names: { 'Gemma-4-E4B-it-GGUF': 'Gemma 4 E4B' } });
         expect(warmUpLine({ seconds: 3, model: 'Gemma-4-E4B-it-GGUF', device: 'gpu' })).toBe('Loading Gemma 4 E4B on your GPU… 3s');
         useModelStore.setState({ names: {} });
+    });
+});
+
+describe('NewChat after first-run setup failed', () => {
+    const error = 'Gemma-4-E4B-it-GGUF - Not enough free memory to load Gemma-4-E4B-it-GGUF with a 32,768-token window: '
+        + 'needs about 7.8 GB and only 6.0 GB is free. See https://amd-gaia.ai/docs/reference/troubleshooting';
+    const failed = { init_state: 'ready', setup_error: error, model_loaded: null } as SystemStatus;
+    const local: ActiveModel = { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma', remote: false, is_default: true };
+
+    beforeEach(() => {
+        useModelStore.setState({ active: local });
+        useChatStore.setState({ settingsSection: null });
+    });
+
+    it('says so with the error before the first message, and opens the model picker', () => {
+        useChatStore.setState({ systemStatus: failed });
+        render(<NewChat onSend={vi.fn()} />);
+
+        const notice = screen.getByRole('alert');
+        expect(notice).toHaveTextContent('GAIA’s first-run setup didn’t finish');
+        expect(notice).toHaveTextContent(error);
+        fireEvent.click(screen.getByRole('button', { name: 'Choose a model' }));
+        expect(useChatStore.getState().settingsSection).toBe('model');
+    });
+
+    it('stays quiet once chats run in the cloud or a model has loaded', () => {
+        useChatStore.setState({ systemStatus: failed });
+        useModelStore.setState({ active: { ...local, provider: 'fireworks', remote: true } });
+        const { unmount } = render(<NewChat onSend={vi.fn()} />);
+        expect(screen.queryByRole('alert')).toBeNull();
+        unmount();
+
+        useModelStore.setState({ active: local });
+        useChatStore.setState({ systemStatus: { ...failed, model_loaded: 'Qwen3-4B-GGUF' } });
+        render(<NewChat onSend={vi.fn()} />);
+        expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('is not shown when setup finished', () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready', setup_error: null } as SystemStatus });
+        render(<NewChat onSend={vi.fn()} />);
+        expect(screen.queryByRole('alert')).toBeNull();
     });
 });

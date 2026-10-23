@@ -46,6 +46,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectionRevokedError,
 )
 from gaia.connectors.providers.base import ConnectorRequirement
@@ -289,12 +290,19 @@ class ConnectionForwarder:
                 )
             raise
         except Exception as e:
-            # An unclassified failure must not turn a short-lived network blip
-            # into a mailbox outage by withdrawing a still-valid forward. The
-            # refresh loop will retry on its next tick.
+            # An unclassified failure — a network blip, or a connection another
+            # GAIA operation is mid-save on (ConnectionBusyError) — must not
+            # turn into a mailbox outage by withdrawing a still-valid forward.
+            # The refresh loop will retry on its next tick.
+            kind = (
+                "busy connection"
+                if isinstance(e, ConnectionBusyError)
+                else "unclassified mint failure"
+            )
             logger.warning(
-                "forward-out: unclassified mint failure for '%s' on agent '%s' "
-                "(%s); retaining any existing forward for the next refresh",
+                "forward-out: %s for '%s' on agent '%s' (%s); retaining any "
+                "existing forward for the next refresh",
+                kind,
                 provider,
                 agent_id,
                 e,
@@ -308,6 +316,15 @@ class ConnectionForwarder:
             # actually declare a requirement, so specs that don't stay on
             # today's exact (ledger-only) behavior.
             connection = self._get_connection(provider)
+            if connection and connection.get("error") == "busy":
+                # Its scopes are unknown mid-save; keep the existing forward.
+                logger.warning(
+                    "forward-out: '%s' for agent '%s' became busy after the "
+                    "mint; retaining any existing forward for the next refresh",
+                    provider,
+                    agent_id,
+                )
+                raise ConnectionBusyError(provider)
             connection_scopes = connection.get("scopes", []) if connection else []
             forwarded_scopes = [s for s in connection_scopes if s in granted]
         else:

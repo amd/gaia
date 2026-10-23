@@ -209,6 +209,17 @@ id. The copies are complete before the stream's terminal event, so you can read
 and restore them as soon as the stream ends. Omit it and nothing is copied. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Approving tool calls by policy? Match on `args`.** A `needs_confirmation`
+event's `args` are exactly the arguments the model sent for the gated call,
+each value capped at 64,000 characters; `args_truncated: true` means one was
+cut, so don't auto-approve that call. What the agent adds to its own prompt —
+the folder a shell call runs in, a risk note — comes in `prompt_context`, never
+in `args`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Serving the turn from the Agent UI? Send `surface: "agent_ui"`** (contract ≥
+2.20), and the agent points recurring requests at the **Scheduled tasks** page
+instead of saying it cannot schedule. Older binaries reject it with `422`.
+
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
 that names what failed and what to do about it.

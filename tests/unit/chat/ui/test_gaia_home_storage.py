@@ -7,6 +7,7 @@
 a hard-coded ``Path.home() / ".gaia"`` shows up as a stray ``<home>/.gaia``.
 """
 
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -84,6 +85,52 @@ def test_blob_document_lifecycle_uses_gaia_home(homes, client, mock_index_docume
 def test_agent_scope_documents_dir_follows_gaia_home(homes):
     _, gaia_home = homes
     assert _managed_documents_dir() == (gaia_home / "documents").resolve()
+
+
+def test_a_fresh_sessions_writable_folder_exists_once_granted(homes, monkeypatch):
+    """#5579: a granted folder that doesn't exist sends the agent to probe ~/.gaia."""
+    from gaia.ui import start_screen
+    from gaia.ui._chat_helpers import _compute_allowed_paths
+
+    fake_home, gaia_home = homes
+    documents = gaia_home / "documents"
+    assert not documents.exists()
+
+    monkeypatch.chdir(fake_home)
+    assert str(documents.resolve()) in _compute_allowed_paths([])
+    assert documents.is_dir()
+
+    documents.rmdir()
+    assert start_screen.working_folder()["path"] == str(documents.resolve())
+    assert documents.is_dir()
+
+
+def test_an_uncreatable_documents_folder_is_a_loud_error(homes):
+    _, gaia_home = homes
+    gaia_home.write_text("not a directory")
+
+    with pytest.raises(OSError, match="GAIA's documents folder"):
+        _managed_documents_dir()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions")
+def test_an_uncreatable_documents_folder_reaches_the_user(homes, client, monkeypatch):
+    """The error's message is the fix, so the route must not reduce it to a bare 500."""
+    fake_home, gaia_home = homes
+    monkeypatch.chdir(fake_home)  # started from home: the chat gets GAIA's folder
+    # The skill list comes from the agent sidecar; this test is about the folder.
+    monkeypatch.setattr(
+        "gaia.ui.routers.skills.list_skills", lambda *a, **k: {"skills": []}
+    )
+    gaia_home.chmod(0o500)
+    try:
+        resp = client.get("/api/onboarding/start", headers={"X-Gaia-UI": "1"})
+    finally:
+        gaia_home.chmod(0o700)
+
+    assert resp.status_code == 500
+    assert "Cannot create GAIA's documents folder" in resp.json()["detail"]
+    assert "GAIA_HOME" in resp.json()["detail"]
 
 
 def test_relocated_documents_dir_is_a_document_root(homes):
