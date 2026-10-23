@@ -738,7 +738,8 @@ error. To run the chat model in the cloud instead, see
     window): the Chromium GPU process is crashing on your graphics stack.
     Turn GPU acceleration off:
     ```bash
-    GAIA_DISABLE_GPU=1 ./gaia-agent-ui-*.AppImage
+    GAIA_DISABLE_GPU=1 ./gaia-agent-ui-*.AppImage   # AppImage
+    GAIA_DISABLE_GPU=1 gaia-desktop                 # .deb install
     ```
     To make it stick, export `GAIA_DISABLE_GPU=1` in your shell profile, or
     add it to the `.desktop` entry's `Exec=` line
@@ -750,7 +751,8 @@ error. To run the chat model in the cloud instead, see
     **The window is missing its frame, draws wrong, or won't resize on
     Wayland:** run the app under XWayland instead:
     ```bash
-    ./gaia-agent-ui-*.AppImage --ozone-platform=x11
+    ./gaia-agent-ui-*.AppImage --ozone-platform=x11   # AppImage
+    gaia-desktop --ozone-platform=x11                 # .deb install
     ```
     Add `--ozone-platform=x11` to the `.desktop` entry's `Exec=` line to
     keep it. Pass it on the command line: the
