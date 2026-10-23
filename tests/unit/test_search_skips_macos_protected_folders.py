@@ -27,6 +27,7 @@ _GUARDED = (
     "Documents",
     "Downloads",
     "Library/Mobile Documents",
+    "Movies/TV",
     "Music",
     "Pictures/Photos Library.photoslibrary",
 )
@@ -158,7 +159,7 @@ class TestFindFilesOnMacOS:
 
         assert out.splitlines()[-1] == (
             "Skipped ~/Desktop, ~/Documents, ~/Downloads, "
-            "~/Library/Mobile Documents, ~/Music, "
+            "~/Library/Mobile Documents, ~/Movies/TV, ~/Music, "
             "~/Pictures/Photos Library.photoslibrary: macOS asks for permission "
             "before GAIA can read them; ask the user to name the folder to "
             "search it."
