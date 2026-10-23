@@ -17,6 +17,10 @@ const MAC_ORDER = ['Ctrl', 'Alt', 'Shift', 'Mod'];
 export function formatShortcut(shortcut: string, mac: boolean = isMacPlatform()): string {
     const mods = shortcut.split('+');
     const key = mods.pop() as string;
+    const unknown = mods.filter((m) => !(m in MAC_SYMBOLS));
+    if (unknown.length) {
+        throw new Error(`formatShortcut: unknown modifier(s) ${unknown.join(', ')} in "${shortcut}"; use Ctrl, Alt, Shift or Mod`);
+    }
     if (!mac) return [...mods.map((m) => (m === 'Mod' ? 'Ctrl' : m)), key].join('+');
     const ordered = MAC_ORDER.filter((m) => mods.includes(m));
     return ordered.map((m) => MAC_SYMBOLS[m]).join('') + key;

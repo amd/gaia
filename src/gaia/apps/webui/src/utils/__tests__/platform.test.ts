@@ -21,6 +21,11 @@ describe('formatShortcut', () => {
         expect(formatShortcut('Shift+Enter', false)).toBe('Shift+Enter');
     });
 
+    it('rejects a modifier it cannot label on both platforms', () => {
+        expect(() => formatShortcut('Cmd+X', true)).toThrow(/unknown modifier\(s\) Cmd/);
+        expect(() => formatShortcut('Meta+X', false)).toThrow(/unknown modifier\(s\) Meta/);
+    });
+
     it('detects the platform from the browser', () => {
         vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
         expect(isMacPlatform()).toBe(true);
