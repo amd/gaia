@@ -153,6 +153,19 @@
             "description": "Whether the caller can answer a mid-run question (contract >= 2.6). False for a one-shot run: the agent must not park on needs_input with nobody there to answer, which reads as a hang.",
             "title": "Can Answer Questions"
           },
+          "changes_turn_id": {
+            "anyOf": [
+              {
+                "pattern": "^\\d{14}-[0-9a-f]{8}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Record this turn's file changes for undo, under this turn of the session (contract >= 2.19). Needs session_id. A copy of each file the agent writes is saved first, in the snapshot store of the agent's GAIA home, keyed by session_id and this id, and the recording is complete before the terminal event is sent. Use file_snapshots.new_turn_id() to make one. Omit it to record nothing.",
+            "title": "Changes Turn Id"
+          },
           "context": {
             "description": "Transcript slice, pushed in the body. May be empty, never absent.",
             "items": {
@@ -267,7 +280,7 @@
                 "type": "null"
               }
             ],
-            "description": "The front-end this turn comes from (contract >= 2.19). 'agent_ui' tells the agent that features like Scheduled tasks are in the caller's sidebar. Fixed when a session is built; omit it when unknown.",
+            "description": "The front-end this turn comes from (contract >= 2.20). 'agent_ui' tells the agent that features like Scheduled tasks are in the caller's sidebar. Fixed when a session is built; omit it when unknown.",
             "title": "Surface"
           }
         },
@@ -446,7 +459,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.19"
+    "version": "2.20"
   },
   "openapi": "3.1.0",
   "paths": {

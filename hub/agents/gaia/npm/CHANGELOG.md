@@ -6,9 +6,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### For integrators: contract 2.19
+### For integrators: contract 2.20
 
-- **`/query` takes `surface`** (contract **2.19**): `"agent_ui"`, `"tui"` or
+- **`/query` takes `surface`** (contract **2.20**): `"agent_ui"`, `"tui"` or
   `"cli"`. Asked to run something on a schedule from the Agent UI, the agent
   said it had no scheduler and sent the user to Windows Task Scheduler; with
   `"agent_ui"` it points them at the **Scheduled tasks** page instead. Older
@@ -17,6 +17,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the session's folders and labels GAIA's documents folder, so "summarize X in
   my documents folder" looks there first instead of trying `~/Documents` and
   the home folder.
+- **`/query` can record a turn's file changes for undo** (contract **2.19**).
+  Desktop chats run in this agent and the Agent UI relays them, so a file the
+  agent wrote never reached the chat's Changes view or its Undo. With
+  `changes_turn_id` (and `session_id`), the agent copies each file before
+  changing it into the snapshot store the Agent UI reads, and finishes the
+  recording before the terminal event. Older binaries refuse the field with
+  `422`, so probe `/version` before sending it.
+- **A tool result names the file it wrote.** When a tool's result carries
+  `file_path` or `image_path`, the `tool_result` event's `data` now keeps it, so
+  a client can list the files a turn produced.
 
 ## [0.3.1]
 

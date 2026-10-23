@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""``/query``'s ``surface`` field (contract 2.19) reaches the agent's config."""
+"""``/query``'s ``surface`` field (contract 2.20) reaches the agent's config."""
 
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def _query(client, **fields):
 
 def test_the_contract_advertises_surface():
     major, minor = (int(x) for x in server_mod.API_VERSION.split(".")[:2])
-    assert (major, minor) >= (2, 19)
+    assert (major, minor) >= (2, 20)
     assert "surface" in server_mod.QueryRequest.model_fields
 
 
