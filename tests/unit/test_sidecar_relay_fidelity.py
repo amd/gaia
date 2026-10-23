@@ -213,6 +213,16 @@ def test_a_folder_gaia_added_is_context_not_an_argument():
     assert "prompt_context" not in sent
 
 
+def test_without_a_noted_call_the_folder_is_the_models():
+    # Only Agent._execute_tool adds a folder, and it always notes the call
+    # first; every other prompt passes the model's arguments through as-is.
+    event = _permission(
+        "run_shell_command", {"command": "ls", "working_directory": "C:\\repo"}
+    )
+    assert event["args"] == {"command": "ls", "working_directory": "C:\\repo"}
+    assert "prompt_context" not in event
+
+
 def test_a_noted_call_is_used_once_and_only_for_its_tool():
     handler = SSEOutputHandler()
     handler.note_call_args("run_shell_command", {"command": "ls"})

@@ -1696,8 +1696,10 @@ class SSEOutputHandler(OutputHandler):
 
         The prompt's arguments can carry what GAIA adds for display (the folder
         a shell call runs in, a risk note), so when they differ the
-        ``permission_request`` also carries these as ``call_args``. Consumed by the next
-        :meth:`confirm_tool_execution`, and only for the same tool.
+        ``permission_request`` also carries these as ``call_args``. Its only
+        reader is ``CanonicalTranslator`` (the ``/query`` wire's ``args``); the
+        Agent UI ignores it. Consumed by the next :meth:`confirm_tool_execution`,
+        and only for the same tool.
         """
         self._noted_call = (tool_name, dict(call_args))
 
