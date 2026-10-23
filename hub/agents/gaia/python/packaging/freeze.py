@@ -62,6 +62,9 @@ PATHEX = [
 
 MANIFEST_SRC = PKG_ROOT / "gaia-agent.yaml"
 SKILLS_SRC = PKG_ROOT / "gaia_agent" / "skills"
+# Linux only: the bundled OpenSSL looks for CA certs where the BUILD distro keeps
+# them, so point it at the host's bundle (see the hook's docstring).
+LINUX_CA_HOOK = HERE / "rthook_linux_ca.py"
 
 # Modules PyInstaller must pull in wholesale, and the distributions whose
 # metadata must travel with them. Declared once so the preflight guard below
@@ -319,6 +322,8 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         args += ["--add-data", f"{source}{os.pathsep}{dest}"]
     for mod in EXCLUDES:
         args += ["--exclude-module", mod]
+    if sys.platform.startswith("linux"):
+        args += ["--runtime-hook", str(LINUX_CA_HOOK)]
     args.append("--onefile" if onefile else "--onedir")
 
     t0 = time.time()

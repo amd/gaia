@@ -99,14 +99,27 @@ class TestPerAttemptEvidence:
             or "attempt" in inspect.signature(runner.run_scenario_subprocess).parameters
         )
 
-    def test_summarized_result_is_what_resume_reloads(self):
+    def test_summarized_result_is_what_resume_reloads(self, tmp_path, monkeypatch):
         """<sid>.json must hold the summarized result (with stability), because
-        that is the file the resume path reads back."""
-        import inspect
+        that is the file the artifacts and the resume path read back."""
+        import json
 
-        from gaia.eval.runner import AgentEvalRunner
+        from gaia.eval import runner
 
-        # The iterations loop lives in _run_locked, which run() delegates to.
-        src = inspect.getsource(AgentEvalRunner._run_locked)
-        assert 'f"{sid}.json"' in src
-        assert "summarize_attempts" in src
+        statuses = iter(["PASS", "FAIL"])
+        monkeypatch.setattr(runner, "_documents_exist", lambda _sd: True)
+        monkeypatch.setattr(runner, "_missing_requirements", lambda _sd, _m: [])
+        monkeypatch.setattr(
+            runner,
+            "run_scripted_scenario",
+            lambda *a, **k: _attempt(next(statuses), 8.0),
+        )
+        scenario = {"id": "s", "category": "c", "turns": []}
+        eval_runner = AgentEvalRunner(iterations=2)
+        results, _aborted, _outage = eval_runner._execute(
+            [(None, scenario)], tmp_path, set(), keep_sessions=False
+        )
+        trace = json.loads((tmp_path / "traces" / "s.json").read_text("utf-8"))
+        assert trace["stability"]["stability"] == "flaky"
+        assert trace["status"] == "FAIL"
+        assert trace == results[0]
