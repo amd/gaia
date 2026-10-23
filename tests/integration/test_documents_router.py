@@ -12,6 +12,7 @@ depend on Lemonade or any LLM backend.
 """
 
 import logging
+import re
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -176,7 +177,8 @@ def test_upload_blob_empty_returns_400(
         files={"file": ("empty.txt", b"", "text/plain")},
     )
     assert response.status_code == 400
-    assert "empty" in response.json()["detail"].lower()
+    assert response.json()["detail"]["status"] == "empty_file"
+    assert "empty" in response.json()["detail"]["message"].lower()
 
     # No orphan files left behind
     assert not any(managed_docs_sandbox.iterdir())
@@ -231,6 +233,22 @@ def test_upload_blob_indexing_failure_cleans_up_file(client, managed_docs_sandbo
     # File should NOT be left on disk
     leftover = list(managed_docs_sandbox.iterdir())
     assert leftover == [], f"Orphaned files after indexing failure: {leftover}"
+
+
+def test_upload_blob_truncated_pdf_is_a_user_error_with_its_kind(
+    client, managed_docs_sandbox
+):
+    """A dropped damaged PDF is the file's fault: 4xx with the kind, not a 500."""
+    response = client.post(
+        "/api/documents/upload",
+        files={"file": ("broken.pdf", b"%PDF-1.4\n1 0 obj\n<<", "application/pdf")},
+    )
+
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["status"] == "corrupted"
+    assert "broken" in detail["message"]
+    assert list(managed_docs_sandbox.iterdir()) == []
 
 
 # ── Delete endpoint cleanup ──────────────────────────────────────────────────
@@ -384,3 +402,49 @@ def test_list_documents_includes_last_error(
     target = next((d for d in docs if d["id"] == doc_id), None)
     assert target is not None
     assert target.get("last_error") == "serialization check"
+
+
+# ── Index errors name the user's file, not GAIA's copy ──────────────────────
+
+_CORRUPT_PDF = b"%PDF-1.4 truncated, not a real PDF"
+# A managed copy is "<12 hex>_<stem><ext>".
+_MANAGED_COPY_NAME = re.compile(r"[0-9a-f]{12}_broken\.pdf")
+
+
+def _assert_names_user_file(text: str) -> None:
+    assert "broken.pdf" in text, text
+    assert "gaia_upload_" not in text, text
+    assert not _MANAGED_COPY_NAME.search(text), text
+
+
+def test_upload_corrupt_pdf_error_names_original_file(client, managed_docs_sandbox):
+    """Real indexing of a corrupt blob upload reports ``broken.pdf``."""
+    r = client.post(
+        "/api/documents/upload",
+        files={"file": ("broken.pdf", _CORRUPT_PDF, "application/pdf")},
+    )
+
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert detail["status"] == "corrupted"
+    _assert_names_user_file(detail["message"])
+
+
+def test_upload_path_corrupt_pdf_error_names_original_file(client, home_tmp_dir):
+    """Path indexing runs on a ``gaia_upload_`` copy; errors still name the file."""
+    pdf = home_tmp_dir / "broken.pdf"
+    pdf.write_bytes(_CORRUPT_PDF)
+    db = client.app.state.db
+
+    r = client.post("/api/documents/upload-path", json={"filepath": str(pdf)})
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["indexing_status"] == "failed"
+    _assert_names_user_file(body["last_error"])
+    _assert_names_user_file(db.get_document(body["id"])["last_error"])
+
+    r2 = client.post(f"/api/documents/{body['id']}/reindex")
+
+    assert r2.status_code == 500
+    _assert_names_user_file(db.get_document(body["id"])["last_error"])

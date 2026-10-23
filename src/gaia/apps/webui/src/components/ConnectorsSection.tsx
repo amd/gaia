@@ -809,11 +809,15 @@ function MCPServerConfigureBody({
         setValues(Object.fromEntries(connector.mcp_env_keys.map((k) => [k, ''])));
     }, [connector.mcp_env_keys.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // Servers like Git and Memory take no keys: connecting just registers them.
+    const keyless = connector.mcp_env_keys.length === 0;
+    const nothingTyped = Object.values(values).every((v) => v.trim() === '');
+
     const handleSave = async () => {
         const filled = Object.fromEntries(
             Object.entries(values).filter(([, v]) => v.trim() !== ''),
         );
-        if (Object.keys(filled).length === 0) return;
+        if (!keyless && Object.keys(filled).length === 0) return;
         setBusy(true);
         setErr(null);
         setSaved(false);
@@ -918,19 +922,23 @@ function MCPServerConfigureBody({
                 </div>
             ))}
             <div className="configure-actions">
-                <button
-                    className={`btn-model-save${saved ? ' saved' : ''}`}
-                    disabled={busy || Object.values(values).every((v) => v.trim() === '')}
-                    onClick={() => void handleSave()}
-                >
-                    {busy ? (
-                        <Loader2 size={12} className="spin" />
-                    ) : saved ? (
-                        <><CheckCircle2 size={12} /> Saved</>
-                    ) : (
-                        'Save'
-                    )}
-                </button>
+                {!(keyless && connector.configured) && (
+                    <button
+                        className={`btn-model-save${saved ? ' saved' : ''}`}
+                        disabled={busy || (!keyless && nothingTyped)}
+                        onClick={() => void handleSave()}
+                    >
+                        {busy ? (
+                            <Loader2 size={12} className="spin" />
+                        ) : saved ? (
+                            <><CheckCircle2 size={12} /> Saved</>
+                        ) : keyless ? (
+                            'Connect'
+                        ) : (
+                            'Save'
+                        )}
+                    </button>
+                )}
                 {connector.configured && (
                     <button
                         className="btn-secondary"

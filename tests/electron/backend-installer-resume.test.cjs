@@ -15,16 +15,21 @@ const installerPath = path.resolve(
   "../../src/gaia/apps/webui/services/backend-installer.cjs"
 );
 
-function loadInstaller(previousState) {
+// `initRun` is what `gaia init` prints and exits with; every other command succeeds.
+function loadInstaller(previousState, initRun = { code: 0 }) {
   const files = new Map();
   if (previousState) {
     files.set("/fixture/.gaia/electron-install-state.json", JSON.stringify(previousState));
   }
-  const spawn = jest.fn(() => {
+  const spawn = jest.fn((cmd, argv) => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
-    queueMicrotask(() => child.emit("exit", 0));
+    const run = argv[0] === "init" ? initRun : { code: 0 };
+    queueMicrotask(() => {
+      if (run.stdout) child.stdout.emit("data", run.stdout);
+      child.emit("exit", run.code);
+    });
     return child;
   });
   const fakeFs = {
@@ -123,6 +128,42 @@ describe("an install whose setup never finished", () => {
 
     expect(pipRuns(spawn).length).toBeGreaterThan(0);
     expect(initRuns(spawn)).toHaveLength(1);
+  });
+});
+
+describe("a setup that fails", () => {
+  const memoryError =
+    "Gemma-4-E4B-it-GGUF - Not enough free memory to load Gemma-4-E4B-it-GGUF with a " +
+    "32,768-token window: needs about 7.8 GB and only 6.0 GB is free. See https://amd-gaia.ai/docs";
+
+  test("records what gaia init said, so the app can show it before the first message", async () => {
+    const { installer, spawn, state } = loadInstaller(
+      { state: "installing", stage: "gaia-init", version: "0.25.0" },
+      {
+        code: 1,
+        stdout:
+          "Step 5/5: Verifying setup...\n" +
+          `   ❌ ${memoryError}\n` +
+          "   ⚠️  Models verified: 1/2 passed\n" +
+          "   Failed models may be corrupted. To fix:\n",
+      }
+    );
+
+    await installer.ensureBackend({ version: "0.25.0", isPackaged: false });
+
+    expect(state()).toMatchObject({ state: "ready", init: "failed", initError: memoryError });
+    // Unwrapped, or the error line would be cut at 80 columns.
+    expect(initRuns(spawn)[0][2].env.COLUMNS).toBe("1000");
+  });
+
+  test("without an error line, the reason is its last line, else its exit code", () => {
+    const { installer } = loadInstaller(null);
+    expect(
+      installer.initFailureReason({ code: 1, stdout: "Step 1/5\nLemonade did not start\n", stderr: "" })
+    ).toBe("Lemonade did not start");
+    expect(installer.initFailureReason({ code: 2, stdout: "", stderr: "" })).toBe(
+      "gaia init exited with code 2 and printed nothing."
+    );
   });
 });
 

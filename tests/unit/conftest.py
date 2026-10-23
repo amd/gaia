@@ -73,6 +73,47 @@ def _isolate_gaia_config(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
 
 
+#: The home this run started with; a test that moves it keeps ``<its home>/.gaia``.
+_RUN_HOME = Path.home()
+
+
+def _patch_default_gaia_home(mp, default_gaia_home) -> None:
+    from gaia import config as config_mod
+    from gaia.connectors import _refresh_lock
+
+    mp.setattr(config_mod, "default_gaia_home", default_gaia_home)
+    # Bound at import; the connector lock is the one writer among those names.
+    mp.setattr(_refresh_lock, "default_gaia_home", default_gaia_home)
+
+
+# Session scope: module- and class-scoped fixtures build agents (and their
+# databases) before any function-scoped fixture runs.
+@pytest.fixture(scope="session", autouse=True)
+def _session_gaia_home(tmp_path_factory):
+    """Keep ``gaia_home()`` -- edit backups, the audit log, databases -- off the
+    developer's real ``~/.gaia``.
+
+    Only the ``~/.gaia`` fallback moves. GAIA_HOME and GAIA_CONFIG_DIR still win,
+    and a test that patches ``Path.home`` or sets HOME/USERPROFILE still gets
+    ``<that home>/.gaia``: setting GAIA_HOME here would override both.
+    """
+    isolated = tmp_path_factory.mktemp("home") / ".gaia"
+
+    def default_gaia_home() -> Path:
+        home = Path.home()
+        return isolated if home == _RUN_HOME else home / ".gaia"
+
+    with pytest.MonkeyPatch.context() as mp:
+        _patch_default_gaia_home(mp, default_gaia_home)
+        yield default_gaia_home
+
+
+@pytest.fixture(autouse=True)
+def _isolate_gaia_home(_session_gaia_home, monkeypatch):
+    """Re-applied per test: a test that reloads ``gaia.config`` drops the patch."""
+    _patch_default_gaia_home(monkeypatch, _session_gaia_home)
+
+
 _DAEMON_SPAWN_MESSAGE = (
     "Unit test tried to spawn a real GAIA daemon (gaia.daemon.client."
     "_spawn_and_wait). Mock the daemon boundary instead — e.g. monkeypatch "
