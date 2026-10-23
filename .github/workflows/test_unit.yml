@@ -136,10 +136,12 @@ on:
   merge_group:
   workflow_dispatch:
 
-# Cancel in-progress runs when a new run is triggered
+# A PR's new push cancels its old run. On main a started run finishes, so main
+# gets a result: GitHub keeps one pending run and drops older pending ones
+# before they start.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

@@ -24,12 +24,27 @@
 # PyInstaller needs (the manylinux images' interpreters are static).
 # check_glibc.py fails the build if anything packed in the binary asks for
 # more, and `distro-smoke` runs the smoke test on each of those distros.
+#
+# A PR that changes what goes into the binary freezes it too, and so does a
+# weekly run, because a new upstream wheel can drop bundled data or a platform
+# with no change here (#5420, #5481, #5546). Both used to surface only at an RC.
 
 name: Build flagship sidecar
 
 on:
   workflow_call:
   workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    paths:
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'hub/agents/gaia/python/pyproject.toml'
+      - 'hub/agents/chat/python/pyproject.toml'
+      - 'hub/agents/gaia/python/packaging/**'
+      - '.github/workflows/build_flagship_sidecar.yml'
+  schedule:
+    - cron: '0 7 * * 1'
 
 permissions:
   contents: read
@@ -42,6 +57,16 @@ jobs:
   freeze:
     name: Freeze sidecar (${{ matrix.key }})
     runs-on: ${{ matrix.os }}
+    if: >-
+      (github.event_name != 'schedule' || github.repository == 'amd/gaia') &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.draft == false ||
+       contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
+    # Job-level: a workflow-level group would take the caller's name under
+    # workflow_call. Only a PR's newer push cancels; release builds never do.
+    concurrency:
+      group: flagship-freeze-${{ matrix.key }}-${{ github.event_name == 'pull_request' && github.head_ref || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     # Empty for every row but linux-x64, which builds on the glibc floor.
     container: ${{ matrix.container }}
     # darwin-x64 (Intel) is BEST-EFFORT, built on macos-26-intel (the latest

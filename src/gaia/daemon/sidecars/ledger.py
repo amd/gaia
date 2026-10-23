@@ -142,9 +142,17 @@ def _tree_kill(pid: int) -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,
+                timeout=30,
             )
         else:
             os.killpg(os.getpgid(pid), 9)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"Stopping the stale sidecar pid {pid} hung: taskkill did not return "
+            f"within {e.timeout:g}s, so it may still be running. Stop it in Task "
+            f"Manager (or `taskkill /PID {pid} /T /F` from an elevated prompt), "
+            "then start the daemon again."
+        ) from e
     except (ProcessLookupError, OSError):
         pass
 

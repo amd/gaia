@@ -790,30 +790,31 @@ class PathValidator:
                 self.config_file,
             )
             return
+        from gaia.utils.file_lock import file_lock, write_text_atomic
+
         try:
-            data = {"paths": []}
-            if self.config_file.exists():
-                try:
-                    with open(self.config_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                except (OSError, json.JSONDecodeError) as load_err:
-                    # Corrupt or unreadable cache file — start fresh and log
-                    # so the situation is visible in debug output (CLAUDE.md
-                    # prohibits bare except/pass).
-                    logger.warning(
-                        "Allowed-paths cache %s unreadable (%s); rebuilding.",
-                        self.config_file,
-                        load_err,
-                    )
+            # Every GAIA process under this home shares the file.
+            with file_lock(self.config_file):
+                data = {"paths": []}
+                if self.config_file.exists():
+                    try:
+                        with open(self.config_file, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    except (OSError, json.JSONDecodeError) as load_err:
+                        # Corrupt or unreadable cache file — start fresh and log
+                        # so the situation is visible in debug output (CLAUDE.md
+                        # prohibits bare except/pass).
+                        logger.warning(
+                            "Allowed-paths cache %s unreadable (%s); rebuilding.",
+                            self.config_file,
+                            load_err,
+                        )
 
-            str_path = str(path)
-            if str_path not in data["paths"]:
-                data["paths"].append(str_path)
-
-                with open(self.config_file, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
-
-                logger.info(f"Persisted new allowed path: {path}")
+                str_path = str(path)
+                if str_path not in data["paths"]:
+                    data["paths"].append(str_path)
+                    write_text_atomic(self.config_file, json.dumps(data, indent=2))
+                    logger.info(f"Persisted new allowed path: {path}")
         except Exception as e:
             logger.error(f"Failed to save allowed path to {self.config_file}: {e}")
 

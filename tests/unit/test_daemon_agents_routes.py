@@ -1225,3 +1225,17 @@ def test_create_app_without_registry_does_not_mount_agents_routes():
     client = TestClient(app)
     r = client.get("/daemon/v1/agents", headers=_auth("tok-1"))
     assert r.status_code == 404
+
+
+@pytest.mark.skipif(os.name != "nt", reason="taskkill is the Windows kill path")
+def test_tree_kill_names_the_pid_when_taskkill_hangs(monkeypatch):
+    import subprocess
+
+    from gaia.daemon.sidecars import ledger
+
+    def hang(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(ledger.subprocess, "run", hang)
+    with pytest.raises(RuntimeError, match=r"pid 4321 hung.*within 30s"):
+        ledger._tree_kill(4321)
