@@ -59,9 +59,11 @@ function Wait-Gone([string]$Path, [int]$Seconds = 90) {
 # running-check makes, but fail at once if a GAIA program really is running.
 function Wait-Writable([string]$Path, [int]$Seconds = 60) {
     if (-not (Test-Path $Path)) { throw "$Path is missing" }
+    # Long, normalised form on both sides: InstallLocation can carry a trailing \ or an 8.3 name.
+    $full = (Get-Item -LiteralPath $Path).FullName
     # SilentlyContinue: "no process by that name" is the expected case.
     $running = Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($Path)) -ErrorAction SilentlyContinue |
-        Where-Object { $_.Path -eq $Path }
+        Where-Object { $_.Path -and (Get-Item -LiteralPath $_.Path).FullName -eq $full }
     if ($running) { throw "$Path is running (pid $($running.Id -join ', ')) - a silent install must not start it" }
     $start = Get-Date
     while ($true) {
