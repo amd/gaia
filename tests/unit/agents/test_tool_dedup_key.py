@@ -302,9 +302,7 @@ def test_a_bad_server_is_refused_and_the_others_still_load(restore_registry):
     assert "mcp_bad_read" not in _TOOL_REGISTRY
     bad.disconnect.assert_called_once()
     assert host._mcp_manager.list_servers() == ["good"]
-    [status] = [
-        s for s in host._mcp_manager.get_status_report() if s["name"] == "bad"
-    ]
+    [status] = [s for s in host._mcp_manager.get_status_report() if s["name"] == "bad"]
     assert status["connected"] is False and "'pth'" in status["error"]
     summary = host.console.print_info.call_args[0][0]
     assert "✓ good" in summary
