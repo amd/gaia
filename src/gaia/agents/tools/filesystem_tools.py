@@ -20,7 +20,11 @@ from typing import Any, Optional
 
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools.file_edit import file_read_record, stamp_of
-from gaia.agents.tools.path_access import missing_file_error, read_access_error
+from gaia.agents.tools.path_access import (
+    missing_file_error,
+    read_access_error,
+    readable_entry,
+)
 from gaia.agents.tools.protected_folders import ProtectedFolders
 from gaia.agents.tools.search_scope import (
     confine_roots,
@@ -907,6 +911,7 @@ class FileSystemToolsMixin:
 
                 query_lower = query.lower()
                 is_glob = "*" in query or "?" in query
+                skipped = [0]
 
                 for root_path in search_roots:
                     if len(results) >= max_results:
@@ -943,6 +948,7 @@ class FileSystemToolsMixin:
                             max_depth=(
                                 min(8, scoped_depth) if scoped_depth is not None else 8
                             ),
+                            skipped=skipped,
                             guard=guard,
                         )
                     else:
@@ -974,9 +980,17 @@ class FileSystemToolsMixin:
                     results.sort(key=lambda x: x.get("name", "").lower())
                 # relevance = default order (already by search priority)
 
+                skipped_note = (
+                    f"{skipped[0]} file(s) GAIA may not read were not searched. "
+                    "If the file may be in a folder outside the allowed ones, ask "
+                    "the user to add that folder rather than searching again."
+                    if skipped[0]
+                    else ""
+                )
                 skip_note = f"\n{guard.note()}" if guard.skipped else ""
                 if not results:
-                    return f"No files found matching '{query}'.{skip_note}"
+                    found_none = f"No files found matching '{query}'."
+                    return f"{found_none} {skipped_note}".rstrip() + skip_note
 
                 lines = [f"Found {len(results)} result(s):\n"]
                 for i, r in enumerate(results, 1):
@@ -994,6 +1008,8 @@ class FileSystemToolsMixin:
                     else:
                         lines.append(f"  {i}. {path_str} ({size_str}, {mod_str})")
 
+                if skipped_note:
+                    lines.append(f"\n{skipped_note}")
                 return "\n".join(lines) + skip_note
 
             except ValueError as e:
@@ -1551,9 +1567,15 @@ class FileSystemToolsMixin:
             _min_date,
             _max_date,
             max_depth=8,
+            skipped=None,
             guard=None,
         ):
-            """Search inside file contents."""
+            """Search inside file contents.
+
+            Files the agent may not read are skipped without asking: one
+            approval prompt per scanned file floods the user. *skipped* (a
+            one-item list) counts them so the result can say so.
+            """
             default_excludes = mixin._get_default_excludes()
             text_exts = {
                 ".txt",
@@ -1624,12 +1646,9 @@ class FileSystemToolsMixin:
                                 if st.st_size > 10 * 1024 * 1024:  # 10MB
                                     continue
 
-                                try:
-                                    mixin._validate_path(entry.path)
-                                except ValueError as exc:
-                                    logger.debug(
-                                        "Skipping unreadable search result: %s", exc
-                                    )
+                                if not readable_entry(mixin, entry.path):
+                                    if skipped is not None:
+                                        skipped[0] += 1
                                     continue
                                 try:
                                     with open(
