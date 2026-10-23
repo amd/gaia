@@ -2025,7 +2025,7 @@ These positions indicate where to split the text."""
             raise
 
     def _extract_text_from_xlsx(self, xlsx_path: str) -> str:
-        """Extract text from Excel (.xlsx / .xls) files using openpyxl."""
+        """Extract text from an Excel .xlsx workbook using openpyxl."""
         try:
             import openpyxl
 
@@ -2158,8 +2158,16 @@ These positions indicate where to split the text."""
             return self._extract_text_from_json(file_path), metadata
 
         # Excel files
-        elif file_type in [".xlsx", ".xls"]:
+        elif file_type == ".xlsx":
             return self._extract_text_from_xlsx(file_path), metadata
+
+        # openpyxl reads only .xlsx; legacy BIFF .xls would fail with a cryptic error.
+        elif file_type == ".xls":
+            raise ValueError(
+                f"Legacy Excel .xls files are not supported: {file_path}. "
+                "Open it in Excel (or LibreOffice) and save it as .xlsx, then index "
+                "the .xlsx file."
+            )
 
         # Word files
         elif file_type == ".docx":

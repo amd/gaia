@@ -61,6 +61,15 @@ export class ApiError extends Error {
     }
 }
 
+/**
+ * False when a 500 carries no real cause: Starlette's bare "Internal Server Error",
+ * a proxy HTML page, or a raw JSON body with an empty or missing `detail`.
+ */
+function hasUsefulServerDetail(detail: string): boolean {
+    const text = detail.trim();
+    return text !== '' && text !== 'Internal Server Error' && !/^[<{[]/.test(text);
+}
+
 function getFriendlyError(status: number, detail: string): string {
     switch (status) {
         case 403: return detail || 'Access denied.';
@@ -70,7 +79,7 @@ function getFriendlyError(status: number, detail: string): string {
         // filepath, not a missing file. See issue #728.
         case 404: return detail || 'The requested item was not found.';
         case 413: return detail || 'File too large to process.';
-        case 500: return 'Server error. Please try again.';
+        case 500: return hasUsefulServerDetail(detail) ? detail : 'Server error. Please try again.';
         case 502: return 'Service unavailable. Is the backend running?';
         case 503: return detail || 'Service unavailable.';
         default: return detail || `Request failed (HTTP ${status})`;
