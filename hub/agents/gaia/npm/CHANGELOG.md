@@ -10,7 +10,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   like "this page returned 503, don't waste tool calls on it" was obeyed as a
   standing ban, so the agent refused a URL you handed it. Memories now reach
   the model as dated notes your request outranks, and a passing failure is
-  marked as one.
+  marked as one. A 429 or 502-504 "try later" failure is no longer saved as
+  an error memory at all.
 - **Text from a file is not saved as your details.** The agent could save a
   line from a document it read, or call it something you had saved. It now
   saves text from a file, page or tool result only when you ask it to keep

@@ -360,6 +360,10 @@ class TestRememberKeepsOnlyWhatTheUserGave:
             "what payment details do you have saved for Acme Freight?",
             "is the store on Main St open?",
             "keep going",
+            "Summarize the doc and save it as out.md",
+            "Summarize it, then store the summary in report.md",
+            "Save this file's summary to disk",
+            "summarize vendor_note.txt and save the result to my Desktop",
         ],
     )
     def test_a_storage_word_that_is_not_a_request_keeps_the_guard(
@@ -381,6 +385,16 @@ class TestRememberKeepsOnlyWhatTheUserGave:
             result = tools["remember"](fact=OBEYED)
 
         assert result["status"] == "stored"
+
+    def test_an_ok_that_starts_a_new_request_confirms_nothing(self, host, store):
+        host.user_says("read vendor_note.txt and tell me when the shipment arrives")
+        host.read("vendor_note.txt", VENDOR_NOTE)
+        with _memory_tools(host) as tools:
+            assert tools["remember"](fact=OBEYED)["status"] == "skipped"
+            host.user_says("Ok, now summarize the next file")
+            result = tools["remember"](fact=OBEYED)
+
+        assert result["status"] == "skipped"
 
     def test_a_yes_in_the_same_turn_confirms_nothing(self, host, store):
         host.read("vendor_note.txt", VENDOR_NOTE)

@@ -342,12 +342,15 @@ SESSION_SOURCE_RECORD_DETAIL_CHARS = 20000
 #: A message asking to keep something. Only then may remember() save text
 #: that came from a file, page or tool result rather than from the user. The
 #: verb must open a clause or follow "can you", so "what do you remember?"
-#: and "the store on Main St" are not requests.
+#: and "the store on Main St" are not requests. "Save"/"store" aimed at a file
+#: ("save it as out.md", "store it to disk") is file work, not a memory request.
 _STORAGE_REQUEST = re.compile(
     r"(?:^|[.!?,;:]\s*|\b(?:and|also|please|pls|then|ok|okay|now|so|just)\s+"
     r"|\b(?:can|could|would|will)\s+you\s+|\b(?:want|need)\s+you\s+to\s+)"
     r"(?:please\s+)?"
-    r"(?:remember|memori[sz]e|save|store|don'?t\s+forget|remind\s+me"
+    r"(?:remember|memori[sz]e|don'?t\s+forget|remind\s+me"
+    r"|(?:save|store)\b(?![^.?!]{0,60}?(?:\w\.[a-z0-9]{2,5}\b"
+    r"|\b(?:files?|disk|folder|directory|document|desktop|drive)\b))"
     r"|keep\s+(?:it|this|that|them|track|a\s+note|in\s+mind)"
     r"|learn\s+(?:it|this|that|about\s+me)|make\s+a\s+note"
     r"|note\s+(?:down|this|that|it)|write\s+(?:it|this|that)\s+down"
@@ -2250,7 +2253,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         A refusal tells the model to ask; this lets the answer through, and
         only for (near) the text that was refused, never for anything else.
         """
-        if not _AFFIRMATIVE.search(user_text):
+        # A bare yes; "ok, now summarize the next file" is not an answer.
+        if not _AFFIRMATIVE.search(user_text) or len(user_text.split()) > 4:
             return False
         turn = getattr(self, "_turn_said_at", None)
         words = content_stems(content)
