@@ -296,12 +296,15 @@ class MCPTool:
         annotations: MCP tool annotations (``readOnlyHint``, ``destructiveHint``,
             …). Server-supplied and therefore advisory — see
             :func:`mcp_tool_requires_confirmation` for how far they are trusted.
+        meta: The tool's ``_meta`` object, where servers put metadata the
+            MCP spec does not define (e.g. ``ai.amd-gaia/dedup_key``).
     """
 
     name: str
     description: str
     input_schema: Dict[str, Any]
     annotations: Dict[str, Any] = field(default_factory=dict)
+    meta: Dict[str, Any] = field(default_factory=dict)
 
     def to_gaia_format(
         self, prefix: str, raw_server_name: Optional[str] = None
@@ -595,6 +598,7 @@ class MCPClient:
                     if isinstance(tool.get("annotations"), dict)
                     else {}
                 ),
+                meta=tool["_meta"] if isinstance(tool.get("_meta"), dict) else {},
             )
             for tool in tools_data
         ]

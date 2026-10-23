@@ -33,6 +33,7 @@ _SUPPORTED_TOOL_KWARGS = (
     "timeout",
     "timeout_arg",
     "preflight",
+    "dedup_key",
     "registry",
 )
 
@@ -229,6 +230,35 @@ def _schema_description(docstring: Optional[str]) -> str:
     return "\n".join(kept).strip()
 
 
+def validate_dedup_key(
+    tool_name: str, dedup_key: Any, param_names: typing.Iterable[str]
+) -> tuple[str, ...]:
+    """Check a tool's ``dedup_key`` and return it as a tuple of argument names.
+
+    Raises:
+        TypeError: ``dedup_key`` is not a non-empty list of strings.
+        ValueError: It names an argument the tool does not take.
+    """
+    if (
+        not isinstance(dedup_key, (list, tuple))
+        or not dedup_key
+        or not all(isinstance(name, str) for name in dedup_key)
+    ):
+        raise TypeError(
+            f"dedup_key for tool {tool_name!r} must be a non-empty list of "
+            f"argument names, got {dedup_key!r}."
+        )
+    params = list(param_names)
+    unknown = [name for name in dedup_key if name not in params]
+    if unknown:
+        raise ValueError(
+            f"dedup_key for tool {tool_name!r} names unknown argument(s) "
+            f"{', '.join(map(repr, unknown))}. Parameters: "
+            f"{', '.join(params) or 'none'}."
+        )
+    return tuple(dedup_key)
+
+
 def tool(
     func: Callable | None = None,
     *,
@@ -237,6 +267,7 @@ def tool(
     timeout: float | None = None,
     timeout_arg: str | None = None,
     preflight: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]] | None = None,
+    dedup_key: list[str] | tuple[str, ...] | None = None,
     registry: dict[str, dict] | None = None,
     **unexpected_kwargs: object,
 ) -> Callable:
@@ -263,6 +294,10 @@ def tool(
             prompt; returns the refusal the call has already earned, or
             ``None``. The tool body must enforce the same rule itself, since
             state can change while a prompt waits.
+        dedup_key: Names of the arguments the repeat-call guard compares.
+            Calls that agree on these count as repeats even when other
+            arguments (e.g. a free-text ``reason``) differ. ``None`` (the
+            default) compares every argument.
 
         registry: An explicit instance-local destination. When omitted, register
             globally for existing callers. Passing an empty mapping is honored;
@@ -289,6 +324,11 @@ def tool(
                 f"@tool(timeout_arg={timeout_arg!r}) names no parameter of tool "
                 f"{tool_name!r}. Parameters: {', '.join(sig.parameters) or 'none'}."
             )
+        dedup = (
+            None
+            if dedup_key is None
+            else validate_dedup_key(tool_name, dedup_key, sig.parameters)
+        )
         arg_descriptions = _parse_arg_descriptions(f.__doc__)
         hints = _resolve_hints(f)
         params = {}
@@ -325,6 +365,7 @@ def tool(
             "timeout": timeout,
             "timeout_arg": timeout_arg,
             "preflight": preflight,
+            "dedup_key": dedup,
         }
 
         # Return the function unchanged

@@ -2568,18 +2568,19 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         if _mcp_config_path.exists() and self._mcp_manager is not None:
             try:
                 self._mcp_manager.load_from_config()
-                self._print_mcp_load_summary()
                 # Filter to servers explicitly activated for this agent
                 # (issue #1005). Falls back to the unfiltered list when the
                 # agent has no registry identity, preserving prior behaviour
                 # for ad-hoc test agents.
                 _active_servers = self._active_mcp_servers(self._mcp_manager)
-                # Preview total tool count before registering
-                _mcp_tool_count = sum(
-                    len(_c.list_tools())
+                # Refuse bad servers before the preview, so their tools don't count.
+                _admitted = {
+                    _srv: _converted
                     for _srv in _active_servers
-                    if (_c := self._mcp_manager.get_client(_srv)) is not None
-                )
+                    if (_converted := self._admit_mcp_server(_srv)) is not None
+                }
+                self._print_mcp_load_summary()
+                _mcp_tool_count = sum(len(_c) for _c in _admitted.values())
                 if _mcp_tool_count > _MCP_TOOL_LIMIT:
                     logger.warning(
                         "MCP servers would add %d tools (limit=%d) — skipping to prevent "
@@ -2589,10 +2590,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     )
                 else:
                     _before = len(_TOOL_REGISTRY)
-                    for _srv in _active_servers:
-                        _client = self._mcp_manager.get_client(_srv)
-                        if _client:
-                            self._register_mcp_tools(_client)
+                    for _srv, _converted in _admitted.items():
+                        self._register_mcp_tools(
+                            self._mcp_manager.get_client(_srv), _converted
+                        )
                     _added = len(_TOOL_REGISTRY) - _before
                     if _added > 0:
                         logger.info(

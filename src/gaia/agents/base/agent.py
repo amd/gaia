@@ -5889,6 +5889,19 @@ Do NOT wrap conversational replies in JSON.
             return float(override)
         return tool_execution_timeout()
 
+    def _loop_guard_key(self, tool_name: str, tool_args: Any) -> Tuple[str, str]:
+        """What the repeat-call guard compares: the tool's ``dedup_key``
+        arguments when it declares one, else every argument."""
+        dedup_key = (self._tools_registry.get(tool_name) or {}).get("dedup_key")
+        # A non-dict payload has no named arguments to project.
+        if not dedup_key or not isinstance(tool_args, dict):
+            return (tool_name, str(tool_args))
+        projected = {name: tool_args.get(name) for name in dedup_key}
+        return (
+            tool_name,
+            json.dumps(projected, sort_keys=True, default=str, ensure_ascii=False),
+        )
+
     def _requested_tool_timeout(
         self, tool_name: str, tool_args: Dict[str, Any]
     ) -> Optional[float]:
@@ -10635,9 +10648,9 @@ Do NOT wrap conversational replies in JSON.
 
                     # Loop detection — same shape as legacy path so
                     # repeated calls across iterations are still caught.
-                    current_call = (tool_name, str(tool_args))
+                    current_call = self._loop_guard_key(tool_name, tool_args)
                     tool_call_history.append(current_call)
-                    tool_call_log.append(current_call)
+                    tool_call_log.append((tool_name, str(tool_args)))
                     if len(tool_call_history) > loop_window:
                         tool_call_history.pop(0)
                     consecutive_count = _repeat_count(tool_call_history)
@@ -10884,10 +10897,10 @@ Do NOT wrap conversational replies in JSON.
                 self.console.start_progress(f"Executing {tool_name}")
 
                 # Check for repeated tool calls (allow up to 3 identical calls)
-                current_call = (tool_name, str(tool_args))
+                current_call = self._loop_guard_key(tool_name, tool_args)
                 tool_call_history.append(current_call)
                 tool_call_log.append(
-                    current_call
+                    (tool_name, str(tool_args))
                 )  # Full unbounded log for workflow guards
 
                 # Enough recent calls to see a short cycle repeat to the limit
