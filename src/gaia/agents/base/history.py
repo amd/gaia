@@ -322,13 +322,36 @@ def model_context_window(
 
 
 def context_window(agent: Any) -> int:
-    """The context window, in tokens, the agent's model is admitted with."""
+    """The context window, in tokens, the agent's model is admitted with.
+
+    Re-read each call: the user or a client pin can change it, and the reply
+    cap (``Agent._max_output_tokens``) is sized from this same value.
+    """
+    from gaia.llm.lemonade_client import LemonadeClient
+
     claude = bool(getattr(agent, "_use_claude", False))
+    cloud = not claude and _is_cloud(agent)
+    if not (claude or cloud):
+        chat = getattr(agent, "chat", None)
+        backend = getattr(getattr(chat, "llm_client", None), "_backend", None)
+        # A client pinned to an exact window loads every model at that size.
+        pin = getattr(backend, "ctx_size_override", None)
+        if (
+            isinstance(backend, LemonadeClient)
+            and isinstance(pin, int)
+            and not isinstance(pin, bool)
+            and pin > 0
+        ):
+            return pin
+        # The model actually sent, so a mid-session switch is sized correctly.
+        model = getattr(chat, "effective_model", None)
+        if isinstance(model, str) and model:
+            return model_context_window(model, device=getattr(agent, "device", None))
     return model_context_window(
         getattr(agent, "model_id", None),
         device=getattr(agent, "device", None),
         claude=claude,
-        cloud=not claude and _is_cloud(agent),
+        cloud=cloud,
     )
 
 
@@ -337,6 +360,14 @@ def _reply_reserve(agent: Any) -> int:
     # provider's own, far larger window, so it takes nothing from history here.
     if _is_cloud(agent) and not getattr(agent, "_use_claude", False):
         return 0
+    # The cap actually sent per reply, which grows with a large local window.
+    max_output = getattr(agent, "_max_output_tokens", None)
+    if callable(max_output):
+        value = max_output()
+        # Only a real positive count; a stand-in agent falls back to the config.
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            # A client cap near the window size must not leave history no room.
+            return min(value, context_window(agent) // 2)
     config = getattr(getattr(agent, "chat", None), "config", None)
     return getattr(config, "max_tokens", DEFAULT_REPLY_TOKENS)
 

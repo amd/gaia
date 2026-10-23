@@ -200,6 +200,37 @@ _MONTH_DISPLAY = [
 
 # Input is whitespace-collapsed before matching, so single spaces are literal.
 _TIME_RE = r"(?:noon|midnight|\d{1,2}(?::\d{2})?(?: ?(?:am|pm))?)"
+
+#: "every morning", "in the evening", "at night": the part of the day a time is in.
+_PERIOD_RE = r"\b(?:(?:every|each|in the|at) )?(morning|afternoon|evening|night)s?\b"
+#: Hours (24h) each part of the day covers, and a time to suggest for it.
+_PERIODS = {
+    "morning": (range(4, 12), "8"),
+    "afternoon": (range(12, 18), "3"),
+    "evening": (range(16, 24), "7"),
+    "night": ((*range(18, 24), *range(0, 5)), "10"),
+}
+
+
+def _apply_period(period: str, time_text: str) -> str:
+    """Settle a bare hour by the part of the day the user named ("8" -> "8am")."""
+    hours, _ = _PERIODS[period]
+    t = time_text.strip().lower()
+    bare = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?", t)
+    if bare and 1 <= int(bare.group(1)) <= 12:
+        for suffix in ("am", "pm"):
+            candidate = f"{t}{suffix}"
+            if int(_parse_time(candidate)[:2]) in hours:
+                return candidate
+        raise _ScheduleInputError(f"'{period}' and '{time_text}' disagree.")
+    if int(_parse_time(t)[:2]) not in hours:
+        raise _ScheduleInputError(
+            f"'{period}' and '{time_text}' disagree — say just the time, like "
+            f"'daily at {time_text}'."
+        )
+    return t
+
+
 _UNIT_RE = r"(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|wks?|w)"
 _UNIT_SECONDS = {"s": 1, "m": _MINUTE, "h": _HOUR, "d": _DAY, "w": _WEEK}
 _SINGLE_UNITS = {
@@ -418,7 +449,19 @@ def _parse_schedule(text: str) -> ScheduleConfig:
 
     config = ScheduleConfig(raw_input=text)
 
+    period, s = _take(_PERIOD_RE, s)
     times = re.findall(rf"\bat ({_TIME_RE})\b", s)
+    if period:
+        name = period.group(1)
+        if not times:
+            raise _ScheduleInputError(
+                f"Say what time in the {name}, like 'every {name} at "
+                f"{_PERIODS[name][1]}'."
+            )
+        settled = [_apply_period(name, t) for t in times]
+        for raw, fixed in zip(times, settled):
+            s = re.sub(rf"\bat {re.escape(raw)}\b", f"at {fixed}", s, count=1)
+        times = settled
     if len(times) > 1:
         raise _ScheduleInputError(
             "Give one time per schedule — for two times a day, create two schedules."
@@ -770,6 +813,7 @@ class ScheduledTask:
         error_count: int = 0,
         session_id: str = None,
         schedule_config: str = None,
+        last_error: str = None,
     ):
         self.id = task_id
         self.name = name
@@ -784,6 +828,8 @@ class ScheduledTask:
         self.error_count = error_count
         self.session_id = session_id
         self.schedule_config = schedule_config
+        # The last run's error, or None when it succeeded.
+        self.last_error = last_error
         self._timer_task: Optional[asyncio.Task] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -802,7 +848,15 @@ class ScheduledTask:
             "error_count": self.error_count,
             "session_id": self.session_id,
             "schedule_config": self.schedule_config,
+            "description": self.describe(),
+            "last_error": self.last_error,
         }
+
+    def describe(self) -> str:
+        """When it runs, in the words the schedule form's preview uses."""
+        if self.schedule_config:
+            return _build_description(ScheduleConfig.from_json(self.schedule_config))
+        return _format_every(self.interval_seconds)
 
 
 class Scheduler:
@@ -1486,6 +1540,7 @@ class Scheduler:
             )
         task.next_run_at = next_run.isoformat()
         task.last_result = error if error else (result or "completed")
+        task.last_error = error
 
         # Persist state
         self._db_update_task(task)
@@ -1516,6 +1571,7 @@ class Scheduler:
                     error_count=row.get("error_count", 0),
                     session_id=row.get("session_id"),
                     schedule_config=row.get("schedule_config"),
+                    last_error=row.get("last_error"),
                 )
             except KeyError as e:
                 raise RuntimeError(
@@ -1591,6 +1647,7 @@ class Scheduler:
             error_count=task.error_count,
             session_id=task.session_id,
             schedule_config=task.schedule_config,
+            last_error=task.last_error,
         )
 
     def _db_delete_task(self, task_id: str):

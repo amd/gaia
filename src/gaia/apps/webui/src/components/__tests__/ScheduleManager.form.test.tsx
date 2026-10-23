@@ -25,6 +25,8 @@ const schedule: Schedule = {
     error_count: 0,
     session_id: null,
     schedule_config: null,
+    description: 'Every day',
+    last_error: null,
 };
 
 const deleteSchedule = vi.fn<(name: string) => Promise<void>>(async () => {});
@@ -75,6 +77,17 @@ describe('New schedule form', () => {
         expect(field).toHaveAccessibleDescription(
             "GAIA didn't understand that schedule. 25:00 isn't a time — use 0:00–23:59.",
         );
+    });
+});
+
+describe('Schedule card', () => {
+    it('says when a weekday schedule runs instead of its raw interval', () => {
+        useScheduleStore.setState({
+            schedules: [{ ...schedule, description: 'Weekdays at 8:00 AM' }],
+        });
+        render(<ScheduleManager />);
+        expect(screen.getByTitle('Weekdays at 8:00 AM')).toHaveTextContent('Weekdays at 8:00 AM');
+        expect(screen.queryByText('1d')).not.toBeInTheDocument();
     });
 });
 

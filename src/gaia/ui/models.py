@@ -519,6 +519,13 @@ class FileListResponse(BaseModel):
         return [{"name": f} if isinstance(f, str) else f for f in files]
 
 
+class McpOutputResponse(BaseModel):
+    """The text an MCP tool returned, capped for the tool row."""
+
+    text: str = ""
+    truncated: bool = False
+
+
 class AgentStepResponse(BaseModel):
     """A single step in the agent's execution (persisted)."""
 
@@ -543,6 +550,9 @@ class AgentStepResponse(BaseModel):
     commandOutput: Optional[CommandOutputResponse] = None
     fileList: Optional[FileListResponse] = None
     mcpServer: Optional[str] = None
+    mcpServerLabel: Optional[str] = None
+    mcpTool: Optional[str] = None
+    mcpOutput: Optional[McpOutputResponse] = None
     latencyMs: Optional[float] = None
     # Render-map card persistence (#2109): populated ONLY when the source
     # tool_result event carried a ``render`` kind (e.g. "email_pre_scan") —
@@ -692,6 +702,10 @@ class DocumentResponse(BaseModel):
         "complete"  # pending | indexing | complete | failed | cancelled | missing
     )
     last_error: Optional[str] = None
+    # Set with last_error when retrying can't help until the file is fixed:
+    # "corrupted", "encrypted", "empty" (no extractable text) or "empty_file"
+    # (0 bytes).
+    error_kind: Optional[str] = None
 
 
 class DocumentListResponse(BaseModel):
@@ -761,6 +775,8 @@ class IndexFolderResponse(BaseModel):
 
     indexed: int = 0
     failed: int = 0
+    # Files in the folder that aren't a type GAIA indexes.
+    skipped: int = 0
     documents: List[DocumentResponse] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
 

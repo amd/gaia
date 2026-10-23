@@ -64,6 +64,7 @@ from gaia.ui.email_sidecar.profiles import (
     memory_supported,
     profile_for,
     scope_supported,
+    surface_supported,
 )
 from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.turn_changes import TurnRecording
@@ -256,10 +257,11 @@ def _agent_type_unknown(agent_type: str, registry) -> bool:
 # even when nothing has changed.  Caching the agent per session_id lets us skip
 # all of that on follow-up turns.
 #
-# Thread-safety: the global turn queue (turn_queue.py) serialises all chat
-# turns, and the per-session session_lock prevents concurrent turns within
-# the same session.  Together they guarantee the cache dict and each agent are
-# accessed by at most one thread at a time — no per-entry locking needed.
+# Thread-safety: ``_agent_cache_lock`` guards the dict, and the per-session
+# session_lock prevents concurrent turns within the same session, so each
+# agent is used by at most one thread at a time — no per-entry locking needed.
+# Turns in different chats can overlap (cloud turns skip turn_queue, and a
+# turn waiting on the user gives its place up).
 _agent_cache: dict[str, dict] = (
     {}
 )  # session_id -> {"agent": Agent, "model_id": str, "agent_type": str, "document_ids": list}
@@ -1754,6 +1756,7 @@ def _session_agent_kwargs(
         "ui_session_id": session_id,
         "dynamic_tools": dynamic_tools,
         "memory_incognito": memory_incognito,
+        "surface": "agent_ui",
     }
 
 
@@ -1946,11 +1949,97 @@ def _relayed_history(
     return context
 
 
+#: What a stopped turn's reply is saved as when it wrote no text.
+_CANCELLED_REPLY = "Cancelled."
+
+# A stopped or cut-off reply reads to the model as withdrawn; left blank, the
+# model takes the request as still pending and answers it next turn.
+_STOPPED_REPLY_FOR_MODEL = (
+    "(The user stopped this reply before it finished. Don't continue it "
+    "unless they ask again.)"
+)
+_CUT_OFF_REPLY_FOR_MODEL = (
+    "(This reply was cut off before it finished. Don't continue it unless "
+    "the user asks again.)"
+)
+
+
+def _withdrawn_reply(content: str) -> Optional[str]:
+    """The model's view of a stopped or cut-off reply; None for any other."""
+    from .restart_recovery import (
+        CANCELLED_TURN_NOTICE,
+        ENDED_WITHOUT_REPLY_NOTICE,
+        INTERRUPTED_TURN_NOTICE,
+    )
+
+    text = content.strip()
+    if text == _CANCELLED_REPLY:
+        return _STOPPED_REPLY_FOR_MODEL
+    for notice in (
+        INTERRUPTED_TURN_NOTICE,
+        CANCELLED_TURN_NOTICE,
+        ENDED_WITHOUT_REPLY_NOTICE,
+    ):
+        if text.endswith(notice):
+            # Keep what it streamed and which tools it started.
+            kept = text[: -len(notice)].rstrip()
+            if not kept:
+                return _CUT_OFF_REPLY_FOR_MODEL
+            return f"{kept}\n\n{_CUT_OFF_REPLY_FOR_MODEL}"
+    return None
+
+
+def _with_final_reply(model_messages: Optional[list], reply: str) -> Optional[list]:
+    """*model_messages* with its closing answer replaced by *reply*."""
+    if not model_messages:
+        return model_messages
+    turn = [dict(m) for m in model_messages]
+    last = turn[-1]
+    if last.get("role") == "assistant" and not last.get("tool_calls"):
+        turn[-1] = {"role": "assistant", "content": reply}
+    else:
+        turn.append({"role": "assistant", "content": reply})
+    return turn
+
+
+def _marked_stopped_reply(model_messages: Optional[list]) -> Optional[str]:
+    """The closing reply of a turn stopped mid-answer, which carries the stop note."""
+    if not model_messages:
+        return None
+    last = model_messages[-1]
+    if not isinstance(last, dict) or last.get("role") != "assistant":
+        return None
+    content = last.get("content")
+    if isinstance(content, str) and content.endswith(_STOPPED_REPLY_FOR_MODEL):
+        return content
+    return None
+
+
+def model_context_messages(db, session_id: str) -> list:
+    """The session's messages as a model reads them: stopped replies withdrawn."""
+    messages = []
+    for message in db.get_context_messages(session_id):
+        if message.get("role") == "assistant":
+            reply = _withdrawn_reply(
+                message.get("content") or ""
+            ) or _marked_stopped_reply(message.get("model_messages"))
+            if reply is not None:
+                message = {
+                    **message,
+                    "content": reply,
+                    "model_messages": _with_final_reply(
+                        message.get("model_messages"), reply
+                    ),
+                }
+        messages.append(message)
+    return messages
+
+
 def model_turns(agent, db, session_id: str) -> list:
     """The session's completed turns as *agent*'s model would be shown them."""
     from gaia.agents.base.history import text_tool_history, transcript_turns
 
-    turns = transcript_turns(db.get_context_messages(session_id))
+    turns = transcript_turns(model_context_messages(db, session_id))
     if (
         hasattr(agent, "_uses_native_tool_calls")
         and not agent._uses_native_tool_calls()
@@ -2110,6 +2199,7 @@ def _dispatch_sidecar_query(
     allowed_paths: list | None = None,
     memory: str = "on",
     recording: TurnRecording | None = None,
+    max_steps: int | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
 
@@ -2311,6 +2401,10 @@ def _dispatch_sidecar_query(
             and changes_supported(profile, handle.api_version)
             else None
         ),
+        surface=(
+            "agent_ui" if surface_supported(profile, handle.api_version) else None
+        ),
+        max_steps=max_steps,
     )
 
 
@@ -2491,37 +2585,111 @@ def _canonicalize_user_input_request(event: dict) -> dict:
     }
 
 
-# Remediation copy for a turn that produced no answer at all — reserved for a
-# genuine backend failure, never a deliberate cancel or an intentionally-empty
-# final (see _empty_answer_outcome).
-_EMPTY_ANSWER_LEMONADE_MSG = (
-    "I wasn't able to generate a response. Please make sure Lemonade Server "
-    "is running and try again."
+_EMPTY_MODEL_ANSWER_MSG = (
+    "The model returned an empty answer. Send your message again, or try "
+    "another model."
 )
 
 
+_NO_ANSWER_AFTER_TOOLS_MSG = (
+    "GAIA ran its tools but didn't write an answer. Send your message again, "
+    "or try another model."
+)
+
+
+async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str]:
+    """Why the backend left a turn with no answer, or None when it looks fine.
+
+    Asks Lemonade's ``/health`` so a working server is never blamed for a
+    model that simply wrote nothing. Returns user-facing copy naming the
+    cause: the server is unreachable or unhealthy, or the model isn't loaded.
+    """
+    if _eval_provider_kwargs():
+        return None
+    import httpx
+
+    from gaia.llm.lemonade_client import (
+        _model_ids_match,
+        cloud_model_provider,
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+        resolve_lemonade_base_url,
+    )
+    from gaia.llm.lemonade_launcher import describe_start_hint
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{base_url}/health", headers=headers)
+        health = resp.json() if resp.status_code == 200 else None
+    except (httpx.HTTPError, ValueError) as e:
+        logger.warning("Empty-answer health check of %s failed: %s", base_url, e)
+        return (
+            f"No answer came back because Lemonade Server at {base_url} isn't "
+            f"responding. {describe_start_hint().instruction}"
+        )
+    if resp.status_code in (401, 403):
+        # Running, so the start hint would be wrong; the key is what to fix.
+        return (
+            f"No answer came back because Lemonade Server at {base_url} "
+            f"rejected GAIA's API key (HTTP {resp.status_code}). Check that "
+            "LEMONADE_API_KEY matches the key the server was started with."
+        )
+    if not isinstance(health, dict):
+        return (
+            f"No answer came back because Lemonade Server at {base_url} failed "
+            f"its health check (HTTP {resp.status_code}). "
+            f"{describe_start_hint().instruction}"
+        )
+    if not model_id or cloud_model_provider(model_id):
+        return None
+    loaded = health.get("all_models_loaded") or []
+    if any(
+        isinstance(m, dict) and _model_ids_match(m.get("model_name"), model_id)
+        for m in loaded
+    ):
+        return None
+    return (
+        f"Lemonade Server is running, but {model_id} isn't loaded, so no answer "
+        "came back. Send your message again to reload it, or try another model."
+    )
+
+
 def _empty_answer_outcome(
-    turn_cancelled: bool, has_steps: bool
+    turn_cancelled: bool,
+    has_steps: bool,
+    has_card: bool,
+    backend_problem: Optional[str] = None,
 ) -> tuple[str, str, bool]:
     """Classify a chat turn that ended with no answer text, for the shared
     persistence tail's empty-``full_response`` branch.
 
-    Returns ``(content, sse_type, keep_steps)``:
+    Returns ``(content, sse_type, keep_steps)``; ``sse_type`` is ``done``,
+    ``failed`` (a ``done`` event marked failed) or ``error``:
       * cancelled → ``("Cancelled.", "done", True)`` — a user Stop, not a
         failure; keep the tool steps executed before the cancel and don't
         blame Lemonade.
-      * no answer but steps/cards were produced → ``("", "done", True)`` — a
-        legitimately-empty final (e.g. the whole final turn was an echoed
-        render card the echo-guard stripped to empty); persist empty content
-        but keep the steps/cards so nothing is lost on rehydration.
-      * genuinely nothing → ``(<lemonade copy>, "error", False)`` — no answer,
-        no cancel, no steps: the only case that warrants the Lemonade copy.
+      * a render card was shown → ``("", "done", True)`` — the card is the
+        answer (e.g. an echoed card the echo-guard stripped to empty); keep
+        the steps so the card survives a reload.
+      * steps but no card → ``(<no-answer copy>, "failed", True)`` — the agent
+        ran tools and ended without answering; say so and keep the steps.
+      * nothing, backend at fault → ``(backend_problem, "error", False)`` —
+        the only case that names Lemonade (see _empty_answer_backend_problem).
+      * nothing, backend fine → ``(<empty-model copy>, "failed", False)`` —
+        the model answered with nothing.
     """
     if turn_cancelled:
-        return "Cancelled.", "done", True
-    if has_steps:
+        return _CANCELLED_REPLY, "done", True
+    if has_card:
         return "", "done", True
-    return _EMPTY_ANSWER_LEMONADE_MSG, "error", False
+    if has_steps:
+        return _NO_ANSWER_AFTER_TOOLS_MSG, "failed", True
+    if backend_problem:
+        return backend_problem, "error", False
+    return _EMPTY_MODEL_ANSWER_MSG, "failed", False
 
 
 def _turn_inference_stats(
@@ -2617,6 +2785,33 @@ def _turn_location(model_id: str) -> InferenceLocation:
 def _cloud_place(loc: InferenceLocation) -> Optional[str]:
     """A cloud turn's place, e.g. "via Fireworks AI"; None for a local one."""
     return f"via {loc.display}" if loc.remote else None
+
+
+def turn_takes_the_line(
+    db: ChatDatabase, session: dict, agent_type: Optional[str] = None
+) -> bool:
+    """Whether a turn in *session* waits in ``turn_queue`` for the local model.
+
+    A turn answered by a cloud model doesn't: the line protects the one local
+    chat model and its prompt cache, which a cloud turn never touches. What a
+    cloud turn does run locally (the embedder, a vision model) is leased from
+    the daemon's broker like every other caller, and the tool registry has
+    its own lock.
+    """
+    agent_type = agent_type or session.get("agent_type") or "chat"
+    try:
+        model_id, _ctx = resolve_session_model(
+            session, agent_type, db.get_setting("custom_model"), _agent_registry
+        )
+        return not (model_id and _turn_location(model_id).remote)
+    except Exception as exc:  # pylint: disable=broad-except
+        # The turn resolves its model again and reports this error itself.
+        logger.warning(
+            "Could not tell where session %s's turn runs, so it waits in line: %s",
+            session.get("id", "?")[:8],
+            exc,
+        )
+        return True
 
 
 async def _local_place(model_id: str, client, base_url: str, headers: dict) -> str:
@@ -3417,7 +3612,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # A relayed sidecar only sees the transcript it is sent; in-process
         # agents restore traces below.
         history_pairs = (
-            _build_history_pairs(db.get_context_messages(request.session_id))
+            _build_history_pairs(model_context_messages(db, request.session_id))
             if _should_relay_to_sidecar(
                 request.agent_type or session.get("agent_type") or "chat",
                 _agent_registry,
@@ -4050,6 +4245,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "active": True,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                             "mcpServer": event.get("mcp_server"),
+                            "mcpServerLabel": event.get("mcp_server_label"),
+                            "mcpTool": event.get("mcp_tool"),
                         }
                     )
                 elif event_type == "tool_args" and captured_steps:
@@ -4079,6 +4276,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         # Persist structured command output for terminal rendering
                         if event.get("command_output"):
                             tool_step["commandOutput"] = event["command_output"]
+                        if event.get("mcp_output"):
+                            tool_step["mcpOutput"] = event["mcp_output"]
                         # Persist file list for rich file list rendering
                         result_data = event.get("result_data", {})
                         if result_data.get("type") == "file_list":
@@ -4410,6 +4609,17 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 relayed_location=turn_location if model_id else None,
             )
 
+            model_messages = result_holder.get("model_messages")
+            if turn_cancelled:
+                # The model sees what was shown, marked as stopped, not a blank.
+                stopped_reply = f"{full_response}\n\n{_STOPPED_REPLY_FOR_MODEL}"
+                model_messages = _with_final_reply(model_messages, stopped_reply)
+                if not model_messages and full_response.strip():
+                    # A relayed turn records none; keep the stop note anyway.
+                    model_messages = [
+                        {"role": "user", "content": request.message},
+                        {"role": "assistant", "content": stopped_reply},
+                    ]
             msg_id = db.upsert_message(
                 request.session_id,
                 persisted_policy_block_msg_id,
@@ -4417,7 +4627,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 full_response,
                 agent_steps=captured_steps if captured_steps else None,
                 inference_stats=inference_stats,
-                model_messages=result_holder.get("model_messages"),
+                model_messages=model_messages,
                 turn_summary=turn_summary,
                 ends_turn=True,
             )
@@ -4463,12 +4673,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 result_holder.get("error"),
                 len(captured_steps),
             )
-            # Distinguish a deliberate cancel and a legitimately-empty final
-            # (e.g. a card-echo the echo-guard stripped) from a genuine backend
-            # failure — only the last warrants the Lemonade copy, and the first
-            # two must keep the steps/cards taken before the empty answer.
+            backend_problem = None
+            if not (turn_cancelled or captured_steps):
+                backend_problem = await _empty_answer_backend_problem(
+                    result_holder.get("model") or model_id
+                )
             content, sse_type, keep_steps = _empty_answer_outcome(
-                turn_cancelled, bool(captured_steps)
+                turn_cancelled,
+                bool(captured_steps),
+                any(step.get("render") for step in captured_steps),
+                backend_problem,
             )
             steps_to_persist = (
                 captured_steps if (keep_steps and captured_steps) else None
@@ -4477,6 +4691,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 db.add_message(request.session_id, "assistant", content, ends_turn=True)
                 yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
             else:
+                failed = sse_type == "failed"
+                if failed:
+                    yield _sse({"type": "answer", "content": content})
                 turn_summary = _turn_summary(
                     sse_handler, result_holder.get("agent"), request.message, None
                 )
@@ -4490,7 +4707,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     ends_turn=True,
                 )
                 done_event = _done_event(
-                    msg_id, content, turn_cancelled, turn_summary=turn_summary
+                    msg_id,
+                    content,
+                    turn_cancelled,
+                    turn_summary=turn_summary,
+                    failed=failed,
                 )
                 link_warning = (
                     turn_box["recording"].link_message(msg_id)
@@ -4624,10 +4845,9 @@ async def _run_chat_lifecycle(
         journal.observe(data)
         run.emit(data)
 
-    queued_at = _time.monotonic()
-
     def _announce_place(position: int) -> None:
-        waited = int(_time.monotonic() - queued_at)
+        # From when this wait began: a turn back from the user counts afresh.
+        waited = int(_time.monotonic() - run.slot.waiting_since)
         _emit(_sse(_queued_status_event(position, ordinal, waited)))
 
     async def _heartbeat() -> None:
@@ -4641,12 +4861,16 @@ async def _run_chat_lifecycle(
         _emit(_sse(_RESUMED_STATUS_EVENT))
 
     # The producer thread hands this back while the turn waits on the user.
-    run.slot = TurnSlot(
-        turn_queue,
-        session_id,
-        asyncio.get_running_loop(),
-        on_position=_announce_place,
-        on_resume=_announce_resume,
+    run.slot = (
+        TurnSlot(
+            turn_queue,
+            session_id,
+            asyncio.get_running_loop(),
+            on_position=_announce_place,
+            on_resume=_announce_resume,
+        )
+        if turn_takes_the_line(db, session, request.agent_type)
+        else None
     )
 
     async def _keep_alive_while_queued() -> None:
@@ -4657,24 +4881,26 @@ async def _run_chat_lifecycle(
             run.emit(_KEEPALIVE_FRAME)
 
     try:
-        keep_alive = asyncio.create_task(_keep_alive_while_queued())
-        heartbeat = asyncio.create_task(_heartbeat())
-        try:
-            await run.slot.acquire()
-        except TurnCancelled:
-            msg_id = db.add_message(
-                session_id, "assistant", "Cancelled.", ends_turn=True
-            )
-            _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
-            return
-        finally:
-            keep_alive.cancel()
-            heartbeat.cancel()
+        if run.slot is not None:
+            keep_alive = asyncio.create_task(_keep_alive_while_queued())
+            heartbeat = asyncio.create_task(_heartbeat())
+            try:
+                await run.slot.acquire()
+            except TurnCancelled:
+                msg_id = db.add_message(
+                    session_id, "assistant", "Cancelled.", ends_turn=True
+                )
+                _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
+                return
+            finally:
+                keep_alive.cancel()
+                heartbeat.cancel()
         try:
             async for data in _stream_chat_impl(run, db, session, request):
                 _emit(data)
         finally:
-            run.slot.close()
+            if run.slot is not None:
+                run.slot.close()
     except asyncio.CancelledError:
         # Shutdown: the marker stays, and the next start says the turn was cut off.
         shutting_down = True
@@ -4816,6 +5042,19 @@ def _settled_quietly(future) -> None:
         future.exception()
 
 
+# Failures retrying can't fix until the file itself changes: RAG's pdf_status
+# values, plus "empty_file" for a 0-byte file of any type.
+PERMANENT_INDEX_FAILURES = frozenset({"corrupted", "encrypted", "empty", "empty_file"})
+
+
+class UnreadableDocumentError(RuntimeError):
+    """Indexing failed because of the file itself; ``kind`` says how."""
+
+    def __init__(self, message: str, kind: str):
+        super().__init__(message)
+        self.kind = kind
+
+
 async def _index_document(filepath: Path, display_name: Optional[str] = None) -> int:
     """Index a document using RAG SDK. Returns chunk count.
 
@@ -4835,7 +5074,8 @@ async def _index_document(filepath: Path, display_name: Optional[str] = None) ->
     no chunks. Callers must treat 0 chunks as a failure condition.
 
     Raises:
-        RuntimeError: If indexing fails or stops making progress.
+        RuntimeError: If indexing fails or stops making progress;
+            ``UnreadableDocumentError`` when the file itself is the problem.
         asyncio.CancelledError: If the awaiting task was cancelled.
     """
     from gaia.rag.sdk import IndexingStopped, name_file_for_user
@@ -4888,7 +5128,13 @@ async def _index_document(filepath: Path, display_name: Optional[str] = None) ->
 
         error = result.get("error")
         if error:
-            raise RuntimeError(f"RAG indexing failed for {name}: {error}")
+            message = f"RAG indexing failed for {name}: {error}"
+            kind = (
+                "empty_file" if result.get("empty_file") else result.get("pdf_status")
+            )
+            if kind in PERMANENT_INDEX_FAILURES:
+                raise UnreadableDocumentError(message, kind)
+            raise RuntimeError(message)
 
         if not result.get("success"):
             raise RuntimeError(f"RAG indexing unsuccessful for {name}")

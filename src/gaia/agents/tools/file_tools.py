@@ -15,7 +15,6 @@ import mimetypes
 import os
 import platform
 import re
-import time
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path, PureWindowsPath
@@ -48,14 +47,110 @@ from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
     confine_roots,
     is_broad_root,
+    is_link,
     root_depth,
     search_roots,
 )
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
+from gaia.filesystem.name_match import fold_name, strip_accents
 from gaia.logger import get_logger
 from gaia.security import BackupError
 
 logger = get_logger(__name__)
+
+#: Version-control and dependency folders content search does not descend into
+#: (thousands of files, none the user wrote); searching one directly still works.
+_CONTENT_SEARCH_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+    }
+)
+
+#: Never text, so content search skips them without opening them.
+_BINARY_SUFFIXES = frozenset(
+    {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".bmp",
+        ".ico",
+        ".webp",
+        ".tif",
+        ".tiff",
+        ".pdf",
+        ".zip",
+        ".gz",
+        ".tgz",
+        ".bz2",
+        ".xz",
+        ".7z",
+        ".rar",
+        ".tar",
+        ".exe",
+        ".dll",
+        ".so",
+        ".dylib",
+        ".pyd",
+        ".pyc",
+        ".o",
+        ".obj",
+        ".a",
+        ".lib",
+        ".bin",
+        ".db",
+        ".sqlite",
+        ".mp3",
+        ".mp4",
+        ".wav",
+        ".mov",
+        ".mkv",
+        ".avi",
+        ".m4a",
+        ".flac",
+        ".ogg",
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".otf",
+        ".docx",
+        ".xlsx",
+        ".pptx",
+        ".xls",
+        ".doc",
+        ".ppt",
+        ".odt",
+        ".ods",
+        ".odp",
+        ".jar",
+        ".class",
+        ".whl",
+        ".npy",
+        ".pkl",
+        ".parquet",
+        ".onnx",
+        ".gguf",
+        ".safetensors",
+    }
+)
+
+
+def _looks_like_text(path: Path) -> bool:
+    """No NUL byte in the first 4 KB, which is how grep tells text from binary."""
+    try:
+        with open(path, "rb") as f:
+            return b"\x00" not in f.read(4096)
+    except OSError:
+        return False
 
 
 def _read_exact(path) -> str:
@@ -266,6 +361,35 @@ class FileSearchToolsMixin:
         """Where a filesystem search should look — see ``search_scope`` (#3576)."""
         return search_roots(self)
 
+    def _resolve_search_directory(self, directory: str):
+        """``(path, None)`` for a directory the model named, or ``(None, error)``.
+
+        A relative directory ("tui/internal", ".") means a folder in the
+        user's workspace, not one under whatever directory this process
+        happens to have been spawned in, so it is resolved against the search
+        roots, most specific first.
+        """
+        scope = Path(directory).expanduser()
+        if scope.is_absolute():
+            return scope.resolve(), None
+        workspace = self._search_roots()
+        matched = next((r for r in workspace if (r / scope).is_dir()), None)
+        if matched is None:
+            # Safe to be specific: no absolute path was supplied, so this is
+            # not an existence oracle.
+            listed = ", ".join(str(r) for r in workspace)
+            return None, {
+                "status": "error",
+                "error": (
+                    f"Directory not found: '{directory}' is not under any "
+                    f"workspace root ({listed}). Nothing was searched — this is "
+                    "not an empty result. Pass an absolute path."
+                ),
+                "searched_paths": [],
+                "workspace_roots": [str(r) for r in workspace],
+            }
+        return (matched / scope).resolve(), None
+
     def _read_access_error(self, path: str):
         """Enforce the ``--allowed-paths`` sandbox on read operations.
 
@@ -342,7 +466,8 @@ class FileSearchToolsMixin:
                     }
 
                 matching_files = []
-                pattern_lower = file_pattern.lower()
+                # Folded, so "resume" finds "résumé.txt" and "CAFE" finds "Café".
+                pattern_lower = fold_name(file_pattern)
                 searched_locations = []
 
                 # Detect pattern type: regex, glob, or plain text.
@@ -353,7 +478,10 @@ class FileSearchToolsMixin:
                 _compiled_re = None
                 if is_regex:
                     try:
-                        _compiled_re = re.compile(pattern_lower, re.IGNORECASE)
+                        # Accents only: casefolding would turn ``\D`` into ``\d``.
+                        _compiled_re = re.compile(
+                            strip_accents(file_pattern), re.IGNORECASE
+                        )
                     except re.error:
                         is_regex = False  # Fall back if invalid regex
                 # Glob: simple wildcards only when not already a regex pattern
@@ -379,12 +507,12 @@ class FileSearchToolsMixin:
                 def matches_pattern_and_type(file_path: Path) -> bool:
                     """Check if file matches pattern and is a document type."""
                     # Match against both filename and stem (without extension)
-                    name_lower = file_path.name.lower()
-                    stem_lower = file_path.stem.lower()
+                    name_lower = fold_name(file_path.name)
+                    stem_lower = fold_name(file_path.stem)
                     # Normalize separators so "employ.*book" matches "employee_handbook"
                     name_normalized = re.sub(r"[_\-.]", "", name_lower)
                     if is_glob:
-                        name_match = fnmatch.fnmatch(name_lower, pattern_lower)
+                        name_match = fnmatch.fnmatchcase(name_lower, pattern_lower)
                     elif is_regex and _compiled_re:
                         # Regex: try against filename, stem, and normalized form
                         name_match = bool(
@@ -413,56 +541,32 @@ class FileSearchToolsMixin:
                     type_match = file_path.suffix.lower() in doc_extensions
                     return name_match and type_match
 
-                budget = {}
+                budget = search_scope.SearchBudget()
 
                 def reset_budget():
-                    budget.update(
-                        started=time.monotonic(),
-                        entries=0,
-                        truncated=False,
-                        reason="",
-                    )
-
-                def budget_exhausted() -> bool:
-                    if budget["truncated"]:
-                        return True
-                    if budget["entries"] >= search_scope.SEARCH_ENTRY_BUDGET:
-                        budget["reason"] = "entries"
-                    elif (
-                        time.monotonic() - budget["started"]
-                        >= search_scope.SEARCH_TIME_BUDGET_S
-                    ):
-                        budget["reason"] = "time"
-                    else:
-                        return False
-                    budget["truncated"] = True
-                    logger.info(
-                        "search_file stopped (%s budget) after %d entries / %.1f s",
-                        budget["reason"],
-                        budget["entries"],
-                        time.monotonic() - budget["started"],
-                    )
-                    return True
+                    nonlocal budget
+                    budget = search_scope.SearchBudget()
 
                 def with_truncation(result: Dict[str, Any]) -> Dict[str, Any]:
                     """Mark a result partial when the walk ran out of budget."""
                     if guard.skipped:
                         result["skipped_folders"] = guard.note()
-                    if not budget["truncated"]:
+                    if not budget.truncated:
                         return result
+                    logger.info(
+                        "search_file stopped (%s budget) after %d entries / %.1f s",
+                        budget.reason,
+                        budget.entries,
+                        budget.elapsed(),
+                    )
                     where = "a narrower `directory`" if directory else "`directory`"
-                    if budget["reason"] == "entries":
-                        stopped = (
-                            f"after examining {budget['entries']:,} files and folders"
-                        )
-                    else:
-                        stopped = f"after {time.monotonic() - budget['started']:.1f} s"
                     hint = (
-                        f"Search stopped {stopped} — pass {where} to "
+                        f"Search stopped {budget.stopped_after()} — pass {where} to "
                         "search a specific folder."
                     )
                     result["truncated"] = True
                     result["hint"] = hint
+                    result["unfinished_paths"] = list(budget.unfinished_paths)
                     if not result.get("files"):
                         result["display_message"] = (
                             f"Search for '{file_pattern}' stopped before "
@@ -474,17 +578,15 @@ class FileSearchToolsMixin:
                         )
                     return result
 
-                reset_budget()
                 walked = set()
                 guard = ProtectedFolders(self)
 
                 def search_location(location: Path, max_depth: int = 999):
                     """Search a specific location up to max_depth."""
-                    if (
-                        guard.blocks(location)
-                        or not location.exists()
-                        or budget_exhausted()
-                    ):
+                    if guard.blocks(location) or not location.exists():
+                        return
+                    if budget.exhausted():
+                        budget.unfinished(location)
                         return
 
                     searched_locations.append(str(location))
@@ -517,8 +619,7 @@ class FileSearchToolsMixin:
 
                         try:
                             for item in current_path.iterdir():
-                                budget["entries"] += 1
-                                if budget_exhausted():
+                                if budget.spend(current_path):
                                     return
                                 # Skip system/hidden directories
                                 if item.name.startswith(
@@ -537,13 +638,18 @@ class FileSearchToolsMixin:
                                     item.is_dir()
                                     and depth < max_depth
                                     and item not in walked
+                                    and not is_link(item)
                                     and not guard.blocks(item)
                                 ):
                                     search_recursive(item, depth + 1)
+                                    if budget.truncated:
+                                        return
                         except (PermissionError, OSError) as e:
                             logger.debug(f"Skipping {current_path}: {e}")
 
                     search_recursive(location, 0)
+                    if budget.truncated:
+                        budget.unfinished(location)
 
                 home = Path.home()
 
@@ -552,36 +658,10 @@ class FileSearchToolsMixin:
                 # file. It is sandbox-checked and must exist — a search that
                 # silently skipped it would report an honest-looking zero.
                 if directory:
-                    # Resolve BEFORE the sandbox check: "tui/internal" means a
-                    # folder in the user's workspace, not one under whatever
-                    # directory this process happens to have been spawned in.
-                    scope = Path(directory).expanduser()
-                    workspace = self._search_roots()
-                    if not scope.is_absolute():
-                        matched = next(
-                            (r for r in workspace if (r / scope).is_dir()), None
-                        )
-                        if matched is None:
-                            # No root holds it. Say that, rather than resolving
-                            # against this process's cwd and reporting "access
-                            # denied" for an absolute path the user never typed
-                            # — a typo'd folder should read as a typo. Safe to
-                            # be specific: no absolute path was supplied, so
-                            # this is not an existence oracle.
-                            listed = ", ".join(str(r) for r in workspace)
-                            return {
-                                "status": "error",
-                                "error": (
-                                    f"Directory not found: '{directory}' is not "
-                                    f"under any workspace root ({listed}). "
-                                    "Nothing was searched — this is not an "
-                                    "empty result."
-                                ),
-                                "searched_paths": [],
-                                "workspace_roots": [str(r) for r in workspace],
-                            }
-                        scope = matched / scope
-                    scope = scope.resolve()
+                    # Resolve BEFORE the sandbox check, against the workspace.
+                    scope, unresolved = self._resolve_search_directory(directory)
+                    if unresolved:
+                        return unresolved
                     # Sandbox before the existence probe, so an out-of-sandbox
                     # path cannot be used as a directory-existence oracle
                     # (same order as read_file / search_file_content).
@@ -623,6 +703,10 @@ class FileSearchToolsMixin:
                         # the sandbox is approvals that accumulated over time,
                         # and a zero-result search would traverse all of them.
                         search_location(root, max_depth=root_depth(root, roots))
+                    for hidden in search_scope.hidden_granted_roots(self, roots):
+                        search_location(
+                            hidden, max_depth=search_scope.SHALLOW_ROOT_DEPTH
+                        )
 
                     # Always also search common locations (Documents, Downloads, etc.)
                     # Wider than the allowed folders on purpose: a name search only
@@ -1101,18 +1185,21 @@ class FileSearchToolsMixin:
             Search for text patterns within files (grep-like functionality).
 
             Searches actual file contents on disk, not RAG indexed documents.
+            A relative directory (including the default ".") is a folder in
+            the workspace. file_pattern filters file names, e.g. "*.py".
             """
             try:
-                directory = os.path.expanduser(directory)
+                # Relative to the workspace, not this process's cwd (#3576).
+                directory, unresolved = self._resolve_search_directory(directory or ".")
+                if unresolved:
+                    return unresolved
                 # Enforce the --allowed-paths sandbox before the existence probe
                 # so out-of-sandbox paths can't be used as a directory-existence
                 # oracle (mirrors read_file / get_file_info). Grepping file
                 # contents outside the sandbox leaks the same data as read_file.
-                denied = self._read_access_error(directory)
+                denied = self._read_access_error(str(directory))
                 if denied:
                     return denied
-
-                directory = Path(directory).resolve()
 
                 if not directory.exists():
                     return {
@@ -1155,6 +1242,39 @@ class FileSearchToolsMixin:
                     ".css",
                     ".sql",
                 }
+
+                # "**/*.py" names files, not paths: match the part after "**/"
+                # against the name, and anything still holding a "/" against
+                # the path relative to the searched directory.
+                name_pattern = None
+                if file_pattern:
+                    name_pattern = file_pattern.replace("\\", "/")
+                    while name_pattern.startswith("**/"):
+                        name_pattern = name_pattern[3:]
+
+                def wanted(file_path: Path) -> bool:
+                    if name_pattern:
+                        if "/" in name_pattern:
+                            rel = file_path.relative_to(directory).as_posix()
+                            return fnmatch.fnmatch(rel, name_pattern)
+                        return fnmatch.fnmatch(file_path.name, name_pattern)
+                    suffix = file_path.suffix.lower()
+                    if suffix in text_extensions:
+                        return True
+                    if suffix in _BINARY_SUFFIXES:
+                        return False
+                    # Unlisted types (.ts, .go, .R, .toml, no extension...):
+                    # text unless the first block holds a NUL byte.
+                    return _looks_like_text(file_path)
+
+                def candidates():
+                    """Files to search, lazily, so a search that fills up early
+                    never walks (or sniffs) the rest of the tree."""
+                    for file_path in search_scope.walk_files(
+                        directory, budget, skip_dirs=_CONTENT_SEARCH_SKIP_DIRS
+                    ):
+                        if wanted(file_path):
+                            yield file_path
 
                 matches = []
                 files_searched = 0
@@ -1219,20 +1339,9 @@ class FileSearchToolsMixin:
                         logger.warning("Could not search %s: %s", file_path, exc)
                         return True
 
-                # Search files
-                for file_path in directory.rglob("*"):
-                    if not file_path.is_file():
-                        continue
-
-                    # Filter by file pattern if provided
-                    if file_pattern:
-                        if not fnmatch.fnmatch(file_path.name, file_pattern):
-                            continue
-                    else:
-                        # Only search text files
-                        if file_path.suffix.lower() not in text_extensions:
-                            continue
-
+                # Search files; both passes share one allowance.
+                budget = search_scope.SearchBudget()
+                for file_path in candidates():
                     files_searched += 1
                     if not search_file(file_path):
                         break  # Hit match limit
@@ -1243,36 +1352,52 @@ class FileSearchToolsMixin:
                 if _use_regex and not matches:
                     _use_regex = False
                     _search_plain = pattern if case_sensitive else pattern.lower()
-                    for _fp2 in directory.rglob("*"):
-                        if not _fp2.is_file():
-                            continue
-                        if file_pattern:
-                            if not fnmatch.fnmatch(_fp2.name, file_pattern):
-                                continue
-                        else:
-                            if _fp2.suffix.lower() not in text_extensions:
-                                continue
+                    for _fp2 in candidates():
                         if not search_file(_fp2):
                             break
 
                 if matches:
-                    return {
+                    result = {
                         "status": "success",
                         "pattern": pattern,
                         "matches": matches[:50],  # Return first 50
                         "total_matches": len(matches),
                         "files_searched": files_searched,
+                        "directory": str(directory),
                         "message": f"Found {len(matches)} matches in {files_searched} files",
                     }
                 else:
-                    return {
+                    if not files_searched and not budget.truncated:
+                        which = (
+                            f"matching '{file_pattern}'" if file_pattern else "of text"
+                        )
+                        message = (
+                            f"Nothing was searched: {directory} holds no files "
+                            f"{which}. This is not an empty result; check the "
+                            "directory and file_pattern."
+                        )
+                    else:
+                        message = (
+                            f"No matches found for '{pattern}' in {files_searched} "
+                            f"files under {directory}"
+                        )
+                    result = {
                         "status": "success",
                         "pattern": pattern,
                         "matches": [],
                         "total_matches": 0,
                         "files_searched": files_searched,
-                        "message": f"No matches found for '{pattern}' in {files_searched} files",
+                        "directory": str(directory),
+                        "message": message,
                     }
+                if budget.truncated:
+                    result["truncated"] = True
+                    result["unfinished_paths"] = list(budget.unfinished_paths)
+                    result["message"] += (
+                        f". {budget.note()} Pass a narrower `directory` to "
+                        "search it fully."
+                    )
+                return result
 
             except Exception as e:
                 logger.error(f"Error searching file content: {e}")

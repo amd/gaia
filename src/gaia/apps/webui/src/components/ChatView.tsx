@@ -6,7 +6,7 @@ import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle
 import { MessageBubble, isErrorContent } from './MessageBubble';
 import { toolActiveLabel } from './AgentActivity';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp } from '../stores/notificationStore';
+import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { refreshActiveRuns } from '../services/activeRuns';
@@ -145,6 +145,8 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
                 narration: event.narration,
                 active: true, timestamp: ts,
                 mcpServer: event.mcp_server,
+                mcpServerLabel: event.mcp_server_label,
+                mcpTool: event.mcp_tool,
             };
         case 'plan':
             return {
@@ -248,6 +250,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const awaitingUser = useChatStore((s) => s.awaitingUser);
     // Other events can arrive while a question waits; it still waits on the user.
     const hasLiveQuestion = useChatStore((s) => Object.values(s.liveQuestions).some((q) => q.sessionId === sessionId));
+    // An unanswered prompt means GAIA is waiting on the user, whatever event arrived last.
+    const hasOpenPrompt = useNotificationStore((s) => selectSessionPermissionPrompt(sessionId)(s) !== null);
 
     const session = sessions.find((s) => s.id === sessionId);
     const sessionDocIds = new Set(session?.document_ids ?? []);
@@ -1023,6 +1027,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             truncated: event.command_output.truncated,
                         };
                     }
+                    if (event.mcp_output?.text) updates.mcpOutput = event.mcp_output;
                     // Pass through retrieval chunks if available
                     if (event.result_data?.chunks && event.result_data.chunks.length > 0) {
                         updates.retrievalChunks = event.result_data.chunks.map((c) => ({
@@ -1049,8 +1054,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
                 // Tool args update the last TOOL step with detail
                 if (event.type === 'tool_args') {
+                    // A call with no arguments keeps its tool_start label, not "{}".
+                    const hasArgs = !!event.args && Object.keys(event.args).length > 0;
+                    const detail = event.detail || (hasArgs ? JSON.stringify(event.args) : '');
                     updateLastToolStep({
-                        detail: event.detail || JSON.stringify(event.args),
+                        ...(detail ? { detail } : {}),
                         ...(event.narration ? { narration: event.narration } : {}),
                     });
                     return;
@@ -1133,7 +1141,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.type === 'tool_start') {
                         toolOccurredRef.current = true;
                         // The model's phase ended with the call; say a tool runs, not the model.
-                        useChatStore.getState().setLiveStatus(toolActiveLabel(event.tool), 'tool');
+                        useChatStore.getState().setLiveStatus(toolActiveLabel(event.tool, step), 'tool');
                     }
                 }
             },
@@ -1851,7 +1859,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 agentStepCount={liveAgentStep}
                                 cards={isStreaming ? cards : lastCardsRef.current}
                                 liveStatus={isStreaming ? liveStatus : null}
-                                awaitingUser={isStreaming && (awaitingUser || hasLiveQuestion)}
+                                awaitingUser={isStreaming && (awaitingUser || hasLiveQuestion || hasOpenPrompt)}
                             />
                         </div>
                     )}
