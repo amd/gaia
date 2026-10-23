@@ -13,7 +13,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const {
-  LIST_TIMEOUT_MS,
+  listTimeoutMs,
   killProcessTree,
   listDescendants,
   listProcesses,
@@ -312,7 +312,6 @@ describe("process table parsing", () => {
   });
 });
 
-
 describe("listProcesses on a loaded PC", () => {
   test("gives the process table query time to finish before giving up", async () => {
     let seen;
@@ -323,7 +322,7 @@ describe("listProcesses on a loaded PC", () => {
     await listProcesses({ platform: "win32", execFile });
     // A timeout here leaves the agent's children running, so it must cover a
     // slow PowerShell start on a busy machine, not just an idle one.
-    expect(LIST_TIMEOUT_MS).toBeGreaterThanOrEqual(15000);
-    expect(seen.timeout).toBe(LIST_TIMEOUT_MS);
+    expect(listTimeoutMs("win32")).toBeGreaterThanOrEqual(15000);
+    expect(seen.timeout).toBe(listTimeoutMs("win32"));
   });
 });
