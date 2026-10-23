@@ -228,7 +228,7 @@ class TestUploadByPathTOCTOU:
         doc_file.write_text("hello world")
         received_paths = []
 
-        async def mock_index(path):
+        async def mock_index(path, display_name=None):
             received_paths.append(str(path))
             return 1
 
@@ -251,7 +251,7 @@ class TestUploadByPathTOCTOU:
         doc_file.write_text("hello world")
         temp_paths = []
 
-        async def mock_index(path):
+        async def mock_index(path, display_name=None):
             temp_paths.append(Path(str(path)))
             return 1
 
@@ -272,7 +272,7 @@ class TestUploadByPathTOCTOU:
         doc_file.write_text("hello world")
         temp_paths = []
 
-        async def mock_index_fail(path):
+        async def mock_index_fail(path, display_name=None):
             temp_paths.append(Path(str(path)))
             raise RuntimeError("indexing failed")
 

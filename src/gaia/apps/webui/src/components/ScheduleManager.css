@@ -11,6 +11,18 @@
     margin-bottom: 20px;
 }
 
+.schedule-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.schedule-field-label {
+    font-size: var(--fs-label);
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
 .schedule-form-row {
     display: flex;
     gap: 8px;
@@ -331,6 +343,11 @@
 .schedule-parsed-description {
     font-weight: 600;
     color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.schedule-parsed-hint {
+    color: var(--text-secondary);
     margin-bottom: 4px;
 }
 
