@@ -15,6 +15,7 @@ import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
+import { useScheduleStore } from './stores/scheduleStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
 import { startActiveRunsPoll } from './services/activeRuns';
@@ -98,6 +99,8 @@ function App() {
     setupRef.current = setup;
     // The agent list has loaded at least once; until then "no flagship" is unknown, not missing.
     const [agentsKnown, setAgentsKnown] = useState(false);
+    const agentsKnownRef = useRef(agentsKnown);
+    agentsKnownRef.current = agentsKnown;
     // A new chat was refused because the flagship is not installed.
     const [flagshipRefused, setFlagshipRefused] = useState(false);
     const flagshipMissing = flagshipRefused || (agentsKnown && !hasFlagshipAgent(agents));
@@ -128,12 +131,34 @@ function App() {
         }
     }, []);
 
+    // Only the latest read may set the list; an older one in flight predates whatever setup installed.
+    const agentsReadSeq = useRef(0);
     const loadAgents = useCallback(async () => {
+        const seq = ++agentsReadSeq.current;
         const list = (await api.listAgents()).agents || [];
+        if (seq !== agentsReadSeq.current) return;
         setAgents(list);
         setAgentsKnown(true);
         if (hasFlagshipAgent(list)) setFlagshipRefused(false);
     }, [setAgents]);
+    // Setup just installed the agent: the list read at startup predates it, so say nothing until re-read.
+    const reloadAgentsAfterSetup = useCallback(() => {
+        const wasKnown = agentsKnownRef.current;
+        setAgentsKnown(false);
+        loadAgents().catch((err) => {
+            log.api.warn('Agent list unavailable after setup', err);
+            if (wasKnown) setAgentsKnown(true);
+        });
+    }, [loadAgents]);
+    // The agent may be installed from the CLI while the app is open; re-check before claiming it isn't.
+    useEffect(() => {
+        const onFocus = () => {
+            if (!flagshipMissingRef.current) return;
+            loadAgents().catch((err) => log.api.warn('Agent list unavailable', err));
+        };
+        window.addEventListener('focus', onFocus);
+        return () => window.removeEventListener('focus', onFocus);
+    }, [loadAgents]);
     // A new chat starts in the configured mode (`full_access` in config).
     const loadDefaultPermissionMode = useCallback(async () => {
         setDefaultPermissionMode((await api.listAllPermissions()).default_mode);
@@ -264,6 +289,13 @@ function App() {
     }, [setSessions]);
 
     useEffect(() => startActiveRunsPoll(), []);
+    // Schedules run unattended: a failed run raises a notification even with the panel closed.
+    useEffect(() => {
+        const load = () => { void useScheduleStore.getState().loadSchedules(); };
+        load();
+        const t = setInterval(load, 30_000);
+        return () => clearInterval(t);
+    }, []);
     // Queued messages go out when their chat's turn ends, even with another chat open.
     useEffect(() => startQueueDispatcher(), []);
 
@@ -361,6 +393,7 @@ function App() {
                 title: 'New Task',
                 agent_type: FLAGSHIP_AGENT_ID,
                 document_ids: store.draftDocumentIds,
+                private: store.draftPrivate,
             });
         } catch (err) {
             if (!isFlagshipMissingError(err)) throw err;
@@ -379,6 +412,7 @@ function App() {
             store = useChatStore.getState();
         }
         store.clearDraftDocuments();
+        store.setDraftPrivate(false);
         addSession(session);
         setCurrentSession(session.id);
         setMessages([]);
@@ -432,6 +466,7 @@ function App() {
 
     const finishSetup = useCallback((first?: StartCard) => {
         setSetup({ state: 'ready' });
+        reloadAgentsAfterSetup();
         void checkSystemStatus();
         if (!first) return;
         if (first.needs_input) {
@@ -439,7 +474,7 @@ function App() {
             return;
         }
         startChat(first.prompt).catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
-    }, [checkSystemStatus, startChat]);
+    }, [checkSystemStatus, startChat, reloadAgentsAfterSetup]);
 
     // ── Keyboard shortcuts ─────────────────────────────────────────────
     useEffect(() => {

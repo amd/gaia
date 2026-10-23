@@ -26,24 +26,32 @@ class SetupPlanError(Exception):
 
 
 def _lemonade() -> Dict[str, Any]:
+    """The server ``gaia init`` will use: the user's, or GAIA's own.
+
+    GAIA's own has no address until it runs. ``url`` is None then, never the
+    default port: that may be another Lemonade, whose downloads aren't GAIA's.
+    """
     from gaia.config import GaiaConfigError
     from gaia.llm import lemonade_choice as choice
-    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+    from gaia.llm.lemonade_client import running_embedded_lemonade_url
 
     try:
         info = choice.describe()
     except (choice.LemonadeChoiceError, GaiaConfigError) as e:
         raise SetupPlanError(str(e)) from e
+    external = info["mode"] == choice.MODE_EXTERNAL
     return {
         "mode": info["mode"],
-        "url": info["base_url"] or resolve_lemonade_base_url(),
+        "url": info["base_url"] if external else running_embedded_lemonade_url(),
     }
 
 
-def _client(url: str):
+def _client(url: Optional[str]):
     """A client for *url* when its server answers, else None."""
     from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
+    if url is None:
+        return None
     client = LemonadeClient(base_url=url, verbose=False)
     try:
         client.health_check()
@@ -51,6 +59,15 @@ def _client(url: str):
         logger.info("Setup plan: no Lemonade at %s yet (%s)", url, e)
         return None
     return client
+
+
+class _NoServer:
+    """Stands in for a server that isn't running, so nothing else is asked."""
+
+    def get_system_info(self, **_kwargs):
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        raise LemonadeClientError("the model server is not running yet")
 
 
 def _registry_size(model_id: str) -> Optional[float]:
@@ -119,7 +136,7 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
 def build_plan() -> Dict[str, Any]:
     """The Lemonade, chat model and downloads ``gaia init --profile gaia`` will use.
 
-    Before GAIA's own Lemonade is installed the hardware cannot be read, so the
+    Until the server setup will use answers, the hardware cannot be read, so the
     chat model is the one setup starts from and ``decided_after_server`` says
     the final pick comes once the server answers.
     """
@@ -132,7 +149,6 @@ def build_plan() -> Dict[str, Any]:
         with_chat_model,
     )
     from gaia.llm.lemonade_client import (
-        LemonadeClient,
         LemonadeClientError,
         recommend_default_chat_model,
     )
@@ -143,7 +159,7 @@ def build_plan() -> Dict[str, Any]:
     try:
         # With no server this still answers: the user's model, else the floor.
         choice = resolve_init_chat_model(
-            client or LemonadeClient(base_url=lemonade["url"], verbose=False),
+            client or _NoServer(),
             reset_corrupt=False,
             enforce_fit=False,
         )

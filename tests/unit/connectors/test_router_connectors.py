@@ -106,6 +106,8 @@ def isolated_registry(monkeypatch, tmp_path):
     monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
     monkeypatch.setattr("gaia.connectors.activations.Path.home", lambda: tmp_path)
     monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
+    # A caller's GAIA_HOME outranks Path.home, and mcp_servers.json follows it.
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / ".gaia"))
     yield fresh
 
 
