@@ -12,13 +12,12 @@ Tests the following endpoints through the HTTP API layer:
 
 LLM/RAG calls are mocked via ``gaia.ui.server._index_document`` so
 the tests run without a Lemonade server.  Temporary files are created
-inside ``Path.home() / ".gaia" / "test_temp"`` to satisfy the
-``ensure_within_home`` security check.
+inside a per-test fake home (``isolated_gaia_home``) to satisfy the
+``ensure_within_home`` security check without touching the real one.
 """
 
 import logging
 import platform
-import shutil
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -61,17 +60,13 @@ def session_id(client):
 
 
 @pytest.fixture
-def temp_folder():
-    """Create a temporary folder inside the user's home directory.
-
-    The folder is placed under ``~/.gaia/test_temp`` so it passes the
-    ``ensure_within_home`` security check enforced by the index-folder
-    endpoint.  Cleaned up after each test.
-    """
-    base = Path.home() / ".gaia" / "test_temp"
-    base.mkdir(parents=True, exist_ok=True)
-    yield base
-    shutil.rmtree(str(base), ignore_errors=True)
+def temp_folder(isolated_gaia_home):
+    """A folder inside this test's own fake home, so it passes the
+    index-folder endpoint's ``ensure_within_home`` check and parallel
+    workers never share it."""
+    folder = isolated_gaia_home / "test_temp"
+    folder.mkdir()
+    return folder
 
 
 def _create_file(folder: Path, name: str, content: str = "test content") -> Path:
@@ -216,9 +211,9 @@ class TestFolderIndexing:
         assert body["errors"] == []
         assert mock_index.call_count == 0
 
-    def test_index_folder_nonexistent_path(self, client):
+    def test_index_folder_nonexistent_path(self, client, temp_folder):
         """A nonexistent folder path should return 404."""
-        fake_path = str(Path.home() / ".gaia" / "test_temp" / "does_not_exist_xyz")
+        fake_path = str(temp_folder / "does_not_exist_xyz")
         resp = client.post(
             "/api/documents/index-folder",
             json={"folder_path": fake_path},

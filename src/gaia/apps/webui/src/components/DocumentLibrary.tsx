@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock, Link2, RefreshCcw } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
@@ -103,6 +104,8 @@ export function DocumentLibrary() {
     const currentSession = sessions.find(s => s.id === currentSessionId) ?? null;
     const closeLibrary = useCallback(() => setShowDocLibrary(false), [setShowDocLibrary]);
     useEscapeToClose(true, closeLibrary);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useFocusTrap(dialogRef, true);
     const [isDragOver, setIsDragOver] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadStatus, setUploadStatus] = useState('');
@@ -561,7 +564,7 @@ export function DocumentLibrary() {
     };
 
     return (
-        <div className="modal-overlay" onClick={() => setShowDocLibrary(false)} role="dialog" aria-modal="true" aria-label="Document library">
+        <div ref={dialogRef} className="modal-overlay" onClick={() => setShowDocLibrary(false)} role="dialog" aria-modal="true" aria-label="Document library">
             <div className="modal-panel doc-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
                     <h3>Document library</h3>

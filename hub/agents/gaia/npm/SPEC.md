@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.18"`                  |
+| Contract version   | `API_VERSION = "2.19"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -286,7 +286,7 @@ checked for drift in CI — the same pattern as the email agent's own
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
-`documents`, `allowed_paths`, `memory`) is optional.
+`documents`, `allowed_paths`, `memory`, `changes_turn_id`) is optional.
 
 `documents` (contract ≥ 2.16) carries the absolute paths of the files the user
 attached to the conversation. Send the whole set on every turn. Before the turn
@@ -314,6 +314,19 @@ omit it to leave memory as the agent has it. `"on"` never turns memory on when
 the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
 `422` the field.
 
+`changes_turn_id` (contract ≥ 2.19) asks the agent to record the turn's file
+changes for undo. Before a tool writes, edits, creates or deletes a file, the
+agent saves a copy of it under `<GAIA home>/snapshots/<session_id>/<changes_turn_id>/`,
+the store the Agent UI's Changes view, Outputs and Undo read. The recording is
+complete before the terminal `final` or `error` event is sent, even while the
+agent finishes post-answer work, so a caller may read or restore it as soon as
+the stream ends. It needs `session_id` (`422` without one) and must look like
+`file_snapshots.new_turn_id()` makes it — 14 digits of local time, a hyphen and
+8 hex digits — so a session's turns sort in the order they ran; anything else
+is a `422`. Work the agent cannot copy, such as a shell command, is noted in
+the turn as untracked. Omit the field to record nothing. Pre-2.19 binaries
+`422` it.
+
 ```json
 {
   "query": "What's in this directory?",
@@ -323,6 +336,20 @@ the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
   "can_answer_questions": true
 }
 ```
+
+#### `needs_confirmation` arguments
+
+A `needs_confirmation` event carries the gated call in `args`: exactly the
+arguments the model sent, each value capped at 64,000 characters with a note
+saying how much was cut, and `args_truncated: true` when any was. `summary`
+shortens long code, so show `args` when the user should read all of it; a
+policy client matches its rules on `args` and should not auto-approve a call
+with `args_truncated`. The agent never adds a key to `args`. What it adds to
+its own prompt is in `prompt_context`: `working_directory` (where a shell call
+runs, when the model's arguments don't say it) and `risk_note` (why the
+agent's checks don't cover the call, which is then approved once). A prompt
+the agent raises on its own, such as `allow_path_access`, has the path it asks
+about in `args`.
 
 `/health` is liveness only. It says nothing about whether Lemonade is up or a
 model is loaded — `/v1/gaia/init` answers that.

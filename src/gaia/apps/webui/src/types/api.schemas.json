@@ -4017,6 +4017,17 @@
         ],
         "title": "Processor Name"
       },
+      "setup_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Setup Error"
+      },
       "start_command": {
         "anyOf": [
           {

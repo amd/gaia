@@ -3,9 +3,9 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { TraySettings } from '../../types/agent';
+import { isMacPlatform } from '../../utils/platform';
 
-const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
-const TRAY = isMac ? 'menu bar' : 'tray';
+const TRAY = isMacPlatform() ? 'menu bar' : 'tray';
 
 const TOGGLES: Array<{ key: keyof TraySettings; label: string; hint: string }> = [
     {

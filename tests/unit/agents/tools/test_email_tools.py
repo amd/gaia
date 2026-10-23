@@ -687,6 +687,12 @@ def test_no_environment_variable_can_choose_the_mailbox(mailbox_env, monkeypatch
             {},
             "OAuth client",
         ),
+        # Mid-save by another GAIA operation: retry, never "reconnect".
+        (
+            {"google": {"provider": "google", "scopes": [], "error": "busy"}},
+            {},
+            "another GAIA operation",
+        ),
     ],
 )
 def test_no_mailbox_error_names_each_providers_own_state(

@@ -12,6 +12,7 @@ depend on Lemonade or any LLM backend.
 """
 
 import logging
+import re
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -401,3 +402,47 @@ def test_list_documents_includes_last_error(
     target = next((d for d in docs if d["id"] == doc_id), None)
     assert target is not None
     assert target.get("last_error") == "serialization check"
+
+
+# ── Index errors name the user's file, not GAIA's copy ──────────────────────
+
+_CORRUPT_PDF = b"%PDF-1.4 truncated, not a real PDF"
+# A managed copy is "<12 hex>_<stem><ext>".
+_MANAGED_COPY_NAME = re.compile(r"[0-9a-f]{12}_broken\.pdf")
+
+
+def _assert_names_user_file(text: str) -> None:
+    assert "broken.pdf" in text, text
+    assert "gaia_upload_" not in text, text
+    assert not _MANAGED_COPY_NAME.search(text), text
+
+
+def test_upload_corrupt_pdf_error_names_original_file(client, managed_docs_sandbox):
+    """Real indexing of a corrupt blob upload reports ``broken.pdf``."""
+    r = client.post(
+        "/api/documents/upload",
+        files={"file": ("broken.pdf", _CORRUPT_PDF, "application/pdf")},
+    )
+
+    assert r.status_code == 500
+    _assert_names_user_file(r.json()["detail"])
+
+
+def test_upload_path_corrupt_pdf_error_names_original_file(client, home_tmp_dir):
+    """Path indexing runs on a ``gaia_upload_`` copy; errors still name the file."""
+    pdf = home_tmp_dir / "broken.pdf"
+    pdf.write_bytes(_CORRUPT_PDF)
+    db = client.app.state.db
+
+    r = client.post("/api/documents/upload-path", json={"filepath": str(pdf)})
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["indexing_status"] == "failed"
+    _assert_names_user_file(body["last_error"])
+    _assert_names_user_file(db.get_document(body["id"])["last_error"])
+
+    r2 = client.post(f"/api/documents/{body['id']}/reindex")
+
+    assert r2.status_code == 500
+    _assert_names_user_file(db.get_document(body["id"])["last_error"])

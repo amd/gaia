@@ -222,7 +222,9 @@ async def upload_by_path(
                 index_error = None
                 error_kind = None
                 try:
-                    chunk_count = await _index_document(temp_path)
+                    chunk_count = await _index_document(
+                        temp_path, display_name=safe_filepath.name
+                    )
                 except Exception as e:
                     logger.error(
                         "Indexing failed for %s: %s",
@@ -290,7 +292,9 @@ async def upload_by_path(
                         original_name,
                         doc_id,
                     )
-                    chunk_count = await _index_document(temp_file)
+                    chunk_count = await _index_document(
+                        temp_file, display_name=original_name
+                    )
                     if doc_id in indexing_tasks:
                         if chunk_count == 0:
                             db.update_document_status(
@@ -477,7 +481,7 @@ async def upload_document_blob(
 
     try:
         file_mtime = final_path.stat().st_mtime
-        chunk_count = await _index_document(final_path)
+        chunk_count = await _index_document(final_path, display_name=display_name)
         doc = db.add_document(
             filename=display_name,
             filepath=str(final_path),
@@ -616,7 +620,9 @@ async def reindex_document(
         # path uses, rather than re-reading the stored path directly.
         with safe_open_document(filepath) as (fd, _file_stat, safe_filepath):
             temp_path = _copy_fd_to_temp(fd, safe_filepath.suffix)
-        chunk_count = await _index_document(temp_path)
+        chunk_count = await _index_document(
+            temp_path, display_name=doc.get("filename") or safe_filepath.name
+        )
     except Exception as exc:
         error_msg = str(exc)
         db.update_document_status(
