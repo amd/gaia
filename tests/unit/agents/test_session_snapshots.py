@@ -222,3 +222,54 @@ class TestTotals:
         out = fs.session_changes(SID, root=root)
         assert out["files"] == [] and out["totals"]["files"] == 0
         assert out["turns"] == 0
+
+
+def test_undo_all_removes_folders_of_a_file_made_and_deleted_in_the_chat(root, work):
+    (work / "keep.txt").write_bytes(b"k")
+    _turn(root, 1, {work / "keep.txt": b"k2", work / "tmp" / "deep" / "x.txt": b"x"})
+    _turn(root, 2, {work / "tmp" / "deep" / "x.txt": None})
+    result = fs.restore_session(SID, root=root)
+    assert not (work / "tmp").exists()
+    assert (work / "keep.txt").read_bytes() == b"k"
+    assert result["kept_folders"] == []
+
+
+def test_undo_all_keeps_such_a_folder_when_it_holds_other_files(root, work):
+    (work / "keep.txt").write_bytes(b"k")
+    _turn(root, 1, {work / "keep.txt": b"k2", work / "tmp" / "x.txt": b"x"})
+    (work / "tmp" / "mine.txt").write_bytes(b"user's")
+    _turn(root, 2, {work / "tmp" / "x.txt": None})
+    result = fs.restore_session(SID, root=root)
+    assert (work / "tmp" / "mine.txt").read_bytes() == b"user's"
+    assert result["kept_folders"] == [str(work / "tmp")]
+
+
+def test_undo_all_removes_a_parent_emptied_by_a_made_and_deleted_subfolder(root, work):
+    _turn(
+        root, 1, {work / "tmp" / "notes.md": b"n", work / "tmp" / "sub" / "x.txt": b"x"}
+    )
+    _turn(root, 2, {work / "tmp" / "sub" / "x.txt": None})
+    result = fs.restore_session(SID, root=root)
+    assert not (work / "tmp").exists()
+    assert result["kept_folders"] == []
+
+
+def test_undo_all_removes_a_parent_shared_by_two_made_and_deleted_files(root, work):
+    (work / "keep.txt").write_bytes(b"k")
+    _turn(
+        root,
+        1,
+        {
+            work / "keep.txt": b"k2",
+            work / "tmp" / "a" / "x.txt": b"x",
+            work / "tmp" / "b" / "y.txt": b"y",
+        },
+    )
+    _turn(
+        root,
+        2,
+        {work / "tmp" / "a" / "x.txt": None, work / "tmp" / "b" / "y.txt": None},
+    )
+    result = fs.restore_session(SID, root=root)
+    assert not (work / "tmp").exists()
+    assert result["kept_folders"] == []
