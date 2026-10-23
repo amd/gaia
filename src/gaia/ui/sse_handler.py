@@ -58,6 +58,10 @@ logger = logging.getLogger(__name__)
 
 _SUMMARY_CHAR_CAP = 300
 
+#: Result keys naming a file the tool wrote; kept on the summary view a
+#: relayed result is reduced to.
+RESULT_PATH_KEYS = ("file_path", "image_path")
+
 #: A tool result with one of these statuses did not do its job.
 FAILED_TOOL_STATUSES = FAILED_STATUSES
 
@@ -795,6 +799,11 @@ class SSEOutputHandler(OutputHandler):
         # summary may be incomplete instead of making them infer truncation.
         if not isinstance(data, dict) and len(str(data)) > _SUMMARY_CHAR_CAP:
             event["summary_truncated"] = True
+        # Where the tool wrote, resolved: a relayed turn's Outputs need it.
+        if isinstance(data, dict):
+            for key in RESULT_PATH_KEYS:
+                if isinstance(data.get(key), str):
+                    event[key] = data[key]
 
         # Attach latency for tool calls (measured from print_tool_usage)
         if self._tool_start_time is not None:
