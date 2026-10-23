@@ -10,6 +10,7 @@ the VLM cannot read fails instead of indexing empty or placeholder text.
 from __future__ import annotations
 
 import base64
+import io
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -161,7 +162,7 @@ def test_no_vlm_fails_with_the_model_and_where_to_get_it(tmp_path):
     assert "scan.png" in message
     assert "Run: lemonade pull Qwen3-VL-4B-Instruct-GGUF" in message
     assert "Lemonade Model Manager (http://localhost:13305)" in message
-    assert "gaia init" in message
+    assert "isn't reachable" not in message
     assert "lemonade-server" not in message
     vlm.extract_from_page_images.assert_not_called()
 
@@ -226,3 +227,154 @@ def test_index_document_reports_the_no_vlm_error_and_indexes_nothing(tmp_path):
     assert stats["success"] is False
     assert "Qwen3-VL-4B-Instruct-GGUF" in stats["error"]
     assert rag.chunks == [] and not rag.indexed_files
+
+
+# ---------------------------------------------------------------------------
+# Server down vs. model missing
+# ---------------------------------------------------------------------------
+
+
+def test_a_down_server_says_unreachable_not_download(tmp_path):
+    from gaia.llm.lemonade_launcher import StartHint
+
+    vlm = _vlm(available=False)
+    vlm.client.health_check.side_effect = ConnectionError("connection refused")
+    with (
+        patch("gaia.llm.VLMClient", return_value=vlm),
+        patch(
+            "gaia.llm.lemonade_launcher.describe_start_hint",
+            return_value=StartHint(instruction="Start the Lemonade app."),
+        ),
+    ):
+        with pytest.raises(ImageExtractionError) as excinfo:
+            _sdk(tmp_path)._extract_text_from_image(str(_image(tmp_path)))
+
+    message = str(excinfo.value)
+    assert "isn't reachable at http://localhost:13305" in message
+    assert "Start the Lemonade app." in message
+    assert "Download" not in message and "pull" not in message
+    assert isinstance(excinfo.value.__cause__, ConnectionError)
+
+
+def test_a_server_error_that_is_not_a_connection_failure_is_reported_as_is(
+    tmp_path,
+):
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    vlm = _vlm(available=False)
+    vlm.client.health_check.side_effect = LemonadeClientError("401 unauthorized")
+    with patch("gaia.llm.VLMClient", return_value=vlm):
+        with pytest.raises(ImageExtractionError, match="returned an error: 401"):
+            _sdk(tmp_path)._extract_text_from_image(str(_image(tmp_path)))
+
+
+# ---------------------------------------------------------------------------
+# What the VLM is shown
+# ---------------------------------------------------------------------------
+
+
+def _sent_images(tmp_path, path):
+    vlm = _vlm()
+    with patch("gaia.llm.VLMClient", return_value=vlm):
+        _, metadata = _sdk(tmp_path)._extract_text_from_image(str(path))
+    calls = vlm.extract_from_page_images.call_args_list
+    return [c.args[0][0] for c in calls], metadata
+
+
+def _decoded(image):
+    return Image.open(io.BytesIO(image["image_bytes"])).convert("RGB")
+
+
+def test_exif_orientation_is_applied_before_the_vlm_sees_a_photo(tmp_path):
+    path = tmp_path / "portrait.jpg"
+    exif = Image.Exif()
+    exif[0x0112] = 6  # stored sideways; shown rotated 90 degrees clockwise
+    Image.new("RGB", (400, 200), "white").save(path, format="JPEG", exif=exif)
+
+    (image,), _ = _sent_images(tmp_path, path)
+    assert (image["width"], image["height"]) == (200, 400)
+
+
+def test_every_page_of_a_multi_page_tiff_is_read(tmp_path):
+    path = tmp_path / "fax.tiff"
+    first = Image.new("RGB", (300, 100), "white")
+    first.save(path, format="TIFF", save_all=True, append_images=[first.copy()])
+    vlm = _vlm()
+    vlm.extract_from_page_images.side_effect = lambda images, page_num: [
+        {"image_num": 1, "text": f"page {page_num} text", "size_kb": 1}
+    ]
+    with patch("gaia.llm.VLMClient", return_value=vlm):
+        text, metadata = _sdk(tmp_path)._extract_text_from_image(str(path))
+
+    calls = vlm.extract_from_page_images.call_args_list
+    assert [c.kwargs["page_num"] for c in calls] == [1, 2]
+    assert text == "[Page 1]\npage 1 text\n\n[Page 2]\npage 2 text"
+    assert metadata["num_pages"] == 2
+    assert metadata["vlm_pages"] == 2 and metadata["total_images"] == 2
+
+
+def test_a_tiff_with_too_many_pages_fails_naming_the_count(tmp_path):
+    path = tmp_path / "archive.tif"
+    page = Image.new("L", (20, 20), 255)
+    page.save(path, format="TIFF", save_all=True, append_images=[page] * 3)
+    with (
+        patch("gaia.rag.sdk.MAX_IMAGE_PAGES", 3),
+        patch("gaia.llm.VLMClient") as ctor,
+    ):
+        with pytest.raises(ImageExtractionError, match="it has 4 pages"):
+            _sdk(tmp_path)._extract_text_from_image(str(path))
+    ctor.assert_not_called()
+
+
+def test_an_animated_gif_is_read_from_its_first_frame(tmp_path):
+    path = tmp_path / "loop.gif"
+    frames = [Image.new("P", (40, 40), i) for i in range(3)]
+    frames[0].save(path, format="GIF", save_all=True, append_images=frames[1:])
+
+    images, metadata = _sent_images(tmp_path, path)
+    assert len(images) == 1 and metadata["vlm_pages"] == 1
+
+
+@pytest.mark.parametrize("mode", ["RGBA", "LA"])
+def test_a_transparent_background_reaches_the_vlm_as_white(tmp_path, mode):
+    path = tmp_path / "diagram.png"
+    Image.new(mode, (50, 50), 0).save(path)  # fully transparent black
+
+    (image,), _ = _sent_images(tmp_path, path)
+    assert _decoded(image).getpixel((0, 0)) == (255, 255, 255)
+
+
+def test_palette_transparency_reaches_the_vlm_as_white(tmp_path):
+    path = tmp_path / "icon.png"
+    img = Image.new("P", (50, 50), 0)
+    img.putpalette([0, 0, 0] * 256)
+    img.save(path, transparency=0)
+
+    (image,), _ = _sent_images(tmp_path, path)
+    assert _decoded(image).getpixel((0, 0)) == (255, 255, 255)
+
+
+def test_16_bit_grayscale_keeps_its_tones(tmp_path):
+    path = tmp_path / "scan16.png"
+    Image.new("I;16", (50, 50), 30000).save(path)
+
+    (image,), _ = _sent_images(tmp_path, path)
+    assert _decoded(image).getpixel((0, 0)) == (116, 116, 116)
+
+
+def test_the_shared_helper_scales_16_bit_and_leaves_alpha_alone():
+    """The PDF path's helper: 16-bit fixed, transparency untouched."""
+    from gaia.rag.pdf_utils import prepare_image_for_vlm
+
+    buf = io.BytesIO()
+    Image.new("I;16", (10, 10), 30000).save(buf, format="PNG")
+    assert _decoded(prepare_image_for_vlm(buf.getvalue())).getpixel((0, 0)) == (
+        116,
+        116,
+        116,
+    )
+
+    buf = io.BytesIO()
+    Image.new("RGBA", (10, 10), (0, 0, 0, 0)).save(buf, format="PNG")
+    prepared = prepare_image_for_vlm(buf.getvalue())
+    assert Image.open(io.BytesIO(prepared["image_bytes"])).mode == "RGBA"

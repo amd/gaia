@@ -24,10 +24,19 @@ def prepare_image_for_vlm(image_bytes: bytes) -> dict:
     """
     from PIL import Image
 
-    img = Image.open(io.BytesIO(image_bytes))
+    return prepare_pil_image_for_vlm(Image.open(io.BytesIO(image_bytes)))
+
+
+def prepare_pil_image_for_vlm(img) -> dict:
+    """:func:`prepare_image_for_vlm` for an already-decoded ``PIL.Image``."""
+    from PIL import Image
 
     # Get dimensions
     width, height = img.size
+
+    # A plain convert("RGB") clips 16-bit samples to 255: the image turns white.
+    if img.mode.startswith("I;16"):
+        img = img.convert("I").point(lambda v: v * (1 / 257)).convert("L")
 
     # Convert to RGB if needed
     if img.mode not in ["RGB", "RGBA"]:

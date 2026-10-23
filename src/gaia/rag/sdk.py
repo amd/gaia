@@ -102,6 +102,52 @@ class ImageExtractionError(ValueError):
     """Raised when an image file cannot be read into text, with a remedy."""
 
 
+# Each page is one VLM call (seconds to tens of seconds), so a fax-sized TIFF is
+# fine and a 500-page archive is a mistake to stop early.
+MAX_IMAGE_PAGES = 50
+
+
+def _flatten_for_vlm(img):
+    """Upright, opaque copy of *img*: EXIF rotation applied, alpha on white.
+
+    Image files only. PDF-embedded images are shown as the PDF places them, so
+    the PDF path must not rotate them by their own EXIF tag.
+    """
+    from PIL import Image, ImageOps  # pylint: disable=import-outside-toplevel
+
+    img = ImageOps.exif_transpose(img)
+    if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
+        # The VLM drops alpha, so a transparent background would read as black.
+        rgba = img.convert("RGBA")
+        white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        img = Image.alpha_composite(white, rgba).convert("RGB")
+    return img
+
+
+def _image_pages_for_vlm(img, file_name: str) -> list:
+    """The prepared VLM inputs for an opened image file, one per page."""
+    from PIL import ImageSequence  # pylint: disable=import-outside-toplevel
+
+    from gaia.rag.pdf_utils import (  # pylint: disable=import-outside-toplevel
+        prepare_pil_image_for_vlm,
+    )
+
+    if img.format != "TIFF":
+        return [prepare_pil_image_for_vlm(_flatten_for_vlm(img))]
+
+    page_count = getattr(img, "n_frames", 1)
+    if page_count > MAX_IMAGE_PAGES:
+        raise ImageExtractionError(
+            f"Cannot index image {file_name}: it has {page_count} pages, and GAIA "
+            f"reads at most {MAX_IMAGE_PAGES} pages from one image file.\n"
+            "Split the TIFF into smaller files and index each one."
+        )
+    return [
+        prepare_pil_image_for_vlm(_flatten_for_vlm(frame))
+        for frame in ImageSequence.Iterator(img)
+    ]
+
+
 def _missing_package_hint(*packages: str) -> str:
     from gaia.agents.install_hints import (  # pylint: disable=import-outside-toplevel
         missing_package_hint,
@@ -2118,28 +2164,32 @@ These positions indicate where to split the text."""
     def _extract_text_from_image(self, image_path: str) -> tuple:
         """Read an image file's text with the vision model.
 
-        The image is prepared and sent exactly as the PDF path sends an
-        embedded image. There is no non-VLM path: an image the VLM cannot read
+        Each page is sent as the PDF path sends an embedded image, after EXIF
+        rotation and flattening transparency onto white. A multi-page TIFF is
+        read page by page; other formats (animated GIF included) by their
+        first frame. There is no non-VLM path: an image the VLM cannot read
         fails instead of indexing empty or placeholder text.
 
         Returns:
-            (text, metadata) — metadata has vlm_pages=1 and total_images=1.
+            (text, metadata) — metadata has vlm_pages and total_images set to
+            the number of pages read, and num_pages for a multi-page TIFF.
 
         Raises:
             ImageExtractionError: VLM turned off or unavailable, the file is not
-                a decodable image, or the VLM found no text in it.
+                a decodable image, it has more than MAX_IMAGE_PAGES pages, or the
+                VLM found no text in it.
         """
+        import io  # pylint: disable=import-outside-toplevel
+
         from PIL import Image  # pylint: disable=import-outside-toplevel
 
         from gaia.llm import VLMClient  # pylint: disable=import-outside-toplevel
         from gaia.llm.lemonade_launcher import (  # pylint: disable=import-outside-toplevel
             describe_client_hint,
+            describe_start_hint,
         )
         from gaia.llm.vlm_client import (  # pylint: disable=import-outside-toplevel
             VLMExtractionError,
-        )
-        from gaia.rag.pdf_utils import (  # pylint: disable=import-outside-toplevel
-            prepare_image_for_vlm,
         )
 
         file_name = Path(image_path).name
@@ -2155,7 +2205,10 @@ These positions indicate where to split the text."""
         # Outside the try: a locked file must reach index_document as PermissionError.
         raw = Path(image_path).read_bytes()
         try:
-            image = prepare_image_for_vlm(raw)
+            with Image.open(io.BytesIO(raw)) as img:
+                pages = _image_pages_for_vlm(img, file_name)
+        except ImageExtractionError:
+            raise
         except (OSError, ValueError, Image.DecompressionBombError) as e:
             self.log.error(f"Unreadable image {image_path}: {e}")
             raise ImageExtractionError(
@@ -2167,7 +2220,21 @@ These positions indicate where to split the text."""
 
         vlm = VLMClient(vlm_model=model, base_url=self.config.base_url)
         if not vlm.check_availability():
-            # `gaia init` does not download the RAG vision model.
+            try:
+                vlm.client.health_check()
+            except Exception as e:  # pylint: disable=broad-except
+                if not _is_connection_failure(e):
+                    raise ImageExtractionError(
+                        f"Cannot index image {file_name}: Lemonade Server at "
+                        f"{vlm.server_url} returned an error: {e}"
+                    ) from e
+                raise ImageExtractionError(
+                    f"Cannot index image {file_name}: Lemonade Server isn't "
+                    f"reachable at {vlm.server_url}.\n"
+                    f"{describe_start_hint().instruction}\n"
+                    "Then index the image again."
+                ) from e
+            # Reachable, so the model is what's missing; `gaia init` skips it.
             pull = describe_client_hint("pull", model).instruction
             raise ImageExtractionError(
                 f"Cannot index image {file_name}: vision model {model} is not "
@@ -2177,14 +2244,19 @@ These positions indicate where to split the text."""
                 f"  1. Download it. {pull}\n"
                 f"     Or download {model} in the Lemonade Model Manager "
                 f"({vlm.server_url}).\n"
-                "  2. Index the image again.\n"
-                "If Lemonade Server isn't installed or running, run `gaia init` first."
+                "  2. Index the image again."
             )
 
         if self.config.show_stats:
-            print(f"  🖼️  Reading image text with {model}...")
+            print(f"  🖼️  Reading image text with {model} ({len(pages)} page(s))...")
+        page_texts = []
         try:
-            image_texts = vlm.extract_from_page_images([image], page_num=1)
+            for page_num, page in enumerate(pages, 1):
+                _beat()
+                results = vlm.extract_from_page_images([page], page_num=page_num)
+                page_texts.append(
+                    "\n\n".join(r["text"].strip() for r in results).strip()
+                )
         except VLMExtractionError as e:
             raise ImageExtractionError(
                 f"Could not read text from image {file_name}: {e}"
@@ -2192,18 +2264,26 @@ These positions indicate where to split the text."""
         finally:
             vlm.cleanup()
 
-        text = "\n\n".join(t["text"].strip() for t in image_texts).strip()
-        if not text:
+        if len(pages) == 1:
+            text = page_texts[0]
+        else:
+            text = "\n\n".join(
+                f"[Page {i}]\n{t}" for i, t in enumerate(page_texts, 1) if t
+            )
+        if not text.strip():
             raise ImageExtractionError(
                 f"No text found in image: {file_name}\n"
                 f"The vision model ({model}) read the image but returned no text."
             )
 
-        self.log.info(f"🖼️  Extracted {len(text):,} characters from {file_name}")
+        self.log.info(
+            f"🖼️  Extracted {len(text):,} characters from {file_name} "
+            f"({len(pages)} page(s))"
+        )
         metadata = {
-            "num_pages": None,
-            "vlm_pages": 1,
-            "total_images": 1,
+            "num_pages": len(pages) if len(pages) > 1 else None,
+            "vlm_pages": len(pages),
+            "total_images": len(pages),
             "vlm_checked": True,
             "vlm_available": True,
         }
