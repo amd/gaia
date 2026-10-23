@@ -146,7 +146,7 @@ describe('SetupScreen', () => {
     it('asks for the Fireworks key only after the install finishes, then picks the top model', async () => {
         let finish!: (s: SetupRunStatus) => void;
         mockedApi.startSetup.mockImplementation(() => new Promise((r) => { finish = r; }));
-        mockedApi.connectProvider.mockResolvedValue({} as Awaited<ReturnType<typeof api.connectProvider>>);
+        mockedApi.connectProviderWaitingForOs.mockResolvedValue({} as Awaited<ReturnType<typeof api.connectProviderWaitingForOs>>);
         mockedApi.listProviderModels.mockResolvedValue({
             provider: 'fireworks',
             models: [
@@ -179,8 +179,21 @@ describe('SetupScreen', () => {
         fireEvent.click(screen.getByRole('button', { name: /Connect/ }));
 
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('fireworks.m1'));
-        expect(mockedApi.connectProvider).toHaveBeenCalledWith('fireworks', { api_key: 'fw-key' });
+        expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('fireworks', { api_key: 'fw-key' }, expect.any(Function), expect.any(Function));
         expect(await screen.findByRole('button', { name: 'Start chatting' })).toBeInTheDocument();
+    });
+
+    it('says when the OS is asking to release the saved key, instead of a silent wait', async () => {
+        const asking = 'macOS is asking GAIA for keychain access to read your saved Fireworks AI key. Look for a system dialog and click Always Allow; this updates once you answer.';
+        mockedApi.startSetup.mockResolvedValue(READY);
+        mockedApi.connectProviderWaitingForOs.mockImplementation((_p, _b, onWaiting) => {
+            onWaiting(asking);
+            return new Promise(() => {});
+        });
+        await start(/Fireworks AI/);
+        fireEvent.click(await screen.findByRole('button', { name: /Connect/ }));
+        expect(await screen.findByText(/Look for a system dialog/)).toHaveAttribute('role', 'status');
+        expect(screen.getByRole('button', { name: /Connect/ })).toBeDisabled();
     });
 
     it("on the user's own Lemonade, connects with no key and says their server is left alone", async () => {
@@ -188,7 +201,7 @@ describe('SetupScreen', () => {
             ...TARGET, mode: 'external', saved_mode: 'external', source: 'config',
             base_url: FOUND.url, saved_base_url: FOUND.url, offer: false,
         });
-        mockedApi.connectProvider.mockResolvedValue({} as Awaited<ReturnType<typeof api.connectProvider>>);
+        mockedApi.connectProviderWaitingForOs.mockResolvedValue({} as Awaited<ReturnType<typeof api.connectProviderWaitingForOs>>);
         mockedApi.listProviderModels.mockResolvedValue({
             provider: 'amd',
             models: [{ id: 'amd.m1', context_length: null, downloaded: true, labels: [], rank: 1, note: null, evidence: null }],
@@ -202,7 +215,7 @@ describe('SetupScreen', () => {
 
         fireEvent.click(screen.getByRole('button', { name: /Connect/ }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('amd.m1'));
-        expect(mockedApi.connectProvider).toHaveBeenCalledWith('amd', { api_key: undefined });
+        expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('amd', { api_key: undefined }, expect.any(Function), expect.any(Function));
     });
 
     it('still asks for the key when LEMONADE_BASE_URL picks the server', async () => {

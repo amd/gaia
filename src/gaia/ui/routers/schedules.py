@@ -63,6 +63,7 @@ class ScheduleResponse(BaseModel):
     error_count: int = 0
     session_id: Optional[str] = None
     schedule_config: Optional[str] = None
+    description: str
     last_error: Optional[str] = None
 
 
