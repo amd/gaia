@@ -167,9 +167,7 @@ func (m Model) Init() tea.Cmd {
 // localServerLine describes Lemonade under the Local row. A cloud model it
 // is serving belongs to that provider's row, not here.
 func localServerLine(info lemonade.ServerInfo) string {
-	if info.Chat != nil && info.Chat.Backend == "remote" {
-		info.Chat = nil
-	}
+	info.Chat = info.LocalChat
 	return info.StatusLine()
 }
 

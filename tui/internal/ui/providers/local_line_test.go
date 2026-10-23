@@ -24,12 +24,14 @@ func TestTheLocalRowNeverNamesACloudModel(t *testing.T) {
 	}
 }
 
-func TestTheLocalRowStillNamesALocalModel(t *testing.T) {
+func TestTheLocalRowNamesALocalModelLoadedBesideTheCloudOne(t *testing.T) {
 	info := lemonade.ServerInfo{
 		BaseURL: "http://localhost:64595/api/v1", Owner: "gaia",
-		Chat: &lemonade.LoadedModel{Name: "Gemma-4-E4B-it-GGUF", Backend: "metal", CtxSize: 65536},
+		Chat:      &lemonade.LoadedModel{Name: "fireworks.deepseek-v4p1-flash", Backend: "remote"},
+		LocalChat: &lemonade.LoadedModel{Name: "Gemma-4-E4B-it-GGUF", Backend: "metal", CtxSize: 65536},
 	}
-	if line := localServerLine(info); !strings.Contains(line, "Gemma-4-E4B-it-GGUF") {
+	line := localServerLine(info)
+	if !strings.Contains(line, "Gemma-4-E4B-it-GGUF") || strings.Contains(line, "deepseek") {
 		t.Fatalf("line = %q", line)
 	}
 }
