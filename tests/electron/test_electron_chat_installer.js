@@ -739,5 +739,16 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       expect(installer).not.toMatch(/\["init"/);
       expect(workflow).not.toContain('GAIA_SKIP_GAIA_INIT');
     });
+
+    it('should still skip gaia init when the upgrade journey launches the previous release', () => {
+      // That release's installer runs gaia init (several GB of models) unless told not to.
+      const journey = fs.readFileSync(
+        path.join(__dirname, '../../installer/headless/windows-journey.ps1'),
+        'utf8',
+      );
+      const upgrade = journey.slice(journey.indexOf("'win-setup-upgrade' {\n                # The state"));
+      expect(upgrade).toMatch(/Start-AgentUi -PreviousRelease/);
+      expect(journey).toMatch(/if \(\$PreviousRelease\) \{[^}]*GAIA_SKIP_GAIA_INIT = '1'/);
+    });
   });
 });
