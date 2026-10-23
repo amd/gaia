@@ -31,8 +31,10 @@ function deviceText(hw: PreflightReport): { value: string; ok: boolean } {
  * Device, memory and disk, read the moment setup opens. Once the plan knows
  * the real download, the disk line follows it instead of the first estimate.
  */
-export function SystemCheck({ hardware, error, plan = null }: {
+export function SystemCheck({ hardware, error, plan = null, cloud = false }: {
     hardware: PreflightReport | null; error: string | null; plan?: SetupPlan | null;
+    /** A cloud choice downloads no chat model, so the estimate's disk need doesn't apply. */
+    cloud?: boolean;
 }) {
     if (error) return <p className="setup-hint">This PC&rsquo;s hardware couldn&rsquo;t be read ({error}). Setup still checks it as it goes.</p>;
     if (!hardware) {
@@ -49,13 +51,14 @@ export function SystemCheck({ hardware, error, plan = null }: {
         : hardware.warnings.filter((w) => !/\bNPU\b/.test(w));
     // The plan's own disk check (shown by the download button) replaces the estimate.
     const planned = plan?.download_gb != null && plan.disk_free_gb != null;
-    const blockers = planned ? hardware.blockers.filter((b) => b !== hardware.disk_blocker) : hardware.blockers;
-    const compatible = planned ? blockers.length === 0 : hardware.compatible;
+    const estimateDropped = planned || cloud;
+    const blockers = estimateDropped ? hardware.blockers.filter((b) => b !== hardware.disk_blocker) : hardware.blockers;
+    const compatible = estimateDropped ? blockers.length === 0 : hardware.compatible;
     const disk = planned
         ? { value: `${Math.round(plan.disk_free_gb as number)} GB free · ${formatGb(plan.download_gb as number)} to download`, ok: !plan.disk_problem }
         : {
             value: hardware.disk_free_gb != null ? `${Math.round(hardware.disk_free_gb)} GB free` : 'Not reported',
-            ok: hardware.disk_free_gb != null && hardware.compatible,
+            ok: hardware.disk_free_gb != null && compatible,
         };
     return (
         <>

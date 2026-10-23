@@ -214,6 +214,19 @@ describe('SetupScreen', () => {
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
+    it("drops the local model's disk estimate once a cloud provider is chosen", async () => {
+        const estimate = 'Not enough disk space: install needs ~8.0 GB but only 2.9 GB is free on /Users/u/.gaia.';
+        mockedApi.getOnboardingPreflight.mockResolvedValue({
+            ...HARDWARE, disk_free_gb: 2.9, compatible: false, blockers: [estimate], disk_blocker: estimate,
+        });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText(estimate)).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('radio', { name: /Fireworks AI/ }));
+        await waitFor(() => expect(screen.queryByText(estimate)).not.toBeInTheDocument());
+        expect(screen.getByRole('list', { name: 'This PC' })).toHaveTextContent('3 GB free');
+        expect(screen.getByRole('button', { name: 'Start setup' })).toBeEnabled();
+    });
+
     it("won't start a download that doesn't fit the disk, and says why", async () => {
         const problem = 'The models need 29.2 GB and the disk that holds them has 10.0 GB free.';
         mockedApi.getSetupPlan.mockResolvedValue({ ...PLAN, disk_free_gb: 10, disk_problem: problem });
