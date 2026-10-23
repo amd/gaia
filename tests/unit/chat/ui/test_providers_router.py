@@ -656,6 +656,47 @@ _CATALOG = [
 ]
 
 
+def test_cloud_models_show_the_providers_window_not_lemonades_4096(client, lemonade):
+    # Lemonade v2026.42.1: a cloud model it has "loaded" lists context_length 4096.
+    lemonade.models = [
+        {
+            "id": "fireworks.deepseek-v4p1-flash",
+            "recipe": "cloud",
+            "labels": [],
+            "context_length": 4096,
+            "max_context_window": 1048576,
+        },
+        {
+            "id": "fireworks.glm-5p3-flash",
+            "recipe": "cloud",
+            "labels": [],
+            "context_length": 1048576,
+            "max_context_window": 1048576,
+        },
+    ]
+    models = client.get("/api/providers/fireworks/models").json()["models"]
+    assert {m["id"]: m["context_length"] for m in models} == {
+        "fireworks.deepseek-v4p1-flash": 1048576,
+        "fireworks.glm-5p3-flash": 1048576,
+    }
+
+
+def test_local_models_show_their_configured_window(client, lemonade):
+    lemonade.models = [
+        {
+            "id": "Qwen3-4B-GGUF",
+            "downloaded": True,
+            "labels": [],
+            "recipe": "llamacpp",
+            "context_length": 65536,
+            "max_context_window": 262144,
+        }
+    ]
+    models = client.get("/api/providers/local/models").json()["models"]
+    (row,) = [m for m in models if m["id"] == "Qwen3-4B-GGUF"]
+    assert row["context_length"] == 65536
+
+
 def test_local_models_are_downloaded_chat_models_plus_the_default(client, lemonade):
     lemonade.models = _CATALOG
     resp = client.get("/api/providers/local/models")

@@ -307,7 +307,11 @@ def _suggested_local_models() -> set:
 
 def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str, Any]]:
     """Chat models for *provider*; *offer_optional* adds the optional ones that fit."""
-    from gaia.llm.lemonade_client import _model_ids_match, find_model_requirement
+    from gaia.llm.lemonade_client import (
+        _model_ids_match,
+        catalog_context_window,
+        find_model_requirement,
+    )
     from gaia.llm.recommended_models import rank
 
     from ..spending import price_card
@@ -338,7 +342,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
         out.append(
             {
                 "id": model_id,
-                "context_length": m.get("context_length"),
+                "context_length": catalog_context_window(m),
                 "downloaded": bool(m.get("downloaded")) or is_cloud,
                 "labels": list(m.get("labels") or []),
                 "recipe": m.get("recipe"),

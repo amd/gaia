@@ -1000,8 +1000,8 @@ func (m Model) View() string {
 			if name := entryName(selected, m.chosen()); name != selected.Model.ID {
 				details = append(details, selected.Model.ID)
 			}
-			if selected.Model.ContextLength > 0 {
-				details = append(details, fmt.Sprintf("Context: %s tokens", formatTokens(selected.Model.ContextLength)))
+			if window := selected.Model.Window(); window > 0 {
+				details = append(details, fmt.Sprintf("Context: %s tokens", formatTokens(window)))
 			}
 			for _, label := range selected.Model.Labels {
 				switch label {

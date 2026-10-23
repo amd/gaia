@@ -37,6 +37,7 @@ from gaia.llm.lemonade_client import (
     CLOUD_RECIPE,
     LemonadeClient,
     LemonadeClientError,
+    catalog_context_window,
     lemonade_auth_headers,
     resolve_lemonade_api_key,
 )
@@ -848,7 +849,7 @@ class GatewayManager:
             GatewayModel(
                 id=entry["id"],
                 labels=list(entry.get("labels") or []),
-                ctx_size=entry.get("context_length"),
+                ctx_size=catalog_context_window(entry),
             )
             for entry in payload.get("data", [])
             if isinstance(entry, dict)
