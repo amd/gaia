@@ -6,6 +6,9 @@ description: |
   Tests the agent's ability to store a time-aware reminder (category=reminder with
   due_at set) and surface it when asked about upcoming tasks.
   Validates the temporal awareness component of the memory system.
+  The reference date is {{eval_today}}. The reminder deadline is
+  {{eval_today_plus_14_days}}, fourteen calendar days later. The simulator and
+  the judge both use those dates; the deadline is not a fixed calendar day.
 
 persona: casual_user
 
@@ -14,26 +17,28 @@ setup:
 
 turns:
   - turn: 1
-    objective: "Ask agent to set a reminder with a specific deadline"
-    user_message: "Please set a reminder: I need to submit the Q2 performance review for my team by April 15th 2026."
+    objective: "Ask agent to set a reminder with a specific deadline. Reference date: {{eval_today}}."
+    user_message: "Please set a reminder: I need to submit the Q2 performance review for my team by {{eval_today_plus_14_days}}. Today is {{eval_today}}."
     ground_truth:
-      expected_answer: "Reminder stored: Q2 performance review due April 15 2026"
-    success_criteria: "Agent confirms the reminder is stored with the Q2 performance review content and April 15th deadline. Should use the remember tool with category=reminder."
+      expected_answer: "Reminder stored: Q2 performance review due {{eval_today_plus_14_days}} (reference date {{eval_today}})"
+    success_criteria: "Agent confirms the reminder is stored with the Q2 performance review content and the {{eval_today_plus_14_days}} deadline. The reference date is {{eval_today}}. Should use the remember tool with category=reminder."
 
   - turn: 2
-    objective: "Ask for upcoming tasks / reminders"
-    user_message: "What do I have coming up that I need to take care of?"
+    objective: "Ask for upcoming tasks / reminders. Reference date: {{eval_today}}."
+    user_message: "What do I have coming up that I need to take care of? Today is {{eval_today}}."
     ground_truth:
-      expected_answer: "Q2 performance review, April 15 2026"
-    success_criteria: "Agent surfaces the Q2 performance review reminder with the April 15th deadline. FAIL if agent says it has no reminders or cannot recall what was stored."
+      expected_answer: "Q2 performance review, {{eval_today_plus_14_days}} (reference date {{eval_today}})"
+    success_criteria: "Agent surfaces the Q2 performance review reminder with the {{eval_today_plus_14_days}} deadline. The reference date is {{eval_today}}. FAIL if agent says it has no reminders or cannot recall what was stored."
 
   - turn: 3
-    objective: "Ask agent to confirm it can track deadlines"
-    user_message: "How many days do I have until the performance review deadline?"
+    objective: "Ask agent to confirm it can track deadlines. Reference date: {{eval_today}}."
+    user_message: "How many days do I have until the performance review deadline? Today is {{eval_today}}."
     ground_truth:
-      expected_answer: "14 days (from April 1 to April 15)"
-    success_criteria: "Agent calculates or estimates the days remaining until April 15 from the current date context. Agent should reference April 15 explicitly. FAIL if agent cannot perform the calculation or doesn't reference the stored deadline."
+      expected_answer: "14 calendar days (from {{eval_today}} to {{eval_today_plus_14_days}})"
+    success_criteria: "Agent calculates the days remaining until {{eval_today_plus_14_days}} from the reference date {{eval_today}} as 14 calendar days. Agent should reference {{eval_today_plus_14_days}} explicitly. FAIL if agent cannot perform the calculation or doesn't reference the stored deadline."
 
 expected_outcome: |
-  Agent stores a time-sensitive reminder and accurately retrieves it with
-  temporal awareness (days until deadline), demonstrating reminder management.
+  Agent stores a time-sensitive reminder due on {{eval_today_plus_14_days}} and
+  accurately retrieves it with temporal awareness (14 calendar days until the
+  deadline from the reference date {{eval_today}}), demonstrating reminder
+  management.

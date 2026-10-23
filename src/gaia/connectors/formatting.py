@@ -26,6 +26,7 @@ from typing import Dict
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectorsError,
 )
 
@@ -101,6 +102,8 @@ def format_connector_error(e: BaseException) -> str:
                 f"Open Settings → Connections → {e.provider} and click Connect."
             )
         return f"AUTH_REQUIRED: {e}"
+    if isinstance(e, ConnectionBusyError):
+        return f"CONNECTION_BUSY: {e}"
     if isinstance(e, ConfigurationError):
         return f"CONFIG_ERROR: {e}"
     if isinstance(e, ConnectorsError):

@@ -108,7 +108,7 @@ class TestCreateSchedule:
             json={"name": "bad", "interval": "whenever", "prompt": "Prompt"},
         )
         assert resp.status_code == 400
-        assert "Cannot parse interval" in resp.json()["detail"]
+        assert "couldn't read 'whenever'" in resp.json()["detail"]
 
     def test_create_missing_fields(self, client):
         resp = client.post("/api/schedules", json={"name": "incomplete"})

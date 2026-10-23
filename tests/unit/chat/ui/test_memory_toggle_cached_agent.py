@@ -250,6 +250,15 @@ def test_scheduled_run_follows_the_memory_setting(monkeypatch, enabled):
     fake_mod.GaiaAgentConfig = SimpleNamespace
     monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("gaia_agent"))
     monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
+    # A wheel install: the flagship runs in process.
+    monkeypatch.setattr(
+        helpers,
+        "_agent_registry",
+        SimpleNamespace(
+            get=lambda _id: SimpleNamespace(is_sidecar=False),
+            get_load_error=lambda _id: None,
+        ),
+    )
 
     db = ChatDatabase(":memory:")
     db.set_setting("memory_enabled", "true" if enabled else "false")
