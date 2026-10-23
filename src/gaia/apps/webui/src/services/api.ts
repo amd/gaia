@@ -46,18 +46,33 @@ function parseErrorStatus(errorText: string): string | null {
     }
 }
 
+/** Request fields a 422 names, from the last part of each error's `loc` (e.g. `retention_days`). */
+export function parseErrorFields(errorText: string): string[] {
+    try {
+        const parsed = JSON.parse(errorText).detail;
+        if (!Array.isArray(parsed)) return [];
+        return parsed
+            .map((e) => (Array.isArray(e?.loc) ? e.loc[e.loc.length - 1] : undefined))
+            .filter((f): f is string => typeof f === 'string');
+    } catch {
+        return [];
+    }
+}
+
 /** A non-2xx answer: the message to show, the backend's own words, and its machine-readable reason. */
 export class ApiError extends Error {
     readonly httpStatus: number;
     readonly detail: string;
     readonly reason: string | null;
+    readonly fields: string[];
 
-    constructor(message: string, httpStatus: number, detail: string, reason: string | null) {
+    constructor(message: string, httpStatus: number, detail: string, reason: string | null, fields: string[] = []) {
         super(message);
         this.name = 'ApiError';
         this.httpStatus = httpStatus;
         this.detail = detail;
         this.reason = reason;
+        this.fields = fields;
     }
 }
 
@@ -136,7 +151,7 @@ export async function apiFetch<T>(
         const errorText = await res.text().catch(() => '');
         log.api.error(`${method} ${url} - HTTP ${res.status}`, { errorText });
         const detail = parseErrorDetail(errorText);
-        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
+        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText), parseErrorFields(errorText));
     }
 
     // Some endpoints (DELETE, fire-and-forget POSTs) intentionally return no
@@ -315,7 +330,7 @@ export async function setLemonadeTarget(body: LemonadeTargetBody): Promise<Lemon
     } catch (err) {
         // A 502 here is "saved, but the daemon did not switch" — keep those words.
         if (err instanceof ApiError && err.httpStatus === 502 && err.detail) {
-            throw new ApiError(err.detail, err.httpStatus, err.detail, err.reason);
+            throw new ApiError(err.detail, err.httpStatus, err.detail, err.reason, err.fields);
         }
         throw err;
     }

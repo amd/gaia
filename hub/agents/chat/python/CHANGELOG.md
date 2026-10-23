@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- In an Agent UI chat with no documents attached, the document tools now say
+  no documents are attached to this chat, and that the user can attach them
+  from the Document library, instead of "No documents are currently indexed".
+  The model used to tell users their index was empty while the library held
+  the files they asked about. Overrides `_no_documents_message`, which the
+  next core release's `RAGToolsMixin` calls; with core 0.25.1 the old message
+  stays.
 - A `run_python` snippet or `execute_python_file` script whose code only reads
   files no longer marks the turn's undo as incomplete, unless files changed in
   the folders it ran in. The check fails closed: an import it doesn't know,

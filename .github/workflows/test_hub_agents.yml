@@ -22,6 +22,9 @@ on:
       - 'src/gaia/agents/tools/**'
       - 'setup.py'
       - '.github/workflows/test_hub_agents.yml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      - 'pyproject.toml'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -32,6 +35,9 @@ on:
       - 'src/gaia/agents/tools/**'
       - 'setup.py'
       - '.github/workflows/test_hub_agents.yml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      - 'pyproject.toml'
   merge_group:
   workflow_dispatch:
 

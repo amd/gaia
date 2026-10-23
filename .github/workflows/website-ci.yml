@@ -6,9 +6,9 @@
 # a broken page (type error, failed Astro build) reached main and only failed at
 # deploy time. This runs on every PR that touches website/.
 #
-# The download links are built from what the download server published (no
-# bundled fixture fallback — see website/src/data/catalog.ts), so
-# HUB_CATALOG_URL points at it, exactly like the Railway production build.
+# The download links are built from the newest stable GitHub release (no
+# bundled fixture fallback — see website/src/data/github.ts), exactly like the
+# Railway production build.
 
 name: Website CI
 
@@ -17,6 +17,9 @@ name: Website CI
 # (cross-surface.test.ts reads both to assert the shared hues match — retuning
 # one surface alone is exactly how the two ambers drifted apart), and the design
 # language spec (tokens.contrast.test.ts recomputes the ratios it quotes).
+# The installer table and the two release workflows are read by
+# release-assets.test.ts: the download buttons look for the asset names they
+# produce, and a rename there would silently drop a button.
 #
 # Both lists are asserted by cross-surface.test.ts, which scans the suite for
 # reads that leave website/ — so a new one fails here rather than going unrun.
@@ -27,6 +30,10 @@ on:
       - 'src/gaia/apps/webui/src/styles/index.css'
       - 'tui/internal/ui/theme/theme.go'
       - 'docs/spec/gaia-design-language.mdx'
+      - 'installer/tui/artifacts.py'
+      - '.github/workflows/build_tui.yml'
+      - '.github/workflows/publish.yml'
+      - '.github/workflows/release_components.yml'
       - '.github/workflows/website-ci.yml'
   push:
     branches: [main]
@@ -35,6 +42,10 @@ on:
       - 'src/gaia/apps/webui/src/styles/index.css'
       - 'tui/internal/ui/theme/theme.go'
       - 'docs/spec/gaia-design-language.mdx'
+      - 'installer/tui/artifacts.py'
+      - '.github/workflows/build_tui.yml'
+      - '.github/workflows/publish.yml'
+      - '.github/workflows/release_components.yml'
       - '.github/workflows/website-ci.yml'
 
 permissions:
@@ -52,13 +63,10 @@ jobs:
       run:
         working-directory: website
     env:
-      # Same source the Railway production build uses for the download links
-      # (no fixture fallback). A download-server outage fails the build loudly.
-      HUB_CATALOG_URL: https://hub.amd-gaia.ai
-      # Optional — the homepage stats row (website/src/data/github.ts) fetches
-      # public GitHub data at build time. Unauthenticated works fine (60
-      # req/hr); this just raises it to 5,000/hr. Actions provides it for
-      # free, so there's no reason to omit it even though it isn't required.
+      # Optional — the download links and stats row (website/src/data/github.ts)
+      # fetch public GitHub data at build time. Unauthenticated works (60
+      # req/hr); this raises it to 5,000/hr. Actions provides it for free, so
+      # there's no reason to omit it even though it isn't required.
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7

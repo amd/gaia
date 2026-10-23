@@ -9,7 +9,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as get_package_version_metadata
 from typing import Optional, Tuple
 
-__version__ = "0.25.0"
+__version__ = "0.25.1"
 
 # Lemonade version used across CI and installer
 LEMONADE_VERSION = "2026.42.1"

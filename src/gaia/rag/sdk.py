@@ -56,6 +56,7 @@ from gaia.utils.file_lock import (
     FileLockTimeout,
     file_lock,
     held_by_another_program,
+    lock_dir_unwritable,
     write_bytes_atomic,
     write_text_atomic,
 )
@@ -156,6 +157,22 @@ def _next_in_chain(error: BaseException) -> Optional[BaseException]:
     if error.__suppress_context__:
         return None
     return error.__context__
+
+
+def name_file_for_user(text: str, file_path: str, display_name: str) -> str:
+    """Replace every spelling of *file_path* in *text* with *display_name*.
+
+    Indexing often runs on a private copy of the user's file; this keeps the
+    copy's path and name out of messages the user reads.
+    """
+    path = Path(file_path)
+    spellings = {str(file_path), str(path), path.as_posix(), os.path.realpath(path)}
+    for spelling in sorted(spellings, key=len, reverse=True):
+        text = text.replace(spelling, display_name)
+    # Any other spelling of the copy's folder (8.3 names, a symlinked temp dir).
+    return re.sub(
+        r"(?:[^\s'\"()]*[\\/])?" + re.escape(path.name), lambda _m: display_name, text
+    )
 
 
 # The running index_document's ``heartbeat`` on this thread, called once per
@@ -2354,10 +2371,14 @@ These positions indicate where to split the text."""
         protected_text = text
         for i, match in enumerate(re.finditer(vlm_pattern, text, re.DOTALL)):
             placeholder = f"<<<VLM_BLOCK_{i}>>>"
-            vlm_blocks.append(
-                {"placeholder": placeholder, "content": match.group(0).strip()}
+            block = match.group(0)
+            content = block.rstrip()
+            vlm_blocks.append({"placeholder": placeholder, "content": content})
+            # Keep the whitespace after the block, or restoring it fuses its last
+            # word to the next image or page marker.
+            protected_text = protected_text.replace(
+                block, placeholder + block[len(content) :], 1
             )
-            protected_text = protected_text.replace(match.group(0), placeholder, 1)
 
         # STEP 2: Identify natural document boundaries
         # Look for markdown headers, section breaks, or significant whitespace
@@ -2971,19 +2992,33 @@ These positions indicate where to split the text."""
         progress_callback: Optional[Callable[[int, int], None]] = None,
         wait_callback: Optional[Callable[[int], None]] = None,
         heartbeat: Optional[Callable[[], None]] = None,
+        display_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Index a document for retrieval; see :meth:`_index_document`.
 
         ``heartbeat`` is called once per extracted PDF page. Raising
         :class:`IndexingStopped` from it, or from ``progress_callback``,
         stops the index and keeps any cache the document had.
+
+        ``display_name`` is the name the user knows the file by, when
+        ``file_path`` is a copy. The returned ``file_name`` and ``error`` use
+        it in place of the copy's path.
         """
+        if display_name:
+            self.log.info(f"Indexing {display_name} (copy at {file_path})")
         previous = getattr(_HEARTBEAT, "fn", None)
         _HEARTBEAT.fn = heartbeat
         try:
-            return self._index_document(file_path, progress_callback, wait_callback)
+            stats = self._index_document(file_path, progress_callback, wait_callback)
         finally:
             _HEARTBEAT.fn = previous
+        if display_name:
+            stats["file_name"] = display_name
+            if stats.get("error"):
+                stats["error"] = name_file_for_user(
+                    str(stats["error"]), file_path, display_name
+                )
+        return stats
 
     def _index_document(
         self,
@@ -3288,8 +3323,9 @@ These positions indicate where to split the text."""
                 # The cache is fine; the embedder is not. Keep the cache.
                 return self._embedding_failed(stats, file_path, e)
             except FileLockError as e:
-                # Busy, not corrupt: re-extracting would redo another process's work.
-                return self._cache_busy(stats, file_path, e)
+                # Not corrupt: re-extracting would redo another process's work,
+                # or fail the same way saving into an unwritable cache.
+                return self._cache_lock_failed(stats, file_path, e)
             except Exception as e:
                 # A miss, not a delete: re-indexing replaces the entry atomically,
                 # and deleting here could destroy a fresh cache another process
@@ -3502,6 +3538,8 @@ These positions indicate where to split the text."""
             raise
         except EmbeddingUnavailableError as e:
             return self._embedding_failed(stats, file_path, e)
+        except FileLockError as e:
+            return self._cache_lock_failed(stats, file_path, e)
         except Exception as e:
             return self._index_failed(stats, file_path, e)
 
@@ -3535,21 +3573,35 @@ These positions indicate where to split the text."""
         stats["error"] = str(e)
         return stats
 
-    def _cache_busy(
+    def _cache_lock_failed(
         self, stats: Dict[str, Any], file_path: str, error: FileLockError
     ) -> Dict[str, Any]:
-        """Index stats for a document whose cache another process holds locked."""
-        message = f"Could not read the cached index for {Path(file_path).name}: {error}"
+        """Index stats for a document whose cache lock could not be taken.
+
+        ``error_type`` is ``cache_busy`` when another process held the lock,
+        ``cache_unwritable`` when this user cannot create files in the cache
+        folder, and ``cache_lock_error`` when the lock file itself is unusable.
+        """
+        folder = error.lock_path.parent
+        name = Path(file_path).name
         if isinstance(error, FileLockTimeout):
-            message += (
-                " Another GAIA process is probably indexing into the same cache; "
-                "index the document again once it finishes."
+            error_type = "cache_busy"
+            message = f"Could not use the cached index for {name} in {folder}: {error}"
+        elif lock_dir_unwritable(error):
+            error_type = "cache_unwritable"
+            message = (
+                f"Cannot use the RAG cache folder {folder} for {name}: {error} "
+                "The document itself is fine."
             )
+        else:
+            error_type = "cache_lock_error"
+            message = f"Cannot open the RAG cache lock in {folder} for {name}: {error}"
         if self.config.show_stats:
             print(f"❌ {message}")
         self.log.error(message)
         stats["error"] = message
-        stats["error_type"] = "cache_busy"
+        stats["error_type"] = error_type
+        stats["cache_dir"] = str(folder)
         return stats
 
     def _embedding_failed(
