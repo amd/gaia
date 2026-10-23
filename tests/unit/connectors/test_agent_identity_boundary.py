@@ -297,11 +297,8 @@ class TestEveryCredentialDoorIsGuarded:
 
         monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
         monkeypatch.setattr(
-            "gaia.connectors.api.get_provider",
-            lambda p: SimpleNamespace(client_id_hash="h", tenant=None),
-        )
-        monkeypatch.setattr(
-            "gaia.connectors.api.load_connection", lambda *a, **kw: None
+            "gaia.connectors.api.load_current_connection",
+            lambda *a, **kw: (SimpleNamespace(client_id_hash="h", tenant=None), None),
         )
         with pytest.raises(AuthRequiredError) as exc:
             _authorize_access(

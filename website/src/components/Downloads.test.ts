@@ -10,36 +10,31 @@
 // HTML back, so those two failures are assertions rather than a code review.
 //
 // Container API rather than parsing a built dist/index.html: it needs no build
-// step, lets the hub manifest be a fixture instead of the live network, and
+// step, lets the GitHub releases be a fixture instead of the live network, and
 // fails at the component rather than at whichever page happened to embed it.
 
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
-const HUB = 'https://hub.test';
+import type { GithubRelease } from '../data/github';
+
 const VERSION = '0.24.1';
 
-// Filenames are spelled out rather than produced by artifactFileName: a test
+// Asset names are spelled out rather than produced by artifactFileName: a test
 // that asks the source for the name it expects cannot notice the source
-// changing it. These are what hub.amd-gaia.ai publishes today.
-//
-// agent-ui's paths deliberately do NOT follow `agents/<id>/<version>/<file>`,
-// so an href that re-derives the object key instead of honouring the published
-// `path` fails here rather than in a visitor's 404.
+// changing it. These are the names publish.yml and release_components.yml
+// attach to a final release.
 const DESKTOP_FILES = {
   'win-x64': 'gaia-agent-ui-0.24.1-x64-setup.exe',
   'darwin-arm64': 'gaia-agent-ui-0.24.1-arm64.dmg',
   'linux-x64': 'gaia-agent-ui-0.24.1-x86_64.AppImage',
 } as const;
 
-const desktopUrl = (platform: keyof typeof DESKTOP_FILES) =>
-  `${HUB}/dl/desktop/${DESKTOP_FILES[platform]}`;
-
 const TUI_FILES = {
-  'win-x64': 'gaia-win-x64.exe',
-  'win-arm64': 'gaia-win-arm64.exe',
-  'darwin-x64': 'gaia-darwin-x64',
+  'win-x64': 'gaia-windows-amd64.exe',
+  'win-arm64': 'gaia-windows-arm64.exe',
+  'darwin-x64': 'gaia-darwin-amd64',
   'darwin-arm64': 'gaia-darwin-arm64',
-  'linux-x64': 'gaia-linux-x64',
+  'linux-x64': 'gaia-linux-amd64',
   'linux-arm64': 'gaia-linux-arm64',
   'win-x64-setup': 'gaia-0.24.1-win-x64-setup.exe',
   'darwin-arm64-pkg': 'gaia-0.24.1-darwin-arm64.pkg',
@@ -48,45 +43,56 @@ const TUI_FILES = {
   'linux-x64-rpm': 'gaia-0.24.1.x86_64.rpm',
 } as const;
 
-const tuiUrl = (key: keyof typeof TUI_FILES) =>
-  `${HUB}/agents/terminal-hub/${VERSION}/${TUI_FILES[key]}`;
+// Not the `releases/download/<tag>/<name>` shape GitHub happens to use today,
+// so an href built from the tag and name instead of the asset's own
+// browser_download_url fails here rather than in a visitor's 404.
+const assetUrl = (tag: string, name: string) => `https://objects.test/${tag}/${name}`;
 
-const artifact = (filename: string, path: string) => ({
-  filename,
-  path,
-  size_bytes: 98_765_432,
-  sha256: 'a'.repeat(64),
-  content_type: 'application/octet-stream',
+const desktopUrl = (platform: keyof typeof DESKTOP_FILES) =>
+  assetUrl(`v${VERSION}`, DESKTOP_FILES[platform]);
+const tuiUrl = (key: keyof typeof TUI_FILES) => assetUrl(`v${VERSION}`, TUI_FILES[key]);
+
+const asset = (tag: string, name: string) => ({
+  name,
+  browser_download_url: assetUrl(tag, name),
+  size: 98_765_432,
+  download_count: 7,
 });
 
-const MANIFESTS: Record<string, unknown> = {
-  'agent-ui': {
-    latest_version: VERSION,
-    versions: {
-      [VERSION]: {
-        artifacts: [
-          ...Object.values(DESKTOP_FILES).map((f) => artifact(f, `dl/desktop/${f}`)),
-          // Published beside the builds and matched by no key — the card has to
-          // ignore it rather than offer a sidecar file as a download.
-          artifact(
-            'gaia-agent-ui-0.24.1-arm64.dmg.blockmap',
-            'dl/desktop/gaia-agent-ui-0.24.1-arm64.dmg.blockmap',
-          ),
-        ],
-      },
-    },
-  },
-  'terminal-hub': {
-    latest_version: VERSION,
-    versions: {
-      [VERSION]: {
-        artifacts: Object.values(TUI_FILES).map((f) =>
-          artifact(f, `agents/terminal-hub/${VERSION}/${f}`),
-        ),
-      },
-    },
-  },
-};
+function release(tag: string, names: readonly string[], prerelease = false): GithubRelease {
+  return {
+    tag_name: tag,
+    draft: false,
+    prerelease,
+    published_at: '2026-09-16T08:00:00Z',
+    html_url: `https://github.com/amd/gaia/releases/tag/${tag}`,
+    assets: names.map((n) => asset(tag, n)),
+  };
+}
+
+const stable = (version: string, names: readonly string[]) => release(`v${version}`, names);
+
+// What the GitHub releases API returns, newest first. The pre-release is newer
+// than the stable one and carries the same terminal names, so a page that took
+// the newest release rather than the newest STABLE one links its files.
+let RELEASES: GithubRelease[] = [];
+const defaultReleases = (): GithubRelease[] => [
+  release(
+    'v0.25.0-rc1',
+    ['gaia-agent-ui-0.25.0-rc.1-x64-setup.exe', ...Object.values(TUI_FILES)],
+    true,
+  ),
+  stable(VERSION, [
+    ...Object.values(DESKTOP_FILES),
+    ...Object.values(TUI_FILES),
+    // Attached beside the builds and matched by no key — the card has to
+    // ignore them rather than offer an updater or checksum file as a download.
+    'gaia-agent-ui-0.24.1-arm64.dmg.blockmap',
+    'gaia-tui-SHA256SUMS.txt',
+    'amd_gaia-0.24.1-py3-none-any.whl',
+  ]),
+  stable('0.24.0', ['gaia-agent-ui-0.24.0-x64-setup.exe']),
+];
 
 // ---- A minimal HTML reader -------------------------------------------------
 //
@@ -181,53 +187,66 @@ const hrefsIn = (el: El): string[] =>
 
 // ---- Rendering -------------------------------------------------------------
 
-async function render() {
-  vi.resetModules();
-  process.env.HUB_CATALOG_URL = HUB;
+function stubReleases(respond: () => Response) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string | URL) => {
       const url = String(input);
-      const id = /\/agents\/([^/]+)\/manifest\.json/.exec(url)?.[1];
-      const manifest = id ? MANIFESTS[id] : undefined;
-      if (!manifest) throw new Error(`unexpected fetch in test: ${url}`);
-      return { ok: true, status: 200, json: async () => manifest } as Response;
+      if (!url.startsWith('https://api.github.com/repos/amd/gaia/releases?')) {
+        throw new Error(`unexpected fetch in test: ${url}`);
+      }
+      return respond();
     }),
   );
+}
 
-  const { getComponentRelease } = await import('../data/catalog');
+async function renderHtml(): Promise<string> {
+  vi.resetModules();
   const { experimental_AstroContainer } = await import('astro/container');
   const Downloads = (await import('./Downloads.astro')).default;
-
   const container = await experimental_AstroContainer.create();
-  const html = await container.renderToString(Downloads);
-  const [desktop, tui] = await Promise.all([
-    getComponentRelease('agent-ui'),
-    getComponentRelease('terminal-hub'),
-  ]);
+  return container.renderToString(Downloads);
+}
 
+async function render() {
+  stubReleases(() => Response.json(RELEASES));
+  const html = await renderHtml();
+  const { pickStableRelease } = await import('../data/github');
   return {
     html,
     root: parse(html),
-    publishedUrls: new Set([...desktop.binaries, ...tui.binaries].map((b) => b.url)),
+    // The stable release's own asset URLs: the only hrefs the page may use.
+    publishedUrls: new Set(pickStableRelease(RELEASES)!.assets.map((a) => a.url)),
   };
 }
 
 let rendered: Awaited<ReturnType<typeof render>>;
 
 beforeEach(async () => {
+  RELEASES = defaultReleases();
   rendered = await render();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  delete process.env.HUB_CATALOG_URL;
 });
 
 const ctas = () => descendants(rendered.root).filter((e) => 'data-dl-cta' in e.attrs);
+const cardCtas = () => ctas().filter((b) => b.attrs['data-surface'] !== 'primary');
+const primaryFor = (platform: string) =>
+  ctas().filter((b) => b.attrs['data-surface'] === 'primary' && b.attrs['data-platform'] === platform);
+/** The hrefs of a block's buttons — what a visitor lands on, not the folded options. */
+const primaryButtons = (block: El) =>
+  descendants(block)
+    .filter((e) => e.tag === 'a' && String(e.attrs.class ?? '').includes('g-btn'))
+    .map((a) => a.attrs.href as string);
+const optionHrefs = (block: El) =>
+  descendants(block)
+    .filter((e) => 'data-dl-option' in e.attrs)
+    .flatMap(hrefsIn);
 
 describe('Downloads.astro', () => {
-  it('links only to files the hub actually published', () => {
+  it('links only to assets of the newest stable release', () => {
     const links = descendants(rendered.root).filter(
       (e) => e.tag === 'a' && typeof e.attrs.href === 'string',
     );
@@ -236,9 +255,12 @@ describe('Downloads.astro', () => {
       .filter((href) => !rendered.publishedUrls.has(href));
     expect(invented).toEqual([]);
 
-    // 3 desktop CTAs + 7 terminal CTAs + 3 + 11 in the all-downloads list.
-    expect(links).toHaveLength(24);
-    expect(rendered.publishedUrls.size).toBe(15);
+    // 14 in the primary blocks + 3 desktop CTAs + 7 terminal CTAs + 3 + 11 in
+    // the all-downloads list.
+    expect(links).toHaveLength(38);
+    expect(rendered.publishedUrls.size).toBe(17);
+    // Never the pre-release, though it is newer and carries the same names.
+    expect(links.filter((a) => String(a.attrs.href).includes('-rc'))).toEqual([]);
   });
 
   it('keeps every reveal block hidden until the script places the machine', () => {
@@ -248,15 +270,20 @@ describe('Downloads.astro', () => {
         ? `cta ${e.attrs['data-surface']}:${e.attrs['data-platform']}`
         : 'data-dl-note' in e.attrs
           ? `note ${e.attrs['data-dl-note']}`
-          : `${e.tag}#${all.indexOf(e)}`;
+          : 'data-dl-primary' in e.attrs
+            ? 'primary wrapper'
+            : `${e.tag}#${all.indexOf(e)}`;
 
     const hidden = all.filter((e) => 'hidden' in e.attrs).map(name);
     const reveals = all
-      .filter((e) => 'data-dl-cta' in e.attrs || 'data-dl-note' in e.attrs)
+      .filter(
+        (e) => 'data-dl-cta' in e.attrs || 'data-dl-note' in e.attrs || 'data-dl-primary' in e.attrs,
+      )
       .map(name);
 
-    // 6 desktop blocks (3 builds, 3 "no build"), 6 terminal rows, 2 captions.
-    expect(reveals.length).toBe(14);
+    // 6 primary blocks and their wrapper, 6 desktop blocks (3 builds, 3 "no
+    // build"), 6 terminal rows, 2 captions.
+    expect(reveals.length).toBe(21);
     expect(hidden.sort()).toEqual([...reveals].sort());
 
     // The full list is the no-JS offer, so it must render open.
@@ -283,7 +310,7 @@ describe('Downloads.astro', () => {
     };
 
     const actual = Object.fromEntries(
-      ctas().map((block) => [
+      cardCtas().map((block) => [
         `${block.attrs['data-surface']}:${block.attrs['data-platform']}`,
         hrefsIn(block),
       ]),
@@ -341,24 +368,47 @@ describe('Downloads.astro', () => {
     const h2s = all.filter((e) => e.tag === 'h2');
     expect(h2s).toHaveLength(1);
     expect(String(h2s[0].attrs.class ?? '')).toContain('sr-only');
-    expect(all.filter((e) => e.tag === 'h3').map(textOf)).toEqual(['GAIA Agent UI', 'GAIA Terminal UI']);
+    expect(all.filter((e) => e.tag === 'h3').map(textOf)).toEqual([
+      'GAIA for Windows (x64)',
+      'GAIA for macOS (Apple Silicon)',
+      'GAIA for Linux (x64)',
+      'GAIA for Windows (ARM64)',
+      'GAIA for macOS (Intel)',
+      'GAIA for Linux (ARM64)',
+      'GAIA Agent UI',
+      'GAIA Terminal UI',
+    ]);
+  });
+
+  // Before 0.25.0 the Windows setup was terminal-only, so Windows leads with
+  // the desktop app like the other desktop platforms.
+  it('leads Windows with the desktop app when the setup predates the choice', () => {
+    const [win] = primaryFor('win-x64');
+    expect(win.attrs['data-kind']).toBe('desktop');
+    expect(primaryButtons(win)).toEqual([desktopUrl('win-x64')]);
+    expect(optionHrefs(win)).toEqual([tuiUrl('win-x64-setup'), tuiUrl('win-x64')]);
   });
 });
 
 // ---- The one Windows setup (0.25.0 on) -------------------------------------
 //
-// From 0.25.0 the terminal hub's win-x64-setup is the setup that asks desktop
+// From 0.25.0 the terminal's win-x64-setup is the setup that asks desktop
 // app / terminal / both. Same filename pattern as the terminal-only 0.24.1
 // setup above, which is why the card is gated on the version as well as on the
-// file being published.
+// file being on the release.
 
 const SETUP_VERSION = '0.25.0';
+const SETUP_DESKTOP_FILES = {
+  'win-x64': 'gaia-agent-ui-0.25.0-x64-setup.exe',
+  'darwin-arm64': 'gaia-agent-ui-0.25.0-arm64.dmg',
+  'linux-x64': 'gaia-agent-ui-0.25.0-x86_64.AppImage',
+} as const;
 const SETUP_RELEASE_FILES = {
-  'win-x64': 'gaia-win-x64.exe',
-  'win-arm64': 'gaia-win-arm64.exe',
-  'darwin-x64': 'gaia-darwin-x64',
+  'win-x64': 'gaia-windows-amd64.exe',
+  'win-arm64': 'gaia-windows-arm64.exe',
+  'darwin-x64': 'gaia-darwin-amd64',
   'darwin-arm64': 'gaia-darwin-arm64',
-  'linux-x64': 'gaia-linux-x64',
+  'linux-x64': 'gaia-linux-amd64',
   'linux-arm64': 'gaia-linux-arm64',
   'win-x64-setup': 'gaia-0.25.0-win-x64-setup.exe',
   'darwin-arm64-pkg': 'gaia-0.25.0-darwin-arm64.pkg',
@@ -366,70 +416,49 @@ const SETUP_RELEASE_FILES = {
 } as const;
 
 const setupUrl = (key: keyof typeof SETUP_RELEASE_FILES) =>
-  `${HUB}/agents/terminal-hub/${SETUP_VERSION}/${SETUP_RELEASE_FILES[key]}`;
+  assetUrl(`v${SETUP_VERSION}`, SETUP_RELEASE_FILES[key]);
+const setupDesktopUrl = (platform: keyof typeof SETUP_DESKTOP_FILES) =>
+  assetUrl(`v${SETUP_VERSION}`, SETUP_DESKTOP_FILES[platform]);
 
-function terminalHubAt(files: readonly string[]) {
-  return {
-    latest_version: SETUP_VERSION,
-    versions: {
-      [SETUP_VERSION]: {
-        artifacts: files.map((f) => artifact(f, `agents/terminal-hub/${SETUP_VERSION}/${f}`)),
-      },
-    },
-  };
-}
+const releaseAt = (tuiFiles: readonly string[]) => [
+  stable(SETUP_VERSION, [...Object.values(SETUP_DESKTOP_FILES), ...tuiFiles]),
+];
 
 describe('Downloads.astro with the one Windows setup', () => {
-  const original = MANIFESTS['terminal-hub'];
-  afterEach(() => {
-    MANIFESTS['terminal-hub'] = original;
-  });
-
-  it('offers Windows one setup instead of a card each', async () => {
-    MANIFESTS['terminal-hub'] = terminalHubAt(Object.values(SETUP_RELEASE_FILES));
+  it('gives Windows the setup as its one button, instead of a card each', async () => {
+    RELEASES = releaseAt(Object.values(SETUP_RELEASE_FILES));
     rendered = await render();
     const all = descendants(rendered.root);
 
-    const setup = ctas().filter((b) => b.attrs['data-surface'] === 'setup');
-    expect(setup).toHaveLength(1);
-    expect(setup[0].attrs['data-platform']).toBe('win-x64');
-    expect('hidden' in setup[0].attrs).toBe(true);
-    expect(hrefsIn(setup[0])).toEqual([setupUrl('win-x64-setup')]);
-    expect(String(setup[0].parent?.attrs.class ?? '')).toMatch(/\bspace-y-\d/);
-    expect(textOf(setup[0])).toContain('the desktop app, the terminal, or both');
+    const win = primaryFor('win-x64');
+    expect(win).toHaveLength(1);
+    expect(win[0].attrs['data-kind']).toBe('setup');
+    expect('hidden' in win[0].attrs).toBe(true);
+    expect(primaryButtons(win[0])).toEqual([setupUrl('win-x64-setup')]);
+    expect(String(win[0].parent?.attrs.class ?? '')).toMatch(/\bspace-y-\d/);
+    expect(textOf(win[0])).toContain('the desktop app, the terminal app, or both');
 
-    // The choice is made in the setup, so neither card offers Windows x64 a button.
-    const perSurfaceWindows = ctas().filter(
-      (b) => b.attrs['data-surface'] !== 'setup' && b.attrs['data-platform'] === 'win-x64',
-    );
-    expect(perSurfaceWindows).toEqual([]);
+    // Neither card offers Windows x64 a button.
+    expect(cardCtas().filter((b) => b.attrs['data-platform'] === 'win-x64')).toEqual([]);
 
     // The cards sit in a wrapper the script can hide; server-side it is shown.
     const cards = all.filter((e) => 'data-dl-cards' in e.attrs);
     expect(cards).toHaveLength(1);
     expect('hidden' in cards[0].attrs).toBe(false);
-    expect(all.filter((e) => e.tag === 'h3').map(textOf)).toEqual([
-      'GAIA for Windows',
-      'GAIA Agent UI',
-      'GAIA Terminal UI',
-    ]);
 
-    const invented = descendants(rendered.root)
-      .filter((e) => e.tag === 'a' && typeof e.attrs.href === 'string')
-      .map((a) => a.attrs.href as string)
-      .filter((href) => !rendered.publishedUrls.has(href));
+    const invented = hrefsIn(rendered.root).filter((href) => !rendered.publishedUrls.has(href));
     expect(invented).toEqual([]);
   });
 
   it('lists the setup once, and keeps the desktop-only setup and the raw binary', async () => {
-    MANIFESTS['terminal-hub'] = terminalHubAt(Object.values(SETUP_RELEASE_FILES));
+    RELEASES = releaseAt(Object.values(SETUP_RELEASE_FILES));
     rendered = await render();
     const [list] = descendants(rendered.root).filter((e) => 'data-dl-list' in e.attrs);
     const links = descendants(list).filter((e) => e.tag === 'a');
     const hrefs = links.map((a) => a.attrs.href as string);
 
     expect(hrefs.filter((h) => h === setupUrl('win-x64-setup'))).toHaveLength(1);
-    expect(hrefs).toContain(desktopUrl('win-x64'));
+    expect(hrefs).toContain(setupDesktopUrl('win-x64'));
     expect(hrefs).toContain(setupUrl('win-x64'));
 
     const names = links.map((a) =>
@@ -439,20 +468,350 @@ describe('Downloads.astro with the one Windows setup', () => {
     expect(names.find((n) => n.includes('Desktop app only'))).toContain('Windows (x64)');
   });
 
-  it('keeps the two cards when 0.25.0 published no Windows setup', async () => {
+  it('folds exactly the two single-app options under the setup, collapsed', async () => {
+    RELEASES = releaseAt(Object.values(SETUP_RELEASE_FILES));
+    rendered = await render();
+    const [win] = primaryFor('win-x64');
+
+    const folds = descendants(win).filter((e) => e.tag === 'details');
+    expect(folds).toHaveLength(1);
+    expect('open' in folds[0].attrs).toBe(false);
+
+    const options = descendants(folds[0])
+      .filter((e) => 'data-dl-option' in e.attrs)
+      .map((o) => ({ hrefs: hrefsIn(o), text: textOf(o) }));
+    expect(options.map((o) => o.hrefs)).toEqual([[setupDesktopUrl('win-x64')], [setupUrl('win-x64')]]);
+    const [desktop, terminal] = options;
+    expect(desktop.text).toContain('Desktop app only');
+    expect(desktop.text).toContain('downloads the GAIA agent the first time it runs');
+    expect(terminal.text).toContain('Terminal app only');
+    expect(terminal.text).toContain('irm https://amd-gaia.ai/install.ps1 | iex');
+    // Sizes come from the release's asset data, not the copy.
+    expect(desktop.text).toContain('94.2 MB');
+  });
+
+  it('hides only the single-app option the release does not carry', async () => {
+    RELEASES = [
+      stable(SETUP_VERSION, [
+        SETUP_DESKTOP_FILES['darwin-arm64'],
+        SETUP_DESKTOP_FILES['linux-x64'],
+        ...Object.values(SETUP_RELEASE_FILES),
+      ]),
+    ];
+    rendered = await render();
+    const [win] = primaryFor('win-x64');
+
+    expect(optionHrefs(win)).toEqual([setupUrl('win-x64')]);
+    expect(primaryButtons(win)).toEqual([setupUrl('win-x64-setup')]);
+    expect(hrefsIn(rendered.root).filter((h) => h.includes('gaia-agent-ui-0.25.0-x64'))).toEqual([]);
+  });
+
+  it('offers Windows no button when the release carries no setup', async () => {
     const { 'win-x64-setup': _setup, ...rest } = SETUP_RELEASE_FILES;
-    MANIFESTS['terminal-hub'] = terminalHubAt(Object.values(rest));
+    RELEASES = releaseAt(Object.values(rest));
     rendered = await render();
 
-    expect(ctas().filter((b) => b.attrs['data-surface'] === 'setup')).toEqual([]);
-    const windows = Object.fromEntries(
-      ctas()
-        .filter((b) => b.attrs['data-platform'] === 'win-x64')
-        .map((b) => [b.attrs['data-surface'], hrefsIn(b)]),
+    // Not the desktop-only setup or the raw binary promoted in its place.
+    expect(ctas().filter((b) => b.attrs['data-platform'] === 'win-x64')).toEqual([]);
+    // Still reachable from the full list, just never promoted to the button.
+    const [list] = descendants(rendered.root).filter((e) => 'data-dl-list' in e.attrs);
+    expect(hrefsIn(list)).toEqual(
+      expect.arrayContaining([setupDesktopUrl('win-x64'), setupUrl('win-x64')]),
     );
-    expect(windows).toEqual({
-      desktop: [desktopUrl('win-x64')],
-      tui: [setupUrl('win-x64')],
+  });
+});
+
+// ---- The primary download, per machine -------------------------------------
+//
+// The header's "Install" button jumps to this section, so every machine the
+// script can place has to land on a visible button. The script reveals the
+// primary blocks whose platform resolveTargets returns; these run the same
+// resolution on fake navigators against v0.25.0 as GitHub carries it once the
+// installers are attached.
+
+const FULL_FILES = [
+  ...Object.values(SETUP_DESKTOP_FILES),
+  'gaia-agent-ui-0.25.0-amd64.deb',
+  ...Object.values(SETUP_RELEASE_FILES),
+  'gaia-0.25.0-darwin-x64.pkg',
+  'gaia-0.25.0.x86_64.rpm',
+];
+const fullUrl = (name: string) => assetUrl(`v${SETUP_VERSION}`, name);
+
+const UA = {
+  win: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36',
+  mac: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36',
+  macSafari:
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+  linux: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36',
+  linuxArm: 'Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36',
+};
+
+const fakeNav = (userAgent: string, architecture?: string) => ({
+  userAgent,
+  maxTouchPoints: 0,
+  userAgentData:
+    architecture === undefined
+      ? undefined
+      : { getHighEntropyValues: async () => ({ architecture }) },
+});
+
+/** What the script reveals for this navigator: the primary blocks it matches. */
+async function landing(navigator: ReturnType<typeof fakeNav>) {
+  const { resolveTargets } = await import('../scripts/download-target');
+  const targets: string[] = await resolveTargets(navigator);
+  return ctas().filter(
+    (b) => b.attrs['data-surface'] === 'primary' && targets.includes(String(b.attrs['data-platform'])),
+  );
+}
+
+describe('Downloads.astro primary download', () => {
+  beforeEach(async () => {
+    RELEASES = [stable(SETUP_VERSION, FULL_FILES)];
+    rendered = await render();
+  });
+
+  it('lands an Apple Silicon Mac on the desktop app', async () => {
+    const blocks = await landing(fakeNav(UA.mac, 'arm'));
+    expect(blocks.map((b) => b.attrs['data-platform'])).toEqual(['darwin-arm64']);
+    expect(blocks[0].attrs['data-kind']).toBe('desktop');
+    expect(primaryButtons(blocks[0])).toEqual([fullUrl('gaia-agent-ui-0.25.0-arm64.dmg')]);
+    expect(optionHrefs(blocks[0])).toEqual([
+      fullUrl('gaia-0.25.0-darwin-arm64.pkg'),
+      fullUrl('gaia-darwin-arm64'),
+    ]);
+  });
+
+  it('lands a Mac of unknown architecture on both Macs, Apple Silicon first', async () => {
+    const blocks = await landing(fakeNav(UA.macSafari));
+    expect(blocks.map((b) => b.attrs['data-platform'])).toEqual(['darwin-arm64', 'darwin-x64']);
+    expect(blocks.map(primaryButtons)).toEqual([
+      [fullUrl('gaia-agent-ui-0.25.0-arm64.dmg')],
+      [fullUrl('gaia-0.25.0-darwin-x64.pkg')],
+    ]);
+  });
+
+  it('lands an Intel Mac on the terminal installer, and says why', async () => {
+    const blocks = await landing(fakeNav(UA.mac, 'x86'));
+    expect(blocks.map((b) => b.attrs['data-platform'])).toEqual(['darwin-x64']);
+    expect(blocks[0].attrs['data-kind']).toBe('terminal');
+    expect(primaryButtons(blocks[0])).toEqual([fullUrl('gaia-0.25.0-darwin-x64.pkg')]);
+    expect(textOf(blocks[0])).toContain('There is no desktop app for macOS (Intel)');
+    expect(optionHrefs(blocks[0])).toEqual([fullUrl('gaia-darwin-amd64')]);
+  });
+
+  it('lands Windows x64 on the setup', async () => {
+    const blocks = await landing(fakeNav(UA.win, 'x86'));
+    expect(blocks.map(primaryButtons)).toEqual([[fullUrl('gaia-0.25.0-win-x64-setup.exe')]]);
+  });
+
+  it('lands Linux x64 on the AppImage, with the .deb and the terminal folded', async () => {
+    const blocks = await landing(fakeNav(UA.linux, 'x86'));
+    expect(blocks.map(primaryButtons)).toEqual([[fullUrl('gaia-agent-ui-0.25.0-x86_64.AppImage')]]);
+    expect(optionHrefs(blocks[0])).toEqual([
+      fullUrl('gaia-agent-ui-0.25.0-amd64.deb'),
+      fullUrl('gaia_0.25.0_amd64.deb'),
+      fullUrl('gaia-0.25.0.x86_64.rpm'),
+      fullUrl('gaia-linux-amd64'),
+    ]);
+  });
+
+  it('lands the arm64 PCs on the raw terminal binary, and says why', async () => {
+    for (const [ua, file, label] of [
+      [UA.win, 'gaia-windows-arm64.exe', 'Windows (ARM64)'],
+      [UA.linuxArm, 'gaia-linux-arm64', 'Linux (ARM64)'],
+    ]) {
+      const blocks = await landing(fakeNav(ua, 'arm'));
+      expect(blocks.map(primaryButtons)).toEqual([[fullUrl(file)]]);
+      expect(textOf(blocks[0])).toContain(`There is no desktop app for ${label}`);
+    }
+  });
+
+  it('gives every platform a primary button on a complete release', () => {
+    const platforms = ctas()
+      .filter((b) => b.attrs['data-surface'] === 'primary' && primaryButtons(b).length === 1)
+      .map((b) => b.attrs['data-platform']);
+    expect(platforms).toEqual([
+      'win-x64',
+      'darwin-arm64',
+      'linux-x64',
+      'win-arm64',
+      'darwin-x64',
+      'linux-arm64',
+    ]);
+  });
+
+  it('drops a platform whose primary file is missing, rather than promote another', async () => {
+    RELEASES = [
+      stable(
+        SETUP_VERSION,
+        FULL_FILES.filter((f) => f !== 'gaia-agent-ui-0.25.0-arm64.dmg'),
+      ),
+    ];
+    rendered = await render();
+    expect(primaryFor('darwin-arm64')).toEqual([]);
+  });
+});
+
+// ---- What the release does not carry ---------------------------------------
+
+describe('Downloads.astro against an incomplete release', () => {
+  // v0.25.0 as GitHub actually has it: the desktop app and the raw terminal
+  // binaries, but none of the terminal installers (those went to the hub only).
+  // Each missing installer is absent — never a link built from a name the
+  // release does not carry.
+  it('renders no button for an installer the release does not carry', async () => {
+    const {
+      'win-x64-setup': _setup,
+      'darwin-arm64-pkg': _pkg,
+      'linux-x64-deb': _deb,
+      ...raw
+    } = SETUP_RELEASE_FILES;
+    RELEASES = releaseAt(Object.values(raw));
+    rendered = await render();
+
+    const tui = Object.fromEntries(
+      ctas()
+        .filter((b) => b.attrs['data-surface'] === 'tui')
+        .map((b) => [b.attrs['data-platform'], [b.attrs['data-kind'], ...hrefsIn(b)]]),
+    );
+    // No Windows x64 entry: its only button is the setup, which is missing here.
+    expect(tui).toEqual({
+      'darwin-arm64': ['binary', setupUrl('darwin-arm64')],
+      'linux-x64': ['binary', setupUrl('linux-x64')],
+      'win-arm64': ['binary', setupUrl('win-arm64')],
+      'darwin-x64': ['binary', setupUrl('darwin-x64')],
+      'linux-arm64': ['binary', setupUrl('linux-arm64')],
     });
+    const hrefs = descendants(rendered.root)
+      .filter((e) => e.tag === 'a')
+      .map((a) => a.attrs.href as string);
+    expect(hrefs.filter((h) => !rendered.publishedUrls.has(h))).toEqual([]);
+    expect(hrefs.filter((h) => /\.(pkg|deb|rpm)$|win-x64-setup/.test(h))).toEqual([]);
+  });
+
+  it('drops a desktop platform the release does not carry, and keeps the rest', async () => {
+    RELEASES = [
+      stable(SETUP_VERSION, [
+        SETUP_DESKTOP_FILES['linux-x64'],
+        ...Object.values(SETUP_RELEASE_FILES),
+      ]),
+    ];
+    rendered = await render();
+    const desktop = ctas().filter(
+      (b) => b.attrs['data-surface'] === 'desktop' && b.attrs['data-kind'] === 'build',
+    );
+    expect(desktop.map((b) => b.attrs['data-platform'])).toEqual(['linux-x64']);
+  });
+
+  it('fails the build when the stable release carries no desktop build', async () => {
+    stubReleases(() => Response.json([stable(SETUP_VERSION, Object.values(SETUP_RELEASE_FILES))]));
+    await expect(renderHtml()).rejects.toThrow(
+      /v0\.25\.0 carries \d+ assets, none of which is a desktop app build/,
+    );
+  });
+
+  it('fails the build when the stable release carries no terminal build', async () => {
+    stubReleases(() => Response.json([stable(SETUP_VERSION, Object.values(SETUP_DESKTOP_FILES))]));
+    await expect(renderHtml()).rejects.toThrow(
+      /v0\.25\.0 carries \d+ assets, none of which is a terminal build/,
+    );
+  });
+
+  // A release candidate is offered in its own section; it never stands in for
+  // a missing stable release.
+  it('fails the build when only pre-releases exist', async () => {
+    stubReleases(() =>
+      Response.json([release('v0.25.0-rc1', Object.values(SETUP_DESKTOP_FILES), true)]),
+    );
+    await expect(renderHtml()).rejects.toThrow(/no published stable release/);
+  });
+
+  it('fails the build when the GitHub API does', async () => {
+    stubReleases(() => new Response('rate limited', { status: 403 }));
+    await expect(renderHtml()).rejects.toThrow(/\[github\].*releases.*HTTP 403.*GITHUB_TOKEN/s);
+  });
+});
+
+// ---- The header's Install button -------------------------------------------
+//
+// Install starts the same file the install section leads with. The script
+// swaps the href in once pickInstallTarget places the machine on exactly one
+// platform; these read the per-platform targets the header ships and run the
+// same picker the script does.
+
+async function renderHeader(): Promise<El> {
+  vi.resetModules();
+  const { experimental_AstroContainer } = await import('astro/container');
+  const Header = (await import('./Header.astro')).default;
+  const container = await experimental_AstroContainer.create();
+  return parse(await container.renderToString(Header));
+}
+
+const installLinks = (header: El) =>
+  descendants(header).filter((e) => 'data-install-link' in e.attrs);
+
+// The minimal reader leaves entities as written; the browser decodes them.
+const decode = (v: string) =>
+  v.replace(/&(#34|quot);/g, '"').replace(/&(#39|apos);/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+const targetsOf = (link: El): Record<string, { href: string; label: string }> =>
+  JSON.parse(decode(String(link.attrs['data-install-targets'])));
+
+describe('Header.astro Install button', () => {
+  it('starts each platform on the same file as its primary download', async () => {
+    RELEASES = [stable(SETUP_VERSION, FULL_FILES)];
+    rendered = await render();
+    const links = installLinks(await renderHeader());
+    // The desktop nav and the mobile menu.
+    expect(links).toHaveLength(2);
+
+    for (const link of links) {
+      // No JS, or a machine the script cannot place, lands on the section.
+      expect(link.attrs.href).toBe('/#install');
+      const targets = targetsOf(link);
+      const primary = Object.fromEntries(
+        ctas()
+          .filter((b) => b.attrs['data-surface'] === 'primary')
+          .map((b) => [b.attrs['data-platform'], primaryButtons(b)[0]]),
+      );
+      expect(Object.keys(targets)).toEqual(Object.keys(primary));
+      expect(Object.keys(targets)).toHaveLength(6);
+      for (const [platform, href] of Object.entries(primary)) {
+        expect(targets[platform].href).toBe(href);
+      }
+      expect(targets['darwin-arm64'].label).toBe(
+        'Download GAIA for macOS (Apple Silicon) (gaia-agent-ui-0.25.0-arm64.dmg)',
+      );
+      expect(targets['win-x64'].href).toBe(fullUrl('gaia-0.25.0-win-x64-setup.exe'));
+      expect(targets['linux-x64'].href).toBe(fullUrl('gaia-agent-ui-0.25.0-x86_64.AppImage'));
+      expect(targets['darwin-x64'].href).toBe(fullUrl('gaia-0.25.0-darwin-x64.pkg'));
+      expect(targets['win-arm64'].href).toBe(fullUrl('gaia-windows-arm64.exe'));
+    }
+  });
+
+  it('keeps the section for a Mac of unknown architecture and an unknown OS', async () => {
+    RELEASES = [stable(SETUP_VERSION, FULL_FILES)];
+    const [link] = installLinks(await renderHeader());
+    const targets = targetsOf(link);
+    const { pickInstallTarget, resolveTargets } = await import('../scripts/download-target');
+    const pick = async (n: ReturnType<typeof fakeNav>) =>
+      pickInstallTarget<{ href: string; label: string }>(await resolveTargets(n), targets);
+
+    expect(await pick(fakeNav(UA.macSafari))).toBeNull();
+    expect(
+      await pick(
+        fakeNav('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148'),
+      ),
+    ).toBeNull();
+    expect((await pick(fakeNav(UA.mac, 'arm')))?.href).toBe(fullUrl('gaia-agent-ui-0.25.0-arm64.dmg'));
+  });
+
+  it('keeps the section on a platform whose primary file is missing', async () => {
+    RELEASES = [stable(SETUP_VERSION, FULL_FILES.filter((f) => f !== 'gaia-0.25.0-win-x64-setup.exe'))];
+    const [link] = installLinks(await renderHeader());
+    const targets = targetsOf(link);
+    expect(targets['win-x64']).toBeUndefined();
+    const { pickInstallTarget } = await import('../scripts/download-target');
+    expect(pickInstallTarget(['win-x64'], targets)).toBeNull();
   });
 });

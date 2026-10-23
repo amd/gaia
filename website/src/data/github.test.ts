@@ -3,7 +3,7 @@
 
 // Pure helpers tested directly; getRepoStats/getReleaseStats/getNpmDownloadStats
 // hit the network so only their pagination/error-shape behavior is covered
-// here, with fetch stubbed — same depth as catalog.test.ts.
+// here, with fetch stubbed.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -13,6 +13,7 @@ import {
   isMainReleaseTag,
   isReleaseCandidateTag,
   pickReleaseCandidate,
+  pickStableRelease,
   streamReleases,
   sumAssetDownloads,
   type GithubRelease,
@@ -295,5 +296,97 @@ describe('streamReleases', () => {
       release('v0.25.0-rc3', false, '2026-10-11T08:00:00Z'),
     ]).map((r) => r.tag);
     expect(tags).toEqual(['v0.24.1']);
+  });
+});
+
+describe('pickStableRelease', () => {
+  const asset = (tag: string, name: string) => ({
+    name,
+    browser_download_url: `https://github.com/amd/gaia/releases/download/${tag}/${name}`,
+    size: 1234,
+    download_count: 0,
+  });
+
+  function release(tag: string, opts: Partial<GithubRelease> = {}): GithubRelease {
+    return {
+      tag_name: tag,
+      draft: false,
+      prerelease: false,
+      published_at: '2026-10-01T00:00:00Z',
+      html_url: `https://github.com/amd/gaia/releases/tag/${tag}`,
+      assets: [asset(tag, `gaia-agent-ui-${tag.slice(1)}-x64-setup.exe`)],
+      ...opts,
+    };
+  }
+
+  it('takes the newest stable release, with its assets as published', () => {
+    const picked = pickStableRelease([release('v0.24.1'), release('v0.25.0')]);
+    expect(picked).toEqual({
+      tag: 'v0.25.0',
+      version: '0.25.0',
+      assets: [
+        {
+          name: 'gaia-agent-ui-0.25.0-x64-setup.exe',
+          url: 'https://github.com/amd/gaia/releases/download/v0.25.0/gaia-agent-ui-0.25.0-x64-setup.exe',
+          sizeBytes: 1234,
+        },
+      ],
+    });
+  });
+
+  // The candidate has its own section; the main buttons stay on the release
+  // that shipped, however new the candidate is.
+  it('skips pre-releases and drafts, however new', () => {
+    const picked = pickStableRelease([
+      release('v0.25.1-rc2', { prerelease: true }),
+      release('v0.26.0', { draft: true }),
+      release('v0.25.0'),
+    ]);
+    expect(picked?.tag).toBe('v0.25.0');
+  });
+
+  it('skips sub-package releases and anything not marked pre-release but RC-named', () => {
+    const picked = pickStableRelease([
+      release('agent-pkg-email-v9.0.0'),
+      release('v0.25.1-rc3'),
+      release('v0.25.0'),
+    ]);
+    expect(picked?.tag).toBe('v0.25.0');
+  });
+
+  // A hotfix to an older line published later must not take over the buttons.
+  it('orders by version, not by list position or publish date', () => {
+    const picked = pickStableRelease([
+      release('v0.24.2', { published_at: '2026-10-20T00:00:00Z' }),
+      release('v0.25.0', { published_at: '2026-10-18T00:00:00Z' }),
+      release('v0.25.0.1', { published_at: '2026-10-19T00:00:00Z' }),
+    ]);
+    expect(picked?.tag).toBe('v0.25.0.1');
+  });
+
+  it('is null when nothing stable has shipped', () => {
+    expect(pickStableRelease([release('v0.25.0-rc1', { prerelease: true })])).toBeNull();
+    expect(pickStableRelease([])).toBeNull();
+  });
+});
+
+describe('getStableRelease', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it('fails loudly, naming the fix, when the GitHub API is rate limited', async () => {
+    vi.resetModules();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
+    const mod = await import('./github');
+    await expect(mod.getStableRelease()).rejects.toThrow(/HTTP 403.*set GITHUB_TOKEN/s);
+  });
+
+  it('fails loudly when the repo has no stable release', async () => {
+    vi.resetModules();
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json([])));
+    const mod = await import('./github');
+    await expect(mod.getStableRelease()).rejects.toThrow(/no published stable release/);
   });
 });

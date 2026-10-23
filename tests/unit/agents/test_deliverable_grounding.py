@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Tests for the deliverable-figure check (``gaia.agents.base.deliverables``).
 
-The flagged shape is kw-02 from the rc12 knowledge-work run: a BOM whose unit
+The flagged shape is a BOM deliverable whose unit
 prices ($95, $60, $12) no tool result held, written through ``run_python``.
 The quiet shapes are ordinary deliverables: values copied from an input, a
 fetched price, totals and per-unit splits computed from them, dates, IDs, and
@@ -41,7 +41,7 @@ BOM_QUERY = (
     "write bom.xlsx with a 40-unit BOM and a total."
 )
 
-#: What the tools showed in kw-02: specs everywhere, two real prices.
+#: What the tools showed for the BOM: specs everywhere, two real prices.
 DATASHEET = (
     "Compute Module 5\nQuad-core Cortex-A76 at 2.4 GHz\nUp to 16 GB LPDDR4X\n"
     "Dual 4Kp60 HDMI\nPCIe Gen 2 x1\nOperating temperature 0-85 C\n"
@@ -110,7 +110,7 @@ INVENTED_BOM = (
 
 
 # ---------------------------------------------------------------------------
-# The kw-02 shape is flagged
+# Invented BOM prices are flagged
 # ---------------------------------------------------------------------------
 
 

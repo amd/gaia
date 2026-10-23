@@ -444,6 +444,22 @@ class TestTheStalePortNeverRestartsALeasedServer:
         assert client.wait_for_gaia_lemonade() is False
         assert world.daemon_posts == []
 
+    def test_with_nothing_recorded_each_poll_asks_the_daemon_once(self, world):
+        """Following with no record already asks for a start; asking again in
+        the same poll doubled the ensure calls and key replays."""
+        world.embedded.state_path.unlink()
+        client = _client()
+
+        def started_but_quiet():
+            # The daemon reports a server it has not recorded answering yet.
+            return _Http(200, {"base_url": f"http://localhost:{NEW_PORT}/api/v1"})
+
+        world.daemon_answers = [started_but_quiet, world.restarted]
+
+        assert client.wait_for_gaia_lemonade() is True
+        assert len(world.daemon_posts) == 2
+        assert world.now == pytest.approx(lc.GAIA_LEMONADE_RECONNECT_POLL_SECONDS)
+
     def test_a_stale_port_never_reaches_a_stop(self, world, monkeypatch):
         """Even waiting on a default-port client only ever asks ``ensure``."""
         world.embedded.state_path.unlink()
