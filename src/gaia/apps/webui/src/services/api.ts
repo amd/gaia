@@ -285,8 +285,9 @@ export async function checkSetup(skipChatModel = false): Promise<SetupCheck> {
     return apiFetch('GET', `/setup/check?skip_chat_model=${skipChatModel}`);
 }
 
-export async function startSetup(skipChatModel: boolean): Promise<SetupRunStatus> {
-    return apiFetch('POST', '/setup/run', { skip_chat_model: skipChatModel });
+/** `gaiaLemonade` sets up, and saves, GAIA's own Lemonade Server instead of the user's. */
+export async function startSetup(skipChatModel: boolean, gaiaLemonade = false): Promise<SetupRunStatus> {
+    return apiFetch('POST', '/setup/run', { skip_chat_model: skipChatModel, gaia_lemonade: gaiaLemonade });
 }
 
 export async function getSetupStatus(): Promise<SetupRunStatus> {
