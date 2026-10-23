@@ -703,7 +703,11 @@ def safe_open_document(
 
     raw = Path(path)
     roots = document_roots()
-    denied = f"Access denied: path must be within one of: {_describe_roots(roots)}"
+    denied = (
+        f"GAIA can only read documents under {_describe_roots(roots)}. Move or "
+        f"copy the file there, or add its folder to {DOCUMENT_ROOTS_ENV} and "
+        "restart GAIA."
+    )
 
     # 1. Must be within an allowed root — check before lstat so that
     # non-existent paths outside them return 403 (not 404).
