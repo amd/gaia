@@ -419,6 +419,7 @@ def relay_query(
     allowed_paths: Optional[List[str]] = None,
     memory: Optional[str] = None,
     changes_turn_id: Optional[str] = None,
+    surface: Optional[str] = None,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
 
@@ -432,6 +433,9 @@ def relay_query(
 
     *memory* — the chat's memory mode (``on`` / ``private`` / ``off``), for a
     sidecar the caller has established takes it (``profiles.memory_supported``).
+
+    *surface* — the front-end this turn comes from, for a sidecar the caller
+    has established takes it (``profiles.surface_supported``).
 
     *documents* — absolute paths of the chat's attached files, for a sidecar
     the caller has established takes them (``profiles.documents_supported``).
@@ -506,6 +510,8 @@ def relay_query(
         body["memory"] = memory
     if changes_turn_id is not None:
         body["changes_turn_id"] = changes_turn_id
+    if surface is not None:
+        body["surface"] = surface
 
     syncs_mode = full_access is not None and bool(session_id)
     enable_after_start = False
