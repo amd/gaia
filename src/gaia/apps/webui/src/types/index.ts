@@ -692,6 +692,8 @@ export interface Schedule {
     session_id: string | null;
     /** Parsed natural-language schedule as JSON; null for plain-interval schedules. */
     schedule_config: string | null;
+    /** When it runs, e.g. "Weekdays at 8:00 AM" — the same words the form preview shows. */
+    description: string;
 }
 
 /** A single execution result for a scheduled task. */
