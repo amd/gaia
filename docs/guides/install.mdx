@@ -293,7 +293,7 @@ The CLI lets you escalate cleanup as far as you want — useful for reclaiming d
 ```bash
 gaia uninstall --purge --dry-run            # Preview the purge tier without deleting
 gaia uninstall --venv                       # Just the Python env
-gaia uninstall --purge                      # Venv + chats + documents + config + installer binaries, daemon state and PATH edits
+gaia uninstall --purge                      # Venv + chats, documents, memory, sessions, config, agents, saved keys + installer leftovers
 gaia uninstall --purge --purge-lemonade     # Also remove Lemonade Server install
 gaia uninstall --purge --purge-models       # Also remove downloaded Lemonade models
 gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
@@ -309,7 +309,7 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Document Library uploads | `~/.gaia/documents/` |
 | Chat file attachments | `~/.gaia/chat/uploads/` |
 | Configuration | `~/.gaia/electron-config.json` |
-| Logs | `~/.gaia/gaia.log` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
+| Logs | `~/.gaia/gaia.log`, or the path in `GAIA_LOG_FILE` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
 | Terminal UI and agent binaries (one-line installer) | `~/.gaia/bin/` |
 | Agent run traces | `~/.gaia/traces/` |
 | Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |

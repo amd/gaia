@@ -68,6 +68,7 @@ from gaia.llm.retry import (
     current_cancel_check,
     current_retry_listener,
     hosted_reply_timeout,
+    http_body_text,
     retry_state_of,
     sleep_unless_cancelled,
     tag_http_failure,
@@ -2240,6 +2241,26 @@ def _remember_cloud_availability(model_id: Optional[str], ok: bool) -> None:
         log.warning(f"Could not record availability of {model_id}: {e}")
 
 
+def catalog_context_window(entry: Dict[str, Any]) -> Optional[int]:
+    """The context window one ``/api/v1/models`` entry should be shown with.
+
+    A cloud entry's ``context_length`` is the window Lemonade last "loaded" it
+    at (4096 once used), not the provider's; ``max_context_window`` is the
+    provider's. A local entry's ``context_length`` is its configured window.
+    """
+
+    def positive(value: Any) -> Optional[int]:
+        ok = isinstance(value, int) and not isinstance(value, bool) and value > 0
+        return value if ok else None
+
+    if entry.get("recipe") == CLOUD_RECIPE or entry.get("cloud_provider"):
+        # Older Lemonade lists only context_length, and there it is the real window.
+        return positive(entry.get("max_context_window")) or positive(
+            entry.get("context_length")
+        )
+    return positive(entry.get("context_length"))
+
+
 def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
     """Remember which ids in a ``/api/v1/models`` payload are cloud-routed.
 
@@ -2262,7 +2283,7 @@ def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
         discovered[model_id] = {
             "tool_calling": "tool-calling" in labels,
             "labels": list(labels),
-            "ctx_size": entry.get("context_length"),
+            "ctx_size": catalog_context_window(entry),
         }
     # Rebind rather than clear()+update(): the UI and daemon call list_models()
     # from several threads, and a reader landing between the two saw an empty
@@ -4899,24 +4920,25 @@ class LemonadeClient:
                 )
 
             if response.status_code != 200:
+                body = http_body_text(response)
                 # The retry verdict is read from the body here, before the
                 # cloud branch drops it (provider bodies are never reflected).
                 if self.cloud_model_provider(model):
                     raise tag_http_failure(
                         self._cloud_failure(response.status_code, model),
                         response.status_code,
-                        response.text,
+                        body,
                         response.headers,
                     )
                 error_msg = (
                     f"Error in chat completions "
-                    f"(status {response.status_code}): {response.text}"
+                    f"(status {response.status_code}): {body}"
                 )
                 self.log.error(error_msg)
                 raise tag_http_failure(
                     LemonadeClientError(error_msg),
                     response.status_code,
-                    response.text,
+                    body,
                     response.headers,
                 )
 
@@ -5483,12 +5505,15 @@ class LemonadeClient:
                 )
 
             if response.status_code != 200:
-                error_msg = f"Error in completions (status {response.status_code}): {response.text}"
+                body = http_body_text(response)
+                error_msg = (
+                    f"Error in completions (status {response.status_code}): {body}"
+                )
                 self.log.error(error_msg)
                 raise tag_http_failure(
                     LemonadeClientError(error_msg),
                     response.status_code,
-                    response.text,
+                    body,
                     response.headers,
                 )
 
@@ -6355,7 +6380,7 @@ class LemonadeClient:
                 )
 
             if response.status_code != 200:
-                error_msg = f"Error pulling model (status {response.status_code}): {response.text}"
+                error_msg = f"Error pulling model (status {response.status_code}): {http_body_text(response)}"
                 self.log.error(error_msg)
                 raise LemonadeClientError(error_msg)
 
@@ -6669,7 +6694,7 @@ class LemonadeClient:
                 )
 
             if response.status_code != 200:
-                error_msg = f"Error in responses (status {response.status_code}): {response.text}"
+                error_msg = f"Error in responses (status {response.status_code}): {http_body_text(response)}"
                 self.log.error(error_msg)
                 raise LemonadeClientError(error_msg)
 
@@ -6700,7 +6725,9 @@ class LemonadeClient:
         This is a simplified implementation that may need enhancement
         for full SSE specification compliance.
         """
-        for line in response.iter_lines(decode_unicode=True):
+        # Decoded here: requests reads text/event-stream as ISO-8859-1.
+        for raw in response.iter_lines():
+            line = raw.decode("utf-8", errors="replace")
             if line.startswith("data: "):
                 try:
                     data = line[6:]  # Remove "data: " prefix
@@ -8604,7 +8631,8 @@ class LemonadeClient:
 
             if response.status_code >= 400:
                 raise LemonadeClientError(
-                    f"Request failed with status {response.status_code}: {response.text}"
+                    f"Request failed with status {response.status_code}: "
+                    f"{http_body_text(response)}"
                 )
 
             return response.json()
@@ -8623,7 +8651,7 @@ class LemonadeClient:
             raise LemonadeClientError(f"Request failed: {str(e)}") from e
         except json.JSONDecodeError as e:
             raise LemonadeClientError(
-                f"Failed to parse response as JSON: {response.text}"
+                f"Failed to parse response as JSON: {http_body_text(response)}"
             ) from e
 
 

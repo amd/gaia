@@ -91,6 +91,26 @@ describe("installQuitCleanup", () => {
     }
   });
 
+  test("an instant cleanup still quits, though Electron ignores a re-quit in the same tick", async () => {
+    // Electron is still unwinding the prevented will-quit until the next task.
+    const app = new EventEmitter();
+    app.exited = 0;
+    let unwinding = false;
+    app.quit = jest.fn(() => {
+      if (unwinding) return;
+      let prevented = false;
+      unwinding = true;
+      app.emit("will-quit", { preventDefault: () => (prevented = true) });
+      setImmediate(() => (unwinding = false));
+      if (!prevented) app.exited += 1;
+    });
+    const state = installQuitCleanup({ app, cleanup: async () => {}, logger: quietLogger });
+
+    app.quit();
+    await state.running;
+    expect(app.exited).toBe(1);
+  });
+
   test("a cleanup that throws is logged and the app still quits", async () => {
     const app = fakeApp();
     const logger = { log: () => {}, error: jest.fn() };
@@ -108,10 +128,23 @@ describe("installQuitCleanup", () => {
     expect(String(logger.error.mock.calls[0][1])).toMatch(/tray already destroyed/);
   });
 
-  test("the default timeout leaves room for the agents' and backend's own bounded stops", () => {
-    // 5 s agent shutdown + 2 s tree grace + 1 s SIGKILL wait run before the backend's 3 s + 1 s.
-    expect(CLEANUP_TIMEOUT_MS).toBeGreaterThanOrEqual(12000);
-  });
+  test.each(["win32", "linux", "darwin"])(
+    "the default timeout outlasts the slowest agent and backend stop on %s",
+    (platform) => {
+      // Agents and the backend stop side by side, so the slower one sets the bar.
+      // Past the deadline the app quits with the agent's children still running.
+      const AgentProcessManager = require("../../src/gaia/apps/webui/services/agent-process-manager.cjs");
+      const { worstCaseKillMs } = require("../../src/gaia/apps/webui/services/process-tree.cjs");
+      const portManager = require("../../src/gaia/apps/webui/services/port-manager.cjs");
+      const backend = worstCaseKillMs({
+        platform,
+        graceMs: portManager.BACKEND_KILL_GRACE_MS,
+        forceWaitMs: portManager.BACKEND_FORCE_WAIT_MS,
+      });
+      expect(AgentProcessManager.worstCaseStopMs(platform)).toBeLessThan(CLEANUP_TIMEOUT_MS);
+      expect(backend).toBeLessThan(CLEANUP_TIMEOUT_MS);
+    }
+  );
 });
 
 describe("a fatal error quits through cleanup", () => {
@@ -170,6 +203,8 @@ describe("a fatal error quits through cleanup", () => {
     expect(order).toEqual(["beforeQuit", "cleanup"]);
     expect(exitSpy).not.toHaveBeenCalled();
     gate.resolve();
+    // The re-quit waits a task (setImmediate), which fake timers hold until advanced.
+    await jest.advanceTimersByTimeAsync(0);
     await state.running;
     expect(app.exited).toBe(1);
   });
@@ -198,6 +233,8 @@ describe("a fatal error quits through cleanup", () => {
     expect(log).toMatch(/FATAL \(while already quitting\).*EPIPE during cleanup/);
 
     gate.resolve();
+    // The re-quit waits a task (setImmediate), which fake timers hold until advanced.
+    await jest.advanceTimersByTimeAsync(0);
     await state.running;
     expect(app.exited).toBe(1);
   });

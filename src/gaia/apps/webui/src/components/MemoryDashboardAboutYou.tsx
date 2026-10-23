@@ -18,6 +18,7 @@ export interface AboutYouItem {
     sensitive: boolean;
     created_at: string;
     updated_at: string;
+    due_at?: string | null;
 }
 
 /** Categories that describe the user, grouped under a plain heading. */
@@ -48,6 +49,22 @@ function relativeDay(iso: string): string {
     if (days === 1) return 'yesterday';
     if (days < 30) return `${days} days ago`;
     return then.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+/** "Due Fri, Oct 30", or "Was due …" once past; a midnight due date counts as the whole day. */
+export function dueLabel(iso: string, now: Date = new Date()): { text: string; past: boolean } | null {
+    const bare = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+    const due = bare ? new Date(+bare[1], +bare[2] - 1, +bare[3]) : new Date(iso);
+    if (Number.isNaN(due.getTime())) return null;
+    const allDay = due.getHours() === 0 && due.getMinutes() === 0 && due.getSeconds() === 0;
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const past = allDay ? due.getTime() < startOfToday : due.getTime() < now.getTime();
+    const when = due.toLocaleString(undefined, {
+        weekday: 'short', month: 'short', day: 'numeric',
+        ...(due.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}),
+        ...(allDay ? {} : { hour: 'numeric', minute: '2-digit' }),
+    });
+    return { text: `${past ? 'Was due' : 'Due'} ${when}`, past };
 }
 
 interface Props {
@@ -140,6 +157,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                 context: item.context,
                 entity: item.entity ?? undefined,
                 sensitive: item.sensitive,
+                due_at: item.due_at ?? undefined,
             });
             setForgotten(prev => prev.filter(f => f.id !== item.id));
             await load();
@@ -253,6 +271,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                         <ul className="mem-about-list">
                             {group.rows.map(item => {
                                 const hidden = item.sensitive && !revealed.has(item.id);
+                                const due = item.due_at ? dueLabel(item.due_at) : null;
                                 return (
                                     <li key={item.id} className="mem-about-item">
                                         {editingId === item.id ? (
@@ -288,6 +307,11 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                                                             <Eye size={12} /> Sensitive — show
                                                         </button>
                                                     ) : item.content}
+                                                    {due && (
+                                                        <span className={`mem-about-due${due.past ? ' is-overdue' : ''}`}>
+                                                            {due.text}
+                                                        </span>
+                                                    )}
                                                     <span className="mem-about-meta">
                                                         {sourceLabel(item.source)} · {relativeDay(item.updated_at)}
                                                     </span>

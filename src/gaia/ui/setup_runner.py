@@ -54,6 +54,8 @@ _STEP_RE = re.compile(r"^Step \d+/\d+:\s*(.+?)\.*$")
 _DOWNLOAD_RE = re.compile(r"^Downloading:\s*(\S+)")
 _FETCH_RE = re.compile(r"^Downloading Lemonade Server v(\S+?)\.*$")
 _PERCENT_RE = re.compile(r"\]\s*(\d{1,3})%")
+# "1.20 GB / 2.50 GB" (a model pull) or "(1.0 MB/5.0 MB)" (the server download).
+_SIZE_RE = re.compile(r"(\d+(?:\.\d+)?\s*[KMG]B)\s*/\s*(\d+(?:\.\d+)?\s*[KMG]B)")
 _CHAT_MODEL_RE = re.compile(r"^Chat model:\s*(\S+)")
 _LOG_PREFIX_RE = re.compile(r"^\[\d{4}-\d\d-\d\d [\d:]+\]\s*\|")
 
@@ -79,6 +81,41 @@ def mark_initialized() -> None:
     marker.write_text("ready", encoding="utf-8")
 
 
+def _setup_error_path():
+    from gaia.config import gaia_home
+
+    return gaia_home() / "chat" / "setup-error"
+
+
+def setup_error() -> Optional[str]:
+    """Why the last first-run setup failed, or None once one has succeeded.
+
+    ``gaia init --check`` without ``--load`` reads downloaded models as ready,
+    so the chat screen can open after a run whose models then failed to load;
+    this lets it say why before the first message does.
+    """
+    path = _setup_error_path()
+    try:
+        return path.read_text(encoding="utf-8").strip() or None
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        return f"GAIA could not read why setup failed from {path}: {e}"
+
+
+def _record_outcome(error: Optional[str]) -> None:
+    """Keep a failed run's error for :func:`setup_error`; a success clears it."""
+    path = _setup_error_path()
+    try:
+        if error:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(error, encoding="utf-8")
+        else:
+            path.unlink(missing_ok=True)
+    except OSError as e:
+        logger.warning("Could not record setup's outcome at %s: %s", path, e)
+
+
 def _gaia_argv(*args: str) -> List[str]:
     # This interpreter, so setup acts on the same GAIA install that serves the UI.
     return [sys.executable, "-m", "gaia.cli", *args]
@@ -94,18 +131,26 @@ def check_args(skip_chat_model: bool, load: bool) -> List[str]:
 
 
 def _choice_flags(
-    skip_chat_model: bool, server_only: bool, chat_model: Optional[str]
+    skip_chat_model: bool,
+    server_only: bool,
+    chat_model: Optional[str],
+    gaia_lemonade: bool = False,
 ) -> List[str]:
     if server_only:
-        return ["--skip-models"]
-    if skip_chat_model:
-        return ["--skip-chat-model"]
-    # The model the screen showed, so the run can't re-pick a different one.
-    return ["--chat-model", chat_model] if chat_model else []
+        flags = ["--skip-models"]
+    elif skip_chat_model:
+        flags = ["--skip-chat-model"]
+    else:
+        # The model the screen showed, so the run can't re-pick a different one.
+        flags = ["--chat-model", chat_model] if chat_model else []
+    return flags + (["--gaia-lemonade"] if gaia_lemonade else [])
 
 
 def run_args(
-    skip_chat_model: bool, server_only: bool = False, chat_model: Optional[str] = None
+    skip_chat_model: bool,
+    server_only: bool = False,
+    chat_model: Optional[str] = None,
+    gaia_lemonade: bool = False,
 ) -> List[str]:
     # --yes: nobody can answer a prompt on a pipe. --skip-webui-build: a source
     # checkout would otherwise rebuild the very UI that is running this.
@@ -116,18 +161,21 @@ def run_args(
         "--yes",
         "--skip-webui-build",
         "--progress-json",
-        *_choice_flags(skip_chat_model, server_only, chat_model),
+        *_choice_flags(skip_chat_model, server_only, chat_model, gaia_lemonade),
     ]
 
 
 def run_command(
-    skip_chat_model: bool, server_only: bool = False, chat_model: Optional[str] = None
+    skip_chat_model: bool,
+    server_only: bool = False,
+    chat_model: Optional[str] = None,
+    gaia_lemonade: bool = False,
 ) -> str:
     """What a person would type to do this themselves."""
     return " ".join(
         [
             "gaia init --profile gaia",
-            *_choice_flags(skip_chat_model, server_only, chat_model),
+            *_choice_flags(skip_chat_model, server_only, chat_model, gaia_lemonade),
         ]
     )
 
@@ -197,6 +245,7 @@ class Progress:
     phase: Optional[str] = None
     text: str = ""
     percent: Optional[int] = None
+    size: Optional[str] = None
     failed: bool = False
     chat_model: Optional[str] = None
 
@@ -212,7 +261,11 @@ def describe(line: str) -> Optional[Progress]:
         return None
     m = _PERCENT_RE.search(line)
     if m:
-        return Progress(percent=min(100, int(m.group(1))))
+        size = _SIZE_RE.search(line)
+        return Progress(
+            percent=min(100, int(m.group(1))),
+            size=f"{size.group(1)} of {size.group(2)}" if size else None,
+        )
     m = _CHAT_MODEL_RE.match(line)
     if m:
         return Progress(chat_model=m.group(1))
@@ -270,6 +323,80 @@ def users_lemonade_url() -> Optional[str]:
     return info["base_url"] if info["mode"] == choice.MODE_EXTERNAL else None
 
 
+#: Hosts that mean this PC, including the wildcard bind addresses.
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0", "::")
+
+
+def _start_hint(host: Optional[str]) -> Optional[str]:
+    """How to start the user's server, or None when this PC has none to start."""
+    from gaia.llm.lemonade_launcher import describe_start_hint, resolve_lemonade
+
+    if host not in _LOCAL_HOSTS:
+        return f"Start it on the computer at {host}, then try again."
+    # With nothing installed the hint says to run `gaia init`, which fails the same way.
+    if not resolve_lemonade().found:
+        return None
+    return describe_start_hint().instruction
+
+
+def server_problem() -> Optional[Dict[str, Any]]:
+    """Plain words and next steps when the user's own Lemonade isn't answering.
+
+    None when GAIA uses its own server or the user's answers: the failure was
+    something else, and ``gaia init``'s own error line says what.
+    """
+    from urllib.parse import urlparse
+
+    from gaia.config import GaiaConfigError
+    from gaia.llm import lemonade_choice as choice
+    from gaia.llm.lemonade_client import (
+        configured_lemonade_url,
+        resolve_lemonade_base_url,
+    )
+
+    try:
+        configured = configured_lemonade_url()
+        from_env = choice.configured_source() == "env"
+    except (choice.LemonadeChoiceError, GaiaConfigError) as e:
+        logger.warning("Setup failed; could not read which Lemonade it used: %s", e)
+        return None
+    if not configured:
+        return None
+    url = resolve_lemonade_base_url(configured)
+    if choice.probe(url).status != choice.UNREACHABLE:
+        return None
+    parsed = urlparse(url)
+    try:
+        start = _start_hint(parsed.hostname)
+    except OSError as e:
+        # The hint is extra; losing it must not hide that the server isn't answering.
+        logger.warning("Could not work out how to start Lemonade: %s", e)
+        start = None
+    return {
+        "kind": "server_unreachable",
+        "message": f"Your Lemonade Server at {parsed.netloc or url} isn't answering.",
+        "start": start,
+        # LEMONADE_BASE_URL outranks a saved choice, so only unsetting it switches.
+        "use_gaia": not from_env,
+        "switch_hint": (
+            "LEMONADE_BASE_URL points GAIA at this server. To use GAIA's own "
+            "instead, unset it and restart GAIA."
+            if from_env
+            else None
+        ),
+    }
+
+
+def _forget_previous_server() -> None:
+    """Cached agents and the model manager still point at the old server."""
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    from ._chat_helpers import evict_all_session_agents
+
+    evict_all_session_agents()
+    LemonadeManager.reset()
+
+
 def step_labels(
     skip_chat_model: bool,
     users_server: Optional[str] = None,
@@ -320,11 +447,15 @@ class SetupRun:
     server_only: bool = False
     #: The chat model the screen showed, passed as `--chat-model`.
     pinned_model: Optional[str] = None
+    gaia_lemonade: bool = False
     state: str = "running"  # running | verifying | ready | failed | cancelled
     phase: Optional[str] = None
     text: str = "Starting setup"
     percent: Optional[int] = None
+    size: Optional[str] = None
     error: Optional[str] = None
+    #: The user's server didn't answer: see :func:`server_problem`.
+    problem: Optional[Dict[str, Any]] = None
     log: List[str] = field(default_factory=list)
     status: Optional[Dict[str, Any]] = None
     #: ``{"id", "reason"}`` for each larger model setup passed over.
@@ -337,7 +468,12 @@ class SetupRun:
     _download_at: float = 0.0
 
     def command(self) -> str:
-        return run_command(self.skip_chat_model, self.server_only, self.pinned_model)
+        return run_command(
+            self.skip_chat_model,
+            self.server_only,
+            self.pinned_model,
+            self.gaia_lemonade,
+        )
 
     def _step_status(self, i: int, reached: int) -> str:
         if self.state == "ready":
@@ -403,11 +539,14 @@ class SetupRun:
             "steps": steps,
             "text": self.text,
             "percent": self.percent,
+            "size": self.size,
             "error": self.error,
+            "problem": self.problem,
             "command": self.command(),
             "log_tail": self.log[-40:],
             "skip_chat_model": self.skip_chat_model,
             "server_only": self.server_only,
+            "gaia_lemonade": self.gaia_lemonade,
             "chat_model": None if self.skip_chat_model else self.chat_model,
             "passed_over": self.passed_over,
             "download_gb": self.download_gb,
@@ -432,21 +571,34 @@ class SetupRunner:
         skip_chat_model: bool,
         server_only: bool = False,
         chat_model: Optional[str] = None,
+        gaia_lemonade: bool = False,
     ) -> Dict[str, Any]:
+        """Start setup; *gaia_lemonade* sets up and saves GAIA's own server."""
+        if gaia_lemonade:
+            from gaia.llm.lemonade_choice import env_override_note
+
+            if env_override_note():
+                raise SetupError(
+                    "LEMONADE_BASE_URL points GAIA at another server, so setup "
+                    "can't switch to GAIA's own. Unset it and restart GAIA."
+                )
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
                 raise SetupError("Setup is already running.")
             pinned = None if skip_chat_model or server_only else chat_model
             run = SetupRun(
                 skip_chat_model=skip_chat_model,
-                users_server=users_lemonade_url(),
+                users_server=None if gaia_lemonade else users_lemonade_url(),
                 chat_model=pinned,
                 server_only=server_only,
                 pinned_model=pinned,
+                gaia_lemonade=gaia_lemonade,
             )
             try:
                 self._proc = subprocess.Popen(
-                    _gaia_argv(*run_args(skip_chat_model, server_only, pinned)),
+                    _gaia_argv(
+                        *run_args(skip_chat_model, server_only, pinned, gaia_lemonade)
+                    ),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL,
@@ -488,6 +640,7 @@ class SetupRunner:
                         f"Setup stopped on an unexpected error: {e}. "
                         "See the Agent UI backend log for details."
                     )
+                    _record_outcome(run.error)
 
     def _pump(self, run: SetupRun, proc: subprocess.Popen) -> None:
         buf = b""
@@ -509,25 +662,43 @@ class SetupRunner:
         if buf:
             self._consume(run, buf.decode("utf-8", errors="replace"))
         code = proc.wait()
+        # A --gaia-lemonade run fails on GAIA's own server; its error says why.
+        failed_early = (
+            code != 0
+            and run.state == "running"
+            and run.phase in (None, PHASE_SERVER)
+            and not run.gaia_lemonade
+        )
+        # Probed outside the lock: the user's server may take seconds to refuse.
+        problem = server_problem() if failed_early else None
+        if code == 0 and run.gaia_lemonade:
+            # init saved the switch, whether or not the check below passes.
+            _forget_previous_server()
         with self._lock:
             if run.state == "cancelled":
                 return
             if code != 0:
                 run.state = "failed"
+                if problem is not None:
+                    # The raw exception stays in the log, behind "Details".
+                    run.problem, run.error = problem, problem["message"]
+                    _record_outcome(run.error)
+                    return
                 run.error = (
                     f"`{run.command()}` failed "
                     f"(exit {code}): {run.error or _last_line(chr(10).join(run.log))}"
                 )
+                _record_outcome(run.error)
                 return
             if run.server_only:
                 # Nothing downloaded yet, so there is nothing to load.
                 run.state, run.text = "ready", "The model server is running"
-                run.percent = None
+                run.percent = run.size = None
                 return
             run.state = "verifying"
             run.phase = PHASE_FINISH
             run.text = "Checking that the models load"
-            run.percent = None
+            run.percent = run.size = None
         self._verify(run)
 
     def _verify(self, run: SetupRun) -> None:
@@ -536,6 +707,7 @@ class SetupRunner:
         except SetupError as e:
             with self._lock:
                 run.state, run.error = "failed", str(e)
+                _record_outcome(run.error)
             return
         with self._lock:
             run.status = status
@@ -546,6 +718,7 @@ class SetupRunner:
                 run.error = "; ".join(status.get("reasons") or []) or (
                     "Setup finished but GAIA is still not ready."
                 )
+            _record_outcome(run.error if run.state == "failed" else None)
 
     def _consume(self, run: SetupRun, line: str) -> None:
         line = line.strip()
@@ -570,13 +743,13 @@ class SetupRunner:
                 run.chat_model = progress.chat_model
                 return
             if progress.percent is not None:
-                run.percent = progress.percent
+                run.percent, run.size = progress.percent, progress.size
             if progress.phase is not None:
                 if run.phase not in PHASES or PHASES.index(
                     progress.phase
                 ) >= PHASES.index(run.phase):
                     run.phase = progress.phase
-                run.percent = None
+                run.percent = run.size = None
                 run.download = None
             if progress.text:
                 run.text = progress.text

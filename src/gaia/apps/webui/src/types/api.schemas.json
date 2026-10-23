@@ -1126,6 +1126,17 @@
         "title": "Chunk Count",
         "type": "integer"
       },
+      "error_kind": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Error Kind"
+      },
       "file_size": {
         "title": "File Size",
         "type": "integer"
@@ -1865,6 +1876,11 @@
       "indexed": {
         "default": 0,
         "title": "Indexed",
+        "type": "integer"
+      },
+      "skipped": {
+        "default": 0,
+        "title": "Skipped",
         "type": "integer"
       }
     },
@@ -3209,6 +3225,17 @@
         "title": "Interval Seconds",
         "type": "integer"
       },
+      "last_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Last Error"
+      },
       "last_result": {
         "anyOf": [
           {
@@ -3656,7 +3683,7 @@
     "type": "object"
   },
   "SetupRunRequest": {
-    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``server_only`` to start the model server and download nothing yet;\n``chat_model`` the model the plan showed, so the run sets up that one.",
+    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``server_only`` to start the model server and download nothing yet;\n``chat_model`` the model the plan showed, so the run sets up that one;\n``gaia_lemonade`` to set up GAIA's own server instead of the user's.",
     "properties": {
       "chat_model": {
         "anyOf": [
@@ -3668,6 +3695,11 @@
           }
         ],
         "title": "Chat Model"
+      },
+      "gaia_lemonade": {
+        "default": false,
+        "title": "Gaia Lemonade",
+        "type": "boolean"
       },
       "server_only": {
         "default": false,
@@ -4027,6 +4059,17 @@
           }
         ],
         "title": "Processor Name"
+      },
+      "setup_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Setup Error"
       },
       "start_command": {
         "anyOf": [

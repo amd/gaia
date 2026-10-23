@@ -417,6 +417,7 @@ export interface DocumentListResponse {
  */
 export interface DocumentResponse {
   chunk_count: number;
+  error_kind?: string | null;
   file_size: number;
   filename: string;
   filepath: string;
@@ -607,6 +608,7 @@ export interface IndexFolderResponse {
   errors?: string[];
   failed?: number;
   indexed?: number;
+  skipped?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];
@@ -960,6 +962,7 @@ export interface ScheduleResponse {
   error_count?: number;
   id: string;
   interval_seconds: number;
+  last_error?: string | null;
   last_result?: string | null;
   last_run_at?: string | null;
   name: string;
@@ -1061,10 +1064,12 @@ export interface SettingsUpdateRequest {
 /**
  * ``skip_chat_model`` when the chat runs on a cloud provider;
  * ``server_only`` to start the model server and download nothing yet;
- * ``chat_model`` the model the plan showed, so the run sets up that one.
+ * ``chat_model`` the model the plan showed, so the run sets up that one;
+ * ``gaia_lemonade`` to set up GAIA's own server instead of the user's.
  */
 export interface SetupRunRequest {
   chat_model?: string | null;
+  gaia_lemonade?: boolean;
   server_only?: boolean;
   skip_chat_model?: boolean;
 }
@@ -1107,6 +1112,7 @@ export interface SystemStatus {
   model_size_gb?: number | null;
   probe_warnings?: string[];
   processor_name?: string | null;
+  setup_error?: string | null;
   start_command?: string | null;
   start_instruction?: string | null;
   time_to_first_token?: number | null;

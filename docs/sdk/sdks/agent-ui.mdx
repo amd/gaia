@@ -327,6 +327,8 @@ class SystemStatus(BaseModel):
     disk_space_gb: float = 0.0
     memory_available_gb: float = 0.0
     initialized: bool = False
+    # Why the last first-run setup failed; None once one has succeeded.
+    setup_error: Optional[str] = None
     version: str = "0.1.0"
 ```
 
@@ -470,9 +472,12 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "disk_space_gb": 128.5,
       "memory_available_gb": 12.3,
       "initialized": true,
+      "setup_error": null,
       "version": "0.1.0"
     }
     ```
+
+    `setup_error` is the error from the last first-run setup run (`/api/setup/run`) when it failed, so the new-chat screen can say why before the first message fails; a later run that succeeds clears it.
 
     `lemonade_probe` tells clients why Lemonade is or isn't reachable: `ok`, `down` (nothing listening, so it needs starting), `timed_out` (running but busy, or the probes ran past their 20-second budget), or `error` (Lemonade answered with an error, or the probe failed some other way; see `lemonade_error`).
   </Accordion>
@@ -755,7 +760,13 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/export">
-    Export a session to Markdown or JSON.
+    Export a session to Markdown or JSON. In Markdown, each answer that
+    recorded the model that wrote it is labelled with that model, as in
+    `**Assistant (Model-X):**`. The header lists those models when every answer
+    recorded one; otherwise it reads `*Model (current setting): …*`, the model
+    the chat runs on now (the `custom_model` setting wins over the session's
+    stored `model`). The JSON `session` object carries that current model as
+    `effective_model`, and each message keeps its own `inference_stats`.
 
     **Query params:** `format` ("markdown" or "json", default "markdown")
   </Accordion>
@@ -946,13 +957,17 @@ Deleting a chat deletes its copies.
     a **422**, and sending into a chat stored under another agent is a **409**
     ("start a new chat"). See [Flagship only](#flagship-only).
 
-    Turns run one at a time. A streamed turn sent while another chat is working
+    Turns on a local model run one at a time; a turn on a cloud model skips
+    the line. A streamed turn sent while another chat is working
     starts at once and waits in line inside its run, sending
     `{"type": "status", "phase": "queued", "queue_position": 1,
     "queue_waited_s": 0, "message": "Waiting for the GPU — 1st in line"}`
     whenever its place changes and again every 10 s while it waits, so the
-    stream is never silent. A non-streamed turn waits up to 60 s, then gets
-    **429**.
+    stream is never silent. A turn waiting on the user (a permission prompt
+    or question, in process or relayed from a sidecar) leaves the line until
+    answered, then rejoins at the front; `queue_waited_s` counts from that
+    rejoin, and `{"type": "status", "phase": "resumed"}` ends that wait. A non-streamed turn is saved first, then waits until it
+    reaches the model or is stopped.
 
     **Request:**
     ```json
@@ -982,9 +997,9 @@ Deleting a chat deletes its copies.
     | Event type | Fields | Description |
     |------------|--------|-------------|
     | `tool_start` | `tool` (string), `detail` (string), `narration` (string) | Tool invocation started. `tool` is the tool function name (e.g., `"query_documents"`, `"search_file"`). `detail` is a human-readable description of the operation. `narration` is what the call does in plain words (`"Searching your documents"`). |
-    | `tool_args` | `tool` (string), `args` (object), `detail` (string), `narration` (string) | Tool arguments. `args` is the raw arguments dict passed to the tool. `detail` is a formatted human-readable summary of the arguments, one `key: value` per line when there are more than two or a value holds a list. `narration` repeats the call's plain line with its main argument (`"Searching your documents: database init"`). |
+    | `tool_args` | `tool` (string), `args` (object), `detail` (string), `narration` (string) | Tool arguments. Every call the agent loop makes sends one after its `tool_start` and before the tool runs; a `tool_start` from outside the loop, such as document indexing or a shell command's progress line, may come without one. `args` is the raw arguments dict passed to the tool, `{}` for a tool called with no arguments. `detail` is a formatted human-readable summary of the arguments, one `key: value` per line when there are more than two or a value holds a list; for a call with no arguments it repeats the `tool_start` `detail`. `narration` repeats the call's plain line with its main argument (`"Searching your documents: database init"`). |
     | `tool_end` | `success` (boolean) | Tool invocation completed. |
-    | `tool_result` | `title` (string or null), `summary` (string), `success` (boolean), `result_data` (object or null), `command_output` (object or null) | Tool result with structured data. `summary` is a human-readable result. `result_data` contains typed results (see below). `command_output` contains shell command output (see below). |
+    | `tool_result` | `title` (string or null), `summary` (string), `success` (boolean), `status` (string, optional), `result_data` (object or null), `command_output` (object or null), `file_path` / `image_path` (string, optional) | Tool result with structured data. `summary` is a human-readable result. `status` is the tool's own outcome word when its result had one (`"skipped"` when a private chat saved nothing to memory). `result_data` contains typed results (see below). `command_output` contains shell command output (see below). `file_path` and `image_path` are the resolved path a tool wrote, when its result names one. |
     | `policy_alert` | `tool` (string), `decision` (`"BLOCK"`), `reason` (string), `rule_ids` (string[]), `policy_version` (string), `receipt_id` (string, optional) | Governance policy blocked a tool before execution. No user action is required; use this to show a visible policy refusal instead of treating the denial as a generic tool failure. |
 
     `result_data` variants in `tool_result`:
@@ -1229,7 +1244,15 @@ Deleting a chat deletes its copies.
     }
     ```
 
-    **Response:** `DocumentResponse`
+    **Response:** `DocumentResponse`. A failed index still returns 200, with
+    `indexing_status: "failed"`, the reason in `last_error`, and `error_kind`
+    set to `corrupted`, `encrypted` or `empty` when retrying can't help until
+    the file is fixed.
+
+    **Errors:** 400 with `detail.status: "is_folder"` when the path is a folder
+    (index it with `index-folder`); 400 for a file type GAIA doesn't index; 404
+    for a missing file inside an allowed root; 403 for any path outside the
+    allowed roots, whether or not it exists.
   </Accordion>
 
   <Accordion title="DELETE /api/documents/{doc_id}">
@@ -1586,7 +1609,9 @@ Used to reach the UI from a phone.
   </Accordion>
 
   <Accordion title="POST /api/documents/index-folder">
-    Recursively index all supported files under a folder.
+    Index the supported files in a folder (`recursive`, default `true`, also
+    takes subfolders). Returns `indexed`, `failed` with one line per file in
+    `errors`, and `skipped`: files of a type GAIA doesn't index.
   </Accordion>
 
   <Accordion title="POST /api/documents/{doc_id}/reindex">
@@ -2169,7 +2194,8 @@ Recurring prompts run on a cron-like interval — see [`gaia schedule`](/referen
 
 <AccordionGroup>
   <Accordion title="GET /api/schedules">
-    List all scheduled tasks.
+    List all scheduled tasks. Each carries `last_error`: why its last run
+    failed, or `null` when that run succeeded.
   </Accordion>
 
   <Accordion title="POST /api/schedules">
@@ -2257,9 +2283,13 @@ so the two can never disagree about whether GAIA is set up.
     memory free now, `passed_over` (`id`, `reason`) for each larger model the
     pick skipped, every model to download with its size, `download_gb`,
     `disk_free_gb`, and `disk_problem` (why the download won't fit the disk,
-    else null). Before GAIA's own server runs the hardware can't be read, so
-    `decided_after_server` is true; run setup with `server_only` first, then
-    read the plan again. Loads and downloads nothing. **403** without `X-Gaia-UI: 1`; **503** when the plan can't be
+    else null). Sizes and `downloaded` come from the server setup will use:
+    the user's when they chose theirs, else GAIA's own; another Lemonade on
+    the default port is never asked, since its downloads aren't GAIA's. Before
+    GAIA's own server runs it has no address (`url` is null) and the hardware
+    can't be read, so `decided_after_server` is true; run setup with
+    `server_only` first, then read the plan again. Loads and downloads
+    nothing. **403** without `X-Gaia-UI: 1`; **503** when the plan can't be
     worked out.
   </Accordion>
 
@@ -2274,28 +2304,39 @@ so the two can never disagree about whether GAIA is set up.
   <Accordion title="POST /api/setup/run">
     Start `gaia init --profile gaia --yes --progress-json` in the background;
     follow it with `/api/setup/status`. Body:
-    `{"skip_chat_model": false, "server_only": false, "chat_model": null}`.
+    `{"skip_chat_model": false, "server_only": false, "chat_model": null, "gaia_lemonade": false}`.
     `chat_model` is the plan's chat model, passed as `--chat-model` so the run
     sets up the model the screen named. `skip_chat_model` is for
     a cloud chat model (only the embedding model downloads); `server_only`
     (`--skip-models`) installs and starts the model server and downloads
     nothing, so the plan can name the model that fits before the download.
-    **409** when setup is already running.
+    `gaia_lemonade` runs `gaia init --gaia-lemonade`, which sets up and saves
+    GAIA's own server instead of the user's. **409** when setup is already
+    running, or `gaia_lemonade` is asked while `LEMONADE_BASE_URL` picks the
+    server.
   </Accordion>
 
   <Accordion title="GET /api/setup/status">
     The running (or last) setup: `state` (`running`, `verifying`, `ready`,
     `failed`, `cancelled`, or `idle` when none has run), the three steps with
-    their status, progress `text` and `percent`, `error`, the equivalent
-    `command`, the last 40 output lines, `server_only`, and `chat_model` with
-    `passed_over` once setup has said which chat model it chose. `download_gb`
-    is the total setup downloads; `download` is the pull in progress (`model`,
-    its `index` of `count`, `bytes_done`, `bytes_total`, `speed_bps`, `eta_s`).
-    `bytes_total` is null when the server reports no total (no `percent` then);
-    after 15 s with no progress, `speed_bps` is 0 and `eta_s` null.
-    A `server_only` run ends `ready` without loading a model, with only the
-    first step done. When the user chose their own Lemonade Server,
-    the first step is "Use your Lemonade Server" rather than an install.
+    their status, progress `text`, `percent` and `size` (e.g. `"1.20 GB of
+    5.60 GB"`), `error`, the equivalent `command`, the last 40 output lines,
+    `server_only`, and `chat_model` with `passed_over` once setup has said
+    which chat model it chose. `download_gb` is the total setup downloads;
+    `download` is the pull in progress (`model`, its `index` of `count`,
+    `bytes_done`, `bytes_total`, `speed_bps`, `eta_s`). `bytes_total` is null
+    when the server reports no total (no `percent` then); after 15 s with no
+    progress, `speed_bps` is 0 and `eta_s` null. A `server_only` run ends
+    `ready` without loading a model, with only the first step done. When the
+    user chose their own Lemonade Server, the first step is "Use your Lemonade
+    Server" rather than an install. When that server isn't answering, `error`
+    says so in one sentence and `problem` carries the next steps: `start` (how
+    to start it on this PC, or null), `use_gaia` (setup can switch to GAIA's
+    own), and `switch_hint` (set when `LEMONADE_BASE_URL` picks the server, so
+    only unsetting it switches). The raw error stays in the output lines.
+    `gaia_lemonade` is true for a run switching to GAIA's own, so a retry
+    keeps switching. A run that fails leaves its error for `setup_error` in
+    `/api/system/status`; one that succeeds clears it.
   </Accordion>
 
   <Accordion title="POST /api/setup/cancel">
