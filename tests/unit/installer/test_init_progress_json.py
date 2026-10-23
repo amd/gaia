@@ -21,6 +21,7 @@ from gaia.installer.init_command import (
     _JsonDownloadProgress,
     bytes_already_on_disk,
 )
+from gaia.llm.lemonade_client import LemonadeClientError, LemonadeUnresponsiveError
 from gaia.llm.model_fit import check_download_fits_disk, model_store_free_gb
 
 GB = 1_000_000_000
@@ -180,6 +181,32 @@ def test_an_unreported_free_space_is_said_out_loud(capsys):
     assert _download(InitCommand(profile="minimal", yes=True), client)
     out = " ".join(capsys.readouterr().out.split())
     assert "could not check that 27.3 GB fits" in out
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        LemonadeUnresponsiveError("system-info timed out after 15s"),
+        LemonadeClientError("Request failed: connection reset"),
+    ],
+)
+def test_a_failing_system_info_warns_and_still_downloads(
+    capsys, tmp_path, monkeypatch, error
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    client = _client()
+    client.get_system_info.side_effect = error
+    cmd = InitCommand(profile="minimal", yes=True, progress_json=True)
+    assert _download(cmd, client)
+    out = capsys.readouterr().out
+    text = " ".join(out.split())
+    assert "could not check that 27.3 GB fits" in text
+    assert str(error) in text
+    assert client.ensure_model_downloaded.call_count == len(MODELS)
+    events = _json_lines(out)
+    assert events[0]["event"] == "plan" and events[0]["disk_free_bytes"] is None
+    assert events[-1] == {"event": "done", "ok": True}
 
 
 def test_check_download_fits_disk():

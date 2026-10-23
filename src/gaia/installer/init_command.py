@@ -1999,18 +1999,25 @@ class InitCommand:
 
             disk_free_gb = None
             if total_gb:
+                from gaia.llm.lemonade_client import LemonadeClientError
                 from gaia.llm.model_fit import (
                     check_download_fits_disk,
                     model_store_free_gb,
                 )
 
-                disk_free_gb, store = model_store_free_gb(
-                    client.get_system_info(timeout=15)
-                )
+                try:
+                    system_info = client.get_system_info(timeout=15)
+                    unread = ""
+                except LemonadeClientError as e:
+                    log.warning("Lemonade /system-info failed: %s", e)
+                    system_info = {}
+                    unread = f" ({e})"
+                disk_free_gb, store = model_store_free_gb(system_info)
                 if disk_free_gb is None:
                     self._print_warning(
                         "Lemonade did not report the free space in its model "
-                        f"store, so GAIA could not check that {total_gb:.1f} GB fits."
+                        f"store{unread}, so GAIA could not check that "
+                        f"{total_gb:.1f} GB fits."
                     )
                 # An interrupted pull's bytes already take disk; count only the rest.
                 pending = [m for m in model_ids if sizes.get(m)]
