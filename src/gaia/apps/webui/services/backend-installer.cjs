@@ -135,6 +135,12 @@ const STAGES = Object.freeze({
   VERIFY: "verify",
 });
 
+const GAIA_INIT_MESSAGE =
+  "Setting up Lemonade Server and downloading models (this can take several minutes)";
+const WAITING_FOR_LEMONADE_CHOICE_MESSAGE =
+  "Waiting for your answer: GAIA found a Lemonade Server already running " +
+  "and is asking whether to use it. Setup continues once you choose.";
+
 // Weight each stage contributes to the overall 0-100 progress.
 // Sum must equal 100.
 const STAGE_WEIGHTS = {
@@ -1397,12 +1403,8 @@ async function runGaiaInit(gaiaBin, report, version, skipGaiaInit, chooseLemonad
     return { init: "skipped" };
   }
   setState(STATES.INSTALLING, { stage: STAGES.GAIA_INIT, version });
-  report(
-    STAGES.GAIA_INIT,
-    0,
-    "Setting up Lemonade Server and downloading models (this can take several minutes)"
-  );
-  const lemonadeArgs = await lemonadeInitArgs(gaiaBin, chooseLemonade);
+  report(STAGES.GAIA_INIT, 0, GAIA_INIT_MESSAGE);
+  const lemonadeArgs = await lemonadeInitArgs(gaiaBin, chooseLemonade, runCommand, report);
   const initResult = await runCommand(
     gaiaBin,
     ["init", "--profile", "gaia", "--yes", "--skip-webui-build", ...lemonadeArgs],
@@ -1463,8 +1465,11 @@ async function readGaiaJson(run, gaiaBin, args) {
  * `--lemonade-url <url>`, "gaia" adds `--gaia-lemonade`, null adds nothing:
  * init then sets up GAIA's own and prints how to switch, as it always has.
  * A server that needs a key or is too old is left to the app's setup screen.
+ *
+ * `report` is the progress reporter: while the question is open the progress
+ * window says setup is waiting on the user, then goes back to GAIA_INIT_MESSAGE.
  */
-async function lemonadeInitArgs(gaiaBin, chooseLemonade, run = runCommand) {
+async function lemonadeInitArgs(gaiaBin, chooseLemonade, run = runCommand, report = () => {}) {
   if (typeof chooseLemonade !== "function") return [];
   const unchanged = "gaia init will set up GAIA's own Lemonade Server; to use yours later run `gaia lemonade connect <url>`.";
   const status = await readGaiaJson(run, gaiaBin, ["lemonade", "status", "--json"]);
@@ -1484,11 +1489,14 @@ async function lemonadeInitArgs(gaiaBin, chooseLemonade, run = runCommand) {
     return [];
   }
   let answer;
+  report(STAGES.GAIA_INIT, 0, WAITING_FOR_LEMONADE_CHOICE_MESSAGE);
   try {
     answer = await chooseLemonade(found);
   } catch (err) {
     log(`Warning: could not ask whether to use the Lemonade Server at ${found.url}: ${err.message}; ${unchanged}`);
     return [];
+  } finally {
+    report(STAGES.GAIA_INIT, 0, GAIA_INIT_MESSAGE);
   }
   log(`Lemonade Server at ${found.url}: user chose ${answer || "not to answer"}`);
   if (answer === "external") return ["--lemonade-url", found.url];
@@ -2042,6 +2050,8 @@ module.exports = {
   // Constants
   STATES,
   STAGES,
+  GAIA_INIT_MESSAGE,
+  WAITING_FOR_LEMONADE_CHOICE_MESSAGE,
   GAIA_HOME,
   GAIA_VENV,
   GAIA_BIN,
