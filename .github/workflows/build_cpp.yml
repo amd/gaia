@@ -434,11 +434,13 @@ jobs:
             lemonade-server-stderr.log
             lemonade-server.log
 
-  # Performance benchmarks (runs after build passes)
+  # Performance benchmarks (runs after build passes). Not on pull requests: they
+  # only warn, and shared runners are too noisy for a PR to act on one; every
+  # merge to main still measures.
   benchmark:
     name: C++ Benchmarks
     needs: [build-and-test]
-    if: "!cancelled() && needs.build-and-test.result == 'success'"
+    if: "!cancelled() && needs.build-and-test.result == 'success' && github.event_name != 'pull_request'"
     uses: ./.github/workflows/benchmark_cpp.yml
 
   # Summary job
