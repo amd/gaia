@@ -34,6 +34,7 @@ from ..models import (
 )
 from ..utils import (
     ALLOWED_EXTENSIONS,
+    FOLDER_INDEX_EXTENSIONS,
     LARGE_FILE_THRESHOLD,
     compute_file_hash,
     compute_file_hash_from_fd,
@@ -368,7 +369,7 @@ async def upload_document_blob(
     display_name = Path(file.filename).name
     ext = Path(display_name).suffix.lower()
 
-    # 2. Validate extension against the strict document set (no images etc.)
+    # 2. Validate extension against the strict document set
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
@@ -654,7 +655,8 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
     """Index all supported documents in a folder.
 
     Scans the given folder for files with extensions in
-    ALLOWED_EXTENSIONS and indexes each one using the RAG pipeline.
+    FOLDER_INDEX_EXTENSIONS and indexes each one using the RAG pipeline.
+    Images are skipped: they index only when picked one by one.
     Indexing runs in a thread-pool executor to avoid blocking the
     event loop.
 
@@ -698,7 +700,7 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
         for item in pattern_iter:
             if item.is_symlink():
                 continue
-            if item.is_file() and item.suffix.lower() in ALLOWED_EXTENSIONS:
+            if item.is_file() and item.suffix.lower() in FOLDER_INDEX_EXTENSIONS:
                 candidate_files.append(item)
     except PermissionError:
         raise HTTPException(

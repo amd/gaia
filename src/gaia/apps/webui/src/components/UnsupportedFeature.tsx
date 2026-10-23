@@ -23,14 +23,12 @@ interface FileTypeCategory {
 const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
     {
         label: 'Image',
-        extensions: new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.ico', '.heic', '.heif']),
-        message: 'Image files cannot be indexed for text search.',
+        extensions: new Set(['.ico', '.heic', '.heif']),
+        message: 'This image format cannot be indexed.',
         alternatives: [
-            'Index PDFs that contain images — text is extracted automatically',
-            'Paste image descriptions or OCR text directly into the chat',
-            'Use GAIA\'s VLM agent for image analysis: gaia vlm',
+            'Convert it to PNG or JPEG — GAIA reads the text in those images',
         ],
-        featureTitle: 'Support image file indexing and OCR',
+        featureTitle: 'Support HEIC and ICO image indexing',
     },
     {
         label: 'Video',
@@ -119,10 +117,13 @@ export function getUnsupportedCategory(extension: string): FileTypeCategory | nu
  * in ``src/gaia/rag/sdk.py::_extract_text_from_file`` — listing one without
  * a backend handler causes the RAG pipeline to index binary garbage.
  * .pptx and .docx ARE supported (python-pptx / python-docx ship with GAIA);
- * legacy .doc/.ppt/.xls are intentionally excluded.
+ * legacy .doc/.ppt/.xls are intentionally excluded. Raster images are read by
+ * the vision model.
  */
 export const SUPPORTED_EXTENSIONS = new Set([
-    '.pdf', '.pptx', '.docx', '.txt', '.md', '.mdx', '.markdown', '.rst', '.csv', '.json', '.xlsx',
+    '.pdf', '.pptx', '.docx',
+    '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tif', '.tiff',
+    '.txt', '.md', '.mdx', '.markdown', '.rst', '.csv', '.json', '.xlsx',
     '.html', '.htm', '.xml', '.svg',
     '.yaml', '.yml', '.py', '.js', '.ts', '.java', '.c', '.cpp',
     '.h', '.rs', '.go', '.rb', '.sh', '.bat', '.ps1', '.log',
