@@ -253,7 +253,7 @@ class TestFolderIndexing:
             json={"folder_path": outside_path},
         )
         assert resp.status_code == 403
-        assert "restricted" in resp.json()["detail"].lower()
+        assert "outside them" in resp.json()["detail"]
 
     @patch("gaia.ui.server._index_document", new_callable=AsyncMock)
     def test_index_folder_partial_failure(self, mock_index, client, temp_folder):

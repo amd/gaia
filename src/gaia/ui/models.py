@@ -66,6 +66,8 @@ class SystemStatus(BaseModel):
     # any agent declaring ``min_memory_gb > 0`` would appear to be over budget.
     memory_available_gb: Optional[float] = None
     initialized: bool = False
+    # Why the desktop app's first-run ``gaia init`` failed; None when it did not.
+    setup_error: Optional[str] = None
     # A factory keeps the version out of the exported schema, which RC builds restamp.
     version: str = Field(default_factory=lambda: _gaia_version)
     # How to start Lemonade ON THIS HOST, resolved server-side by
@@ -562,9 +564,9 @@ class InferenceStatsResponse(BaseModel):
     output_tokens: int = 0
     # The agent's own step count for the turn, not the number of activity rows.
     steps: Optional[int] = None
-    # Set when the answer was kept from "Retry with…": the model that wrote it,
-    # and how long it took, loading included.
+    # The model that wrote the answer; unset on answers saved before it was recorded.
     model: Optional[str] = None
+    # Set when the answer was kept from "Retry with…": how long it took, loading included.
     seconds: Optional[float] = None
     # True only for an answer kept from "Retry with…".
     retried: Optional[bool] = None
@@ -690,6 +692,10 @@ class DocumentResponse(BaseModel):
         "complete"  # pending | indexing | complete | failed | cancelled | missing
     )
     last_error: Optional[str] = None
+    # Set with last_error when retrying can't help until the file is fixed:
+    # "corrupted", "encrypted", "empty" (no extractable text) or "empty_file"
+    # (0 bytes).
+    error_kind: Optional[str] = None
 
 
 class DocumentListResponse(BaseModel):
@@ -759,6 +765,8 @@ class IndexFolderResponse(BaseModel):
 
     indexed: int = 0
     failed: int = 0
+    # Files in the folder that aren't a type GAIA indexes.
+    skipped: int = 0
     documents: List[DocumentResponse] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
 

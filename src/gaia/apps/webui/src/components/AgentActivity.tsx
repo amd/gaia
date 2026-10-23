@@ -33,6 +33,7 @@ import {
 import type { AgentStep, CommandOutput, RetrievalChunk } from '../types';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { StepResult } from './LongContent';
 import './AgentActivity.css';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -66,6 +67,7 @@ const TOOL_META: Record<string, ToolMeta> = {
     semantic_search:       { label: 'Searched documents', activeLabel: 'Searching documents', icon: BookOpen },
     evaluate_retrieval:    { label: 'Evaluated retrieval', activeLabel: 'Evaluating retrieval', icon: BookOpen },
     index_document:        { label: 'Indexed document',   activeLabel: 'Indexing document',   icon: Database },
+    index_documents:       { label: 'Indexed documents',  activeLabel: 'Indexing documents',  icon: Database },
     index_directory:       { label: 'Indexed directory',  activeLabel: 'Indexing directory',   icon: Database },
     index_file:            { label: 'Indexed file',       activeLabel: 'Indexing file',       icon: Database },
     list_indexed_documents: { label: 'Listed documents',  activeLabel: 'Listing documents',   icon: Database },
@@ -106,7 +108,12 @@ function getToolMeta(toolName?: string): ToolMeta {
     if (toolName.startsWith('mcp_')) {
         return { label: 'MCP tool', activeLabel: 'Running MCP tool', icon: Globe };
     }
-    return TOOL_META[toolName] || DEFAULT_TOOL_META;
+    if (TOOL_META[toolName]) return TOOL_META[toolName];
+    // A tool with no entry still says what it was, not a bare "Used tool".
+    const words = toolName.replace(/[_-]+/g, ' ').trim();
+    return words
+        ? { ...DEFAULT_TOOL_META, label: `Used ${words}`, activeLabel: `Using ${words}` }
+        : DEFAULT_TOOL_META;
 }
 
 /** What the live line says while a tool runs: the step row's own wording, never the raw tool id. */
@@ -739,7 +746,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now }: FlowToolCardProps) {
                             <span className="detail-section-label">
                                 {step.success === false ? 'Error' : 'Result'}
                             </span>
-                            <div className="detail-result-content">{linkifyPaths(step.result)}</div>
+                            <StepResult text={step.result} renderShort={linkifyPaths} />
                         </div>
                     )}
                     {/* Retrieved document chunks */}

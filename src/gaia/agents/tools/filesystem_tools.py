@@ -20,7 +20,12 @@ from typing import Any, Optional
 
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools.file_edit import file_read_record, stamp_of
-from gaia.agents.tools.path_access import missing_file_error, read_access_error
+from gaia.agents.tools.path_access import (
+    missing_file_error,
+    read_access_error,
+    readable_entry,
+)
+from gaia.agents.tools.protected_folders import ProtectedFolders
 from gaia.agents.tools.search_scope import (
     confine_roots,
     in_env_scope,
@@ -894,17 +899,26 @@ class FileSystemToolsMixin:
                 search_roots = [
                     str(r) for r in confine_roots(self, _get_search_roots(scope))
                 ]
+                guard = ProtectedFolders(
+                    self,
+                    named=(
+                        []
+                        if scope in ("smart", "home", "cwd", "everywhere")
+                        else [scope_root]
+                    ),
+                )
                 resolved_roots = [Path(r).expanduser().resolve() for r in search_roots]
 
                 query_lower = query.lower()
                 is_glob = "*" in query or "?" in query
+                skipped = [0]
 
                 for root_path in search_roots:
                     if len(results) >= max_results:
                         break
 
                     root = Path(root_path).expanduser().resolve()
-                    if not root.exists() or not root.is_dir():
+                    if guard.blocks(root) or not root.exists() or not root.is_dir():
                         continue
                     # A workspace scope takes its depth from the shared policy,
                     # so this tool and ``search_file`` cannot disagree on how
@@ -934,6 +948,8 @@ class FileSystemToolsMixin:
                             max_depth=(
                                 min(8, scoped_depth) if scoped_depth is not None else 8
                             ),
+                            skipped=skipped,
+                            guard=guard,
                         )
                     else:
                         # Name/metadata search
@@ -952,6 +968,7 @@ class FileSystemToolsMixin:
                             max_depth=(
                                 scoped_depth if scoped_depth is not None else 10
                             ),
+                            guard=guard,
                         )
 
                 # Sort results
@@ -963,8 +980,17 @@ class FileSystemToolsMixin:
                     results.sort(key=lambda x: x.get("name", "").lower())
                 # relevance = default order (already by search priority)
 
+                skipped_note = (
+                    f"{skipped[0]} file(s) GAIA may not read were not searched. "
+                    "If the file may be in a folder outside the allowed ones, ask "
+                    "the user to add that folder rather than searching again."
+                    if skipped[0]
+                    else ""
+                )
+                skip_note = f"\n{guard.note()}" if guard.skipped else ""
                 if not results:
-                    return f"No files found matching '{query}'."
+                    found_none = f"No files found matching '{query}'."
+                    return f"{found_none} {skipped_note}".rstrip() + skip_note
 
                 lines = [f"Found {len(results)} result(s):\n"]
                 for i, r in enumerate(results, 1):
@@ -982,7 +1008,9 @@ class FileSystemToolsMixin:
                     else:
                         lines.append(f"  {i}. {path_str} ({size_str}, {mod_str})")
 
-                return "\n".join(lines)
+                if skipped_note:
+                    lines.append(f"\n{skipped_note}")
+                return "\n".join(lines) + skip_note
 
             except ValueError as e:
                 return str(e)
@@ -1431,6 +1459,10 @@ class FileSystemToolsMixin:
                 # Treat as a specific path
                 return [scope]
 
+        def _listed(results, path):
+            # Search roots overlap (cwd sits under home), so a file can be met twice.
+            return any(r["path"] == path for r in results)
+
         def _search_names(
             root,
             _query,
@@ -1444,6 +1476,7 @@ class FileSystemToolsMixin:
             min_date,
             max_date,
             max_depth=10,
+            guard=None,
         ):
             """Search for files by name."""
             import fnmatch
@@ -1503,17 +1536,23 @@ class FileSystemToolsMixin:
                                     if mod_str > max_date:
                                         continue
 
-                                results.append(
-                                    {
-                                        "path": str(Path(entry.path).resolve()),
-                                        "name": name,
-                                        "size": st.st_size if not is_dir else 0,
-                                        "modified": st.st_mtime,
-                                        "is_dir": is_dir,
-                                    }
-                                )
+                                found = str(Path(entry.path).resolve())
+                                if not _listed(results, found):
+                                    results.append(
+                                        {
+                                            "path": found,
+                                            "name": name,
+                                            "size": st.st_size if not is_dir else 0,
+                                            "modified": st.st_mtime,
+                                            "is_dir": is_dir,
+                                        }
+                                    )
 
-                            if is_dir and name not in default_excludes:
+                            if (
+                                is_dir
+                                and name not in default_excludes
+                                and not (guard and guard.blocks(entry.path))
+                            ):
                                 _walk(Path(entry.path), depth + 1)
 
                         except (PermissionError, OSError):
@@ -1534,8 +1573,15 @@ class FileSystemToolsMixin:
             _min_date,
             _max_date,
             max_depth=8,
+            skipped=None,
+            guard=None,
         ):
-            """Search inside file contents."""
+            """Search inside file contents.
+
+            Files the agent may not read are skipped without asking: one
+            approval prompt per scanned file floods the user. *skipped* (a
+            one-item list) counts them so the result can say so.
+            """
             default_excludes = mixin._get_default_excludes()
             text_exts = {
                 ".txt",
@@ -1582,7 +1628,8 @@ class FileSystemToolsMixin:
                                 continue
 
                             if entry.is_dir(follow_symlinks=False):
-                                _walk(Path(entry.path), depth + 1)
+                                if not (guard and guard.blocks(entry.path)):
+                                    _walk(Path(entry.path), depth + 1)
                             elif entry.is_file(follow_symlinks=False):
                                 ext = Path(name).suffix.lower()
 
@@ -1605,12 +1652,11 @@ class FileSystemToolsMixin:
                                 if st.st_size > 10 * 1024 * 1024:  # 10MB
                                     continue
 
-                                try:
-                                    mixin._validate_path(entry.path)
-                                except ValueError as exc:
-                                    logger.debug(
-                                        "Skipping unreadable search result: %s", exc
-                                    )
+                                if _listed(results, str(Path(entry.path).resolve())):
+                                    continue
+                                if not readable_entry(mixin, entry.path):
+                                    if skipped is not None:
+                                        skipped[0] += 1
                                     continue
                                 try:
                                     with open(
