@@ -81,6 +81,12 @@ var builtinPrices = map[string]modelPrice{
 		InputPerMTok: 0.15, OutputPerMTok: 0.50,
 		CachedPerMTok: floatPtr(0.03), Currency: "USD",
 	},
+	// DeepSeek V4.1 Flash — standard serverless tier, read later than the rest.
+	"fireworks.deepseek-v4p1-flash": {
+		InputPerMTok: 0.30, OutputPerMTok: 1.20,
+		CachedPerMTok: floatPtr(0.006), Currency: "USD",
+		asOf: "2026-10-22",
+	},
 }
 
 func floatPtr(f float64) *float64 { return &f }
@@ -98,6 +104,16 @@ type modelPrice struct {
 	// fromUser marks a rate that came from the user's own file rather than the
 	// built-in table, so the view can say which it quoted.
 	fromUser bool
+	// asOf is the day this rate was read, when that is not pricesAsOf.
+	asOf string
+}
+
+// readOn is the day a built-in rate was read from the provider's table.
+func (p modelPrice) readOn() string {
+	if p.asOf != "" {
+		return p.asOf
+	}
+	return pricesAsOf
 }
 
 // source names where this rate came from, for the line under the cost.
@@ -105,7 +121,7 @@ func (p modelPrice) source() string {
 	if p.fromUser {
 		return "your model-prices.json"
 	}
-	return "published rates as of " + pricesAsOf
+	return "published rates as of " + p.readOn()
 }
 
 // totalUSD is the bill as a number, for callers that render it themselves.
@@ -159,7 +175,11 @@ func costHelp(model string) string {
 	// Every built-in rate is Fireworks', so citing that page to anyone else
 	// sends them to a price table that does not cover their model.
 	if model == "" || strings.HasPrefix(model, "fireworks.") {
-		fmt.Fprintf(&b, "  Rates are the provider's published serverless prices, read on %s:\n", pricesAsOf)
+		readOn := pricesAsOf
+		if p := lookupPrice(model); p != nil && !p.fromUser {
+			readOn = p.readOn()
+		}
+		fmt.Fprintf(&b, "  Rates are the provider's published serverless prices, read on %s:\n", readOn)
 		fmt.Fprintf(&b, "  %s\n\n", pricesSource)
 		b.WriteString("  A model with no published rate here shows tokens and no dollars,\n")
 		b.WriteString("  rather than a guess.\n\n")

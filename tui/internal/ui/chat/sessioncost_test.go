@@ -145,7 +145,7 @@ func TestBuiltinRatesPriceTheModelsWeShip(t *testing.T) {
 // the published card does. The two generations look interchangeable and are
 // not: 5.3 charges nearly double 5.2 for cached input, which is the token
 // class most of a long session is made of.
-func TestGLMRatesMatchThePublishedCard(t *testing.T) {
+func TestBuiltinRatesMatchThePublishedCard(t *testing.T) {
 	noPriceFile(t)
 	for _, tc := range []struct {
 		model           string
@@ -156,6 +156,7 @@ func TestGLMRatesMatchThePublishedCard(t *testing.T) {
 		{"fireworks.accounts/fireworks/routers/glm-5p3-fast", 2.10, 0.39, 6.60},
 		{"fireworks.glm-5p3", 1.40, 0.26, 4.40},
 		{"fireworks.glm-5p3-flash", 0.15, 0.03, 0.50},
+		{"fireworks.deepseek-v4p1-flash", 0.30, 0.006, 1.20},
 	} {
 		p := lookupPrice(tc.model)
 		if p == nil {
@@ -275,5 +276,24 @@ func TestTheLedgerCallsItActiveTimeNotWallTime(t *testing.T) {
 	}
 	if strings.Contains(out, "wall time") {
 		t.Errorf("the sum of the turns is still called wall time:\n%s", out)
+	}
+}
+
+// The rate GAIA recommends first must be priced, and dated by the day it was
+// read rather than the older table date it was added after.
+func TestRecommendedModelIsPricedWithItsOwnDate(t *testing.T) {
+	noPriceFile(t)
+	p := lookupPrice("fireworks.deepseek-v4p1-flash")
+	if p == nil {
+		t.Fatal("fireworks.deepseek-v4p1-flash: no built-in rate")
+	}
+	if got := p.source(); got != "published rates as of 2026-10-22" {
+		t.Errorf("source = %q, want the day the DeepSeek rate was read", got)
+	}
+	if got := lookupPrice("fireworks.glm-5p3-flash").source(); got != "published rates as of "+pricesAsOf {
+		t.Errorf("GLM source = %q, want the table date", got)
+	}
+	if help := costHelp("fireworks.deepseek-v4p1-flash"); !strings.Contains(help, "read on 2026-10-22") {
+		t.Errorf("/cost help quotes the wrong date for DeepSeek:\n%s", help)
 	}
 }
