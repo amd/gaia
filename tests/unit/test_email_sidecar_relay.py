@@ -633,7 +633,7 @@ class TestStreamFailureHandling:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
         # Ends the turn: the chat is recorded failed, not done.
         assert agent_errors[0]["fatal"] is True
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
@@ -647,7 +647,7 @@ class TestStreamFailureHandling:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
 
     def test_generator_exhausted_without_terminal_event(self):
@@ -661,7 +661,7 @@ class TestStreamFailureHandling:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
 
     def test_exception_never_propagates_out_of_relay_query(self):
@@ -747,7 +747,7 @@ class TestSidecarHTTPErrorDetail:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
 
 
 # --- Orphaned-generation cleanup (#2158) -------------------------------------
@@ -827,7 +827,7 @@ class TestOrphanCancelOnCrash:
         assert proxy.cancel_calls == ["rid-t7"]
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
 
 
 # --- Cancellation mid-stream -------------------------------------------------
@@ -1232,7 +1232,7 @@ class TestReadTimeoutMidStream:
         elapsed = time.monotonic() - start
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
         assert elapsed < 5.0
 
 
