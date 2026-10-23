@@ -9,9 +9,36 @@ import { useFocusTrap } from '../hooks/useFocusTrap';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
-import { UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
-import type { Document } from '../types';
+import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
+import type { Document, IndexFolderResponse } from '../types';
 import './DocumentLibrary.css';
+
+/** Split a stored indexing error into a one-line summary and the rest. */
+function splitFailureReason(lastError: string): { summary: string; more: string } {
+    const text = lastError.replace(/^RAG indexing failed for [^:]+:\s*/, '').trim();
+    const [first, ...rest] = text.split('\n');
+    return { summary: first.trim(), more: rest.join('\n').trim() };
+}
+
+/** One sentence on what folder indexing added, skipped and couldn't read. */
+function describeFolderResult(folderName: string, result: IndexFolderResponse): string {
+    const skipped = result.skipped ?? 0;
+    const parts: string[] = [];
+    if (result.indexed > 0) {
+        parts.push(`Indexed ${result.indexed} file${result.indexed !== 1 ? 's' : ''} from "${folderName}".`);
+    } else if (result.failed === 0) {
+        parts.push(`"${folderName}" has no documents GAIA can index.`);
+    }
+    if (skipped > 0) {
+        parts.push(`Skipped ${skipped} file${skipped !== 1 ? 's' : ''} of a type GAIA doesn't index.`);
+    }
+    if (result.failed > 0) {
+        const first = result.errors[0] ? ` ${result.errors[0].split('\n')[0]}` : '';
+        parts.push(`${result.failed} file${result.failed !== 1 ? 's' : ''} couldn't be indexed.${first}`);
+    }
+    parts.push('Subfolders aren\'t included.');
+    return parts.join(' ');
+}
 
 /** Compute elapsed time as human-readable string. */
 function elapsed(startMs: number): string {
@@ -89,7 +116,9 @@ export function DocumentLibrary() {
     const [uploadStatus, setUploadStatus] = useState('');
     const [folderPath, setFolderPath] = useState('');
     // Upload error state for rich error toasts
-    const [uploadError, setUploadError] = useState<{ filename: string; error: string; status?: number } | null>(null);
+    const [uploadError, setUploadError] = useState<{ filename: string; error: string; status?: number; kind?: string | null } | null>(null);
+    // Outcome of indexing a folder typed into the path box
+    const [folderNotice, setFolderNotice] = useState<string | null>(null);
     // Documents with a reindex in flight — guards double-click and shows progress
     const [reindexingIds, setReindexingIds] = useState<Set<string>>(new Set());
     // Track indexing start times for elapsed display
@@ -231,6 +260,32 @@ export function DocumentLibrary() {
         log.doc.info(`Attached "${filename}" to session ${targetSessionId}`);
     }, [targetSessionId, targetChatName, updateSessionInList, addDraftDocuments]);
 
+    /** Attach a folder's newly indexed documents where the user chose. */
+    const attachIndexed = useCallback(async (docIds: string[], label: string) => {
+        if (docIds.length === 0) return;
+        if (!targetSessionId) {
+            addDraftDocuments(docIds);
+            log.doc.info(`"${label}" will be attached to the next new chat`);
+            return;
+        }
+        const attached: string[] = [];
+        for (const id of docIds) {
+            try {
+                await api.attachDocument(targetSessionId, id);
+                attached.push(id);
+            } catch (attachErr) {
+                log.doc.warn(`Could not attach document to session: ${attachErr}`);
+            }
+        }
+        const freshSession = useChatStore.getState().sessions.find(s => s.id === targetSessionId);
+        const existing = freshSession?.document_ids ?? [];
+        const added = attached.filter((id) => !existing.includes(id));
+        if (added.length > 0) {
+            updateSessionInList(targetSessionId, { document_ids: [...existing, ...added] });
+        }
+        log.doc.info(`Attached "${label}" to session ${targetSessionId}`);
+    }, [targetSessionId, updateSessionInList, addDraftDocuments]);
+
     // Shared upload state-machine: preflight extension check, set UI state,
     // run the caller-provided uploader, attach the result where the user
     // chose, and refresh the document list. Used by both path-based and
@@ -238,16 +293,16 @@ export function DocumentLibrary() {
     const runUpload = useCallback(async (
         filename: string,
         uploader: () => Promise<Document>,
+        onFolder?: () => Promise<void>,
     ) => {
-        // Pre-check: warn about unsupported file types before sending to server
         const ext = filename.includes('.') ? '.' + filename.split('.').pop()?.toLowerCase() : '';
-        if (ext && !isExtensionSupported(ext)) {
-            const category = getUnsupportedCategory(ext);
-            const errMsg = category
-                ? category.message
-                : `The file type "${ext}" is not supported for indexing.`;
+        const unsupportedMessage = ext && !isExtensionSupported(ext)
+            ? (getUnsupportedCategory(ext)?.message ?? `The file type "${ext}" is not supported for indexing.`)
+            : null;
+        // A typed path may be a dotted folder name (notes.v2), so only the server can rule it out.
+        if (unsupportedMessage && !onFolder) {
             log.doc.warn(`Unsupported file type: ${filename} (${ext})`);
-            setUploadError({ filename, error: errMsg });
+            setUploadError({ filename, error: unsupportedMessage });
             return;
         }
 
@@ -256,6 +311,7 @@ export function DocumentLibrary() {
         setIsUploading(true);
         setUploadStatus(`Indexing ${filename}...`);
         setUploadError(null);
+        setFolderNotice(null);
         setNotice('');
         try {
             const doc = await uploader();
@@ -277,21 +333,52 @@ export function DocumentLibrary() {
             setDocuments(data.documents || []);
             setUploadStatus('');
         } catch (err) {
+            // ApiError's fields, read by shape: the class itself is mocked in tests.
+            const { httpStatus, reason } = (err ?? {}) as { httpStatus?: number; reason?: string | null };
+            if (reason === 'is_folder' && onFolder) {
+                await onFolder();
+                return;
+            }
             log.doc.error(`Failed to index "${filename}"`, err);
-            // Extract error message from API response
-            const errMsg = err instanceof Error ? err.message : 'Upload failed';
-            const status = (err as { httpStatus?: number } | null)?.httpStatus;
-            setUploadError({ filename, error: errMsg, status });
+            const errMsg = httpStatus === 400 && unsupportedMessage
+                ? unsupportedMessage
+                : err instanceof Error ? err.message : 'Upload failed';
+            setUploadError({ filename, error: errMsg, status: httpStatus, kind: reason });
             setUploadStatus('');
         } finally {
             setIsUploading(false);
         }
     }, [attachToTarget, targetChatName, setDocuments]);
 
+    /** Index the documents directly inside a folder typed into the path box. */
+    const indexFolderPath = useCallback(async (folder: string, folderName: string) => {
+        log.doc.info(`"${folder}" is a folder; indexing its documents`);
+        setUploadStatus(`Indexing the documents in ${folderName}...`);
+        try {
+            // Top level only: a typed path like a home folder would otherwise index everything below it.
+            const result = await api.indexFolder(folder, false);
+            await attachIndexed(result.documents.map((d) => d.id).filter(Boolean), folderName);
+            setFolderNotice(describeFolderResult(folderName, result));
+            const data = await api.listDocuments();
+            setDocuments(data.documents || []);
+        } catch (err) {
+            log.doc.error(`Failed to index folder "${folder}"`, err);
+            const errMsg = err instanceof Error ? err.message : 'Folder indexing failed';
+            const { httpStatus } = (err ?? {}) as { httpStatus?: number };
+            setUploadError({ filename: folderName, error: errMsg, status: httpStatus });
+        } finally {
+            setUploadStatus('');
+        }
+    }, [attachIndexed, setDocuments]);
+
     /** Index a document by a server-side filesystem path (used by the file browser and path input). */
     const uploadFile = useCallback(async (filepath: string, filename: string) => {
-        await runUpload(filename, () => api.uploadDocumentByPath(filepath));
-    }, [runUpload]);
+        await runUpload(
+            filename,
+            () => api.uploadDocumentByPath(filepath),
+            () => indexFolderPath(filepath, filename),
+        );
+    }, [runUpload, indexFolderPath]);
 
     /**
      * Index a document by uploading its bytes directly (used by drag-and-drop).
@@ -399,8 +486,9 @@ export function DocumentLibrary() {
     const handleFolderSubmit = useCallback(async (e: React.FormEvent) => {
         e.preventDefault();
         if (!folderPath.trim()) return;
-        log.doc.info(`Indexing from path input: ${folderPath.trim()}`);
-        await uploadFile(folderPath.trim(), folderPath.trim().split(/[\\/]/).pop() || 'file');
+        const typed = folderPath.trim();
+        log.doc.info(`Indexing from path input: ${typed}`);
+        await uploadFile(typed, typed.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'file');
         setFolderPath('');
     }, [folderPath, uploadFile]);
 
@@ -435,28 +523,45 @@ export function DocumentLibrary() {
                         </button>
                     </div>
                 );
-            case 'failed':
+            case 'failed': {
+                const hint = doc.error_kind ? PERMANENT_FAILURE_HINTS[doc.error_kind] : undefined;
+                const reason = doc.last_error ? splitFailureReason(doc.last_error) : null;
                 return (
-                    <div className="doc-indexing-status">
-                        <span
-                            className="doc-status-badge doc-status-failed"
-                            title={doc.last_error || undefined}
-                            aria-label={doc.last_error ? `Failed: ${doc.last_error}` : 'Indexing failed'}
-                        >
-                            <AlertCircle size={12} /> Failed
-                        </span>
-                        <button
-                            className="btn-retry"
-                            onClick={(e) => { e.stopPropagation(); handleReindex(doc.id); }}
-                            title="Retry indexing"
-                            aria-label={`Retry indexing ${doc.filename}`}
-                            disabled={reindexingIds.has(doc.id)}
-                        >
-                            <RefreshCcw size={14} />
-                            {reindexingIds.has(doc.id) ? 'Retrying…' : 'Retry'}
-                        </button>
+                    <div className="doc-failure">
+                        <div className="doc-indexing-status">
+                            <span
+                                className="doc-status-badge doc-status-failed"
+                                title={doc.last_error || undefined}
+                                aria-label={doc.last_error ? `Failed: ${doc.last_error}` : 'Indexing failed'}
+                            >
+                                <AlertCircle size={12} /> {hint ? "Can't be read" : 'Failed'}
+                            </span>
+                            <button
+                                className={hint ? 'btn-retry btn-retry-quiet' : 'btn-retry'}
+                                onClick={(e) => { e.stopPropagation(); handleReindex(doc.id); }}
+                                title={hint ? 'Retry indexing (fix the file first, or this fails again)' : 'Retry indexing'}
+                                aria-label={`Retry indexing ${doc.filename}`}
+                                disabled={reindexingIds.has(doc.id)}
+                            >
+                                <RefreshCcw size={hint ? 12 : 14} />
+                                {reindexingIds.has(doc.id) ? 'Retrying…' : 'Retry'}
+                            </button>
+                        </div>
+                        {hint && <p className="doc-failure-hint">{hint}</p>}
+                        {reason && (reason.more ? (
+                            <details className="doc-failure-reason">
+                                <summary>{reason.summary}</summary>
+                                <p>{reason.more}</p>
+                            </details>
+                        ) : (
+                            <p className="doc-failure-reason">{reason.summary}</p>
+                        ))}
+                        {!reason && !hint && (
+                            <p className="doc-failure-reason">GAIA didn't record why. Retry to see the error.</p>
+                        )}
                     </div>
                 );
+            }
             case 'cancelled':
                 return (
                     <span className="doc-status-badge doc-status-cancelled">
@@ -542,7 +647,7 @@ export function DocumentLibrary() {
                             className="path-input"
                             value={folderPath}
                             onChange={(e) => setFolderPath(e.target.value)}
-                            placeholder="Or enter file path: C:\docs\manual.pdf"
+                            placeholder="Or enter a file or folder path: C:\docs\manual.pdf"
                             aria-label="File path to index"
                         />
                         <button type="submit" className="btn-secondary" disabled={!folderPath.trim() || isUploading}>
@@ -567,8 +672,19 @@ export function DocumentLibrary() {
                             filename={uploadError.filename}
                             error={uploadError.error}
                             status={uploadError.status}
+                            kind={uploadError.kind}
                             onDismiss={() => setUploadError(null)}
                         />
+                    )}
+
+                    {folderNotice && (
+                        <div className="doc-folder-notice" role="status">
+                            <CheckCircle size={14} />
+                            <span>{folderNotice}</span>
+                            <button className="btn-icon-sm" onClick={() => setFolderNotice(null)} aria-label="Dismiss folder indexing result">
+                                <X size={12} />
+                            </button>
+                        </div>
                     )}
 
                     {/* Stats */}

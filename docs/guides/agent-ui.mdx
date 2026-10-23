@@ -765,7 +765,7 @@ Chats, documents and schedules are saved on disk as you go. What happens to work
 |---------------|-----------------------|--------------------------|
 | You switch chats or close the browser tab | Keeps going; reopen the chat to watch it finish | Keeps going |
 | You close the desktop window | Keeps going: the window hides to the tray (unless you turned that off) and GAIA keeps running | Keeps going |
-| You quit GAIA, it crashes, or the PC shuts down | Stops. On the next start the reply shows what it had written so far, which tools it had started, then "This answer was interrupted when GAIA closed. Send again to retry." A scheduled run cut short shows the same in its chat. | Stops. On the next start it shows as **Failed** with **Retry**; hover the badge for "Indexing was interrupted when GAIA closed" |
+| You quit GAIA, it crashes, or the PC shuts down | Stops. On the next start the reply shows what it had written so far, which tools it had started, then "This answer was interrupted when GAIA closed. Send again to retry." A scheduled run cut short shows the same in its chat. | Stops. On the next start it shows as **Failed** with **Retry**, and "Indexing was interrupted when GAIA closed" under the document |
 
 GAIA never re-runs an interrupted reply by itself: it may already have run tools, and running them twice is not safe. Send the message again to retry.
 
@@ -887,6 +887,7 @@ The agent supports the **Model Context Protocol** in both directions — connect
   </Accordion>
 
   <Accordion title="Document indexing fails">
+    - The reason shows under the document in the library. A damaged, password-protected or scanned (no text) PDF is marked **Can't be read**: retrying won't help until you re-export the file, remove the password or run OCR on it
     - Ensure the file is a supported format and does not need a password to open (PDFs with only permission restrictions index fine)
     - Keep file size under 100MB
     - For PDF image extraction, download the VLM model: `gaia download --agent chat`
@@ -895,7 +896,10 @@ The agent supports the **Model Context Protocol** in both directions — connect
 
   <Accordion title="GAIA can only read documents under ...">
     Documents can only be read from an allowed root. By default that is your
-    home directory — a file elsewhere on disk is rejected with HTTP 403.
+    home directory — a path elsewhere on disk is rejected with HTTP 403.
+    GAIA gives the same answer whether or not a file exists there, so it can't
+    be used to probe the rest of the disk: if the path might be mistyped, check
+    it first. A missing file inside an allowed root says it doesn't exist.
     Dropping the file onto the Document library works from anywhere: GAIA
     keeps its own copy (up to 20 MB).
 

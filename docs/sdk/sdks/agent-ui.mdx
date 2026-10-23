@@ -1239,7 +1239,15 @@ Deleting a chat deletes its copies.
     }
     ```
 
-    **Response:** `DocumentResponse`
+    **Response:** `DocumentResponse`. A failed index still returns 200, with
+    `indexing_status: "failed"`, the reason in `last_error`, and `error_kind`
+    set to `corrupted`, `encrypted` or `empty` when retrying can't help until
+    the file is fixed.
+
+    **Errors:** 400 with `detail.status: "is_folder"` when the path is a folder
+    (index it with `index-folder`); 400 for a file type GAIA doesn't index; 404
+    for a missing file inside an allowed root; 403 for any path outside the
+    allowed roots, whether or not it exists.
   </Accordion>
 
   <Accordion title="DELETE /api/documents/{doc_id}">
@@ -1596,7 +1604,9 @@ Used to reach the UI from a phone.
   </Accordion>
 
   <Accordion title="POST /api/documents/index-folder">
-    Recursively index all supported files under a folder.
+    Index the supported files in a folder (`recursive`, default `true`, also
+    takes subfolders). Returns `indexed`, `failed` with one line per file in
+    `errors`, and `skipped`: files of a type GAIA doesn't index.
   </Accordion>
 
   <Accordion title="POST /api/documents/{doc_id}/reindex">

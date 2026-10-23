@@ -472,6 +472,8 @@ export interface Document {
     sessions_using: number;
     indexing_status?: 'pending' | 'indexing' | 'complete' | 'failed' | 'cancelled' | 'missing';
     last_error?: string | null;
+    /** Set when retrying can't help until the file is fixed: corrupted, encrypted, empty (no text) or empty_file (0 bytes). */
+    error_kind?: string | null;
 }
 
 /** A file attached to a message before sending. */
@@ -661,6 +663,8 @@ export interface BrowseResponse {
 export interface IndexFolderResponse {
     indexed: number;
     failed: number;
+    /** Files in the folder of a type GAIA doesn't index. */
+    skipped?: number;
     documents: Document[];
     errors: string[];
 }
