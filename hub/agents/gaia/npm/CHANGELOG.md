@@ -23,7 +23,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   against this agent it gets the headless advice (the model server's
   `LEMONADE_BASE_URL`) instead of its own settings screen. GAIA ships the TUI,
   the Agent UI and this agent together, so this only shows when one of them is
-  updated without the others.
+  updated without the others, or when the TUI's `/version` probe times out and
+  it can't confirm the agent takes the field.
 
 ### For integrators: contract 2.19
 

@@ -14,7 +14,6 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, FrozenSet, List, Optional
-from urllib.parse import urlsplit
 
 from gaia.config import gaia_home
 from gaia.logger import get_logger
@@ -97,6 +96,7 @@ from gaia.llm.inference_location import (
     resolve_inference_location,
 )
 from gaia.llm.lemonade_client import (
+    _endpoint_label,
     configured_lemonade_url,
     is_tool_calling_model,
     resolve_default_chat_model,
@@ -1120,15 +1120,10 @@ class ChatAgent(
             "current_base_url",
             None,
         )
-        try:
-            parts = urlsplit(live() if callable(live) else resolve_lemonade_base_url())
-            host, port = parts.hostname, parts.port
-        except ValueError:
-            host = port = None
-        if not host:
+        label = _endpoint_label(live() if callable(live) else resolve_lemonade_base_url())
+        if not label:
             return "The configured model server"
-        host = f"[{host}]" if ":" in host else host
-        return f"The model server at {host}" + (f":{port}" if port else "")
+        return f"The model server at {label}"
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
