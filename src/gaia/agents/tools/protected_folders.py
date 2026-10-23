@@ -57,7 +57,10 @@ class ProtectedFolders:
             self._guarded[resolved] = folder
 
     def blocks(self, path: Any) -> bool:
-        """True (and recorded) when *path* is a guarded folder to skip."""
+        """True (and recorded) when *path* is a guarded folder to skip.
+
+        Matches by exact path, so *path* must be built from a resolved root.
+        """
         if not self._guarded:
             return False
         folder = self._guarded.get(Path(path))
