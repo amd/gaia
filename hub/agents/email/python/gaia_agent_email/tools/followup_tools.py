@@ -56,8 +56,9 @@ _DAY_MS = 24 * 60 * 60 * 1000
 def _timestamp_ms(msg: Dict[str, Any]) -> int:
     """Return a message's ``internalDate`` as epoch milliseconds.
 
-    Gmail returns epoch-millis strings; the Outlook translation carries the
-    Graph ISO-8601 ``receivedDateTime``. Anything else raises — an age
+    Every backend emits epoch-millis strings (the Outlook translation converts
+    Graph's ISO-8601 ``receivedDateTime``); an ISO-8601 string is still
+    accepted. Anything else raises — an age
     computed from a guessed timestamp would silently mis-flag threads.
     """
     raw = msg.get("internalDate")
@@ -195,7 +196,9 @@ def check_followups_impl(
                 continue
             headers = _header_map(latest)
             recipients = [
-                a for a in _recipient_addresses(headers.get("to", "")) if a != user_email
+                a
+                for a in _recipient_addresses(headers.get("to", ""))
+                if a != user_email
             ]
             if not recipients:
                 # Note-to-self (or no recipient) — an inbound reply can never

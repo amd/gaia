@@ -120,3 +120,10 @@ def test_reply_latency_is_computed_for_an_outlook_message():
     latency = reply_tools._compute_reply_latency_seconds(msg)
 
     assert latency is not None
+
+
+def test_malformed_received_date_time_names_the_message():
+    from gaia_agent_email.outlook_backend import _received_epoch_ms
+
+    with pytest.raises(ValueError, match="'msg-7'"):
+        _received_epoch_ms({"id": "msg-7", "receivedDateTime": "yesterday"})

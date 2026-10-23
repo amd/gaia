@@ -147,7 +147,12 @@ def _received_epoch_ms(msg: Dict[str, Any]) -> str:
     received = msg.get("receivedDateTime")
     if not received:
         return ""
-    return str(parse_timestamp_ms(received))
+    try:
+        return str(parse_timestamp_ms(received))
+    except ValueError as exc:
+        raise ValueError(
+            f"message {msg.get('id')!r} receivedDateTime {received!r} is not ISO-8601"
+        ) from exc
 
 
 def graph_message_to_gmail(
