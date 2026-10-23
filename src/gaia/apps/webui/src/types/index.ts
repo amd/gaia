@@ -266,9 +266,9 @@ export interface InferenceStats {
     output_tokens: number;
     /** The agent's own step count for the turn. */
     steps?: number | null;
-    /** Set when the answer came from Retry with…: the model that wrote it. */
+    /** The model that wrote the answer; absent on answers saved before it was recorded. */
     model?: string | null;
-    /** Set with `model`: how long that model took, loading included. */
+    /** Set when the answer came from Retry with…: how long its model took, loading included. */
     seconds?: number | null;
     /** True only for an answer kept from Retry with…. */
     retried?: boolean | null;
