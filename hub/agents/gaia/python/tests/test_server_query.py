@@ -1409,9 +1409,7 @@ def test_a_failed_turn_ends_on_a_final_marked_failed(built, monkeypatch):
     assert final["answer"].startswith("The model stopped responding at step 13")
 
 
-def test_a_failed_turn_that_printed_nothing_is_still_marked_failed(
-    built, monkeypatch
-):
+def test_a_failed_turn_that_printed_nothing_is_still_marked_failed(built, monkeypatch):
     client, _ = built
     monkeypatch.setattr(
         _ScriptedAgent,
@@ -1433,3 +1431,67 @@ def test_an_ordinary_answer_is_not_marked_failed(built):
     r = client.post("/v1/gaia/query", json=_body())
     (final,) = _terminals(r)
     assert final["type"] == "final" and "failed" not in final
+
+
+# ---------------------------------------------------------------------------
+# A failed model request is worded for the caller's front-end (#5295)
+#
+# A headless caller whose model endpoint returned 502 was told to check "the
+# TUI provider settings", a screen it doesn't have. The caller now says which
+# front-end it is, and a caller that says nothing is a headless service.
+# ---------------------------------------------------------------------------
+
+
+def _endpoint_failure():
+    from gaia.llm.lemonade_client import _cloud_request_error
+
+    return str(_cloud_request_error(502, "fireworks", endpoint="10.0.0.5:8080"))
+
+
+def _answering(text):
+    def turn(self, query, max_steps=None):
+        self.console.mark_turn_failed()
+        self.console.print_final_answer(text)
+        return {"result": text, "status": "failed", "model_failed": True}
+
+    return turn
+
+
+def test_a_headless_caller_is_pointed_at_the_endpoint_not_the_tui(built, monkeypatch):
+    from gaia.llm.surface_hints import SERVICE_PROVIDER_SETTINGS
+
+    client, _ = built
+    monkeypatch.setattr(
+        _ScriptedAgent, "process_query", _answering(_endpoint_failure())
+    )
+
+    (final,) = _terminals(client.post("/v1/gaia/query", json=_body()))
+
+    assert final["failed"] is True
+    assert "10.0.0.5:8080" in final["answer"]
+    assert SERVICE_PROVIDER_SETTINGS in final["answer"]
+    assert "TUI" not in final["answer"]
+
+
+@pytest.mark.parametrize(
+    "surface,expected",
+    [("tui", "in the TUI provider settings"), ("agent_ui", "under Settings > Model")],
+)
+def test_a_front_end_that_names_itself_gets_its_own_advice(
+    built, monkeypatch, surface, expected
+):
+    client, _ = built
+    monkeypatch.setattr(
+        _ScriptedAgent, "process_query", _answering(_endpoint_failure())
+    )
+
+    r = client.post("/v1/gaia/query", json=_body(surface=surface))
+
+    (final,) = _terminals(r)
+    assert expected in final["answer"] and "10.0.0.5:8080" in final["answer"]
+
+
+def test_an_unknown_surface_is_refused(built):
+    client, _ = built
+    r = client.post("/v1/gaia/query", json=_body(surface="webui"))
+    assert r.status_code == 422, r.text

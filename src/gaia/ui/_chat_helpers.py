@@ -64,6 +64,7 @@ from gaia.ui.email_sidecar.profiles import (
     memory_supported,
     profile_for,
     scope_supported,
+    surface_supported,
 )
 from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.turn_changes import TurnRecording
@@ -2092,6 +2093,9 @@ def _dispatch_sidecar_query(
             and session_id
             and changes_supported(profile, handle.api_version)
             else None
+        ),
+        surface=(
+            "agent_ui" if surface_supported(profile, handle.api_version) else None
         ),
     )
 

@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.19"`                  |
+| Contract version   | `API_VERSION = "2.20"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -286,7 +286,8 @@ checked for drift in CI — the same pattern as the email agent's own
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
-`documents`, `allowed_paths`, `memory`, `changes_turn_id`) is optional.
+`documents`, `allowed_paths`, `memory`, `changes_turn_id`, `surface`) is
+optional.
 
 `documents` (contract ≥ 2.16) carries the absolute paths of the files the user
 attached to the conversation. Send the whole set on every turn. Before the turn
@@ -326,6 +327,14 @@ the stream ends. It needs `session_id` (`422` without one) and must look like
 is a `422`. Work the agent cannot copy, such as a shell command, is noted in
 the turn as untracked. Omit the field to record nothing. Pre-2.19 binaries
 `422` it.
+
+`surface` (contract ≥ 2.20) names the caller's front-end, so a model-provider
+error tells the user where to fix it: `"service"` (the default), `"tui"`,
+`"agent_ui"` or `"cli"`. A headless caller can omit it: under `"service"` the
+advice points at the model server the GAIA host uses (`LEMONADE_BASE_URL`), not
+at the TUI's or Agent UI's settings. A failed hosted-model request also names
+the `host:port` it went through. Pre-2.20 binaries `422` the field and word
+every such error for the TUI.
 
 ```json
 {

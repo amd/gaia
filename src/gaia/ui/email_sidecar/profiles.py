@@ -124,6 +124,9 @@ class RelayProfile:
     #: Contract version from which ``/query`` takes ``changes_turn_id`` and
     #: records the run's file changes for undo. ``None`` means never sent.
     min_changes_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes ``surface``, so provider
+    #: errors come back worded for the Agent UI. ``None`` means never sent.
+    min_surface_api_version: Optional[Tuple[int, int]] = None
 
 
 # --- email ------------------------------------------------------------------
@@ -449,6 +452,8 @@ GAIA_PROFILE = RelayProfile(
     ),
     # 2.19 added /query's changes_turn_id field.
     min_changes_api_version=(2, 19),
+    # 2.20 added /query's surface field.
+    min_surface_api_version=(2, 20),
 )
 
 
@@ -554,6 +559,15 @@ def changes_supported(profile: RelayProfile, api_version: Optional[str]) -> bool
     return floor is not None and _meets(api_version, floor)
 
 
+def surface_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``surface`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_surface_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def _meets(api_version: Optional[str], floor: Tuple[int, int]) -> bool:
     if not api_version:
         return False
@@ -581,4 +595,5 @@ __all__ = [
     "scope_supported",
     "memory_supported",
     "changes_supported",
+    "surface_supported",
 ]

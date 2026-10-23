@@ -265,6 +265,18 @@
             ],
             "description": "Conversation handle (contract >= 2.12). Threaded to the agent as its UI session so indexed documents survive across turns — without it a document agent forgets what it just indexed.",
             "title": "Session Id"
+          },
+          "surface": {
+            "default": "service",
+            "description": "The front-end the caller is (contract >= 2.20), so an error tells the user where to fix it. 'service', the default, is a headless caller: provider advice points at the model server this GAIA host uses instead of a settings screen the caller doesn't have.",
+            "enum": [
+              "service",
+              "tui",
+              "agent_ui",
+              "cli"
+            ],
+            "title": "Surface",
+            "type": "string"
           }
         },
         "required": [
@@ -442,7 +454,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.19"
+    "version": "2.20"
   },
   "openapi": "3.1.0",
   "paths": {

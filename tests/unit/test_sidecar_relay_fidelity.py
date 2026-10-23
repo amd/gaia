@@ -29,6 +29,7 @@ from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
     memory_supported,
+    surface_supported,
 )
 from gaia.ui.models import ChatRequest
 from gaia.ui.sse_handler import SSEOutputHandler
@@ -387,6 +388,42 @@ def test_a_memory_on_turn_still_runs_on_an_older_agent(monkeypatch):
 def test_a_current_agent_is_told_the_mode(monkeypatch):
     _events, calls = _dispatch(monkeypatch, "2.18", "private")
     assert calls[0]["memory"] == "private"
+
+
+# ── provider-error wording (#5295) ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "version, expected", [("2.20", True), ("3.0", True), ("2.19", False), (None, False)]
+)
+def test_only_a_flagship_at_2_20_takes_the_surface(version, expected):
+    assert surface_supported(GAIA_PROFILE, version) is expected
+    assert surface_supported(EMAIL_PROFILE, "9.9") is False
+
+
+@pytest.mark.parametrize("version, surface", [("2.20", "agent_ui"), ("2.19", None)])
+def test_the_agent_ui_names_itself_to_an_agent_that_takes_it(
+    monkeypatch, version, surface
+):
+    _events, calls = _dispatch(monkeypatch, version, "on")
+    assert calls[0]["surface"] == surface
+
+
+def test_the_relay_sends_the_surface_only_when_given():
+    proxy = _Proxy()
+    relay.relay_query(
+        SSEOutputHandler(),
+        proxy,
+        query="q",
+        context=[],
+        profile=GAIA_PROFILE,
+        surface="agent_ui",
+    )
+    relay.relay_query(
+        SSEOutputHandler(), proxy, query="q", context=[], profile=GAIA_PROFILE
+    )
+    assert proxy.bodies[0]["surface"] == "agent_ui"
+    assert "surface" not in proxy.bodies[1]
 
 
 # ── automatic memory writes ────────────────────────────────────────────────

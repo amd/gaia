@@ -396,8 +396,12 @@ def relay_query(
     allowed_paths: Optional[List[str]] = None,
     memory: Optional[str] = None,
     changes_turn_id: Optional[str] = None,
+    surface: Optional[str] = None,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
+
+    *surface* — the front-end the sidecar words provider errors for, for a
+    sidecar the caller has established takes it (``profiles.surface_supported``).
 
     *changes_turn_id* — the undo-history turn the sidecar records this run's
     file changes under, for a sidecar the caller has established takes it
@@ -483,6 +487,8 @@ def relay_query(
         body["memory"] = memory
     if changes_turn_id is not None:
         body["changes_turn_id"] = changes_turn_id
+    if surface is not None:
+        body["surface"] = surface
 
     syncs_mode = full_access is not None and bool(session_id)
     enable_after_start = False

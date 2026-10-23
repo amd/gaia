@@ -2469,16 +2469,34 @@ def _cloud_error_status(error: openai.APIError) -> Optional[int]:
 _CLOUD_BILLING = {"fireworks": ("Fireworks AI", "https://fireworks.ai/account/billing")}
 
 
+def _endpoint_label(base_url: Optional[str]) -> Optional[str]:
+    """``host:port`` of *base_url* for an error message; never credentials or query."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(base_url or "")
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return None
+    if not host:
+        return None
+    if ":" in host:
+        host = f"[{host}]"
+    return f"{host}:{port}" if port else host
+
+
 def _cloud_request_error(
     status: Optional[int],
     provider: Optional[str] = None,
     reason: Optional[str] = None,
     model: Optional[str] = None,
+    endpoint: Optional[str] = None,
 ) -> LemonadeClientError:
     """Actionable cloud failures without reflecting provider response bodies.
 
     *reason* is the retry classifier's verdict (``gaia.llm.retry``); it tells a
-    status-less hop failure apart from an unexplained one.
+    status-less hop failure apart from an unexplained one. *endpoint* is the
+    ``host:port`` the request went to (:func:`_endpoint_label`).
     """
     if status in {401, 403}:
         return LemonadeAuthError(
@@ -2513,27 +2531,32 @@ def _cloud_request_error(
             "message again, or switch to a local model "
             f"{TUI_PROVIDER_SETTINGS} to keep working now."
         )
+    label = _CLOUD_BILLING.get(provider or "", (provider,))[0]
+    noun = f"{label} cloud request" if label else "cloud request"
+    via = f" through {endpoint}" if endpoint else ""
+    server = f"the server at {endpoint}" if endpoint else "the model server"
     if status is None:
         if reason == "upstream timeout":
             return LemonadeClientError(
-                "The cloud model did not answer within Lemonade's time limit. "
+                f"The cloud model did not answer within the time limit of {server}. "
                 "Send your message again; if it keeps happening the provider "
                 "is overloaded, so wait a few minutes or pick another model."
             )
         if reason in ("connection dropped", "upstream failure"):
             return LemonadeClientError(
                 "The cloud provider dropped the connection before the model "
-                "finished answering; no error code came back. This is usually "
-                "momentary, so send your message again."
+                f"finished answering (the {noun}{via}); no error code came "
+                "back. This is usually momentary, so send your message again."
             )
         return LemonadeClientError(
-            "The cloud request failed without an error code from the provider. "
-            "Send your message again; if it fails the same way, check the "
-            f"provider connection {TUI_PROVIDER_SETTINGS}."
+            f"The {noun}{via} failed without an error code. Send your message "
+            "again; if it fails the same way, check that the server is "
+            f"reachable and the provider connection {TUI_PROVIDER_SETTINGS}."
         )
     return LemonadeClientError(
-        f"Cloud request through Lemonade failed (HTTP {status}). Check the "
-        f"provider connection and selected model {TUI_PROVIDER_SETTINGS}."
+        f"The {noun}{via} failed (HTTP {status}). Check that the server is "
+        "reachable, and the provider connection and selected model "
+        f"{TUI_PROVIDER_SETTINGS}."
     )
 
 
@@ -5788,7 +5811,11 @@ class LemonadeClient:
     ) -> LemonadeClientError:
         """The error for a failed cloud call; a 404 is also recorded per model."""
         error = _cloud_request_error(
-            status, self.cloud_model_provider(model), reason, model
+            status,
+            self.cloud_model_provider(model),
+            reason,
+            model,
+            endpoint=_endpoint_label(self.base_url),
         )
         if isinstance(error, CloudModelUnavailableError):
             _remember_cloud_availability(model, ok=False)

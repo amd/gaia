@@ -6,6 +6,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### For integrators: contract 2.20
+
+- **A failed model request says which endpoint failed, worded for your
+  front-end** (contract **2.20**, #5295). A headless caller of `/query` whose
+  hosted model returned HTTP 502 was told the "cloud request through Lemonade
+  failed" and to check "the TUI provider settings", though no TUI was
+  involved. The error now names the provider and the `host:port` the request
+  went through, and its advice follows the new `surface` field: `"service"`
+  (the default) points at the model server the GAIA host uses; `"tui"`,
+  `"agent_ui"` and `"cli"` keep their own settings screens. Older binaries
+  refuse the field with `422`, so probe `/version` before sending it.
+
 ### For integrators: contract 2.19
 
 - **`/query` can record a turn's file changes for undo** (contract **2.19**).
