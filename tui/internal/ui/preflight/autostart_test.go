@@ -308,6 +308,8 @@ func TestMain(m *testing.M) {
 	tryAutoStartLemonade = func(context.Context) (bool, string, string) { return false, "", "" }
 	// Nor may a test start the developer's real daemon to replay a key.
 	replayKeptKey = func(context.Context, string) (bool, error) { return false, nil }
+	// Nor reach the network to check the AMD gateway.
+	probeChatGateway = func(context.Context, string) error { return nil }
 	// Nor read the developer's own Lemonade choice, or find their server.
 	cfgDir, err := os.MkdirTemp("", "gaia-preflight-config-")
 	if err != nil {

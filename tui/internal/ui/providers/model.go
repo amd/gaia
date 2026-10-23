@@ -62,6 +62,15 @@ type clearedMsg struct {
 	err    error
 }
 
+// gatewayProbedMsg is whether the AMD gateway's host answered.
+type gatewayProbedMsg struct {
+	source *lemonade.Client
+	err    error
+}
+
+// probeGateway is a var so tests reach no network.
+var probeGateway = lemonade.ProbeGateway
+
 type Model struct {
 	spin          spinner.Model
 	ctx           context.Context
@@ -106,6 +115,10 @@ type Model struct {
 	showDetail bool
 	// server names the Lemonade in use and the backend its chat model runs on.
 	server string
+	// gatewayChecked is set once a reachability check of the AMD gateway has
+	// answered; gatewayErr is what it found (nil: the host answered).
+	gatewayChecked bool
+	gatewayErr     error
 }
 
 var names = lemonade.ChatProviders
@@ -174,6 +187,33 @@ func (m Model) WithConnect(provider string) Model {
 }
 
 func (m Model) chosen() string { return names[m.selected] }
+
+// checkGateway asks whether the AMD gateway this Lemonade is set up for
+// answers, so the list can say so before anyone picks it.
+func (m Model) checkGateway() tea.Cmd {
+	c, ctx, base := m.client, m.ctx, ""
+	for _, p := range m.providers {
+		if p.Name == "amd" {
+			base = p.BaseURL
+		}
+	}
+	return func() tea.Msg { return gatewayProbedMsg{source: c, err: probeGateway(ctx, base)} }
+}
+
+// gatewayDisabled reports whether the AMD gateway was found unreachable.
+func (m Model) gatewayDisabled() bool {
+	var u *lemonade.UnreachableError
+	return m.gatewayChecked && errors.As(m.gatewayErr, &u)
+}
+
+// gatewayNote is what enter on an unreachable gateway says.
+func (m Model) gatewayNote() string {
+	var u *lemonade.UnreachableError
+	if errors.As(m.gatewayErr, &u) {
+		return u.Brief() + ". Connect to it, then press r to check again."
+	}
+	return ""
+}
 
 // openSetup is enter on a cloud provider: its key form, registering the
 // provider with Lemonade first when a read has proved it absent.
@@ -467,8 +507,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.stage == "setup" {
 			m.fields[3].Placeholder = m.keyPlaceholder()
 		}
-		if m.autoConnect && m.stage == "providers" && v.err == nil {
+		probe := m.checkGateway()
+		// The gateway's key form waits for its network check.
+		if m.autoConnect && m.stage == "providers" && v.err == nil && m.chosen() != "amd" {
 			m.autoConnect = false
+			next, cmd := m.openSetup()
+			return next, tea.Batch(cmd, probe)
+		}
+		return m, probe
+	case gatewayProbedMsg:
+		if v.source != nil && v.source != m.client {
+			return m, nil
+		}
+		m.gatewayChecked, m.gatewayErr = true, v.err
+		if m.autoConnect && m.stage == "providers" && m.chosen() == "amd" {
+			m.autoConnect = false
+			if m.gatewayDisabled() {
+				m = m.withDetail(m.gatewayNote(), v.err.Error())
+				return m, nil
+			}
 			return m.openSetup()
 		}
 		return m, nil
@@ -609,6 +666,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activity = "Loading models"
 					return m, tea.Batch(m.spin.Tick, m.fetchModels())
 				}
+				if m.chosen() == "amd" && m.gatewayDisabled() {
+					m = m.withDetail(m.gatewayNote(), m.gatewayErr.Error())
+					return m, nil
+				}
 				m.autoConnect = false
 				return m.openSetup()
 			case "r":
@@ -746,6 +807,21 @@ func (m Model) filteredEntries() []lemonade.Entry {
 	return out
 }
 
+// gatewayDesc is the AMD row's line: whether its network answers, and only
+// when it does, what its key found.
+func (m Model) gatewayDesc(keyDesc string) string {
+	var u *lemonade.UnreachableError
+	switch {
+	case !m.gatewayChecked:
+		return keyDesc + " · checking the network"
+	case errors.As(m.gatewayErr, &u):
+		return u.Brief()
+	case m.gatewayErr != nil:
+		return "Via Lemonade · " + m.gatewayErr.Error()
+	}
+	return strings.Replace(keyDesc, "Via Lemonade", "Via Lemonade · network available", 1)
+}
+
 func pullLine(p lemonade.PullProgress) string {
 	parts := []string{}
 	if p.TotalFiles > 1 {
@@ -782,13 +858,19 @@ func (m Model) View() string {
 						desc = "Via Lemonade · key configured"
 					}
 				}
+				if name == "amd" {
+					desc = m.gatewayDesc(desc)
+				}
 			}
 			marker := "  "
 			if i == m.selected {
 				marker = "› "
 			}
 			label := marker + lemonade.Label(name)
-			if i == m.selected {
+			switch {
+			case name == "amd" && m.gatewayDisabled():
+				label = lipgloss.NewStyle().Foreground(theme.Dim).Render(label)
+			case i == m.selected:
 				label = title.Render(label)
 			}
 			lines = append(lines, label, lipgloss.NewStyle().Foreground(theme.Dim).Render("    "+desc))
