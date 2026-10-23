@@ -8,7 +8,7 @@ import './ModelPicker.css';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import {
-    useModelStore, useInferencePlace, selectChipModel, displayModelName, UNKNOWN_PLACE_TITLE,
+    useModelStore, useInferencePlace, selectChipModel, displayModelName, distinctModelLabels, UNKNOWN_PLACE_TITLE,
 } from '../stores/modelStore';
 import { STATE_LABELS, isDownloading, modelMetaLine, modelState } from './modelMeta';
 import { formatPrice } from './settings/cloudPrice';
@@ -155,6 +155,7 @@ export function ModelChip() {
     const Icon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
     const name = chipModel ? displayModelName(chipModel) : 'Model';
     const label = `${name}${place ? ` · ${place.label}` : ''}`;
+    const rowLabels = Object.fromEntries((groups ?? []).map((g) => [g.provider.id, distinctModelLabels(g.models)]));
     const notDownloaded = active?.downloaded === false && chipModel === active.model;
     const title = queueError
         ? queueError
@@ -239,7 +240,7 @@ export function ModelChip() {
                                             {switching === m.id ? <Loader2 size={13} className="spin" /> : current ? <Check size={13} /> : null}
                                         </span>
                                         <span className="popover-item-body">
-                                            <span className="popover-item-title">{m.display_name ?? displayModelName(m.id)}</span>
+                                            <span className="popover-item-title">{rowLabels[provider.id][m.id]}</span>
                                             {note && <span className="popover-item-note">{note}</span>}
                                             {m.placement?.warning && (
                                                 <span className="popover-item-note is-warning">{m.placement.warning}</span>

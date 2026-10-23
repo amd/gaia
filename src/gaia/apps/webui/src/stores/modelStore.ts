@@ -251,6 +251,28 @@ export function shortModelName(model: string): string {
     return withoutProvider.slice(withoutProvider.lastIndexOf('/') + 1);
 }
 
+/**
+ * A label per model for one list, keyed by id. Names already unique are kept;
+ * models that would share one show as much of their id as tells them apart.
+ */
+export function distinctModelLabels(models: Array<{ id: string; display_name?: string | null }>): Record<string, string> {
+    const labels: Record<string, string> = {};
+    for (const m of models) labels[m.id] = m.display_name || displayModelName(m.id);
+    const byLabel = new Map<string, string[]>();
+    for (const m of models) byLabel.set(labels[m.id], [...(byLabel.get(labels[m.id]) ?? []), m.id]);
+    for (const ids of byLabel.values()) {
+        if (ids.length < 2) continue;
+        const paths = ids.map((id) => (/^(fireworks|amd)\./.test(id) ? id.slice(id.indexOf('.') + 1) : id).split('/'));
+        let tails = ids;
+        for (let n = 1; n <= Math.max(...paths.map((p) => p.length)); n++) {
+            const candidate = paths.map((p) => p.slice(-n).join('/'));
+            if (new Set(candidate).size === candidate.length) { tails = candidate; break; }
+        }
+        ids.forEach((id, i) => { labels[id] = tails[i]; });
+    }
+    return labels;
+}
+
 /** A cloud provider's name as people know it; an unknown id is shown as given. */
 export function cloudProviderName(provider: string): string {
     return provider === 'fireworks' ? 'Fireworks AI' : provider === 'amd' ? 'AMD LLM Gateway' : provider;

@@ -183,6 +183,23 @@ describe('ModelChip model states', () => {
         expect(mockedApi.listProviderModels).not.toHaveBeenCalledWith('fireworks');
     });
 
+    it('tells apart two Fireworks models that share a short name', async () => {
+        const fireworks: ProviderInfo = { ...FIREWORKS_NO_KEY, models_discovered: true };
+        const cloud = (id: string): ProviderModel => ({
+            id, context_length: null, downloaded: true, labels: [], rank: null, note: null, evidence: null,
+        });
+        mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, fireworks], active: ACTIVE, lemonade_error: null });
+        mockedApi.listProviderModels.mockImplementation(async (id) => (id === 'fireworks'
+            ? { provider: 'fireworks', models: [cloud('fireworks.auto'), cloud('fireworks.firerouter/auto'), cloud('fireworks.glm-5p3-flash')] }
+            : { provider: 'local', models: MODELS }));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        await within(dialog).findByText('firerouter/auto');
+        expect(within(dialog).getByText('auto')).toBeInTheDocument();
+        expect(within(dialog).getByText('glm-5p3-flash')).toBeInTheDocument();
+        expect(within(dialog).getByText('Qwen3 4B')).toBeInTheDocument();
+    });
+
     it('flags a default that is not downloaded on the chip', () => {
         useModelStore.setState({ active: { ...ACTIVE, model: QWEN, display_name: 'Qwen3.6 35B A3B', downloaded: false } });
         useChatStore.setState({ sessions: [{ ...SESSION, effective_model: QWEN }] });
