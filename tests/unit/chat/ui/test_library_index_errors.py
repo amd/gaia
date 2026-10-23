@@ -231,7 +231,7 @@ class TestFailureReason:
             "The file appears to be corrupted, truncated, or not a valid PDF."
         )
 
-        async def corrupt(_path):
+        async def corrupt(_path, display_name=None):
             raise UnreadableDocumentError(reason, "corrupted")
 
         with patch("gaia.ui.server._index_document", corrupt):
@@ -250,7 +250,7 @@ class TestFailureReason:
         doc_file = home / "notes.md"
         doc_file.write_text("# Notes")
 
-        async def boom(_path):
+        async def boom(_path, display_name=None):
             raise RuntimeError("embedder not loaded")
 
         with patch("gaia.ui.server._index_document", boom):
@@ -258,7 +258,7 @@ class TestFailureReason:
         assert failed["last_error"] == "embedder not loaded"
         assert failed["error_kind"] is None
 
-        async def ok(_path):
+        async def ok(_path, display_name=None):
             return 3
 
         with patch("gaia.ui.server._index_document", ok):

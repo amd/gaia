@@ -424,8 +424,10 @@ def test_upload_corrupt_pdf_error_names_original_file(client, managed_docs_sandb
         files={"file": ("broken.pdf", _CORRUPT_PDF, "application/pdf")},
     )
 
-    assert r.status_code == 500
-    _assert_names_user_file(r.json()["detail"])
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert detail["status"] == "corrupted"
+    _assert_names_user_file(detail["message"])
 
 
 def test_upload_path_corrupt_pdf_error_names_original_file(client, home_tmp_dir):
