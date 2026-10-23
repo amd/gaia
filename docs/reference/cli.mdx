@@ -733,8 +733,9 @@ gaia agent install <id> --version 0.5.0    # a specific version
 gaia agent install <id> --trust            # required for non-verified agents
 ```
 
-`gaia agent list` shows what is available to install (with an `[installed]`
-marker) so you know which id to pass. This is the supported way to provision a sidecar
+`gaia agent list` shows what is available to install so you know which id to pass.
+An installed agent shows the version on disk with an `[installed]` marker, plus the
+catalog's latest version when the two differ. This is the supported way to provision a sidecar
 agent on a machine with no UI.
 
 <Note>
@@ -2460,7 +2461,7 @@ Skills are discovered from three roots, highest precedence first:
     gaia-testing                 -          experimental  claude-import  -
     ```
 
-    A skill shadowed by a higher-precedence copy of the same name is reported on stderr rather than hidden. A skill directory that fails to parse is listed with its error and the command exits `4`.
+    A skill shadowed by a higher-precedence copy of the same name is reported on stderr rather than hidden. A skill directory that fails to parse is listed with its error and the command exits `4`. One under the read-only `claude-import` roots belongs to another tool, so it is listed as a warning (`import_errors` in `--json`) and does not change the exit code.
   </Tab>
 
   <Tab title="info">
@@ -2936,7 +2937,7 @@ gaia skill trust list
 ```
 </CodeGroup>
 
-**Exit codes:** `0` success · `2` missing/unknown subcommand · `3` skill not found · `4` invalid skill (bad manifest, name collision without `--force`, or a discovery root containing a malformed skill).
+**Exit codes:** `0` success · `2` missing/unknown subcommand · `3` skill not found · `4` invalid skill (bad manifest, name collision without `--force`, or a GAIA discovery root containing a malformed skill — a malformed `claude-import` skill is only a warning).
 
 ### Loading a skill into an agent
 
