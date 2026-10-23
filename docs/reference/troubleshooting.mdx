@@ -729,6 +729,41 @@ error. To run the chat model in the cloud instead, see
     ```
   </Accordion>
 
+  <Accordion title="App crashes at launch, or the window looks wrong on Wayland" icon="display">
+    Both are Chromium startup problems on GPU or desktop setups outside the
+    Ubuntu 24.04 test matrix (Fedora, Kinoite, ROCm overlays, GNOME on
+    Wayland), and each has a switch that fixes it.
+
+    **The app aborts right after launch** (a `SIGTRAP` or core dump with no
+    window): the Chromium GPU process is crashing on your graphics stack.
+    Turn GPU acceleration off:
+    ```bash
+    GAIA_DISABLE_GPU=1 ./gaia-agent-ui-*.AppImage   # AppImage
+    GAIA_DISABLE_GPU=1 gaia-desktop                 # .deb install
+    ```
+    To make it stick, export `GAIA_DISABLE_GPU=1` in your shell profile
+    (covers terminal launches), and add it to the `Exec=` line of the
+    desktop entry you launch from the app menu
+    (`Exec=env GAIA_DISABLE_GPU=1 /path/to/gaia-agent-ui.AppImage %U`). For
+    the `.deb`, don't edit the entry in `/usr/share/applications/`, because
+    upgrades replace it: copy it to `~/.local/share/applications/` and edit
+    the copy, which overrides the system one. It accepts `1`, `true`, or
+    `yes`, and also works on Windows and macOS.
+    The UI still works without the GPU; scrolling and animations may be
+    less smooth.
+
+    **The window is missing its frame, draws wrong, or won't resize on
+    Wayland:** run the app under XWayland instead:
+    ```bash
+    ./gaia-agent-ui-*.AppImage --ozone-platform=x11   # AppImage
+    gaia-desktop --ozone-platform=x11                 # .deb install
+    ```
+    To keep it, add `--ozone-platform=x11` to the desktop entry's `Exec=`
+    line, using the same `~/.local/share/applications/` copy for the
+    `.deb`. Use the flag, not the `ELECTRON_OZONE_PLATFORM_HINT`
+    environment variable, which current Electron releases ignore.
+  </Accordion>
+
   <Accordion title="Resetting a broken bootstrap" icon="rotate-left">
     If the Python backend bootstrap (uv, virtualenv, `amd-gaia[ui]` install)
     got interrupted or is in a half-installed state, clear the cached state
@@ -767,10 +802,11 @@ error. To run the chat model in the cloud instead, see
 
   <Accordion title="Collecting a diagnostics bundle for bug reports" icon="box-archive">
     GAIA ships a `gaia diagnostics` command that bundles the logs above,
-    including the rotated `gaia.log.1`, `gaia.log.2`, ... copies,
-    together with a short system-info snapshot (`uname -a`, distro info,
-    relevant environment variables, `ss -tlnp (all TCP listeners)`) into a single
-    tarball:
+    including the rotated `gaia.log.1`, `gaia.log.2`, ... copies, plus the
+    daemon, Lemonade and agent sidecar logs, together with a short
+    system-info snapshot (OS version, relevant environment variables, the
+    ports GAIA's daemon, Lemonade and UI backend are on, and all TCP
+    listeners) into a single tarball:
 
     ```bash
     gaia diagnostics
