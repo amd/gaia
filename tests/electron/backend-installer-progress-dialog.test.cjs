@@ -11,6 +11,7 @@ const { EventEmitter } = require("events");
 const INSTALLER_PATH = "../../src/gaia/apps/webui/services/backend-installer.cjs";
 const DIALOG_PATH =
   "../../src/gaia/apps/webui/services/backend-installer-progress-dialog.cjs";
+const APP_ICON_PATH = "../../src/gaia/apps/webui/services/app-icon.cjs";
 
 const LOG_PATH = "/mock/home/.gaia/install.log";
 const STATE_PATH = "/mock/home/.gaia/install-state.json";
@@ -72,6 +73,13 @@ describe("createProgressWindow", () => {
     expect(prefs.nodeIntegration).toBe(false);
     expect(prefs.preload).toMatch(/preload\.cjs$/);
     expect(window.loadURL.mock.calls[0][0]).toMatch(/^data:text\/html/);
+  });
+
+  test("carries the GAIA icon, not Electron's", () => {
+    const { dialog } = load();
+    const { window } = dialog.createProgressWindow();
+
+    expect(window.options.icon).toBe(require(APP_ICON_PATH).appIconPath());
   });
 
   test("registers the install IPC handlers only once across windows", () => {
@@ -195,14 +203,16 @@ describe("install:* IPC handlers", () => {
 });
 
 describe("showFailureDialog", () => {
+  // A failure outside uv: no "Install uv" button, Retry first.
   const BUTTON = {
-    INSTALL_UV: 0,
-    RETRY: 1,
-    MANUAL: 2,
-    COPY_LOG: 3,
-    OPEN_LOG: 4,
-    QUIT: 5,
+    RETRY: 0,
+    MANUAL: 1,
+    COPY_LOG: 2,
+    OPEN_LOG: 3,
+    QUIT: 4,
   };
+  // A uv failure puts "Install uv" first.
+  const UV = { INSTALL_UV: 0, QUIT: 5 };
 
   function answer(electron, ...responses) {
     for (const response of responses) {
@@ -269,12 +279,34 @@ describe("showFailureDialog", () => {
     }
   });
 
+  test("a failure outside uv offers no Install uv and defaults to Retry", async () => {
+    const { electron, dialog } = load();
+    answer(electron, BUTTON.QUIT);
+
+    await dialog.showFailureDialog(null, { message: "pip failed", stage: "install-package" });
+
+    const opts = electron.dialog.showMessageBox.mock.calls[0][1];
+    expect(opts.buttons).not.toContain("Install uv (auto)");
+    expect(opts.buttons[opts.defaultId]).toBe("Retry");
+  });
+
+  test("a uv failure offers Install uv as the default", async () => {
+    const { electron, dialog } = load();
+    answer(electron, UV.QUIT);
+
+    await dialog.showFailureDialog(null, { message: "no uv", stage: "ensure-uv" });
+
+    const opts = electron.dialog.showMessageBox.mock.calls[0][1];
+    expect(opts.buttons[opts.defaultId]).toBe("Install uv (auto)");
+    expect(opts.buttons[opts.cancelId]).toBe("Quit");
+  });
+
   test("Install uv runs the packaged install and resolves to retry on success", async () => {
     const { electron, installer, dialog } = load();
-    answer(electron, BUTTON.INSTALL_UV);
+    answer(electron, UV.INSTALL_UV);
     installer.ensureBackend.mockResolvedValue("/mock/gaia");
 
-    await expect(dialog.showFailureDialog(null, {})).resolves.toBe("retry");
+    await expect(dialog.showFailureDialog(null, { stage: "ensure-uv" })).resolves.toBe("retry");
 
     expect(installer.ensureBackend).toHaveBeenCalledWith(
       expect.objectContaining({ isPackaged: true, onProgress: expect.any(Function) })
@@ -285,12 +317,12 @@ describe("showFailureDialog", () => {
 
   test("a failed Install uv re-shows the dialog with the new error", async () => {
     const { electron, installer, dialog } = load();
-    answer(electron, BUTTON.INSTALL_UV, BUTTON.QUIT);
+    answer(electron, UV.INSTALL_UV, UV.QUIT);
     const err = Object.assign(new Error("uv download failed"), { stage: "uv" });
     installer.ensureBackend.mockRejectedValue(err);
 
     await expect(
-      dialog.showFailureDialog(null, { message: "first failure" })
+      dialog.showFailureDialog(null, { message: "first failure", stage: "ensure-uv" })
     ).resolves.toBe("quit");
 
     const second = electron.dialog.showMessageBox.mock.calls[1][1];
