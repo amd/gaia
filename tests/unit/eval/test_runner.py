@@ -26,6 +26,7 @@ import yaml
 from gaia.eval import runner
 from gaia.eval.runner import (
     _SCORE_WEIGHTS,
+    ScorecardMismatchError,
     _aggregate_performance,
     _compute_effective_timeout,
     _validate_turn_scores,
@@ -648,12 +649,12 @@ class TestAgentEvalRunnerInit:
 # ---------------------------------------------------------------------------
 
 
-class TestJudgeMismatchWarning:
+class TestJudgeMismatchRefused:
     """A score is the judge's opinion, so a diff across two judges is not a diff.
 
-    The committed baselines were scored by Sonnet 4.6 and the judge has since
-    moved to Opus 5, so this path is live today — without the banner the shift
-    reads as a clean regression report.
+    The eval model also drives every scenario, so this used to be a warning
+    printed above a full diff that still read as a regression report. It is
+    now a refusal (ScorecardMismatchError, exit 3 from the CLI).
     """
 
     def _write(self, path, judge, score, status="PASS"):
@@ -674,41 +675,36 @@ class TestJudgeMismatchWarning:
             data["config"] = {"model": judge}
         Path(path).write_text(json.dumps(data), encoding="utf-8")
 
-    def test_warns_when_judges_differ(self, tmp_path, capsys):
+    def test_refuses_when_judges_differ(self, tmp_path):
         self._write(tmp_path / "base.json", "claude-sonnet-4-6", 8.0)
-        self._write(tmp_path / "curr.json", "claude-opus-5", 6.0)
+        self._write(tmp_path / "curr.json", "claude-opus-5", 3.0, status="FAIL")
 
-        compare_scorecards(tmp_path / "base.json", tmp_path / "curr.json")
+        with pytest.raises(ScorecardMismatchError) as err:
+            compare_scorecards(tmp_path / "base.json", tmp_path / "curr.json")
+        assert "claude-sonnet-4-6" in str(err.value)
+        assert "claude-opus-5" in str(err.value)
 
-        out = capsys.readouterr().out
-        assert "judge mismatch" in out
-        assert "claude-sonnet-4-6" in out
-        assert "claude-opus-5" in out
-
-    def test_silent_when_judges_match(self, tmp_path, capsys):
+    def test_compares_when_judges_match(self, tmp_path):
         self._write(tmp_path / "base.json", "claude-opus-5", 8.0)
-        self._write(tmp_path / "curr.json", "claude-opus-5", 6.0)
-
-        compare_scorecards(tmp_path / "base.json", tmp_path / "curr.json")
-
-        assert "judge mismatch" not in capsys.readouterr().out
-
-    def test_silent_when_judge_unrecorded(self, tmp_path, capsys):
-        """Older scorecards predate the config block — don't cry wolf on them."""
-        self._write(tmp_path / "base.json", None, 8.0)
-        self._write(tmp_path / "curr.json", "claude-opus-5", 6.0)
-
-        compare_scorecards(tmp_path / "base.json", tmp_path / "curr.json")
-
-        assert "judge mismatch" not in capsys.readouterr().out
-
-    def test_mismatch_does_not_suppress_the_comparison(self, tmp_path):
-        self._write(tmp_path / "base.json", "claude-sonnet-4-6", 8.0)
         self._write(tmp_path / "curr.json", "claude-opus-5", 3.0, status="FAIL")
 
         result = compare_scorecards(tmp_path / "base.json", tmp_path / "curr.json")
 
         assert len(result["regressed"]) == 1
+
+    def test_compares_when_the_baseline_records_no_judge(self, tmp_path):
+        """Older scorecards predate the config block; there is nothing to hold to."""
+        self._write(tmp_path / "base.json", None, 8.0)
+        self._write(tmp_path / "curr.json", "claude-opus-5", 6.0)
+
+        compare_scorecards(tmp_path / "base.json", tmp_path / "curr.json")
+
+    def test_refuses_a_current_run_that_records_no_judge(self, tmp_path):
+        self._write(tmp_path / "base.json", "claude-opus-5", 8.0)
+        self._write(tmp_path / "curr.json", None, 6.0)
+
+        with pytest.raises(ScorecardMismatchError, match="does not record"):
+            compare_scorecards(tmp_path / "base.json", tmp_path / "curr.json")
 
 
 # ---------------------------------------------------------------------------

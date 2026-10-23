@@ -38,6 +38,7 @@ from gaia.ui.email_sidecar.profiles import (
 )
 from gaia.ui.email_sidecar.proxy import EmailSidecarProxy, SidecarProxy
 from gaia.ui.models import ChatRequest
+from gaia.ui.turn_summary import TurnLedger
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
@@ -214,6 +215,7 @@ class _FakeSSEHandler:
     def __init__(self):
         self.events = []
         self.cancelled = threading.Event()
+        self.turn_ledger = TurnLedger()
         self.relay_question = None
 
     def _emit(self, event):

@@ -106,6 +106,13 @@ export const INSTALLERS_FOR: Record<PlatformKey, InstallerKey[]> = {
  */
 export const WINDOWS_SETUP_SINCE = '0.25.0';
 
+/**
+ * The Windows one-liner, shared by the install-command block and the Windows
+ * setup's "terminal app only" option so the two cannot drift. Keep it
+ * byte-identical to docs/quickstart.mdx.
+ */
+export const WINDOWS_INSTALL_COMMAND = 'irm https://amd-gaia.ai/install.ps1 | iex';
+
 /** True when `version` is at or past WINDOWS_SETUP_SINCE; false if unparseable. */
 export function windowsSetupOffersChoice(version: string): boolean {
   const core = (v: string) => v.split('-')[0].split('.').map(Number);
@@ -221,6 +228,20 @@ export async function resolveTargets(nav: NavigatorLike): Promise<PlatformKey[]>
   return os === 'darwin' ? ['darwin-arm64', 'darwin-x64'] : [];
 }
 
+/**
+ * The header Install button's download for a visitor, or null to keep it on
+ * the install section. Only a machine placed on exactly ONE platform gets a
+ * file: a Mac of unknown architecture resolves to two, an unplaceable machine
+ * to none, and a platform with no primary download on this release has no
+ * entry -- each keeps the section, where every option shows.
+ */
+export function pickInstallTarget<T>(
+  targets: readonly PlatformKey[],
+  byPlatform: Partial<Record<PlatformKey, T>>,
+): T | null {
+  return targets.length === 1 ? (byPlatform[targets[0]] ?? null) : null;
+}
+
 // The raw terminal binaries as publish.yml attaches them to the GitHub release:
 // build_tui.yml names them `gaia-<goos>-<goarch>`, so Go's names (windows,
 // amd64), not the site's keys (win, x64). Spelled out per key rather than
@@ -309,4 +330,28 @@ export function desktopArtifactFileName(
   version: string,
 ): string | null {
   return DESKTOP_FILENAMES[platform]?.(version) ?? null;
+}
+
+/**
+ * Other packagings of the desktop app, offered under a platform's "more
+ * options" rather than as its main download. Linux's AppImage runs on any
+ * distro, so it leads; the .deb is for a visitor who wants the package manager.
+ */
+const DESKTOP_EXTRA_FILENAMES: Partial<
+  Record<PlatformKey, { label: string; name: (version: string) => string }[]>
+> = {
+  'linux-x64': [
+    { label: 'Desktop app (.deb — Debian, Ubuntu)', name: (v) => `gaia-agent-ui-${v}-amd64.deb` },
+  ],
+};
+
+/** The extra desktop packagings for a platform, as [label, asset name] pairs. */
+export function desktopExtraFileNames(
+  platform: PlatformKey,
+  version: string,
+): { label: string; name: string }[] {
+  return (DESKTOP_EXTRA_FILENAMES[platform] ?? []).map((e) => ({
+    label: e.label,
+    name: e.name(version),
+  }));
 }
