@@ -164,7 +164,10 @@ setup(
         # not an extra: a skill's security tier rests on its signature, and a
         # build that cannot verify one would have to either refuse every signed
         # skill or skip the check — neither is acceptable for a base install.
-        "cryptography>=42.0.0",
+        # Intel Macs stay <49: 49+ has no x86_64 macOS wheel and its sdist needs
+        # Rust. Elsewhere it is uncapped, so they keep 49/50's security fixes.
+        "cryptography>=42.0.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+        "cryptography>=42.0.0,<49; sys_platform == 'darwin' and platform_machine == 'x86_64'",
         # gaia.daemon locks the sidecar launch-secret file down with an
         # owner-only NTFS DACL (#2250) — chmod 0600 is inert on Windows. Core,
         # not an extra: without win32security the daemon cannot spawn ANY
@@ -214,7 +217,7 @@ setup(
             # Version specifiers match the standalone "rag" extra.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
-            "pymupdf>=1.24.0",
+            "pymupdf>=1.24.0,<2",
             "pypdf",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
@@ -311,7 +314,9 @@ setup(
             # RAG embeds via Lemonade, not sentence-transformers — do NOT add it.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
-            "pymupdf>=1.24.0",
+            # 2.x ships no macOS x86_64 wheel and its sdist doesn't build. No
+            # platform marker: `gaia init` refuses to evaluate one (install_hints).
+            "pymupdf>=1.24.0,<2",
             "pypdf",
             # Reading AND writing the common office formats. The read half is
             # what RAG needs; the write half is what the document skills need,

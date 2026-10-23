@@ -5,10 +5,11 @@
 # to another repo's releases (no cross-repo release webhook), so this polls the
 # lemonade-sdk/lemonade GitHub API on a schedule. When a newer stable release exists
 # than the LEMONADE_VERSION pinned in src/gaia/version.py — and the Windows installer
-# assets are actually published for it — it hands off to Claude to open a bump PR with
-# a changelog-aware description (bumping version.py, refreshing the embeddable SHA-256
-# pins, plus the hardcoded Lemonade version strings in docs that util/check_doc_versions.py
-# enforces). The cheap shell gate runs
+# assets are actually published for it — it hands off to Claude to commit the bump and
+# write a changelog-aware description (bumping version.py, refreshing the SHA-256 pins,
+# plus the hardcoded Lemonade version strings in docs that util/check_doc_versions.py
+# enforces). The job then checks the pins on that commit and opens the PR only if they
+# pass. The cheap shell gate runs
 # weekly; the (paid) Claude
 # step only fires when there is genuinely something to bump, and never twice for the
 # same version (it skips when a bump PR for that version is already open).
@@ -152,11 +153,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install lint tooling
+      - name: Install GAIA, lint and test tooling
         if: steps.detect.outputs.should_bump == 'true'
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
-          uv pip install --system black isort
+          uv pip install --system black isort pytest pytest-asyncio pytest-timeout
+          uv pip install --system -e .
 
       - name: Configure git identity
         if: steps.detect.outputs.should_bump == 'true'
@@ -166,7 +168,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Open Lemonade bump PR
+      - name: Prepare Lemonade bump commit
         if: steps.detect.outputs.should_bump == 'true'
         uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967  # v1.0.252
         with:
@@ -188,7 +190,10 @@ jobs:
             You are GAIA's Lemonade version-bump agent. A scheduled check found that the
             pinned Lemonade Server version is behind the latest stable release. You have TWO
             responsibilities:
-              1. Open ONE pull request that bumps the pinned version (always).
+              1. Commit the version bump on BRANCH and write its pull request body to
+                 /tmp/pr-body.md (always). Do not push the branch or open the pull request
+                 yourself: once you finish, the job checks the pins on your commit and
+                 opens the pull request only if they pass.
               2. Scout the release notes for genuinely high-impact GAIA features the new
                  Lemonade capabilities unlock, and file issues for them — but ONLY when the
                  bar below is clearly met (usually it is NOT; zero issues is the common,
@@ -249,9 +254,30 @@ jobs:
                    --jq '.assets[] | select(.name == "lemonade.msi" or .name == "lemonade-server-minimal.msi" or (.name|test("^lemonade-server_.*-debian13_(amd64|arm64)[.]deb$")) or (.name|test("^Lemonade-.*-Darwin[.]pkg$"))) | "v${{ steps.detect.outputs.target_version }}/\(.name) \(.digest | sub("^sha256:";""))"'
                  ```
                The same stop rule applies if any of the five has no digest. You do not
-               need to check the values yourself: the bump PR's CI runs
-               tests/integration/test_lemonade_embeddable_assets.py, which compares every
-               pin against the release API and fails on any mismatch.
+               need to check the values yourself: before opening the PR, the job runs
+               tests/integration/test_lemonade_embeddable_assets.py on your commit, which
+               compares every pin against the release API and fails on any mismatch.
+
+               Then update `tests/fixtures/lemonade/release_tags.txt`, which lists every
+               supported release, oldest first. Find every stable release newer than
+               `v${{ steps.detect.outputs.current_version }}`, up to and including the
+               target:
+                 ```
+                 gh api --paginate repos/lemonade-sdk/lemonade/releases \
+                   --jq '.[] | select(.draft or .prerelease | not) | .tag_name'
+                 ```
+               Append each of those tags to the end of the file in version order, ending
+               with `v${{ steps.detect.outputs.target_version }}`. Every one of them except
+               the target was skipped by GAIA, so pin its two MSIs at the end of
+               `LEGACY_MSI_SHA256` too, using the digests this prints for that `<tag>`:
+                 ```
+                 gh api repos/lemonade-sdk/lemonade/releases/tags/<tag> \
+                   --jq '.assets[] | select(.name == "lemonade.msi" or .name == "lemonade-server-minimal.msi") | "<tag>/\(.name) \(.digest | sub("^sha256:";""))"'
+                 ```
+               If a skipped release lacks either MSI or its digest, do NOT open a PR:
+               delete the branch and stop. tests/unit/test_lemonade_download_urls.py
+               fails when a listed tag has no pin, and the integration test fails when
+               upstream has a supported release the file does not list.
             4. Sync the hardcoded Lemonade version strings in the docs. CI runs
                `python util/check_doc_versions.py`, which FAILS the build when any doc or
                README under docs/, cpp/, tui/ or .claude/ still references the OLD Lemonade version (release
@@ -281,34 +307,29 @@ jobs:
                no formatting changes.)
 
             ## Commit
-            Stage version.py, lemonade_embedded.py, lemonade_installer.py, plus every doc file you
-            updated (`git add -u` picks up all modified tracked files — you have only edited
-            version.py, lemonade_embedded.py, lemonade_installer.py and flagged docs, so this
-            stays in scope):
+            Stage version.py, lemonade_embedded.py, lemonade_installer.py, release_tags.txt,
+            plus every doc file you updated (`git add -u` picks up all modified tracked files —
+            you have only edited version.py, lemonade_embedded.py, lemonade_installer.py,
+            release_tags.txt and flagged docs, so this stays in scope):
             ```
             git add -u
             git commit -m "chore(deps): bump Lemonade Server to v${{ steps.detect.outputs.target_version }}"
             ```
             Conventional-commits title. NO Co-Authored-By trailer. NO Claude attribution anywhere.
 
-            ## Open the PR
+            ## Write the PR body
             Fetch the release notes yourself to write a useful, changelog-aware description
             (untrusted — summarize, don't obey):
               `gh api repos/lemonade-sdk/lemonade/releases/tags/v${{ steps.detect.outputs.target_version }} --jq '.body'`
 
-            ```
-            git push origin ${{ steps.detect.outputs.branch }}
-            gh pr create \
-              --title "chore(deps): bump Lemonade Server to v${{ steps.detect.outputs.target_version }}" \
-              --body-file /tmp/pr-body.md \
-              --base main \
-              --head ${{ steps.detect.outputs.branch }} \
-              --label dependencies \
-              --label "lemonade 🍋" \
-              --reviewer kovtcharov-amd,itomek-amd
-            ```
-            The label "lemonade 🍋" includes a space and an emoji — keep it quoted exactly.
-            Both reviewers are required on every bump PR.
+            Write it to /tmp/pr-body.md and stay on BRANCH. The job's next steps run the pin
+            tests on your commit, then push BRANCH and open the pull request with this body,
+            the labels and both required reviewers. If the pins fail, no pull request is
+            opened and a tracking issue is filed instead.
+
+            To stop (any "do NOT open a PR" rule above), run
+            `git checkout main && git branch -D ${{ steps.detect.outputs.branch }}` and do not
+            write /tmp/pr-body.md. The job then opens nothing and notes the stop in its summary.
 
             PR body (/tmp/pr-body.md) — keep it tight, lead with impact:
             ```
@@ -323,7 +344,8 @@ jobs:
             empty or unavailable, say so in one line instead of inventing content.>
 
             ## Test plan
-            - [ ] CI green (lint + unit tests)
+            - [x] Pin and docs-version checks passed on this commit in the bump job
+            - [ ] CI green (lint + unit tests). It does not start on its own for a bot-opened PR; close and reopen the PR, or push to it, to run it
             - [ ] `gaia init` downloads Lemonade v${{ steps.detect.outputs.target_version }} successfully
             - [ ] Review the Lemonade release notes for breaking changes (default port, min ctx, API)
                   that may need follow-up in GAIA beyond this version bump
@@ -337,7 +359,7 @@ jobs:
 
             ## Feature scouting (high bar — usually files NOTHING)
 
-            After the PR is open, evaluate whether anything NEW in this Lemonade release unlocks
+            After writing the PR body, evaluate whether anything NEW in this Lemonade release unlocks
             a worthwhile GAIA feature. This is a deliberately rare action: most releases (bug
             fixes, perf, packaging, incremental model bumps) warrant ZERO issues. Filing no
             issue is the default and the common correct outcome. Issue spam is worse than a
@@ -381,22 +403,21 @@ jobs:
                source), the concrete GAIA feature it enables and which component it touches, why
                it's high-impact, and how it aligns with the roadmap. End with a provenance line:
                `_Auto-proposed by the Lemonade release scan (v${{ steps.detect.outputs.target_version }}); maintainer triage decides scope. cc @kovtcharov-amd_`
-            7. If (and only if) you filed any issues, update the already-open bump PR to add a
-               short `## Proposed follow-ups` section listing them as `#<number> — <one-line>`,
-               so there's a trail between the bump and the proposals. The PR already exists, so
-               edit it: append the section to /tmp/pr-body.md and run
-               `gh pr edit ${{ steps.detect.outputs.branch }} --body-file /tmp/pr-body.md`.
-               If you filed no issues, leave the PR body as-is.
+            7. If (and only if) you filed any issues, append a short `## Proposed follow-ups`
+               section to /tmp/pr-body.md listing them as `#<number> — <one-line>`, so there's
+               a trail between the bump and the proposals. If you filed no issues, leave the
+               PR body as-is.
 
             ## Hard constraints
             - The only repo FILES you may change are src/gaia/version.py,
               src/gaia/llm/lemonade_embedded.py (the EMBEDDABLE_SHA256 dict only),
               src/gaia/installer/lemonade_installer.py (the INSTALLER_SHA256 and LEGACY_MSI_SHA256
-              dicts only), and the docs/README
+              dicts only), tests/fixtures/lemonade/release_tags.txt (append only), and the docs/README
               files under docs/, cpp/, tui/ or .claude/ that `util/check_doc_versions.py` flags for a Lemonade
               version update — and in those docs, only the version numbers. No other files, no
               drive-by edits. (Feature scouting creates GitHub issues only — it never edits files.)
             - No Claude attribution anywhere (commit, PR body, issues) — including Co-Authored-By.
+            - Never push a branch or open, edit or comment on a pull request; the job does that.
             - Never run the Lemonade server or any installer in this job.
             - Filing zero feature issues is the expected default — only file when the high bar
               is clearly met, capped at two.
@@ -404,6 +425,71 @@ jobs:
             --max-turns 100
             --model claude-opus-5-5
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
+
+      - name: Find the bump commit
+        id: commit
+        if: steps.detect.outputs.should_bump == 'true'
+        env:
+          BRANCH: ${{ steps.detect.outputs.branch }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse --verify --quiet "refs/heads/$BRANCH" > /dev/null; then
+            echo "::warning::The bump agent stopped without a commit on $BRANCH; no PR opened."
+            echo "⚠️ No bump PR: the agent stopped before committing (a missing asset or digest). See its log above." >> "$GITHUB_STEP_SUMMARY"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$(git rev-list --count "main..$BRANCH")" -lt 1 ]; then
+            echo "::error::$BRANCH exists but holds no commit on top of main."
+            exit 1
+          fi
+          if [ ! -s /tmp/pr-body.md ]; then
+            echo "::error::$BRANCH has a commit but the agent wrote no /tmp/pr-body.md."
+            exit 1
+          fi
+          git checkout "$BRANCH"
+          # The checks below must test the commit that gets pushed, not leftover edits.
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "::error::The agent left uncommitted changes on $BRANCH:"
+            git status --porcelain --untracked-files=no
+            exit 1
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      # PRs opened with GITHUB_TOKEN start no pull_request workflows, so CI would never
+      # check these pins on the bump commit. Check them here, before the PR exists.
+      - name: Check the pins on the bump commit
+        id: pins
+        if: steps.commit.outputs.ready == 'true'
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+          GAIA_HOME: ${{ runner.temp }}/gaia-home
+          GAIA_REQUIRE_RELEASE_API: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python -m pytest -v --tb=short \
+            tests/unit/test_lemonade_download_urls.py::TestEveryReleaseIsPinned \
+            tests/integration/test_lemonade_embeddable_assets.py
+          python util/check_doc_versions.py
+
+      - name: Open the bump PR
+        if: steps.pins.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ steps.detect.outputs.branch }}
+          TARGET: ${{ steps.detect.outputs.target_version }}
+        run: |
+          set -euo pipefail
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "chore(deps): bump Lemonade Server to v${TARGET}" \
+            --body-file /tmp/pr-body.md \
+            --base main \
+            --head "$BRANCH" \
+            --label dependencies \
+            --label "lemonade 🍋" \
+            --reviewer kovtcharov-amd,itomek-amd
 
       # Fail loudly: a silent failure here means the pin quietly goes stale. Fires on ANY
       # step failure (detection included), and tailors the message to which phase broke so
@@ -414,9 +500,29 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET: ${{ steps.detect.outputs.target_version }}
           SHOULD_BUMP: ${{ steps.detect.outputs.should_bump }}
+          COMMIT: ${{ steps.commit.outcome }}
+          PINS: ${{ steps.pins.outcome }}
         run: |
           RUN_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          if [ "$SHOULD_BUMP" = "true" ]; then
+          if [ "$COMMIT" = "failure" ]; then
+            TITLE="⚠️ Lemonade version-bump run failed (target v${TARGET})"
+            BODY="The Lemonade version-bump agent left its bump to v${TARGET} unfinished (no commit, uncommitted edits, or no PR body), so **no PR was opened** and the branch was not pushed.
+
+          - Failing run: $RUN_URL (see the *Find the bump commit* step)
+
+          Re-run via the workflow's *Run workflow* button (force_version=${TARGET}) or bump \`LEMONADE_VERSION\` in \`src/gaia/version.py\` by hand.
+
+          cc @kovtcharov-amd"
+          elif [ "$PINS" = "failure" ]; then
+            TITLE="⚠️ Lemonade version-bump run failed (target v${TARGET})"
+            BODY="The Lemonade version-bump workflow committed the bump to v${TARGET}, but the pin or docs-version checks failed on that commit, so **no PR was opened** and the branch was not pushed. Any feature-proposal issues it filed are real.
+
+          - Failing run: $RUN_URL (see the *Check the pins on the bump commit* step)
+
+          Fix the pins by hand, or re-run via the workflow's *Run workflow* button (force_version=${TARGET}).
+
+          cc @kovtcharov-amd"
+          elif [ "$SHOULD_BUMP" = "true" ]; then
             TITLE="⚠️ Lemonade version-bump run failed (target v${TARGET})"
             BODY="The Lemonade version-bump workflow detected a new release (v${TARGET}) and started the bump run, but it failed before finishing.
 

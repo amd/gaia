@@ -155,3 +155,49 @@ async def test_time_waiting_for_a_worker_does_not_count(slow_rag):
     with patch.object(helpers, "_INDEX_TIMEOUT_S", 0.5):
         counts = await asyncio.gather(*(helpers._index_document(doc) for _ in range(4)))
     assert counts == [6] * 4
+
+
+async def test_waiting_in_line_for_the_embedder_counts_as_progress(slow_rag):
+    from gaia.daemon import broker_client
+
+    rag, doc = slow_rag
+    rag.steps = 1
+    real_index = rag.index_document
+
+    def index_after_a_long_queue(self, path, progress_callback=None, heartbeat=None):
+        # Queued behind a long chat for the embedder: the broker reports the
+        # wait every so often, but no page or batch moves for 1.5 s.
+        for _ in range(15):
+            broker_client.notify_wait({"event": "queued", "scope": "daemon"})
+            time.sleep(0.1)
+        return real_index(self, path, progress_callback, heartbeat)
+
+    rag.index_document = index_after_a_long_queue
+    with patch.object(helpers, "_INDEX_TIMEOUT_S", 0.4):
+        assert await asyncio.wait_for(helpers._index_document(doc), 10) == 1
+
+
+async def test_cancel_reaches_an_index_waiting_in_line_for_the_model(slow_rag):
+    from gaia.daemon import broker_client
+
+    rag, doc = slow_rag
+    left_the_queue = threading.Event()
+
+    def queued_until_cancelled(self, path, progress_callback=None, heartbeat=None):
+        # A broker wait: it reports and checks its cancel scope as it waits.
+        try:
+            for _ in range(100):
+                broker_client.notify_wait({"event": "queued", "scope": "daemon"})
+                broker_client.check_cancelled("the model slot")
+                time.sleep(0.05)
+        finally:
+            left_the_queue.set()
+        return {"success": True, "num_chunks": 1}
+
+    rag.index_document = queued_until_cancelled
+    task = asyncio.create_task(helpers._index_document(doc))
+    await asyncio.sleep(0.3)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert await asyncio.to_thread(left_the_queue.wait, 1), "still waiting after Cancel"
