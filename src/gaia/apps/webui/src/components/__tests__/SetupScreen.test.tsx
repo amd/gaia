@@ -551,3 +551,42 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         expect(screen.queryByRole('button', { name: 'Use mine' })).not.toBeInTheDocument();
     });
 });
+
+describe('SetupScreen: an unreachable AMD gateway (#5604)', () => {
+    const NO_NET = "No network available — can't reach llm-api.amd.com (needs AMD's network or VPN)";
+    const gateway = (reachable: boolean) => ({
+        providers: [{
+            id: 'amd' as const, name: 'AMD LLM Gateway', remote: true, privacy_notice: '',
+            network: { reachable, detail: reachable ? null : NO_NET },
+        }],
+        active: { provider: 'local' as const, model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma', remote: false, is_default: true },
+        lemonade_error: null,
+    });
+
+    it('greys out the gateway choice and says there is no network', async () => {
+        mockedApi.listProviders.mockResolvedValue(gateway(false));
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        const amd = await screen.findByRole('radio', { name: /AMD LLM Gateway/ });
+        await waitFor(() => expect(amd).toBeDisabled());
+        expect(amd).toHaveTextContent('No network available');
+        expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toBeEnabled();
+    });
+
+    it('refuses to start setup on a saved gateway choice while there is no network, then re-enables it', async () => {
+        localStorage.setItem('gaia-setup-choice', 'amd');
+        mockedApi.listProviders.mockResolvedValue(gateway(false));
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Start setup' })).toBeDisabled());
+        expect(screen.getByText(/Choose another option, or connect and check again/)).toBeInTheDocument();
+
+        mockedApi.listProviders.mockResolvedValue(gateway(true));
+        fireEvent.click(screen.getByRole('button', { name: 'Check the AMD gateway again' }));
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Start setup' })).toBeEnabled());
+    });
+
+    it('keeps the gateway choosable when the network check has not answered', async () => {
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        await waitFor(() => expect(mockedApi.getSetupStatus).toHaveBeenCalled());
+        expect(screen.getByRole('radio', { name: /AMD LLM Gateway/ })).toBeEnabled();
+    });
+});

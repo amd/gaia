@@ -145,6 +145,15 @@ def test_scheduled_runs_use_the_flagship(monkeypatch):
     monkeypatch.setattr(lemonade_service, "ensure_daemon_owns_lemonade", lambda: None)
 
     with TestClient(server.create_app(db_path=":memory:")) as client:
+        # An in-process (wheel) flagship, whatever this machine has installed.
+        monkeypatch.setattr(
+            helpers,
+            "_agent_registry",
+            types.SimpleNamespace(
+                get=lambda _id: types.SimpleNamespace(is_sidecar=False),
+                get_load_error=lambda _id: None,
+            ),
+        )
         executor = client.app.state.scheduler._executor
         assert asyncio.run(executor("summarize")) == "did summarize"
 

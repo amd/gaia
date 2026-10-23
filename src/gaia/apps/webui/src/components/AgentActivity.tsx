@@ -33,6 +33,7 @@ import {
 import type { AgentStep, CommandOutput, RetrievalChunk } from '../types';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { StepResult } from './LongContent';
 import './AgentActivity.css';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -739,7 +740,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now }: FlowToolCardProps) {
                             <span className="detail-section-label">
                                 {step.success === false ? 'Error' : 'Result'}
                             </span>
-                            <div className="detail-result-content">{linkifyPaths(step.result)}</div>
+                            <StepResult text={step.result} renderShort={linkifyPaths} />
                         </div>
                     )}
                     {/* Retrieved document chunks */}

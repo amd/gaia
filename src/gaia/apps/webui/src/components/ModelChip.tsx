@@ -21,6 +21,7 @@ interface ProviderModels {
 }
 
 const DOWNLOAD_POLL_MS = 2000;
+const KEY_WAITING = 'waiting_for_os_permission';
 
 /** Loaded (green dot), downloaded, or a download button — always with a text label. */
 function StateMark({ m, onDownload, busy }: { m: ProviderModel; onDownload: () => void; busy: boolean }) {
@@ -109,11 +110,12 @@ export function ModelChip() {
     }, [open, load]);
 
     const anyDownloading = !!groups?.some((g) => g.models.some(isDownloading));
+    const awaitingPermission = !!groups?.some((g) => g.provider.key_state === KEY_WAITING);
     useEffect(() => {
-        if (!open || !anyDownloading) return;
+        if (!open || !(anyDownloading || awaitingPermission)) return;
         const t = setInterval(() => { void load(true); }, DOWNLOAD_POLL_MS);
         return () => clearInterval(t);
-    }, [open, anyDownloading, load]);
+    }, [open, anyDownloading, awaitingPermission, load]);
 
     const download = useCallback(async (model: string) => {
         setDownloading(model);
@@ -203,7 +205,11 @@ export function ModelChip() {
                     <div key={provider.id}>
                         <div className="popover-heading">{provider.name}</div>
                         {groupError && <div className="popover-message is-error">{groupError}</div>}
-                        {provider.remote && !provider.models_discovered && (
+                        {provider.key_state === KEY_WAITING ? (
+                            <div className="popover-message" role="status">
+                                <Loader2 size={13} className="spin" aria-hidden="true" /> {provider.key_message}
+                            </div>
+                        ) : provider.remote && !provider.models_discovered && (
                             <button
                                 type="button"
                                 className="popover-item"
