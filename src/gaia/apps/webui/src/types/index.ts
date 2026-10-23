@@ -1069,6 +1069,14 @@ export interface ProviderInfo {
     env_var?: string;
     base_url?: string | null;
     error?: string;
+    /** AMD gateway only: whether its host answers from this network. */
+    network?: ProviderNetwork;
+}
+
+export interface ProviderNetwork {
+    reachable: boolean;
+    /** Why it can't be reached; null when it can. */
+    detail: string | null;
 }
 
 export interface ActiveModel {
