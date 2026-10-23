@@ -28,10 +28,22 @@ function innermost(): Container | undefined {
     return top;
 }
 
+/** True when `el` is inside a closed `<details>` within `container`, outside that details' summary. */
+function inClosedDetails(el: HTMLElement, container: HTMLElement): boolean {
+    for (let d = el.parentElement?.closest('details'); d && container.contains(d); d = d.parentElement?.closest('details')) {
+        if (!d.open && !d.querySelector(':scope > summary')?.contains(el)) return true;
+    }
+    return false;
+}
+
 function isShown(el: HTMLElement, container: HTMLElement): boolean {
+    const inert = el.closest('[inert]');
+    if ((inert && container.contains(inert)) || inClosedDetails(el, container)) return false;
+    // One native check in Chromium/Electron instead of a style read per ancestor.
+    if (typeof el.checkVisibility === 'function') return el.checkVisibility({ visibilityProperty: true });
     if (getComputedStyle(el).visibility === 'hidden') return false;
     for (let n: HTMLElement | null = el; n && n !== container.parentElement; n = n.parentElement) {
-        if (n.hidden || n.hasAttribute('inert') || getComputedStyle(n).display === 'none') return false;
+        if (n.hidden || getComputedStyle(n).display === 'none') return false;
     }
     return true;
 }
@@ -45,13 +57,16 @@ function tabbableIn(container: HTMLElement): HTMLElement[] {
         return isShown(el, container);
     });
     // Tab stops once per radio group: on the checked radio, else the first.
-    return items.filter((el) => {
-        if (!(el instanceof HTMLInputElement) || el.type !== 'radio' || !el.name) return true;
-        const group = items.filter((o): o is HTMLInputElement =>
-            o instanceof HTMLInputElement && o.type === 'radio' && o.name === el.name);
-        const checked = group.find((o) => o.checked);
-        return checked ? el === checked : el === group[0];
-    });
+    const isGroupedRadio = (el: HTMLElement): el is HTMLInputElement =>
+        el instanceof HTMLInputElement && el.type === 'radio' && el.name !== '';
+    const stopByGroup = new Map<string, HTMLInputElement>();
+    for (const el of items) {
+        if (!isGroupedRadio(el)) continue;
+        const stop = stopByGroup.get(el.name);
+        if (!stop || (el.checked && !stop.checked)) stopByGroup.set(el.name, el);
+    }
+    const stops = new Set<HTMLElement>(stopByGroup.values());
+    return items.filter((el) => !isGroupedRadio(el) || stops.has(el));
 }
 
 /**

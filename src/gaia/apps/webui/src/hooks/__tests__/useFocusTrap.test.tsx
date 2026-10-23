@@ -99,6 +99,89 @@ describe('useFocusTrap', () => {
         expect(byName('First')).toHaveFocus();
     });
 
+    it('treats a closed <details> as just its summary', async () => {
+        const user = userEvent.setup();
+        render(
+            <Page>
+                <button>First</button>
+                <details>
+                    <summary>More</summary>
+                    <button>Inside closed</button>
+                    <details open><summary>Nested summary</summary><button>Nested inside</button></details>
+                </details>
+            </Page>,
+        );
+        const summary = screen.getByText('More');
+        summary.focus();
+
+        await user.tab();
+        expect(byName('First')).toHaveFocus();
+
+        await user.tab({ shift: true });
+        expect(summary).toHaveFocus();
+    });
+
+    it('reaches the content of an open <details>', async () => {
+        const user = userEvent.setup();
+        render(<Page><button>First</button><details open><summary>More</summary><button>Inside open</button></details></Page>);
+        byName('First').focus();
+
+        await user.tab({ shift: true });
+
+        expect(byName('Inside open')).toHaveFocus();
+    });
+
+    it('stops once per radio group, on the first radio when none is checked', async () => {
+        const user = userEvent.setup();
+        render(
+            <Page>
+                <button>First</button>
+                <input type="radio" name="mode" aria-label="Fast" />
+                <input type="radio" name="mode" aria-label="Slow" />
+            </Page>,
+        );
+        byName('First').focus();
+
+        await user.tab({ shift: true });
+        expect(screen.getByLabelText('Fast')).toHaveFocus();
+
+        await user.tab();
+        expect(byName('First')).toHaveFocus();
+    });
+
+    it('stops once per radio group, on the checked radio', async () => {
+        const user = userEvent.setup();
+        render(
+            <Page>
+                <button>First</button>
+                <input type="radio" name="size" aria-label="Large" defaultChecked />
+                <input type="radio" name="size" aria-label="Small" />
+            </Page>,
+        );
+        byName('First').focus();
+
+        await user.tab({ shift: true });
+        expect(screen.getByLabelText('Large')).toHaveFocus();
+    });
+
+    it('uses checkVisibility when the browser has it', async () => {
+        const user = userEvent.setup();
+        const proto = HTMLElement.prototype as unknown as Record<string, unknown>;
+        const original = proto.checkVisibility;
+        proto.checkVisibility = function (this: HTMLElement) { return this.textContent !== 'Invisible'; };
+        try {
+            render(<Page><button>First</button><button>Last</button><button>Invisible</button></Page>);
+            byName('Last').focus();
+
+            await user.tab();
+
+            expect(byName('First')).toHaveFocus();
+        } finally {
+            if (original === undefined) delete proto.checkVisibility;
+            else proto.checkVisibility = original;
+        }
+    });
+
     it('lets only the innermost of two open traps handle Tab', async () => {
         const user = userEvent.setup();
         render(
