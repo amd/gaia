@@ -96,7 +96,9 @@ def _isolate_daemon_home(tmp_path_factory):
 # Spawn attempts made outside any test's own guard: one line per attempt
 # naming the test running at the time, the thread, and the test code calling.
 _STRAY_SPAWN_ATTEMPTS: list = []
-_TESTS_DIR = os.path.normcase(os.path.dirname(os.path.dirname(__file__)))
+_TESTS_DIR = os.path.join(
+    os.path.normcase(os.path.dirname(os.path.dirname(__file__))), ""
+)
 
 
 def _describe_stray_spawn() -> str:
@@ -438,6 +440,10 @@ def _forbid_real_lemonade(request, monkeypatch):
     opted_in = any(request.node.get_closest_marker(m) for m in _REAL_LEMONADE_MARKERS)
     if opted_in:
         for name, value in _CALLER_LEMONADE_ENV.items():
+            # Undo only what the session fixture planted; a value set since is deliberate.
+            planted = _UNROUTABLE_LEMONADE_URL if name == "LEMONADE_BASE_URL" else None
+            if os.environ.get(name) != planted:
+                continue
             if value is None:
                 monkeypatch.delenv(name, raising=False)
             else:
