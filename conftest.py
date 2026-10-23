@@ -14,8 +14,9 @@ directories at the front of ``sys.path``, so the checkout you are sitting in is
 the one that gets tested. It also fails the session loudly if a core module
 still resolves elsewhere, rather than letting a green run mean nothing.
 
-It also points GAIA's config file, daemon home and memory database at a
-per-session tmp dir, so no result depends on the developer's real ~/.gaia.
+It also points GAIA's config file, daemon home, TUI home, memory database, file
+index and scratchpad at a per-session tmp dir, so no result depends on the
+developer's real ~/.gaia, and fails any test that opens a database inside it.
 
 Set ``GAIA_ALLOW_EXTERNAL_IMPORTS=1`` to opt out — testing an actually-installed
 wheel is a legitimate thing to do, it just must not happen by accident.
@@ -24,11 +25,14 @@ wheel is a legitimate thing to do, it just must not happen by accident.
 from __future__ import annotations
 
 import atexit
+import functools
 import importlib.util
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -121,7 +125,11 @@ _STATE_ENV = {
     "GAIA_MEMORY_DB": ("memory", "memory.db"),
     # Cloud calls record model availability here.
     "GAIA_GATEWAY_FILE": ("gateway", "gateway.json"),
+    # The stdio agent writes each session's chat history under it.
+    "GAIA_TUI_HOME": ("tui",),
 }
+#: The _STATE_ENV entries that name a directory rather than a file.
+_STATE_DIRS = {"GAIA_DAEMON_HOME", "GAIA_TUI_HOME"}
 _STATE_ROOT = Path(tempfile.mkdtemp(prefix="gaia-test-state-"))
 atexit.register(shutil.rmtree, _STATE_ROOT, ignore_errors=True)
 #: Names this conftest set, so a pytest-xdist worker can tell them from the
@@ -141,7 +149,7 @@ def _isolate_gaia_state() -> None:
         if os.environ.get(name) and name not in inherited:
             continue
         path = _STATE_ROOT.joinpath(*parts)
-        (path if name == "GAIA_DAEMON_HOME" else path.parent).mkdir(
+        (path if name in _STATE_DIRS else path.parent).mkdir(
             parents=True, exist_ok=True
         )
         os.environ[name] = str(path)
@@ -177,13 +185,20 @@ _EXIT_WITH_PID_ENV = "GAIA_DAEMON_EXIT_WITH_PID"
 _REAL_GAIA_HOME = Path.home() / ".gaia"
 
 _REAL_HOME_MESSAGE = (
-    "This test would {action} the GAIA in your real home, {home}: it would "
-    "start, stop or unload the Lemonade Server your own GAIA is using. Point "
-    "it at a tmp folder instead: set GAIA_HOME (a daemon also needs "
+    "This test would {action} the GAIA in your real home, {home}: {harm} "
+    "Point it at a tmp folder instead: set GAIA_HOME (a daemon also needs "
     "GAIA_DAEMON_HOME) with monkeypatch.setenv, or use the mock_home fixture. "
+    "{hint}"
+)
+_LEMONADE_HARM = (
+    "it would start, stop or unload the Lemonade Server your own GAIA is using."
+)
+_LEMONADE_HINT = (
     "A test that only needs a model server tries to start one when yours is "
     "stopped: start it first with `gaia daemon start`."
 )
+_DB_HARM = "it would read or write your own chats, file index or scratchpad."
+_DB_HINT = "A database a test opens itself belongs under tmp_path."
 
 
 def _is_real_gaia_home(path: Path) -> bool:
@@ -315,7 +330,10 @@ def _guard_real_gaia_home():
             if _is_real_gaia_home(self.root):
                 pytest.fail(
                     _REAL_HOME_MESSAGE.format(
-                        action=f"EmbeddedLemonade.{name}()", home=_REAL_GAIA_HOME
+                        action=f"EmbeddedLemonade.{name}()",
+                        home=_REAL_GAIA_HOME,
+                        harm=_LEMONADE_HARM,
+                        hint=_LEMONADE_HINT,
                     ),
                     pytrace=False,
                 )
@@ -329,7 +347,12 @@ def _guard_real_gaia_home():
         home = _child_gaia_home(os.environ)
         if _is_real_gaia_home(home):
             pytest.fail(
-                _REAL_HOME_MESSAGE.format(action="start a daemon for", home=home),
+                _REAL_HOME_MESSAGE.format(
+                    action="start a daemon for",
+                    home=home,
+                    harm=_LEMONADE_HARM,
+                    hint=_LEMONADE_HINT,
+                ),
                 pytrace=False,
             )
         return real_spawn(*args, **kwargs)
@@ -342,6 +365,93 @@ def _guard_real_gaia_home():
                 _guard_method(name, getattr(EmbeddedLemonade, name)),
             )
         mp.setattr(client, "_spawn_and_wait", guarded_spawn)
+        # sqlite3.dbapi2 is the module SQLAlchemy and other drivers bind.
+        for module in (sqlite3, sqlite3.dbapi2):
+            mp.setattr(module, "connect", _guard_connect(module.connect))
+        yield
+
+
+def _sqlite_target(database, uri: bool) -> Path | None:
+    """The file a ``sqlite3.connect`` call opens, or None for an in-memory DB."""
+    if isinstance(database, int):
+        return None
+    target = os.fsdecode(database)
+    if uri and target.startswith("file:"):
+        parsed = urllib.parse.urlsplit(target)
+        target = urllib.parse.unquote(parsed.path)
+        # file:///C:/x is a Windows URI for C:/x.
+        if os.name == "nt" and target.startswith("/") and target[2:3] == ":":
+            target = target[1:]
+    if target in ("", ":memory:"):
+        return None
+    return Path(target).expanduser()
+
+
+def _guard_connect(real_connect):
+    """Fail a test that opens a SQLite database in the real ``~/.gaia``."""
+
+    @functools.wraps(real_connect)
+    def guarded(database, *args, **kwargs):
+        target = _sqlite_target(database, bool(kwargs.get("uri")))
+        if target is not None and _is_real_gaia_home(target):
+            pytest.fail(
+                _REAL_HOME_MESSAGE.format(
+                    action=f"open {target.name} in",
+                    home=_REAL_GAIA_HOME,
+                    harm=_DB_HARM,
+                    hint=_DB_HINT,
+                ),
+                pytrace=False,
+            )
+        return real_connect(database, *args, **kwargs)
+
+    return guarded
+
+
+#: Where a database whose default lives in ``~/.gaia`` goes for this session.
+#: Per process, so pytest-xdist workers never share one.
+_TEST_GAIA_HOME = _STATE_ROOT / "gaia-home"
+
+
+def _off_real_home(path: Path) -> Path:
+    """*path* moved from the real ``~/.gaia`` into ``_TEST_GAIA_HOME``."""
+    if not _is_real_gaia_home(path):
+        return path
+    relative = Path(path).resolve().relative_to(_REAL_GAIA_HOME.resolve())
+    return _TEST_GAIA_HOME / relative
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _redirect_default_databases():
+    """Open the file index and scratchpad under ``_TEST_GAIA_HOME``, not ``~/.gaia``.
+
+    Both default to ``gaia_home()``, and GAIA_HOME stays unset (see
+    _STATE_ENV). ``ChatAgentConfig`` passes that same default in explicitly, so
+    the constructor's ``db_path`` is redirected as well as its default.
+    """
+    from gaia.config import gaia_home
+    from gaia.filesystem import index
+    from gaia.scratchpad import service
+
+    def redirected_home():
+        return _off_real_home(gaia_home())
+
+    def redirect_init(real_init):
+        @functools.wraps(real_init)
+        def init(self, db_path=None):
+            if db_path:
+                db_path = str(_off_real_home(Path(db_path).expanduser()))
+            return real_init(self, db_path)
+
+        return init
+
+    with pytest.MonkeyPatch.context() as mp:
+        for module, cls in (
+            (index, index.FileSystemIndexService),
+            (service, service.ScratchpadService),
+        ):
+            mp.setattr(module, "gaia_home", redirected_home)
+            mp.setattr(cls, "__init__", redirect_init(cls.__init__))
         yield
 
 
