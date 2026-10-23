@@ -8,28 +8,28 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'src/gaia/version.py'
-      - 'src/gaia/llm/**'
-      - 'src/gaia/installer/**'
-      - 'setup.py'
       - '.github/workflows/test_lemonade_server.yml'
-      - '.github/actions/install-lemonade/**'
       - '.github/actions/setup-venv/**'
-      - 'installer/**'
-      - 'tests/test_lemonade*.py'
+      - 'setup.py'
+      - 'pyproject.toml'
+      # Runs no GAIA Python: it pins Lemonade, starts it and calls its REST API,
+      # so only the pin and the start scripts can change the result.
+      - '.github/actions/install-lemonade/**'
+      - 'installer/scripts/*lemonade*.ps1'
+      - 'src/gaia/version.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'src/gaia/version.py'
-      - 'src/gaia/llm/**'
-      - 'src/gaia/installer/**'
-      - 'setup.py'
       - '.github/workflows/test_lemonade_server.yml'
-      - '.github/actions/install-lemonade/**'
       - '.github/actions/setup-venv/**'
-      - 'installer/**'
-      - 'tests/test_lemonade*.py'
+      - 'setup.py'
+      - 'pyproject.toml'
+      # Runs no GAIA Python: it pins Lemonade, starts it and calls its REST API,
+      # so only the pin and the start scripts can change the result.
+      - '.github/actions/install-lemonade/**'
+      - 'installer/scripts/*lemonade*.ps1'
+      - 'src/gaia/version.py'
   merge_group:
   workflow_dispatch:
     inputs:
@@ -52,8 +52,8 @@ concurrency:
 jobs:
   test-lemonade-server:
     name: Lemonade Server Smoke Test (${{ inputs.runson || (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }})
-    # Strix Point: its models fit there, and the 128 GB Halo pool stays free for the evals.
-    runs-on: [self-hosted, Windows, xsj-dispatch, strix-point]
+    # Runs on the AMD Ryzen DevLab Dispatch ephemeral pool via the devlab-dispatch label.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:

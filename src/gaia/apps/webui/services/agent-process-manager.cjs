@@ -26,6 +26,7 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const { EventEmitter } = require("events");
+const { killProcessTree, listDescendants } = require("./process-tree.cjs");
 
 // ── Constants ────────────────────────────────────────────────────────────
 
@@ -37,6 +38,9 @@ const MANIFEST_FILENAME = "agent-manifest.json";
 
 /** Graceful shutdown timeout before force kill (ms) */
 const SHUTDOWN_TIMEOUT = 5000;
+
+/** After the graceful shutdown, how long the tree gets between SIGTERM and SIGKILL (ms) */
+const TREE_KILL_GRACE = 2000;
 
 /** Health check interval (ms) — uses MCP "ping", not "initialize" */
 const HEALTH_CHECK_INTERVAL = 30000;
@@ -82,6 +86,7 @@ class AgentProcessManager extends EventEmitter {
    *   handlers proxy to that backend's `/api/agents/*` routes (the real install
    *   runtime), so without a resolver those handlers fail loudly rather than
    *   duplicating download/verify/uv logic in the main process (issue #1721).
+   *   killTree / listDescendants replace the process-tree helpers (tests).
    */
   constructor(mainWindow, options = {}) {
     super();
@@ -110,6 +115,12 @@ class AgentProcessManager extends EventEmitter {
      */
     this.processes = {};
 
+    this._killTree = options.killTree || killProcessTree;
+    this._listDescendants = options.listDescendants || listDescendants;
+
+    /** Set by stopAll(): GAIA is quitting, so nothing may start another agent. */
+    this._shuttingDown = false;
+
     /** Crash timestamps per agent for rate-limiting restart attempts */
     this._crashTimes = {};
 
@@ -130,6 +141,11 @@ class AgentProcessManager extends EventEmitter {
    * @returns {Promise<{ pid: number }>}
    */
   async startAgent(agentId) {
+    if (this._shuttingDown) {
+      throw new Error(
+        `Not starting agent "${agentId}": GAIA is quitting and has already stopped its agents.`
+      );
+    }
     if (this.processes[agentId]) {
       console.log(`[agent-mgr] Agent ${agentId} is already running (PID ${this.processes[agentId].process.pid})`);
       return { pid: this.processes[agentId].process.pid };
@@ -166,9 +182,17 @@ class AgentProcessManager extends EventEmitter {
       pendingRpc: {},
       healthTimer: null,
       stopping: false, // Set to true during intentional shutdown to suppress crash recovery
+      stopPromise: null, // The running stopAgent(), shared by duplicate calls
+      stdinError: null, // The error that broke stdin; nothing more can be written once set
     };
 
     this.processes[agentId] = entry;
+
+    // A write to a child that has died fails later, as an 'error' on the
+    // stream; without a listener that EPIPE crashes the whole app (#3498).
+    child.stdin.on("error", (err) => {
+      this._handleStdinError(agentId, child, err);
+    });
 
     // ── stdout: JSON-RPC message stream ──
     child.stdout.on("data", (data) => {
@@ -207,6 +231,7 @@ class AgentProcessManager extends EventEmitter {
   /**
    * Stop an agent gracefully using JSON-RPC shutdown protocol.
    * Cross-platform (works on Windows where SIGTERM = TerminateProcess).
+   * A second call while the first runs waits for that same stop.
    * @param {string} agentId
    * @returns {Promise<void>}
    */
@@ -217,21 +242,38 @@ class AgentProcessManager extends EventEmitter {
       return;
     }
 
-    // Guard against concurrent stopAgent() calls for the same agent
-    if (entry.stopping) {
-      console.log(`[agent-mgr] Agent ${agentId} is already being stopped — skipping duplicate`);
-      return;
+    if (entry.stopPromise) {
+      console.log(`[agent-mgr] Agent ${agentId} is already being stopped — waiting for that stop`);
+      return entry.stopPromise;
     }
 
     console.log(`[agent-mgr] Stopping agent ${agentId} (PID ${entry.process.pid})...`);
 
     // Mark as intentionally stopping — suppresses crash recovery in _handleProcessExit
     entry.stopping = true;
+    entry.stopPromise = this._stopAgent(agentId, entry);
+    return entry.stopPromise;
+  }
 
+  async _stopAgent(agentId, entry) {
     // Clear health check timer
     if (entry.healthTimer) {
       clearInterval(entry.healthTimer);
       entry.healthTimer = null;
+    }
+
+    // Read the tree while the agent is alive: once it exits, its children
+    // are re-parented on Linux and macOS and can no longer be found from it.
+    let knownDescendants = [];
+    if (entry.process.exitCode === null && entry.process.signalCode === null) {
+      try {
+        ({ descendants: knownDescendants } = await this._listDescendants(entry.process.pid));
+      } catch (err) {
+        console.error(
+          `[agent-mgr] Could not list the processes agent ${agentId} started (${err.message}); ` +
+            "any it leaves behind will keep running."
+        );
+      }
     }
 
     // Step 1: Send JSON-RPC shutdown request via stdin
@@ -247,17 +289,17 @@ class AgentProcessManager extends EventEmitter {
     // Step 2: Wait up to SHUTDOWN_TIMEOUT for clean exit
     const exited = await this._waitForExit(agentId, SHUTDOWN_TIMEOUT);
 
-    // Step 3: Force kill if still running
-    if (!exited && this.processes[agentId]) {
+    // Step 3: Stop the agent if it ignored the request, and anything it started either way.
+    if (!exited) {
       console.warn(
         `[agent-mgr] Agent ${agentId} did not exit within ${SHUTDOWN_TIMEOUT}ms, force killing...`
       );
-      try {
-        entry.process.kill(); // SIGKILL on Unix, TerminateProcess on Windows
-      } catch {
-        // Already dead
-      }
     }
+    await this._killTree(entry.process, {
+      knownDescendants,
+      graceMs: TREE_KILL_GRACE,
+      label: `agent ${agentId}`,
+    });
 
     // Note: _handleProcessExit may have already cleaned up if the process exited.
     // _cleanupProcess is idempotent, so calling it again is safe.
@@ -626,7 +668,13 @@ class AgentProcessManager extends EventEmitter {
 
       entry.pendingRpc[id] = { resolve, reject, timer };
 
-      this._sendJsonRpcRaw(agentId, method, params, id);
+      try {
+        this._sendJsonRpcRaw(agentId, method, params, id);
+      } catch (err) {
+        clearTimeout(timer);
+        delete entry.pendingRpc[id];
+        reject(err);
+      }
     });
   }
 
@@ -639,6 +687,7 @@ class AgentProcessManager extends EventEmitter {
     const agentConfigs = this.config.agents || {};
 
     for (const [agentId, agentCfg] of Object.entries(agentConfigs)) {
+      if (this._shuttingDown) return;
       if (agentCfg.autoStart && !this.processes[agentId]) {
         try {
           await this.startAgent(agentId);
@@ -656,13 +705,16 @@ class AgentProcessManager extends EventEmitter {
   }
 
   /**
-   * Stop all running agents gracefully.
+   * Stop all running agents gracefully. For quitting only: afterwards no
+   * agent can be started, so a pending auto-start or crash restart can't
+   * spawn one the app will never stop.
    */
   async stopAll() {
     const agentIds = Object.keys(this.processes);
     console.log(
       `[agent-mgr] Stopping all agents: ${agentIds.join(", ") || "(none)"}`
     );
+    this._shuttingDown = true;
     await Promise.all(agentIds.map((id) => this.stopAgent(id)));
   }
 
@@ -832,6 +884,7 @@ class AgentProcessManager extends EventEmitter {
     );
 
     setTimeout(async () => {
+      if (this._shuttingDown) return;
       try {
         await this.startAgent(agentId);
         console.log(`[agent-mgr] Agent ${agentId} restarted after crash`);
@@ -858,6 +911,11 @@ class AgentProcessManager extends EventEmitter {
     if (!entry || !entry.process.stdin || entry.process.stdin.destroyed) {
       throw new Error(`Cannot write to stdin of agent "${agentId}"`);
     }
+    if (entry.stdinError) {
+      throw new Error(
+        `Cannot write to stdin of agent "${agentId}": the pipe broke earlier (${entry.stdinError.message})`
+      );
+    }
 
     const msg = {
       jsonrpc: "2.0",
@@ -868,6 +926,36 @@ class AgentProcessManager extends EventEmitter {
 
     const payload = JSON.stringify(msg) + "\n";
     entry.process.stdin.write(payload);
+  }
+
+  /**
+   * The agent's stdin failed — almost always EPIPE because the process is
+   * gone. Fail its pending calls now instead of letting them time out, and
+   * make sure the death is reported: a child that only closed its stdin is
+   * unusable, so it is stopped and its exit goes through the crash path.
+   */
+  _handleStdinError(agentId, child, err) {
+    const entry = this.processes[agentId];
+    const current = entry && entry.process === child ? entry : null;
+    const exited = child.exitCode !== null || child.signalCode !== null;
+    console.error(
+      `[agent-mgr] stdin of agent ${agentId} (PID ${child.pid}) failed: ${err.code || "error"} ${err.message}` +
+        (exited ? " — the agent had already exited" : "")
+    );
+    if (!current) return;
+    current.stdinError = err;
+
+    for (const [rpcId, pending] of Object.entries(current.pendingRpc)) {
+      clearTimeout(pending.timer);
+      delete current.pendingRpc[rpcId];
+      pending.reject(new Error(`Agent "${agentId}" stopped reading its input (${err.code || err.message})`));
+    }
+
+    if (exited || current.stopping) return;
+    console.error(`[agent-mgr] Agent ${agentId} can no longer receive requests — stopping it`);
+    this._killTree(child, { graceMs: TREE_KILL_GRACE, label: `agent ${agentId}` }).catch((killErr) => {
+      console.error(`[agent-mgr] Could not stop agent ${agentId} after its stdin broke: ${killErr.message}`);
+    });
   }
 
   // ── Private: Health check ────────────────────────────────────────────

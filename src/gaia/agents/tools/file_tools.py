@@ -29,6 +29,8 @@ from gaia.agents.tools.document_text import (
     document_type,
     index_only_error,
     read_document,
+    text_page_notes,
+    with_small_limit_warning,
 )
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
@@ -36,7 +38,11 @@ from gaia.agents.tools.file_edit import (
     read_first_preflight,
     stamp_of,
 )
-from gaia.agents.tools.path_access import read_access_error, readable_entry
+from gaia.agents.tools.path_access import (
+    missing_file_error,
+    read_access_error,
+    readable_entry,
+)
 from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
     confine_roots,
@@ -891,7 +897,7 @@ class FileSearchToolsMixin:
             Args:
                 file_path: Path to the file to read
                 offset: Zero-based character offset for a bounded text page.
-                limit: Page size in characters (1..8000 for text files); omitted preserves full analysis.
+                limit: Page size in characters, not lines (1..8000 for text files); omitted preserves full analysis.
 
             Returns:
                 Dictionary with file content and type-specific metadata
@@ -906,27 +912,7 @@ class FileSearchToolsMixin:
                     return denied
 
                 if not os.path.exists(file_path):
-                    # Check if parent directory exists to give a more helpful error
-                    parent_dir = os.path.dirname(file_path)
-                    parent_exists = os.path.exists(parent_dir) if parent_dir else False
-                    file_name = os.path.basename(file_path)
-                    hint = (
-                        f" The parent directory '{parent_dir}' also does not exist."
-                        if parent_dir and not parent_exists
-                        else (
-                            f" The directory '{parent_dir}' exists but the file is not in it."
-                            if parent_dir
-                            else ""
-                        )
-                    )
-                    return {
-                        "status": "error",
-                        "error": (
-                            f"File not found: {file_path}.{hint}"
-                            f" Try using search_file with pattern '{file_name}'"
-                            " to locate it elsewhere."
-                        ),
-                    }
+                    return missing_file_error(file_path)
 
                 # os.path.exists() is true for a directory too, so without this
                 # check open() below raises IsADirectoryError into the generic
@@ -945,7 +931,11 @@ class FileSearchToolsMixin:
                 if unreadable:
                     return unreadable
                 if document_type(file_path) is not None:
-                    return read_document(self, file_path, offset, limit)
+                    return with_small_limit_warning(
+                        read_document(self, file_path, offset, limit),
+                        limit,
+                        line_ranges=False,
+                    )
 
                 reads = file_read_record(self)
                 seen = stamp_of(file_path)
@@ -960,7 +950,17 @@ class FileSearchToolsMixin:
                         encoding=text_encoding(file_path),
                     )
                     reads.note(file_path, seen)
-                    return {"status": "success", "file_path": file_path, **page}
+                    return with_small_limit_warning(
+                        {
+                            "status": "success",
+                            "file_path": file_path,
+                            **text_page_notes(
+                                page, os.path.getsize(file_path), line_ranges=False
+                            ),
+                        },
+                        limit,
+                        line_ranges=False,
+                    )
 
                 # Guard against reading very large files into memory
                 file_size = os.path.getsize(file_path)
@@ -1683,8 +1683,7 @@ class FileSearchToolsMixin:
                 # File must exist for editing
                 if not resolved_path.exists():
                     return {
-                        "status": "error",
-                        "error": f"File not found: {resolved_path}",
+                        **missing_file_error(resolved_path),
                         "operation": "edit_file",
                     }
 
@@ -1996,8 +1995,7 @@ class FileSearchToolsMixin:
 
                 if not fp.exists():
                     return {
-                        "status": "error",
-                        "error": f"File not found: {file_path}",
+                        **missing_file_error(file_path),
                         "has_errors": True,
                         "operation": "get_file_info",
                     }

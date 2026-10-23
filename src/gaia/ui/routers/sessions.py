@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
 
+from .. import answer_retry, followups
 from .. import permissions as session_permissions
 from .._chat_helpers import (
     _SIDECAR_AGENT_TYPES,
@@ -399,6 +400,8 @@ async def delete_session(
         session_locks.pop(session_id, None)
         evict_session_agent(session_id)
         session_permissions.forget_session(session_id)
+        followups.forget(session_id)
+        answer_retry.forget(session_id)
     try:
         await asyncio.to_thread(file_snapshots.delete_session, session_id)
     except OSError as e:

@@ -12,9 +12,17 @@ Stored at ``~/.gaia/config.json``.
 import json
 import logging
 import os
-from dataclasses import dataclass, fields
+from contextlib import contextmanager
+from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Callable, ClassVar, Dict, Iterator, List, Optional
+
+from gaia.utils.file_lock import (
+    FileLockError,
+    file_lock,
+    lock_dir_unwritable,
+    write_text_atomic,
+)
 
 log = logging.getLogger(__name__)
 
@@ -160,6 +168,9 @@ class GaiaConfig:
             or ``cpu``) GAIA asks Lemonade for when it loads a local chat
             model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
             Takes effect on the next load; the embedding model keeps its own.
+        context_sizes: Context window, in tokens, the user chose per local
+            model in the Agent UI (model id -> tokens). Every load of that
+            model uses it; a model not listed gets GAIA's automatic size.
         undo_retention_days: Keep the copies that let a turn's file changes be
             undone for this many days.
         undo_max_mb: Keep at most this many megabytes of those copies; the
@@ -177,8 +188,12 @@ class GaiaConfig:
     lemonade_api_key_stored: bool = False
     lemonade_idle_timeout_minutes: int = 15
     llamacpp_backend: Optional[str] = None
+    context_sizes: Dict[str, int] = field(default_factory=dict)
     undo_retention_days: int = 7
     undo_max_mb: int = 500
+
+    #: Field values as last read from or written to the file (not a field).
+    _loaded: ClassVar[Optional[dict]] = None
 
     #: Strings accepted for a boolean field, and what each means. Anything
     #: else raises — "false" silently meaning True is the exact accident this
@@ -297,6 +312,21 @@ class GaiaConfig:
             )
         return word
 
+    @staticmethod
+    def _check_context_sizes(value: Any, config_file: Path) -> None:
+        if not isinstance(value, dict) or not all(
+            isinstance(k, str)
+            and isinstance(v, int)
+            and not isinstance(v, bool)
+            and v > 0
+            for k, v in value.items()
+        ):
+            raise GaiaConfigError(
+                f"GAIA config at {config_file}: 'context_sizes' must map model ids "
+                f"to a positive number of tokens, but it is {value!r}. Fix it by "
+                "hand, or delete the key to go back to automatic sizes."
+            )
+
     @classmethod
     def field_names(cls) -> List[str]:
         """Return the configurable field names (drives the CLI ``config`` cmd)."""
@@ -321,16 +351,46 @@ class GaiaConfig:
         an actionable message, not silently degrade to defaults.
         """
         config_file = cls.config_path(path)
+        if not config_file.parent.is_dir():
+            return cls()._snapshot()
         try:
-            text = config_file.read_text(encoding="utf-8")
+            with file_lock(config_file):
+                text = cls._read_text(config_file)
+        except FileLockError as e:
+            if not lock_dir_unwritable(e):
+                raise GaiaConfigError(str(e)) from e
+            # The directory is read-only to this user, so none of their GAIA
+            # processes can replace the file mid-read.
+            text = cls._read_text(config_file)
+        if text is None:
+            return cls()._snapshot()
+        return cls._from_doc(cls._parse_doc(text, config_file), config_file)
+
+    @staticmethod
+    @contextmanager
+    def _locked(config_file: Path) -> Iterator[None]:
+        """Hold the cross-process lock on *config_file*, or raise GaiaConfigError."""
+        try:
+            with file_lock(config_file):
+                yield
+        except FileLockError as e:
+            raise GaiaConfigError(str(e)) from e
+
+    @staticmethod
+    def _read_text(config_file: Path) -> Optional[str]:
+        """The file's text, or None when it does not exist. Caller holds the lock."""
+        try:
+            return config_file.read_text(encoding="utf-8")
         except FileNotFoundError:
-            return cls()
+            return None
         except (OSError, UnicodeDecodeError) as e:
             raise GaiaConfigError(
                 f"Cannot read GAIA config at {config_file}: {e}. "
                 f"Check file permissions, or delete it to reset to defaults."
             ) from e
 
+    @staticmethod
+    def _parse_doc(text: str, config_file: Path) -> dict:
         try:
             data = json.loads(text)
         except json.JSONDecodeError as e:
@@ -345,7 +405,10 @@ class GaiaConfig:
                 f"GAIA config at {config_file} must be a JSON object, "
                 f"got {type(data).__name__}. Delete it to reset to defaults."
             )
+        return data
 
+    @classmethod
+    def _from_doc(cls, data: dict, config_file: Path) -> "GaiaConfig":
         known = set(cls.field_names())
         for key, value in data.items():
             # Strict, as the TUI's reader is: a string is never a true/false
@@ -372,25 +435,105 @@ class GaiaConfig:
                 f'or "external", but it is {mode!r}. Fix or delete that key in '
                 "the file, then retry."
             )
+        if "context_sizes" in data:
+            cls._check_context_sizes(data["context_sizes"], config_file)
         kwargs = {k: v for k, v in data.items() if k in known}
         if "llamacpp_backend" in kwargs:
             kwargs["llamacpp_backend"] = cls._check_llamacpp_backend(
                 kwargs["llamacpp_backend"], f"GAIA config at {config_file}"
             )
-        return cls(**kwargs)
+        return cls(**kwargs)._snapshot()
+
+    def _snapshot(self) -> "GaiaConfig":
+        """Record the values as read, so :meth:`save` writes only what changed."""
+        # Per-instance on purpose; the ClassVar keeps it out of fields().
+        self._loaded = {  # type: ignore[misc]
+            f.name: getattr(self, f.name) for f in fields(self)
+        }
+        return self
+
+    def _changed(self) -> dict:
+        loaded = self._loaded
+        current = {f.name: getattr(self, f.name) for f in fields(self)}
+        if loaded is None:
+            return current
+        return {k: v for k, v in current.items() if loaded.get(k) != v}
+
+    @staticmethod
+    def _write_doc(config_file: Path, doc: dict) -> None:
+        """Atomically replace *config_file* with *doc*. Caller holds the lock."""
+        write_text_atomic(config_file, json.dumps(doc, indent=2) + "\n")
+
+    @classmethod
+    def update(
+        cls,
+        mutate: Callable[["GaiaConfig"], None],
+        path: Optional[Path] = None,
+        *,
+        on_unreadable: Optional[Callable[[GaiaConfigError], None]] = None,
+    ) -> "GaiaConfig":
+        """Apply *mutate* to the config on disk as one locked read-modify-write.
+
+        The file is re-read under the lock, so a key another process saved
+        since this one last loaded survives, and so do keys this class does not
+        declare. Every declared field is then written. Returns the result.
+
+        Args:
+            on_unreadable: When given, an unreadable or invalid file is reported
+                to it and replaced by defaults instead of raising. Only
+                ``gaia init``, the recovery path, passes it.
+        """
+        config_file = cls.config_path(path)
+        with cls._locked(config_file):
+            try:
+                text = cls._read_text(config_file)
+                doc = {} if text is None else cls._parse_doc(text, config_file)
+                config = cls._from_doc(doc, config_file)
+            except GaiaConfigError as e:
+                if on_unreadable is None:
+                    raise
+                on_unreadable(e)
+                doc, config = {}, cls()
+            mutate(config)
+            doc.update({f.name: getattr(config, f.name) for f in fields(config)})
+            cls._write_doc(config_file, doc)
+        log.info(f"Saved GAIA config to {config_file}")
+        return config._snapshot()
+
+    @classmethod
+    def edit_doc(
+        cls, mutate: Callable[[dict], None], path: Optional[Path] = None
+    ) -> "GaiaConfig":
+        """Apply *mutate* to the raw JSON document as one locked read-modify-write.
+
+        Unlike :meth:`update`, only the keys *mutate* touches change; the
+        result is validated before it is written. Returns the new config.
+        """
+        config_file = cls.config_path(path)
+        with cls._locked(config_file):
+            text = cls._read_text(config_file)
+            doc = {} if text is None else cls._parse_doc(text, config_file)
+            mutate(doc)
+            config = cls._from_doc(doc, config_file)
+            cls._write_doc(config_file, doc)
+        log.info(f"Saved GAIA config to {config_file}")
+        return config
 
     def save(self, path: Optional[Path] = None) -> None:
-        """Write config to the resolved config file."""
-        config_file = self.config_path(path)
-        # Create the file's own parent — the path can be overridden via the
-        # --config flag or GAIA_CONFIG_FILE, independent of GAIA_CONFIG_DIR.
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        payload = {f.name: getattr(self, f.name) for f in fields(self)}
-        config_file.write_text(
-            json.dumps(payload, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        log.info(f"Saved GAIA config to {config_file}")
+        """Write the fields changed since this config was loaded.
+
+        Fields left as loaded take whatever the file holds now, so a key
+        another process saved in the meantime survives. A config not read from
+        a file (``GaiaConfig()``) writes every field.
+        """
+        values = self._changed()
+
+        def _apply(config: "GaiaConfig") -> None:
+            for name, value in values.items():
+                setattr(config, name, value)
+
+        self.update(_apply, path)
+        self._snapshot()
 
     @classmethod
     def save_key(
@@ -398,21 +541,26 @@ class GaiaConfig:
     ) -> "GaiaConfig":
         """Set one key in the config file, keeping every other key in it.
 
-        Unlike :meth:`save`, keys this class does not declare (written by a
-        newer GAIA or by the TUI) survive. Returns the reloaded config.
+        Keys this class does not declare (written by a newer GAIA or by the
+        TUI) survive, and so does every other declared key exactly as the file
+        holds it. Returns the reloaded config.
         """
-        config = cls.load(path)
-        config.set(key, value)
+        return cls.save_keys({key: value}, path)
+
+    @classmethod
+    def save_keys(cls, values: dict, path: Optional[Path] = None) -> "GaiaConfig":
+        """Set several keys in one locked read-modify-write; see :meth:`save_key`."""
         config_file = cls.config_path(path)
-        try:
-            doc = json.loads(config_file.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            doc = {}
-        doc[key] = getattr(config, key)
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        config_file.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-        log.info(f"Saved {key} to GAIA config at {config_file}")
-        return config
+        with cls._locked(config_file):
+            text = cls._read_text(config_file)
+            doc = {} if text is None else cls._parse_doc(text, config_file)
+            config = cls._from_doc(doc, config_file)
+            for key, value in values.items():
+                config.set(key, value)
+                doc[key] = getattr(config, key)
+            cls._write_doc(config_file, doc)
+        log.info(f"Saved {', '.join(values)} to GAIA config at {config_file}")
+        return config._snapshot()
 
     def get(self, key: str) -> Any:
         """Return the value of a config field, raising on an unknown key."""
@@ -433,6 +581,11 @@ class GaiaConfig:
         if key == "llamacpp_backend":
             setattr(self, key, self._check_llamacpp_backend(value, "gaia config"))
             return
+        if key == "context_sizes":
+            raise GaiaConfigError(
+                "context_sizes is set per model: choose a context size in the "
+                "Agent UI under Settings › Model, or edit config.json by hand."
+            )
         setattr(self, key, self._coerce(key, value))
 
     def resolve_model(

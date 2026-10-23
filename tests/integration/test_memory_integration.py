@@ -1378,7 +1378,7 @@ class TestSchemaMigration:
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
             )
             version = cursor.fetchone()[0]
-        assert version == 6
+        assert version == 7
 
     def test_embedding_column_exists(self, memory_store):
         """The embedding BLOB column exists in the knowledge table."""

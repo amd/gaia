@@ -8,6 +8,8 @@ import re
 import time
 from typing import Callable, Iterator, List, Optional, Tuple, Union
 
+from gaia.utils import perf_trace
+
 from ..base_client import LLMClient
 from ..inference_location import provider_phrase
 from ..lemonade_client import (
@@ -26,6 +28,7 @@ from ..lemonade_client import (
     resolve_ctx_size,
 )
 from ..lemonade_launcher import describe_client_hint
+from ..surface_hints import TUI_MODEL_SWITCH_HINT, TUI_PROVIDER_AUTH_HINT
 
 logger = logging.getLogger(__name__)
 
@@ -330,16 +333,6 @@ class LemonadeCloudAccountError(LemonadeError):
     )
 
 
-#: How a TUI user picks another model. The Agent UI swaps this exact sentence
-#: for :data:`AGENT_UI_MODEL_SWITCH_HINT` (``gaia.ui._chat_helpers``).
-TUI_MODEL_SWITCH_HINT = "Pick another model with /model in the TUI."
-AGENT_UI_MODEL_SWITCH_HINT = (
-    "Pick another model from the model menu next to the Send button. If you "
-    "typed this model ID yourself, clear it under Settings > Advanced > "
-    "Custom model ID."
-)
-
-
 class LemonadeCloudModelUnavailableError(LemonadeError):
     """The cloud provider answered 404 for the model (not deployed, renamed,
     or no access). Retrying the same model can never succeed."""
@@ -374,10 +367,7 @@ class LemonadeAuthRejectedError(LemonadeError):
     """
 
     retryable = False
-    user_message = (
-        "The request was rejected as unauthorized. Run /provider in the TUI "
-        "to reconnect the provider, or verify LEMONADE_API_KEY."
-    )
+    user_message = f"The request was rejected as unauthorized. {TUI_PROVIDER_AUTH_HINT}"
 
 
 def _classify_lemonade_response(
@@ -928,6 +918,7 @@ class LemonadeProvider(LLMClient):
             (timings or {}).get("predicted_per_second") or 0.0
         )
         self._last_usage = captured
+        perf_trace.note_server_timings(timings)
 
     def get_last_usage(self) -> Optional[dict]:
         """Token-usage dict from the most recent non-streaming ``chat()``
@@ -990,7 +981,7 @@ class LemonadeProvider(LLMClient):
             # stream_options request in lemonade_client.
             if chunk.get("usage"):
                 usage_seen = True
-                self._capture_usage(chunk["usage"], timings=None)
+                self._capture_usage(chunk["usage"], timings=chunk.get("timings"))
             if "choices" in chunk and chunk["choices"]:
                 choice = chunk["choices"][0]
                 finish_reason = choice.get("finish_reason") or finish_reason

@@ -19,6 +19,7 @@ from gaia.agents.base.errors import require_host_attr
 from gaia.agents.base.file_snapshots import before_change
 from gaia.agents.install_hints import missing_extra_hint
 from gaia.agents.tools.path_access import (
+    missing_file_error,
     read_access_error,
     readable_entry,
     write_access_error,
@@ -114,10 +115,16 @@ def _index_within_budget(
             jobs[path] = job
 
             def _run():
+                from gaia.daemon.broker_client import detached_from_turn
+
                 try:
-                    job.result = rag.index_document(
-                        path, progress_callback=job.progress, wait_callback=job.waiting
-                    )
+                    # Outlives the turn that started it: not its Stop, not its stream.
+                    with detached_from_turn():
+                        job.result = rag.index_document(
+                            path,
+                            progress_callback=job.progress,
+                            wait_callback=job.waiting,
+                        )
                 except BaseException as e:  # noqa: BLE001 — re-raised by the waiter
                     job.error = e
                 finally:
@@ -237,6 +244,37 @@ def _index_embedding_error(stats: Dict[str, Any]) -> Dict[str, Any]:
             "index it again",
             busy=bool(stats.get("embedder_busy")),
         ),
+    }
+
+
+_CACHE_LOCK_HINTS = {
+    "cache_busy": (
+        "Another process is using the document cache ({cache}). Tell the "
+        "user, and index the document again once it finishes."
+    ),
+    "cache_unwritable": (
+        "The document is fine: GAIA cannot write its document cache folder "
+        "({cache}). Tell the user to fix that folder's permissions; do not "
+        "suggest they check the document."
+    ),
+    "cache_lock_error": (
+        "The document is fine: GAIA could not open the lock file in its "
+        "document cache folder ({cache}). Tell the user the error; do not "
+        "suggest they check the document."
+    ),
+}
+
+
+def _index_cache_error(stats: Dict[str, Any], file_path: str) -> Dict[str, Any]:
+    """The result for a document whose cache lock could not be taken."""
+    error_type = stats["error_type"]
+    return {
+        "status": "error",
+        "error_type": error_type,
+        "error": stats.get("error"),
+        "file_name": stats.get("file_name", Path(file_path).name),
+        "cache_dir": stats.get("cache_dir"),
+        "hint": _CACHE_LOCK_HINTS[error_type].format(cache=stats.get("cache_dir")),
     }
 
 
@@ -881,6 +919,8 @@ class RAGToolsMixin:
                                 idx_result.get("error_type") == "embedding_unavailable"
                             ):
                                 return _index_embedding_error(idx_result)
+                            elif idx_result.get("error_type") in _CACHE_LOCK_HINTS:
+                                return _index_cache_error(idx_result, file_path)
                             else:
                                 return {
                                     "status": "error",
@@ -1468,7 +1508,7 @@ class RAGToolsMixin:
                     return denied
 
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
 
                 # Resolve to real path for consistent validation
                 real_file_path = os.path.realpath(file_path)
@@ -1542,6 +1582,8 @@ class RAGToolsMixin:
                             **_index_embedding_error(result),
                             "file_name": result.get("file_name", Path(file_path).name),
                         }
+                    if result.get("error_type") in _CACHE_LOCK_HINTS:
+                        return _index_cache_error(result, file_path)
                     err = result.get("error", f"Failed to index: {file_path}")
                     hint = (
                         "The file is empty (0 bytes) — tell the user there is no content to read."

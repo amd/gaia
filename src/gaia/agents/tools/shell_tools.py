@@ -3265,6 +3265,20 @@ class ShellToolsMixin:
                 remaining -= slice_s
                 waited += slice_s
 
+    def _withheld_cwd_error(self, cwd: str) -> Optional[Dict[str, Any]]:
+        """The refusal for running in a folder the user removed, or None."""
+        validator = getattr(self, "path_validator", None)
+        withheld_root = getattr(validator, "withheld_root", None)
+        if not callable(withheld_root) or withheld_root(cwd) is None:
+            return None
+        return {
+            **NOT_EXECUTED,
+            "status": "error",
+            "error": validator.access_denied_message(cwd)
+            + " Pass a working_directory in a folder this chat can still use.",
+            "has_errors": True,
+        }
+
     def _path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         """Whether *path* is inside this agent's allowed paths.
 
@@ -4366,6 +4380,12 @@ class ShellToolsMixin:
                     cwd = self.shell_session.cwd
                     session_scoped = True
 
+                # A folder the user removed from the chat is refused even under
+                # full access, and even as the folder a new session starts in.
+                withheld = self._withheld_cwd_error(cwd)
+                if withheld is not None:
+                    return withheld
+
                 # Operators, syntax, and the per-command whitelist, for every
                 # segment of every pipeline on the line. Shared with the
                 # pre-flight that runs before the confirmation prompt, so a
@@ -4922,6 +4942,8 @@ class ShellToolsMixin:
             Shell commands share one session, so a `cd` from an earlier command
             (when it was not a one-shot `working_directory` override) is still
             in effect. Call this to read that directory instead of guessing it.
+            When the user asks you to run a command, `pwd` included, run it with
+            `run_shell_command`; this only reads the session's state.
             """
             return {
                 "status": "success",

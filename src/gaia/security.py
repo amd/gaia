@@ -567,7 +567,9 @@ def _intersect_scopes(
     return _dedupe_paths(kept)
 
 
-def narrow_allowed_paths(paths: Optional[List[Any]]) -> Optional[List[str]]:
+def narrow_allowed_paths(
+    paths: Optional[List[Any]], *, warn: bool = True
+) -> Optional[List[str]]:
     """*paths* narrowed by ``GAIA_ALLOWED_PATHS``, or unchanged when it is unset.
 
     ``None`` stands for the validator default, the working directory; once
@@ -576,6 +578,7 @@ def narrow_allowed_paths(paths: Optional[List[Any]]) -> Optional[List[str]]:
 
     Args:
         paths: An agent's configured ``allowed_paths``.
+        warn: Log the setting's entries that fall outside *paths*.
 
     Returns:
         The narrowed list, or *paths* itself when the variable is unset.
@@ -587,7 +590,7 @@ def narrow_allowed_paths(paths: Optional[List[Any]]) -> Optional[List[str]]:
     if ceiling is None:
         return paths
     base = [Path.cwd()] if paths is None else paths
-    return [str(p) for p in _intersect_scopes(base, ceiling)]
+    return [str(p) for p in _intersect_scopes(base, ceiling, warn=warn)]
 
 
 class PathValidator:
@@ -647,6 +650,8 @@ class PathValidator:
         self.allowed_paths: Set[Path] = set()
         # Readable but never writable, e.g. a loaded skill's own folder.
         self.read_only_paths: Set[Path] = set()
+        # Folders the user took away from this chat: refused, never prompted for.
+        self.withheld_paths: Set[Path] = set()
         self.scratch_dir: Optional[Path] = None
 
         # A host-supplied scope must not union with the machine-global grants the
@@ -883,6 +888,40 @@ class PathValidator:
         """
         self.read_only_paths.discard(Path(_real_path(path)))
 
+    def withhold_path(self, path: str) -> None:
+        """Refuse everything under *path* until :meth:`release_path`.
+
+        Wins over every grant, including a wider allowed folder, a read-only
+        grant and full access, and is never offered as an approval prompt.
+
+        Args:
+            path: The folder (or file) the user removed.
+        """
+        real = Path(_real_path(path))
+        self.withheld_paths.add(real)
+        self.allowed_paths = {
+            p
+            for p in self.allowed_paths
+            if not _path_is_within(Path(_real_path(p)), real)
+        }
+        logger.info("Withheld path: %s", real)
+
+    def release_path(self, path: str) -> None:
+        """Undo :meth:`withhold_path` for *path*.
+
+        Args:
+            path: The folder (or file) that was withheld.
+        """
+        self.withheld_paths.discard(Path(_real_path(path)))
+
+    def withheld_root(self, path: str) -> Optional[Path]:
+        """The withheld folder *path* is in, or None."""
+        real = Path(_real_path(path))
+        for root in self.withheld_paths:
+            if _path_is_within(real, root):
+                return root
+        return None
+
     def _in_read_only_scope(self, path: str) -> bool:
         """Whether *path*, symlinks and ``..`` resolved, is under a read-only grant."""
         real = Path(_real_path(path))
@@ -917,6 +956,9 @@ class PathValidator:
                 f"'{path}' is outside {ALLOWED_PATHS_ENV}, which confines this "
                 f"session to {sorted(str(p) for p in self._env_scope)}"
             )
+        withheld = self.withheld_root(str(path))
+        if withheld is not None:
+            return f"'{path}' is in {withheld}, which the user removed from this chat"
         read_blocked, reason = self.is_read_blocked(str(path))
         if read_blocked:
             return reason
@@ -1012,6 +1054,14 @@ class PathValidator:
             ``Access denied: '<path>' is not in allowed paths.`` followed by what
             the user can actually do about it here.
         """
+        withheld = self.withheld_root(path)
+        if withheld is not None:
+            return (
+                f"Access denied: '{path}' is in {withheld}, which the user removed "
+                "from this chat's folders. Don't try another way to reach it; tell "
+                "the user it can be added back under Environment in the session "
+                "panel."
+            )
         message = f"Access denied: '{path}' is not in allowed paths."
         real_path = Path(_real_path(path))
         unaskable = self._unaskable_reason(real_path)
@@ -1050,6 +1100,8 @@ class PathValidator:
 
             # Held to the env scope even if something added a wider grant directly.
             if not self.in_env_scope(real_path):
+                return False
+            if self.withheld_root(real_path_str) is not None:
                 return False
 
             # macOS /var symlink handling: normalize by removing /private prefix.
@@ -1297,6 +1349,8 @@ class PathValidator:
         Returns:
             Tuple of (is_allowed, reason). If not allowed, reason explains why.
         """
+        if self.withheld_root(path) is not None:
+            return (False, self.access_denied_message(path))
         if not self._in_read_only_scope(path) and not self.is_path_allowed(
             path, prompt_user=False
         ):

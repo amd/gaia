@@ -5,6 +5,7 @@ name: Docs Validation
 
 on:
   push:
+    branches: [ main ]
     paths:
       - 'docs/**'
       - 'cpp/**/*.md'
@@ -12,6 +13,7 @@ on:
       - 'util/check_doc_versions.py'
       - 'util/validate_release_notes.py'
       - '.github/workflows/docs.yml'
+      - 'util/release_tag.py'
   pull_request:
     paths:
       - 'docs/**'
@@ -20,6 +22,7 @@ on:
       - 'util/check_doc_versions.py'
       - 'util/validate_release_notes.py'
       - '.github/workflows/docs.yml'
+      - 'util/release_tag.py'
 
 # Cancel in-progress runs when a new run is triggered
 concurrency:

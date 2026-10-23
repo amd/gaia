@@ -256,7 +256,7 @@ def test_each_request_extends_the_previous_one(flagship):
     turn_two = model.requests[1][0][-1]["content"]
     assert "RECALLED PROCEDURES" in turn_two and "read-the-handbook" in turn_two
     turn_three = [m for m in model.requests[4][0] if m["role"] == "user"][-1]
-    assert "[Indexed documents: handbook.md]" in turn_three["content"]
+    assert "[Indexed documents: handbook.md (" in turn_three["content"]
     assert "Sam works on the safety team" not in model.requests[-1][0][0]["content"]
 
 

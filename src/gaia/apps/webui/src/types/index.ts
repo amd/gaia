@@ -266,9 +266,158 @@ export interface InferenceStats {
     output_tokens: number;
     /** The agent's own step count for the turn. */
     steps?: number | null;
+    /** Set when the answer came from Retry with…: the model that wrote it. */
+    model?: string | null;
+    /** Set with `model`: how long that model took, loading included. */
+    seconds?: number | null;
+    /** True only for an answer kept from Retry with…. */
+    retried?: boolean | null;
     /** Where the turn was answered: "on your GPU", "via Fireworks AI". */
     place?: string | null;
 }
+
+/** Estimated tokens the next model call holds, by kind (GET /api/chat/context). */
+export interface ContextUsage {
+    window: number;
+    reply_reserve: number;
+    system: number;
+    tools: number;
+    documents: number;
+    history: number;
+    query: number;
+    used: number;
+    history_budget: number;
+    history_used: number;
+    turns_in_view: number;
+    turns_hidden: number;
+    /** Oldest turns the next overflow drops, by their question. */
+    at_risk: string[];
+    at_risk_tokens: number;
+    /** Parts of `system` the skills and memory fragments take. */
+    skills?: number;
+    memory?: number;
+    /** Part of `tools` the tool schemas take; the rest is replayed tool activity. */
+    tool_definitions?: number;
+    /** Between turns only: whether the counts came from the model's own tokenizer. */
+    tokenizer?: { exact: true; model: string } | { exact: false; reason: string };
+    /** Between turns only: the panel's categories; their tokens add up to `used`. */
+    categories?: Array<{ key: string; label: string; tokens: number }>;
+    tool_loading?: { loaded: string[]; on_demand: string[] };
+    model?: string | null;
+    /** A cloud model's own window from the catalog, when larger than what GAIA admits. */
+    model_window?: number | null;
+    /** What the agent moved out of the window to keep going; absent when it reports nothing. */
+    context_state?: ContextState | null;
+}
+
+/** The agent's own account of context it put away or summarized (``context_state()``). */
+export interface ContextState {
+    /** Tool results already used, replaced by a re-read handle. */
+    put_away?: { results: number; tokens: number } | null;
+    /** Older turns folded into a rolling summary; originals stay searchable. */
+    summarized?: { turns: number; tokens: number; summary_tokens: number } | null;
+}
+
+/** GET /api/chat/performance/{id}: one turn's measured performance. Null = not measured. */
+export interface TurnPerformance {
+    message_id: number;
+    created_at: string;
+    model: string | null;
+    time: {
+        wall_seconds: number;
+        model_seconds: number | null;
+        gaia_seconds: number | null;
+        tool_seconds: number;
+        waiting_seconds: number;
+        own_seconds: number | null;
+    };
+    first_token_seconds: number | null;
+    /** `server`: the model server's own timing. `client`: measured by GAIA on the stream. */
+    first_token_source?: 'server' | 'client' | null;
+    prefill_tokens_per_second: number | null;
+    /** `client` means derived from GAIA's first-token time, so it includes network time. */
+    prefill_source?: 'server' | 'client' | null;
+    generation_tokens_per_second: number | null;
+    generation_source?: 'server' | 'client' | null;
+    model_calls: number;
+    tokens_in: number | null;
+    tokens_new: number | null;
+    tokens_cached: number | null;
+    tokens_out: number | null;
+    /** The last request's whole templated prompt, as the server counted it. */
+    last_prompt_tokens: number | null;
+    tool_calls: number;
+    /** All tool time the step timer measured, the same total as the time split. */
+    tool_seconds_total?: number;
+    /** A null name is tool time measured outside any recorded step. */
+    tools: Array<{ name: string | null; seconds: number | null }>;
+    loads: Array<{ model: string | null; seconds: number; replaced?: string[]; during?: 'request' }>;
+    cost: { kind: 'local' | 'estimate' | 'unknown'; usd: number | null };
+    /** Why a value is unknown, keyed by field. */
+    unknown?: Partial<Record<'first_token_seconds' | 'prefill_tokens_per_second' | 'generation_tokens_per_second' | 'tokens' | 'tokens_cached' | 'time', string>>;
+}
+
+export interface ChatPerformance {
+    /** The newest answer's id; the last turn is unknown when `turns` has no record of it. */
+    latest_message_id: number | null;
+    turns: TurnPerformance[];
+    totals: {
+        turns: number;
+        wall_seconds: number | null;
+        model_seconds: number | null;
+        gaia_seconds: number | null;
+        tokens_in: number | null;
+        tokens_cached: number | null;
+        tokens_out: number | null;
+        tool_calls: number;
+        loads: number;
+        load_seconds: number | null;
+        usd: number;
+        unpriced_turns: number;
+    };
+    /** The model as Lemonade reports it now. */
+    now: {
+        model: string | null;
+        /** `local`, a cloud provider name, `cloud`, or `unknown`. */
+        provider: string;
+        loaded: boolean | null;
+        device: string | null;
+        backend: string | null;
+        ctx_size: number | null;
+        weights_gb: number | null;
+        kv_cache_gb: number | null;
+        free_gb: number | null;
+        error: string | null;
+    };
+}
+
+/** A retried answer from another model, held until one is kept. */
+export interface RetryResult {
+    message_id: number;
+    model: string;
+    content: string;
+    stats: {
+        model: string;
+        retried: true;
+        seconds: number;
+        load_seconds: number;
+        input_tokens: number;
+        output_tokens: number;
+        tokens_per_second: number;
+        time_to_first_token: number;
+    };
+}
+
+/** GET /api/chat/context: the meter's numbers, or why there are none yet. */
+export type ContextUsageResult = ({ available: true } & ContextUsage) | { available: false; reason: string };
+
+/** POST /api/chat/retry-with/choose: which answer the chat now continues from. */
+export type RetryChoice = { kept: 'original' } | {
+    kept: 'retry';
+    content: string;
+    /** The retry's numbers over the turn's saved ones, so `steps` and `place` carry over. */
+    stats: RetryResult['stats'] & Pick<InferenceStats, 'steps' | 'place'>;
+};
 
 export interface Message {
     id: number;
@@ -448,6 +597,8 @@ export interface SystemStatus {
     config_error?: string | null;
     /** One message per status probe that failed; the matching fields stay unknown. */
     probe_warnings?: string[];
+    /** The folder that holds the chat database. */
+    data_dir?: string | null;
 }
 
 /**
@@ -574,6 +725,8 @@ export interface TunnelStatus {
     startedAt: string | null;
     error: string | null;
     publicIp: string | null;
+    /** The device behind the latest authenticated remote request. */
+    device?: { name: string; lastSeen: string } | null;
 }
 
 // ── Agent Activity Types ──────────────────────────────────────────────────
@@ -673,7 +826,10 @@ export type StreamEventType =
     | 'needs_input' // Mid-run question (#2595) — answerable; the run blocks until POST /chat/user-input
     | 'policy_alert' // Governance policy blocked a tool
     | 'mcp_status'   // MCP server connection status update
-    | 'agent_created'; // New agent created — triggers agent list refresh
+    | 'agent_created' // New agent created — triggers agent list refresh
+    | 'followup_taken'    // The running turn took a message sent mid-turn
+    | 'followup_returned' // The turn ended without taking these mid-turn messages
+    | 'context_usage';    // What this turn's model call holds, by kind
 
 export interface StreamEvent {
     type: StreamEventType;
@@ -681,6 +837,10 @@ export interface StreamEvent {
     message_id?: number;
     /** On `done`: the user's Stop ended this run (absent when it completed normally). */
     cancelled?: boolean;
+    /** On `followup_taken`: the message the running turn took. */
+    text?: string;
+    /** On `followup_returned`: messages the turn ended without taking. */
+    texts?: string[];
     // Agent-specific fields
     status?: string;
     message?: string;
@@ -913,10 +1073,18 @@ export interface ProviderInfo {
 
 export interface ActiveModel {
     provider: ProviderId;
-    model: string;
-    label: string;
+    /** Null only when an unreadable config hides the default; `config_error` says why. */
+    model: string | null;
+    display_name?: string | null;
+    label: string | null;
     remote: boolean;
     is_default: boolean;
+    /** Local model on disk; null for a cloud model or while the server starts. */
+    downloaded?: boolean | null;
+    config_error?: string | null;
+    /** Where a new chat would be answered, as the backend resolves it; null when it can't tell. */
+    inference_remote?: boolean | null;
+    inference_description?: string | null;
     /** `pending` while the model server is still starting; ask again. */
     restore?: { status: 'restored' | 'failed' | 'none' | 'pending'; message: string | null };
 }
@@ -935,8 +1103,84 @@ export interface ProviderModel {
     rank: number | null;
     note: string | null;
     evidence: string | null;
+    // Local models only (GET /api/providers/local/models).
+    display_name?: string;
+    recipe?: string | null;
+    state?: LocalModelState;
+    placement?: ModelPlacement;
+    size_gb?: number | null;
+    /** Fits this PC's memory; null when GAIA can't tell. */
+    fits?: boolean | null;
+    available?: boolean;
+    unavailable_reason?: string | null;
+    /** Median tokens/s of its recent turns on this PC. */
+    tokens_per_second?: number | null;
+    /** An in-flight (or just-finished) download of this model. */
+    download_progress?: DownloadProgress | null;
     /** List price per million tokens; null when unknown (never shown as $0). Cloud models only. */
     price?: ModelPrice | null;
+}
+
+export type LocalModelState = 'loaded' | 'downloaded' | 'not_downloaded';
+
+/** Where a local model runs: Lemonade's report once loaded, its recipe's target before. */
+export interface ModelPlacement {
+    device: string | null;
+    backend: string | null;
+    /** "GPU · Vulkan", "NPU · FLM", "CPU". */
+    label: string | null;
+    source: 'reported' | 'expected' | null;
+    /** Set when the reported device is not the expected one. */
+    warning: string | null;
+}
+
+export interface ProviderModelsResponse {
+    provider: string;
+    models: ProviderModel[];
+    memory_gb?: number | null;
+    memory_source?: string | null;
+    capacity_error?: string | null;
+}
+
+/** GET/PUT /api/providers/local/context. */
+export interface ContextChoice {
+    model: string;
+    display_name: string;
+    chosen: number | null;
+    automatic: number | null;
+    min: number | null;
+    max_fit: number | null;
+    options: number[];
+    loaded_ctx: number | null;
+    memory_source: string;
+    note: string | null;
+    /** On PUT for a loaded model: whether GAIA started reloading it at the new size. */
+    reload?: { started: boolean; reason: 'busy' | 'warm_up' | 'already_loaded' | 'restarting' | 'not_gaias_server' | null } | null;
+}
+
+/** GET /api/providers/local/status — the sidebar pill's popover. */
+export interface LocalModelStatus {
+    state: 'loaded' | 'warming' | 'idle' | 'stopped';
+    active_model: string | null;
+    active_display_name: string | null;
+    active_remote: boolean;
+    model: string | null;
+    display_name: string | null;
+    placement: ModelPlacement | null;
+    ctx_size: number | null;
+    memory: { source: string; total_gb: number; free_gb: number | null; model_gb: number | null } | null;
+    memory_error: string | null;
+    /** One plain line; `error_detail` carries the raw cause. */
+    error: string | null;
+    error_detail?: string | null;
+    base_url: string | null;
+    /** `gaia` for GAIA's own Lemonade; GAIA asks before reloading on `user` or `remote`. */
+    owner: 'gaia' | 'user' | 'remote' | null;
+    /** The loaded model is answering a request, or GAIA is warming it up for a new chat. */
+    busy: boolean;
+    busy_reason?: 'warm_up' | 'request' | null;
+    restarting: boolean;
+    restart_error: string | null;
 }
 
 /** USD per million tokens, from GAIA's one rate card. */

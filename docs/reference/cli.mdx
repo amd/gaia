@@ -325,6 +325,14 @@ own PC, speed, tool calling and (with `--tasks core`) agent quality, run
 </Note>
 
 <Note>
+gpt-oss 20B (`user.ggml-gpt-oss-20b-MXFP4-GGUF`, a 12 GB download, ~15 GB for models)
+and gpt-oss 120B (`gpt-oss-120b-mxfp-GGUF`, 63 GB, ~70 GB for models, a 128 GB Strix
+Halo) are supported and never auto-selected. Choose one with
+`gaia config set default_model <id>`; see
+[gpt-oss 20B and 120B](/guides/ai-providers#gpt-oss-20b-and-120b).
+</Note>
+
+<Note>
 `gaia llm` quick queries use `default_model` when set, else `Gemma-4-E4B-it-GGUF`.
 </Note>
 
@@ -1590,7 +1598,8 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | Key | Default | Purpose |
 |-----|---------|---------|
 | `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `Qwen3.6-35B-A3B-GGUF` on a PC with the memory for it and never overwrites a value you set. `user.Qwen3.8-Flash-Next-GGUF` is available on a 128 GB Strix Halo; choose it here, `gaia init` never does |
-| `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
+| `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) for commands that load without naming a model. A model always runs on the device it was built for |
+| `context_sizes` | _(empty)_ | Context window per local model, set in the Agent UI under **Settings → Model** (`gaia config set` refuses it). A model not listed gets GAIA's automatic size; `GAIA_CTX_SIZE` overrides it |
 | `profile` | `chat` | Last `gaia init` profile |
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
 | `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, `rocm`, `metal`, `cpu`, or `auto` to let Lemonade choose. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
@@ -1810,7 +1819,7 @@ in which case a free one is picked and remembered instead. `start` writes them t
 so the secret never lands in terminal scrollback, shell history or a CI log:
 
 ```
-✅ Embedded Lemonade 2026.40.0 running on http://localhost:62232/api/v1
+✅ Embedded Lemonade 2026.42.1 running on http://localhost:62232/api/v1
    pid 26080   logs: ~/.gaia/lemonade/lemond.log
 
    The instance is private. Load its URL and API key with:
@@ -1995,7 +2004,22 @@ gaia eval retrieval --component code --suite pr --gate tests/fixtures/eval_basel
 | `--work-root` | `$GAIA_BENCH_WORK_ROOT` or `<tmp>/gaia-bench` | Repository cache and indexes |
 | `--keep-work` | off | Keep the indexes built during the run |
 
-[→ Full Evaluation Guide](/reference/eval)
+Benchmark memory over months of chats (changing facts, forgets, lessons, planted content):
+```bash
+gaia eval memory --suite pr --gate tests/fixtures/eval_baselines/memory-bench/pr.json
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--suite` | `pr` | `pr` (offline, deterministic, a few seconds; gates PRs) or `full` (the local model and real embedder; needs Lemonade, takes the eval lock) |
+| `--scenario ID` | all | Run one scenario; repeat for more |
+| `--model` | GAIA's default chat model | `full` only: the chat model for extraction, consolidation and answers |
+| `--gate BASELINE` | off | Compare with a baseline `results.json`; exit 1 if a check that passed there fails now |
+| `--out` | `eval/results/memory-<suite>-<time>` | Where `results.json` and `report.md` go |
+| `--list` | off | List the scenarios and exit |
+| `--keep-work` | off | Keep the replayed memory databases for inspection |
+
+[→ Full Evaluation Guide](/reference/eval#memory-benchmark)
 
 ---
 
@@ -2015,7 +2039,7 @@ gaia eval agent [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--scenario` | string | all | Run a specific scenario by ID |
+| `--scenario` | string | all | Run only these scenario IDs; repeat the flag or comma-separate them. An ID that would not run (wrong `--category`, excluded tag) is an error |
 | `--category` | string | all | Run all scenarios in a category |
 | `--backend` | string | `http://localhost:4200` | Agent UI backend URL |
 | `--agent-type` | string | `gaia` | Agent registration ID to score. Every scenario runs against this one agent, so a scorecard names a single agent and two scorecards are comparable. Override only to measure a different agent — and never compare the result to a scorecard captured under another one |
@@ -2032,6 +2056,7 @@ gaia eval agent [OPTIONS]
 | `--target-pass-rate` | float | `0.90` | Stop fix iterations when judged pass rate reaches this threshold |
 | `--compare` | string(s) | -- | Compare two scorecard files, or one scorecard against saved baseline |
 | `--save-baseline` | flag | false | Save this run's scorecard as `eval/results/baseline.json` |
+| `--resume` | string | -- | Finish a run that stopped because Claude was unavailable: runs only its scenarios without a result, under the run's own settings, and updates its scorecard. Takes the run directory |
 | `--capture-session` | string | -- | Convert an Agent UI session (by UUID) into a YAML scenario file |
 | `--scenario-dir` | string | -- | Additional scenario directory to scan (repeatable) |
 | `--corpus-dir` | string | -- | Additional corpus directory to scan (repeatable) |
@@ -2072,6 +2097,10 @@ gaia eval agent --compare eval/results/latest/scorecard.json
 
 ```bash Explicit Two-File Comparison
 gaia eval agent --compare eval/results/run_A/scorecard.json eval/results/run_B/scorecard.json
+```
+
+```bash Resume After a Quota Stop
+gaia eval agent --resume eval/results/eval-20261021-141300
 ```
 
 ```bash Capture Session to Scenario
@@ -2953,6 +2982,8 @@ The running daemon reloads schedules every second, so adding, pausing, resuming,
 
 A run that comes due while the daemon is running but the machine is asleep or busy still fires once the daemon catches up, as long as that is within an hour of the due time; several missed runs collapse into one. A run more than an hour late, or one that comes due while the same schedule's previous run is still going, is skipped and logged at WARNING with the schedule name. A run that came due while the daemon itself was not running is not replayed on restart.
 
+Runs that never happened are not silent: the ones a sleep skipped or collapsed, and the ones due while the daemon was not running, are counted on the schedule. `gaia schedule show` prints the total, `missed: 3 runs in all while the PC was off or asleep, or the schedule daemon wasn't running (latest due …)`, and `gaia schedule list` adds `missed=3`. Runs due while a schedule was paused are not counted. The total is kept until the schedule is removed; past 100,000 in one stretch it reads "at least", and the latest due time is still exact. Times are shown in local time.
+
 Only one `gaia schedule daemon` can run per schedule store. A second one exits immediately with an error instead of firing every schedule twice. The daemon holds `~/.gaia/schedules.lock` while it runs; the OS releases it when the process exits, even after a crash. On Windows that error names no pid — Windows refuses another process's read of the locked byte, so the holder is unknowable.
 
 ```bash
@@ -2964,8 +2995,8 @@ gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
 | Action | Description |
 |--------|-------------|
 | `add` | Register a new schedule (requires `--name`, `--cron`, and exactly one of `--prompt`/`--skill`) |
-| `list` | List all schedules with their next fire time |
-| `show <name>` | Show one schedule's full configuration and next fire time |
+| `list` | List all schedules with their next fire time, and how many runs each missed |
+| `show <name>` | Show one schedule's full configuration, next fire time, and missed runs |
 | `remove <name>` | Delete a schedule |
 | `pause <name>` | Disable a schedule without deleting it |
 | `resume <name>` | Re-enable a paused schedule |
@@ -3241,9 +3272,32 @@ model **evicts** the first. The daemon therefore runs a **model-slot broker**
 that hands out one lease at a time, so model loads queue instead of racing.
 
 When a daemon is running, `gaia` commands and the Agent UI backend attach to it
-automatically and take a lease around each model load — you may see a brief
-`⏳ switching model…` while another process finishes. Interactive chat turns
-take priority over background work (embedder warm-ups, autonomous briefs).
+automatically and take a lease around each model load and request. Interactive
+chat turns take priority over background work (memory extraction, embedder
+warm-ups, autonomous briefs).
+
+A request that has to wait is **queued, not failed**:
+
+- It waits for as long as the request ahead of it holds the slot. The holder
+  renews its lease every 15 seconds. One that stops renewing for a minute (it
+  exited) is dropped and the queue moves on. One that keeps renewing past the
+  time its own request is allowed (its request timeout, the two-minute retry
+  window, and 15 minutes for a model load) is wedged, and loses the slot too.
+- Background work (memory extraction, document indexing) that has waited ten
+  minutes goes ahead of newer chat turns, so it is never starved.
+- While an **Agent UI** turn waits, it shows `Waiting for the model — <who> is
+  using it` with its place in line and seconds waited, updated every two
+  seconds, and the wait never counts toward the turn's idle stop. A `gaia`
+  command prints `⏳` once. The gaia agent's `/query` stream, which the
+  terminal UI reads, carries the same wait as a `model_queue` status (see
+  `docs/spec/agent-ui-query-sse-contract.md` §4.4).
+- Pressing Stop in the Agent UI, cancelling a `/query` run, pressing Ctrl+C, or
+  closing the app takes the request out of the queue, so the slot never goes to a caller that has left.
+  Indexing a turn started keeps going after the turn ends.
+- To cap the wait, set `GAIA_MODEL_LEASE_WAIT_S` to a number of seconds. Past
+  it, the request fails with where it stood in line and who held the model.
+- If the daemon stops sending queue updates for 30 seconds, the request fails
+  and names the daemon as the cause.
 
 With **no daemon running, nothing changes**: there are no sidecars, nothing else
 holds the slot, and loads proceed directly. Attaching never starts a daemon.
@@ -3341,6 +3395,15 @@ Install and uninstall stop a running sidecar first, and two installs of the same
 never race (the second gets a clean "already in progress" error). Requires the daemon
 extras (`pip install "amd-gaia[api]"`).
 
+A Python agent's install waits up to 5 minutes when another install holds uv's
+package cache (GAIA sets `UV_LOCK_TIMEOUT` for uv, keeping a shorter value of your
+own). While it waits, the install status reads "waiting for another install to
+finish"; if the cache is still taken, it stops with an error saying so. An install
+that does no work (no CPU or disk activity) for 900 seconds is stopped as stuck
+(`GAIA_HUB_PIP_TIMEOUT` changes that window), and one still running after 2 hours is
+stopped however busy it looks (`GAIA_HUB_PIP_MAX_SECONDS` changes that ceiling).
+Either way, everything the install started is stopped and the install is rolled back.
+
 Any agent outside the `verified` security tier runs third-party code on your machine,
 so the daemon refuses it with **HTTP 403** until you pass `--trust`. The error shows
 the agent's publisher and security tier and names the `--trust` re-run.
@@ -3367,14 +3430,14 @@ binary is `tui/bin/gaia-tui` (`cd tui && make build`).
 ```bash
 gaia tui                                       # splash -> readiness gate -> chat
 gaia tui run email                             # chat with another agent by id
-gaia tui run email --query "triage my inbox"   # one-shot: answer on stdout, exit 0/1/3
+gaia tui run email --query "triage my inbox"   # one-shot: answer on stdout, exit 0/1/3/130
 gaia tui status                                # background service + what is installed
 ```
 
 | Command | Description |
 |---------|-------------|
 | `gaia tui` | Launch straight into the flagship agent's chat, behind its readiness gate. |
-| `gaia tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent by catalog id. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). It exits **0** when the agent answered and nothing reported a failure, **1** on an error or a tool failure nothing recovered, and **3** when a confirmation gate held back a destructive action the run cannot approve — nothing broke, and nothing was done. |
+| `gaia tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent by catalog id. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). It exits **0** when the agent answered and nothing reported a failure, **1** on an error or a tool failure nothing recovered, **3** when a confirmation gate held back a destructive action the run cannot approve — nothing broke, and nothing was done — and **130** when Ctrl+C, SIGTERM or SIGHUP stopped it. A stop asks the agent to end the turn and waits up to 10s for it to confirm; a second Ctrl+C quits without waiting. If the agent does not confirm, a local agent's process is killed, and one run by the background service is reported on stderr as possibly still running. |
 | `gaia tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia tui run --query` is, `--timeout` included. |
 | `gaia tui status` | Whether the background service is running, which Lemonade it uses (address, version, the chat model's backend and context window), which sidecars it knows, and what is installed. |
 | `gaia tui version` | Print the build version. |

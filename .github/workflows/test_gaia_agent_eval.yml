@@ -61,12 +61,12 @@
 #     is what keeps the unconditional integrity gate meaningful for the rest.
 #
 # Self-hosted: needs a running Lemonade Server on AMD hardware + the Agent UI
-# backend, so it runs on the [self-hosted, Windows, lemonade-eval] pool. THIS
+# backend, so it runs on the ephemeral devlab-dispatch Strix Halo pool. THIS
 # POOL IS WINDOWS: every inline `run:` is PowerShell 5.1 (see the shell
 # default) — do not reintroduce bash (test_eval_agent_gemma_consolidation.yml
-# documents the scar). Serial execution across the eval workflows is enforced
-# by the shared `lemonade-eval` concurrency group on the JOB (never also at
-# the workflow level — that is a self-deadlock; see the concurrency notes).
+# documents the scar). Each job gets a fresh machine with its own Lemonade, so
+# it must NOT join the `lemonade-eval` slot: that group serialises by name
+# across machines and belongs to the persistent pool (see eval_flagship.yml).
 
 name: GAIA Agent Eval (judged scenarios, report mode)
 
@@ -93,8 +93,7 @@ on:
         required: false
         default: '3'
   # Reusable: called by release_agent_gaia.yml so the release runs the same
-  # eval definition. The `lemonade-eval`
-  # job group keeps calls strictly serial on the single Lemonade slot.
+  # eval definition.
   workflow_call:
     inputs:
       categories:
@@ -124,10 +123,7 @@ on:
         required: false
 
 concurrency:
-  # PER-INVOCATION SUPERSEDING — NOT the serial slot. The `lemonade-eval`
-  # group lives on the JOB below and is deliberately NOT repeated here: a run
-  # holding a group at the workflow level while its only job waits on the same
-  # group is a self-deadlock (test_email_agent_eval.yml documents it).
+  # PER-INVOCATION SUPERSEDING — NOT a serial slot (see the header).
   #
   # Non-PR key is `github.run_id` on purpose, NOT `github.ref`: a called
   # reusable workflow's `concurrency` is evaluated in the CALLER's context
@@ -158,6 +154,9 @@ env:
   # Only a dispatch can enforce; every other run reports.
   ENFORCE: ${{ github.event.inputs.enforce || 'false' }}
   BACKEND_URL: http://127.0.0.1:4200
+  # The checkout is outside this runner's home, so without this every
+  # `setup.index_documents` scenario 403s (#3585). Declares the corpus only.
+  GAIA_DOCUMENT_ROOTS: ${{ github.workspace }}\eval\corpus
   BASELINE_DIR: tests/fixtures/eval_baselines/gaia-gemma-4-e4b
   # Fixture server port — the corpus hardcodes http://127.0.0.1:8765
   # (tests/fixtures/gaia/README.md; never 4001/4200/8141/13305).
@@ -211,20 +210,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'ready_for_ci')) &&
       !contains(github.event.pull_request.labels.*.name, 'skip-gaia-eval'))
     # `Windows` is load-bearing: every step is PowerShell + LemonadeServer.exe.
-    # `lemonade-eval` narrows to the box carrying the label; serialization
-    # comes from the concurrency group, not the label.
-    runs-on: [self-hosted, Windows, xsj-dispatch, strix-halo]
-    # THE SERIAL SLOT. Same group name as test_email_agent_eval.yml,
-    # email_scorecard_refresh.yml and test_eval_agent_gemma_consolidation.yml
-    # — `lemonade-eval`, exactly — so at most one eval touches the single
-    # Lemonade backend at a time (CLAUDE.md: at most one `gaia eval agent`
-    # process, period).
-    concurrency:
-      group: lemonade-eval
-      cancel-in-progress: false
-      # `queue: single` (the default) cancels the previously-queued run — a
-      # phantom red X. `max` queues FIFO.
-      queue: max
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     defaults:
       run:
         # Pinned to Windows PowerShell 5.1 — everything below is written to
@@ -278,7 +264,7 @@ jobs:
           Write-Host "Eval driver and judge model: $model"
 
       # Fail-fast: without the judge/driver credential every scenario scores
-      # as an infra error after hours on the serial slot. Die in 10 seconds
+      # as an infra error after hours on the runner. Die in 10 seconds
       # instead, on EVERY trigger (a run that cannot judge proves nothing).
       - name: Preflight — judge credential
         env:

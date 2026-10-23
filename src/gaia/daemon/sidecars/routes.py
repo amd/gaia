@@ -212,7 +212,7 @@ def build_agents_router(token: str, registry):
             raise HTTPException(status_code=409, detail=str(e)) from e
         except HubUnavailableError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
-        except StopFailedError as e:
+        except (StopFailedError, InstallFailedError) as e:
             raise HTTPException(status_code=500, detail=str(e)) from e
 
     @router.get(f"{API_PREFIX}/agents/{{agent_id}}/install-status")

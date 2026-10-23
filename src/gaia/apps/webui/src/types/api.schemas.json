@@ -765,6 +765,30 @@
     "title": "CommandOutputResponse",
     "type": "object"
   },
+  "CommitRequest": {
+    "properties": {
+      "confirmed": {
+        "default": false,
+        "description": "True only after the user saw and confirmed the commit.",
+        "title": "Confirmed",
+        "type": "boolean"
+      },
+      "message": {
+        "title": "Message",
+        "type": "string"
+      },
+      "root": {
+        "title": "Root",
+        "type": "string"
+      }
+    },
+    "required": [
+      "root",
+      "message"
+    ],
+    "title": "CommitRequest",
+    "type": "object"
+  },
   "ConfigureRequest": {
     "properties": {
       "config": {
@@ -825,6 +849,31 @@
       }
     },
     "title": "ConnectRequest",
+    "type": "object"
+  },
+  "ContextRequest": {
+    "description": "``ctx_size`` None returns the model to GAIA's automatic size.",
+    "properties": {
+      "ctx_size": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Ctx Size"
+      },
+      "model": {
+        "title": "Model",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model"
+    ],
+    "title": "ContextRequest",
     "type": "object"
   },
   "CreateScheduleRequest": {
@@ -1616,6 +1665,39 @@
     "title": "FileUploadResponse",
     "type": "object"
   },
+  "FolderRequest": {
+    "properties": {
+      "path": {
+        "description": "An absolute folder path.",
+        "minLength": 1,
+        "title": "Path",
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "title": "FolderRequest",
+    "type": "object"
+  },
+  "FollowUpRequest": {
+    "properties": {
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "text": {
+        "title": "Text",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "text"
+    ],
+    "title": "FollowUpRequest",
+    "type": "object"
+  },
   "ForwardConnectionRequest": {
     "description": "Body for ``POST /v1/connections/{provider}`` (#1292).\n\nA host app forwards the OAuth client it authenticated the user under\n(``client_id`` + ``client_secret``) plus the user's ``refresh_token``.\nGAIA persists both and refreshes AS THE HOST APP'S CLIENT — no second\nOAuth, no consent step.\n\n``refresh_token`` / ``client_secret`` are secret INPUTS — they are never\nechoed back in any response. ``account_email`` is display-only in v1\n(the keyring slot is single-account per provider). ``grant_agents`` is\nthe list of namespaced agent ids (e.g. ``installed:email``) to grant the\nforwarded scopes so they can resolve the connection ambiently.",
     "properties": {
@@ -1882,6 +1964,17 @@
         "title": "Input Tokens",
         "type": "integer"
       },
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
       "output_tokens": {
         "default": 0,
         "title": "Output Tokens",
@@ -1897,6 +1990,28 @@
           }
         ],
         "title": "Place"
+      },
+      "retried": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Retried"
+      },
+      "seconds": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Seconds"
       },
       "steps": {
         "anyOf": [
@@ -1970,6 +2085,19 @@
       "id"
     ],
     "title": "InstallRequest",
+    "type": "object"
+  },
+  "InternetRequest": {
+    "properties": {
+      "on": {
+        "title": "On",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "on"
+    ],
+    "title": "InternetRequest",
     "type": "object"
   },
   "KnowledgeCreate": {
@@ -2858,6 +2986,35 @@
     "title": "PreflightReport",
     "type": "object"
   },
+  "PullRequestRequest": {
+    "properties": {
+      "body": {
+        "default": "",
+        "title": "Body",
+        "type": "string"
+      },
+      "confirmed": {
+        "default": false,
+        "description": "True only after the user saw and confirmed the PR.",
+        "title": "Confirmed",
+        "type": "boolean"
+      },
+      "root": {
+        "title": "Root",
+        "type": "string"
+      },
+      "title": {
+        "title": "Title",
+        "type": "string"
+      }
+    },
+    "required": [
+      "root",
+      "title"
+    ],
+    "title": "PullRequestRequest",
+    "type": "object"
+  },
   "QuickLink": {
     "description": "A quick-access link to a common filesystem location.",
     "properties": {
@@ -2880,6 +3037,68 @@
       "path"
     ],
     "title": "QuickLink",
+    "type": "object"
+  },
+  "RestartRequest": {
+    "description": "``confirm`` is required to reload a model on a server GAIA does not run.",
+    "properties": {
+      "confirm": {
+        "default": false,
+        "title": "Confirm",
+        "type": "boolean"
+      }
+    },
+    "title": "RestartRequest",
+    "type": "object"
+  },
+  "RetryChoiceRequest": {
+    "properties": {
+      "keep": {
+        "enum": [
+          "original",
+          "retry"
+        ],
+        "title": "Keep",
+        "type": "string"
+      },
+      "message_id": {
+        "title": "Message Id",
+        "type": "integer"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "message_id",
+      "keep"
+    ],
+    "title": "RetryChoiceRequest",
+    "type": "object"
+  },
+  "RetryWithRequest": {
+    "properties": {
+      "message_id": {
+        "title": "Message Id",
+        "type": "integer"
+      },
+      "model": {
+        "title": "Model",
+        "type": "string"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "message_id",
+      "model"
+    ],
+    "title": "RetryWithRequest",
     "type": "object"
   },
   "RunningAnswer": {
@@ -3519,6 +3738,17 @@
         "title": "Context Size Sufficient",
         "type": "boolean"
       },
+      "data_dir": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Data Dir"
+      },
       "default_model_is_cloud": {
         "default": false,
         "title": "Default Model Is Cloud",
@@ -4135,6 +4365,58 @@
     "title": "TurnSummaryModel",
     "type": "object"
   },
+  "TurnSummaryOutput": {
+    "description": "Something the turn made besides a file: an image, an indexed document,\na memory or a scheduled task.",
+    "properties": {
+      "detail": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Detail"
+      },
+      "kind": {
+        "title": "Kind",
+        "type": "string"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "path": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Path"
+      },
+      "ref": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Ref"
+      }
+    },
+    "required": [
+      "kind",
+      "name"
+    ],
+    "title": "TurnSummaryOutput",
+    "type": "object"
+  },
   "TurnSummaryPage": {
     "description": "A web page the turn read, or a search hit when it read none.",
     "properties": {
@@ -4208,6 +4490,13 @@
             "type": "null"
           }
         ]
+      },
+      "outputs": {
+        "items": {
+          "$ref": "#/components/schemas/TurnSummaryOutput"
+        },
+        "title": "Outputs",
+        "type": "array"
       },
       "pages": {
         "items": {

@@ -18,6 +18,7 @@ from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfig, GaiaConfigError
 from gaia.logger import get_logger
 
+from .. import session_git
 from ..database import ChatDatabase
 from ..dependencies import get_db
 
@@ -102,6 +103,126 @@ async def undo_changes(
         except file_snapshots.SnapshotError as e:
             logger.warning("Undo of turn %s refused: %s", turn_id, e)
             raise _snapshot_http_error(e) from e
+
+
+@router.get("/api/sessions/{session_id}/changes/total")
+async def session_changes(session_id: str, db: ChatDatabase = Depends(get_db)):
+    """Every file the chat changed, before its first turn against after its last."""
+    _require_session(db, session_id)
+    try:
+        return await asyncio.to_thread(file_snapshots.session_changes, session_id)
+    except file_snapshots.SnapshotError as e:
+        raise _snapshot_http_error(e) from e
+
+
+@router.post("/api/sessions/{session_id}/changes/undo")
+async def undo_session_changes(
+    session_id: str,
+    body: UndoRequest,
+    http_request: Request,
+    db: ChatDatabase = Depends(get_db),
+):
+    """Put every file the chat changed back as it was; all or nothing."""
+    _require_session(db, session_id)
+    lock = http_request.app.state.session_locks.setdefault(session_id, asyncio.Lock())
+    if lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="GAIA is still working in this chat. Undo once it finishes.",
+        )
+    async with lock:
+        try:
+            return await asyncio.to_thread(
+                file_snapshots.restore_session, session_id, body.force
+            )
+        except file_snapshots.SnapshotError as e:
+            logger.warning("Undo all in session %s refused: %s", session_id, e)
+            raise _snapshot_http_error(e) from e
+
+
+class CommitRequest(BaseModel):
+    root: str
+    message: str
+    confirmed: bool = Field(
+        False, description="True only after the user saw and confirmed the commit."
+    )
+
+
+class PullRequestRequest(BaseModel):
+    root: str
+    title: str
+    body: str = ""
+    confirmed: bool = Field(
+        False, description="True only after the user saw and confirmed the PR."
+    )
+
+
+@router.get("/api/sessions/{session_id}/changes/git")
+async def git_state(session_id: str, db: ChatDatabase = Depends(get_db)):
+    """The git repositories holding the chat's changes, with drafted messages."""
+    _require_session(db, session_id)
+    try:
+        return await asyncio.to_thread(session_git.describe, db, session_id)
+    except (session_git.GitActionError, file_snapshots.SnapshotError) as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+async def _git_action(http_request: Request, session_id: str, fn, *args):
+    lock = http_request.app.state.session_locks.setdefault(session_id, asyncio.Lock())
+    if lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="GAIA is still working in this chat. Try again once it finishes.",
+        )
+    async with lock:
+        try:
+            return await asyncio.to_thread(fn, *args)
+        except session_git.GitActionError as e:
+            logger.warning("Git action in session %s refused: %s", session_id, e)
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/api/sessions/{session_id}/changes/git/commit")
+async def git_commit(
+    session_id: str,
+    body: CommitRequest,
+    http_request: Request,
+    db: ChatDatabase = Depends(get_db),
+):
+    """Commit the chat's files in one repository; needs the user's confirmation."""
+    _require_session(db, session_id)
+    return await _git_action(
+        http_request,
+        session_id,
+        session_git.commit,
+        db,
+        session_id,
+        body.root,
+        body.message,
+        body.confirmed,
+    )
+
+
+@router.post("/api/sessions/{session_id}/changes/git/pr")
+async def git_pull_request(
+    session_id: str,
+    body: PullRequestRequest,
+    http_request: Request,
+    db: ChatDatabase = Depends(get_db),
+):
+    """Push the branch and open a pull request; needs the user's confirmation."""
+    _require_session(db, session_id)
+    return await _git_action(
+        http_request,
+        session_id,
+        session_git.create_pr,
+        db,
+        session_id,
+        body.root,
+        body.title,
+        body.body,
+        body.confirmed,
+    )
 
 
 def _settings_payload() -> dict:

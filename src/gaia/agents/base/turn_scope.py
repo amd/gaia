@@ -17,6 +17,11 @@ the model varies its arguments on every call:
   run again: the model is told to change approach. Calling it once more ends
   the turn. A program that ran and exited non-zero is not a tool failure —
   that is how a failing test reports — so only the tool's own refusals count.
+  One response's parallel calls are one attempt: a batch that all fails moves
+  the streak by one. Once the streak is reached, a corrected retry on a target
+  that failed — new arguments for the same file — still runs; only a repeat of
+  a failed call, or yet another new target, is refused. A failure whose error
+  names the valid arguments (``correctable``) does not move the streak.
 """
 
 from __future__ import annotations
@@ -99,8 +104,10 @@ POST_ANSWER_CLOSING_PROMPT = (
 )
 FAILURE_STREAK_CORRECTION = (
     "`{tool}` has failed {count} times in a row with different arguments "
-    "(last error: {error}). It was not run again. Do not call it again — try "
-    "a different approach, or give your final answer with what is missing."
+    "(last error: {error}). It was not run. Only a corrected retry of a call "
+    "that failed (same file, arguments fixed as the error says) still runs; "
+    "otherwise try a different approach, or give your final answer with what "
+    "is missing."
 )
 
 
@@ -183,6 +190,19 @@ def _is_tool_failure(result: Any) -> bool:
     return tool_result_failed(result, FAILED_STATUSES)
 
 
+def _call_signature(args: Dict[str, Any]) -> str:
+    try:
+        return json.dumps(args, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return repr(sorted(args.items(), key=lambda kv: str(kv[0])))
+
+
+def _is_correctable(result: Any) -> bool:
+    """The error itself names valid arguments, so the retry is a correction."""
+    data = tool_result_dict(result)
+    return bool(data and data.get("correctable") is True)
+
+
 class TurnScopeGuard:
     """Per-turn scope of the request, and per-tool failure streaks."""
 
@@ -199,6 +219,11 @@ class TurnScopeGuard:
         self.failures: Dict[str, int] = {}
         self.last_error: Dict[str, str] = {}
         self.corrected: Set[str] = set()
+        #: Per streak: the exact calls that failed, and failures per target.
+        self.failed_calls: Dict[str, Set[str]] = {}
+        self.failed_targets: Dict[str, Dict[str, int]] = {}
+        #: Streaks already moved by the open batch of parallel calls.
+        self._batch: Optional[Set[str]] = None
         self.paths: Set[str] = set()
         #: Output folders the request or a check named: what's inside them is in scope.
         self.folders: Set[str] = set()
@@ -216,11 +241,47 @@ class TurnScopeGuard:
         self.failures = {}
         self.last_error = {}
         self.corrected = set()
+        self.failed_calls = {}
+        self.failed_targets = {}
+        self._batch = None
         self.paths = {_norm(p, root) for p in mentioned_paths(query or "")}
         self.folders = self._output_folders(save_obligations(query or "")[0])
         self.tables = set()
         self.urls = _urls_in(query or "")
         self.scratch = _norm(str(scratch), root) if scratch else None
+
+    def begin_batch(self) -> None:
+        """The calls until :meth:`end_batch` came from one model response."""
+        self._batch = set()
+
+    def end_batch(self) -> None:
+        self._batch = None
+
+    def _target(self, args: Dict[str, Any]) -> Optional[str]:
+        """What a call acts on — a path or a page — or ``None`` for neither."""
+        paths = sorted(self._call_paths(args))
+        if paths:
+            return paths[0]
+        urls = sorted(self._call_urls(args))
+        return urls[0] if urls else None
+
+    def _is_correction(self, key: str, args: Dict[str, Any]) -> bool:
+        """New arguments for a target that failed, which has not failed out itself."""
+        if _call_signature(args) in self.failed_calls.get(key, set()):
+            return False
+        target = self._target(args)
+        if target is None:
+            return False
+        count = self.failed_targets.get(key, {}).get(target)
+        return count is not None and count < self.failure_limit
+
+    def _clear_streak(self, key: str) -> None:
+        self.failures.pop(key, None)
+        self.corrected.discard(key)
+        self.failed_calls.pop(key, None)
+        self.failed_targets.pop(key, None)
+        if self._batch is not None:
+            self._batch.discard(key)
 
     def mark_answered(self) -> None:
         """The turn has produced an answer; later calls must serve it."""
@@ -352,7 +413,14 @@ class TurnScopeGuard:
         args = args if isinstance(args, dict) else {}
         key = _streak_key(tool, args)
         count = self.failures.get(key, 0)
-        if self.failure_limit and count >= self.failure_limit:
+        if self._batch is not None and key in self._batch:
+            # Judged by the streak before this response: its own calls are one try.
+            count -= 1
+        if (
+            self.failure_limit
+            and count >= self.failure_limit
+            and not self._is_correction(key, args)
+        ):
             if key in self.corrected:
                 self.turn_should_end = True
                 self.end_reason = "failures"
@@ -386,16 +454,38 @@ class TurnScopeGuard:
         args = args if isinstance(args, dict) else {}
         key = _streak_key(tool, args)
         if _is_tool_failure(result):
-            self.failures[key] = self.failures.get(key, 0) + 1
-            self.last_error[key] = _error_brief(result)
+            self._record_failure(key, args, result)
             return
-        self.failures.pop(key, None)
-        self.corrected.discard(key)
+        self._clear_streak(key)
         if is_mutating_tool(tool):
             # The world changed, so a retry of anything is a new attempt.
             self.failures.clear()
             self.corrected.clear()
+            self.failed_calls.clear()
+            self.failed_targets.clear()
         if not self.answered or self.related(tool, args):
             self.paths |= self._call_paths(args)
             self.tables |= self._call_tables(args)
             self.urls |= _urls_in(result)
+
+    def _record_failure(self, key: str, args: Dict[str, Any], result: Any) -> None:
+        self.last_error[key] = _error_brief(result)
+        self.failed_calls.setdefault(key, set()).add(_call_signature(args))
+        target = self._target(args)
+        on_target = 0
+        if target is not None:
+            targets = self.failed_targets.setdefault(key, {})
+            on_target = targets[target] = targets.get(target, 0) + 1
+        if self._batch is not None and key in self._batch:
+            return
+        # Told exactly how to fix the call: a correction, not a wall, until the
+        # same target keeps failing anyway.
+        if (
+            _is_correctable(result)
+            and target is not None
+            and on_target < self.failure_limit
+        ):
+            return
+        if self._batch is not None:
+            self._batch.add(key)
+        self.failures[key] = self.failures.get(key, 0) + 1

@@ -14,6 +14,7 @@ import time
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.ui import sse_handler as sse_module
 from gaia.ui.sse_handler import (
     SSEOutputHandler,
     _fix_double_escaped,
@@ -1263,16 +1264,26 @@ class TestResponseEnvelopeNeverStreamsRaw:
             handler.print_streaming_text(piece)
             assert _content(_drain(handler)) == [], handler._stream_buffer[:80]
 
-    def test_huge_envelope_token_by_token_is_not_quadratic(self, handler):
+    def test_huge_envelope_token_by_token_is_not_quadratic(self, handler, monkeypatch):
         """A 400 KB file write streamed 4 chars at a time scans each char once."""
         content = 'x \\"{y}\\" ' * 40_000
         envelope = (
             '{"thought": "t", "tool": "write_file", '
             f'"tool_args": {{"file_path": "a.md", "content": "{content}"}}}}'
         )
-        started = time.monotonic()
+        # Counted, not timed: a rescan per token is ~2e10 chars, a resumed scan
+        # ~4e5, and wall time on a loaded runner can't tell them apart reliably.
+        scanned = []
+        real_scan = sse_module._json_object_end
+
+        def counting_scan(text, start, resume=None):
+            scanned.append(len(text) - (resume[0] if resume else start))
+            return real_scan(text, start, resume)
+
+        monkeypatch.setattr(sse_module, "_json_object_end", counting_scan)
         assert _content(_stream(handler, _pieces(envelope, 4))) == []
-        assert time.monotonic() - started < 5
+        assert len(scanned) > len(envelope) // 8, "the envelope was never scanned"
+        assert sum(scanned) <= 2 * len(envelope), sum(scanned)
 
     def test_think_tag_inside_an_envelope_string_is_content(self, handler):
         envelope = (

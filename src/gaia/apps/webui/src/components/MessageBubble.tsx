@@ -12,7 +12,8 @@ import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { AnswerStats } from './AnswerStats';
-import { MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
+import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
+import { LOCAL_MODEL_WAIT_HINT, MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
@@ -35,6 +36,8 @@ interface MessageBubbleProps {
     onDelete?: (messageId: number) => void;
     /** Called when user clicks the resend button (user messages only). */
     onResend?: (message: Message) => void;
+    /** More message actions, before Copy (e.g. Retry with…). */
+    extraActions?: React.ReactNode;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
@@ -96,6 +99,7 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
     // One clock for the whole silent wait: a repeated or retried phase must not restart it.
     const waitingOnModel = active && !awaitingUser && isModelWaitLabel(label);
     const modelWaitElapsed = useElapsedSeconds(waitingOnModel);
+    const place = useInferencePlace();
 
     if (phase === 'done') return null;
 
@@ -109,7 +113,7 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
             )}
             {active && <span className="cursor" />}
             {showModelWaitHint && (
-                <span className="thinking-indicator-hint" role="status">{MODEL_WAIT_HINT}</span>
+                <span className="thinking-indicator-hint" role="status">{place?.remote === false ? LOCAL_MODEL_WAIT_HINT : MODEL_WAIT_HINT}</span>
             )}
         </span>
     );
@@ -135,7 +139,7 @@ function useElapsedSeconds(active: boolean, key?: string): number {
 }
 
 /** Detect if message content looks like an error. */
-function isErrorContent(content: string): boolean {
+export function isErrorContent(content: string): boolean {
     if (!content) return false;
     const lower = content.toLowerCase();
     return (
@@ -410,7 +414,8 @@ function formatFullTimestamp(iso: string): string {
 /** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, agentStepCount, cards, onDelete, onResend, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, agentStepCount, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+    useModelNames();
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
@@ -505,6 +510,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                     <RefreshCw size={12} />
                                 </button>
                             )}
+                            {extraActions}
                             <button
                                 className={`msg-copy ${copied ? 'copied' : ''}`}
                                 onClick={handleCopy}
@@ -577,6 +583,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 <span className="msg-stats-ts" title="Message timestamp">
                                     {formatFullTimestamp(message.created_at)}
                                 </span>
+                            )}
+                            {message.stats?.retried && message.stats.model && (
+                                <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
                             <AnswerStats latencyMs={latencyMs} stats={message.stats} />
                         </div>
@@ -721,7 +730,7 @@ function linkifyChildren(children: React.ReactNode): React.ReactNode {
     );
 }
 
-function RenderedContent({ content, showCursor }: { content: string; showCursor?: boolean }) {
+export function RenderedContent({ content, showCursor }: { content: string; showCursor?: boolean }) {
     if (!content && !showCursor) return null;
     if (!content && showCursor) return <span className="cursor" />;
 

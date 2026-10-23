@@ -29,7 +29,7 @@ def test_the_turn_names_what_is_indexed():
         assert agent.get_memory_dynamic_context() == ""
         agent.rag = MagicMock(indexed_files={"/docs/b.txt", "/x/a.pdf"})
         assert agent.get_memory_dynamic_context() == (
-            "[Indexed documents: a.pdf, b.txt]"
+            "[Indexed documents: a.pdf (/x/a.pdf), b.txt (/docs/b.txt)]"
         )
 
 
@@ -50,14 +50,14 @@ def test_a_document_still_indexing_is_not_listed_as_indexed():
             result, job = rag_tools._index_within_budget(rag, "/docs/big.pdf", 0.05)
             assert result is None
             assert agent.get_memory_dynamic_context() == (
-                "[Indexed documents: b.txt]\n"
+                "[Indexed documents: b.txt (/docs/b.txt)]\n"
                 "[Still indexing in the background, not searchable yet: big.pdf]"
             )
         finally:
             release.set()
         assert job.done.wait(30)
         assert agent.get_memory_dynamic_context() == (
-            "[Indexed documents: b.txt, big.pdf]"
+            "[Indexed documents: b.txt (/docs/b.txt), big.pdf (/docs/big.pdf)]"
         )
 
 

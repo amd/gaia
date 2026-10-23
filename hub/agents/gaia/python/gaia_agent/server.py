@@ -42,7 +42,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
@@ -60,7 +60,9 @@ from gaia_agent_chat.session import validate_session_id
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.responses import StreamingResponse
 
+from gaia.agents.base import file_snapshots
 from gaia.agents.base.readiness import start_advice, version_meets_min
+from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 from gaia.version import LEMONADE_MIN_VERSION
@@ -78,7 +80,9 @@ AGENT_ID = "gaia"
 #: 2.15 (#3620) added ``POST /query/{run_id}/followup`` for mid-turn messages.
 #: 2.16 (#4166) added ``/query``'s ``documents`` field.
 #: 2.17 added ``GET /skills`` for the Agent UI's Skills settings.
-API_VERSION = "2.17"
+#: 2.18 added ``/query``'s ``allowed_paths`` and ``memory`` fields.
+#: 2.19 added ``/query``'s ``changes_turn_id`` field.
+API_VERSION = "2.19"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -179,6 +183,66 @@ class QueryRequest(_Strict):
             "one attached mid-conversation is picked up on the next turn."
         ),
     )
+
+    allowed_paths: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "The conversation's file scope as the caller computed it (contract "
+            ">= 2.18), so the agent works where the caller's UI says it does. "
+            "Absolute paths. Builds a new session with exactly this scope; a "
+            "retained session gains any entry it lacks and keeps what the user "
+            "granted. GAIA_ALLOWED_PATHS still narrows it. Omit for the agent's "
+            "default scope."
+        ),
+    )
+
+    @field_validator("allowed_paths")
+    @classmethod
+    def _allowed_paths_absolute(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        relative = [p for p in v if not p or not Path(p).is_absolute()]
+        if relative:
+            raise ValueError(
+                f"allowed_paths must be absolute paths; got {relative!r}. The "
+                "agent's working directory is not the caller's, so a relative "
+                "path would name a different folder."
+            )
+        return list(dict.fromkeys(v))
+
+    memory: Optional[Literal["on", "private", "off"]] = Field(
+        default=None,
+        description=(
+            "Whether this turn may save to memory (contract >= 2.18): 'on', "
+            "'private' (a private chat) or 'off' (memory turned off in the "
+            "caller's settings). With 'private' or 'off' nothing is written, "
+            "including the errors and lessons the agent saves on its own. Send "
+            "it every turn: a retained session keeps the last value. Omit it to "
+            "leave memory as the agent has it."
+        ),
+    )
+
+    changes_turn_id: Optional[str] = Field(
+        default=None,
+        pattern=file_snapshots.TURN_ID_PATTERN,
+        description=(
+            "Record this turn's file changes for undo, under this turn of the "
+            "session (contract >= 2.19). Needs session_id. A copy of each file "
+            "the agent writes is saved first, in the snapshot store of the "
+            "agent's GAIA home, keyed by session_id and this id, and the "
+            "recording is complete before the terminal event is sent. Use "
+            "file_snapshots.new_turn_id() to make one. Omit it to record nothing."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _changes_need_a_session(self) -> "QueryRequest":
+        if self.changes_turn_id is not None and not self.session_id:
+            raise ValueError(
+                "changes_turn_id needs session_id: a turn's file changes are "
+                "recorded under the session they belong to."
+            )
+        return self
 
     @field_validator("documents")
     @classmethod
@@ -339,6 +403,8 @@ class _QueryRun:
         #: step boundary; see Agent._drain_followups.
         self.followups: "queue.Queue[str]" = queue.Queue()
         self.result: Optional[Dict[str, Any]] = None
+        #: Records the run's file changes when the caller asked for it.
+        self.recorder: Optional[file_snapshots.TurnRecorder] = None
 
 
 class DuplicateRunError(RuntimeError):
@@ -482,7 +548,10 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
         for key in ("answer", "response", "result", "output"):
             value = result.get(key)
             if isinstance(value, str) and value.strip():
-                return {"type": "final", "answer": value}
+                final: Dict[str, Any] = {"type": "final", "answer": value}
+                if result.get("model_failed"):
+                    final["failed"] = True
+                return final
         error = result.get("error")
         if isinstance(error, str) and error.strip():
             return {"type": "error", "detail": error, "status": 500}
@@ -583,6 +652,23 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             },
         }
     )
+
+
+def _apply_memory_mode(agent: Any, mode: Optional[str]) -> None:
+    """Turn *agent*'s memory writes off or back on for this turn (>= 2.18).
+
+    "on" never re-enables memory the agent itself switched off (no store, or
+    ``GAIA_MEMORY_DISABLED``).
+    """
+    if mode is None or not hasattr(agent, "_incognito"):
+        return
+    if mode == "on":
+        if getattr(agent, "_memory_store", None) is not None:
+            agent._incognito = False
+            agent._incognito_reason = None
+        return
+    agent._incognito = True
+    agent._incognito_reason = "private" if mode == "private" else "memory_off"
 
 
 def build_query_agent(**config_kwargs: Any):
@@ -778,6 +864,26 @@ async def memory() -> Dict[str, Any]:
             close_agent(agent)
 
 
+@router.get("/debug/turns", include_in_schema=False)
+async def debug_turns(limit: int = 20) -> Dict[str, Any]:
+    """The last *limit* turn records, newest last — dev mode only.
+
+    Off the contract on purpose: it exists only while ``GAIA_TURN_LOG`` is set,
+    and its shape is the turn log's (``gaia.turn/1``), not a versioned API.
+    """
+    from gaia.agents.base.turn_metrics import RECENT_TURNS, TURN_LOG_ENV, turn_log_path
+
+    if turn_log_path() is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Turn recording is off. Set {TURN_LOG_ENV}=<path> before "
+            "starting the agent to record turns.",
+        )
+    if limit < 1:
+        raise HTTPException(status_code=422, detail="limit must be 1 or more")
+    return {"turns": list(RECENT_TURNS)[-limit:]}
+
+
 @router.get("/skills")
 async def skills() -> Dict[str, Any]:
     """The skills this agent can load, for the Agent UI's Skills settings.
@@ -945,6 +1051,24 @@ def _release_abandoned_turn(checked_out: Optional[Tuple[Any, bool]]) -> None:
         checked_out[0].run_lock.release()
 
 
+async def _finish_changes(run: _QueryRun) -> List[Dict[str, Any]]:
+    """Complete the run's undo recording ahead of its terminal event.
+
+    The caller reads the recording as soon as the stream ends. Returns the
+    status event to send first when it could not be saved.
+    """
+    if run.recorder is None:
+        return []
+    try:
+        await asyncio.to_thread(run.recorder.finish)
+    except OSError as exc:
+        logger.error("Undo history for run_id=%s: %s", run.run_id, exc)
+        return [
+            {"type": "status", "message": f"Undo may not work for this turn: {exc}"}
+        ]
+    return []
+
+
 @router.post("/query")
 async def query(request: QueryRequest):
     """Run the flagship agent loop for one request, streaming canonical SSE."""
@@ -1001,6 +1125,8 @@ async def query(request: QueryRequest):
                 kwargs["claude_model"] = request.model
         elif request.model:
             kwargs["model_id"] = request.model
+        if request.allowed_paths is not None:
+            kwargs["allowed_paths"] = request.allowed_paths
         if request.session_id:
             # Cross-turn document retention: ChatAgent persists its indexed-doc
             # set per UI session, so dropping this makes the agent forget a
@@ -1057,6 +1183,12 @@ async def query(request: QueryRequest):
                     display,
                 )
             agent = session.agent
+            if request.allowed_paths:
+                # Built on an earlier turn's scope; this turn's may hold more.
+                validator = getattr(agent, "path_validator", None)
+                if validator is not None:
+                    for path in request.allowed_paths:
+                        validator.add_allowed_path(path)
             # Hand this turn's handler the session's accumulated permission
             # state — bypass, and every "always" the user has granted. Built
             # fresh per turn, so without this both reset at every turn boundary
@@ -1088,6 +1220,14 @@ async def query(request: QueryRequest):
             )
             one_shot_agent = agent
         agent.console = handler
+        # A confirmation can only be carried when somebody is there to answer it
+        # AND there is a session to hold the grant. ``can_answer_questions`` is
+        # the caller's own declaration that a human is watching (spec >= 2.6); a
+        # one-shot sets it False precisely so the agent never parks on a prompt.
+        handler.answers_confirmations = (
+            session is not None and request.can_answer_questions is not False
+        )
+        _apply_memory_mode(agent, request.memory)
         if request.can_answer_questions is False:
             # Nobody is there to answer. Let the loop know so it resolves
             # ambiguity itself instead of parking on a question forever.
@@ -1137,16 +1277,30 @@ async def query(request: QueryRequest):
             status_code=500, detail=f"Failed to start the query run: {exc}"
         ) from exc
 
+    def _process() -> None:
+        if request.documents:
+            _index_attached_documents(agent, request.documents, handler)
+        if request.max_steps is not None:
+            run.result = agent.process_query(request.query, max_steps=request.max_steps)
+        else:
+            run.result = agent.process_query(request.query)
+
     def _run_agent() -> None:
         try:
-            if request.documents:
-                _index_attached_documents(agent, request.documents, handler)
-            if request.max_steps is not None:
-                run.result = agent.process_query(
-                    request.query, max_steps=request.max_steps
-                )
+            if request.changes_turn_id is None:
+                _process()
             else:
-                run.result = agent.process_query(request.query)
+                # Tools find the recorder through a context variable set here.
+                with file_snapshots.recording_turn(
+                    request.session_id, request.changes_turn_id
+                ) as recorder:
+                    run.recorder = recorder
+                    _process()
+        except file_snapshots.SnapshotError as exc:
+            logger.error("Undo history for run_id=%s: %s", run.run_id, exc)
+            handler._emit(
+                {"type": "status", "message": f"Undo may not work for this turn: {exc}"}
+            )
         except Exception as exc:  # surface loudly as a terminal error event
             logger.exception("%s /query run failed for run_id=%s", AGENT_ID, run.run_id)
             handler.print_error(_terminal_error_detail(exc))
@@ -1182,7 +1336,16 @@ async def query(request: QueryRequest):
             if one_shot_agent is not None:
                 close_agent(one_shot_agent)
 
-    thread = threading.Thread(target=_run_agent, daemon=True)
+    def _run_turn() -> None:
+        # The user's turn: it leases ahead of background work, a wait for the
+        # model reaches this stream, and /cancel ends that wait.
+        with interactive_turn(
+            on_wait_event=lambda event: handler._emit(queue_status_event(event)),
+            cancel=run.cancel_event,
+        ):
+            _run_agent()
+
+    thread = threading.Thread(target=_run_turn, daemon=True)
     try:
         thread.start()
     except Exception as exc:
@@ -1194,11 +1357,7 @@ async def query(request: QueryRequest):
             status_code=500, detail=f"Failed to start the query run: {exc}"
         ) from exc
 
-    # A confirmation can only be carried when somebody is there to answer it AND
-    # there is a session to hold the grant. ``can_answer_questions`` is the
-    # caller's own declaration that a human is watching (spec >= 2.6); a
-    # one-shot sets it False precisely so the agent never parks on a prompt.
-    can_confirm = session is not None and request.can_answer_questions is not False
+    can_confirm = handler.answers_confirmations
 
     async def _stream():
         translator = CanonicalTranslator(request.run_id, agent_id=AGENT_ID)
@@ -1224,6 +1383,9 @@ async def query(request: QueryRequest):
 
                 for canonical in translator.translate(event):
                     ctype = canonical.get("type")
+                    if ctype in TERMINAL_TYPES:
+                        for warning in await _finish_changes(run):
+                            yield _sse(warning)
                     yield _sse(canonical)
                     last_write = time.monotonic()
                     if ctype == "needs_input":
@@ -1241,6 +1403,8 @@ async def query(request: QueryRequest):
                         # Nobody can answer — refusing is the honest end, and
                         # far better than parking a run on a prompt no one will
                         # ever see.
+                        for warning in await _finish_changes(run):
+                            yield _sse(warning)
                         yield _sse(_confirmation_refusal(canonical.get("action", "")))
                         handler.cancelled.set()
                         run.cancel_event.set()
@@ -1253,6 +1417,9 @@ async def query(request: QueryRequest):
             # Queue closed. Flush any buffered tool_call, then guarantee the one
             # terminal event the contract mandates.
             for canonical in translator.flush():
+                if canonical.get("type") in TERMINAL_TYPES:
+                    for warning in await _finish_changes(run):
+                        yield _sse(warning)
                 yield _sse(canonical)
                 if canonical.get("type") in TERMINAL_TYPES:
                     terminated = True

@@ -1,10 +1,11 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { NewChat, greeting, warmUpLine } from '../NewChat';
+import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
 import { useChatStore } from '../../stores/chatStore';
+import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
 import type { StartScreen, SystemStatus } from '../../types';
 
@@ -98,6 +99,17 @@ describe('NewChat empty state', () => {
         expect(greeting(new Date(2026, 0, 1, 21))).toBe('Good evening. What should we work on?');
     });
 
+    it('takes focus when New chat is chosen while it is already showing', () => {
+        const { rerender } = render(<NewChat onSend={vi.fn()} focusRequest={1} />);
+        const box = screen.getByPlaceholderText('Ask GAIA anything');
+        const other = document.createElement('input');
+        document.body.appendChild(other);
+        other.focus();
+        rerender(<NewChat onSend={vi.fn()} focusRequest={2} />);
+        expect(document.activeElement).toBe(box);
+        other.remove();
+    });
+
     it('offers the task cards the backend picked', async () => {
         render(<NewChat onSend={vi.fn()} />);
         const list = await screen.findByRole('list', { name: 'Things to try' });
@@ -166,6 +178,31 @@ describe('NewChat empty state', () => {
         expect(screen.queryByText(/didn.t start/)).not.toBeInTheDocument();
     });
 
+    it('fetches the suggestions again on its own once the assistant has started', async () => {
+        vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+        try {
+            vi.mocked(api.getStartScreen)
+                .mockResolvedValueOnce({ ...START, cards: [], skills_error: 'The GAIA agent could not be started yet.' })
+                .mockResolvedValueOnce({ ...START, cards: [], skills_error: 'The GAIA agent could not be started yet.' })
+                .mockResolvedValue(START);
+            render(<NewChat onSend={vi.fn()} />);
+            expect(await screen.findByText(/didn.t start/)).toBeInTheDocument();
+            await act(async () => {});  // let the retry effect start its interval
+
+            await act(async () => { vi.advanceTimersByTime(START_RETRY_MS); });
+            await waitFor(() => expect(api.getStartScreen).toHaveBeenCalledTimes(2));
+            await act(async () => {});
+            // Still failing: the reason stays up rather than flickering away.
+            expect(screen.getByText(/didn.t start/)).toBeInTheDocument();
+
+            await act(async () => { vi.advanceTimersByTime(START_RETRY_MS); });
+            expect(await screen.findByRole('list', { name: 'Things to try' })).toBeInTheDocument();
+            expect(screen.queryByText(/didn.t start/)).not.toBeInTheDocument();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('makes no model call of its own', async () => {
         render(<NewChat onSend={vi.fn()} />);
         await screen.findByRole('list', { name: 'Things to try' });
@@ -190,5 +227,11 @@ describe('NewChat warm-up line', () => {
         expect(warmUpLine({ seconds: 2, model: 'Gemma-4-E4B-it-GGUF', device: 'cpu' })).toBe('Loading Gemma-4-E4B-it-GGUF on the CPU… 2s');
         expect(warmUpLine({ seconds: 2, model: 'Gemma-4-E4B-it-GGUF', device: null })).toBe('Loading Gemma-4-E4B-it-GGUF… 2s');
         expect(warmUpLine({ seconds: 0, model: null, device: null })).toBe('Getting GAIA ready… 0s');
+    });
+
+    it('names the model the way the model chip does once its friendly name is known', () => {
+        useModelStore.setState({ names: { 'Gemma-4-E4B-it-GGUF': 'Gemma 4 E4B' } });
+        expect(warmUpLine({ seconds: 3, model: 'Gemma-4-E4B-it-GGUF', device: 'gpu' })).toBe('Loading Gemma 4 E4B on your GPU… 3s');
+        useModelStore.setState({ names: {} });
     });
 });

@@ -42,6 +42,12 @@ run_python -- the binary is the only Python a release user has:
      script's exit code comes back unchanged. Before the fix the script path
      reached the stdio parser and exited 2 with ``unrecognized arguments``.
 
+Linux only -- the binary carries its build distro's OpenSSL:
+
+ 10. A ``run_python`` script's default SSL context holds CA certificates, so
+     HTTPS from a script verifies on a distro other than the one it was
+     built on (``rthook_linux_ca.py``).
+
 The handshake deliberately stops short of a real turn: an answer needs a running
 Lemonade Server and a downloaded model, which the release runners do not have.
 It still fails loudly on a broken binary -- the opening event is emitted with
@@ -91,7 +97,7 @@ STDIO_HANDSHAKE_DEADLINE_S = 300.0
 #: harness imports nothing outside the stdlib (a unit test pins the two).
 RUN_PYTHON_FILE_FLAG = "--gaia-run-python-file"
 
-#: What a knowledge-work ``run_python`` call does: office files, a table, a
+#: What a typical ``run_python`` call does: office files, a table, a
 #: chart, and stdlib modules nothing in GAIA itself imports.
 RUN_PYTHON_SCRIPT = """\
 import sys, statistics, sqlite3, zipfile, xml.etree.ElementTree, csv, decimal
@@ -453,6 +459,30 @@ def check_run_python(binary: Path) -> bool:
     return True
 
 
+#: Prints how many CA certificates a script's default SSL context loaded.
+TLS_TRUST_SCRIPT = """import ssl, sys
+count = ssl.create_default_context().cert_store_stats()["x509_ca"]
+print("CA_CERTS", count, ssl.get_default_verify_paths())
+sys.exit(0 if count else 4)
+"""
+
+
+def check_tls_trust(binary: Path) -> bool:
+    """A script can verify HTTPS: its default context found the host's CAs."""
+    with tempfile.TemporaryDirectory(prefix="gaia-smoke-tls-") as tmp:
+        result = _run_script(binary, Path(tmp), TLS_TRUST_SCRIPT)
+    log(f"tls: {result.stdout.strip()[-600:]}")
+    if result.returncode != 0:
+        log(
+            "FAIL: a run_python script's default SSL context holds no CA "
+            "certificates, so its HTTPS calls fail verification on this distro. "
+            f"stderr: {result.stderr[-1500:]!r}"
+        )
+        return False
+    log("tls trust check PASS -- scripts find the host's CA certificates")
+    return True
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Smoke-test the frozen GAIA agent binary (both transports)."
@@ -520,9 +550,14 @@ def main(argv=None) -> int:
 
     log("checking run_python on the frozen binary")
     results["run_python"] = check_run_python(binary)
+    expected = 7
+    if sys.platform.startswith("linux"):
+        log("checking a script's TLS trust store")
+        results["tls_trust"] = check_tls_trust(binary)
+        expected += 1
 
     log(f"results: {results}")
-    ok = len(results) == 7 and all(results.values())
+    ok = len(results) == expected and all(results.values())
     log("VERDICT: PASS" if ok else "VERDICT: FAIL")
     return 0 if ok else 1
 

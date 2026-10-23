@@ -61,6 +61,13 @@ describe('isAbandonedDraft', () => {
         expect(isAbandonedDraft('s1', state)).toBe(false);
     });
 
+    it('is false while the chat still has messages waiting to send, open or not', () => {
+        const queued = { s1: [{ id: 1, text: 'next', state: 'queued' }] };
+        expect(isAbandonedDraft('s1', { ...baseState, messageQueues: queued })).toBe(false);
+        expect(isAbandonedDraft('s1', { ...baseState, currentSessionId: 'other', messageQueues: queued })).toBe(false);
+        expect(isAbandonedDraft('s1', { ...baseState, messageQueues: { other: queued.s1 } })).toBe(true);
+    });
+
     it('ignores the loaded-messages signal for a non-current session', () => {
         // messages reflect the CURRENT session only; a background empty draft
         // should still be reapable even though `messages` is populated here.

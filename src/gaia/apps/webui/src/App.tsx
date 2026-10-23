@@ -11,20 +11,25 @@ import { SettingsDialog } from './components/settings/SettingsDialog';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { NotificationCenter } from './components/NotificationCenter';
+import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
 import { startActiveRunsPoll } from './services/activeRuns';
+import { startQueueDispatcher } from './services/queueDispatch';
 import * as api from './services/api';
 import { createStatusPoller, type StatusOutcome } from './services/statusPoll';
 import { log, logBanner } from './utils/logger';
+import { announceMobileAccess, useMobileAccessRequests } from './utils/mobileAccessEvents';
 import { getSessionHash } from './utils/format';
 import { readUrlTarget, resolveUrlNavTarget } from './utils/sessionNav';
 import { getApiBase } from './utils/apiBase';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
-import { FLAGSHIP_AGENT_ID } from './utils/newTask';
+import { FLAGSHIP_AGENT_ID, hasFlagshipAgent, isFlagshipMissingError } from './utils/newTask';
+import { runWhileVisible } from './utils/visibleInterval';
+import { retryUntilOk, type Retrier } from './utils/retry';
 import type { SetupCheck, StartCard } from './types';
 
 // Heavy, occasional screens load on first use.
@@ -50,6 +55,9 @@ function Loading() {
     return <div className="loading-spinner" role="status" aria-label="Loading" />;
 }
 
+// First failure, then every 10th (~5 min at the 30 s cap), so a stuck read stays in the log.
+const shouldLogRetry = (attempt: number) => attempt === 1 || attempt % 10 === 0;
+
 function App() {
     const currentSessionId = useChatStore((s) => s.currentSessionId);
     const setSessions = useChatStore((s) => s.setSessions);
@@ -66,6 +74,7 @@ function App() {
     const setSystemStatus = useChatStore((s) => s.setSystemStatus);
     const setBackendConnected = useChatStore((s) => s.setBackendConnected);
     const setAgents = useChatStore((s) => s.setAgents);
+    const agents = useChatStore((s) => s.agents);
     const setPendingPrompt = useChatStore((s) => s.setPendingPrompt);
     const setDefaultPermissionMode = useChatStore((s) => s.setDefaultPermissionMode);
     const openSettings = useChatStore((s) => s.openSettings);
@@ -85,16 +94,27 @@ function App() {
     }, [restoreNotice, dismissRestoreNotice]);
 
     const [setup, setSetup] = useState<SetupGate>({ state: 'checking' });
+    const setupRef = useRef(setup);
+    setupRef.current = setup;
+    // The agent list has loaded at least once; until then "no flagship" is unknown, not missing.
+    const [agentsKnown, setAgentsKnown] = useState(false);
+    // A new chat was refused because the flagship is not installed.
+    const [flagshipRefused, setFlagshipRefused] = useState(false);
+    const flagshipMissing = flagshipRefused || (agentsKnown && !hasFlagshipAgent(agents));
+    const flagshipMissingRef = useRef(flagshipMissing);
+    flagshipMissingRef.current = flagshipMissing;
     const [createError, setCreateError] = useState<string | null>(null);
     // A task picked at the end of setup that needs the user to finish typing it.
     const [draftText, setDraftText] = useState('');
+    const [newChatFocus, setNewChatFocus] = useState(0);
     const [showMobileAccess, setShowMobileAccess] = useState(false);
     const [tunnelActive, setTunnelActive] = useState(false);
     const [tunnelError, setTunnelError] = useState<string | null>(null);
 
     // ── First run: is GAIA set up? Same question the TUI asks. ──────────
-    const checkSetup = useCallback(async () => {
-        setSetup({ state: 'checking' });
+    // Quiet: keep the current screen until the answer, so a re-check never blanks the app.
+    const checkSetup = useCallback(async (quiet = false) => {
+        if (!quiet) setSetup({ state: 'checking' });
         try {
             await useModelStore.getState().refresh();
             const active = useModelStore.getState().active;
@@ -108,17 +128,42 @@ function App() {
         }
     }, []);
 
+    const loadAgents = useCallback(async () => {
+        const list = (await api.listAgents()).agents || [];
+        setAgents(list);
+        setAgentsKnown(true);
+        if (hasFlagshipAgent(list)) setFlagshipRefused(false);
+    }, [setAgents]);
+    // A new chat starts in the configured mode (`full_access` in config).
+    const loadDefaultPermissionMode = useCallback(async () => {
+        setDefaultPermissionMode((await api.listAllPermissions()).default_mode);
+    }, [setDefaultPermissionMode]);
+
+    // The desktop window loads before the backend listens, so these retry until answered.
+    const startupLoads = useRef<Retrier[]>([]);
     useEffect(() => {
         logBanner(__APP_VERSION__);
         void checkSetup();
-        api.listAgents()
-            .then((d) => setAgents(d.agents || []))
-            .catch((err) => log.api.warn('Agent list unavailable; connector grants will be empty', err));
-        // A new chat starts in the configured mode (`full_access` in config).
-        api.listAllPermissions()
-            .then((d) => setDefaultPermissionMode(d.default_mode))
-            .catch((err) => log.api.warn('Default permission mode unavailable; new chats will ask', err));
-    }, [checkSetup, setAgents, setDefaultPermissionMode]);
+        const loads = [
+            retryUntilOk(loadAgents, {
+                onError: (err, n) => { if (shouldLogRetry(n)) log.api.warn(`Agent list unavailable (attempt ${n}); retrying`, err); },
+            }),
+            retryUntilOk(loadDefaultPermissionMode, {
+                onError: (err, n) => { if (shouldLogRetry(n)) log.api.warn(`Default permission mode unavailable (attempt ${n}); retrying`, err); },
+            }),
+        ];
+        startupLoads.current = loads;
+        return () => loads.forEach((l) => l.stop());
+    }, [checkSetup, loadAgents, loadDefaultPermissionMode]);
+
+    // The backend answered after being unreachable: read now what startup could not.
+    const onBackendBack = useCallback(() => {
+        startupLoads.current.forEach((l) => l.kick());
+        useModelStore.getState().retryNow();
+        if (setupRef.current.state === 'unknown') void checkSetup(true);
+    }, [checkSetup]);
+    const onBackendBackRef = useRef(onBackendBack);
+    onBackendBackRef.current = onBackendBack;
 
     // ── Backend and model-server health ─────────────────────────────────
     const failCount = useRef(0);
@@ -143,6 +188,7 @@ function App() {
         }
         if (outcome.kind === 'error') {
             log.system.warn(`System status answered HTTP ${outcome.httpStatus}`, outcome.message);
+            if (wasUnreachable.current) onBackendBackRef.current();
             wasUnreachable.current = false;
             slowCount.current = 0;
             slowSince.current = null;
@@ -170,13 +216,13 @@ function App() {
             return;
         }
         const { status } = outcome;
+        if (wasUnreachable.current) onBackendBackRef.current();
         wasUnreachable.current = false;
         slowCount.current = 0;
         slowSince.current = null;
         setBackendSlow(false);
         setBackendError(null);
         setBackendConnected(true);
-        if (status.detected_devices?.length) useChatStore.getState().setDetectedDevices(status.detected_devices);
         // One slow health probe under load is not an outage.
         failCount.current = status.lemonade_running ? 0 : failCount.current + 1;
         const prev = useChatStore.getState().systemStatus;
@@ -191,7 +237,7 @@ function App() {
     const [statusPoller] = useState(() => createStatusPoller((outcome) => applyStatusRef.current(outcome)));
     const checkSystemStatus = statusPoller.check;
 
-    useEffect(() => statusPoller.start(), [statusPoller]);
+    useEffect(() => runWhileVisible(statusPoller.start), [statusPoller]);
 
     // ── Chats ───────────────────────────────────────────────────────────
     const sessionFingerprint = useRef('');
@@ -218,6 +264,8 @@ function App() {
     }, [setSessions]);
 
     useEffect(() => startActiveRunsPoll(), []);
+    // Queued messages go out when their chat's turn ends, even with another chat open.
+    useEffect(() => startQueueDispatcher(), []);
 
     useChatAlerts();
 
@@ -306,13 +354,30 @@ function App() {
     // A new chat's first message: make the chat, then hand ChatView the text.
     const startChat = useCallback(async (text: string) => {
         setCreateError(null);
-        const store = useChatStore.getState();
-        const session = await api.createSession({
-            title: 'New Task',
-            agent_type: FLAGSHIP_AGENT_ID,
-            device: store.activeDevice,
-            document_ids: store.draftDocumentIds,
-        });
+        let store = useChatStore.getState();
+        let session;
+        try {
+            session = await api.createSession({
+                title: 'New Task',
+                agent_type: FLAGSHIP_AGENT_ID,
+                document_ids: store.draftDocumentIds,
+            });
+        } catch (err) {
+            if (!isFlagshipMissingError(err)) throw err;
+            setFlagshipRefused(true);
+            throw new Error("The GAIA agent isn't installed. Install it from the notice above, then send again.");
+        }
+        if (flagshipMissingRef.current) {
+            // Created after all: the agent list was stale (installed from the CLI meanwhile).
+            setFlagshipRefused(false);
+            void loadAgents().catch((err) => log.api.warn('Agent list unavailable', err));
+        }
+        // The chip may still show a guess if startup never reached the backend; the saved default wins.
+        if (!store.defaultPermissionModeKnown) {
+            await loadDefaultPermissionMode()
+                .catch((err) => log.api.warn("Default permission mode unavailable; using the chip's mode", err));
+            store = useChatStore.getState();
+        }
         store.clearDraftDocuments();
         addSession(session);
         setCurrentSession(session.id);
@@ -328,9 +393,9 @@ function App() {
             );
             return;
         }
-        store.setDraftPermissionMode(store.defaultPermissionMode);
+        store.resetDraftPermissionMode();
         setPendingPrompt(text);
-    }, [addSession, setCurrentSession, setMessages, setPendingPrompt]);
+    }, [addSession, setCurrentSession, setMessages, setPendingPrompt, loadAgents, loadDefaultPermissionMode]);
 
     const newChat = useCallback(() => {
         const store = useChatStore.getState();
@@ -340,6 +405,7 @@ function App() {
         store.setShowSchedules(false);
         setCurrentSession(null);
         setMessages([]);
+        setNewChatFocus((n) => n + 1);
     }, [setCurrentSession, setMessages]);
 
     // ── Desktop tray: its icon follows this window; its menu acts here ──
@@ -441,6 +507,10 @@ function App() {
         }
     }, []);
 
+    // The session panel's Phone access toggle drives the same flow.
+    useMobileAccessRequests((on) => { void (on ? openMobileAccess() : stopMobileAccess()); });
+    useEffect(() => { announceMobileAccess(tunnelActive); }, [tunnelActive]);
+
     const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
 
     // A PC set up before can chat while the check runs; a new one waits, so
@@ -471,7 +541,7 @@ function App() {
     ) : currentSessionId ? (
         <ChatView key={currentSessionId} sessionId={currentSessionId} />
     ) : (
-        <NewChat key={draftText} onSend={startChat} initialText={draftText} />
+        <NewChat key={draftText} onSend={startChat} initialText={draftText} focusRequest={newChatFocus} />
     );
 
     return (
@@ -501,6 +571,7 @@ function App() {
                         <button type="button" className="link-btn" onClick={() => void checkSetup()}>Check again</button>
                     </div>
                 )}
+                {flagshipMissing && <FlagshipAgentNotice onInstalled={loadAgents} />}
                 {restoreNotice && (
                     <div className={`app-notice${restoreNotice.ok ? '' : ' is-warning'}`} role="status">
                         <span>{restoreNotice.message}</span>

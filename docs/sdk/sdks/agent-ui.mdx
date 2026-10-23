@@ -809,7 +809,7 @@ Deleting a chat deletes its copies.
           "finished_at": "2026-10-16T15:30:40+00:00",
           "restored_at": null,
           "files": [{"path": "C:\\notes\\todo.md", "change": "edited", "tool": "edit_file"}],
-          "untracked": [{"kind": "shell", "detail": "npm run build", "paths": []}],
+          "untracked": [{"kind": "shell", "detail": "npm run build", "paths": [], "may_write": true}],
           "incomplete": true
         }
       ]
@@ -821,7 +821,12 @@ Deleting a chat deletes its copies.
     something GAIA can't copy ahead of time — a shell command outside the
     read-only tier, a Python snippet or script, or an MCP tool not marked
     read-only — and `untracked` lists each one. Undo does not cover what those
-    changed.
+    changed. A Python snippet or script is left out only when a static check
+    finds nothing in its code that could write (it fails closed: an unknown
+    import or dynamic code counts as a write) and a scan of the folders it ran
+    in finds no changed files and was not cut short; `detail` is its first
+    docstring or comment line, else its first line of code, and `paths` the
+    files seen changing.
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/changes/{turn_id}/diff">
@@ -845,6 +850,77 @@ Deleting a chat deletes its copies.
     turn was already undone, when a saved copy is damaged, when the turn never
     finished, or while a turn is running in the chat. **404** means the copies
     are gone, usually removed by the retention limit.
+  </Accordion>
+
+  <Accordion title="GET /api/sessions/{session_id}/changes/total">
+    Every file the chat changed, from its state before the chat's first turn to
+    its state after the last. Undone turns are left out, and a turn still
+    running sets `pending` without being counted.
+
+    **Response:**
+    ```json
+    {
+      "files": [
+        {"path": "C:\\work\\app.py", "change": "edited", "unified": "...",
+         "additions": 3, "deletions": 1, "binary": false, "too_large": false,
+         "truncated": false, "message_ids": [42, 47], "changed_since": null}
+      ],
+      "totals": {"files": 1, "additions": 3, "deletions": 1, "uncounted": 0},
+      "turns": 2, "pending": false, "untracked": [], "incomplete": false
+    }
+    ```
+
+    A file put back by a later turn, or created and then deleted, is not
+    listed. `additions` and `deletions` are null for a binary or too-large file,
+    which `totals.uncounted` counts. `changed_since` says why the file on disk no
+    longer matches what the chat left (`"changed after this turn"`), or is null.
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/changes/undo">
+    Undo all: put every file the chat changed back as it was before its first
+    turn, then mark every turn undone.
+
+    **Request:** `{"force": false}`
+
+    All or nothing, like undoing one turn: saved copies are checked, a file
+    changed since the chat last touched it is a **409** with
+    `detail.conflicts` unless `force` is true, and a write that fails part-way
+    puts every file back. Also **409** when nothing is left to undo, when a turn
+    never finished, or while a turn is running.
+  </Accordion>
+
+  <Accordion title="GET /api/sessions/{session_id}/changes/git">
+    The git repositories holding the chat's changed files:
+    `{"available": true, "repos": [{"root", "branch", "remote", "default_branch",
+    "gh", "files", "uncommitted", "ignored", "draft": {"title", "body"},
+    "pr_blocked"}]}`. `ignored` lists the chat's files git ignores; they are
+    left out of `files` and never committed. `draft` is drafted from the chat's requests for the turns that changed those
+    files; `pr_blocked` says why a pull request can't be opened (no `gh`, no
+    remote, or on the default branch), or is null.
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/changes/git/commit">
+    **Request:** `{"root": "...", "message": "...", "confirmed": true}`
+
+    Stages only the files the chat changed in `root`, outside any folder removed
+    from the chat (deletions included, names taken literally, never as
+    patterns) and
+    commits them with `message`; other staged or changed files are left alone
+    and hooks run as usual. Files git ignores are left out and returned in
+    `ignored`. Returns `{"root", "commit", "files", "ignored"}`. **400**
+    without `"confirmed": true`, for an empty message, for a repository in a
+    folder removed from the chat, when every changed file is ignored, or when
+    git refuses; **409** while a turn is
+    running.
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/changes/git/pr">
+    **Request:** `{"root": "...", "title": "...", "body": "...", "confirmed": true}`
+
+    Pushes the current branch with `--set-upstream` (never forced), then runs
+    `gh pr create`. Returns `{"root", "url"}`. **400** without confirmation,
+    while the chat's internet is off, on the default branch, or without `gh` or
+    a remote.
   </Accordion>
 
   <Accordion title="GET /api/settings/undo">
@@ -908,7 +984,7 @@ Deleting a chat deletes its copies.
     | `tool_start` | `tool` (string), `detail` (string), `narration` (string) | Tool invocation started. `tool` is the tool function name (e.g., `"query_documents"`, `"search_file"`). `detail` is a human-readable description of the operation. `narration` is what the call does in plain words (`"Searching your documents"`). |
     | `tool_args` | `tool` (string), `args` (object), `detail` (string), `narration` (string) | Tool arguments. `args` is the raw arguments dict passed to the tool. `detail` is a formatted human-readable summary of the arguments, one `key: value` per line when there are more than two or a value holds a list. `narration` repeats the call's plain line with its main argument (`"Searching your documents: database init"`). |
     | `tool_end` | `success` (boolean) | Tool invocation completed. |
-    | `tool_result` | `title` (string or null), `summary` (string), `success` (boolean), `result_data` (object or null), `command_output` (object or null) | Tool result with structured data. `summary` is a human-readable result. `result_data` contains typed results (see below). `command_output` contains shell command output (see below). |
+    | `tool_result` | `title` (string or null), `summary` (string), `success` (boolean), `result_data` (object or null), `command_output` (object or null), `file_path` / `image_path` (string, optional) | Tool result with structured data. `summary` is a human-readable result. `result_data` contains typed results (see below). `command_output` contains shell command output (see below). `file_path` and `image_path` are the resolved path a tool wrote, when its result names one. |
     | `policy_alert` | `tool` (string), `decision` (`"BLOCK"`), `reason` (string), `rule_ids` (string[]), `policy_version` (string), `receipt_id` (string, optional) | Governance policy blocked a tool before execution. No user action is required; use this to show a visible policy refusal instead of treating the denial as a generic tool failure. |
 
     `result_data` variants in `tool_result`:
@@ -971,6 +1047,7 @@ Deleting a chat deletes its copies.
     | `documents` | Documents it drew passages from: `name` (the name the file was attached under, not the upload copy's ID), `path`, `pages`, `passages`. |
     | `files` | Files it created or changed and that still exist: `path`, `name`, `openable` (false for scripts, programs and web pages), `mtime` (when the turn ended). |
     | `sites` | Hosts GAIA's web tools contacted. |
+    | `outputs` | What it made besides files, for the session panel's Outputs: `kind` (`image`, `document` indexed, `memory` saved, `schedule` created), `name`, and `path`, `detail` or `ref` (a memory's id) where they apply. |
     | `live_data` | `attempted` and `failed` counts for the internet tools. All failed means the answer has no live data. |
     | `model` | `remote`, `provider`, `provider_name`, `name`. Absent when the location could not be determined. |
     | `cost` | `kind`: `local`, `estimate` (with `usd`, at list price), or `unknown`. |
@@ -1023,6 +1100,94 @@ Deleting a chat deletes its copies.
     in-process agent first, then an email-relay run blocked on the sidecar's
     own query loop; a session with neither pending is a 404, never a silent
     no-op accept.
+  </Accordion>
+
+  <Accordion title="POST /api/chat/followup">
+    Hand `{session_id, text}` to the session's running turn. The agent reads it
+    at its next step without restarting. The stream then carries
+    `followup_taken` (`text`) and the message is saved as a user message. A turn
+    that ends first sends `followup_returned` (`texts`) before `done`. 404: no
+    turn is running. 409: the running turn can't take it yet (it hasn't reached
+    the model, or a relayed agent runs it). The Agent UI calls it only when the
+    user picks **Add to this reply** on a queued message; otherwise a message
+    typed mid-turn waits and is sent as its own turn.
+  </Accordion>
+
+  <Accordion title="GET /api/chat/followup/{session_id}">
+    What the session's last finished turn did with the follow-ups handed to it:
+    `{"taken": [...], "returned": [...]}`, as the user sent them. A chat that
+    was not watching when the turn ended reads this to send the returned ones
+    as their own turns without resending the taken ones. Each turn replaces the
+    record, and deleting the session drops it. 409 while a turn still runs.
+  </Accordion>
+
+  <Accordion title="GET /api/chat/context/{session_id}">
+    Tokens the chat's next message would carry, against the model's window:
+    `system`, `tools`, `documents` (results of document-reading tools),
+    `history`, `reply_reserve`, `used`, `window`, plus `turns_in_view`,
+    `turns_hidden` and `at_risk`, the questions of the oldest turns that leave
+    the model's view at the next overflow. `skills` and `memory` are the parts
+    of `system` those prompt sections take, and `tool_definitions` the part of
+    `tools` the tool schemas take. `categories` lists system prompt, tool
+    definitions, skills, memory, documents and messages; their `tokens` add up
+    to `used`. `tool_loading` names the tools sent now (`loaded`) and the ones
+    loaded only when a turn needs them (`on_demand`). `context_state` is what
+    the agent moved out of the window, from its optional `context_state()`
+    method: `put_away` (`results`, `tokens`: tool results swapped for a re-read
+    handle) and `summarized` (`turns`, `tokens`, `summary_tokens`: older turns
+    folded into a rolling summary). No agent folds turns yet, so `summarized`
+    is `null` today. `context_state` is `null` when the agent doesn't report
+    one; a malformed report is a 500, never a guess.
+
+    Counts come from the loaded model's own tokenizer (Lemonade's `/tokenize`)
+    when the chat's model is the one loaded: `tokenizer` is
+    `{"exact": true, "model"}`. Otherwise (a cloud model, another model
+    loaded, or the model server not answering) they are estimates and
+    `tokenizer` is `{"exact": false, "reason"}`. Asking never loads or swaps a
+    model. `{"available": false, "reason"}` until an agent has answered in the
+    chat. A streaming turn sends estimates of the same numbers as a
+    `context_usage` event.
+  </Accordion>
+
+  <Accordion title="GET /api/chat/performance/{session_id}">
+    Where each answered turn's time went. `turns` lists each turn, oldest
+    first, with `time`: `wall_seconds` (message received to answer saved),
+    `model_seconds` (every model request plus any model load before the turn)
+    and `gaia_seconds`, which add up to `wall_seconds`. `gaia_seconds` splits
+    into `tool_seconds`, `waiting_seconds` (approving a tool) and
+    `own_seconds`. Each turn also has `first_token_seconds`,
+    `prefill_tokens_per_second`, `generation_tokens_per_second`, `tokens_in`,
+    `tokens_new`, `tokens_cached` (reused from the server's prompt cache),
+    `tokens_out`, `tool_calls`, `loads` and `cost` (`local` at $0, a cloud
+    `estimate` at list price, or `unknown`). `totals` sums the chat. `now` is
+    the model as Lemonade reports it: `provider` (`local`, a cloud provider,
+    or `unknown`), `device`, `backend`, `ctx_size`, `weights_gb`,
+    `kv_cache_gb` and `free_gb`. `latest_message_id` is the newest answer, so
+    a client can tell when it has no record. A value nobody measured is
+    `null`, never 0: token totals are `null` unless every model call reported
+    them. Turns answered before
+    this existed have no entry.
+  </Accordion>
+
+  <Accordion title="POST /api/chat/retry-with">
+    Answer the chat's latest question again on another local model:
+    `{session_id, message_id, model}`. Tools aren't run again; the other model
+    gets the turn's recorded tool calls and results as text. Returns
+    `{content, stats}`, where `stats` holds `seconds`, `load_seconds`,
+    `tokens_per_second` and token counts. Nothing is saved until
+    `/api/chat/retry-with/choose`. 409: the message isn't the latest answer, or
+    GAIA is answering in any chat (loading another model would unload the one
+    it uses). 400: a cloud model. 413: the turn doesn't fit the model's window.
+    503: the model couldn't be loaded or didn't answer.
+  </Accordion>
+
+  <Accordion title="POST /api/chat/retry-with/choose">
+    Keep one answer from a comparison: `{session_id, message_id, keep}`, where
+    `keep` is `original` or `retry`. `retry` replaces the answer in place,
+    keeping the turn's tool evidence, so the next message continues from it.
+    Its stats become the retry's, keeping the turn's step count and where it
+    ran. Deleting the session drops an open comparison. 404: no open
+    comparison for that message.
   </Accordion>
 </AccordionGroup>
 
@@ -1125,7 +1290,7 @@ Deleting a chat deletes its copies.
   </Accordion>
 
   <Accordion title="POST /api/files/status">
-    Report whether each path still exists and when it last changed. The side rail uses it to show files deleted or changed since the turn that wrote them.
+    Report whether each path still exists and when it last changed. The session panel uses it to show files deleted or changed since the turn that wrote them.
 
     **Request:** `{"paths": ["/home/user/out/report.md"]}` (at most 50 paths).
 
@@ -1223,6 +1388,86 @@ of that router's connector types.
   </Accordion>
 </AccordionGroup>
 
+### Session environment and outputs
+
+What one chat may reach and what it produced, behind the session panel's
+Environment and Outputs sections. Folder and internet changes are stored with
+the chat, applied to its agent before every turn, and applied to a running
+agent at once, so they take effect on its next step.
+
+<AccordionGroup>
+  <Accordion title="GET /api/sessions/{session_id}/environment">
+    ```json
+    {
+      "session_id": "...",
+      "folders": [{"path": "C:\\work", "kind": "folder", "source": "added", "removable": true}],
+      "removed": ["C:\\work\\private"],
+      "internet": true,
+      "enforced": true
+    }
+    ```
+
+    `folders` is every folder and file the agent may read and write;
+    `source` is `added`, `gaia_documents`, `scratch`, `document`,
+    `working_folder` or `approved` (granted during the chat). `removable` is
+    false for an attached document, which leaves through the chat's document
+    list. `enforced` is false for an agent that runs as its own process (a
+    relayed sidecar); the folder and internet endpoints then refuse changes
+    with **409** (**400** for adding a folder).
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/environment/folders">
+    **Request:** `{"path": "C:\\work\\project"}`. Let the chat read and
+    write the folder. **400** for a path that isn't a folder, for a filesystem
+    root, the home folder or a protected folder, and for a folder inside one
+    the user removed.
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/environment/folders/remove">
+    **Request:** `{"path": "..."}`. Take a folder or file away from the chat.
+    The agent's path validator then refuses everything under it, even inside a
+    wider grant and under full access, and never offers it as an approval,
+    until it is added back.
+  </Accordion>
+
+  <Accordion title="PUT /api/sessions/{session_id}/environment/internet">
+    **Request:** `{"on": false}`. With the internet off, the agent refuses
+    web tools, the in-app browser, connector (MCP) tools, and any call whose
+    arguments or shell command reach a host other than this PC (for example
+    `curl https://…`, `git push`, `pip install`, `npx`), before asking for
+    confirmation. This check lets through a web or browser call whose URL is
+    on this PC (the web tools still refuse private addresses on their own) and
+    a plain `curl`/`wget`/`Invoke-WebRequest` whose every destination
+    is: `localhost` exactly or a loopback IP (`127.0.0.0/8`, `::1`). Each
+    command in a chained shell line is checked on its own. The refusal tells the model the
+    internet is off for this chat.
+  </Accordion>
+
+  <Accordion title="GET /api/sessions/{session_id}/outputs">
+    Everything the chat produced, newest first:
+
+    ```json
+    {
+      "session_id": "...",
+      "items": [
+        {"id": "export:47:c:\\work\\totals.csv", "kind": "export", "name": "totals.csv",
+         "path": "C:\\work\\totals.csv", "detail": null, "message_id": 47,
+         "created_at": "2026-10-16 20:01:12", "change": "created", "state": "present",
+         "openable": true, "revealable": true}
+      ]
+    }
+    ```
+
+    `kind` is `file`, `export`, `image`, `document`, `memory` or `schedule`.
+    A file appears once, at the latest turn that changed it. `state` is
+    `undone` when Undo restored its turn and `gone` when it is no longer on
+    disk. `openable` is false for scripts, programs and web pages, which only
+    show in their folder. `created_at` is UTC. Built from each answer's turn
+    summary (`turn_summary.outputs`) and the undo snapshots, so it survives a
+    restart.
+  </Accordion>
+</AccordionGroup>
+
 ### Tunnel
 
 Expose the local Agent UI over the internet via an ngrok/Cloudflare tunnel.
@@ -1238,7 +1483,9 @@ Used to reach the UI from a phone.
   </Accordion>
 
   <Accordion title="GET /api/tunnel/status">
-    Current tunnel status — active/inactive, public URL, provider, uptime.
+    Current tunnel status — active/inactive, public URL, provider, uptime, and
+    `device`: `{"name": "iPhone", "lastSeen": "..."}` for the latest
+    authenticated request through the tunnel, or null.
   </Accordion>
 </AccordionGroup>
 
@@ -2098,7 +2345,13 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
   </Accordion>
 
   <Accordion title="GET /api/providers/active">
-    The model new turns run. On the first call of a backend run it also
+    The model new turns run — the one a new chat starts on: the picked model,
+    else `default_model` from `~/.gaia/config.json`, else Gemma. Carries
+    `display_name`, `downloaded` for a local model (`null` for a cloud
+    model or while the server starts), and `inference_remote` /
+    `inference_description`: where a new chat would be answered, by the rule
+    session locations use (`null` when it can't tell). With an unreadable config, `model` is
+    `null` and `config_error` says why. On the first call of a backend run it also
     restores `last_model` from `~/.gaia/config.json`; `restore.status` is
     `restored`, `failed` (with the reason — another model is never switched in
     quietly), `none`, or `pending` while the local model server is still
@@ -2131,9 +2384,62 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
 
   <Accordion title="GET /api/providers/{provider}/models">
     Chat models for a provider (embedding, reranker, speech, and image models
-    are left out). `local` lists downloaded models plus the default model;
+    are left out). `local` lists downloaded models plus the default models
+    (`Qwen3.6-35B-A3B-GGUF`, `Gemma-4-E4B-it-GGUF` and the configured default);
     cloud providers list their own. Recommended models come first with a
     `rank`, `note`, and the measured `evidence` behind the pick.
+
+    Each local model also carries `display_name`; `state` (`loaded`,
+    `downloaded` or `not_downloaded`); `placement` — `label` such as
+    "GPU · Vulkan" or "NPU · FLM", with `source` `reported` (Lemonade's
+    `/health` for a loaded model) or `expected` (its recipe), and a `warning`
+    when the two differ; `size_gb`; `fits` this PC's memory; `available` with
+    an `unavailable_reason` (no NPU, no usable backend, too large); and
+    `tokens_per_second`, the median of its recent turns on this PC.
+  </Accordion>
+
+  <Accordion title="GET /api/providers/local/context">
+    The context sizes a local model (the `model` query parameter) may use here: `options` from its `min` up
+    to `max_fit`, the largest window that fits this PC, plus the `automatic`
+    size GAIA picks, the `chosen` one (or `null`), and `loaded_ctx`. **422**
+    for a cloud model.
+  </Accordion>
+
+  <Accordion title="PUT /api/providers/local/context">
+    Remember a context size for a model in `~/.gaia/config.json`
+    (`context_sizes`); every load of it uses that size. Body:
+    `{"model", "ctx_size"}`, with `ctx_size: null` for Automatic. If the model
+    is loaded, GAIA reloads it in the background through its normal load path
+    (free-memory check included); `reload` says `{"started": true}`, or
+    `started: false` with `reason` `already_loaded` (it is loaded at that size
+    already), `busy` (a reply is running), `warm_up` (GAIA is preparing a new
+    chat), `restarting`, or `not_gaias_server` (GAIA never reloads a model on a
+    server it doesn't run); in the last four cases the size applies on the next
+    load. **422** for a size not offered on this PC, or for a cloud model
+    (nothing is saved then). A saved size that stops
+    fitting, or that can't be checked because this PC's memory can't be read,
+    is refused at load with how to fix it; `GAIA_CTX_SIZE` still overrides it.
+  </Accordion>
+
+  <Accordion title="GET /api/providers/local/status">
+    The sidebar's live status: `state` (`loaded`, `warming`, `idle` or
+    `stopped`), `owner` (`gaia`, `user` or `remote`, as in the Model server
+    panel), `busy` with `busy_reason` (`request`, or `warm_up` while GAIA primes a new chat), the loaded `model` with its
+    `placement` and `ctx_size`, `memory` (`free_gb`, `total_gb`, and
+    `model_gb`, its estimated share; `free_gb` never exceeds `total_gb`, and
+    is absent for a Lemonade on another machine), `error` with the raw cause in `error_detail`, and `restarting` /
+    `restart_error`. Requires `X-Gaia-UI: 1`.
+  </Accordion>
+
+  <Accordion title="POST /api/providers/local/restart">
+    Start the model server if it is stopped, else reload the loaded chat model
+    (or the active one) at its context size. Returns **202**; progress shows in
+    `/local/status`. On a server GAIA doesn't run, it never starts the server and
+    reloads only with `{"confirm": true}`; without it the **409** explains what
+    the reload would interrupt. Also **409** while a restart runs, while the
+    model is answering, or while GAIA prepares a new chat (even before that
+    first load lists a model); **422** for a cloud model. A server that fails
+    to start is reported in `restart_error`.
   </Accordion>
 
   <Accordion title="POST /api/providers/select">
@@ -2279,7 +2585,8 @@ CREATE TABLE documents (
     indexed_at TEXT,
     last_accessed_at TEXT,
     indexing_status TEXT DEFAULT 'complete',  -- pending | indexing | complete | failed | cancelled
-    file_mtime REAL                          -- file modification time (Unix epoch)
+    file_mtime REAL,                         -- file modification time (Unix epoch)
+    indexing_owner TEXT                      -- server process indexing it, while pending/indexing
 );
 
 -- Sessions (conversations)
@@ -2319,13 +2626,27 @@ CREATE TABLE settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- A chat or scheduled turn that has started and not yet saved its reply, one
+-- row per question, written with the question. Saving the reply deletes it in
+-- the same transaction. A row whose owner has exited becomes the reply "This
+-- answer was interrupted when GAIA closed."
+CREATE TABLE unfinished_turns (
+    question_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    owner TEXT NOT NULL,                       -- server process running the turn
+    started_at TEXT NOT NULL,
+    partial_content TEXT NOT NULL DEFAULT '',  -- cleaned reply so far, saved every 2 s
+    tools_run TEXT NOT NULL DEFAULT '[]',      -- tools the turn had started
+    updated_at TEXT
+);
 ```
 
 **SQLite settings:** Foreign keys enabled, WAL journal mode for concurrent reads.
 
 <Note>
-The `indexing_status`, `file_mtime`, `agent_steps`, and `inference_stats`
-columns (plus the `settings` table) are added via migrations for databases
+The `indexing_status`, `file_mtime`, `indexing_owner`, `agent_steps`, and
+`inference_stats` columns (plus the `settings` table) are added via migrations for databases
 created before these existed. New databases include them in the initial schema.
 </Note>
 
@@ -2487,11 +2808,11 @@ The npm package includes:
 The package version is sourced from `src/gaia/version.py` (single source of truth for all of GAIA):
 
 ```bash
-# Check version consistency (package.json matches version.py)
-node installer/version/bump-ui-version.mjs --check
+# Check every version field, package.json included, matches its source (lint runs this)
+python util/release_versions.py --check
 
-# Sync package.json to version.py
-node installer/version/bump-ui-version.mjs
+# Sync package.json, and every other version field, to version.py
+python util/release_versions.py --stamp
 
 # Full release (sync, commit, tag, push)
 node installer/version/release-ui.mjs

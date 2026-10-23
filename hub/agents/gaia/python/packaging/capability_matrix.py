@@ -96,13 +96,16 @@ TOOLS_COUNT_DEFINITION = (
     "(which the flagship's registry must equal exactly, including the 8 "
     "skill-library tools and the 4 code-index tools), less the load_tools "
     "escape hatch, which registers only when GAIA_DYNAMIC_TOOLS=1 turns "
-    "per-turn tool selection on. This is the REGISTERED size — what the agent "
+    "per-turn tool selection on, and set_reasoning_effort, which registers only "
+    "on a model that grades its reasoning (gpt-oss). This is the REGISTERED size — what the agent "
     "can do. It is distinct from the REST surface's {rest_functional} "
     "functional verbs, a purpose-built streaming facade for external callers."
 )
 
 #: In CORE, but registered only while per-turn tool selection is on (off by default).
 LOADER_ONLY_TOOLS = frozenset({"load_tools"})
+#: In a bundle, but registered only on models that grade reasoning (gpt-oss).
+MODEL_ONLY_TOOLS = frozenset({"set_reasoning_effort"})
 
 
 def tools_count_definition(rest_functional: int) -> str:
@@ -278,6 +281,13 @@ def _decorator_route(dec: ast.expr, module_constants: Dict[str, str]):
         return None
     if not dec.args:
         return None
+    if any(
+        kw.arg == "include_in_schema"
+        and isinstance(kw.value, ast.Constant)
+        and kw.value.value is False
+        for kw in dec.keywords
+    ):
+        return None  # a dev-only route, off the published contract
     path_node = dec.args[0]
     if isinstance(path_node, ast.Constant) and isinstance(path_node.value, str):
         path = path_node.value
@@ -467,7 +477,7 @@ def derive_matrix(repo_root: Path | None = None) -> CapabilityMatrix:
     union: set = set(core)
     for members in bundles.values():
         union |= members
-    tools_total = len(union - LOADER_ONLY_TOOLS)
+    tools_total = len(union - LOADER_ONLY_TOOLS - MODEL_ONLY_TOOLS)
 
     skill_library_tools = _derive_skill_library_tool_names()
     missing = set(skill_library_tools) - union

@@ -114,6 +114,19 @@ class TestSystemStatus:
         assert "disk_space_gb" in data
         assert "version" in data
 
+    def test_system_status_names_the_real_data_folder(self, tmp_path):
+        """Privacy showed a hard-coded ~/.gaia/chat/, wrong under GAIA_HOME."""
+        db_file = tmp_path / "home" / "chat" / "gaia_chat.db"
+        data = (
+            TestClient(create_app(db_path=str(db_file)))
+            .get("/api/system/status")
+            .json()
+        )
+        assert data["data_dir"] == str(db_file.parent)
+
+    def test_system_status_reports_no_folder_for_an_in_memory_database(self, client):
+        assert client.get("/api/system/status").json()["data_dir"] is None
+
     def test_system_status_lemonade_field_is_boolean(self, client):
         """lemonade_running should be a boolean regardless of server state."""
         resp = client.get("/api/system/status")
@@ -128,7 +141,7 @@ class TestSystemStatus:
         assert data["version"] == __version__
 
     def test_unreadable_config_is_reported_not_hidden(
-        self, client, tmp_path, monkeypatch
+        self, client, tmp_path, monkeypatch, gaia_owned_lemonade
     ):
         bad = tmp_path / "config.json"
         bad.write_text("{not json", encoding="utf-8")

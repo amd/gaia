@@ -95,9 +95,9 @@ Add `"releases/v0.17.0"` as the **second entry** (after `"releases/index"`, befo
 
 Change the version in the `label` value to match the new release tag.
 
-#### 4. `hub/components/{terminal-hub,agent-ui}/gaia-agent.yaml` — bump `version`
+#### 4. `hub/components/terminal-hub/gaia-agent.yaml` — bump `version` and `min_gaia_version`
 
-`release_components.yml` gates a tag against both manifests — publishing under a stale `version` fails the release, since R2 paths are immutable.
+The terminal's six raw binaries publish to the Agent Hub (R2), where the flagship agent's lock pins them, and `release_components.yml` gates a tag against this manifest — publishing under a stale `version` fails the release, since R2 paths are immutable. The installers and the desktop app ship on the GitHub release only, so `hub/components/agent-ui/` is no longer published and needs no bump.
 
 #### 5. `src/gaia/apps/webui/package.json` and `package-lock.json` — bump the UI version
 

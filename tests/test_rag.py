@@ -1534,6 +1534,128 @@ class TestCacheSecurity:
                 assert result2["success"] is True
                 assert len(rag2.chunks) > 0
 
+    def test_failed_verification_misses_without_deleting(self, mock_dependencies):
+        """A mismatch is a miss: the entry another process wrote must survive."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+                assert rag.index_document(str(fake_pdf))["success"] is True
+                cache_path = rag._get_cache_path(str(fake_pdf))
+
+                rag2 = RAGSDK(config)
+                with (
+                    patch.object(
+                        rag2,
+                        "_verify_and_load_cache",
+                        side_effect=ValueError("Cache integrity check failed"),
+                    ),
+                    patch.object(
+                        rag2,
+                        "_extract_text_from_file",
+                        side_effect=RuntimeError("extraction interrupted"),
+                    ),
+                ):
+                    result = rag2.index_document(str(fake_pdf))
+
+                assert result["success"] is False
+                assert os.path.exists(cache_path)
+                assert os.path.exists(cache_path + ".sig")
+                assert rag._verify_and_load_cache(cache_path)["chunks"]
+
+    def test_busy_cache_lock_is_an_error_not_a_reindex(
+        self, mock_dependencies, monkeypatch
+    ):
+        """A lock another process holds must not pass for a corrupt cache."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+        import threading
+
+        from gaia.rag.sdk import _cache_lock_target
+        from gaia.utils import file_lock as file_lock_mod
+
+        monkeypatch.setattr(file_lock_mod, "LOCK_TIMEOUT_SECONDS", 0.2)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+                assert rag.index_document(str(fake_pdf))["success"] is True
+                cache_path = rag._get_cache_path(str(fake_pdf))
+                held, release = threading.Event(), threading.Event()
+
+                def other_process():
+                    with file_lock_mod.file_lock(_cache_lock_target(cache_path)):
+                        held.set()
+                        release.wait(30)
+
+                holder = threading.Thread(target=other_process)
+                holder.start()
+                held.wait(10)
+                rag2 = RAGSDK(config)
+                try:
+                    with patch.object(
+                        rag2,
+                        "_extract_text_from_file",
+                        side_effect=AssertionError("re-extracted a valid cache"),
+                    ):
+                        result = rag2.index_document(str(fake_pdf))
+                finally:
+                    release.set()
+                    holder.join()
+
+                assert result["success"] is False
+                assert result["error_type"] == "cache_busy"
+                assert "1 other GAIA operation was ahead" in result["error"]
+
+
+class TestCacheLockFailure:
+    """Busy, unwritable and a bad lock file are three error types."""
+
+    def _failed(self, error):
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+        from gaia.rag.sdk import RAGSDK
+
+        rag = RAGSDK.__new__(RAGSDK)
+        rag.config = Mock(show_stats=False)
+        rag.log = Mock()
+        return rag._cache_lock_failed({}, "doc.pdf", error)
+
+    def test_timeout_is_busy(self):
+        from gaia.utils.file_lock import FileLockTimeout
+
+        lock = Path("cache") / "rag-cache.lock"
+        stats = self._failed(FileLockTimeout("lock held", lock))
+        assert stats["error_type"] == "cache_busy"
+        assert "lock held" in stats["error"]
+        assert str(lock.parent) in stats["error"]
+        assert stats["cache_dir"] == str(lock.parent)
+
+    def test_unwritable_lock_dir_is_its_own_type(self):
+        from gaia.utils.file_lock import FileLockError
+
+        lock = Path("cache") / "rag-cache.lock"
+        error = FileLockError("cannot create x.lock", lock, dir_unwritable=True)
+        stats = self._failed(error)
+        assert stats["error_type"] == "cache_unwritable"
+        assert "cannot create x.lock" in stats["error"]
+        assert str(lock.parent) in stats["error"]
+
+    def test_bad_lock_file_in_a_writable_dir_is_neither(self):
+        from gaia.utils.file_lock import FileLockError
+
+        stats = self._failed(FileLockError("cannot open x.lock", Path("x.lock")))
+        assert stats["error_type"] == "cache_lock_error"
+        assert "cannot open x.lock" in stats["error"]
+
 
 class TestClearCacheSafety:
     """clear_cache must only ever delete files the RAG cache wrote (#4194)."""
@@ -1588,7 +1710,8 @@ class TestClearCacheSafety:
         rag.clear_cache()
 
         remaining = sorted(p.name for p in cache_dir.iterdir())
-        assert remaining == sorted(foreign + ["subdir"])
+        # rag-cache.lock is the cross-process lock clear_cache itself holds.
+        assert remaining == sorted(foreign + ["rag-cache.lock", "subdir"])
 
     @pytest.mark.parametrize("target", ["gaia_dir", "home"])
     def test_clear_refuses_gaia_home_and_user_home(self, gaia_home, target):

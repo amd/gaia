@@ -14,6 +14,7 @@ patches take effect.
 """
 
 import asyncio
+import concurrent.futures
 import copy
 import importlib.util
 import json
@@ -25,7 +26,7 @@ import threading
 import time as _time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -34,37 +35,47 @@ from gaia.agents.install_hints import (
     agent_import_error_message,
     agent_not_installed_message,
 )
-from gaia.daemon.broker_client import BrokerUnavailableError
+from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
 from gaia.llm import lemonade_client as _lemonade_client_mod
 from gaia.llm.inference_location import (
     InferenceLocation,
     resolve_inference_location,
 )
 from gaia.llm.providers.lemonade import classify_lemonade_exception
-from gaia.security import BLOCKED_DIRECTORIES
+from gaia.security import (
+    BLOCKED_DIRECTORIES,
+    AllowedPathsEnvError,
+    env_allowed_paths,
+    narrow_allowed_paths,
+)
+from gaia.stream_timeout import (
+    DEFAULT_STREAM_TIMEOUT_SECONDS,
+    MAX_STREAM_TIMEOUT_SECONDS,
+    STREAM_TIMEOUT_ENV,
+    stream_timeout_from_env,
+)
 from gaia.ui.email_sidecar.profiles import (
     _NO_PROFILE,
     SIDECAR_AGENT_IDS,
     api_version_supported,
+    changes_supported,
     confirmations_supported,
     documents_supported,
+    memory_supported,
     profile_for,
+    scope_supported,
 )
 from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.turn_changes import TurnRecording
+from gaia.utils import awake_clock as _awake_clock
 
+from . import followups
 from . import permissions as session_permissions
 from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
-from .sse_handler import (
-    _ANSWER_JSON_SUB_RE,
-    _RAG_RESULT_JSON_SUB_RE,
-    _THOUGHT_JSON_SUB_RE,
-    _TOOL_CALL_JSON_SUB_RE,
-    _clean_answer_json,
-    _fix_double_escaped,
-)
+from .session_environment import apply_environment
+from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
 from .utils import attached_upload_paths, managed_documents_dir
 from .warmup import wait_for_warm_up
@@ -239,11 +250,11 @@ _agent_cache: dict[str, dict] = (
 _agent_cache_lock = threading.Lock()
 _MAX_CACHED_AGENTS = 10
 
-_STREAM_TIMEOUT_ENV = "GAIA_STREAM_TIMEOUT"
-# Longer than one model call may stay silent (an hour of slow local prefill),
-# so a quiet model is always ended by the LLM layer, not by this limit.
-_DEFAULT_STREAM_TIMEOUT_SECONDS = 4500
-_MAX_STREAM_TIMEOUT_SECONDS = 86400
+# Shared with the messaging bridges (gaia.stream_timeout).
+_STREAM_TIMEOUT_ENV = STREAM_TIMEOUT_ENV
+_DEFAULT_STREAM_TIMEOUT_SECONDS = DEFAULT_STREAM_TIMEOUT_SECONDS
+_MAX_STREAM_TIMEOUT_SECONDS = MAX_STREAM_TIMEOUT_SECONDS
+_stream_timeout_from_env = stream_timeout_from_env
 # How often a waiting turn checks whether it has gone idle.
 _IDLE_POLL_SECONDS = 0.2
 # How long an ended turn waits for its agent thread before freeing the model.
@@ -260,37 +271,6 @@ def stuck_producer(session_id: str) -> Optional[threading.Thread]:
         _stopping_sessions.pop(session_id, None)
         return None
     return thread
-
-
-def _stream_timeout_from_env() -> int:
-    """Resolve the turn's no-progress limit in seconds from ``GAIA_STREAM_TIMEOUT``.
-
-    A turn is stopped only after this long without progress; a turn that keeps
-    making progress has no time limit. Unset or empty returns the 4500 s
-    default. Any other value must be a whole number of seconds from 1 to 86400.
-
-    Raises:
-        ValueError: the variable is set to a non-integer or out-of-range value.
-    """
-    raw = os.environ.get(_STREAM_TIMEOUT_ENV, "").strip()
-    if not raw:
-        return _DEFAULT_STREAM_TIMEOUT_SECONDS
-    remedy = (
-        f"Set it to a whole number of seconds from 1 to "
-        f"{_MAX_STREAM_TIMEOUT_SECONDS} (e.g. {_STREAM_TIMEOUT_ENV}=1800), or "
-        f"unset it for the {_DEFAULT_STREAM_TIMEOUT_SECONDS}s default. See "
-        "https://amd-gaia.ai/docs/guides/agent-ui#long-responses"
-    )
-    try:
-        value = int(raw)
-    except ValueError as e:
-        raise ValueError(
-            f"{_STREAM_TIMEOUT_ENV}={raw!r} is not a whole number of seconds. "
-            f"{remedy}"
-        ) from e
-    if not 1 <= value <= _MAX_STREAM_TIMEOUT_SECONDS:
-        raise ValueError(f"{_STREAM_TIMEOUT_ENV}={value} is out of range. {remedy}")
-    return value
 
 
 # Read once at import so a bad value stops the Agent UI server at startup.
@@ -509,14 +489,18 @@ def _take_model_load_lock(sse_handler=None, stopped=None) -> bool:
 
 def _load_making_room(
     client, model_id: str, ctx: int, resident: list, may_unload: bool, sse_handler
-) -> None:
-    """Load *model_id*, unloading only this process's other models if it won't fit."""
+) -> list:
+    """Load *model_id*, unloading only this process's other models if it won't fit.
+
+    Returns the names of the models unloaded to make room.
+    """
     from gaia.llm.lemonade_client import InsufficientMemoryError
 
     try:
         client.load_model(
             model_id, ctx_size=ctx, prompt=False, timeout=_PREFLIGHT_LOAD_TIMEOUT_S
         )
+        ours = []
     except InsufficientMemoryError:
         wanted = _model_key(model_id)
         ours = [
@@ -544,6 +528,7 @@ def _load_making_room(
             model_id, ctx_size=ctx, prompt=False, timeout=_PREFLIGHT_LOAD_TIMEOUT_S
         )
     note_model_loaded(model_id)
+    return ours
 
 
 # ── Lemonade error classification ──────────────────────────────────────────
@@ -664,13 +649,14 @@ async def _generate_session_title(
     """
     from contextlib import nullcontext
 
-    from gaia.daemon.broker_client import model_lease
+    from gaia.daemon.broker_client import lease_wait_limit, model_lease
     from gaia.llm.lemonade_client import (
         SIDE_SLOT,
         LemonadeClient,
         LemonadeClientError,
         _model_ids_match,
         cloud_model_provider,
+        find_model_requirement,
         no_thinking_kwargs,
     )
 
@@ -689,11 +675,15 @@ async def _generate_session_title(
         )
         # A thinking model would spend all 24 tokens reasoning and title nothing.
         kwargs = dict(no_thinking_kwargs(model_id))
+        mr = find_model_requirement(model_id)
+        # It reasons even at "low"; leave room for the title after that.
+        max_tokens = 96 if mr is not None and mr.reasoning_effort else 24
         local = not cloud_model_provider(model_id)
         # One lease over the residency check and the call, so the model can't
         # be swapped out between them; the call's own lease folds into it.
         lease = model_lease(model_id, priority="background") if local else nullcontext()
-        with lease:
+        # Give up rather than hold a default-pool thread behind a long queue.
+        with lease_wait_limit(30), lease:
             if local:
                 loaded = client.health_check().get("all_models_loaded", [])
                 if not any(
@@ -705,7 +695,7 @@ async def _generate_session_title(
             return client.chat_completions(
                 model_id,
                 [{"role": "user", "content": prompt}],
-                max_tokens=24,
+                max_tokens=max_tokens,
                 # Low temperature: titles should be deterministic-ish
                 # for the same conversation.
                 temperature=0.3,
@@ -1512,7 +1502,9 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
 
     Falls back to the current working directory only when nothing is attached,
     and refuses even that when the CWD is a root, ``$HOME``, or overlaps a
-    protected directory — a scope that broad is not a scope.
+    protected directory — a scope that broad is not a scope. When
+    ``GAIA_ALLOWED_PATHS`` shares nothing with that fallback, the folders it
+    names are the scope instead (see :func:`_env_scope_for_fallback`).
 
     Args:
         rag_file_paths: Paths of the documents attached to this session.
@@ -1535,6 +1527,10 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
 
     cwd = Path.cwd().resolve()
     reason = _unsafe_directory_grant_reason(cwd)
+    fallback = [managed] if reason else sorted({managed, str(cwd)})
+    env_scope = _env_scope_for_fallback(fallback)
+    if env_scope:
+        return sorted({managed, *env_scope})
     if reason:
         logger.warning(
             "Refusing to grant this session file access to %s because %s. The "
@@ -1543,8 +1539,52 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
             cwd,
             reason,
         )
-        return [managed]
-    return sorted({managed, str(cwd)})
+    return fallback
+
+
+def _env_scope_for_fallback(fallback: list) -> list:
+    """``GAIA_ALLOWED_PATHS``'s folders, when they share nothing with *fallback*.
+
+    The setting only narrows, but narrowing a default the user never picked to
+    nothing leaves an agent that can open no file at all; the folders the user
+    did name stand in. Entries too broad to grant on their own are skipped.
+
+    Args:
+        fallback: The scope a session with no documents would otherwise get.
+
+    Returns:
+        The usable entries, or ``[]`` when the setting is unset, invalid (the
+        agent's validator, or the relay's :func:`_effective_scope`, reports
+        that), or overlaps *fallback*.
+    """
+    try:
+        ceiling = env_allowed_paths()
+    except AllowedPathsEnvError:
+        return []
+    if ceiling is None or narrow_allowed_paths(fallback, warn=False):
+        return []
+    usable = []
+    for root in ceiling:
+        reason = _unsafe_directory_grant_reason(root)
+        if reason:
+            logger.warning(
+                "Not granting GAIA_ALLOWED_PATHS entry %s because %s.", root, reason
+            )
+        else:
+            usable.append(str(root))
+    return usable
+
+
+def _effective_scope(allowed: list) -> list:
+    """*allowed* as the agent's validator will hold it under ``GAIA_ALLOWED_PATHS``.
+
+    Raises:
+        AllowedPathsEnvError: When ``GAIA_ALLOWED_PATHS`` holds an invalid
+            value. Never answered with an empty scope: a relayed sidecar need
+            not share this process's environment, so it could not say why it
+            refuses every file.
+    """
+    return narrow_allowed_paths(allowed, warn=False)
 
 
 def _with_attachments(allowed: list, attached: list) -> list:
@@ -1631,6 +1671,13 @@ def _memory_off(session: dict, db) -> bool:
     return bool(session.get("private", 0)) or not memory_enabled(db)
 
 
+def _memory_mode(session: dict, db) -> str:
+    """*session*'s memory mode for a relayed sidecar: on, private, or off."""
+    if bool(session.get("private", 0)):
+        return "private"
+    return "on" if memory_enabled(db) else "off"
+
+
 def _apply_memory_state(agent, session: dict, db) -> None:
     """Set *agent*'s memory-off state for this turn from *session* and Settings.
 
@@ -1692,6 +1739,26 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
     return context
 
 
+def model_turns(agent, db, session_id: str) -> list:
+    """The session's completed turns as *agent*'s model would be shown them."""
+    from gaia.agents.base.history import text_tool_history, transcript_turns
+
+    turns = transcript_turns(db.get_context_messages(session_id))
+    if (
+        hasattr(agent, "_uses_native_tool_calls")
+        and not agent._uses_native_tool_calls()
+    ):
+        turns = text_tool_history(turns)
+    return turns
+
+
+def cached_session_agent(session_id: str):
+    """The agent that answered this session last, or None when none is cached."""
+    with _agent_cache_lock:
+        entry = _agent_cache.get(session_id)
+        return entry["agent"] if entry is not None else None
+
+
 def _restore_model_history(
     agent, db, session_id: str, query: str, sse_handler=None
 ) -> None:
@@ -1702,18 +1769,12 @@ def _restore_model_history(
     """
     from gaia.agents.base.history import (
         CutReporter,
+        context_usage,
         history_budget,
         select_history,
-        text_tool_history,
-        transcript_turns,
     )
 
-    turns = transcript_turns(db.get_context_messages(session_id))
-    if (
-        hasattr(agent, "_uses_native_tool_calls")
-        and not agent._uses_native_tool_calls()
-    ):
-        turns = text_tool_history(turns)
+    turns = model_turns(agent, db, session_id)
 
     def on_cut(cut):
         sse_handler._emit(
@@ -1726,6 +1787,10 @@ def _restore_model_history(
             }
         )
 
+    if sse_handler is not None:
+        sse_handler._emit(
+            {"type": "context_usage", **context_usage(agent, turns, query)}
+        )
     agent.conversation_history = select_history(
         turns,
         history_budget(agent, query),
@@ -1835,12 +1900,27 @@ def _dispatch_sidecar_query(
     agent_type: str,
     session_id: str | None = None,
     documents: list | None = None,
+    allowed_paths: list | None = None,
+    memory: str = "on",
+    recording: TurnRecording | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
 
     *documents* are the session's attached file paths. A sidecar that takes
     them gets them on every turn; one that should but is too old to stops
     the turn with an upgrade message rather than answer without them.
+
+    *allowed_paths* is the chat's computed file scope. A sidecar that takes it
+    gets it with ``GAIA_ALLOWED_PATHS`` already applied — the sidecar process
+    need not share this one's environment — so it works where the UI says.
+
+    *memory* is the chat's memory mode (:func:`_memory_mode`). Likewise, a
+    private or memory-off turn is stopped rather than sent to a sidecar that
+    keeps memory but is too old to be told not to save.
+
+    *recording* is the turn's undo recording. A sidecar that takes it records
+    its own file changes under a turn of this chat, which is where Changes,
+    Outputs and Undo read them.
 
     Self-contained: every path here either relays the sidecar's ``/query``
     loop to completion or emits a terminal SSE error and returns. The CALLER
@@ -1890,6 +1970,27 @@ def _dispatch_sidecar_query(
             )
             return
         relayed_documents = [str(Path(p).resolve()) for p in documents]
+
+    relayed_scope = None
+    if allowed_paths is not None and scope_supported(profile, handle.api_version):
+        try:
+            relayed_scope = _effective_scope(allowed_paths)
+        except AllowedPathsEnvError as exc:
+            # In process, the agent's validator raises this same error. The
+            # sidecar may not see this environment, so say it here instead of
+            # sending a scope that refuses every file without saying why.
+            sse_handler._emit({"type": "agent_error", "content": str(exc)})
+            return
+
+    relayed_memory = None
+    if profile.min_memory_api_version is not None:
+        if memory_supported(profile, handle.api_version):
+            relayed_memory = memory
+        elif memory != "on":
+            sse_handler._emit(
+                {"type": "agent_error", "content": profile.memory_upgrade_message}
+            )
+            return
 
     proxy = handle.proxy()
 
@@ -1983,6 +2084,15 @@ def _dispatch_sidecar_query(
         session_id=session_id,
         answers_confirmations=confirmations_supported(profile, handle.api_version),
         documents=relayed_documents,
+        allowed_paths=relayed_scope,
+        memory=relayed_memory,
+        changes_turn_id=(
+            recording.relay()
+            if recording is not None
+            and session_id
+            and changes_supported(profile, handle.api_version)
+            else None
+        ),
     )
 
 
@@ -1995,19 +2105,14 @@ def _find_last_tool_step(steps: list) -> dict | None:
 
 
 def _agent_ui_wording(text: str) -> str:
-    """Swap the agent's TUI-only "how to switch model" advice for the Agent UI's.
+    """Swap the agent's TUI-only provider advice for the Agent UI's own.
 
     The agent loop can't tell which front-end it serves (the flagship sidecar
-    answers both), so the Agent UI rewrites the one sentence it owns here.
+    answers both), so the Agent UI rewrites the sentences it owns here.
     """
-    from gaia.llm.providers.lemonade import (
-        AGENT_UI_MODEL_SWITCH_HINT,
-        TUI_MODEL_SWITCH_HINT,
-    )
+    from gaia.llm.surface_hints import surface_wording
 
-    if not text or TUI_MODEL_SWITCH_HINT not in text:
-        return text
-    return text.replace(TUI_MODEL_SWITCH_HINT, AGENT_UI_MODEL_SWITCH_HINT)
+    return surface_wording(text, "agent_ui")
 
 
 def _echoes_failed_tool(event: dict, steps: list) -> bool:
@@ -2023,6 +2128,15 @@ def _echoes_failed_tool(event: dict, steps: list) -> bool:
         return False
     running = last.get("active") and last.get("success") is None
     return last.get("success") is False or bool(running)
+
+
+def _turn_clock() -> float:
+    """Seconds on a clock that stops while the PC sleeps.
+
+    A turn on a PC that sleeps for longer than the no-progress limit must not
+    be stopped the moment it wakes: the model slept too.
+    """
+    return _awake_clock.monotonic()
 
 
 class _TurnIdleClock:
@@ -2050,6 +2164,34 @@ def _format_duration(seconds: int) -> str:
             count = seconds // size
             return f"{count} {unit}{'s' if count != 1 else ''}"
     return f"{seconds} second{'s' if seconds != 1 else ''}"
+
+
+def _as_interactive_turn(run, cancel_event, sse_handler=None, on_wait_event=None):
+    """*run* as the user's turn: it leases the model ahead of background work,
+    a wait for the model shows on the turn's stream (or reaches
+    *on_wait_event* when it has none), and Stop ends the wait."""
+    from gaia.daemon.broker_client import interactive_turn, queue_status_event
+
+    # Each update also counts as progress, so a long queue never trips the
+    # turn's idle stop.
+    def _listen(event: dict) -> None:
+        sse_handler._emit(queue_status_event(event))
+
+    class _Stopped:
+        # Stop sets the handler's flag; teardown and the idle stop set the turn's.
+        def is_set(self) -> bool:
+            return cancel_event.is_set() or (
+                sse_handler is not None and sse_handler.cancelled.is_set()
+            )
+
+    def _run():
+        with interactive_turn(
+            on_wait_event=_listen if sse_handler is not None else on_wait_event,
+            cancel=_Stopped(),
+        ):
+            return run()
+
+    return _run
 
 
 def _turn_idle_message(seconds: int) -> str:
@@ -2203,9 +2345,16 @@ def _agent_location(agent) -> InferenceLocation | None:
 
 
 def _turn_summary(
-    sse_handler, agent, message: str, answer_event: Optional[dict]
+    sse_handler,
+    agent,
+    message: str,
+    answer_event: Optional[dict],
+    relayed_location: InferenceLocation | None = None,
 ) -> dict:
     """The side rail's account of this turn (see :mod:`gaia.ui.turn_summary`).
+
+    *relayed_location* is where a turn with no in-process agent ran: a sidecar
+    turn answered by the model the chat named.
 
     A failure here becomes an ``error`` the rail shows, so it never costs the
     user the answer it describes.
@@ -2213,7 +2362,9 @@ def _turn_summary(
     try:
         evidence = getattr(agent, "_completion_evidence", None)
         return sse_handler.turn_ledger.summary(
-            location=_agent_location(agent) if agent is not None else None,
+            location=(
+                _agent_location(agent) if agent is not None else relayed_location
+            ),
             written_files=evidence.written_files() if evidence is not None else (),
             display_names=upload_display_names(message),
             usage=answer_event,
@@ -2272,22 +2423,47 @@ async def _local_place(model_id: str, client, base_url: str, headers: dict) -> s
     return f"on your {' and '.join(chips)}" if chips else "on this PC"
 
 
+def _turn_failure(
+    answer_event: Optional[dict],
+    fatal_error: Optional[str],
+    result: Any,
+) -> Tuple[bool, Optional[str]]:
+    """``(failed, explanation)`` for a turn: did a model failure end it?
+
+    Three sources, one per way the news arrives: the agent's answer event
+    (in-process or relayed ``final``), a relayed sidecar's terminal error, and
+    the in-process agent's own result. *explanation* is the text to show when
+    no answer event carried it.
+    """
+    if isinstance(answer_event, dict) and answer_event.get("failed"):
+        return True, None
+    if fatal_error is not None:
+        return True, fatal_error
+    if isinstance(result, dict) and result.get("model_failed"):
+        return True, None
+    return False, None
+
+
 def _done_event(
     msg_id: int,
     content: str,
     turn_cancelled: bool,
     stats: Optional[dict] = None,
     turn_summary: Optional[dict] = None,
+    failed: bool = False,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
     ``cancelled`` is set only when the user's Stop actually ended the run, so
     the UI labels the turn from what happened rather than from the click — a
     Stop that lands after the agent already answered stays an ordinary turn.
+    ``failed`` marks a turn a model failure ended; its content explains why.
     """
     event: dict = {"type": "done", "message_id": msg_id, "content": content}
     if turn_cancelled:
         event["cancelled"] = True
+    elif failed:
+        event["failed"] = True
     if stats:
         event["stats"] = stats
     if turn_summary:
@@ -2304,7 +2480,9 @@ def _done_event(
 _PREFLIGHT_LOAD_TIMEOUT_S = 120
 
 
-def _preflight_load(model_id: str, sse_handler, stopped) -> None:
+def _preflight_load(
+    model_id: str, sse_handler, stopped, loads: Optional[list] = None
+) -> None:
     """Ensure a text-generation LLM is active *with the expected model
     name and a 32K+ context window* before issuing a chat completion.
 
@@ -2336,6 +2514,9 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
     unloaded. When the model won't fit, only models this process loaded are
     unloaded to make room; otherwise the load fails loudly. A Stop
     (``sse_handler.cancelled``) seen after a wait means nothing is loaded.
+
+    A load that happens is appended to *loads*, when given, as
+    ``{"model", "seconds", "replaced"}``.
 
     Note: there is a small TOCTOU window between this check and the
     actual chat request. An eviction in that window fails the turn with an
@@ -2481,6 +2662,8 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                         return
 
                 client = LemonadeClient(verbose=False)
+                load_started = _time.monotonic()
+                replaced = []
                 # A server the user runs keeps its models: GAIA only loads there.
                 may_unload = not is_users_server(base_url)
                 if may_unload:
@@ -2507,7 +2690,8 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                                 "Settings -> Load."
                             )
                         client.unload_model(m["model_name"], ignore_if_not_loaded=True)
-                _load_making_room(
+                        replaced.append(m["model_name"])
+                replaced += _load_making_room(
                     client,
                     model_id,
                     required_ctx,
@@ -2515,6 +2699,14 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                     may_unload,
                     sse_handler,
                 )
+                if loads is not None:
+                    loads.append(
+                        {
+                            "model": model_id,
+                            "seconds": round(_time.monotonic() - load_started, 3),
+                            "replaced": replaced,
+                        }
+                    )
             finally:
                 model_load_lock.release()
     except InsufficientMemoryError as exc:
@@ -2524,6 +2716,8 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
     except ModelInUseError as exc:
         logger.error("Pre-flight model load refused: %s", exc)
         raise
+    except LeaseWaitCancelled:
+        logger.info("Pre-flight model load stopped with the turn")
     except BrokerUnavailableError as exc:
         # Do NOT report this as "check that Lemonade is running" — Lemonade is
         # fine, the daemon that arbitrates the model slot is not, and pointing
@@ -2547,14 +2741,14 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
 
 
 def _maybe_load_expected_model(
-    model_id: str, sse_handler=None, cancel_event=None
+    model_id: str, sse_handler=None, cancel_event=None, loads: Optional[list] = None
 ) -> None:
     """Load *model_id* at the window a turn needs before it is queried.
 
-    See :func:`_preflight_load` for what is checked, loaded and raised. A
-    turn stopped while this waits (``sse_handler.cancelled`` for Stop, or the
-    turn's own *cancel_event*, which teardown and the idle stop set) loads
-    nothing: whatever the wait raised then, the stop is why, so this returns
+    See :func:`_preflight_load` for what is checked, loaded, recorded in
+    *loads* and raised. A turn stopped while this waits
+    (``sse_handler.cancelled`` for Stop, or the turn's own *cancel_event*,
+    which teardown and the idle stop set) loads nothing: whatever the wait raised then, the stop is why, so this returns
     and the caller sees the turn as stopped.
     """
 
@@ -2564,7 +2758,7 @@ def _maybe_load_expected_model(
         )
 
     try:
-        _preflight_load(model_id, sse_handler, stopped)
+        _preflight_load(model_id, sse_handler, stopped, loads)
     except Exception as exc:
         if not stopped():
             raise
@@ -2787,6 +2981,7 @@ async def _get_chat_response(
                 _register_agent_memory_ops(agent)
 
         _apply_memory_state(agent, session, db)
+        apply_environment(agent, session_id, db)
 
         _restore_model_history(agent, db, session_id, request.message)
 
@@ -2801,7 +2996,7 @@ async def _get_chat_response(
 
         agent._cancel_event = cancel_event
 
-        activity = _ActivityConsole(agent.console, _time.monotonic)
+        activity = _ActivityConsole(agent.console, _turn_clock)
         agent.console = activity
         activity_box["console"] = activity
         recording = TurnRecording(session_id)
@@ -2839,8 +3034,17 @@ async def _get_chat_response(
         return _clean_answer_json(result_str)
 
     try:
-        idle = _TurnIdleClock(_time.monotonic())
-        worker = asyncio.get_running_loop().run_in_executor(None, _do_chat)
+        idle = _TurnIdleClock(_turn_clock())
+        # A wait for the model is progress: the queue reports every few seconds.
+        queue_seen = {"at": 0.0}
+
+        def _queue_update(_event: dict) -> None:
+            queue_seen["at"] = _turn_clock()
+
+        worker = asyncio.get_running_loop().run_in_executor(
+            None,
+            _as_interactive_turn(_do_chat, cancel_event, on_wait_event=_queue_update),
+        )
         idle_message = None
         try:
             while not worker.done():
@@ -2850,9 +3054,10 @@ async def _get_chat_response(
                 owned_wait = activity is not None and activity.tool_running
                 if activity is not None:
                     idle.progressed(activity.last_progress)
+                idle.progressed(queue_seen["at"])
                 if (
                     not worker.done()
-                    and idle.idle_for(owned_wait, _time.monotonic())
+                    and idle.idle_for(owned_wait, _turn_clock())
                     > _STREAM_TIMEOUT_SECONDS
                 ):
                     idle_message = _turn_idle_message(_STREAM_TIMEOUT_SECONDS)
@@ -2915,6 +3120,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     from gaia.ui.sse_handler import SSEOutputHandler
 
     session_id = request.session_id
+    turn_started = _time.monotonic()
     sse_handler = None
     producer = None
     cleanup_done = False
@@ -3077,14 +3283,15 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         refusal = spending.limit_refusal(db, model_id)
         if refusal:
             # Saved as the reply, so it stays in the chat and reads as an answer, not a crash.
-            msg_id = db.add_message(session_id, "assistant", refusal)
+            msg_id = db.add_message(session_id, "assistant", refusal, ends_turn=True)
             yield f"data: {json.dumps({'type': 'answer', 'content': refusal})}\n\n"
             yield f"data: {json.dumps(_done_event(msg_id, refusal, False))}\n\n"
             return
 
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.
-        result_holder = {"answer": "", "error": None}
+        result_holder = {"answer": "", "error": None, "model_loads": []}
+        inbox_holder: dict = {}
         turn_box: dict = {}
 
         def _run_agent():
@@ -3277,6 +3484,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         agent_type,
                         session_id=session_id,
                         documents=_relayed_documents(rag_file_paths, attached),
+                        allowed_paths=allowed,
+                        memory=_memory_mode(session, db),
+                        recording=recording,
                     )
                     return
 
@@ -3386,10 +3596,20 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         sse_handler._emit({"type": "mcp_status", "servers": mcp_report})
 
                 _apply_memory_state(agent, session, db)
+                apply_environment(agent, request.session_id, db)
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
                     return
+
+                def _followup_taken(text):
+                    db.add_message(session_id, "user", text)
+                    sse_handler._emit({"type": "followup_taken", "text": text})
+
+                inbox_holder["agent"] = agent
+                inbox_holder["inbox"] = followups.open_inbox(
+                    session_id, agent, _followup_taken
+                )
 
                 _restore_model_history(
                     agent, db, session_id, request.message, sse_handler
@@ -3413,7 +3633,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # invisible pre-construction. Using agent.model_id preserves the existing
                 # 100-900s silent-hang protection for all code paths including setdefault.
                 _maybe_load_expected_model(
-                    _effective_model(agent, model_id), sse_handler, cancel_event
+                    _effective_model(agent, model_id),
+                    sse_handler,
+                    cancel_event,
+                    loads=result_holder["model_loads"],
                 )
                 # Stopped while waiting for the model: nothing was loaded,
                 # so the turn must not send its query either.
@@ -3433,6 +3656,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     _time.monotonic() - t_query,
                 )
                 if isinstance(result, dict):
+                    result_holder["result"] = result
+                    result_holder["model"] = _effective_model(agent, model_id)
                     result_holder["model_messages"] = result.get("model_messages")
                     val = result.get("result")
                     result_holder["answer"] = (
@@ -3452,10 +3677,18 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # AgentSDK that wrap the original LemonadeError.
                 classified = _classify_chat_exception(e)
                 if classified is not None:
-                    result_holder["error"] = classified.user_message
+                    result_holder["error"] = _agent_ui_wording(classified.user_message)
                 else:
-                    result_holder["error"] = str(e)
+                    result_holder["error"] = _agent_ui_wording(str(e))
             finally:
+                if "inbox" in inbox_holder:
+                    untaken = followups.close_inbox(
+                        session_id, inbox_holder["agent"], inbox_holder["inbox"]
+                    )
+                    if untaken:
+                        sse_handler._emit(
+                            {"type": "followup_returned", "texts": untaken}
+                        )
                 warning = recording.close()
                 if warning:
                     sse_handler._emit(
@@ -3465,22 +3698,26 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
         # The limit is on going without progress, not on total time: a long
         # task that keeps making progress runs to the end.
-        _idle = _TurnIdleClock(_time.monotonic())
+        _idle = _TurnIdleClock(_turn_clock())
         idle_message = None
-        producer = threading.Thread(target=_run_agent, daemon=True)
+        producer = threading.Thread(
+            target=_as_interactive_turn(_run_agent, cancel_event, sse_handler),
+            daemon=True,
+        )
         producer.start()
 
         # Yield SSE events from the handler's queue
         # Also capture agent steps for persistence
         full_response = ""
         answer_event = None
+        fatal_error = None
         captured_steps = []  # Collect agent steps for DB persistence
         persisted_policy_block_msg_id = None
         persisted_policy_block_content = None
         step_id = 0
         idle_cycles = 0
         stopped_at = None
-        last_event_at = _time.monotonic()
+        last_event_at = _turn_clock()
 
         def _blocked_policy_steps():
             return [
@@ -3521,7 +3758,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             _owned_wait = (
                 sse_handler.awaiting_user_input() or sse_handler.tool_running()
             )
-            if _idle.idle_for(_owned_wait, _time.monotonic()) > _STREAM_TIMEOUT_SECONDS:
+            if _idle.idle_for(_owned_wait, _turn_clock()) > _STREAM_TIMEOUT_SECONDS:
                 logger.error(
                     "Turn made no progress for %ds (%s); stopping it",
                     _STREAM_TIMEOUT_SECONDS,
@@ -3540,7 +3777,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     None, lambda: sse_handler.event_queue.get(timeout=0.2)
                 )
                 idle_cycles = 0
-                last_event_at = _time.monotonic()
+                last_event_at = _turn_clock()
                 _idle.progressed(last_event_at)
                 if event is None:
                     # Sentinel - agent is done
@@ -3564,6 +3801,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     answer_event = event
                 elif event_type == "chunk":
                     full_response += event.get("content", "")
+                elif event_type == "agent_error" and event.get("fatal"):
+                    # A relayed sidecar's terminal error: the turn ends here.
+                    fatal_error = event.get("content") or ""
 
                 # Capture agent steps for persistence
                 if event_type == "thinking":
@@ -3762,7 +4002,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # into a single updating step on the frontend. A running tool
                 # shows its own timer, so the model is not the one being waited on.
                 if idle_cycles % 75 == 0 and not sse_handler.tool_running():
-                    elapsed = int(_time.monotonic() - last_event_at)
+                    elapsed = int(_turn_clock() - last_event_at)
                     status_evt = json.dumps(
                         {
                             "type": "status",
@@ -3810,6 +4050,20 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             error_data = json.dumps({"type": "error", "content": error_msg})
             yield f"data: {error_data}\n\n"
 
+        # A model failure ended the turn. The streamed text is only its opening
+        # sentence, so the message must say what happened.
+        turn_failed, failure_text = _turn_failure(
+            answer_event, fatal_error, result_holder.get("result")
+        )
+        if turn_failed and answer_event is None:
+            explained = _agent_ui_wording(failure_text or result_holder["answer"] or "")
+            if explained and explained not in full_response:
+                full_response = (
+                    f"{full_response.rstrip()}\n\n{explained}"
+                    if full_response.strip()
+                    else explained
+                )
+
         # Use agent result if no streamed answer was captured
         if not full_response and result_holder["answer"]:
             full_response = _agent_ui_wording(result_holder["answer"])
@@ -3821,29 +4075,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             full_response = idle_message
             yield f"data: {json.dumps({'type': 'answer', 'content': full_response})}\n\n"
 
-        # Clean LLM output artifacts before DB storage.
-        # Apply all canonical patterns so stored content is always clean
-        # regardless of which streaming path was taken.
-        # Order matters: _clean_answer_json MUST run before _THOUGHT_JSON_SUB_RE.
-        # The base agent asks for {"thought":..., "answer":...} JSON; if that JSON
-        # leaks into full_response (e.g. streaming buffer released early), the
-        # thought-stripper would consume the entire blob including the answer,
-        # leaving an empty string.  Extracting the answer first prevents that.
+        # Clean LLM output artifacts before DB storage, whichever streaming
+        # path was taken.
         if full_response:
-            full_response = _TOOL_CALL_JSON_SUB_RE.sub("", full_response)
-            # Extract answer from {"thought":..., "answer":...} before thought stripping.
-            full_response = _clean_answer_json(full_response)
-            full_response = _THOUGHT_JSON_SUB_RE.sub("", full_response)
-            full_response = _RAG_RESULT_JSON_SUB_RE.sub("", full_response)
-            # _ANSWER_JSON_SUB_RE handles mixed content where {"answer": "..."} is
-            # embedded after plain text — strips the duplicate JSON wrapper.
-            full_response = _ANSWER_JSON_SUB_RE.sub("", full_response)
-            full_response = _fix_double_escaped(full_response)
-            # Strip trailing JSON artifact sequences (3+ closing braces = nested tool result leak)
-            full_response = _re.sub(r"\}{3,}\s*$", "", full_response).strip()
-            # Strip trailing code-fence artifacts (e.g. "}\n```" left after JSON extraction)
-            full_response = _re.sub(r"[\n\s]*`{3,}\s*$", "", full_response).strip()
-            full_response = full_response.strip()
+            full_response = clean_reply_text(full_response)
 
         # Guard: if cleaning reduced the response to JSON/code artifacts only
         # (e.g. "}", "}}", "}\n", "}\n```", backtick-only), fall back to the agent's
@@ -3924,10 +4159,37 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     exc,
                 )
             inference_stats = _turn_inference_stats(inference_stats, answer_event)
+            if isinstance(result_holder.get("result"), dict):
+                from .turn_insights import summarize_turn
+
+                inference_stats = dict(inference_stats or {})
+                try:
+                    inference_stats["performance"] = summarize_turn(
+                        result_holder["result"],
+                        wall_seconds=_time.monotonic() - turn_started,
+                        model_id=result_holder.get("model"),
+                        loads=result_holder["model_loads"],
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    # The answer is still saved; the panel shows the turn as unmeasured.
+                    logger.warning(
+                        "Turn performance for session %s not recorded: %s",
+                        request.session_id,
+                        exc,
+                    )
             if turn_place:
                 inference_stats = {**(inference_stats or {}), "place": turn_place}
+            # Settings › Model shows each model's speed measured on this PC. Not
+            # "model": a kept Retry with… answer uses that key to name its model.
+            if inference_stats is not None and model_id:
+                inference_stats["measured_model"] = model_id
             turn_summary = _turn_summary(
-                sse_handler, result_holder.get("agent"), request.message, answer_event
+                sse_handler,
+                result_holder.get("agent"),
+                request.message,
+                answer_event,
+                # A relayed turn ran on the model it sent; with none, the sidecar picked.
+                relayed_location=turn_location if model_id else None,
             )
 
             msg_id = db.upsert_message(
@@ -3939,6 +4201,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 inference_stats=inference_stats,
                 model_messages=result_holder.get("model_messages"),
                 turn_summary=turn_summary,
+                ends_turn=True,
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)
@@ -3973,6 +4236,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 turn_cancelled,
                 stats=inference_stats,
                 turn_summary=turn_summary,
+                failed=turn_failed,
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
@@ -4001,7 +4265,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 captured_steps if (keep_steps and captured_steps) else None
             )
             if sse_type == "error":
-                db.add_message(request.session_id, "assistant", content)
+                db.add_message(request.session_id, "assistant", content, ends_turn=True)
                 yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
             else:
                 turn_summary = _turn_summary(
@@ -4014,6 +4278,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     agent_steps=steps_to_persist,
                     model_messages=result_holder.get("model_messages"),
                     turn_summary=turn_summary,
+                    ends_turn=True,
                 )
                 done_event = _done_event(
                     msg_id, content, turn_cancelled, turn_summary=turn_summary
@@ -4032,7 +4297,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         await _cleanup_stream()
         error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
         try:
-            db.add_message(request.session_id, "assistant", error_msg)
+            db.add_message(request.session_id, "assistant", error_msg, ends_turn=True)
         except Exception as exc:
             logger.error("Could not persist chat error: %s", exc)
         error_data = json.dumps({"type": "error", "content": error_msg})
@@ -4081,6 +4346,7 @@ class _RunOutcome:
         self._error = False
         self._done = False
         self._cancelled = False
+        self._failed = False
 
     def observe(self, data: str) -> None:
         # A frame may carry ": padding" lines after its data line.
@@ -4099,9 +4365,10 @@ class _RunOutcome:
         elif kind == "done":
             self._done = True
             self._cancelled = bool(event.get("cancelled"))
+            self._failed = bool(event.get("failed"))
 
     def status(self) -> str:
-        if self._error or not self._done:
+        if self._error or self._failed or not self._done:
             return "failed"
         return "stopped" if self._cancelled else "done"
 
@@ -4131,13 +4398,17 @@ async def _run_chat_lifecycle(
     response, a client disconnect cannot cancel it — the producer finishes
     and persists server-side (#1580 follow-up).
     """
+    from gaia.ui.restart_recovery import TurnJournal
     from gaia.ui.turn_queue import TurnCancelled, TurnSlot, ordinal, turn_queue
 
     session_id = request.session_id
     outcome = _RunOutcome()
+    journal = TurnJournal(db, session_id)
+    shutting_down = False
 
     def _emit(data: str) -> None:
         outcome.observe(data)
+        journal.observe(data)
         run.emit(data)
 
     queued_at = _time.monotonic()
@@ -4178,7 +4449,9 @@ async def _run_chat_lifecycle(
         try:
             await run.slot.acquire()
         except TurnCancelled:
-            msg_id = db.add_message(session_id, "assistant", "Cancelled.")
+            msg_id = db.add_message(
+                session_id, "assistant", "Cancelled.", ends_turn=True
+            )
             _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
             return
         finally:
@@ -4189,7 +4462,22 @@ async def _run_chat_lifecycle(
                 _emit(data)
         finally:
             run.slot.close()
+    except asyncio.CancelledError:
+        # Shutdown: the marker stays, and the next start says the turn was cut off.
+        shutting_down = True
+        try:
+            journal.flush()
+        except (RuntimeError, sqlite3.Error) as exc:
+            # The database already closed; the text from the last save stands.
+            logger.warning("Could not save the interrupted turn's text: %s", exc)
+        raise
     finally:
+        if not shutting_down:
+            try:
+                journal.close()
+            except (RuntimeError, sqlite3.Error) as exc:
+                # Don't mask the turn's own error; the next start closes the turn.
+                logger.warning("Could not close the finished turn: %s", exc)
         _record_run_outcome(db, session_id, outcome.status())
     # Notify the AgentLoop that a user turn completed (best-effort; no-op if
     # the autonomy loop isn't running). Fires on real run completion rather
@@ -4259,28 +4547,120 @@ async def _attach_chat_stream(session_id: str):
 # ── Document Indexing ────────────────────────────────────────────────────────
 
 
+# Indexing gets its own pools: a big PDF embeds for minutes, and on the
+# shared default executor a few of them starve the chat stream loop. Files
+# under _INDEX_SMALL_FILE_BYTES have a pool of their own, so a quick upload
+# never waits behind big documents.
+_INDEX_MAX_PARALLEL = 2
+_INDEX_SMALL_FILE_BYTES = 20 * 1024 * 1024
+_INDEX_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=_INDEX_MAX_PARALLEL, thread_name_prefix="gaia-index"
+)
+_INDEX_SMALL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=_INDEX_MAX_PARALLEL, thread_name_prefix="gaia-index-small"
+)
+_INDEX_TIMEOUT_ENV = "GAIA_INDEX_TIMEOUT"
+_INDEX_TIMEOUT_DEFAULT_S = 600.0
+
+
+def _index_timeout_from_env() -> float:
+    """Seconds indexing may go without progress (``GAIA_INDEX_TIMEOUT``, default 600).
+
+    Progress is a page extracted, a batch embedded, or a queue update while
+    waiting for the model slot, so a large document that keeps moving is never
+    stopped.
+
+    Raises:
+        ValueError: the variable is set to something other than a positive number.
+    """
+    raw = os.environ.get(_INDEX_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return _INDEX_TIMEOUT_DEFAULT_S
+    remedy = (
+        "Set it to a positive number of seconds without progress (e.g. 1200), "
+        f"or unset it for the {_INDEX_TIMEOUT_DEFAULT_S:g} s default."
+    )
+    try:
+        value = float(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"{_INDEX_TIMEOUT_ENV}={raw!r} is not a number. {remedy}"
+        ) from e
+    if value <= 0:
+        raise ValueError(f"{_INDEX_TIMEOUT_ENV}={raw!r} must be positive. {remedy}")
+    return value
+
+
+# Read once at import so a bad value stops the Agent UI server at startup.
+_INDEX_TIMEOUT_S = _index_timeout_from_env()
+# How often a waiting index checks for progress.
+_INDEX_POLL_S = 0.5
+
+
+def _settled_quietly(future) -> None:
+    """Mark an abandoned index's outcome as seen, so asyncio doesn't warn about it."""
+    if not future.cancelled():
+        future.exception()
+
+
 async def _index_document(filepath: Path) -> int:
     """Index a document using RAG SDK. Returns chunk count.
 
-    Runs the synchronous RAG indexing in a thread pool executor
-    to avoid blocking the async event loop.
+    Runs on an indexing pool (``_INDEX_MAX_PARALLEL`` at once per pool; small
+    files have their own, and the rest wait their turn). Cancelling the
+    awaiting task stops indexing at its next page or embedding batch, or
+    ends a wait for the model slot at once; so does going
+    ``GAIA_INDEX_TIMEOUT`` seconds without progress. Queue updates from the
+    broker count as progress; time spent waiting for a worker doesn't. A
+    daemon too old to stream its queue sends no updates, so a wait on one
+    still counts against the timeout.
 
     Note: A return value of 0 means RAG reported success but produced
     no chunks. Callers must treat 0 chunks as a failure condition.
 
     Raises:
-        RuntimeError: If indexing fails for any reason.
+        RuntimeError: If indexing fails or stops making progress.
+        asyncio.CancelledError: If the awaiting task was cancelled.
     """
+    from gaia.rag.sdk import IndexingStopped
+
+    stop = threading.Event()
+    # Monotonic time of the last page or batch; None until a worker starts.
+    progress = {"at": None}
+
+    def _step() -> None:
+        progress["at"] = _time.monotonic()
+        if stop.is_set():
+            raise IndexingStopped(filepath.name)
+
+    def _queue_update(_event: dict) -> None:
+        # Waiting in line for the embedder or vision model is not a stall.
+        # Runs on the waiting thread, so it only notes the time.
+        progress["at"] = _time.monotonic()
 
     def _do_index():
+        from gaia.daemon.broker_client import lease_cancel_scope, lease_wait_listener
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
+        _step()
         # Allow access to the file's directory (and user home) since the UI
         # explicitly selected this file via the file browser.
         allowed = [str(filepath.parent), str(Path.home())]
         config = RAGConfig(allowed_paths=allowed)
         rag = RAGSDK(config)
-        result = rag.index_document(str(filepath))
+        # Cancel and the no-progress stop also end a wait for the model.
+        try:
+            with lease_wait_listener(_queue_update), lease_cancel_scope(stop):
+                result = rag.index_document(
+                    str(filepath),
+                    progress_callback=lambda _done, _total: _step(),
+                    heartbeat=_step,
+                )
+        except LeaseWaitCancelled as e:
+            raise IndexingStopped(filepath.name) from e
+        # A stop absorbed on the way (a degraded image page) is still a stop.
+        if stop.is_set():
+            raise IndexingStopped(filepath.name)
         logger.info("RAG index_document result for %s: %s", filepath, result)
 
         if not isinstance(result, dict):
@@ -4301,9 +4681,29 @@ async def _index_document(filepath: Path) -> int:
         return chunks
 
     try:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _do_index)
-    except RuntimeError:
+        small = filepath.stat().st_size < _INDEX_SMALL_FILE_BYTES
+    except OSError:
+        small = False
+    pool = _INDEX_SMALL_EXECUTOR if small else _INDEX_EXECUTOR
+    future = asyncio.get_running_loop().run_in_executor(pool, _do_index)
+    future.add_done_callback(_settled_quietly)
+    try:
+        while True:
+            done, _ = await asyncio.wait({future}, timeout=_INDEX_POLL_S)
+            if done:
+                return future.result()
+            last = progress["at"]
+            if last is not None and _time.monotonic() - last > _INDEX_TIMEOUT_S:
+                stop.set()
+                raise RuntimeError(
+                    f"Indexing {filepath.name} made no progress for "
+                    f"{_INDEX_TIMEOUT_S:g} s and was stopped. Try it again; "
+                    f"if it stalls again, raise {_INDEX_TIMEOUT_ENV}."
+                )
+    except asyncio.CancelledError:
+        stop.set()
+        raise
+    except (RuntimeError, IndexingStopped):
         raise
     except Exception as e:
         raise RuntimeError(f"Failed to index {filepath.name}: {e}") from e

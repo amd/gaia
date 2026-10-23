@@ -66,6 +66,10 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     ),
     "audio": ("gaia.agents.tools.audio_tools", "AudioToolsMixin"),
     "wait": ("gaia.agents.tools.wait_tools", "WaitToolsMixin"),
+    "reasoning_effort": (
+        "gaia.agents.tools.reasoning_tools",
+        "ReasoningEffortToolsMixin",
+    ),
 }
 
 # Manifest-fingerprint keys used to detect a legacy YAML manifest masquerading
@@ -625,7 +629,12 @@ class AgentRegistry:
         # 1. Scan <gaia_home>/agents/
         agents_dir = gaia_agents_dir()
         if agents_dir.exists():
-            subdirs = sorted(d for d in agents_dir.iterdir() if d.is_dir())
+            # Dot-names are never agents: the install backup and lock queues.
+            subdirs = sorted(
+                d
+                for d in agents_dir.iterdir()
+                if d.is_dir() and not d.name.startswith(".")
+            )
             logger.info(
                 "registry: Found %d agent directories: %s",
                 len(subdirs),

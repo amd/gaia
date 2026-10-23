@@ -795,4 +795,8 @@ def test_lock_save_failure_leaves_previous_lock_intact(tmp_path, monkeypatch):
         lock.save()
 
     assert lock_path(tmp_path).read_text(encoding="utf-8") == before
-    assert [p.name for p in tmp_path.iterdir()] == ["skill-lock.json"]
+    # No temp file left behind; the advisory lock file beside it is expected.
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "skill-lock.json",
+        "skill-lock.json.lock",
+    ]

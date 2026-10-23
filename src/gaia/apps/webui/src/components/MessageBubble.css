@@ -139,11 +139,9 @@
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--danger) 8%, transparent);
     color: var(--danger);
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    font-family: var(--font-sans);
 }
 
 .msg-error .msg-body {
@@ -152,7 +150,6 @@
 
 .msg-error .msg-body .md-p,
 .msg-error .msg-body .md-content {
-    font-family: var(--font-mono);
     font-size: 13px;
 }
 
