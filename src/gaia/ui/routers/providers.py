@@ -810,9 +810,7 @@ def connect_provider(
             from gaia.connectors.credential_wait import CredentialStoreWaiting
 
             try:
-                ensure_authenticated(
-                    provider, recall=lambda: _bounded_recall(provider)
-                )
+                ensure_authenticated(provider, recall=lambda: _bounded_recall(provider))
             except CredentialStoreWaiting as e:
                 # 409, not a failure: the screen shows this and asks again.
                 raise ProviderError(str(e), 409) from e
