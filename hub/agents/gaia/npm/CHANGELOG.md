@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Local models with a large window can write longer replies.** The output
+  cap is a quarter of the loaded window (16K at 64K, between 8K and 32K)
+  instead of a flat 8K, and a reply cut off at the cap is told to write the
+  file in smaller parts.
+- **`search_file_content` searches the workspace.** A relative or default
+  directory resolved against the sidecar's own folder and reported "0 files";
+  it now resolves against the workspace, searches text files of any extension,
+  and says when nothing was searched.
 - **Token counts are exact in the published binary, offline too.** The binary
   could not load its tokenizer, so every turn trimmed history and sized
   context from an estimate that overcounts, and logged `Unknown encoding

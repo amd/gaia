@@ -25,6 +25,8 @@ from gaia.llm.model_fit import MachineCapacity
 from gaia.ui import setup_plan as sp
 from gaia.ui.routers import setup as setup_router
 
+_REAL_LEMONADE = sp._lemonade
+
 UI = {"X-Gaia-UI": "1"}
 BIG_GPU = MachineCapacity(memory_gb=96, memory_source="AMD iGPU", disk_free_gb=500)
 SMALL_GPU = MachineCapacity(memory_gb=12, memory_source="AMD iGPU", disk_free_gb=500)
@@ -216,6 +218,85 @@ def test_only_setups_own_models_can_be_picked(running):
 
 
 def test_picking_before_the_server_runs_says_to_start_setup(no_server):
+    with pytest.raises(sp.SetupPlanError, match="Start setup"):
+        sp.choose_chat_model(DEFAULT_MODEL_NAME)
+
+
+# ── which server the plan asks ─────────────────────────────────────────────
+
+
+@pytest.fixture
+def lemonade_target(monkeypatch):
+    """GAIA set to *mode*; GAIA's own runs at *embedded* (None: not running)."""
+    from gaia.llm import lemonade_choice, lemonade_client
+
+    def use(mode, base_url=None, embedded=None):
+        monkeypatch.setattr(sp, "_lemonade", _REAL_LEMONADE)
+        monkeypatch.setattr(
+            lemonade_choice,
+            "describe",
+            lambda: {"mode": mode, "base_url": base_url},
+        )
+        monkeypatch.setattr(
+            lemonade_client, "running_embedded_lemonade_url", lambda: embedded
+        )
+
+    return use
+
+
+def test_gaias_own_not_running_never_asks_the_default_port(
+    lemonade_target, monkeypatch
+):
+    """Another Lemonade on :13305 has its own downloads; GAIA's own has none yet."""
+    lemonade_target("gaia")
+    monkeypatch.setattr(
+        LemonadeClient,
+        "health_check",
+        lambda self: pytest.fail(f"asked {self.base_url}, not GAIA's own server"),
+    )
+    plan = sp.build_plan()
+    assert plan["lemonade"] == {"mode": "gaia", "url": None, "reachable": False}
+    assert plan["chat_model"]["downloaded"] is None
+    assert plan["decided_after_server"] is True
+    assert plan["download_gb"] and plan["download_gb"] > 5
+
+
+def test_gaias_own_running_is_the_server_asked(lemonade_target, monkeypatch):
+    lemonade_target("gaia", embedded="http://127.0.0.1:51234/api/v1")
+    fake = _FakeLemonade(BIG_GPU, downloaded={LARGE_DEFAULT_MODEL_NAME})
+    asked = []
+    monkeypatch.setattr(sp, "_client", lambda url: asked.append(url) or fake)
+    plan = sp.build_plan()
+    assert asked == ["http://127.0.0.1:51234/api/v1"]
+    assert plan["chat_model"]["downloaded"] is True
+
+
+def test_use_mine_asks_the_users_server(lemonade_target, monkeypatch):
+    lemonade_target("external", base_url="http://localhost:13305/api/v1")
+    fake = _FakeLemonade(BIG_GPU, downloaded={LARGE_DEFAULT_MODEL_NAME})
+    asked = []
+    monkeypatch.setattr(sp, "_client", lambda url: asked.append(url) or fake)
+    plan = sp.build_plan()
+    assert asked == ["http://localhost:13305/api/v1"]
+    assert plan["lemonade"]["url"] == "http://localhost:13305/api/v1"
+    assert plan["chat_model"]["downloaded"] is True
+
+
+def test_switching_to_gaias_own_changes_the_plan(lemonade_target, monkeypatch):
+    """The plan the setup screen re-reads after "Use GAIA's own" must differ."""
+    fake = _FakeLemonade(BIG_GPU, downloaded={LARGE_DEFAULT_MODEL_NAME})
+    monkeypatch.setattr(sp, "_client", lambda url: fake if url else None)
+    lemonade_target("external", base_url="http://localhost:13305/api/v1")
+    mine = sp.build_plan()
+    lemonade_target("gaia")
+    own = sp.build_plan()
+    assert mine["chat_model"]["downloaded"] is True
+    assert own["chat_model"]["downloaded"] is None
+    assert own["download_gb"] > mine["download_gb"]
+
+
+def test_picking_a_model_before_gaias_own_runs_says_to_start_setup(lemonade_target):
+    lemonade_target("gaia")
     with pytest.raises(sp.SetupPlanError, match="Start setup"):
         sp.choose_chat_model(DEFAULT_MODEL_NAME)
 

@@ -174,13 +174,12 @@ async def browse_files(path: Optional[str] = None):
 
     Args:
         path: Directory to browse. Defaults to user home directory.
-              On Windows, pass an empty string or "/" to list drive
-              letters.
+              On Windows, pass "/" to list drive letters.
     """
     quick_links = build_quick_links()
 
-    # On Windows, treat None / empty / "/" as "list drive letters"
-    if platform.system() == "Windows" and (not path or path in ("/", "\\")):
+    # On Windows, "/" lists drive letters; no path opens home like everywhere else.
+    if platform.system() == "Windows" and path in ("/", "\\"):
         entries = list_windows_drives()
         return BrowseResponse(
             current_path="/",

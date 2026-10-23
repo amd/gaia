@@ -109,6 +109,7 @@ module_skips:
       - tests/unit/test_run_python_frozen.py
       - tests/unit/test_run_python_frozen_adversarial.py
       - tests/unit/test_run_python_untracked.py
+      - tests/unit/test_scratch_dir_lifecycle.py
       - tests/unit/test_skill_tools_same_turn.py
       - tests/unit/test_tool_admission_order.py
       - tests/unit/test_tool_loader_disambiguation.py

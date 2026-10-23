@@ -3656,8 +3656,13 @@
     "type": "object"
   },
   "SetupRunRequest": {
-    "description": "``skip_chat_model`` when the chat runs on a cloud provider.",
+    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``gaia_lemonade`` to set up GAIA's own server instead of the user's.",
     "properties": {
+      "gaia_lemonade": {
+        "default": false,
+        "title": "Gaia Lemonade",
+        "type": "boolean"
+      },
       "skip_chat_model": {
         "default": false,
         "title": "Skip Chat Model",
