@@ -755,10 +755,13 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/export">
-    Export a session to Markdown or JSON. Both name the model a turn runs on
-    (the `custom_model` setting wins over the session's stored `model`): the
-    Markdown header, and `effective_model` on the JSON `session` object. An
-    answer kept from "Retry with…" is labelled with the model that wrote it.
+    Export a session to Markdown or JSON. In Markdown, each answer that
+    recorded the model that wrote it is labelled with that model, as in
+    `**Assistant (Model-X):**`. The header lists those models when every answer
+    recorded one; otherwise it reads `*Model (current setting): …*`, the model
+    the chat runs on now (the `custom_model` setting wins over the session's
+    stored `model`). The JSON `session` object carries that current model as
+    `effective_model`, and each message keeps its own `inference_stats`.
 
     **Query params:** `format` ("markdown" or "json", default "markdown")
   </Accordion>
