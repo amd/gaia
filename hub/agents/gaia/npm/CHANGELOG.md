@@ -14,11 +14,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   directory resolved against the sidecar's own folder and reported "0 files";
   it now resolves against the workspace, searches text files of any extension,
   and says when nothing was searched.
-- **Full access in the Agent UI grants the folders you name.** Turning it on
-  over `/sessions/{id}/bypass` refused every path outside the chat's scope with
-  nobody asked. On a run the caller can answer for, Full access now grants the
-  path without a prompt, as it does in-process; Ask mode asks. Unattended runs,
-  the home folder and drive roots are still refused.
+
 ### For integrators: contract 2.19
 
 - **`/query` can record a turn's file changes for undo** (contract **2.19**).
