@@ -169,6 +169,16 @@ def _kind_re() -> "re.Pattern":
     return re.compile(rf'"kind"\s*:\s*"(?:{alt})"')
 
 
+def _user_wait(event: Dict[str, Any], answers_confirmations: bool) -> Optional[str]:
+    """The prompt or question id the sidecar now waits on the user for, if any."""
+    etype = event.get("type")
+    if etype == "needs_input":
+        return str(event.get("request_id") or "") or None
+    if etype == "needs_confirmation" and answers_confirmations:
+        return str(event.get("confirm_id") or "") or None
+    return None
+
+
 def _dispatch_one(
     handler: Any,
     event: Dict[str, Any],
@@ -409,6 +419,7 @@ def relay_query(
     allowed_paths: Optional[List[str]] = None,
     memory: Optional[str] = None,
     changes_turn_id: Optional[str] = None,
+    surface: Optional[str] = None,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
 
@@ -422,6 +433,9 @@ def relay_query(
 
     *memory* — the chat's memory mode (``on`` / ``private`` / ``off``), for a
     sidecar the caller has established takes it (``profiles.memory_supported``).
+
+    *surface* — the front-end this turn comes from, for a sidecar the caller
+    has established takes it (``profiles.surface_supported``).
 
     *documents* — absolute paths of the chat's attached files, for a sidecar
     the caller has established takes them (``profiles.documents_supported``).
@@ -496,6 +510,8 @@ def relay_query(
         body["memory"] = memory
     if changes_turn_id is not None:
         body["changes_turn_id"] = changes_turn_id
+    if surface is not None:
+        body["surface"] = surface
 
     syncs_mode = full_access is not None and bool(session_id)
     enable_after_start = False
@@ -540,6 +556,9 @@ def relay_query(
     terminated = False
     crashed = False
     crash_message = profile.stream_ended_text()
+    # Gave the chat's model slot up while the sidecar waits on the user.
+    stepped_away = False
+    asked = False
     try:
         events = proxy.query_stream(
             body, read_timeout=read_timeout, on_response=_register_response
@@ -553,9 +572,28 @@ def relay_query(
         for event in events:
             if handler.cancelled.is_set():
                 break
+            if asked:
+                # Any event after a question means the sidecar stopped waiting.
+                handler.set_relay_question(None)
+                asked = False
+            if stepped_away:
+                stepped_away = False
+                # The user answered or the sidecar's wait ended. A last event
+                # needs no model, so the turn ends without waiting in line.
+                if event.get("type") not in ("final", "error"):
+                    handler.come_back_to_model()
+                    if handler.cancelled.is_set():
+                        break
             if _dispatch_one(handler, event, profile, answers_confirmations):
                 terminated = True
                 break
+            waiting_on = _user_wait(event, answers_confirmations)
+            if waiting_on is not None:
+                if event.get("type") == "needs_input":
+                    handler.set_relay_question(waiting_on)
+                    asked = True
+                # The sidecar run stays parked; only this chat's slot is freed.
+                stepped_away = handler.step_away_from_model()
     except _FullAccessNotSet as exc:
         crashed = True
         crash_message = exc.event["content"]

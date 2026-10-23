@@ -265,6 +265,23 @@
             ],
             "description": "Conversation handle (contract >= 2.12). Threaded to the agent as its UI session so indexed documents survive across turns — without it a document agent forgets what it just indexed.",
             "title": "Session Id"
+          },
+          "surface": {
+            "anyOf": [
+              {
+                "enum": [
+                  "agent_ui",
+                  "tui",
+                  "cli"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The front-end this turn comes from (contract >= 2.20). 'agent_ui' tells the agent that features like Scheduled tasks are in the caller's sidebar. Fixed when a session is built; omit it when unknown.",
+            "title": "Surface"
           }
         },
         "required": [
@@ -442,7 +459,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.19"
+    "version": "2.20"
   },
   "openapi": "3.1.0",
   "paths": {

@@ -952,13 +952,17 @@ Deleting a chat deletes its copies.
     a **422**, and sending into a chat stored under another agent is a **409**
     ("start a new chat"). See [Flagship only](#flagship-only).
 
-    Turns run one at a time. A streamed turn sent while another chat is working
+    Turns on a local model run one at a time; a turn on a cloud model skips
+    the line. A streamed turn sent while another chat is working
     starts at once and waits in line inside its run, sending
     `{"type": "status", "phase": "queued", "queue_position": 1,
     "queue_waited_s": 0, "message": "Waiting for the GPU — 1st in line"}`
     whenever its place changes and again every 10 s while it waits, so the
-    stream is never silent. A non-streamed turn waits up to 60 s, then gets
-    **429**.
+    stream is never silent. A turn waiting on the user (a permission prompt
+    or question, in process or relayed from a sidecar) leaves the line until
+    answered, then rejoins at the front; `queue_waited_s` counts from that
+    rejoin, and `{"type": "status", "phase": "resumed"}` ends that wait. A non-streamed turn is saved first, then waits until it
+    reaches the model or is stopped.
 
     **Request:**
     ```json
@@ -1235,7 +1239,15 @@ Deleting a chat deletes its copies.
     }
     ```
 
-    **Response:** `DocumentResponse`
+    **Response:** `DocumentResponse`. A failed index still returns 200, with
+    `indexing_status: "failed"`, the reason in `last_error`, and `error_kind`
+    set to `corrupted`, `encrypted` or `empty` when retrying can't help until
+    the file is fixed.
+
+    **Errors:** 400 with `detail.status: "is_folder"` when the path is a folder
+    (index it with `index-folder`); 400 for a file type GAIA doesn't index; 404
+    for a missing file inside an allowed root; 403 for any path outside the
+    allowed roots, whether or not it exists.
   </Accordion>
 
   <Accordion title="DELETE /api/documents/{doc_id}">
@@ -1592,7 +1604,9 @@ Used to reach the UI from a phone.
   </Accordion>
 
   <Accordion title="POST /api/documents/index-folder">
-    Recursively index all supported files under a folder.
+    Index the supported files in a folder (`recursive`, default `true`, also
+    takes subfolders). Returns `indexed`, `failed` with one line per file in
+    `errors`, and `skipped`: files of a type GAIA doesn't index.
   </Accordion>
 
   <Accordion title="POST /api/documents/{doc_id}/reindex">

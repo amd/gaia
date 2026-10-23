@@ -164,18 +164,52 @@ describe('UploadErrorToast', () => {
         expect(screen.getByRole('link', { name: /report this issue/i })).toBeInTheDocument();
     });
 
-    it('treats a refused path as a limit to work around, not a bug', () => {
+    it('says a missing file does not exist, with no bug report link', () => {
         render(
             <UploadErrorToast
-                filename="spec.pdf"
-                error="GAIA can only read documents under /home/u."
+                filename="missing.pdf"
+                error="File not found: there is no file at C:\Users\me\missing.pdf. Check the path for typos."
+                status={404}
+                onDismiss={() => {}}
+                timeout={0}
+            />
+        );
+
+        expect(screen.getByText(`"missing.pdf" doesn't exist`)).toBeInTheDocument();
+        expect(screen.getByText(/there is no file at .*Check the path/)).toBeInTheDocument();
+        expect(screen.queryByRole('link')).toBeNull();
+    });
+
+    it('explains the readable folders without claiming the file exists', () => {
+        render(
+            <UploadErrorToast
+                filename="missing.pdf"
+                error="GAIA can only read documents under C:\Users\me, and C:\nope\missing.pdf is outside them. Check the path is right."
                 status={403}
                 onDismiss={() => {}}
                 timeout={0}
             />
         );
 
-        expect(screen.getByText(/can't read "spec\.pdf" where it is/)).toBeInTheDocument();
+        expect(screen.getByText("GAIA can't read files in that location")).toBeInTheDocument();
+        expect(screen.getByText(/can only read documents under.*drop the file here instead \(up to 20 MB\)/)).toBeInTheDocument();
+        expect(screen.queryByText(/Access denied/)).toBeNull();
+        expect(screen.queryByRole('link')).toBeNull();
+    });
+
+    it('names a file with no extension plainly', () => {
+        render(
+            <UploadErrorToast
+                filename="README"
+                error="File type not allowed: 'README' has no file extension, so GAIA can't tell what kind of document it is."
+                status={400}
+                onDismiss={() => {}}
+                timeout={0}
+            />
+        );
+
+        expect(screen.getByText('"README" has no file extension')).toBeInTheDocument();
+        expect(screen.queryByText(/File type not supported: $/)).toBeNull();
         expect(screen.queryByRole('link')).toBeNull();
     });
 });

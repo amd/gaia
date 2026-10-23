@@ -945,7 +945,8 @@ export async function uploadDocumentBlob(file: File): Promise<Document> {
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
-        throw new Error(getFriendlyError(res.status, parseErrorDetail(errorText)));
+        const detail = parseErrorDetail(errorText);
+        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
     }
 
     const data = await res.json();

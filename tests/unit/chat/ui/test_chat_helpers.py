@@ -558,6 +558,7 @@ class TestSessionAgentKwargsShape:
             "ui_session_id",
             "dynamic_tools",
             "memory_incognito",
+            "surface",
         }
 
     def test_memory_off_reaches_the_agent_at_construction(self):

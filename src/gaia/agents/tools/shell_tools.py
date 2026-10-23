@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from gaia.agents.base.call_risk import (
     DESTRUCTIVE,
+    NEEDS_PERSON_ARG,
     RISK_NOTE_ARG,
     shell_command_risk,
 )
@@ -410,6 +411,11 @@ def _reaches_the_prompt(error: Optional[Dict[str, Any]]) -> bool:
         TIER_CONFIRM,
         TIER_CONFIRM_ONCE,
     )
+
+
+def _call_key(command: Any, working_directory: Any) -> Tuple[Any, Any]:
+    """The identity an approval is bound to: this text, in this folder."""
+    return command, working_directory or None
 
 
 # The binaries a developer session needs and a read-only session must not have
@@ -2905,7 +2911,8 @@ class ShellToolsMixin:
         ``TIER_CONFIRM`` (``git commit``, ``npm test``) and ``TIER_CONFIRM_ONCE``
         (``git push``, ``python -c``, a path outside the project) fall through
         to the prompt. The exception is a run where only a blanket pre-approval
-        would answer it; see :meth:`_approval_is_blanket_only`.
+        would answer it; see :meth:`_approval_is_blanket_only`. If a person is
+        watching that run (:meth:`_a_person_answers`), the call is put to them.
 
         Duck-typed rather than an override: ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
@@ -2915,6 +2922,8 @@ class ShellToolsMixin:
         # Every shell call starts with no approval on record; only this call's
         # own prompt can write one.
         self._approved_once = None
+        self._needs_person = None
+        self._person_approved = None
         command = (tool_args or {}).get("command")
         if not isinstance(command, str):
             return None
@@ -2935,6 +2944,12 @@ class ShellToolsMixin:
             }
         if _reaches_the_prompt(error):
             if not self._approval_is_blanket_only():
+                return None
+            if tool_name == _POLICY_GATED_SHELL_TOOL and self._a_person_answers():
+                # Pre-approval stands, but this call goes to that person.
+                self._needs_person = _call_key(
+                    command, (tool_args or {}).get("working_directory")
+                )
                 return None
             error = self._blanket_approval_refusal(error, command)
         logger.info(
@@ -2964,6 +2979,30 @@ class ShellToolsMixin:
         from gaia.agents.base import console as console_mod
 
         return console_mod.auto_approve_env_enabled()
+
+    def _a_person_answers(self) -> bool:
+        """True when a pre-approving run can still put a call to a person.
+
+        A watched Full access chat over the sidecar's socket: tools are
+        pre-approved, the shell gates stay on (#3373), and someone is there to
+        answer. A command past the gates is asked about there instead of
+        refused. ``GAIA_AUTO_APPROVE_TOOLS`` marks an unattended run, so it
+        keeps refusing whatever the console says.
+        """
+        console = getattr(self, "console", None)
+        if console is None or getattr(console, "full_access", False) is True:
+            return False
+        if not (
+            getattr(console, "asks_past_preapproval", False) is True
+            and getattr(console, "answers_confirmations", False) is True
+            and getattr(console, "grants_paths", False) is True
+            and not getattr(console, "background_mode", False)
+        ):
+            return False
+        # Deferred: the console module imports the package root.
+        from gaia.agents.base import console as console_mod
+
+        return not console_mod.auto_approve_env_enabled()
 
     def _nothing_could_have_confirmed(self) -> bool:
         """True when this call reached execution without anyone approving it.
@@ -3117,8 +3156,23 @@ class ShellToolsMixin:
         always names its folder and carries ``RISK_NOTE_ARG``: the prompt shows
         the line verbatim with that note, and offers no "always".
 
+        A call the pre-flight left for a person (:meth:`_a_person_answers`)
+        carries ``NEEDS_PERSON_ARG``, so pre-approval does not answer it.
+
         Duck-typed, like :meth:`skill_grant_covers_call`.
         """
+        shown = self._shown_args(tool_name, tool_args)
+        if (
+            tool_name == _POLICY_GATED_SHELL_TOOL
+            and isinstance(tool_args, dict)
+            and getattr(self, "_needs_person", None)
+            == _call_key(tool_args.get("command"), tool_args.get("working_directory"))
+        ):
+            return {**shown, NEEDS_PERSON_ARG: True}
+        return shown
+
+    def _shown_args(self, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
+        """:meth:`confirmation_args_for_call` before any approval marker."""
         if tool_name != _POLICY_GATED_SHELL_TOOL or not isinstance(tool_args, dict):
             return tool_args
         command = tool_args.get("command")
@@ -3152,16 +3206,26 @@ class ShellToolsMixin:
         """
         if tool_name != _POLICY_GATED_SHELL_TOOL or not isinstance(tool_args, dict):
             return
-        self._approved_once = (
-            tool_args.get("command"),
-            tool_args.get("working_directory") or None,
-        )
+        key = _call_key(tool_args.get("command"), tool_args.get("working_directory"))
+        self._approved_once = key
+        # The marked call reached a person, so its approval was theirs.
+        if key == getattr(self, "_needs_person", None):
+            self._person_approved = key
 
     def _take_once_approval(self, command: str, working_directory: Any) -> bool:
         """Consume the approval for exactly this call; False when there is none."""
         approved = getattr(self, "_approved_once", None)
         self._approved_once = None
-        return approved == (command, working_directory or None)
+        return approved == _call_key(command, working_directory)
+
+    def _take_person_approval(self, command: str, working_directory: Any) -> bool:
+        """Consume a person's approval of exactly this call; False when there is none."""
+        approved = getattr(self, "_person_approved", None)
+        self._person_approved = None
+        self._needs_person = None
+        return approved is not None and approved == _call_key(
+            command, working_directory
+        )
 
     def _call_cwd(self, working_directory: Any) -> Optional[Tuple[str, bool]]:
         """``(folder, explicit)`` a call runs in, or None when it names no real one."""
@@ -4554,6 +4618,8 @@ class ShellToolsMixin:
                 # Spent by every run, so an approval reaches only the call it
                 # was given for and never a later one.
                 approved_once = self._take_once_approval(command, working_directory)
+                if self._take_person_approval(command, working_directory):
+                    unconfirmed = False
                 error, steps = self._line_verdict(command, working_directory)
                 if error and not _reaches_the_prompt(error):
                     return error

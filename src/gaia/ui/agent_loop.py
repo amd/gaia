@@ -478,6 +478,7 @@ class AgentLoop:
                         ui_session_id=session_id,
                         dynamic_tools=dynamic_tools,
                         memory_incognito=_helpers._memory_off(session, db),
+                        surface="agent_ui",
                     )
                     with _helpers.writing_tool_registry():
                         agent = GaiaAgent(config)
