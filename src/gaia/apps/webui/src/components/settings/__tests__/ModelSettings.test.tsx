@@ -69,20 +69,57 @@ describe('ModelSettings provider keys', () => {
         expect(within(card).getByRole('button', { name: 'Forget key' })).toBeInTheDocument();
     });
 
+    it('says the OS is asking for keychain access instead of "No key yet", then updates', async () => {
+        mockedApi.listProviders
+            .mockResolvedValueOnce({
+                providers: [LOCAL, fireworks({
+                    key_state: 'waiting_for_os_permission',
+                    key_message: 'macOS is asking GAIA for keychain access to read your saved Fireworks AI key.',
+                })],
+                active: LOCAL_ACTIVE,
+                lemonade_error: null,
+            })
+            .mockResolvedValue({ providers: [LOCAL, fireworks({ key_source: 'stored' })], active: LOCAL_ACTIVE, lemonade_error: null });
+        const card = await openFireworks();
+        expect(within(card).getByText(/asking GAIA for keychain access/)).toBeInTheDocument();
+        expect(within(card).queryByText('No key yet.')).not.toBeInTheDocument();
+        expect(await within(card).findByText('A saved key will be used.', {}, { timeout: 4000 })).toBeInTheDocument();
+    });
+
     it('connects with the typed key and clears the field', async () => {
-        mockedApi.connectProvider.mockResolvedValue({ ...fireworks(), remembered: true, remember_error: null });
+        mockedApi.connectProviderWaitingForOs.mockResolvedValue({ ...fireworks(), remembered: true, remember_error: null });
         const card = await openFireworks();
         const field = within(card).getByLabelText('Fireworks AI API key');
         fireEvent.change(field, { target: { value: 'fw-secret' } });
         fireEvent.click(within(card).getByRole('button', { name: 'Connect' }));
 
-        await waitFor(() => expect(mockedApi.connectProvider).toHaveBeenCalledWith('fireworks', { api_key: 'fw-secret' }));
+        await waitFor(() => expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('fireworks', { api_key: 'fw-secret' }, expect.any(Function), expect.any(Function)));
         expect(await within(card).findByRole('status')).toHaveTextContent('The key is kept for next time.');
         expect(field).toHaveValue('');
     });
 
+    it('stops waiting on the keychain prompt once the user picks another provider', async () => {
+        let stopped: (() => boolean) | undefined;
+        let answer!: (v: Awaited<ReturnType<typeof api.connectProviderWaitingForOs>>) => void;
+        mockedApi.connectProviderWaitingForOs.mockImplementation((_p, _b, onWaiting, stop) => {
+            stopped = stop;
+            onWaiting('macOS is asking GAIA for keychain access. Look for a system dialog and click Always Allow.');
+            return new Promise((r) => { answer = r; });
+        });
+        withProviders(fireworks({ key_source: 'stored' }));
+        const card = await openFireworks();
+        fireEvent.click(within(card).getByRole('button', { name: 'Connect' }));
+        expect(await within(card).findByText(/Look for a system dialog/)).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('radio', { name: /Local/ }));
+        expect(stopped?.()).toBe(true);
+        answer({ ...fireworks(), models_discovered: true, remembered: false, remember_error: null });
+        await waitFor(() => expect(mockedApi.listProviders).toHaveBeenCalled());
+        expect(screen.queryByText('Connected.')).not.toBeInTheDocument();
+    });
+
     it('shows why the connection was refused', async () => {
-        mockedApi.connectProvider.mockRejectedValue(new Error('Fireworks rejected the key (401)'));
+        mockedApi.connectProviderWaitingForOs.mockRejectedValue(new Error('Fireworks rejected the key (401)'));
         const card = await openFireworks();
         fireEvent.change(within(card).getByLabelText('Fireworks AI API key'), { target: { value: 'bad' } });
         fireEvent.click(within(card).getByRole('button', { name: 'Connect' }));
@@ -96,5 +133,41 @@ describe('ModelSettings provider keys', () => {
         fireEvent.click(within(card).getByRole('button', { name: 'Forget key' }));
         await waitFor(() => expect(mockedApi.forgetProviderKey).toHaveBeenCalledWith('fireworks'));
         expect(await within(card).findByRole('status')).toHaveTextContent('Key cleared');
+    });
+});
+
+describe('ModelSettings: an unreachable AMD gateway (#5604)', () => {
+    const NO_NET = "No network available — can't reach llm-api.amd.com (needs AMD's network or VPN)";
+    function amd(over: Partial<ProviderInfo> = {}): ProviderInfo {
+        return {
+            id: 'amd', name: 'AMD LLM Gateway', remote: true, models_discovered: false, key_source: null,
+            env_var: 'LEMONADE_AMD_API_KEY', privacy_notice: 'Chat history is sent to your configured AMD gateway.',
+            network: { reachable: false, detail: NO_NET }, ...over,
+        };
+    }
+
+    it('greys out the gateway tab and says there is no network', async () => {
+        mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, fireworks(), amd()], active: LOCAL_ACTIVE, lemonade_error: null });
+        render(<ModelSettings />);
+        const tab = await screen.findByRole('radio', { name: /AMD LLM Gateway/ });
+        expect(tab).toBeDisabled();
+        expect(tab).toHaveAttribute('title', NO_NET);
+        expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toBeEnabled();
+    });
+
+    it('on the gateway, shows no key form until the network is back, and checks again', async () => {
+        const amdActive: ActiveModel = { provider: 'amd', model: 'amd.DeepSeek-V4.1-Flash', label: 'DeepSeek', remote: true, is_default: false };
+        useModelStore.setState({ active: amdActive, error: null, restoreNotice: null });
+        mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, fireworks(), amd()], active: amdActive, lemonade_error: null });
+        render(<ModelSettings />);
+        const card = await screen.findByRole('region', { name: 'AMD LLM Gateway' });
+        expect(await within(card).findByRole('alert')).toHaveTextContent(NO_NET);
+        expect(within(card).queryByLabelText('AMD LLM Gateway API key')).not.toBeInTheDocument();
+
+        mockedApi.listProviders.mockResolvedValue({
+            providers: [LOCAL, fireworks(), amd({ network: { reachable: true, detail: null } })], active: amdActive, lemonade_error: null,
+        });
+        fireEvent.click(within(card).getByRole('button', { name: 'Check again' }));
+        expect(await within(card).findByLabelText('AMD LLM Gateway API key')).toBeInTheDocument();
     });
 });

@@ -135,6 +135,12 @@ const STAGES = Object.freeze({
   VERIFY: "verify",
 });
 
+const GAIA_INIT_MESSAGE =
+  "Setting up Lemonade Server and downloading models (this can take several minutes)";
+const WAITING_FOR_LEMONADE_CHOICE_MESSAGE =
+  "Waiting for your answer: GAIA found a Lemonade Server already running " +
+  "and is asking whether to use it. Setup continues once you choose.";
+
 // Weight each stage contributes to the overall 0-100 progress.
 // Sum must equal 100.
 const STAGE_WEIGHTS = {
@@ -1560,40 +1566,52 @@ function shouldSkipGaiaInit(opts) {
  * `chooseLemonade` is asked about a Lemonade Server already running here; see
  * lemonadeInitArgs.
  *
- * Returns "done", "failed" or "skipped". The state file records it: a backend
- * whose setup never finished is not installed, and the next launch runs it.
+ * Returns `{ init }`, "done", "failed" or "skipped", plus `initError` when it
+ * failed. The state file records both: a backend whose setup never finished is
+ * not installed, so the next launch runs it, and the app shows the error.
  */
 async function runGaiaInit(gaiaBin, report, version, skipGaiaInit, chooseLemonade) {
   if (skipGaiaInit) {
     log("Skipping gaia init (skipGaiaInit=true or GAIA_SKIP_GAIA_INIT set)");
-    return "skipped";
+    return { init: "skipped" };
   }
   setState(STATES.INSTALLING, { stage: STAGES.GAIA_INIT, version });
-  report(
-    STAGES.GAIA_INIT,
-    0,
-    "Setting up Lemonade Server and downloading models (this can take several minutes)"
-  );
-  const lemonadeArgs = await lemonadeInitArgs(gaiaBin, chooseLemonade);
+  report(STAGES.GAIA_INIT, 0, GAIA_INIT_MESSAGE);
+  const lemonadeArgs = await lemonadeInitArgs(gaiaBin, chooseLemonade, runCommand, report);
   const progress = createInitProgress((within, message) =>
     report(STAGES.GAIA_INIT, within, message)
   );
   const initResult = await runCommand(
     gaiaBin,
     ["init", "--profile", "gaia", "--yes", "--skip-webui-build", "--progress-json", ...lemonadeArgs],
-    { stageLabel: "gaia-init", onLine: progress.onLine }
+    // Unwrapped, so an error line reaches initFailureReason whole.
+    { stageLabel: "gaia-init", env: { ...process.env, COLUMNS: "1000" }, onLine: progress.onLine }
   );
   if (initResult.code !== 0) {
-    // Non-fatal: the app opens and its setup screen retries, and so does the
-    // next launch, because the state file records that setup did not finish.
+    // Non-fatal: the app opens and its start screen shows initError, and the
+    // next launch runs setup again, because the state file records the failure.
     log(
       `Warning: gaia init exited with code ${initResult.code}. Continuing; setup runs again next launch.`
     );
     report(STAGES.GAIA_INIT, 100, "Lemonade Server setup did not finish");
-    return "failed";
+    return { init: "failed", initError: initFailureReason(initResult) };
   }
   report(STAGES.GAIA_INIT, 100, "Lemonade Server setup complete");
-  return "done";
+  return { init: "done" };
+}
+
+/** Why `gaia init` failed, in its own words: its last ❌ line, else its last line. */
+function initFailureReason({ code, stdout, stderr }) {
+  const lines = `${stdout || ""}\n${stderr || ""}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    // --progress-json event lines are for the progress bar, not the user.
+    .filter((line) => line && !line.startsWith('{"event"'));
+  const marked = lines.filter((line) => line.startsWith("❌"));
+  const reason = marked.length
+    ? marked[marked.length - 1].replace(/^❌\s*/, "")
+    : lines[lines.length - 1];
+  return reason || `gaia init exited with code ${code} and printed nothing.`;
 }
 
 /**
@@ -1624,8 +1642,11 @@ async function readGaiaJson(run, gaiaBin, args) {
  * `--lemonade-url <url>`, "gaia" adds `--gaia-lemonade`, null adds nothing:
  * init then sets up GAIA's own and prints how to switch, as it always has.
  * A server that needs a key or is too old is left to the app's setup screen.
+ *
+ * `report` is the progress reporter: while the question is open the progress
+ * window says setup is waiting on the user, then goes back to GAIA_INIT_MESSAGE.
  */
-async function lemonadeInitArgs(gaiaBin, chooseLemonade, run = runCommand) {
+async function lemonadeInitArgs(gaiaBin, chooseLemonade, run = runCommand, report = () => {}) {
   if (typeof chooseLemonade !== "function") return [];
   const unchanged = "gaia init will set up GAIA's own Lemonade Server; to use yours later run `gaia lemonade connect <url>`.";
   const status = await readGaiaJson(run, gaiaBin, ["lemonade", "status", "--json"]);
@@ -1645,11 +1666,14 @@ async function lemonadeInitArgs(gaiaBin, chooseLemonade, run = runCommand) {
     return [];
   }
   let answer;
+  report(STAGES.GAIA_INIT, 0, WAITING_FOR_LEMONADE_CHOICE_MESSAGE);
   try {
     answer = await chooseLemonade(found);
   } catch (err) {
     log(`Warning: could not ask whether to use the Lemonade Server at ${found.url}: ${err.message}; ${unchanged}`);
     return [];
+  } finally {
+    report(STAGES.GAIA_INIT, 0, GAIA_INIT_MESSAGE);
   }
   log(`Lemonade Server at ${found.url}: user chose ${answer || "not to answer"}`);
   if (answer === "external") return ["--lemonade-url", found.url];
@@ -1884,7 +1908,7 @@ async function installBackend(opts = {}) {
   report(STAGES.INSTALL_PACKAGE, 100, "GAIA package installed");
 
   // Stage 4: gaia init
-  const init = await runGaiaInit(
+  const setup = await runGaiaInit(
     GAIA_BIN,
     report,
     version,
@@ -1950,7 +1974,7 @@ async function installBackend(opts = {}) {
     log(`Shim creation check failed: ${err.message}`);
   }
 
-  setState(STATES.READY, { stage: null, version, installedVersion, init });
+  setState(STATES.READY, { stage: null, version, installedVersion, ...setup });
   log("Backend install complete");
 }
 
@@ -2090,14 +2114,14 @@ async function ensureBackend(opts = {}) {
             `(state=${prev.state}, stage=${prev.stage || "-"}) — running gaia init`
         );
         const report = makeProgressReporter(opts.onProgress);
-        const init = await runGaiaInit(
+        const setup = await runGaiaInit(
           existingBin,
           report,
           expectedVersion,
           shouldSkipGaiaInit(opts),
           opts.chooseLemonade
         );
-        setState(STATES.READY, { version: expectedVersion, installedVersion, init });
+        setState(STATES.READY, { version: expectedVersion, installedVersion, ...setup });
         report(STAGES.VERIFY, 100, `GAIA ${installedVersion} ready`);
         return existingBin;
       }
@@ -2173,6 +2197,7 @@ module.exports = {
   findGaiaBin,
   toPep440,
   lemonadeInitArgs,
+  initFailureReason,
 
   // Pre-checks
   runPreChecks,
@@ -2207,6 +2232,8 @@ module.exports = {
   // Constants
   STATES,
   STAGES,
+  GAIA_INIT_MESSAGE,
+  WAITING_FOR_LEMONADE_CHOICE_MESSAGE,
   GAIA_HOME,
   GAIA_VENV,
   GAIA_BIN,

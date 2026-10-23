@@ -210,6 +210,24 @@ describe('ChatView question lifecycle', () => {
         await waitFor(() => expect(document.querySelector('.thinking-indicator-text')?.textContent).toBe('Waiting for you'));
     });
 
+    it('an open permission prompt keeps the header on "Waiting for you" after a status event', async () => {
+        render(<ChatView sessionId={SESSION.id} />);
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'delete it' } });
+            fireEvent.click(screen.getByLabelText('Send'));
+        });
+        act(() => {
+            callbacks!.onAgentEvent({
+                type: 'permission_request', tool: 'run_shell_command', confirm_id: 'c-1',
+                summary: 'del note.txt', args: { command: 'del note.txt' },
+            } as unknown as StreamEvent);
+        });
+        act(() => {
+            callbacks!.onAgentEvent({ type: 'status', status: 'info', message: 'Running command' } as unknown as StreamEvent);
+        });
+        await waitFor(() => expect(document.querySelector('.thinking-indicator-text')?.textContent).toBe('Waiting for you'));
+    });
+
     it('the turn ending closes its questions', async () => {
         await send();
         expect(useChatStore.getState().liveQuestions['req-1']).toBeDefined();

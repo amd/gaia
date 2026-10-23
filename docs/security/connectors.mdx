@@ -62,9 +62,18 @@ connection doesn't match that cache, the process re-reads the client
 config from the credential store before judging it. A connection another
 GAIA process just forwarded or reconnected under a new client is kept. A
 connection that still doesn't match is cleared only while holding the
-connection lock; if another GAIA operation holds it, the connection is left in
-place and the call raises `AuthRequiredError(REAUTH_REQUIRED)`, so a retry
-can succeed.
+connection lock. If another GAIA operation (in this process or another)
+holds it, the connection is left in place and the call raises
+`ConnectionBusyError`, a transient error rather than a disconnect: agent
+tools report it as busy, HTTP returns `503` with `Retry-After`, the
+connection listing keeps the row marked `"error": "busy"` (with no scopes,
+since they may be about to change), and the daemon keeps the token it already
+forwarded to a sidecar. An access token already forwarded to a sidecar stays
+usable until it expires or is withdrawn, even after the provider is
+disconnected. A forwarded connection saves its client config and its
+connection in one lock hold, and a forward that fails partway puts both back
+before letting go of the lock, so no process ever sees a new client next to an
+old connection.
 
 ## What we do not protect
 

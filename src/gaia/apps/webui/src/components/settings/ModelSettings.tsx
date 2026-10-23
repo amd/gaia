@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Cloud, Cpu, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useModelStore, displayModelName } from '../../stores/modelStore';
@@ -17,6 +17,7 @@ import type { ProviderId, ProviderInfo, ProviderModel } from '../../types';
 const DOWNLOAD_POLL_MS = 2000;
 
 function keyStatus(p: ProviderInfo): string {
+    if (p.key_state === 'waiting_for_os_permission') return p.key_message ?? 'Waiting for the OS to allow reading the saved key.';
     switch (p.key_source) {
         case 'environment': return `A key is set in ${p.env_var} and is in use.`;
         case 'lemonade': return 'A key is already configured on the local model server.';
@@ -50,7 +51,14 @@ export function ModelSettings() {
     const [memory, setMemory] = useState<string | null>(null);
     const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
+    // A connect waiting on an OS prompt stops once the user picks another provider or leaves.
+    const chosenRef = useRef(chosen);
+    chosenRef.current = chosen;
+    const mounted = useRef(true);
+    useEffect(() => () => { mounted.current = false; }, []);
+
     const provider = providers?.find((p) => p.id === chosen) ?? null;
+    const offline = (p: ProviderInfo | null) => p?.network?.reachable === false;
     const connected = !!provider && (!provider.remote || !!provider.models_discovered);
 
     const loadProviders = useCallback(async () => {
@@ -80,6 +88,13 @@ export function ModelSettings() {
     }, [rememberNames]);
 
     useEffect(() => { void loadProviders(); }, [loadProviders]);
+    // Ask again while the OS keychain dialog is open, so answering it is enough.
+    const awaitingPermission = !!providers?.some((p) => p.key_state === 'waiting_for_os_permission');
+    useEffect(() => {
+        if (!awaitingPermission) return;
+        const t = setInterval(() => { void loadProviders(); }, DOWNLOAD_POLL_MS);
+        return () => clearInterval(t);
+    }, [awaitingPermission, loadProviders]);
     const activeProvider = active?.provider;
     useEffect(() => { if (activeProvider) setChosen(activeProvider); }, [activeProvider]);
     useEffect(() => {
@@ -100,7 +115,14 @@ export function ModelSettings() {
             const body = chosen === 'amd'
                 ? { api_key: key || undefined, ...Object.fromEntries(Object.entries(amd).filter(([, v]) => v !== '')) }
                 : { api_key: key || undefined };
-            const r = await api.connectProvider(chosen, body);
+            const movedOn = () => !mounted.current || chosenRef.current !== chosen;
+            const r = await api.connectProviderWaitingForOs(
+                chosen,
+                body,
+                (waiting) => { if (!movedOn()) setNotice({ ok: true, text: waiting }); },
+                movedOn,
+            );
+            if (movedOn()) return;
             setKey('');
             setNotice({
                 ok: true,
@@ -110,9 +132,11 @@ export function ModelSettings() {
             });
             await loadProviders();
         } catch (err) {
-            setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
+            if (mounted.current && chosenRef.current === chosen) {
+                setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
+            }
         } finally {
-            setBusy(null);
+            if (mounted.current) setBusy(null);
         }
     }, [amd, chosen, key, loadProviders, provider]);
 
@@ -236,8 +260,10 @@ export function ModelSettings() {
                         type="button"
                         role="radio"
                         aria-checked={chosen === p.id}
-                        className={`provider-tab${chosen === p.id ? ' is-active' : ''}`}
+                        className={`provider-tab${chosen === p.id ? ' is-active' : ''}${offline(p) ? ' is-disabled' : ''}`}
                         onClick={() => setChosen(p.id)}
+                        disabled={offline(p) && chosen !== p.id}
+                        title={offline(p) ? p.network?.detail ?? undefined : undefined}
                     >
                         {p.remote ? <Cloud size={14} aria-hidden="true" /> : <Cpu size={14} aria-hidden="true" />}
                         <span>{p.name}</span>
@@ -266,7 +292,16 @@ export function ModelSettings() {
                         </div>
                     )}
 
-                    {provider.remote && (
+                    {offline(provider) && (
+                        <div className="settings-field">
+                            <p className="settings-error" role="alert">{provider.network?.detail}</p>
+                            <button type="button" className="btn-secondary" onClick={() => void loadProviders()}>
+                                Check again
+                            </button>
+                        </div>
+                    )}
+
+                    {provider.remote && !offline(provider) && (
                         <form
                             className="settings-field"
                             onSubmit={(e) => { e.preventDefault(); void connect(); }}
