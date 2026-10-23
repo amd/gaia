@@ -21,6 +21,7 @@ const schedule: Schedule = {
     last_run_at: null,
     next_run_at: null,
     last_result: null,
+    last_error: null,
     run_count: 0,
     error_count: 0,
     session_id: null,
