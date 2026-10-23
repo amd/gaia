@@ -307,13 +307,26 @@ def test_undo_moves_the_new_copy_aside_whole_while_a_file_in_it_is_open(
 def test_capture_cleanup_does_not_wait_on_a_busy_lock_twice(tmp_path, monkeypatch):
     """The lock was busy, so the entry was never written: clean up and fail once."""
     import time
+    from contextlib import contextmanager
 
+    from gaia.skills import lock as skill_lock_mod
     from gaia.skills.capture import capture_skill
     from gaia.skills.lock import SkillLockBusyError, lock_path
     from tests.unit.skills_helpers import isolated_manager
     from tests.unit.test_skill_capture import _markdown
 
     monkeypatch.setattr(file_lock_mod, "LOCK_TIMEOUT_SECONDS", 1.0)
+    # Count the waits rather than time them, so a slow runner can't fake a second one.
+    waits = []
+    real_file_lock = skill_lock_mod.file_lock
+
+    @contextmanager
+    def counted_file_lock(path, *args, **kwargs):
+        waits.append(path)
+        with real_file_lock(path, *args, **kwargs):
+            yield
+
+    monkeypatch.setattr(skill_lock_mod, "file_lock", counted_file_lock)
     manager = isolated_manager(tmp_path)
     root = tmp_path / "gaia-home" / "skills"
     root.mkdir(parents=True, exist_ok=True)
@@ -335,7 +348,8 @@ def test_capture_cleanup_does_not_wait_on_a_busy_lock_twice(tmp_path, monkeypatc
         release.set()
         holder.join()
     # One timeout, not a second wait in the cleanup path.
-    assert time.monotonic() - started < 1.8
+    assert len(waits) == 1, waits
+    assert time.monotonic() - started < 10
     assert not (root / "meeting-notes").exists()
 
 

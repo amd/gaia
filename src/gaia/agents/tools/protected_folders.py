@@ -10,18 +10,24 @@ user did not point at them must not enter them at all.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Tuple
 
 from gaia.agents.tools.search_scope import is_broad_root, search_roots
 
-#: Relative to home. iCloud Drive is guarded the same way.
+#: Relative to home. iCloud Drive is guarded the same way, ~/Music and the TV
+#: app's ~/Movies/TV behind the "Media & Apple Music" prompt, and the Photos
+#: library behind "Photos".
 MACOS_PROTECTED_HOME_FOLDERS = (
     "Desktop",
     "Documents",
     "Downloads",
     "Library/Mobile Documents",
+    "Movies/TV",
+    "Music",
+    "Pictures/Photos Library.photoslibrary",
 )
 
 
@@ -40,6 +46,9 @@ class ProtectedFolders:
     def __init__(self, host: Any, named: Iterable[Any] = ()):
         self.skipped: List[Path] = []
         self._guarded: Dict[Path, Path] = {}
+        # A walk of / meets ~/Music again as /System/Volumes/Data/Users/<u>/Music.
+        self._by_id: Dict[Tuple[int, int], Path] = {}
+        self._names: set = set()
         if sys.platform != "darwin":
             return
         granted = [
@@ -55,15 +64,30 @@ class ProtectedFolders:
                 continue
             self._guarded[folder] = folder
             self._guarded[resolved] = folder
+            try:
+                st = os.stat(resolved)
+            except FileNotFoundError:
+                continue
+            self._by_id[(st.st_dev, st.st_ino)] = folder
+        self._names = {f.name for f in self._guarded.values()}
 
     def blocks(self, path: Any) -> bool:
         """True (and recorded) when *path* is a guarded folder to skip.
 
-        Matches by exact path, so *path* must be built from a resolved root.
+        Matches by path, then by inode for a folder of the same name, so an alias
+        of a guarded folder (a firmlink, a symlinked parent) is skipped too.
+        Stat-ing the folder itself never triggers the permission prompt.
         """
         if not self._guarded:
             return False
-        folder = self._guarded.get(Path(path))
+        path = Path(path)
+        folder = self._guarded.get(path)
+        if folder is None and path.name in self._names:
+            try:
+                st = os.stat(path)
+            except FileNotFoundError:
+                return False
+            folder = self._by_id.get((st.st_dev, st.st_ino))
         if folder is None:
             return False
         if folder not in self.skipped:

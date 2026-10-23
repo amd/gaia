@@ -27,15 +27,19 @@ function summarize(n: GaiaNotification): string {
 /** Lines of code a prompt shows before "Show all". */
 export const CODE_PREVIEW_LINES = 12;
 
-/** The code a gated call runs, collapsed past {@link CODE_PREVIEW_LINES} lines. */
-function CodeBlock({ code }: { code: string }) {
+/** Long text, collapsed past `previewLines` lines (the code a gated call runs, a tool's output). */
+export function CodeBlock({ code, previewLines = CODE_PREVIEW_LINES, testId = 'perm-code' }: {
+    code: string;
+    previewLines?: number;
+    testId?: string;
+}) {
     const [expanded, setExpanded] = useState(false);
     const lines = code.replace(/^\n+|\n+$/g, '').split('\n');
-    const long = lines.length > CODE_PREVIEW_LINES;
-    const shown = (long && !expanded ? lines.slice(0, CODE_PREVIEW_LINES) : lines).join('\n');
+    const long = lines.length > previewLines;
+    const shown = (long && !expanded ? lines.slice(0, previewLines) : lines).join('\n');
     return (
         <>
-            <pre className={`perm-card-pre perm-card-code${expanded ? ' is-expanded' : ''}`} data-testid="perm-code">{shown}</pre>
+            <pre className={`perm-card-pre perm-card-code${expanded ? ' is-expanded' : ''}`} data-testid={testId}>{shown}</pre>
             {long && (
                 <button
                     type="button"

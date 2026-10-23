@@ -696,6 +696,8 @@ export interface Schedule {
     session_id: string | null;
     /** Parsed natural-language schedule as JSON; null for plain-interval schedules. */
     schedule_config: string | null;
+    /** When it runs, e.g. "Weekdays at 8:00 AM" — the same words the form preview shows. */
+    description: string;
     /** The last run's error; null when it succeeded. */
     last_error: string | null;
 }
@@ -810,8 +812,20 @@ export interface AgentStep {
     };
     /** MCP server name (for MCP tools). */
     mcpServer?: string;
+    /** The connector's display name, e.g. "Git" (for MCP tools). */
+    mcpServerLabel?: string;
+    /** The server's own tool name, e.g. "git_log" (for MCP tools). */
+    mcpTool?: string;
+    /** The text an MCP tool returned. */
+    mcpOutput?: McpOutput;
     /** Tool call latency in milliseconds. */
     latencyMs?: number;
+}
+
+/** The text an MCP tool returned, capped by the server. */
+export interface McpOutput {
+    text: string;
+    truncated?: boolean;
 }
 
 /** Extended SSE event types for agent communication. */
@@ -916,6 +930,12 @@ export interface StreamEvent {
     timeout_seconds?: number;
     /** MCP server name (for tool_start of MCP tools). */
     mcp_server?: string;
+    /** The connector's display name (for tool_start of MCP tools). */
+    mcp_server_label?: string;
+    /** The server's own tool name (for tool_start of MCP tools). */
+    mcp_tool?: string;
+    /** The text an MCP tool returned (for tool_result of MCP tools). */
+    mcp_output?: McpOutput;
     /** Tool call latency in milliseconds (for tool_result). */
     latency_ms?: number;
     /** agent_error the agent recovers from by retrying, rather than a turn-ending one. */
