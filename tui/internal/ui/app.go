@@ -455,17 +455,20 @@ func launchFullAccess(agent catalog.Agent, fullAccess, saved bool) (bool, string
 	return fullAccess, "", nil
 }
 
-// oneShotModel is the model a --query run uses: an explicit --model, else the
-// flagship's remembered Lemonade model, so a one-shot answers on the provider
-// the chat runs on instead of loading (or downloading) a local default.
 // oneShotConfig is the readiness check for a --query turn. It carries the model
 // the turn runs on, so a cloud model is checked rather than the local default.
 func oneShotConfig(agentID, name, model string) preflight.Config {
 	cfg := preflight.ConfigFor(agentID, name)
-	cfg.Model = model
+	// Only the flagship takes a per-turn model; email ignores one.
+	if agentID == catalog.FlagshipID {
+		cfg.Model = model
+	}
 	return cfg
 }
 
+// oneShotModel is the model a --query run uses: an explicit --model, else the
+// flagship's remembered Lemonade model, so a one-shot answers on the provider
+// the chat runs on instead of loading (or downloading) a local default.
 func oneShotModel(agentID, model string, useClaude bool, read func() (preflight.LastModel, error)) (string, string) {
 	if model != "" || useClaude || agentID != catalog.FlagshipID {
 		return model, ""
