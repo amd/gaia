@@ -826,8 +826,10 @@ async function chooseLemonadeInDialog(found, parent) {
   if (owner) {
     if (owner.isMinimized()) owner.restore();
     owner.show();
+    owner.moveTop();
     owner.focus();
-    owner.flashFrame(true);
+    // Windows can refuse focus to a background app; the taskbar flash is the hint.
+    if (!owner.isFocused()) owner.flashFrame(true);
   }
   const box = {
     type: "question",

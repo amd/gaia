@@ -125,11 +125,37 @@ async def test_a_card_that_answered_keeps_the_turn_empty(runtime):
     assert runtime.get_session(sid)["last_run_status"] == "done"
 
 
-async def test_nothing_at_all_still_reports_an_error(runtime):
-    sid, events = await _run(runtime, [])
+async def test_nothing_from_a_down_backend_reports_an_error(runtime):
+    problem = "No answer came back because Lemonade Server isn't responding."
+    with patch.object(
+        helpers, "_empty_answer_backend_problem", AsyncMock(return_value=problem)
+    ) as probe:
+        sid, events = await _run(runtime, [])
 
+    probe.assert_awaited_once_with("M-GGUF")
     assert not _of(events, "done")
-    assert _of(events, "error")[-1]["content"] == helpers._EMPTY_ANSWER_LEMONADE_MSG
-    assert runtime.get_messages(sid)[-1]["content"] == (
-        helpers._EMPTY_ANSWER_LEMONADE_MSG
-    )
+    assert _of(events, "error")[-1]["content"] == problem
+    assert runtime.get_messages(sid)[-1]["content"] == problem
+
+
+async def test_nothing_from_a_healthy_backend_says_the_model_was_empty(runtime):
+    with patch.object(
+        helpers, "_empty_answer_backend_problem", AsyncMock(return_value=None)
+    ):
+        sid, events = await _run(runtime, [])
+
+    assert not _of(events, "error")
+    [done] = _of(events, "done")
+    assert done["content"] == helpers._EMPTY_MODEL_ANSWER_MSG
+    assert done["failed"] is True
+    saved = runtime.get_messages(sid)[-1]
+    assert saved["content"] == helpers._EMPTY_MODEL_ANSWER_MSG
+    assert "Lemonade" not in saved["content"]
+    assert runtime.get_session(sid)["last_run_status"] == "failed"
+
+
+async def test_a_turn_with_steps_never_probes_the_backend(runtime):
+    with patch.object(helpers, "_empty_answer_backend_problem", AsyncMock()) as probe:
+        await _run(runtime, [_TOOL_START, _TOOL_RESULT])
+
+    probe.assert_not_awaited()
