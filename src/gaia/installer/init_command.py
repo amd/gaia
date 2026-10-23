@@ -15,6 +15,7 @@ the profile's min_context_size, which is where that requirement is enforced.
 """
 
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -732,9 +733,11 @@ class _DownloadProgress:
 
     REDRAW_S = 0.2
 
-    def __init__(self, console, model_id: str):
+    def __init__(self, console, model_id: str, emit=None):
         self.console = console
         self.model_id = model_id
+        # With --progress-json, a ``download`` event replaces the bar.
+        self.emit = emit
         self.events = 0
         self.reported_error = False
         self._last_bytes = 0
@@ -760,13 +763,22 @@ class _DownloadProgress:
                 )
                 self._last_bytes, self._last_time = done, now
             self._drawn_at = now
+            if self.emit is not None:
+                self.emit(
+                    "download",
+                    model=self.model_id,
+                    bytes_done=done,
+                    bytes_total=total,
+                    speed_bps=round(self._speed_mbps * 1024**2, 1),
+                )
+                return
             self.console.print_download_progress(
                 percent=int(event.get("percent", 0)),
                 bytes_downloaded=done,
                 bytes_total=total,
                 speed_mbps=self._speed_mbps,
             )
-        elif kind == "complete" and self._drawn_at is not None:
+        elif kind == "complete" and self._drawn_at is not None and self.emit is None:
             print()  # end the in-place progress line
         elif kind == "error":
             self.reported_error = True
@@ -805,6 +817,7 @@ class InitCommand:
         progress_callback: Optional[Callable[[InitProgress], None]] = None,
         lemonade_url: Optional[str] = None,
         gaia_lemonade: bool = False,
+        progress_json: bool = False,
     ):
         """
         Initialize the init command.
@@ -832,6 +845,9 @@ class InitCommand:
             lemonade_url: Use the Lemonade Server the user already runs at
                 this URL, and save that choice; GAIA installs no server.
             gaia_lemonade: Use GAIA's own Lemonade, and save that choice.
+            progress_json: Also print the chat model choice, the planned
+                downloads and download progress as JSON lines on stdout (see
+                :meth:`_emit`), for the Agent UI's setup screen.
         """
         if lemonade_url and gaia_lemonade:
             raise ValueError(
@@ -857,6 +873,7 @@ class InitCommand:
         self.remote = remote
         self.skip_chat_model = skip_chat_model
         self.progress_callback = progress_callback
+        self.progress_json = progress_json
 
         # A configured server is someone else's to run; init only checks it.
         # An explicit choice is applied first, in run(), so a broken saved
@@ -905,6 +922,16 @@ class InitCommand:
                 self.console.print(message)
         else:
             print(message, end=end, flush=True)
+
+    def _emit(self, event: str, **fields) -> None:
+        """One ``{"event": ..., ...}`` line on stdout, only with ``--progress-json``.
+
+        Events: ``chat_model`` (model, user_set, skipped), ``downloads``
+        (models with size_gb, total_gb) and ``download`` (model, bytes_done,
+        bytes_total, speed_bps). Plain print, so Rich never wraps or styles it.
+        """
+        if self.progress_json:
+            print(json.dumps({"event": event, **fields}), flush=True)
 
     def _print_header(self):
         """Print initialization header."""
@@ -1724,6 +1751,16 @@ class InitCommand:
                 self._print(f"   Chat model: {choice.model_id}{where}")
                 for skipped_id, reason in choice.skipped:
                     self._print(f"   Not using {skipped_id}: {reason}")
+            self._emit(
+                "chat_model",
+                model=choice.model_id,
+                user_set=choice.user_set,
+                skipped=(
+                    []
+                    if choice.user_set
+                    else [{"id": m, "reason": r} for m, r in choice.skipped]
+                ),
+            )
             if self.skip_models:
                 self._print(
                     "   Not downloaded (--skip-models). Run `gaia init` without it "
@@ -1809,6 +1846,11 @@ class InitCommand:
             if total_gb:
                 self._print(f"   Total download: about {total_gb:.1f} GB")
             self._print("")
+            self._emit(
+                "downloads",
+                models=[{"id": m, "size_gb": sizes.get(m)} for m in model_ids],
+                total_gb=round(total_gb, 1),
+            )
 
             if not self._prompt_yes_no("Continue?", default=True):
                 self._print("   Skipping model downloads")
@@ -1864,7 +1906,11 @@ class InitCommand:
                 # time proportional to its size (~5 MB/s floor).
                 if mr and mr.size_gb:
                     pull_kwargs["timeout"] = max(7200, int(mr.size_gb * 200))
-                progress = _DownloadProgress(self.agent_console, model_id)
+                progress = _DownloadProgress(
+                    self.agent_console,
+                    model_id,
+                    emit=self._emit if self.progress_json else None,
+                )
                 if client.ensure_model_downloaded(
                     model_id, on_progress=progress, **pull_kwargs
                 ):
@@ -2698,6 +2744,7 @@ def run_init(
     skip_chat_model: bool = False,
     lemonade_url: Optional[str] = None,
     gaia_lemonade: bool = False,
+    progress_json: bool = False,
 ) -> int:
     """
     Entry point for `gaia init` command.
@@ -2715,6 +2762,7 @@ def run_init(
             (see InitCommand's docstring — for a Claude-backed session)
         lemonade_url: Use (and save) the Lemonade Server the user runs here
         gaia_lemonade: Use (and save) GAIA's own Lemonade Server
+        progress_json: Also print progress as JSON lines (see InitCommand._emit)
 
     Returns:
         Exit code (0 for success, non-zero for failure)
@@ -2732,6 +2780,7 @@ def run_init(
             skip_chat_model=skip_chat_model,
             lemonade_url=lemonade_url,
             gaia_lemonade=gaia_lemonade,
+            progress_json=progress_json,
         )
         return cmd.run()
     except ValueError as e:

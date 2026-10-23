@@ -206,6 +206,8 @@ class TestDefaultPick:
     )
     def test_recommend_reads_lemonade(self, info, expected):
         class FakeClient:
+            base_url = "http://127.0.0.1:9/api/v1"
+
             def get_system_info(self, timeout=None):
                 return info
 
@@ -481,6 +483,9 @@ class TestRealLemonadeReports:
         info = _fixture("lemonade11_amd_dgpu_windows.json")
 
         class FakeClient:
+
+            base_url = "http://127.0.0.1:9/api/v1"
+
             def get_system_info(self, timeout=None):
                 return info
 
@@ -502,6 +507,8 @@ class TestLemonadeVersionGate:
 
     def _client(self, info, version):
         class FakeClient:
+            base_url = "http://127.0.0.1:9/api/v1"
+
             def get_system_info(self, timeout=None):
                 return info
 
@@ -559,6 +566,9 @@ def test_a_ladder_model_without_a_size_is_never_guessed_in(monkeypatch):
     )
 
     class FakeClient:
+
+        base_url = "http://127.0.0.1:9/api/v1"
+
         def get_system_info(self, timeout=None):
             return STRIX_HALO_128
 
@@ -621,6 +631,9 @@ class TestQwenWindowFollowsMemory:
         }
 
         class FakeClient:
+
+            base_url = "http://127.0.0.1:9/api/v1"
+
             def get_system_info(self, timeout=None):
                 return info
 

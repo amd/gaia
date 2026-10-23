@@ -6,7 +6,7 @@ import { Check, Info, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
 import { shortModelName } from '../stores/modelStore';
 import { formatGb } from '../utils/modelLabels';
-import type { PreflightReport, SetupPlan } from '../types';
+import type { PreflightReport, SetupPassedOver, SetupPlan } from '../types';
 
 /** One line of the system check: what was found, or that it is checked later. */
 function CheckRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {
@@ -65,18 +65,32 @@ export function SystemCheck({ hardware, error }: { hardware: PreflightReport | n
     );
 }
 
+/** Why setup didn't pick each larger model: the user is told, never left to guess. */
+function PassedOver({ items }: { items?: SetupPassedOver[] | null }) {
+    if (!items || items.length === 0) return null;
+    return (
+        <>
+            {items.map((p) => (
+                <p key={p.id} className="setup-hint">Not {shortModelName(p.id)}: {p.reason}.</p>
+            ))}
+        </>
+    );
+}
+
 interface ChatModelProps {
     plan: SetupPlan | null;
     planError: string | null;
     /** The model a running (or finished) setup reported choosing. */
     chosen: string | null;
+    /** What that setup said about the larger models it passed over. */
+    passedOver?: SetupPassedOver[] | null;
     /** Setup has started, so the choice is fixed. */
     locked: boolean;
     onPlan: (plan: SetupPlan) => void;
 }
 
 /** Which chat model setup downloads, named before it starts, with a way to pick another. */
-export function ChatModelChoice({ plan, planError, chosen, locked, onPlan }: ChatModelProps) {
+export function ChatModelChoice({ plan, planError, chosen, passedOver, locked, onPlan }: ChatModelProps) {
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     // A model the user picked here, or set beforehand, is theirs, not setup's.
@@ -85,10 +99,13 @@ export function ChatModelChoice({ plan, planError, chosen, locked, onPlan }: Cha
     if (chosen) {
         const theirs = picked || (plan?.chat_model.user_set && plan.chat_model.id === chosen);
         return (
-            <p className="setup-hint">
-                {theirs ? 'You chose ' : 'Setup chose '}
-                <strong>{shortModelName(chosen)}</strong>{theirs ? '.' : ' for this PC.'}
-            </p>
+            <>
+                <p className="setup-hint">
+                    {theirs ? 'You chose ' : 'Setup chose '}
+                    <strong>{shortModelName(chosen)}</strong>{theirs ? '.' : ' for this PC.'}
+                </p>
+                {!theirs && <PassedOver items={passedOver} />}
+            </>
         );
     }
     if (planError) {
@@ -108,8 +125,9 @@ export function ChatModelChoice({ plan, planError, chosen, locked, onPlan }: Cha
         return (
             <p className="setup-hint">
                 Picked once the model server is running: the largest model your GPU holds
-                {ladder.length > 1 ? ` (${ladder.slice(0, -1).join(', ')}, or else ${ladder[ladder.length - 1]})` : ''}.
-                It&rsquo;s named here as soon as setup chooses.
+                {ladder.length > 1 ? ` (${ladder.slice(0, -1).join(', ')}, or else ${ladder[ladder.length - 1]})` : ''}
+                {' '}that also fits the memory free right now. Setup starts the server first and names the
+                model and its download size here before anything large downloads.
             </p>
         );
     }
@@ -139,6 +157,7 @@ export function ChatModelChoice({ plan, planError, chosen, locked, onPlan }: Cha
                 <strong>{name}</strong> will answer your chats{size ? ` (${size})` : ''}.{fit}
                 {own && ' It’s your default_model; change it in Settings → Model after setup.'}
             </p>
+            {!chat.user_set && <PassedOver items={plan.passed_over} />}
             {choosable && (
                 <div className="setup-choices" role="radiogroup" aria-label="Chat model">
                     {plan.options.map((o) => (

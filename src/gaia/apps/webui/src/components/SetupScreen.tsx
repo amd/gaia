@@ -11,7 +11,7 @@ import './settings/CloudSpending.css';
 import { formatGb } from '../utils/modelLabels';
 import { ChatModelChoice, SystemCheck } from './SetupSteps';
 import { StartCards } from './StartCards';
-import type { LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCheck, SetupPlan, SetupRunStatus, SetupStep, StartCard } from '../types';
+import type { LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, ProviderModel, SetupCheck, SetupDownload, SetupPlan, SetupRunStatus, SetupStep, StartCard } from '../types';
 import './SetupScreen.css';
 
 const CHOICES: Array<{ id: ProviderId; title: string; note: string }> = [
@@ -201,11 +201,39 @@ function plannedSteps(steps: SetupStep[], plan: SetupPlan | null, cloud: boolean
     });
 }
 
+function bytesGb(bytes: number): string {
+    return `${(bytes / 1e9).toFixed(1)} GB`;
+}
+
+function timeLeft(seconds: number): string {
+    if (seconds < 60) return 'under a minute';
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `${minutes} min`;
+    return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+}
+
+/** "Downloading Qwen3.6 (2 of 3): 4.1 GB of 23.3 GB · 48 MB/s · about 7 min left" */
+function downloadText(d: SetupDownload): string {
+    const place = d.index != null && d.count != null && d.count > 1 ? ` (${d.index} of ${d.count})` : '';
+    const parts = [`${bytesGb(d.bytes_done)} of ${bytesGb(d.bytes_total)}`];
+    if (d.speed_bps > 0) parts.push(`${Math.round(d.speed_bps / 1e6)} MB/s`);
+    if (d.eta_s != null) parts.push(`about ${timeLeft(d.eta_s)} left`);
+    return `Downloading ${shortModelName(d.model)}${place}: ${parts.join(' · ')}`;
+}
+
+function downloadLabel(plan: SetupPlan | null): string {
+    if (plan?.download_gb === 0) return 'Finish setup';
+    if (plan?.download_gb != null) return `Download ${formatGb(plan.download_gb)} and finish setup`;
+    return 'Download and finish setup';
+}
+
 /**
  * First run, the same steps as the TUI: check this PC, choose where GAIA runs
  * and which chat model, then install the model server, download the models and
  * check they load. A cloud choice skips the local chat model (the embedding
- * model is still needed for documents and memory). Ends on a first task.
+ * model is still needed for documents and memory). On this PC, the model
+ * server is set up first and nothing is downloaded until the screen has named
+ * the model that fits the memory free now and its size. Ends on a first task.
  */
 export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const refreshModel = useModelStore((s) => s.refresh);
@@ -221,6 +249,10 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const [plan, setPlan] = useState<SetupPlan | null>(null);
     const [planError, setPlanError] = useState<string | null>(null);
     const [cloudModel, setCloudModel] = useState<string | null>(null);
+    const [cloudModels, setCloudModels] = useState<ProviderModel[]>([]);
+    const [cloudPick, setCloudPick] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
+    // The model server is set up and nothing is downloaded yet: the model is named next.
+    const [serverReady, setServerReady] = useState(false);
     const [firstTasks, setFirstTasks] = useState<StartCard[]>([]);
     // GAIA uses a Lemonade the user runs, so the Connect step changes nothing there.
     const [usersServer, setUsersServer] = useState(false);
@@ -230,9 +262,13 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const steps: SetupStep[] = run?.steps
         ?? plannedSteps(cloud ? initial.cloud_steps ?? initial.steps : initial.steps, plan, cloud);
     const running = run?.state === 'running' || run?.state === 'verifying';
-    const installed = run?.state === 'ready';
+    const installed = run?.state === 'ready' && !run.server_only;
     // The run's steps are numbered after: check, where, and (local) model.
     const firstRunStep = cloud ? 3 : 4;
+    // On this PC, start the model server first unless it already answers, so the
+    // model that fits (and its size) is shown before anything large downloads.
+    const serverFirst = !cloud && !serverReady && !plan?.lemonade.reachable;
+    const diskProblem = !cloud && !serverFirst ? plan?.disk_problem ?? null : null;
 
     const loadHardware = useCallback(() => {
         setHardwareError(null);
@@ -264,6 +300,10 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
         api.getSetupStatus()
             .then((s) => {
                 if (s.state === 'idle') return;
+                if (s.server_only && s.state === 'ready') {
+                    setServerReady(true);
+                    return;
+                }
                 setRun(s);
                 // A cloud run with no saved choice can't say which provider; the
                 // Connect step lets the user switch if this guess is wrong.
@@ -287,15 +327,26 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
         return stopPolling;
     }, [running, stopPolling]);
 
+    // The server is up: read the plan again, now that this PC's memory can be asked.
+    useEffect(() => {
+        if (!run?.server_only || run.state !== 'ready') return;
+        setRun(null);
+        setServerReady(true);
+        loadHardware();
+        loadPlan();
+    }, [run, loadHardware, loadPlan]);
+
     const start = useCallback(async () => {
         setStartError(null);
         try {
             saveChoice(choice);
-            setRun(await api.startSetup(cloud));
+            setRun(await (cloud ? api.startSetup(true)
+                : serverFirst ? api.startSetup(false, true)
+                    : api.startSetup(false)));
         } catch (err) {
             setStartError(err instanceof Error ? err.message : String(err));
         }
-    }, [cloud, choice]);
+    }, [cloud, choice, serverFirst]);
 
     const connect = useCallback(async () => {
         setKeyState({ busy: true, error: null, done: false });
@@ -306,12 +357,24 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
             if (!pick) throw new Error('Connected, but the provider listed no chat models.');
             await selectModel(pick.id);
             setCloudModel(pick.id);
+            setCloudModels(models);
             setKey('');
             setKeyState({ busy: false, error: null, done: true });
         } catch (err) {
             setKeyState({ busy: false, error: err instanceof Error ? err.message : String(err), done: false });
         }
     }, [choice, key, selectModel, usersServer]);
+
+    const pickCloudModel = useCallback(async (id: string) => {
+        setCloudPick({ busy: true, error: null });
+        try {
+            await selectModel(id);
+            setCloudModel(id);
+            setCloudPick({ busy: false, error: null });
+        } catch (err) {
+            setCloudPick({ busy: false, error: err instanceof Error ? err.message : String(err) });
+        }
+    }, [selectModel]);
 
     const switchCloud = useCallback((id: ProviderId) => {
         saveChoice(id);
@@ -343,7 +406,8 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                 <h1 id="setup-title" className="setup-title">Set up GAIA</h1>
                 <p className="setup-lede">
                     {canFinish ? 'All set.' : run ? 'Setting things up. Setup keeps going if you switch away.'
-                        : 'A few minutes of setup, then your first chat.'}
+                        : serverReady ? 'The model server is running. Check the chat model, then download it.'
+                            : 'A few minutes of setup, then your first chat.'}
                 </p>
 
                 <ol className="setup-steps">
@@ -400,6 +464,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                     plan={plan}
                                     planError={planError}
                                     chosen={run?.chat_model ?? null}
+                                    passedOver={run?.passed_over}
                                     locked={!!run}
                                     onPlan={setPlan}
                                 />
@@ -409,15 +474,28 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
 
                     {!run && (
                         <li className="setup-step-action">
-                            <button type="button" className="btn-primary setup-start" onClick={() => void start()}>
-                                Start setup
+                            <button
+                                type="button"
+                                className="btn-primary setup-start"
+                                disabled={diskProblem != null}
+                                onClick={() => void start()}
+                            >
+                                {cloud || serverFirst ? 'Start setup' : downloadLabel(plan)}
                             </button>
+                            {serverFirst && (
+                                <p className="setup-hint">
+                                    This starts the local model server first. Nothing large downloads until
+                                    you&rsquo;ve seen which model fits this PC.
+                                </p>
+                            )}
+                            {diskProblem && <p className="setup-error" role="alert">{diskProblem}</p>}
                             {startError && <p className="setup-error" role="alert">{startError}</p>}
                         </li>
                     )}
 
                     {steps.map((step, i) => {
-                        const status = run ? step.status : 'pending';
+                        const status = run ? step.status
+                            : serverReady && step.key === 'server' ? 'done' : 'pending';
                         const isActive = status === 'active';
                         const failed = status === 'failed' || status === 'cancelled';
                         return (
@@ -431,7 +509,9 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                 </div>
                                 {isActive && run && (
                                     <div className="setup-step-body">
-                                        <p className="setup-hint" role="status">{run.text}</p>
+                                        <p className="setup-hint" role="status">
+                                            {run.download ? downloadText(run.download) : run.text}
+                                        </p>
                                         {run.percent != null && (
                                             <progress className="setup-progress" max={100} value={run.percent} aria-label={run.text} />
                                         )}
@@ -497,6 +577,27 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                     </div>
                                     {keyState.error && <p className="setup-error" role="alert">{keyState.error}</p>}
                                 </form>
+                            )}
+                            {keyState.done && cloudModels.length > 1 && (
+                                <div className="setup-step-body">
+                                    <label className="setup-row">
+                                        <span className="setup-hint">Chat model</span>
+                                        <select
+                                            className="settings-input"
+                                            aria-label="Cloud chat model"
+                                            value={cloudModel ?? ''}
+                                            disabled={cloudPick.busy}
+                                            onChange={(e) => void pickCloudModel(e.target.value)}
+                                        >
+                                            {cloudModels.map((m) => (
+                                                <option key={m.id} value={m.id}>
+                                                    {shortModelName(m.id)}{m.rank === 1 ? ' (recommended)' : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </label>
+                                    {cloudPick.error && <p className="setup-error" role="alert">{cloudPick.error}</p>}
+                                </div>
                             )}
                         </li>
                     )}

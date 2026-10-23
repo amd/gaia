@@ -74,7 +74,10 @@ models, not an unused local chat model.
 A3B** on any PC whose GPU has ~27 GB for models (its 23.3 GB of weights and
 vision projector plus the context cache at its smallest, 64K window — a 64 GB+
 Strix Halo or a 32 GB GPU qualifies; a 24 GB card does not), **Gemma 4 E4B** everywhere
-else, including CPU-only PCs. GAIA runs Qwen3.6 with thinking on, so each step
+else, including CPU-only PCs. Qwen3.6 must also fit the memory free when setup
+runs (about 26 GB at its smallest window): on a 48 GB Mac with other apps holding
+memory, setup picks Gemma and says how much Qwen3.6 needs and how much is free.
+Close those apps and run setup again to get Qwen3.6. GAIA runs Qwen3.6 with thinking on, so each step
 reasons before it answers or calls a tool. It records the pick as `default_model` in `~/.gaia/config.json`,
 so the TUI's agent starts on it. Set `gaia config set default_model <id>` to
 choose your own; `gaia init` never overwrites it, and downloads it instead of

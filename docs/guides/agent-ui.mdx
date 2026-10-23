@@ -23,7 +23,7 @@ npm install -g @amd-gaia/agent-ui
 gaia-ui
 ```
 
-The first time it opens, the app sets itself up: it installs GAIA's local model server, downloads the models and checks they load, with each step shown in the window. No accounts or API keys are needed to run locally.
+The first time it opens, the app asks where chat should run. Choose a cloud provider (Fireworks AI or the AMD LLM Gateway) and it installs only GAIA's local model server and its small document-search model, then asks for your key. Choose **On this PC** and it starts the model server, names the chat model that fits the memory free now and its download size, then downloads it with the model, size, speed and time left shown in the window. No accounts or API keys are needed to run locally.
 
 ---
 
@@ -152,9 +152,10 @@ Pick the install path that fits you best:
   <Tab title="Desktop installer (easiest)">
     Prebuilt desktop installers are published on the
     [GitHub Releases page](https://github.com/amd/gaia/releases) alongside
-    each tagged release. They bundle the Electron shell; Lemonade Server and
-    the default model are downloaded automatically on first launch. This is
-    the simplest path for non-developer end users.
+    each tagged release. They bundle the Electron shell and install the Python
+    backend on first launch; no model is downloaded until you choose where chat
+    runs on the app's setup screen. This is the simplest path for
+    non-developer end users.
 
     **Artifact naming** (`electron-builder.yml`):
     `gaia-agent-ui-<version>-<arch>-setup.<ext>` — e.g. `gaia-agent-ui-0.17.2-x64-setup.exe`
@@ -182,7 +183,7 @@ Pick the install path that fits you best:
   </Tab>
 
   <Tab title="npm">
-    The npm package handles everything — on first run it auto-installs Python, the GAIA backend, Lemonade Server, and a minimal model.
+    The npm package handles everything — on first run it auto-installs Python and the GAIA backend; the app's setup screen then sets up Lemonade Server and the model you choose.
 
     **Requires:** [Node.js 20+](https://nodejs.org) (`winget install OpenJS.NodeJS.LTS` on Windows, `brew install node@22` on macOS)
 
@@ -241,10 +242,13 @@ Pick the install path that fits you best:
     </Note>
 
     **First run:** no separate setup command is needed. When the app opens on a
-    PC that is not set up yet, it checks the PC (device, memory, disk), asks
-    where GAIA runs, names the chat model it will download and its size (you
-    can pick a smaller one first), then runs the same steps `gaia init` runs and
-    ends on a few tasks to start with. If you choose a Lemonade Server you
+    PC that is not set up yet, it checks the PC (device, memory, disk) and asks
+    where GAIA runs. For a local model it starts the model server first, then
+    names the chat model that fits the memory free now, why any larger model was
+    passed over, and the download size (you can pick a smaller one first), then
+    runs the same steps `gaia init` runs and ends on a few tasks to start with.
+    For a cloud provider it downloads under 1 GB, then asks for the key and lets
+    you pick the cloud model. If you choose a Lemonade Server you
     already run, setup uses it instead of installing GAIA's own. Running
     `gaia init` yourself beforehand also works.
   </Tab>

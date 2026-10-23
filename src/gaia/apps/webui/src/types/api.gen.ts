@@ -1058,9 +1058,11 @@ export interface SettingsUpdateRequest {
   dynamic_tools?: boolean | null;
 }
 /**
- * ``skip_chat_model`` when the chat runs on a cloud provider.
+ * ``skip_chat_model`` when the chat runs on a cloud provider;
+ * ``server_only`` to start the model server and download nothing yet.
  */
 export interface SetupRunRequest {
+  server_only?: boolean;
   skip_chat_model?: boolean;
 }
 export interface StartAgentServerRequest {

@@ -980,8 +980,33 @@ export interface SetupRunStatus {
     command?: string;
     log_tail?: string[];
     skip_chat_model?: boolean;
+    /** Only the model server was set up; no model was downloaded. */
+    server_only?: boolean;
     /** The chat model setup chose, once it has said. */
     chat_model?: string | null;
+    /** Each larger model setup passed over, and why. */
+    passed_over?: SetupPassedOver[];
+    /** What setup downloads in all, once it has said. */
+    download_gb?: number | null;
+    /** The model being downloaded right now. */
+    download?: SetupDownload | null;
+}
+
+export interface SetupPassedOver {
+    id: string;
+    reason: string;
+}
+
+export interface SetupDownload {
+    model: string;
+    /** Its place among the models still to download (1-based), when known. */
+    index: number | null;
+    count: number | null;
+    bytes_done: number;
+    bytes_total: number;
+    speed_bps: number;
+    /** Seconds left at the current speed; null until a speed is measured. */
+    eta_s: number | null;
 }
 
 /** GET /api/setup/plan: what setup will use and download, before it starts. */
@@ -994,8 +1019,14 @@ export interface SetupPlan {
     memory_gb: number | null;
     memory_source: string | null;
     options: Array<{ id: string; size_gb: number | null; fits: boolean | null; reason: string | null }>;
+    /** Larger models the hardware's pick passed over (memory, free memory, disk, version). */
+    passed_over?: SetupPassedOver[];
     models: Array<{ id: string; role: 'chat' | 'embedding'; size_gb: number | null }>;
     download_gb: number | null;
+    /** Free space on the disk Lemonade keeps models on; null before it runs. */
+    disk_free_gb?: number | null;
+    /** Why the download won't fit that disk; null when it fits or can't be told. */
+    disk_problem?: string | null;
 }
 
 /** A task a new chat offers, from an installed skill and what is set up. */

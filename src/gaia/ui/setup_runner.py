@@ -10,7 +10,11 @@ does, and turns the output into numbered steps with progress. Readiness is read
 from the real state every time, never from a marker file.
 
 ``--skip-chat-model`` is passed when the user chose a cloud provider: the chat
-then runs remotely and only the embedding model is needed locally.
+then runs remotely and only the embedding model is needed locally. A
+``server_only`` run (``--skip-models``) installs and starts the model server
+and downloads nothing, so the screen can name the model that fits this PC
+before the user agrees to download it. ``--progress-json`` makes ``gaia init``
+report the chosen model, the planned downloads and their bytes and speed.
 """
 
 from __future__ import annotations
@@ -86,19 +90,30 @@ def check_args(skip_chat_model: bool, load: bool) -> List[str]:
     return args
 
 
-def run_args(skip_chat_model: bool) -> List[str]:
+def _choice_flags(skip_chat_model: bool, server_only: bool) -> List[str]:
+    if server_only:
+        return ["--skip-models"]
+    return ["--skip-chat-model"] if skip_chat_model else []
+
+
+def run_args(skip_chat_model: bool, server_only: bool = False) -> List[str]:
     # --yes: nobody can answer a prompt on a pipe. --skip-webui-build: a source
     # checkout would otherwise rebuild the very UI that is running this.
-    args = ["init", "--profile", PROFILE, "--yes", "--skip-webui-build"]
-    if skip_chat_model:
-        args.append("--skip-chat-model")
-    return args
+    return [
+        "init",
+        "--profile",
+        PROFILE,
+        "--yes",
+        "--skip-webui-build",
+        "--progress-json",
+        *_choice_flags(skip_chat_model, server_only),
+    ]
 
 
-def run_command(skip_chat_model: bool) -> str:
+def run_command(skip_chat_model: bool, server_only: bool = False) -> str:
     """What a person would type to do this themselves."""
-    return "gaia init --profile gaia" + (
-        " --skip-chat-model" if skip_chat_model else ""
+    return " ".join(
+        ["gaia init --profile gaia", *_choice_flags(skip_chat_model, server_only)]
     )
 
 
@@ -210,6 +225,24 @@ def describe(line: str) -> Optional[Progress]:
     return None
 
 
+#: The ``gaia init --progress-json`` events (see ``InitCommand._emit``).
+_EVENTS = frozenset({"chat_model", "downloads", "download"})
+
+
+def parse_event(line: str) -> Optional[Dict[str, Any]]:
+    """The ``--progress-json`` event on *line*, or None for any other output."""
+    line = line.strip()
+    if not line.startswith("{"):
+        return None
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(event, dict) or event.get("event") not in _EVENTS:
+        return None
+    return event
+
+
 def users_lemonade_url() -> Optional[str]:
     """The user's own Lemonade when they chose "Use mine", else None."""
     from gaia.config import GaiaConfigError
@@ -226,14 +259,22 @@ def step_labels(
     skip_chat_model: bool,
     users_server: Optional[str] = None,
     chat_model: Optional[str] = None,
+    download_gb: Optional[float] = None,
 ) -> List[Dict[str, str]]:
-    """The steps as the user reads them: their server, and the model setup chose."""
+    """The steps as the user reads them: their server, the model setup chose,
+    and (once setup has said) how much it downloads."""
     if skip_chat_model:
         models = "the embedding model, under 1 GB"
     elif chat_model:
         models = f"chat model {chat_model}, plus the embedding model"
     else:
         models = "the chat model that fits this PC, plus the embedding model"
+    if download_gb is not None:
+        models += (
+            f" ({download_gb:.1f} GB in all)"
+            if download_gb
+            else " (already downloaded)"
+        )
     return [
         (
             {
@@ -260,6 +301,8 @@ class SetupRun:
     skip_chat_model: bool
     users_server: Optional[str] = None
     chat_model: Optional[str] = None
+    #: Only the model server; no model is downloaded.
+    server_only: bool = False
     state: str = "running"  # running | verifying | ready | failed | cancelled
     phase: Optional[str] = None
     text: str = "Starting setup"
@@ -267,33 +310,78 @@ class SetupRun:
     error: Optional[str] = None
     log: List[str] = field(default_factory=list)
     status: Optional[Dict[str, Any]] = None
+    #: ``{"id", "reason"}`` for each larger model setup passed over.
+    passed_over: List[Dict[str, str]] = field(default_factory=list)
+    #: ``{"id", "size_gb"}`` for each model setup pulls; size 0 is already on disk.
+    downloads: List[Dict[str, Any]] = field(default_factory=list)
+    download_gb: Optional[float] = None
+    #: The pull in progress: model, its place in the queue, bytes, speed, time left.
+    download: Optional[Dict[str, Any]] = None
+
+    def _step_status(self, i: int, reached: int) -> str:
+        if self.state == "ready":
+            return "pending" if self.server_only and i > 0 else "done"
+        if i < reached:
+            return "done"
+        if i == reached or (reached < 0 and i == 0):
+            if self.state == "failed":
+                return "failed"
+            return "cancelled" if self.state == "cancelled" else "active"
+        return "pending"
+
+    def apply(self, event: Dict[str, Any]) -> None:
+        """Take in one ``--progress-json`` event (see :func:`parse_event`)."""
+        kind = event["event"]
+        if kind == "chat_model":
+            self.chat_model = event.get("model") or self.chat_model
+            self.passed_over = list(event.get("skipped") or [])
+        elif kind == "downloads":
+            self.downloads = list(event.get("models") or [])
+            self.download_gb = event.get("total_gb")
+        elif kind == "download":
+            self._apply_download(event)
+
+    def _apply_download(self, event: Dict[str, Any]) -> None:
+        model = event.get("model")
+        done = int(event.get("bytes_done") or 0)
+        total = int(event.get("bytes_total") or 0)
+        speed = float(event.get("speed_bps") or 0.0)
+        queue = [m.get("id") for m in self.downloads if m.get("size_gb") != 0]
+        self.download = {
+            "model": model,
+            "index": queue.index(model) + 1 if model in queue else None,
+            "count": len(queue) or None,
+            "bytes_done": done,
+            "bytes_total": total,
+            "speed_bps": speed,
+            "eta_s": round((total - done) / speed) if speed > 0 and total else None,
+        }
+        self.phase = PHASE_MODELS
+        self.text = f"Downloading {model}"
+        self.percent = min(100, done * 100 // total) if total else None
 
     def view(self) -> Dict[str, Any]:
         reached = PHASES.index(self.phase) if self.phase in PHASES else -1
         steps = []
-        labels = step_labels(self.skip_chat_model, self.users_server, self.chat_model)
+        labels = step_labels(
+            self.skip_chat_model, self.users_server, self.chat_model, self.download_gb
+        )
         for i, step in enumerate(labels):
-            if self.state == "ready" or i < reached:
-                status = "done"
-            elif i == reached or (reached < 0 and i == 0):
-                status = (
-                    "failed"
-                    if self.state == "failed"
-                    else "cancelled" if self.state == "cancelled" else "active"
-                )
-            else:
-                status = "pending"
-            steps.append({**step, "status": status})
+            steps.append({**step, "status": self._step_status(i, reached)})
         return {
             "state": self.state,
             "steps": steps,
             "text": self.text,
             "percent": self.percent,
             "error": self.error,
-            "command": run_command(self.skip_chat_model),
+            "command": run_command(self.skip_chat_model, self.server_only),
             "log_tail": self.log[-40:],
             "skip_chat_model": self.skip_chat_model,
+            "server_only": self.server_only,
             "chat_model": None if self.skip_chat_model else self.chat_model,
+            "passed_over": self.passed_over,
+            "download_gb": self.download_gb,
+            "download": self.download,
         }
 
 
@@ -309,16 +397,18 @@ class SetupRunner:
         with self._lock:
             return self._run.view() if self._run else None
 
-    def start(self, skip_chat_model: bool) -> Dict[str, Any]:
+    def start(self, skip_chat_model: bool, server_only: bool = False) -> Dict[str, Any]:
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
                 raise SetupError("Setup is already running.")
             run = SetupRun(
-                skip_chat_model=skip_chat_model, users_server=users_lemonade_url()
+                skip_chat_model=skip_chat_model,
+                users_server=users_lemonade_url(),
+                server_only=server_only,
             )
             try:
                 self._proc = subprocess.Popen(
-                    _gaia_argv(*run_args(skip_chat_model)),
+                    _gaia_argv(*run_args(skip_chat_model, server_only)),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL,
@@ -329,8 +419,8 @@ class SetupRunner:
                 )
             except OSError as e:
                 raise SetupError(
-                    f"Could not start `{run_command(skip_chat_model)}`: {e}. Run it "
-                    "in a terminal instead."
+                    f"Could not start `{run_command(skip_chat_model, server_only)}`: "
+                    f"{e}. Run it in a terminal instead."
                 ) from e
             self._run = run
             proc = self._proc
@@ -387,9 +477,14 @@ class SetupRunner:
             if code != 0:
                 run.state = "failed"
                 run.error = (
-                    f"`{run_command(run.skip_chat_model)}` failed (exit {code}): "
-                    f"{run.error or _last_line(chr(10).join(run.log))}"
+                    f"`{run_command(run.skip_chat_model, run.server_only)}` failed "
+                    f"(exit {code}): {run.error or _last_line(chr(10).join(run.log))}"
                 )
+                return
+            if run.server_only:
+                # Nothing downloaded yet, so there is nothing to load.
+                run.state, run.text = "ready", "The model server is running"
+                run.percent = None
                 return
             run.state = "verifying"
             run.phase = PHASE_FINISH
@@ -418,6 +513,11 @@ class SetupRunner:
         line = line.strip()
         if not line:
             return
+        event = parse_event(line)
+        if event is not None:
+            with self._lock:
+                run.apply(event)
+            return
         progress = describe(line)
         with self._lock:
             run.log.append(line)
@@ -439,6 +539,7 @@ class SetupRunner:
                 ) >= PHASES.index(run.phase):
                     run.phase = progress.phase
                 run.percent = None
+                run.download = None
             if progress.text:
                 run.text = progress.text
 

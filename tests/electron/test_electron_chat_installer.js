@@ -726,25 +726,18 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   // ── CI AppImage Smoke Contract ───────────────────────────────────
 
   describe('CI AppImage smoke configuration', () => {
-    it('should let the userns AppImage smoke skip gaia init', () => {
-      const workflowPath = path.join(
-        __dirname,
-        '../../.github/workflows/build-installers.yml',
+    it('should not need to skip gaia init: the installer never runs it', () => {
+      const installer = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'services/backend-installer.cjs'),
+        'utf8',
       );
-      const workflow = fs.readFileSync(workflowPath, 'utf8');
-
-      expect(workflow).toContain('GAIA_SKIP_GAIA_INIT: "1"');
-    });
-
-    it('should honor GAIA_SKIP_GAIA_INIT in the shared backend installer', () => {
-      const installerPath = path.join(
-        CHAT_APP_PATH,
-        'services/backend-installer.cjs',
+      const workflow = fs.readFileSync(
+        path.join(__dirname, '../../.github/workflows/build-installers.yml'),
+        'utf8',
       );
-      const installer = fs.readFileSync(installerPath, 'utf8');
 
-      expect(installer).toContain('process.env.GAIA_SKIP_GAIA_INIT');
-      expect(installer).toContain('Skipping gaia init');
+      expect(installer).not.toMatch(/\["init"/);
+      expect(workflow).not.toContain('GAIA_SKIP_GAIA_INIT');
     });
   });
 });

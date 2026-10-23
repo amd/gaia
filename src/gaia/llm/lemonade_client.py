@@ -1991,12 +1991,61 @@ def optional_chat_models_that_fit(capacity: Any) -> List[str]:
     return out
 
 
+def free_memory_verdict(base_url: str, requirement: "ModelRequirement", capacity):
+    """Whether *requirement*'s model fits the memory free right now, at the
+    smallest window a load falls back to.
+
+    The same test the load applies (``LemonadeClient._check_free_memory``), so
+    setup never downloads a model the next load refuses. None when it can't be
+    told here: a Lemonade on another machine, a GPU whose free memory nothing
+    reports, or free memory that could not be read (the load re-reads it).
+    """
+    from gaia.llm.model_fit import (
+        MIN_CONTEXT_TOKENS,
+        FitVerdict,
+        ModelFitError,
+        check_free_memory,
+        kv_cache_gb,
+    )
+
+    if not requirement.size_gb or not _is_local_url(base_url):
+        return None
+    try:
+        free, resident = _free_memory_snapshot(base_url.rstrip("/"))
+    except (LemonadeClientError, ModelFitError) as e:
+        get_logger(__name__).warning(
+            "Cannot read free memory (%s); %s is judged on total memory, and its "
+            "load checks free memory again.",
+            e,
+            requirement.model_id,
+        )
+        return None
+    if free is None:
+        return None
+    free = _with_own_memory(free, resident, requirement)
+    window = min(MIN_CONTEXT_TOKENS, context_for_capacity(requirement, capacity))
+    verdict = check_free_memory(
+        requirement.size_gb,
+        kv_cache_gb(requirement.kv_bytes_per_token, window),
+        free.limit_gb,
+    )
+    if verdict.fits:
+        return verdict
+    return FitVerdict(
+        False,
+        f"not enough free memory right now: {verdict.reason}. Close apps that "
+        "use a lot of memory, then run setup again to get it",
+    )
+
+
 def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
     """Pick the default chat model this machine can run, from Lemonade's view of it.
 
     Returns ``(model_id, skipped, capacity)``: ``skipped`` lists
     ``(model_id, reason)`` for each larger model passed over, so the caller can
-    say why a big machine did not get the big model. When Lemonade's report
+    say why a big machine did not get the big model. A larger model must also
+    fit the memory free right now (:func:`free_memory_verdict`), or setup would
+    download one that won't load. When Lemonade's report
     does not say how much memory this PC has, the floor model is picked —
     the model every PC ran before this choice existed — with that as the
     reason, and ``capacity`` is None.
@@ -2045,6 +2094,10 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
             )
             if not verdict.fits:
                 unsupported.append((model_id, verdict.reason))
+                continue
+            free = free_memory_verdict(client.base_url, mr, capacity)
+            if free is not None and not free.fits:
+                unsupported.append((model_id, free.reason))
                 continue
         candidates.append((model_id, size, kv))
     model_id, skipped = pick_default_model(candidates, capacity)

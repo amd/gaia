@@ -112,11 +112,66 @@ describe('SetupScreen', () => {
         expect(screen.getByText('All set.')).toBeInTheDocument();
     });
 
-    it('installs the local chat model when running on this PC', async () => {
-        await start();
-        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledExactlyOnceWith(false));
+    it('on this PC, starts the model server first and downloads only once the model is named', async () => {
+        mockedApi.getSetupPlan
+            .mockResolvedValueOnce({ ...PLAN, decided_after_server: true, lemonade: { ...PLAN.lemonade, reachable: false } })
+            .mockResolvedValue(PLAN);
+        mockedApi.startSetup
+            .mockResolvedValueOnce({ state: 'ready', server_only: true, steps: steps('done', 'pending') })
+            .mockResolvedValueOnce(READY);
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText(/Nothing large downloads until/)).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Start setup' }));
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledExactlyOnceWith(false, true));
+
+        // The server answers: the model that fits, and the whole download, before it starts.
+        const download = await screen.findByRole('button', { name: 'Download 29.2 GB and finish setup' });
+        expect(screen.getByText('Qwen3.6-35B-A3B-GGUF', { selector: 'strong' })).toBeInTheDocument();
+        expect(screen.getByText(/The model server is running/)).toBeInTheDocument();
+        expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
+
+        fireEvent.click(download);
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false));
         expect(await screen.findByRole('button', { name: 'Start chatting' })).toBeInTheDocument();
         expect(screen.queryByLabelText('API key')).not.toBeInTheDocument();
+    });
+
+    it('after a reload, a server-only setup that finished goes straight to the model', async () => {
+        mockedApi.getSetupStatus.mockResolvedValue({ state: 'ready', server_only: true, steps: steps('done', 'pending') });
+        mockedApi.getSetupPlan.mockResolvedValue(PLAN);
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByRole('button', { name: 'Download 29.2 GB and finish setup' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Start chatting' })).not.toBeInTheDocument();
+    });
+
+    it('shows which model is downloading, how much, how fast and the time left', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(PLAN);
+        mockedApi.startSetup.mockResolvedValue({
+            state: 'running',
+            steps: steps('done', 'active'),
+            text: 'Downloading Gemma-4-E4B-it-GGUF',
+            percent: 25,
+            download: {
+                model: 'Gemma-4-E4B-it-GGUF', index: 1, count: 2,
+                bytes_done: 1e9, bytes_total: 4e9, speed_bps: 5e7, eta_s: 60,
+            },
+        });
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockReturnValue(new Promise(() => {}));
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: /finish setup/ }));
+        expect(await screen.findByText(
+            'Downloading Gemma-4-E4B-it-GGUF (1 of 2): 1.0 GB of 4.0 GB · 50 MB/s · about 1 min left',
+        )).toBeInTheDocument();
+        expect(screen.getByRole('progressbar')).toHaveAttribute('value', '25');
+    });
+
+    it("won't start a download that doesn't fit the disk, and says why", async () => {
+        const problem = 'The models need 29.2 GB and the disk that holds them has 10.0 GB free.';
+        mockedApi.getSetupPlan.mockResolvedValue({ ...PLAN, disk_free_gb: 10, disk_problem: problem });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByRole('alert')).toHaveTextContent(problem);
+        expect(screen.getByRole('button', { name: /finish setup/ })).toBeDisabled();
     });
 
     it('skips the local chat model for Fireworks AI', async () => {
@@ -181,6 +236,13 @@ describe('SetupScreen', () => {
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('fireworks.m1'));
         expect(mockedApi.connectProvider).toHaveBeenCalledWith('fireworks', { api_key: 'fw-key' });
         expect(await screen.findByRole('button', { name: 'Start chatting' })).toBeInTheDocument();
+
+        // The top model is picked for them; they can pick another before chatting.
+        const picker = screen.getByRole('combobox', { name: 'Cloud chat model' });
+        expect(picker).toHaveValue('fireworks.m1');
+        fireEvent.change(picker, { target: { value: 'fireworks.m2' } });
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenLastCalledWith('fireworks.m2'));
+        expect(await screen.findByText(/GAIA is ready\./)).toHaveTextContent('m2 answers in the cloud.');
     });
 
     it("on the user's own Lemonade, connects with no key and says their server is left alone", async () => {
@@ -347,7 +409,7 @@ describe('SetupScreen: the chat model', () => {
         render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
         fireEvent.click(await screen.findByRole('radio', { name: /Gemma-4-E4B-it/ }));
         await waitFor(() => expect(screen.getByRole('radio', { name: /Gemma-4-E4B-it/ })).toHaveAttribute('aria-checked', 'true'));
-        fireEvent.click(screen.getByRole('button', { name: 'Start setup' }));
+        fireEvent.click(await screen.findByRole('button', { name: /finish setup/ }));
         expect(await screen.findByText(/You chose/)).toHaveTextContent('You chose Gemma-4-E4B-it-GGUF.');
         expect(screen.queryByText(/Setup chose/)).not.toBeInTheDocument();
     });
@@ -364,25 +426,45 @@ describe('SetupScreen: the chat model', () => {
     });
 
     it("says the pick comes once GAIA's own server is running, without claiming a size", async () => {
-        mockedApi.getSetupPlan.mockResolvedValue({ ...PLAN, decided_after_server: true, download_gb: 5.9 });
+        mockedApi.getSetupPlan.mockResolvedValue({
+            ...PLAN, decided_after_server: true, download_gb: 5.9, lemonade: { ...PLAN.lemonade, reachable: false },
+        });
         render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
         expect(await screen.findByText(/Picked once the model server is running/)).toBeInTheDocument();
         expect(screen.queryByRole('radio', { name: /Gemma-4-E4B-it/ })).not.toBeInTheDocument();
         expect(screen.queryByText(/5\.9 GB/)).not.toBeInTheDocument();
     });
 
-    it('names the model setup actually chose while it runs', async () => {
-        mockedApi.getSetupPlan.mockResolvedValue({ ...PLAN, decided_after_server: true });
-        mockedApi.startSetup.mockResolvedValue({
+    it('names the model setup actually chose while it runs, and why it passed over a larger one', async () => {
+        const reason = 'not enough free memory right now: it needs about 26.1 GB and only 20.4 GB is free';
+        mockedApi.getSetupPlan.mockResolvedValue(PLAN);
+        const running: SetupRunStatus = {
             state: 'running',
-            chat_model: 'Qwen3.6-35B-A3B-GGUF',
-            steps: [{ key: 'models', label: 'Download the models', detail: 'chat model Qwen3.6-35B-A3B-GGUF, plus the embedding model', status: 'active' }],
+            chat_model: 'Gemma-4-E4B-it-GGUF',
+            passed_over: [{ id: 'Qwen3.6-35B-A3B-GGUF', reason }],
+            steps: [{ key: 'models', label: 'Download the models', detail: 'chat model Gemma-4-E4B-it-GGUF, plus the embedding model', status: 'active' }],
+        };
+        mockedApi.startSetup.mockResolvedValue(running);
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue(running);
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: /finish setup/ }));
+        expect(await screen.findByText(/Setup chose/)).toHaveTextContent('Setup chose Gemma-4-E4B-it-GGUF for this PC.');
+        expect(screen.getByText(`Not Qwen3.6-35B-A3B-GGUF: ${reason}.`)).toBeInTheDocument();
+    });
+
+    it('says why the plan passed over a larger model before the download', async () => {
+        const reason = 'not enough free memory right now: it needs about 26.1 GB and only 20.4 GB is free';
+        mockedApi.getSetupPlan.mockResolvedValue({
+            ...PLAN,
+            chat_model: { id: 'Gemma-4-E4B-it-GGUF', user_set: false, size_gb: 5.6, downloaded: false },
+            recommended_model: 'Gemma-4-E4B-it-GGUF',
+            passed_over: [{ id: 'Qwen3.6-35B-A3B-GGUF', reason }],
+            options: [{ ...PLAN.options[0], fits: false, reason }, PLAN.options[1]],
+            download_gb: 5.9,
         });
-        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue({
-            state: 'running', chat_model: 'Qwen3.6-35B-A3B-GGUF', steps: [],
-        });
-        await start();
-        expect(await screen.findByText(/Setup chose/)).toHaveTextContent('Setup chose Qwen3.6-35B-A3B-GGUF for this PC.');
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText(`Not Qwen3.6-35B-A3B-GGUF: ${reason}.`)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Download 5.9 GB and finish setup' })).toBeInTheDocument();
     });
 });
 
@@ -431,7 +513,7 @@ describe('SetupScreen: ready', () => {
         mockedApi.startSetup.mockResolvedValue({ ...READY, chat_model: 'Gemma-4-E4B-it-GGUF' });
         render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
         await waitFor(() => expect(mockedApi.getSetupStatus).toHaveBeenCalled());
-        fireEvent.click(screen.getByRole('button', { name: 'Start setup' }));
+        fireEvent.click(await screen.findByRole('button', { name: /finish setup/ }));
         expect(await screen.findByText(/GAIA is ready\./)).toHaveTextContent('GAIA is ready. Gemma-4-E4B-it-GGUF answers on this PC.');
     });
 
@@ -442,7 +524,7 @@ describe('SetupScreen: ready', () => {
         const onReady = vi.fn();
         render(<SetupScreen initial={CHECK} onReady={onReady} />);
         await waitFor(() => expect(mockedApi.getSetupStatus).toHaveBeenCalled());
-        fireEvent.click(screen.getByRole('button', { name: 'Start setup' }));
+        fireEvent.click(await screen.findByRole('button', { name: /finish setup/ }));
 
         const done = await screen.findByText(/GAIA is ready\./);
         expect(done).toHaveTextContent('GAIA is ready. Qwen3.6-35B-A3B-GGUF answers on this PC.');

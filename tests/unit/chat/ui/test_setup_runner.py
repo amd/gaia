@@ -56,6 +56,20 @@ def test_run_args_never_prompt_or_rebuild_the_running_ui():
 def test_run_command_is_what_a_person_would_type():
     assert sr.run_command(False) == "gaia init --profile gaia"
     assert sr.run_command(True) == "gaia init --profile gaia --skip-chat-model"
+    assert sr.run_command(False, server_only=True) == (
+        "gaia init --profile gaia --skip-models"
+    )
+
+
+def test_run_args_ask_for_machine_readable_progress():
+    assert "--progress-json" in sr.run_args(False)
+    assert "--progress-json" not in sr.run_command(False)
+
+
+def test_a_server_only_run_downloads_no_models():
+    args = sr.run_args(False, server_only=True)
+    assert "--skip-models" in args
+    assert "--skip-models" not in sr.run_args(False)
 
 
 # ── parse_status ───────────────────────────────────────────────────────────
@@ -401,6 +415,80 @@ def test_a_run_follows_the_chat_model_and_the_users_server(monkeypatch):
     assert "Qwen3.6-35B-A3B-GGUF" in view["steps"][1]["detail"]
 
 
+_JSON_OUTPUT = (
+    b"Step 1/5: Starting Lemonade Server...\n"
+    b'{"event": "chat_model", "model": "Gemma-4-E4B-it-GGUF", "user_set": false, '
+    b'"skipped": [{"id": "Qwen3.6-35B-A3B-GGUF", "reason": "not enough free memory '
+    b'right now: it needs about 26.1 GB and only 20.4 GB is free"}]}\n'
+    b"Step 2/5: Downloading models for 'gaia' profile...\n"
+    b'{"event": "downloads", "models": [{"id": "Gemma-4-E4B-it-GGUF", "size_gb": 5.6}, '
+    b'{"id": "user.embeddinggemma-300m-GGUF", "size_gb": 0.3}], "total_gb": 5.9}\n'
+    b"   Downloading: Gemma-4-E4B-it-GGUF\n"
+    b'{"event": "download", "model": "Gemma-4-E4B-it-GGUF", "bytes_done": 1000000000, '
+    b'"bytes_total": 4000000000, "speed_bps": 50000000.0}\n'
+)
+
+
+def test_json_progress_names_the_model_bytes_speed_and_time_left(monkeypatch):
+    stdout = _BlockingStdout(_JSON_OUTPUT)
+    _popen(monkeypatch, _FakeProc(stdout))
+    runner = sr.SetupRunner()
+    runner.start(False)
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        view = runner.status()
+        if view.get("download"):
+            break
+        time.sleep(0.02)
+    assert view["download"] == {
+        "model": "Gemma-4-E4B-it-GGUF",
+        "index": 1,
+        "count": 2,
+        "bytes_done": 1000000000,
+        "bytes_total": 4000000000,
+        "speed_bps": 50000000.0,
+        "eta_s": 60,
+    }
+    assert view["percent"] == 25
+    assert view["download_gb"] == 5.9
+    assert view["chat_model"] == "Gemma-4-E4B-it-GGUF"
+    assert view["passed_over"][0]["id"] == "Qwen3.6-35B-A3B-GGUF"
+    assert "20.4 GB is free" in view["passed_over"][0]["reason"]
+    assert "5.9 GB" in view["steps"][1]["detail"]
+    # The JSON is for the screen; the details stay readable.
+    assert not any(line.startswith("{") for line in view["log_tail"])
+    assert runner.cancel() is True
+    _wait_done(runner)
+
+
+def test_unknown_or_broken_json_lines_are_kept_as_output(monkeypatch):
+    out = b'{"event": "something_new"}\n{not json\n'
+    _popen(monkeypatch, _FakeProc(io.BytesIO(out)))
+    monkeypatch.setattr(sr, "check", lambda *_a, **_k: {"ready": True})
+    runner = sr.SetupRunner()
+    runner.start(False)
+    view = _wait_done(runner)
+    assert "{not json" in view["log_tail"]
+
+
+def test_a_server_only_run_is_ready_without_loading_models(monkeypatch):
+    calls = []
+    _popen(
+        monkeypatch, _FakeProc(io.BytesIO(b"Step 1/2: Starting Lemonade...\n")), calls
+    )
+    monkeypatch.setattr(
+        sr, "check", lambda *a, **k: pytest.fail("no models to check yet")
+    )
+    runner = sr.SetupRunner()
+    runner.start(False, server_only=True)
+    view = _wait_done(runner)
+    assert view["state"] == "ready"
+    assert view["server_only"] is True
+    assert [s["status"] for s in view["steps"]] == ["done", "pending", "pending"]
+    assert "--skip-models" in calls[0][0]
+    assert not sr.is_initialized()
+
+
 def test_init_error_lines_are_not_wrapped_at_80_columns(monkeypatch):
     """The failure reason is the last ❌ line; Rich would wrap it in a pipe."""
     from rich.console import Console
@@ -637,3 +725,14 @@ def test_run_status_and_cancel_routes(client, monkeypatch):
     assert test_client.get("/api/setup/status").json()["state"] == "running"
     assert test_client.post("/api/setup/cancel").json() == {"cancelled": True}
     assert test_client.post("/api/setup/cancel").json() == {"cancelled": False}
+
+
+def test_run_route_can_start_only_the_server(client, monkeypatch):
+    test_client, _ = client
+    calls = []
+    _popen(monkeypatch, _FakeProc(_BlockingStdout()), calls)
+    started = test_client.post("/api/setup/run", json={"server_only": True})
+    assert started.status_code == 200
+    assert started.json()["server_only"] is True
+    assert "--skip-models" in calls[0][0]
+    test_client.post("/api/setup/cancel")
