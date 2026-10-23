@@ -9,6 +9,15 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Outlook messages show their real age and the newest one is replied to.**
+  The Outlook backend handed downstream Graph's ISO-8601 `receivedDateTime` in
+  the `internalDate` field, which every consumer reads as epoch milliseconds
+  and turned into 0. Every message looked like it arrived at the epoch, so the
+  needs-you ages were empty, the "newest message in the thread" reply target
+  never fired, and the recency order of the needs-review list was lost. The
+  backend now emits epoch milliseconds, using one timestamp parser shared with
+  the follow-up tools.
+
 - **A `/query` run waiting for the model streams that it is waiting.** The run
   thread runs as the user's turn: `status` events with `phase: "model_queue"`
   and a `queue` object (see the npm `SPEC.md`), interactive lease priority, and

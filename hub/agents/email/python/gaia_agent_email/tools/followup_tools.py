@@ -25,12 +25,11 @@ Detection semantics (per thread reached from a Sent-folder scan):
 
 from __future__ import annotations
 
-import re
 import time
-from datetime import datetime, timezone
 from email.utils import getaddresses
 from typing import Any, Dict, List, Optional
 
+from gaia_agent_email.timestamps import parse_timestamp_ms
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.tools.read_tools import extract_sender_email
 from gaia_agent_email.verbose import log_tool_call
@@ -67,23 +66,13 @@ def _timestamp_ms(msg: Dict[str, Any]) -> int:
             f"message {msg.get('id')!r} has no internalDate; cannot compute "
             "its follow-up age"
         )
-    text = str(raw)
     try:
-        return int(text)
-    except ValueError:
-        pass
-    # Graph emits 7-digit (100 ns) fractions; py3.10 fromisoformat caps at 6.
-    iso = re.sub(r"(\.\d{6})\d+", r"\1", text.replace("Z", "+00:00"))
-    try:
-        parsed = datetime.fromisoformat(iso)
+        return parse_timestamp_ms(raw)
     except ValueError as exc:
         raise ValueError(
             f"message {msg.get('id')!r} internalDate {raw!r} is neither epoch "
             "milliseconds nor ISO-8601"
         ) from exc
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return int(parsed.timestamp() * 1000)
 
 
 def _header_map(msg: Dict[str, Any]) -> Dict[str, str]:
