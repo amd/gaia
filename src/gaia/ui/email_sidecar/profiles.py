@@ -20,6 +20,8 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Dict, FrozenSet, Mapping, Optional, Tuple
 
+from gaia.config import gaia_agents_dir
+
 
 @dataclass(frozen=True)
 class RelayProfile:
@@ -30,7 +32,7 @@ class RelayProfile:
     #: agent isn't ready yet"). Lower-case except for proper nouns.
     display_name: str
     #: Terminal error when the stream closes without a ``final``/``error``.
-    #: Per-agent so it names the log the reader should actually open.
+    #: Shown through :meth:`stream_ended_text`, which adds the log folder.
     stream_ended_message: str
     #: Contract floor, as ``(major, minor)``. A sidecar below this 404s or
     #: mis-speaks the relay's request shape, so it is refused BEFORE the first
@@ -124,6 +126,23 @@ class RelayProfile:
     #: Contract version from which ``/query`` takes ``changes_turn_id`` and
     #: records the run's file changes for undo. ``None`` means never sent.
     min_changes_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes ``surface``, the front-end
+    #: the turn comes from. ``None`` means the relay never sends it.
+    min_surface_api_version: Optional[Tuple[int, int]] = None
+
+    def stream_ended_text(self) -> str:
+        """:attr:`stream_ended_message`, plus the agent's log folder once it exists.
+
+        Resolved per call so it names the real folder under the current GAIA home.
+        """
+        if not self.agent_id:
+            return self.stream_ended_message
+        log_dir = gaia_agents_dir() / self.agent_id / "logs"
+        if not log_dir.is_dir():
+            return self.stream_ended_message
+        return (
+            f"{self.stream_ended_message} The details are in this log folder: {log_dir}"
+        )
 
 
 # --- email ------------------------------------------------------------------
@@ -227,12 +246,12 @@ EMAIL_PROFILE = RelayProfile(
     # daemon's MAJOR-only handshake and then 404s every call.
     min_api_version=(2, 4),
     stream_ended_message=(
-        "Email agent stream ended unexpectedly (the sidecar may have "
-        "crashed). Check the sidecar log under ~/.gaia/logs/ and retry."
+        "The email agent stopped unexpectedly while working. Anything it had "
+        "already written is kept above. Send your message again."
     ),
     version_upgrade_message=(
-        "The installed email agent doesn't support chat queries (needs contract "
-        "2.4+). Update it from the Hub and retry."
+        "The email agent is out of date and can't answer chat messages. Update "
+        "GAIA and the email agent to the latest version, then try again."
     ),
     tool_labels=MappingProxyType(_EMAIL_TOOL_LABELS),
     mutating_tools=_EMAIL_MUTATING_TOOLS,
@@ -404,12 +423,12 @@ GAIA_PROFILE = RelayProfile(
     # exists — it guards a downgrade, not a supported install.
     min_api_version=(2, 12),
     stream_ended_message=(
-        "GAIA agent stream ended unexpectedly (the sidecar may have "
-        "crashed). Check the sidecar log under ~/.gaia/logs/ and retry."
+        "GAIA stopped unexpectedly while answering. Anything it had already "
+        "written is kept above. Send your message again."
     ),
     version_upgrade_message=(
-        "The installed GAIA agent is too old for the Agent UI (needs contract "
-        "2.12+). Update it from the Hub and retry."
+        "GAIA's agent is out of date and can't answer here. Update GAIA to the "
+        "latest version, then try again."
     ),
     tool_labels=MappingProxyType(_GAIA_TOOL_LABELS),
     mutating_tools=_GAIA_MUTATING_TOOLS,
@@ -428,27 +447,29 @@ GAIA_PROFILE = RelayProfile(
     min_documents_api_version=(2, 16),
     documents_upgrade_message=(
         "This chat has attached documents, but the installed GAIA agent can't "
-        "read them (needs contract 2.16+). Update the GAIA agent from the Hub, "
-        "or remove the documents from this chat, then retry."
+        "read them. Update GAIA to the latest version, or remove the documents "
+        "from this chat, then try again."
     ),
     # 2.17 added GET /skills.
     min_skills_api_version=(2, 17),
     # 2.18 added /query's allowed_paths field.
     min_scope_api_version=(2, 18),
     skills_upgrade_message=(
-        "The installed GAIA agent is too old to list its skills here (needs "
-        "contract 2.17+). Update the GAIA agent from the Hub, then reopen this "
-        "page. Its skills still work in chat."
+        "The installed GAIA agent is too old to list its skills here. Update "
+        "GAIA to the latest version, then reopen this page. Its skills still "
+        "work in chat."
     ),
     # 2.18 added /query's memory field.
     min_memory_api_version=(2, 18),
     memory_upgrade_message=(
         "Memory is off for this chat, but the installed GAIA agent can't be "
-        "told so and would save to memory (needs contract 2.18+). Update the "
-        "GAIA agent from the Hub and retry, or turn memory back on for this chat."
+        "told so and would save to memory. Update GAIA to the latest version, "
+        "then try again, or turn memory back on for this chat."
     ),
     # 2.19 added /query's changes_turn_id field.
     min_changes_api_version=(2, 19),
+    # 2.20 added /query's surface field.
+    min_surface_api_version=(2, 20),
 )
 
 
@@ -551,6 +572,15 @@ def changes_supported(profile: RelayProfile, api_version: Optional[str]) -> bool
     Same evidence rule as :func:`api_version_supported`: no version, no claim.
     """
     floor = profile.min_changes_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def surface_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``surface`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_surface_api_version
     return floor is not None and _meets(api_version, floor)
 
 
