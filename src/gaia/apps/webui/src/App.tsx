@@ -15,6 +15,7 @@ import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
+import { useScheduleStore } from './stores/scheduleStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
 import { startActiveRunsPoll } from './services/activeRuns';
@@ -264,6 +265,13 @@ function App() {
     }, [setSessions]);
 
     useEffect(() => startActiveRunsPoll(), []);
+    // Schedules run unattended: a failed run raises a notification even with the panel closed.
+    useEffect(() => {
+        const load = () => { void useScheduleStore.getState().loadSchedules(); };
+        load();
+        const t = setInterval(load, 30_000);
+        return () => clearInterval(t);
+    }, []);
     // Queued messages go out when their chat's turn ends, even with another chat open.
     useEffect(() => startQueueDispatcher(), []);
 

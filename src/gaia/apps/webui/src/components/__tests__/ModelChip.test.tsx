@@ -397,6 +397,28 @@ describe('ModelChip', () => {
         expect(await within(dialog).findByRole('alert')).toHaveTextContent('Lemonade is not running');
     });
 
+    it('says when the OS is asking for keychain access, then lists the models once answered', async () => {
+        const waiting: ProviderInfo = {
+            ...FIREWORKS, models_discovered: false, key_source: null,
+            key_state: 'waiting_for_os_permission',
+            key_message: 'macOS is asking GAIA for keychain access to read your saved Fireworks AI key.',
+        };
+        mockedApi.listProviders
+            .mockResolvedValueOnce({ providers: [LOCAL, waiting, AMD_UNCONNECTED], active: LOCAL_ACTIVE, lemonade_error: null })
+            .mockResolvedValue({ providers: [LOCAL, FIREWORKS, AMD_UNCONNECTED], active: LOCAL_ACTIVE, lemonade_error: null });
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        const status = await within(dialog).findByText(/asking GAIA for keychain access/);
+        expect(status.closest('[role="status"]')).not.toBeNull();
+        expect(within(dialog).queryByText('Loading models…')).not.toBeInTheDocument();
+        expect(within(dialog).queryByText('Add your key')).not.toBeInTheDocument();
+
+        // The picker asks again on its own, so answering the dialog is enough.
+        expect(await within(dialog).findByRole('button', { name: /kimi-k2/ }, { timeout: 4000 })).toBeInTheDocument();
+        expect(within(dialog).queryByText(/keychain access/)).not.toBeInTheDocument();
+    });
+
     it('opens model settings from the picker', async () => {
         render(<ModelChip />);
         const dialog = await openPicker();

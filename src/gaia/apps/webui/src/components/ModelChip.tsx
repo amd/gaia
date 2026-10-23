@@ -22,6 +22,7 @@ interface ProviderModels {
 }
 
 const DOWNLOAD_POLL_MS = 2000;
+const KEY_WAITING = 'waiting_for_os_permission';
 // How many polls a picked model may show no download before the pick is given up.
 const PICK_START_POLLS = 5;
 
@@ -189,11 +190,12 @@ export function ModelChip() {
     };
 
     const anyDownloading = !!groups?.some((g) => g.models.some(isDownloading));
+    const awaitingPermission = !!groups?.some((g) => g.provider.key_state === KEY_WAITING);
     useEffect(() => {
-        if (!(open || pickAfterDownload) || !(anyDownloading || pickAfterDownload)) return;
+        if (!(open || pickAfterDownload) || !(anyDownloading || pickAfterDownload || awaitingPermission)) return;
         const t = setInterval(() => { void load(true); }, DOWNLOAD_POLL_MS);
         return () => clearInterval(t);
-    }, [open, anyDownloading, pickAfterDownload, load]);
+    }, [open, anyDownloading, pickAfterDownload, awaitingPermission, load]);
 
     const download = useCallback(async (model: string) => {
         setDownloading(model);
@@ -356,7 +358,11 @@ export function ModelChip() {
                     <div key={provider.id} role="group" aria-labelledby={`${listId}-${provider.id}`}>
                         <div className="popover-heading" id={`${listId}-${provider.id}`}>{provider.name}</div>
                         {groupError && <div className="popover-message is-error">{groupError}</div>}
-                        {provider.remote && !provider.models_discovered && (
+                        {provider.key_state === KEY_WAITING ? (
+                            <div className="popover-message" role="status">
+                                <Loader2 size={13} className="spin" aria-hidden="true" /> {provider.key_message}
+                            </div>
+                        ) : provider.remote && !provider.models_discovered && (
                             <button
                                 type="button"
                                 className="popover-item"
