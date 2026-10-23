@@ -2056,6 +2056,7 @@ gaia eval agent [OPTIONS]
 | `--target-pass-rate` | float | `0.90` | Stop fix iterations when judged pass rate reaches this threshold |
 | `--compare` | string(s) | -- | Compare two scorecard files, or one scorecard against saved baseline |
 | `--save-baseline` | flag | false | Save this run's scorecard as `eval/results/baseline.json` |
+| `--resume` | string | -- | Finish a run that stopped because Claude was unavailable: runs only its scenarios without a result, under the run's own settings, and updates its scorecard. Takes the run directory |
 | `--capture-session` | string | -- | Convert an Agent UI session (by UUID) into a YAML scenario file |
 | `--scenario-dir` | string | -- | Additional scenario directory to scan (repeatable) |
 | `--corpus-dir` | string | -- | Additional corpus directory to scan (repeatable) |
@@ -2096,6 +2097,10 @@ gaia eval agent --compare eval/results/latest/scorecard.json
 
 ```bash Explicit Two-File Comparison
 gaia eval agent --compare eval/results/run_A/scorecard.json eval/results/run_B/scorecard.json
+```
+
+```bash Resume After a Quota Stop
+gaia eval agent --resume eval/results/eval-20261021-141300
 ```
 
 ```bash Capture Session to Scenario
