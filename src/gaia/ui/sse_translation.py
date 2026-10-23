@@ -843,7 +843,8 @@ def render_command_summary(
 
     A leading ``cd <folder> &&`` becomes an ``in <folder>`` line, folder paths
     inside the command become relative to it, and the workspace itself is never
-    spelled out. Anything long is shortened head AND tail, with the cut counted,
+    spelled out, except that a home-folder workspace shows as ``~``, so a path
+    under home can't read as one in the project. Anything long is shortened head AND tail, with the cut counted,
     so the end of the command stays visible. Arguments other than the command
     and its folder follow in brackets — a hidden key is a hidden side effect.
     """
