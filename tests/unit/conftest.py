@@ -14,6 +14,7 @@ from any ``test_memory_*.py`` file so the per-test mocks take effect.
 
 import os
 import socket
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -162,6 +163,12 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "allow_network: opt out of the _block_network socket guard"
     )
+    config.addinivalue_line(
+        "markers",
+        "real_lemonade: keep the caller's LEMONADE_BASE_URL; with "
+        "GAIA_TEST_ALLOW_REAL_LEMONADE=1 also let the test spawn or kill a "
+        "real Lemonade server",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -212,3 +219,201 @@ def _enable_memory_for_memory_tests(request, monkeypatch):
     module_path = getattr(request.module, "__file__", "") or ""
     if "test_memory_" in os.path.basename(module_path):
         monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
+
+
+# ── Real Lemonade guard ────────────────────────────────────────────────────
+#
+# Unit tests build clients aimed at the default port with faked server
+# processes. Anything that then reaches a real spawn or kill lands on the
+# developer's own Lemonade, so both are refused for the whole session --
+# finalizers run after a test's mocks are gone, outside any per-test guard.
+
+_LEMONADE_SERVER_BINARIES = frozenset(
+    {
+        "lemonadeserver",
+        "lemonade-server",
+        "lemonade-server-dev",
+        "lemond",
+        "lemonade-router",
+    }
+)
+_KILL_COMMANDS = frozenset({"taskkill", "kill", "pkill", "killall"})
+_UNROUTABLE_LEMONADE_URL = "http://127.0.0.1:1"
+_REAL_LEMONADE_OPT_IN_ENV = "GAIA_TEST_ALLOW_REAL_LEMONADE"
+_REAL_LEMONADE_MARKERS = ("real_lemonade", "integration", "real_model")
+_REAL_LEMONADE_MESSAGE = (
+    "Unit test tried to {action}. That is the Lemonade Server on this "
+    "machine, not one the test owns. Mock the launch or kill boundary "
+    "(subprocess.Popen, gaia.ports.terminate_pid), or mark the test "
+    "@pytest.mark.real_lemonade and run it deliberately with "
+    f"{_REAL_LEMONADE_OPT_IN_ENV}=1."
+)
+
+# Attempts made under the guard: (test running at the time, action).
+_REAL_LEMONADE_ATTEMPTS: list = []
+_REAL_LEMONADE_ALLOWED = {"current_test": False}
+
+
+def _program(token) -> str:
+    name = os.path.basename(str(token)).lower()
+    return name[:-4] if name.endswith(".exe") else name
+
+
+def _is_test_fixture(path) -> bool:
+    """True for a file under the temp dir: a fake binary a test made itself."""
+    try:
+        resolved = os.path.normcase(os.path.realpath(str(path)))
+    except (OSError, ValueError):
+        return False
+    tmp = os.path.normcase(os.path.realpath(tempfile.gettempdir()))
+    return resolved.startswith(tmp + os.sep)
+
+
+def _lemonade_process_name(pid) -> "str | None":
+    """The name of *pid* when it is a real Lemonade server, else None.
+
+    A Lemonade-named fake a test copied into its tmp dir is not real.
+    """
+    import psutil
+
+    try:
+        proc = psutil.Process(int(pid))
+        name = proc.name()
+        if _program(name) not in _LEMONADE_SERVER_BINARIES:
+            return None
+        exe = proc.exe()
+    except psutil.AccessDenied:
+        return name
+    except (psutil.Error, ValueError, TypeError, OverflowError):
+        return None
+    return None if _is_test_fixture(exe) else name
+
+
+def _real_lemonade_allowed() -> bool:
+    """Only a marked test, run with the opt-in env var, and never between tests."""
+    return _REAL_LEMONADE_ALLOWED["current_test"]
+
+
+def _refuse_real_lemonade(action: str) -> None:
+    _REAL_LEMONADE_ATTEMPTS.append(
+        (os.environ.get("PYTEST_CURRENT_TEST", "between tests"), action)
+    )
+    raise RuntimeError(_REAL_LEMONADE_MESSAGE.format(action=action))
+
+
+def _check_command(args) -> None:
+    tokens = args.split() if isinstance(args, (str, bytes)) else list(args)
+    tokens = [t.decode() if isinstance(t, bytes) else str(t) for t in tokens]
+    if not tokens:
+        return
+    if _program(tokens[0]) in _KILL_COMMANDS:
+        for token in tokens[1:]:
+            if _program(token) in _LEMONADE_SERVER_BINARIES:
+                _refuse_real_lemonade(f"kill Lemonade by name ({' '.join(tokens)})")
+            if token.isdigit() and _lemonade_process_name(token):
+                _refuse_real_lemonade(
+                    f"kill PID {token} ({_lemonade_process_name(token)})"
+                )
+        return
+    for token in tokens:
+        if _program(token) in _LEMONADE_SERVER_BINARIES and not (
+            os.path.isabs(token) and _is_test_fixture(token)
+        ):
+            _refuse_real_lemonade(f"start a real Lemonade server ({' '.join(tokens)})")
+
+
+def _check_kill(pid) -> None:
+    name = _lemonade_process_name(pid)
+    if name:
+        _refuse_real_lemonade(f"kill PID {pid} ({name})")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _forbid_real_lemonade_all_session():
+    """Refuse spawning or killing a real Lemonade for the whole unit session."""
+    import subprocess
+
+    import psutil
+
+    real_execute_child = subprocess.Popen._execute_child
+    real_kill = os.kill
+    real_killpg = getattr(os, "killpg", None)
+    real_psutil = {
+        name: getattr(psutil.Process, name)
+        for name in ("terminate", "kill", "send_signal")
+    }
+
+    def execute_child(self, args, *rest, **kwargs):
+        if not _real_lemonade_allowed():
+            _check_command(args)
+        return real_execute_child(self, args, *rest, **kwargs)
+
+    def kill(pid, sig):
+        if not _real_lemonade_allowed():
+            _check_kill(pid)
+        return real_kill(pid, sig)
+
+    def killpg(pgid, sig):
+        if not _real_lemonade_allowed():
+            _check_kill(pgid)
+        return real_killpg(pgid, sig)
+
+    def guard_psutil(name):
+        real = real_psutil[name]
+
+        def guarded(self, *args, **kwargs):
+            if not _real_lemonade_allowed():
+                _check_kill(self.pid)
+            return real(self, *args, **kwargs)
+
+        return guarded
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(subprocess.Popen, "_execute_child", execute_child)
+        mp.setattr(os, "kill", kill)
+        if real_killpg is not None:
+            mp.setattr(os, "killpg", killpg)
+        for name in real_psutil:
+            mp.setattr(psutil.Process, name, guard_psutil(name))
+        yield
+    outside = [a for a in _REAL_LEMONADE_ATTEMPTS if a[0] == "between tests"]
+    if outside:
+        raise RuntimeError(
+            _REAL_LEMONADE_MESSAGE.format(action="reach a real Lemonade")
+            + " Code running between tests (a finalizer or a leftover thread) "
+            "tried: " + "; ".join(sorted({action for _, action in outside}))
+        )
+
+
+@pytest.fixture(autouse=True)
+def _forbid_real_lemonade(request, monkeypatch):
+    """Point unit tests at an unroutable Lemonade, and fail one that reaches a real one.
+
+    A @pytest.mark.real_lemonade (or integration / real_model) test keeps the
+    caller's LEMONADE_BASE_URL; it may also spawn or kill a real Lemonade only
+    when GAIA_TEST_ALLOW_REAL_LEMONADE=1 is set as well.
+    """
+    opted_in = any(request.node.get_closest_marker(m) for m in _REAL_LEMONADE_MARKERS)
+    if not opted_in and os.environ.get(_REAL_LEMONADE_OPT_IN_ENV) != "1":
+        monkeypatch.setenv("LEMONADE_BASE_URL", _UNROUTABLE_LEMONADE_URL)
+        monkeypatch.delenv("LEMONADE_HOST", raising=False)
+        monkeypatch.delenv("LEMONADE_PORT", raising=False)
+    _REAL_LEMONADE_ALLOWED["current_test"] = (
+        opted_in and os.environ.get(_REAL_LEMONADE_OPT_IN_ENV) == "1"
+    )
+    before = len(_REAL_LEMONADE_ATTEMPTS)
+    yield
+    _REAL_LEMONADE_ALLOWED["current_test"] = False
+    caught = _REAL_LEMONADE_ATTEMPTS[before:]
+    if caught:
+        pytest.fail(_REAL_LEMONADE_MESSAGE.format(action=caught[0][1]), pytrace=False)
+
+
+@pytest.fixture
+def gaia_owned_lemonade(monkeypatch):
+    """Unset the guard's LEMONADE_BASE_URL for a test of GAIA running its own server.
+
+    A set LEMONADE_BASE_URL means "the user's server", which GAIA never starts.
+    The spawn/kill guard and the network block stay on.
+    """
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)

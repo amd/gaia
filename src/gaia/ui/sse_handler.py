@@ -25,7 +25,7 @@ from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
 from gaia.agents.base.call_risk import call_risk
 from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
-from gaia.agents.base.tool_grants import grant_scope
+from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, grant_scope
 from gaia.agents.base.tool_outcome import FAILED_STATUSES
 from gaia.agents.base.tool_outcome import tool_result_failed as _tool_result_failed
 from gaia.agents.base.tools import (
@@ -57,6 +57,10 @@ from gaia.utils.json_string import (
 logger = logging.getLogger(__name__)
 
 _SUMMARY_CHAR_CAP = 300
+
+#: Result keys naming a file the tool wrote; kept on the summary view a
+#: relayed result is reduced to.
+RESULT_PATH_KEYS = ("file_path", "image_path")
 
 #: A tool result with one of these statuses did not do its job.
 FAILED_TOOL_STATUSES = FAILED_STATUSES
@@ -597,6 +601,8 @@ class SSEOutputHandler(OutputHandler):
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
+        # Set by mark_turn_failed; the next answer event carries ``failed``.
+        self._turn_failed = False
         # The answer this turn already put on the wire. A transport that ends
         # the turn on it cancels the run, so the run reads it back from here.
         self.delivered_answer: str = ""
@@ -793,6 +799,11 @@ class SSEOutputHandler(OutputHandler):
         # summary may be incomplete instead of making them infer truncation.
         if not isinstance(data, dict) and len(str(data)) > _SUMMARY_CHAR_CAP:
             event["summary_truncated"] = True
+        # Where the tool wrote, resolved: a relayed turn's Outputs need it.
+        if isinstance(data, dict):
+            for key in RESULT_PATH_KEYS:
+                if isinstance(data.get(key), str):
+                    event[key] = data[key]
 
         # Attach latency for tool calls (measured from print_tool_usage)
         if self._tool_start_time is not None:
@@ -1005,6 +1016,10 @@ class SSEOutputHandler(OutputHandler):
         """Stash the sealed turn record for the answer event that follows."""
         self._turn_metrics = record
 
+    def mark_turn_failed(self) -> None:
+        """The answer that follows ends a turn a model failure cut short."""
+        self._turn_failed = True
+
     def print_final_answer(
         self,
         answer: str,
@@ -1075,6 +1090,9 @@ class SSEOutputHandler(OutputHandler):
         record, self._turn_metrics = self._turn_metrics, None
         if record is not None and turn_log_path() is not None:
             event["metrics"] = record
+        if self._turn_failed:
+            self._turn_failed = False
+            event["failed"] = True
         self.delivered_answer = event["content"] or ""
         self._emit(event)
 
@@ -1713,7 +1731,9 @@ class SSEOutputHandler(OutputHandler):
         # emitted: neither has a question to ask, so putting a modal up would be
         # theatre. Checked per call, so toggling full access mid-run takes effect on
         # the very next gated tool.
-        if self.auto_approve_confirmations_enabled():
+        # Pre-approval answers tool prompts; only full access widens the file scope.
+        widens_scope = tool_name == PATH_ACCESS_PROMPT_TOOL and not self.full_access
+        if self.auto_approve_confirmations_enabled() and not widens_scope:
             self.log_auto_approval(tool_name)
             self._emit(
                 {

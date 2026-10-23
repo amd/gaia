@@ -183,16 +183,11 @@ def test_lock_reads_from_a_skills_root_it_cannot_write(tmp_path, monkeypatch):
     real_open = os.open
 
     def read_only_dir(name, flags, *args):
-        if str(name).endswith(".lock"):
+        if flags & os.O_CREAT and Path(name).parent == tmp_path:
             raise PermissionError(errno.EACCES, "Permission denied", str(name))
         return real_open(name, flags, *args)
 
     monkeypatch.setattr(file_lock_mod.os, "open", read_only_dir)
-    monkeypatch.setattr(
-        file_lock_mod.os,
-        "access",
-        lambda p, mode: False if Path(p) == tmp_path else os.path.exists(p),
-    )
     assert SkillLock.load(tmp_path).get("demo").version == "1.0.0"
 
 
@@ -254,6 +249,59 @@ def test_failed_undo_keeps_the_previous_copy(marketplace, tmp_path, monkeypatch)
     old = kept[0]
     assert "version: 1.0.0" in (old / "SKILL.md").read_text(encoding="utf-8")
     assert len(list((old / "references").glob("*"))) == 3
+
+
+def _files(directory: Path) -> dict:
+    if not directory.is_dir():
+        return {}
+    return {
+        p.relative_to(directory).as_posix(): p.read_bytes()
+        for p in directory.rglob("*")
+        if p.is_file()
+    }
+
+
+def test_undo_moves_the_new_copy_aside_whole_while_a_file_in_it_is_open(
+    marketplace, tmp_path, monkeypatch
+):
+    """Undoing an install with a file held open must not half-delete the new copy."""
+    marketplace.publish(_write_source(tmp_path, "eta", "1.0.0", extra_files=3))
+    marketplace.install("eta")
+    target = marketplace.skills_root / "eta"
+    marketplace.publish(_write_source(tmp_path, "eta", "1.1.0", extra_files=3))
+
+    def disk_full(self, path=None):
+        raise OSError("disk full")
+
+    real_swap_back = install_mod._swap_back
+    after_undo = {}
+
+    def swap_back_with_a_file_open(target_dir, retired, failed):
+        after_undo["new_copy"] = _files(target_dir)
+        # A loader in another process is reading the new SKILL.md. It sorts
+        # after references/, so a delete would remove those first.
+        with open(target_dir / "SKILL.md", "rb"):
+            undone = real_swap_back(target_dir, retired, failed)
+            after_undo["at_target"] = _files(target_dir)
+            after_undo["moved_aside"] = _files(failed)
+        return undone
+
+    monkeypatch.setattr(file_lock_mod, "REPLACE_RETRY_SECONDS", 0.05)
+    monkeypatch.setattr(SkillLock, "save", disk_full)
+    monkeypatch.setattr(install_mod, "_swap_back", swap_back_with_a_file_open)
+    with pytest.raises(OSError, match="disk full"):
+        marketplace.install("eta", force=True)
+    monkeypatch.undo()
+
+    new_copy = after_undo["new_copy"]
+    assert b"version: 1.1.0" in new_copy["SKILL.md"]
+    # POSIX renames it aside; Windows refuses the rename and leaves it in place.
+    # Either way every file of it is still there.
+    assert new_copy in (after_undo["moved_aside"], after_undo["at_target"]), (
+        "the new copy was partly deleted: "
+        f"{sorted(after_undo['at_target'])} at {target}, "
+        f"{sorted(after_undo['moved_aside'])} moved aside"
+    )
 
 
 def test_capture_cleanup_does_not_wait_on_a_busy_lock_twice(tmp_path, monkeypatch):

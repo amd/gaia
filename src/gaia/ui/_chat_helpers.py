@@ -26,7 +26,7 @@ import threading
 import time as _time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -42,7 +42,12 @@ from gaia.llm.inference_location import (
     resolve_inference_location,
 )
 from gaia.llm.providers.lemonade import classify_lemonade_exception
-from gaia.security import BLOCKED_DIRECTORIES
+from gaia.security import (
+    BLOCKED_DIRECTORIES,
+    AllowedPathsEnvError,
+    env_allowed_paths,
+    narrow_allowed_paths,
+)
 from gaia.stream_timeout import (
     DEFAULT_STREAM_TIMEOUT_SECONDS,
     MAX_STREAM_TIMEOUT_SECONDS,
@@ -53,10 +58,12 @@ from gaia.ui.email_sidecar.profiles import (
     _NO_PROFILE,
     SIDECAR_AGENT_IDS,
     api_version_supported,
+    changes_supported,
     confirmations_supported,
     documents_supported,
     memory_supported,
     profile_for,
+    scope_supported,
 )
 from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.turn_changes import TurnRecording
@@ -1495,7 +1502,9 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
 
     Falls back to the current working directory only when nothing is attached,
     and refuses even that when the CWD is a root, ``$HOME``, or overlaps a
-    protected directory — a scope that broad is not a scope.
+    protected directory — a scope that broad is not a scope. When
+    ``GAIA_ALLOWED_PATHS`` shares nothing with that fallback, the folders it
+    names are the scope instead (see :func:`_env_scope_for_fallback`).
 
     Args:
         rag_file_paths: Paths of the documents attached to this session.
@@ -1518,6 +1527,10 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
 
     cwd = Path.cwd().resolve()
     reason = _unsafe_directory_grant_reason(cwd)
+    fallback = [managed] if reason else sorted({managed, str(cwd)})
+    env_scope = _env_scope_for_fallback(fallback)
+    if env_scope:
+        return sorted({managed, *env_scope})
     if reason:
         logger.warning(
             "Refusing to grant this session file access to %s because %s. The "
@@ -1526,8 +1539,52 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
             cwd,
             reason,
         )
-        return [managed]
-    return sorted({managed, str(cwd)})
+    return fallback
+
+
+def _env_scope_for_fallback(fallback: list) -> list:
+    """``GAIA_ALLOWED_PATHS``'s folders, when they share nothing with *fallback*.
+
+    The setting only narrows, but narrowing a default the user never picked to
+    nothing leaves an agent that can open no file at all; the folders the user
+    did name stand in. Entries too broad to grant on their own are skipped.
+
+    Args:
+        fallback: The scope a session with no documents would otherwise get.
+
+    Returns:
+        The usable entries, or ``[]`` when the setting is unset, invalid (the
+        agent's validator, or the relay's :func:`_effective_scope`, reports
+        that), or overlaps *fallback*.
+    """
+    try:
+        ceiling = env_allowed_paths()
+    except AllowedPathsEnvError:
+        return []
+    if ceiling is None or narrow_allowed_paths(fallback, warn=False):
+        return []
+    usable = []
+    for root in ceiling:
+        reason = _unsafe_directory_grant_reason(root)
+        if reason:
+            logger.warning(
+                "Not granting GAIA_ALLOWED_PATHS entry %s because %s.", root, reason
+            )
+        else:
+            usable.append(str(root))
+    return usable
+
+
+def _effective_scope(allowed: list) -> list:
+    """*allowed* as the agent's validator will hold it under ``GAIA_ALLOWED_PATHS``.
+
+    Raises:
+        AllowedPathsEnvError: When ``GAIA_ALLOWED_PATHS`` holds an invalid
+            value. Never answered with an empty scope: a relayed sidecar need
+            not share this process's environment, so it could not say why it
+            refuses every file.
+    """
+    return narrow_allowed_paths(allowed, warn=False)
 
 
 def _with_attachments(allowed: list, attached: list) -> list:
@@ -1843,7 +1900,9 @@ def _dispatch_sidecar_query(
     agent_type: str,
     session_id: str | None = None,
     documents: list | None = None,
+    allowed_paths: list | None = None,
     memory: str = "on",
+    recording: TurnRecording | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
 
@@ -1851,9 +1910,17 @@ def _dispatch_sidecar_query(
     them gets them on every turn; one that should but is too old to stops
     the turn with an upgrade message rather than answer without them.
 
+    *allowed_paths* is the chat's computed file scope. A sidecar that takes it
+    gets it with ``GAIA_ALLOWED_PATHS`` already applied — the sidecar process
+    need not share this one's environment — so it works where the UI says.
+
     *memory* is the chat's memory mode (:func:`_memory_mode`). Likewise, a
     private or memory-off turn is stopped rather than sent to a sidecar that
     keeps memory but is too old to be told not to save.
+
+    *recording* is the turn's undo recording. A sidecar that takes it records
+    its own file changes under a turn of this chat, which is where Changes,
+    Outputs and Undo read them.
 
     Self-contained: every path here either relays the sidecar's ``/query``
     loop to completion or emits a terminal SSE error and returns. The CALLER
@@ -1903,6 +1970,17 @@ def _dispatch_sidecar_query(
             )
             return
         relayed_documents = [str(Path(p).resolve()) for p in documents]
+
+    relayed_scope = None
+    if allowed_paths is not None and scope_supported(profile, handle.api_version):
+        try:
+            relayed_scope = _effective_scope(allowed_paths)
+        except AllowedPathsEnvError as exc:
+            # In process, the agent's validator raises this same error. The
+            # sidecar may not see this environment, so say it here instead of
+            # sending a scope that refuses every file without saying why.
+            sse_handler._emit({"type": "agent_error", "content": str(exc)})
+            return
 
     relayed_memory = None
     if profile.min_memory_api_version is not None:
@@ -2006,7 +2084,15 @@ def _dispatch_sidecar_query(
         session_id=session_id,
         answers_confirmations=confirmations_supported(profile, handle.api_version),
         documents=relayed_documents,
+        allowed_paths=relayed_scope,
         memory=relayed_memory,
+        changes_turn_id=(
+            recording.relay()
+            if recording is not None
+            and session_id
+            and changes_supported(profile, handle.api_version)
+            else None
+        ),
     )
 
 
@@ -2019,19 +2105,14 @@ def _find_last_tool_step(steps: list) -> dict | None:
 
 
 def _agent_ui_wording(text: str) -> str:
-    """Swap the agent's TUI-only "how to switch model" advice for the Agent UI's.
+    """Swap the agent's TUI-only provider advice for the Agent UI's own.
 
     The agent loop can't tell which front-end it serves (the flagship sidecar
-    answers both), so the Agent UI rewrites the one sentence it owns here.
+    answers both), so the Agent UI rewrites the sentences it owns here.
     """
-    from gaia.llm.providers.lemonade import (
-        AGENT_UI_MODEL_SWITCH_HINT,
-        TUI_MODEL_SWITCH_HINT,
-    )
+    from gaia.llm.surface_hints import surface_wording
 
-    if not text or TUI_MODEL_SWITCH_HINT not in text:
-        return text
-    return text.replace(TUI_MODEL_SWITCH_HINT, AGENT_UI_MODEL_SWITCH_HINT)
+    return surface_wording(text, "agent_ui")
 
 
 def _echoes_failed_tool(event: dict, steps: list) -> bool:
@@ -2342,22 +2423,47 @@ async def _local_place(model_id: str, client, base_url: str, headers: dict) -> s
     return f"on your {' and '.join(chips)}" if chips else "on this PC"
 
 
+def _turn_failure(
+    answer_event: Optional[dict],
+    fatal_error: Optional[str],
+    result: Any,
+) -> Tuple[bool, Optional[str]]:
+    """``(failed, explanation)`` for a turn: did a model failure end it?
+
+    Three sources, one per way the news arrives: the agent's answer event
+    (in-process or relayed ``final``), a relayed sidecar's terminal error, and
+    the in-process agent's own result. *explanation* is the text to show when
+    no answer event carried it.
+    """
+    if isinstance(answer_event, dict) and answer_event.get("failed"):
+        return True, None
+    if fatal_error is not None:
+        return True, fatal_error
+    if isinstance(result, dict) and result.get("model_failed"):
+        return True, None
+    return False, None
+
+
 def _done_event(
     msg_id: int,
     content: str,
     turn_cancelled: bool,
     stats: Optional[dict] = None,
     turn_summary: Optional[dict] = None,
+    failed: bool = False,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
     ``cancelled`` is set only when the user's Stop actually ended the run, so
     the UI labels the turn from what happened rather than from the click — a
     Stop that lands after the agent already answered stays an ordinary turn.
+    ``failed`` marks a turn a model failure ended; its content explains why.
     """
     event: dict = {"type": "done", "message_id": msg_id, "content": content}
     if turn_cancelled:
         event["cancelled"] = True
+    elif failed:
+        event["failed"] = True
     if stats:
         event["stats"] = stats
     if turn_summary:
@@ -3378,7 +3484,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         agent_type,
                         session_id=session_id,
                         documents=_relayed_documents(rag_file_paths, attached),
+                        allowed_paths=allowed,
                         memory=_memory_mode(session, db),
+                        recording=recording,
                     )
                     return
 
@@ -3569,9 +3677,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # AgentSDK that wrap the original LemonadeError.
                 classified = _classify_chat_exception(e)
                 if classified is not None:
-                    result_holder["error"] = classified.user_message
+                    result_holder["error"] = _agent_ui_wording(classified.user_message)
                 else:
-                    result_holder["error"] = str(e)
+                    result_holder["error"] = _agent_ui_wording(str(e))
             finally:
                 if "inbox" in inbox_holder:
                     untaken = followups.close_inbox(
@@ -3602,6 +3710,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # Also capture agent steps for persistence
         full_response = ""
         answer_event = None
+        fatal_error = None
         captured_steps = []  # Collect agent steps for DB persistence
         persisted_policy_block_msg_id = None
         persisted_policy_block_content = None
@@ -3692,6 +3801,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     answer_event = event
                 elif event_type == "chunk":
                     full_response += event.get("content", "")
+                elif event_type == "agent_error" and event.get("fatal"):
+                    # A relayed sidecar's terminal error: the turn ends here.
+                    fatal_error = event.get("content") or ""
 
                 # Capture agent steps for persistence
                 if event_type == "thinking":
@@ -3938,6 +4050,20 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             error_data = json.dumps({"type": "error", "content": error_msg})
             yield f"data: {error_data}\n\n"
 
+        # A model failure ended the turn. The streamed text is only its opening
+        # sentence, so the message must say what happened.
+        turn_failed, failure_text = _turn_failure(
+            answer_event, fatal_error, result_holder.get("result")
+        )
+        if turn_failed and answer_event is None:
+            explained = _agent_ui_wording(failure_text or result_holder["answer"] or "")
+            if explained and explained not in full_response:
+                full_response = (
+                    f"{full_response.rstrip()}\n\n{explained}"
+                    if full_response.strip()
+                    else explained
+                )
+
         # Use agent result if no streamed answer was captured
         if not full_response and result_holder["answer"]:
             full_response = _agent_ui_wording(result_holder["answer"])
@@ -4110,6 +4236,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 turn_cancelled,
                 stats=inference_stats,
                 turn_summary=turn_summary,
+                failed=turn_failed,
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
@@ -4219,6 +4346,7 @@ class _RunOutcome:
         self._error = False
         self._done = False
         self._cancelled = False
+        self._failed = False
 
     def observe(self, data: str) -> None:
         # A frame may carry ": padding" lines after its data line.
@@ -4237,9 +4365,10 @@ class _RunOutcome:
         elif kind == "done":
             self._done = True
             self._cancelled = bool(event.get("cancelled"))
+            self._failed = bool(event.get("failed"))
 
     def status(self) -> str:
-        if self._error or not self._done:
+        if self._error or self._failed or not self._done:
             return "failed"
         return "stopped" if self._cancelled else "done"
 
@@ -4437,8 +4566,9 @@ _INDEX_TIMEOUT_DEFAULT_S = 600.0
 def _index_timeout_from_env() -> float:
     """Seconds indexing may go without progress (``GAIA_INDEX_TIMEOUT``, default 600).
 
-    Progress is a page extracted or a batch embedded, so a large document that
-    keeps moving is never stopped.
+    Progress is a page extracted, a batch embedded, or a queue update while
+    waiting for the model slot, so a large document that keeps moving is never
+    stopped.
 
     Raises:
         ValueError: the variable is set to something other than a positive number.
@@ -4478,9 +4608,12 @@ async def _index_document(filepath: Path) -> int:
 
     Runs on an indexing pool (``_INDEX_MAX_PARALLEL`` at once per pool; small
     files have their own, and the rest wait their turn). Cancelling the
-    awaiting task stops indexing at its next page or embedding batch, and so
-    does going ``GAIA_INDEX_TIMEOUT`` seconds without one; time spent waiting
-    for a worker doesn't count.
+    awaiting task stops indexing at its next page or embedding batch, or
+    ends a wait for the model slot at once; so does going
+    ``GAIA_INDEX_TIMEOUT`` seconds without progress. Queue updates from the
+    broker count as progress; time spent waiting for a worker doesn't. A
+    daemon too old to stream its queue sends no updates, so a wait on one
+    still counts against the timeout.
 
     Note: A return value of 0 means RAG reported success but produced
     no chunks. Callers must treat 0 chunks as a failure condition.
@@ -4500,7 +4633,13 @@ async def _index_document(filepath: Path) -> int:
         if stop.is_set():
             raise IndexingStopped(filepath.name)
 
+    def _queue_update(_event: dict) -> None:
+        # Waiting in line for the embedder or vision model is not a stall.
+        # Runs on the waiting thread, so it only notes the time.
+        progress["at"] = _time.monotonic()
+
     def _do_index():
+        from gaia.daemon.broker_client import lease_cancel_scope, lease_wait_listener
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
         _step()
@@ -4509,11 +4648,19 @@ async def _index_document(filepath: Path) -> int:
         allowed = [str(filepath.parent), str(Path.home())]
         config = RAGConfig(allowed_paths=allowed)
         rag = RAGSDK(config)
-        result = rag.index_document(
-            str(filepath),
-            progress_callback=lambda _done, _total: _step(),
-            heartbeat=_step,
-        )
+        # Cancel and the no-progress stop also end a wait for the model.
+        try:
+            with lease_wait_listener(_queue_update), lease_cancel_scope(stop):
+                result = rag.index_document(
+                    str(filepath),
+                    progress_callback=lambda _done, _total: _step(),
+                    heartbeat=_step,
+                )
+        except LeaseWaitCancelled as e:
+            raise IndexingStopped(filepath.name) from e
+        # A stop absorbed on the way (a degraded image page) is still a stop.
+        if stop.is_set():
+            raise IndexingStopped(filepath.name)
         logger.info("RAG index_document result for %s: %s", filepath, result)
 
         if not isinstance(result, dict):

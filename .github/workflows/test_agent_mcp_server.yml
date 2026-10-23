@@ -20,6 +20,17 @@ on:
       - 'tests/unit/test_mcp2_server.py'
       - 'setup.py'
       - '.github/workflows/test_agent_mcp_server.yml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      - 'pyproject.toml'
+      - 'util/check_module_skips.py'
+      - 'util/check_test_lane_coverage.py'
+      - 'util/test_lane_allowlist.yml'
+      - 'src/gaia/agents/base/console.py'
+      - 'src/gaia/cli.py'
+      - 'src/gaia/llm/lemonade_client.py'
+      - 'tests/unit/conftest.py'
+      - 'tests/unit/test_mcp_bridge_protocol.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -34,6 +45,17 @@ on:
       - 'tests/unit/test_mcp2_server.py'
       - 'setup.py'
       - '.github/workflows/test_agent_mcp_server.yml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      - 'pyproject.toml'
+      - 'util/check_module_skips.py'
+      - 'util/check_test_lane_coverage.py'
+      - 'util/test_lane_allowlist.yml'
+      - 'src/gaia/agents/base/console.py'
+      - 'src/gaia/cli.py'
+      - 'src/gaia/llm/lemonade_client.py'
+      - 'tests/unit/conftest.py'
+      - 'tests/unit/test_mcp_bridge_protocol.py'
   merge_group:
   workflow_dispatch:
 

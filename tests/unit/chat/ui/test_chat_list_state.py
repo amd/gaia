@@ -117,6 +117,8 @@ def test_unknown_run_status_is_refused():
     [
         (['data: {"type":"done","message_id":1,"content":"hi"}\n\n'], "done"),
         (['data: {"type":"done","message_id":1,"cancelled":true}\n\n'], "stopped"),
+        # A turn a model failure ended carries its explanation, not a result.
+        (['data: {"type":"done","message_id":1,"failed":true}\n\n'], "failed"),
         (['data: {"type":"error","content":"boom"}\n\n'], "failed"),
         (['data: {"type":"status","message":"x"}\n\n: ' + "x" * 40 + "\n\n"], "failed"),
         ([": keepalive xxx\n\n"], "failed"),

@@ -211,3 +211,15 @@ def test_a_relayed_agent_is_reported_unenforced_and_changes_are_refused(
     assert (
         client.get(f"/api/sessions/{session_id}/environment").json()["internet"] is True
     )
+
+
+def test_an_invalid_allowed_paths_setting_is_named_not_an_empty_list(
+    client, session_id, monkeypatch
+):
+    # Set after start-up, as when a folder it names is deleted mid-run.
+    monkeypatch.setenv("GAIA_ALLOWED_PATHS", "relative/folder")
+
+    res = client.get(f"/api/sessions/{session_id}/environment")
+
+    assert res.status_code == 500
+    assert "GAIA_ALLOWED_PATHS" in res.json()["detail"]

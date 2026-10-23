@@ -247,6 +247,37 @@ def _index_embedding_error(stats: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+_CACHE_LOCK_HINTS = {
+    "cache_busy": (
+        "Another process is using the document cache ({cache}). Tell the "
+        "user, and index the document again once it finishes."
+    ),
+    "cache_unwritable": (
+        "The document is fine: GAIA cannot write its document cache folder "
+        "({cache}). Tell the user to fix that folder's permissions; do not "
+        "suggest they check the document."
+    ),
+    "cache_lock_error": (
+        "The document is fine: GAIA could not open the lock file in its "
+        "document cache folder ({cache}). Tell the user the error; do not "
+        "suggest they check the document."
+    ),
+}
+
+
+def _index_cache_error(stats: Dict[str, Any], file_path: str) -> Dict[str, Any]:
+    """The result for a document whose cache lock could not be taken."""
+    error_type = stats["error_type"]
+    return {
+        "status": "error",
+        "error_type": error_type,
+        "error": stats.get("error"),
+        "file_name": stats.get("file_name", Path(file_path).name),
+        "cache_dir": stats.get("cache_dir"),
+        "hint": _CACHE_LOCK_HINTS[error_type].format(cache=stats.get("cache_dir")),
+    }
+
+
 def _require_rag(host: Any) -> Any:
     """Read ``host.rag``, raising loudly if never bound.
 
@@ -888,6 +919,8 @@ class RAGToolsMixin:
                                 idx_result.get("error_type") == "embedding_unavailable"
                             ):
                                 return _index_embedding_error(idx_result)
+                            elif idx_result.get("error_type") in _CACHE_LOCK_HINTS:
+                                return _index_cache_error(idx_result, file_path)
                             else:
                                 return {
                                     "status": "error",
@@ -1549,6 +1582,8 @@ class RAGToolsMixin:
                             **_index_embedding_error(result),
                             "file_name": result.get("file_name", Path(file_path).name),
                         }
+                    if result.get("error_type") in _CACHE_LOCK_HINTS:
+                        return _index_cache_error(result, file_path)
                     err = result.get("error", f"Failed to index: {file_path}")
                     hint = (
                         "The file is empty (0 bytes) — tell the user there is no content to read."
