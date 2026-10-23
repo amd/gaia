@@ -39,7 +39,7 @@ from ..utils import (
     compute_file_hash,
     compute_file_hash_from_fd,
     doc_to_response,
-    ensure_within_home,
+    ensure_document_path_allowed,
     managed_documents_dir,
     safe_open_document,
     unsupported_type_message,
@@ -693,12 +693,9 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
 
     raw_folder = Path(os.path.expanduser(folder_path))
 
-    resolved = raw_folder.resolve(strict=False)
-
-    # Security: restrict folder indexing to user's home directory FIRST,
-    # before ANY filesystem operations (is_symlink/exists/is_dir can throw
-    # PermissionError on protected OS paths).
-    ensure_within_home(resolved)
+    # Same check as upload-path, and before any filesystem access
+    # (is_symlink/exists/is_dir can throw PermissionError on protected paths).
+    resolved = Path(ensure_document_path_allowed(raw_folder))
 
     # Check symlink after home restriction
     try:

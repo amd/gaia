@@ -101,6 +101,54 @@ class TestFolderPath:
         assert resp.json()["indexed"] == 1
 
 
+class TestBothRoutesShareOneRootCheck:
+    """A folder upload-path calls a folder, index-folder must accept, and vice versa."""
+
+    def _index_folder(self, client, folder):
+        async def fake_index(_path):
+            return 1
+
+        with patch("gaia.ui.server._index_document", fake_index):
+            return client.post(
+                "/api/documents/index-folder",
+                json={"folder_path": str(folder), "recursive": False},
+            )
+
+    def test_folder_in_an_extra_root_outside_home_indexes(
+        self, tmp_path, home, client, monkeypatch
+    ):
+        extra = tmp_path / "shared"
+        folder = extra / "reports"
+        folder.mkdir(parents=True)
+        (folder / "q3.md").write_text("# Q3")
+        monkeypatch.setenv(DOCUMENT_ROOTS_ENV, str(extra))
+
+        handed_off = _upload(client, folder)
+        assert handed_off.json()["detail"]["status"] == "is_folder"
+
+        resp = self._index_folder(client, folder)
+        assert resp.status_code == 200
+        assert resp.json()["indexed"] == 1
+
+    def test_the_root_folder_itself_is_a_folder_on_both_routes(self, home, client):
+        (home / "notes.md").write_text("# Notes")
+
+        assert _upload(client, home).json()["detail"]["status"] == "is_folder"
+        assert self._index_folder(client, home).json()["indexed"] == 1
+
+    def test_outside_the_roots_both_routes_give_the_same_answer(
+        self, tmp_path, home, client
+    ):
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+
+        from_file_route = _upload(client, outside)
+        from_folder_route = self._index_folder(client, outside)
+
+        assert from_file_route.status_code == from_folder_route.status_code == 403
+        assert from_file_route.json()["detail"] == from_folder_route.json()["detail"]
+
+
 class TestMissingAndOutOfScope:
     def test_missing_file_inside_the_roots_says_it_does_not_exist(self, home, client):
         resp = _upload(client, home / "nope" / "missing.pdf")

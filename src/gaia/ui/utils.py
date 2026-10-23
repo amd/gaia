@@ -655,6 +655,36 @@ def ensure_within_home(resolved: Path) -> None:
         )
 
 
+def ensure_document_path_allowed(raw: Path) -> str:
+    """Raise HTTP 403 unless *raw* lies inside a document root; return its realpath.
+
+    The one containment check for paths a user types into the Document library,
+    shared by the file and folder routes so a path one accepts the other does too.
+
+    1. Lexical: ``os.path.abspath`` (no symlink following) must be under a root.
+       This runs before any filesystem access, so a path outside the roots gets
+       the same 403 whether or not it exists — a 404 there would let a client
+       probe which files exist outside them.
+    2. Physical: the realpath must be under a root too, which stops an
+       intermediate symlinked directory inside a root from pointing outside.
+    """
+    roots = document_roots()
+    # Worded so it holds whether or not the path exists: see step 1.
+    denied = (
+        f"Access denied: GAIA only reads documents under "
+        f"{_describe_roots(roots)}, and {raw} is outside them. Check the path "
+        f"is right. If it is, move or copy it under one of those folders, "
+        f"or add its folder to {DOCUMENT_ROOTS_ENV} and restart GAIA."
+    )
+    abs_raw = Path(os.path.abspath(str(raw)))
+    if not any(abs_raw.is_relative_to(root) for root in roots):
+        raise HTTPException(status_code=403, detail=denied)
+    real = os.path.realpath(str(raw))
+    if not any(Path(real).is_relative_to(root) for root in roots):
+        raise HTTPException(status_code=403, detail=denied)
+    return real
+
+
 # ── Filesystem Helpers ─────────────────────────────────────────────────────────
 
 
@@ -721,30 +751,8 @@ def safe_open_document(
         raise HTTPException(status_code=400, detail="Invalid file path")
 
     raw = Path(os.path.expanduser(path))
-    roots = document_roots()
-    # Worded so it holds whether or not the file exists: see step 1.
-    denied = (
-        f"Access denied: GAIA only reads documents under "
-        f"{_describe_roots(roots)}, and {raw} is outside them. Check the path "
-        f"is right. If it is, move or copy the file under one of those folders, "
-        f"or add its folder to {DOCUMENT_ROOTS_ENV} and restart GAIA."
-    )
-
-    # 1. Must be within an allowed root — check before lstat so that
-    # non-existent paths outside them return 403 (not 404): answering 404 vs
-    # 403 there would let any client probe which files exist outside the roots.
-    # Use os.path.abspath (doesn't follow symlinks) for this check.
-    abs_raw = Path(os.path.abspath(str(raw)))
-    if not any(abs_raw.is_relative_to(root) for root in roots):
-        raise HTTPException(status_code=403, detail=denied)
-
-    # 2. Physical containment: the lexical check above can be defeated by an
-    # intermediate symlinked directory inside a root that points outside
-    # (O_NOFOLLOW below only guards the FINAL path component). realpath
-    # resolves every component; require the result to stay under a root.
-    real = os.path.realpath(str(raw))
-    if not any(real.startswith(str(root).rstrip(os.sep) + os.sep) for root in roots):
-        raise HTTPException(status_code=403, detail=denied)
+    # 1-2. Containment before lstat, so nothing outside the roots is probed.
+    real = ensure_document_path_allowed(raw)
 
     # 3. Reject symlinks before resolving — lstat doesn't follow symlinks
     try:
