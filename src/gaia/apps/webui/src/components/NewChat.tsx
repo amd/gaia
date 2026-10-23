@@ -120,8 +120,11 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         return setVisibleInterval(() => loadStart(true), START_RETRY_MS);
     }, [startError, loadStart]);
 
+    // Set before any re-render, so keypresses landing in the same tick are dropped too.
+    const sendingRef = useRef(false);
     const send = useCallback(async (message: string) => {
-        if (!message || sending) return;
+        if (!message || sendingRef.current) return;
+        sendingRef.current = true;
         setSending(true);
         setError(null);
         try {
@@ -131,9 +134,10 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
         } finally {
+            sendingRef.current = false;
             setSending(false);
         }
-    }, [attachments, onSend, sending]);
+    }, [attachments, onSend]);
 
     const submit = useCallback(() => send(attachments.compose(text.trim())), [attachments, send, text]);
 
