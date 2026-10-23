@@ -51,9 +51,15 @@ RAG searches your documents and answers using real information.
 
 <Note>
 **Supported document formats:** PDF, Word (`.docx`), PowerPoint (`.pptx`),
-Excel (`.xlsx`), plus plain text, Markdown, CSV, JSON, HTML, and common source
+Excel (`.xlsx`), images (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.gif`,
+`.tif`, `.tiff`), plus plain text, Markdown, CSV, JSON, HTML, and common source
 code files. Legacy binary Office formats (`.doc`, `.ppt`, `.xls`) are not
 supported — re-save them as the modern `.docx` / `.pptx` / `.xlsx` formats.
+
+Images are indexed by the text the vision model (`RAGConfig.vlm_model`) reads
+from them. If that model isn't available on Lemonade, or `use_vlm=False`,
+indexing an image fails with an error that says how to fix it. It never
+indexes empty text. GIF and TIFF files are read from their first frame only.
 </Note>
 
 ---

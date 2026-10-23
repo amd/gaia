@@ -97,6 +97,16 @@ class EmptyPDFError(PDFExtractionError):
     status = "empty"
 
 
+# Raster formats Pillow decodes; each is re-encoded as PNG before the VLM sees it.
+IMAGE_EXTENSIONS = frozenset(
+    {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
+)
+
+
+class ImageExtractionError(ValueError):
+    """Raised when an image file cannot be read into text, with a remedy."""
+
+
 def _missing_package_hint(*packages: str) -> str:
     from gaia.agents.install_hints import (  # pylint: disable=import-outside-toplevel
         missing_package_hint,
@@ -2110,6 +2120,94 @@ These positions indicate where to split the text."""
         self.log.info(f"📄 Extracted {len(text):,} characters from Word file")
         return text
 
+    def _extract_text_from_image(self, image_path: str) -> tuple:
+        """Read an image file's text with the vision model.
+
+        The image is prepared and sent exactly as the PDF path sends an
+        embedded image. There is no non-VLM path: an image the VLM cannot read
+        fails instead of indexing empty or placeholder text.
+
+        Returns:
+            (text, metadata) — metadata has vlm_pages=1 and total_images=1.
+
+        Raises:
+            ImageExtractionError: VLM turned off or unavailable, the file is not
+                a decodable image, or the VLM found no text in it.
+        """
+        from PIL import Image  # pylint: disable=import-outside-toplevel
+
+        from gaia.llm import VLMClient  # pylint: disable=import-outside-toplevel
+        from gaia.llm.vlm_client import (  # pylint: disable=import-outside-toplevel
+            VLMExtractionError,
+        )
+        from gaia.rag.pdf_utils import (  # pylint: disable=import-outside-toplevel
+            prepare_image_for_vlm,
+        )
+
+        file_name = Path(image_path).name
+        model = self.config.vlm_model
+
+        if not self.config.use_vlm:
+            raise ImageExtractionError(
+                f"Cannot index image {file_name}: image text extraction is off "
+                "(RAGConfig.use_vlm=False).\n"
+                "Images are read by the vision model; set use_vlm=True to index them."
+            )
+
+        # Outside the try: a locked file must reach index_document as PermissionError.
+        raw = Path(image_path).read_bytes()
+        try:
+            image = prepare_image_for_vlm(raw)
+        except (OSError, ValueError, Image.DecompressionBombError) as e:
+            self.log.error(f"Unreadable image {image_path}: {e}")
+            raise ImageExtractionError(
+                f"Could not read image: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted or not a supported image.\n"
+                "Re-export it as PNG or JPEG and index it again."
+            ) from e
+
+        vlm = VLMClient(vlm_model=model, base_url=self.config.base_url)
+        if not vlm.check_availability():
+            raise ImageExtractionError(
+                f"Cannot index image {file_name}: vision model {model} is not "
+                f"available at {vlm.server_url}.\n"
+                "Images are indexed by reading their text with the vision model.\n"
+                "To fix:\n"
+                "  1. Make sure Lemonade Server is running (`gaia init` sets it up)\n"
+                f"  2. Download {model} in the Lemonade Model Manager "
+                f"({vlm.server_url})\n"
+                "  3. Index the image again"
+            )
+
+        if self.config.show_stats:
+            print(f"  🖼️  Reading image text with {model}...")
+        try:
+            image_texts = vlm.extract_from_page_images([image], page_num=1)
+        except VLMExtractionError as e:
+            raise ImageExtractionError(
+                f"Could not read text from image {file_name}: {e}"
+            ) from e
+        finally:
+            vlm.cleanup()
+
+        text = "\n\n".join(t["text"].strip() for t in image_texts).strip()
+        if not text:
+            raise ImageExtractionError(
+                f"No text found in image: {file_name}\n"
+                f"The vision model ({model}) read the image but returned no text."
+            )
+
+        self.log.info(f"🖼️  Extracted {len(text):,} characters from {file_name}")
+        metadata = {
+            "num_pages": None,
+            "vlm_pages": 1,
+            "total_images": 1,
+            "vlm_checked": True,
+            "vlm_available": True,
+        }
+        return text, metadata
+
     def _extract_text_from_file(self, file_path: str) -> tuple:
         """
         Extract text from file based on type.
@@ -2117,8 +2215,8 @@ These positions indicate where to split the text."""
         Returns:
             (text, metadata_dict) tuple where metadata_dict contains:
             - num_pages: int (for PDFs/PPTX) or None
-            - vlm_pages: int (for PDFs/PPTX with VLM) or None
-            - total_images: int (for PDFs/PPTX with VLM) or None
+            - vlm_pages: int (for PDFs/PPTX/images with VLM) or None
+            - total_images: int (for PDFs/PPTX/images with VLM) or None
         """
         file_type = self._get_file_type(file_path)
         metadata = {"num_pages": None, "vlm_pages": None, "total_images": None}
@@ -2144,6 +2242,10 @@ These positions indicate where to split the text."""
             metadata["vlm_pages"] = pptx_metadata.get("vlm_slides", 0)
             metadata["total_images"] = pptx_metadata.get("total_images", 0)
             return text, metadata
+
+        # Image files (read by the vision model)
+        elif file_type in IMAGE_EXTENSIONS:
+            return self._extract_text_from_image(file_path)
 
         # Text-based files
         elif file_type in [".txt", ".md", ".mdx", ".markdown", ".rst", ".log"]:

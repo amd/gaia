@@ -102,7 +102,7 @@ gaia chat --query "Hello" --show-stats
 ## Document Q&A (RAG)
 
 <Note>
-RAG (Retrieval-Augmented Generation) enables chatting with documents — including PDF, Word (.docx), PowerPoint (.pptx), and Excel (.xlsx) — using semantic search and context retrieval.
+RAG (Retrieval-Augmented Generation) enables chatting with documents — including PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), and images (.png, .jpg, .webp, ...) — using semantic search and context retrieval.
 </Note>
 
 ### CLI with RAG
@@ -115,6 +115,7 @@ RAG (Retrieval-Augmented Generation) enables chatting with documents — includi
     gaia chat --index handbook.docx
     gaia chat --index slides.pptx
     gaia chat --index budget.xlsx
+    gaia chat --index screenshot.png
     ```
   </Tab>
 
@@ -155,7 +156,7 @@ RAG (Retrieval-Augmented Generation) enables chatting with documents — includi
 </Tabs>
 
 <Note>
-  **Document Indexing Requirements:** Processing PDFs and PPTX files with images requires a Vision Language Model (VLM). GAIA uses `Qwen3-VL-4B-Instruct-GGUF` by default for extracting text from images in documents.
+  **Document Indexing Requirements:** Processing PDFs and PPTX files with images requires a Vision Language Model (VLM). GAIA uses `Qwen3-VL-4B-Instruct-GGUF` by default for extracting text from images in documents. Image files (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.gif`, `.tif`, `.tiff`) are indexed only through the VLM: if it isn't available, indexing the image fails with instructions to download it in the Lemonade Model Manager.
 
   To download all models needed for chat (including VLM):
   ```bash

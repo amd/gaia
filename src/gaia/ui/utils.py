@@ -59,12 +59,20 @@ logger = logging.getLogger(__name__)
 #   .xls (legacy BIFF) — openpyxl only handles .xlsx; would raise on open
 # NOTE: .pptx and .docx ARE supported — python-pptx and python-docx ship with
 # GAIA. See ``_UNSUPPORTED_CATEGORIES`` below for the user-facing rejection hint.
-# Image formats are tracked by issue #730 (VLM-based indexing).
+# Raster images are read by the vision model (``IMAGE_EXTENSIONS`` in the RAG SDK).
 ALLOWED_EXTENSIONS = frozenset(
     {
         ".pdf",
         ".pptx",
         ".docx",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+        ".bmp",
+        ".gif",
+        ".tif",
+        ".tiff",
         ".txt",
         ".md",
         ".mdx",
@@ -311,20 +319,9 @@ def sanitize_document_path(user_path: str) -> Path:
         # Provide categorized feedback for common unsupported types
         _UNSUPPORTED_CATEGORIES = {
             "image": (
-                {
-                    ".jpg",
-                    ".jpeg",
-                    ".png",
-                    ".gif",
-                    ".bmp",
-                    ".tiff",
-                    ".webp",
-                    ".ico",
-                    ".heic",
-                    ".heif",
-                },
-                "Image files cannot be indexed for text search. "
-                "Tip: If your images contain text, convert them to PDF first — GAIA can extract text from PDFs.",
+                {".ico", ".heic", ".heif"},
+                "This image format cannot be indexed. "
+                "Tip: Convert it to PNG or JPEG — GAIA reads the text in those images.",
             ),
             "video": (
                 {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"},
@@ -373,7 +370,7 @@ def sanitize_document_path(user_path: str) -> Path:
         detail = (
             f"{hint} "
             f"Supported formats: PDF, PPTX, TXT, MD, CSV, JSON, XLSX, "
-            f"HTML, XML, YAML, and 30+ code file formats. "
+            f"HTML, XML, YAML, images (PNG, JPG, WEBP, ...), and 30+ code file formats. "
             f"Want support for {category + ' files' if category else 'this file type'}? "
             f"Request it at https://github.com/amd/gaia/issues/new?title=[Feature]%20Support%20{ext}%20file%20indexing"
         )
