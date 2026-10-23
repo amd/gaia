@@ -3,8 +3,17 @@
 
 # Fast unit tests that don't require Lemonade server or external dependencies
 # These tests run first to provide quick feedback on core SDK components
-# Platform: Linux, macOS and Windows all run the full unit suite, and a
-# failure on any of them fails the run.
+#
+# What runs where (util/select_tests.py picks the files):
+#   pull request   Linux runs the test files the change can reach; Windows and
+#                  macOS run the ones among those that touch the OS.
+#   push to main   Linux runs the full suite; Windows and macOS run the
+#                  OS-touching files the merge can reach.
+#   nightly        the full suite on all three, and Linux rebuilds the coverage
+#                  map the selection reads.
+#   dispatch, merge queue   the full suite on all three (the release gate
+#                  dispatches this workflow on the tagged commit).
+# A failure on any OS fails the run.
 
 name: Unit Tests
 
@@ -135,21 +144,109 @@ on:
       - 'hub/agents/*/npm/SKILL.md'
   merge_group:
   workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * *'
 
-# Cancel in-progress runs when a new run is triggered
+# A PR's new push cancels its old run. On main a started run finishes, so main
+# gets a result: GitHub keeps one pending run and drops older pending ones
+# before they start. The event is in the group so a push never drops the nightly.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
+  select:
+    name: Select unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: >-
+      (github.event_name != 'schedule' || github.repository == 'amd/gaia') &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.draft == false ||
+       contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
+    permissions:
+      contents: read
+      # A push diffs against the last commit a successful run tested.
+      actions: read
+    outputs:
+      linux_full: ${{ steps.pick.outputs.linux_full }}
+      linux_count: ${{ steps.pick.outputs.linux_count }}
+      platform_full: ${{ steps.pick.outputs.platform_full }}
+      platform_count: ${{ steps.pick.outputs.platform_count }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The diff needs the merge base with the PR's base branch.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Restore the coverage map
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        uses: actions/cache/restore@v6
+        with:
+          path: test_map.json
+          key: unit-test-map-${{ github.sha }}-${{ github.run_id }}
+          restore-keys: unit-test-map-
+
+      - name: Pick the test files this change can reach
+        id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request) base="origin/$BASE_REF" ;;
+            # Not event.before: a burst of merges drops the pending runs in
+            # between, and their changes would never reach Windows or macOS.
+            push) base=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow test_unit.yml \
+                    --branch main --event push --status success --limit 1 \
+                    --json headSha --jq '.[0].headSha // ""') ;;
+            *) base="" ;;
+          esac
+          # No earlier tested commit to diff against: run everything.
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            {
+              echo "linux_full=true"; echo "linux_count=0"
+              echo "platform_full=true"; echo "platform_count=0"
+            } >> "$GITHUB_OUTPUT"
+            echo "**Test selection** — full suite on every OS ($EVENT)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python util/select_tests.py select --base "$base" --map test_map.json \
+            --out linux.txt --github-output linux
+          python util/select_tests.py select --base "$base" --map test_map.json \
+            --platform-only --out platform.txt --github-output platform
+          if [ "$EVENT" = push ]; then
+            echo "linux_full=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A file, not a job output: Windows caps one environment variable at 32 KB.
+      - name: Upload the selection
+        if: hashFiles('linux.txt') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-selection
+          path: |
+            linux.txt
+            platform.txt
+          if-no-files-found: error
+
   unit-tests:
     name: Unit Tests (Linux, py3.12)
+    needs: select
     runs-on: ubuntu-latest
-    # Sized to suite growth, not a hang: ~44 min passing by 2026-10-13.
-    timeout-minutes: 60
+    # Sized to suite growth, not a hang: ~44 min passing by 2026-10-13. The
+    # nightly run's per-test coverage contexts add about three quarters.
+    timeout-minutes: ${{ github.event_name == 'schedule' && 120 || 60 }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
       - uses: actions/checkout@v7
@@ -216,19 +313,45 @@ jobs:
         run: |
           pytest tests/unit/test_context_size_resolution.py tests/unit/test_llamacpp_backend.py tests/unit/test_lemonade_client_ctx_override.py tests/unit/test_lemonade_model_loading.py tests/integration/test_context_override_reload.py -v --tb=short
 
+      - name: Download the selection
+        if: needs.select.outputs.linux_full != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: unit-test-selection
+
       - name: Run unit tests
         env:
           # Skip memory init — Lemonade isn't available in this CI job; the
           # unit tests don't exercise memory functionality (memory has its
           # own dedicated tests with mocked embeddings).
           GAIA_MEMORY_DISABLED: "1"
+          FULL: ${{ needs.select.outputs.linux_full }}
+          # The nightly run records which test ran which line, for the map.
+          CONTEXTS: ${{ github.event_name == 'schedule' && '--cov=hub/agents --cov-context=test' || '' }}
         run: |
-          echo "=== Running Unit Tests ==="
-          echo "These are fast tests for core SDK components"
-          echo ""
+          set -euo pipefail
           # One worker per vCPU; worksteal evens out the few long tests.
-          pytest tests/unit/ -n logical --dist=worksteal -v --tb=short --durations=50 \
-            --cov=src/gaia --cov-report=term-missing --cov-report=xml:coverage.xml
+          if [ "$FULL" = "true" ]; then
+            # shellcheck disable=SC2086
+            pytest tests/unit/ -n logical --dist=worksteal -v --tb=short --durations=50 \
+              --cov=src/gaia $CONTEXTS --cov-report=term-missing --cov-report=xml:coverage.xml
+          elif [ -s linux.txt ]; then
+            pytest @linux.txt -n logical --dist=worksteal -v --tb=short --durations=50
+          else
+            echo "No unit-test file can reach this change; see the Select unit tests job."
+          fi
+
+      # A failing test still recorded what it ran, so the map is still good.
+      - name: Build the test coverage map
+        if: github.event_name == 'schedule' && !cancelled()
+        run: python util/select_tests.py build-map --coverage .coverage --out test_map.json
+
+      - name: Save the test coverage map
+        if: github.event_name == 'schedule' && !cancelled()
+        uses: actions/cache/save@v6
+        with:
+          path: test_map.json
+          key: unit-test-map-${{ github.sha }}-${{ github.run_id }}
 
       - name: Run CLI tool-confirmation integration tests
         env:
@@ -239,8 +362,10 @@ jobs:
           echo ""
           pytest tests/integration/test_cli_tool_confirmation.py -v --tb=short --timeout=300
 
+      # A selected run measures part of the code; uploading it would read as
+      # a coverage drop.
       - name: Upload coverage to Codecov
-        if: always()
+        if: always() && needs.select.outputs.linux_full == 'true'
         uses: codecov/codecov-action@v7
         with:
           files: coverage.xml
@@ -462,10 +587,13 @@ jobs:
 
   unit-tests-macos:
     name: Unit Tests (macOS, py3.12)
+    needs: select
     runs-on: macos-latest
     # The full unit suite takes ~33 min here; 30 cut it off at 92%.
     timeout-minutes: 60
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    if: >-
+      !cancelled() && needs.select.result == 'success' &&
+      (needs.select.outputs.platform_full == 'true' || needs.select.outputs.platform_count != '0')
     steps:
       - uses: actions/checkout@v7
 
@@ -494,12 +622,25 @@ jobs:
           pytest tests/unit/test_packaging.py -v --tb=short
           echo "Packaging integrity checks passed"
 
+      - name: Download the selection
+        if: needs.select.outputs.platform_full != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: unit-test-selection
+
       - name: Run unit tests (macOS)
         env:
           GAIA_MEMORY_DISABLED: "1"
+          FULL: ${{ needs.select.outputs.platform_full }}
         # 180 s, not 60: a few CLI-spawning tests take 30-50 s alone and slow
         # down beside other workers, and on Windows a timeout kills the worker.
-        run: pytest tests/unit/ -n logical --dist=worksteal --timeout=180 -v --tb=short --durations=50
+        run: |
+          set -euo pipefail
+          if [ "$FULL" = "true" ]; then
+            pytest tests/unit/ -n logical --dist=worksteal --timeout=180 -v --tb=short --durations=50
+          else
+            pytest @platform.txt -n logical --dist=worksteal --timeout=180 -v --tb=short --durations=50
+          fi
 
       - name: Check no GAIA daemon outlived the tests
         if: ${{ !cancelled() }}
@@ -508,10 +649,13 @@ jobs:
   # GAIA is Windows/NPU-first; this is the only hosted Windows run of the suite.
   unit-tests-windows:
     name: Unit Tests (Windows, py3.12)
+    needs: select
     runs-on: windows-latest
     # The full suite reached 95% at 60 min on windows-latest.
     timeout-minutes: 90
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    if: >-
+      !cancelled() && needs.select.result == 'success' &&
+      (needs.select.outputs.platform_full == 'true' || needs.select.outputs.platform_count != '0')
     steps:
       - uses: actions/checkout@v7
 
@@ -542,13 +686,26 @@ jobs:
           pytest tests/unit/test_packaging.py -v --tb=short
           echo "Packaging integrity checks passed"
 
+      - name: Download the selection
+        if: needs.select.outputs.platform_full != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: unit-test-selection
+
       - name: Run unit tests (Windows)
         shell: bash
         env:
           GAIA_MEMORY_DISABLED: "1"
+          FULL: ${{ needs.select.outputs.platform_full }}
         # 180 s, not 60: a few CLI-spawning tests take 30-50 s alone and slow
         # down beside other workers, and on Windows a timeout kills the worker.
-        run: pytest tests/unit/ -n logical --dist=worksteal --timeout=180 -v --tb=short --durations=50
+        run: |
+          set -euo pipefail
+          if [ "$FULL" = "true" ]; then
+            pytest tests/unit/ -n logical --dist=worksteal --timeout=180 -v --tb=short --durations=50
+          else
+            pytest @platform.txt -n logical --dist=worksteal --timeout=180 -v --tb=short --durations=50
+          fi
 
       - name: Run daemon lifetime integration tests (Windows)
         shell: bash

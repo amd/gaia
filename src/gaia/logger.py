@@ -53,6 +53,7 @@ def configure_console_encoding():
                     capture_output=True,
                     shell=False,
                     check=False,
+                    timeout=10,
                 )
             except (subprocess.SubprocessError, OSError, FileNotFoundError):
                 pass  # Ignore if chcp command fails

@@ -298,6 +298,22 @@ installs the package. That lane must name the file and run the check too.
 </Note>
 
 <Note>
+A pull request doesn't run the whole unit suite. `util/select_tests.py` picks the
+test files the change can reach: through imports, patch-target strings, files the
+tests read, and a coverage map of which test ran which file, rebuilt nightly. Linux
+runs that set; Windows and macOS run the part of it that touches the OS
+(processes, paths, locks, permissions). Every push to main runs the full suite on
+Linux, and the nightly run covers all three operating systems. A change to a
+`conftest.py`, packaging or pytest config, or a deleted or renamed file runs
+everything. The coverage map has one known blind spot: code behind a cache or a
+shared fixture is credited only to the first test that ran it, so a test that only
+reaches it second can be left out until the nightly run.
+See what your branch will run with
+`python util/select_tests.py select --base origin/main --explain`, and dispatch
+`test_unit.yml` on the branch to run the full suite.
+</Note>
+
+<Note>
 `--ci-paths` fails when a workflow's `paths:` filter would not fire on a file the
 workflow runs, imports directly, installs, or reads by literal path. A PR changing
 only that file would merge with the lane never running. It also fails when a file
