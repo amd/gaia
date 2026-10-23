@@ -142,6 +142,12 @@ Drag files into the chat — or just ask the agent to find them. It indexes the 
 >
 > *"What's the total spend in this expense report?"*
 
+A chat searches only the documents attached to it, never the whole Document
+library, so one chat's files don't leak into another's answers. The library
+says where the documents you add go: the open chat, or your next new chat. A
+new chat lists the library's documents and offers to attach them; picking
+**Ask about your documents** attaches them all.
+
 ---
 
 ## Install
@@ -400,6 +406,10 @@ Open **Settings → Model** (or the model chip in the message box):
   store, and are refused over mobile access. When a key is already set (in the
   environment or from the TUI) the screen says so; leave the field blank to keep
   using it. **Forget key** removes it here and for future sessions.
+- On macOS, the first read of a saved key after reinstalling GAIA opens a
+  Keychain dialog. Until you answer it, the model list says macOS is asking for
+  keychain access instead of offering to add a key. Click **Always Allow** and
+  the list fills in on its own.
 - The AMD LLM Gateway is greyed out, here and on the first-run setup screen,
   when its host can't be reached from this network. It reads "No network
   available — can't reach llm-api.amd.com (needs AMD's network or VPN)". Connect
@@ -793,6 +803,8 @@ Each schedule runs in its own chat session, so the full history of runs (prompt 
 Behavior notes:
 
 - Scheduled runs use the GAIA agent and the model you picked; with a local model nothing leaves your machine.
+- Nobody is there to approve a tool call during a scheduled run, so tools that need approval (shell commands, file writes) are refused.
+- A run that fails shows its error on the schedule card and raises a notification in the notification center's **Errors** tab.
 - Runs are **suspended while mobile access (tunnel) is active**, matching the autonomous agent loop's security posture. Set `GAIA_AUTONOMOUS_ALLOW_TUNNEL=1` to override.
 - One run executes at a time; overlapping schedules queue.
 - Per-run timeout defaults to 300 s; override with `GAIA_SCHEDULE_TIMEOUT`.
@@ -878,9 +890,11 @@ The agent supports the **Model Context Protocol** in both directions — connect
     - Two large documents index at a time and the rest wait their turn; small files (under 20 MB) have their own two slots, so they never wait behind big ones. A document that keeps making progress indexes to the end however long it takes. One that makes no progress for 10 minutes stops with an error that says so; to allow longer stalls, set `GAIA_INDEX_TIMEOUT` (seconds without progress) before GAIA starts, e.g. `export GAIA_INDEX_TIMEOUT=1200`
   </Accordion>
 
-  <Accordion title="Access denied: path must be within one of ...">
+  <Accordion title="GAIA can only read documents under ...">
     Documents can only be read from an allowed root. By default that is your
     home directory — a file elsewhere on disk is rejected with HTTP 403.
+    Dropping the file onto the Document library works from anywhere: GAIA
+    keeps its own copy (up to 20 MB).
 
     This bites on service accounts and CI runners, whose home
     (`C:\Windows\System32\config\systemprofile`) is not where their files live.

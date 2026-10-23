@@ -25,6 +25,7 @@ const schedule: Schedule = {
     error_count: 0,
     session_id: null,
     schedule_config: null,
+    last_error: null,
 };
 
 const deleteSchedule = vi.fn<(name: string) => Promise<void>>(async () => {});

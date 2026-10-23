@@ -6,6 +6,10 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **Token counts are exact in the published binary, offline too.** The
+  binary could not load its tokenizer and counted tokens by an estimate that
+  overcounts. The tokenizer and its data now ship inside the binary, so it
+  no longer downloads anything to count tokens.
 - **A mailbox connection being saved is reported as transient.** When another
   GAIA process or request is mid-save on the mailbox connection, a mailbox
   route now answers `502` with a detail saying the connection "is being saved
