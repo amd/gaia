@@ -147,6 +147,21 @@ def keys(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def reach(monkeypatch):
+    """The gateway reachability check, faked: reachable unless a test says not."""
+    state = {"error": None, "asked": []}
+
+    def check_reachable(base_url=None):
+        state["asked"].append(base_url)
+        if state["error"] is not None:
+            raise state["error"]
+
+    monkeypatch.setattr(providers, "check_gateway_reachable", check_reachable)
+    monkeypatch.setattr("urllib.request.getproxies", lambda: {})
+    return state
+
+
+@pytest.fixture(autouse=True)
 def _fresh_restore():
     providers.reset_restore_state()
     yield
@@ -644,6 +659,47 @@ _CATALOG = [
     {"id": "fireworks.embed", "recipe": "cloud", "labels": ["embedding"]},
     {"id": "amd.gpt-oss", "recipe": "cloud", "labels": [], "downloaded": True},
 ]
+
+
+def test_cloud_models_show_the_providers_window_not_lemonades_4096(client, lemonade):
+    # Lemonade v2026.42.1: a cloud model it has "loaded" lists context_length 4096.
+    lemonade.models = [
+        {
+            "id": "fireworks.deepseek-v4p1-flash",
+            "recipe": "cloud",
+            "labels": [],
+            "context_length": 4096,
+            "max_context_window": 1048576,
+        },
+        {
+            "id": "fireworks.glm-5p3-flash",
+            "recipe": "cloud",
+            "labels": [],
+            "context_length": 1048576,
+            "max_context_window": 1048576,
+        },
+    ]
+    models = client.get("/api/providers/fireworks/models").json()["models"]
+    assert {m["id"]: m["context_length"] for m in models} == {
+        "fireworks.deepseek-v4p1-flash": 1048576,
+        "fireworks.glm-5p3-flash": 1048576,
+    }
+
+
+def test_local_models_show_their_configured_window(client, lemonade):
+    lemonade.models = [
+        {
+            "id": "Qwen3-4B-GGUF",
+            "downloaded": True,
+            "labels": [],
+            "recipe": "llamacpp",
+            "context_length": 65536,
+            "max_context_window": 262144,
+        }
+    ]
+    models = client.get("/api/providers/local/models").json()["models"]
+    (row,) = [m for m in models if m["id"] == "Qwen3-4B-GGUF"]
+    assert row["context_length"] == 65536
 
 
 def test_local_models_are_downloaded_chat_models_plus_the_default(client, lemonade):
@@ -1173,3 +1229,92 @@ def test_first_download_registers_under_the_user_name(
         "vision": True,
         "reasoning": True,
     }
+
+
+# ── AMD gateway reachability (#5604) ───────────────────────────────────────
+
+
+def _offline():
+    from gaia.llm.gateway import GatewayUnreachable
+
+    return GatewayUnreachable("llm-api.amd.com", "Name or service not known")
+
+
+def _amd(body):
+    return next(p for p in body["providers"] if p["id"] == "amd")
+
+
+def test_list_says_a_reachable_gateway_has_a_network(client, lemonade, keys, reach):
+    lemonade.cloud["amd"] = {"name": "amd", "base_url": "https://gw.example.test/v1"}
+    amd = _amd(client.get("/api/providers").json())
+    assert amd["network"] == {"reachable": True, "detail": None}
+    assert reach["asked"] == ["https://gw.example.test/v1"]
+
+
+def test_list_marks_an_unreachable_gateway_no_network(client, lemonade, keys, reach):
+    reach["error"] = _offline()
+    amd = _amd(client.get("/api/providers").json())
+    assert amd["network"]["reachable"] is False
+    assert "No network available" in amd["network"]["detail"]
+    assert "llm-api.amd.com" in amd["network"]["detail"]
+    fireworks = next(
+        p
+        for p in client.get("/api/providers").json()["providers"]
+        if p["id"] == "fireworks"
+    )
+    assert "network" not in fireworks
+
+
+def test_list_checks_the_gateway_even_when_lemonade_is_down(
+    client, lemonade, keys, reach
+):
+    lemonade.down = True
+    reach["error"] = _offline()
+    amd = _amd(client.get("/api/providers").json())
+    assert amd["network"]["reachable"] is False
+
+
+def test_connecting_an_unreachable_gateway_says_no_network_not_key(
+    client, lemonade, keys, reach
+):
+    reach["error"] = _offline()
+    resp = client.post("/api/providers/amd/connect", json={"api_key": KEY})
+    assert resp.status_code == 503, resp.text
+    detail = resp.json()["detail"]
+    assert "No network available" in detail
+    assert "key" not in detail.lower()
+    # Nothing was registered or sent: the key never left this machine.
+    assert lemonade.paths("POST") == []
+    assert keys["remembered"] == []
+
+
+@pytest.mark.parametrize("setup", ["remote_lemonade", "proxy"])
+def test_the_gateway_is_not_checked_where_a_dial_from_here_proves_nothing(
+    client, lemonade, keys, reach, monkeypatch, setup
+):
+    """Lemonade sends the gateway's requests; a remote one, or a proxy, takes another path."""
+    if setup == "remote_lemonade":
+        monkeypatch.setattr(providers, "_is_local_url", lambda url: False)
+    else:
+        monkeypatch.setattr(
+            "urllib.request.getproxies", lambda: {"https": "http://proxy.test:3128"}
+        )
+    reach["error"] = _offline()
+    amd = _amd(client.get("/api/providers").json())
+    assert amd["network"] == {"reachable": None, "detail": None}
+    assert reach["asked"] == []
+    if setup == "proxy":
+        resp = client.post("/api/providers/amd/connect", json={"api_key": KEY})
+        assert resp.status_code == 200, resp.text
+
+
+def test_an_unreadable_lemonade_address_skips_the_gateway_check(
+    client, lemonade, keys, reach, monkeypatch
+):
+    def unreadable():
+        raise providers.ProviderError("LEMONADE_BASE_URL is not a URL", 503)
+
+    monkeypatch.setattr(providers, "_base_url", unreadable)
+    reach["error"] = _offline()
+    amd = _amd(client.get("/api/providers").json())
+    assert amd["network"] == {"reachable": None, "detail": None}

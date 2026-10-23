@@ -2156,6 +2156,26 @@ def _remember_cloud_availability(model_id: Optional[str], ok: bool) -> None:
         log.warning(f"Could not record availability of {model_id}: {e}")
 
 
+def catalog_context_window(entry: Dict[str, Any]) -> Optional[int]:
+    """The context window one ``/api/v1/models`` entry should be shown with.
+
+    A cloud entry's ``context_length`` is the window Lemonade last "loaded" it
+    at (4096 once used), not the provider's; ``max_context_window`` is the
+    provider's. A local entry's ``context_length`` is its configured window.
+    """
+
+    def positive(value: Any) -> Optional[int]:
+        ok = isinstance(value, int) and not isinstance(value, bool) and value > 0
+        return value if ok else None
+
+    if entry.get("recipe") == CLOUD_RECIPE or entry.get("cloud_provider"):
+        # Older Lemonade lists only context_length, and there it is the real window.
+        return positive(entry.get("max_context_window")) or positive(
+            entry.get("context_length")
+        )
+    return positive(entry.get("context_length"))
+
+
 def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
     """Remember which ids in a ``/api/v1/models`` payload are cloud-routed.
 
@@ -2178,7 +2198,7 @@ def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
         discovered[model_id] = {
             "tool_calling": "tool-calling" in labels,
             "labels": list(labels),
-            "ctx_size": entry.get("context_length"),
+            "ctx_size": catalog_context_window(entry),
         }
     # Rebind rather than clear()+update(): the UI and daemon call list_models()
     # from several threads, and a reader landing between the two saw an empty

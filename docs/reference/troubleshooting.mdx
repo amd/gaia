@@ -767,10 +767,11 @@ error. To run the chat model in the cloud instead, see
 
   <Accordion title="Collecting a diagnostics bundle for bug reports" icon="box-archive">
     GAIA ships a `gaia diagnostics` command that bundles the logs above,
-    including the rotated `gaia.log.1`, `gaia.log.2`, ... copies,
-    together with a short system-info snapshot (`uname -a`, distro info,
-    relevant environment variables, `ss -tlnp (all TCP listeners)`) into a single
-    tarball:
+    including the rotated `gaia.log.1`, `gaia.log.2`, ... copies, plus the
+    daemon, Lemonade and agent sidecar logs, together with a short
+    system-info snapshot (OS version, relevant environment variables, the
+    ports GAIA's daemon, Lemonade and UI backend are on, and all TCP
+    listeners) into a single tarball:
 
     ```bash
     gaia diagnostics

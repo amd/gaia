@@ -266,9 +266,9 @@ export interface InferenceStats {
     output_tokens: number;
     /** The agent's own step count for the turn. */
     steps?: number | null;
-    /** Set when the answer came from Retry with…: the model that wrote it. */
+    /** The model that wrote the answer; absent on answers saved before it was recorded. */
     model?: string | null;
-    /** Set with `model`: how long that model took, loading included. */
+    /** Set when the answer came from Retry with…: how long its model took, loading included. */
     seconds?: number | null;
     /** True only for an answer kept from Retry with…. */
     retried?: boolean | null;
@@ -556,6 +556,8 @@ export interface SystemStatus {
     disk_space_gb: number;
     memory_available_gb: number | null;
     initialized: boolean;
+    /** Why the desktop app's first-run `gaia init` failed; null when it did not. */
+    setup_error?: string | null;
     version: string;
     // Extended Lemonade info
     lemonade_version: string | null;
@@ -1069,6 +1071,15 @@ export interface ProviderInfo {
     env_var?: string;
     base_url?: string | null;
     error?: string;
+    /** AMD gateway only: whether its host answers from this network. */
+    network?: ProviderNetwork;
+}
+
+export interface ProviderNetwork {
+    /** Null when this PC can't tell: Lemonade runs elsewhere, or a proxy carries the traffic. */
+    reachable: boolean | null;
+    /** Why it can't be reached; null when it can. */
+    detail: string | null;
 }
 
 export interface ActiveModel {

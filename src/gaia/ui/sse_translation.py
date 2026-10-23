@@ -104,9 +104,14 @@ TERMINAL_TYPES = frozenset({"final", "error"})
 SUMMARY_VIEW_KEYS = (
     "summary",
     "success",
+    # The tool's own outcome word, e.g. "skipped" when a private chat saves nothing.
+    "status",
     "summary_truncated",
     "command_output",
     "latency_ms",
+    # What the tool wrote (``RESULT_PATH_KEYS`` in ``gaia.ui.sse_handler``).
+    "file_path",
+    "image_path",
 )
 
 #: Counts a ``status`` carrying a ``phase`` may report alongside it: reasoning

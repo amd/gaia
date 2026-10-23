@@ -7,7 +7,8 @@ drop three things the in-process path keeps: the turn's token usage (so a
 Fireworks chat showed no tokens and no cost), a permission prompt's arguments
 (so code was approved from a shortened summary and a path prompt said an
 existing file "doesn't exist yet"), and the chat's private / memory-off state
-(so the agent saved memories from a private chat).
+(so the agent saved memories from a private chat). It also skipped the turn
+ledger, so a file the agent wrote never reached the chat's Outputs.
 """
 
 from __future__ import annotations
@@ -242,6 +243,7 @@ class _Handler:
     def __init__(self):
         self.events: list = []
         self.cancelled = threading.Event()
+        self.turn_ledger = TurnLedger()
 
     def _emit(self, event):
         self.events.append(event)
@@ -292,6 +294,71 @@ def test_a_current_agent_is_told_the_mode(monkeypatch):
     assert calls[0]["memory"] == "private"
 
 
+# ── what the turn made ─────────────────────────────────────────────────────
+
+
+def _relayed_summary(tool, args, result):
+    """The turn summary a relayed tool call yields, from the sidecar's own events."""
+    sidecar = SSEOutputHandler()
+    sidecar.print_tool_usage(tool)
+    sidecar.pretty_print_json(args, "Arguments")
+    sidecar.pretty_print_json(result)
+    sidecar.print_tool_complete()
+    translator = CanonicalTranslator("r1", agent_id="gaia")
+    canonical = [c for e in _drain(sidecar) for c in translator.translate(e)]
+    ui = SSEOutputHandler()
+    for event in canonical + translator.flush():
+        relay._dispatch_one(ui, event, GAIA_PROFILE)
+    ledger = TurnLedger()
+    for event in _drain(ui):
+        if event["type"] == "tool_start":
+            ledger.tool_started(event["tool"])
+        elif event["type"] == "tool_args":
+            ledger.tool_args(event["args"])
+        elif event["type"] == "tool_result":
+            ledger.tool_result(event["data"], event["success"])
+    return ledger.summary(location=None)
+
+
+def _relayed_outputs(tool, args, result):
+    """The Outputs a relayed tool call adds."""
+    return _relayed_summary(tool, args, result)["outputs"]
+
+
+_FACT = "my locker combination hint is heron-plum-604"
+
+
+def test_a_memory_a_private_chat_refused_to_save_is_not_listed():
+    outputs = _relayed_outputs(
+        "remember",
+        {"fact": _FACT},
+        {
+            "status": "skipped",
+            "message": "This is a private chat, so nothing is saved to memory.",
+        },
+    )
+    assert outputs == []
+
+
+def test_a_memory_the_relayed_turn_saved_is_listed():
+    outputs = _relayed_outputs(
+        "remember",
+        {"fact": _FACT},
+        {"status": "stored", "stored": 1, "knowledge_id": "k1", "message": "ok"},
+    )
+    assert [(o["kind"], o["name"]) for o in outputs] == [("memory", _FACT)]
+
+
+def test_a_relayed_call_the_user_denied_contacted_nothing():
+    summary = _relayed_summary(
+        "fetch_page",
+        {"url": "https://example.com/page"},
+        {"status": "denied", "message": "The user declined this action."},
+    )
+    assert summary["sites"] == []
+    assert summary["live_data"] == {"attempted": 0, "failed": 0}
+
+
 # ── automatic memory writes ────────────────────────────────────────────────
 
 
@@ -340,3 +407,159 @@ def test_automatic_errors_are_still_saved_with_memory_on():
     host = _Host(incognito=False)
     host._auto_store_error("run_python", "NameError: x is not defined")
     assert [w[0] for w in host._memory_store.writes] == ["store"]
+
+
+# ── the turn summary and tool timer ────────────────────────────────────────
+
+
+def _sidecar_events(tool, args, result):
+    """The canonical events a flagship sidecar sends for one tool call: its
+    own handler's events run through the same translator its /query uses."""
+    agent_side = SSEOutputHandler()
+    agent_side.print_tool_usage(tool)
+    agent_side.pretty_print_json(args, title="Arguments")
+    agent_side.pretty_print_json(result)
+    agent_side.print_tool_complete()
+    translator = CanonicalTranslator("run-1", agent_id="gaia")
+    canonical = []
+    for event in _drain(agent_side):
+        canonical.extend(translator.translate(event))
+    canonical.extend(translator.flush())
+    assert [e["type"] for e in canonical] == ["tool_call", "tool_result"]
+    return canonical
+
+
+def _relay(handler, events):
+    for event in events:
+        relay._dispatch_one(handler, event, GAIA_PROFILE)
+
+
+def test_a_relayed_page_fetch_names_its_site_in_the_turn_summary():
+    handler = SSEOutputHandler()
+    for url in ("https://www.example.com/a", "https://docs.python.org/3/"):
+        _relay(
+            handler,
+            _sidecar_events(
+                "fetch_page", {"url": url}, {"status": "success", "url": url}
+            ),
+        )
+    summary = handler.turn_ledger.summary(location=None)
+    assert summary["sites"] == ["example.com", "docs.python.org"]
+    assert summary["live_data"] == {"attempted": 2, "failed": 0}
+
+
+def test_a_relayed_write_lists_the_file_in_the_turn_summary(tmp_path):
+    path = tmp_path / "notes.md"
+    path.write_text("hi", encoding="utf-8")
+    handler = SSEOutputHandler()
+    _relay(
+        handler,
+        _sidecar_events(
+            "write_file",
+            {"file_path": str(path), "content": "hi"},
+            {"status": "success", "file_path": str(path)},
+        ),
+    )
+    files = handler.turn_ledger.summary(location=None)["files"]
+    assert [f["path"] for f in files] == [str(path)]
+
+
+def test_a_failed_relayed_write_lists_no_file(tmp_path):
+    path = tmp_path / "notes.md"
+    path.write_text("hi", encoding="utf-8")
+    handler = SSEOutputHandler()
+    _relay(
+        handler,
+        _sidecar_events(
+            "write_file",
+            {"file_path": str(path), "content": "hi"},
+            {"status": "error", "error": "disk full"},
+        ),
+    )
+    assert handler.turn_ledger.summary(location=None)["files"] == []
+
+
+def test_a_relayed_tool_counts_as_running_until_its_result():
+    handler = SSEOutputHandler()
+    call, result = _sidecar_events(  # pylint: disable=unbalanced-tuple-unpacking
+        "fetch_page", {"url": "https://example.com"}, {"status": "success"}
+    )
+    assert not handler.tool_running()
+    relay._dispatch_one(handler, call, GAIA_PROFILE)
+    assert handler.tool_running()
+    relay._dispatch_one(handler, result, GAIA_PROFILE)
+    assert not handler.tool_running()
+
+
+# ── files the turn wrote ───────────────────────────────────────────────────
+
+
+def _sidecar_write(tool, args, result):
+    """What the sidecar streams for one tool call, as canonical events."""
+    sidecar = SSEOutputHandler()
+    sidecar.print_tool_usage(tool)
+    sidecar.pretty_print_json(args, "Arguments")
+    sidecar.pretty_print_json(result)
+    sidecar.print_tool_complete()
+    translator = CanonicalTranslator("r1", agent_id="gaia")
+    events = [c for e in _drain(sidecar) for c in translator.translate(e)]
+    return events + translator.flush()
+
+
+def _relayed_files(events):
+    ui = SSEOutputHandler()
+    for event in events:
+        relay._dispatch_one(ui, event, GAIA_PROFILE)
+    return [f["path"] for f in helpers._turn_summary(ui, None, "q", None)["files"]]
+
+
+def test_a_relayed_write_reaches_the_turn_summary(tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_text("hello", encoding="utf-8")
+    events = _sidecar_write(
+        "write_file",
+        {"file_path": str(target), "content": "hello"},
+        {"status": "success", "file_path": str(target), "bytes_written": 5},
+    )
+    assert _relayed_files(events) == [str(target)]
+
+
+def test_the_resolved_path_is_kept_when_the_agent_named_a_relative_one(tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_text("hello", encoding="utf-8")
+    events = _sidecar_write(
+        "write_file",
+        {"file_path": "notes.txt", "content": "hello"},
+        {"status": "success", "file_path": str(target)},
+    )
+    (result,) = [e for e in events if e["type"] == "tool_result"]
+    assert result["data"]["file_path"] == str(target)
+    assert _relayed_files(events) == [str(target)]
+
+
+def test_a_sidecar_that_sends_no_resolved_path_still_reports_an_absolute_one(
+    tmp_path,
+):
+    # A sidecar built before the summary view kept the path sends only these.
+    target = tmp_path / "notes.txt"
+    target.write_text("hello", encoding="utf-8")
+    events = [
+        {"type": "tool_call", "tool": "write_file", "args": {"file_path": str(target)}},
+        {
+            "type": "tool_result",
+            "tool": "write_file",
+            "data": {"summary": "Wrote notes.txt", "success": True},
+        },
+    ]
+    assert _relayed_files(events) == [str(target)]
+
+
+def test_a_failed_relayed_write_is_not_listed(tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_text("old", encoding="utf-8")
+    events = _sidecar_write(
+        "write_file",
+        {"file_path": str(target), "content": "hello"},
+        {"status": "error", "error": "Permission denied", "file_path": str(target)},
+    )
+    assert _relayed_files(events) == []

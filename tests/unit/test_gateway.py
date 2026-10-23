@@ -903,3 +903,54 @@ class TestPreCloudOffloadServerIsRejected:
             assert (
                 manager.install("https://gw.example.com/v1")["models_discovered"] == 0
             )
+
+
+# ── check_reachable (#5604) ────────────────────────────────────────────────
+
+
+def test_check_reachable_dials_the_gateway_host_on_443(monkeypatch):
+    import socket
+
+    from gaia.llm import gateway
+
+    dialed = []
+
+    class _Conn:
+        def close(self):
+            pass
+
+    def fake_connect(addr, timeout):
+        dialed.append((addr, timeout))
+        return _Conn()
+
+    monkeypatch.setattr(socket, "create_connection", fake_connect)
+    gateway.check_reachable("https://llm-api.amd.com/Unified/v1")
+    gateway.check_reachable("http://gw.example.test:8080/v1")
+    assert [a for a, _ in dialed] == [
+        ("llm-api.amd.com", 443),
+        ("gw.example.test", 8080),
+    ]
+    assert all(t == gateway.REACH_TIMEOUT for _, t in dialed)
+
+
+def test_check_reachable_raises_no_network_for_an_unresolvable_host(monkeypatch):
+    import socket
+
+    from gaia.llm import gateway
+
+    def fail(addr, timeout):
+        raise socket.gaierror(8, "nodename nor servname provided, or not known")
+
+    monkeypatch.setattr(socket, "create_connection", fail)
+    with pytest.raises(gateway.GatewayUnreachable) as exc:
+        gateway.check_reachable(None)
+    assert exc.value.host == "llm-api.amd.com"
+    assert str(exc.value).startswith("No network available")
+    assert "key" not in str(exc.value).lower()
+
+
+def test_check_reachable_refuses_a_url_with_no_host():
+    from gaia.llm import gateway
+
+    with pytest.raises(ValueError):
+        gateway.check_reachable("not a url")

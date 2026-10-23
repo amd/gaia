@@ -153,6 +153,20 @@ export function isErrorContent(content: string): boolean {
     );
 }
 
+const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
+
+/**
+ * Drop an error step the answer is, word for word. A run that fails before
+ * answering saves its error as the whole answer; it is shown once, there, with
+ * its links. An answer that only quotes a tool's error keeps the step.
+ */
+export function dropErrorsEchoedInAnswer(steps: AgentStep[], content: string): { steps: AgentStep[]; echoed: boolean } {
+    const answer = squash(content);
+    if (!answer) return { steps, echoed: false };
+    const kept = steps.filter((s) => !(s.type === 'error' && s.detail && squash(s.detail) === answer));
+    return { steps: kept, echoed: kept.length < steps.length };
+}
+
 /**
  * Safety-net regex to strip raw tool-call JSON from rendered message content.
  *
@@ -416,7 +430,13 @@ const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
 export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, agentStepCount, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
     useModelNames();
-    const isError = message.role === 'assistant' && isErrorContent(message.content);
+    const echo = useMemo(
+        () => (message.role === 'assistant' && !isStreaming && agentSteps
+            ? dropErrorsEchoedInAnswer(agentSteps, message.content)
+            : { steps: agentSteps, echoed: false }),
+        [agentSteps, message.content, message.role, isStreaming],
+    );
+    const isError = message.role === 'assistant' && (echo.echoed || isErrorContent(message.content));
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
         : undefined;
@@ -535,9 +555,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                 </div>
                 <div className="msg-body">
                     {/* Agent activity inside the message bubble */}
-                    {agentSteps && agentSteps.length > 0 && (
+                    {echo.steps && echo.steps.length > 0 && (
                         <AgentActivity
-                            steps={agentSteps}
+                            steps={echo.steps}
                             isActive={agentStepsActive ?? false}
                             variant={agentStepsActive ? 'inline' : 'summary'}
                             agentStepCount={agentStepCount ?? message.stats?.steps ?? undefined}

@@ -5,6 +5,7 @@ package preflight
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -35,6 +36,8 @@ type ChatOption struct {
 	// Needs is what the choice takes before the first message: a download and
 	// whether it fits, or a key.
 	Needs string
+	// Unavailable is why the choice cannot be made right now; "" when it can.
+	Unavailable string
 }
 
 // ChatChosenMsg tells the host where the user chose to run chat, so a gate it
@@ -88,6 +91,25 @@ func chatOption(provider, localSize, localFit string) ChatOption {
 		o.Needs = "Needs its key. Downloads under 1 GB."
 	}
 	return o
+}
+
+// probeChatGateway is a var so tests reach no network.
+var probeChatGateway = lemonade.ProbeGatewayFrom
+
+// withGatewayReach marks the AMD gateway unavailable when its host does not
+// answer, so the choice says "no network" before anyone picks it.
+func withGatewayReach(ctx context.Context, options []ChatOption) []ChatOption {
+	for i := range options {
+		if options[i].Provider != "amd" {
+			continue
+		}
+		var u *lemonade.UnreachableError
+		// The first run has no gateway set up yet, so the default is the one asked about.
+		if err := probeChatGateway(ctx, "", ""); errors.As(err, &u) {
+			options[i].Unavailable = u.Brief()
+		}
+	}
+	return options
 }
 
 // withChatStep puts the choice in front of the first step still to do.
@@ -220,6 +242,10 @@ func (m Model) handleChooserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // and what the remaining steps download now follows from it.
 func (m Model) chooseChat() (tea.Model, tea.Cmd) {
 	option := m.chatOptions()[m.choice]
+	if option.Unavailable != "" {
+		m.note = option.Unavailable + ". Connect to it, then press r to check again."
+		return m, nil
+	}
 	chooser, ok := m.r.(chatChooser)
 	if !ok {
 		m.choosing = false
@@ -265,8 +291,12 @@ func (m Model) chooserLines(w, budget int) []string {
 			if selected {
 				cursor, style = "> ", keyStyle
 			}
-			out = append(out, pad(cursor+style.Render(fmt.Sprintf("%d. %s", i+1, o.Label))))
 			detail := []string{o.TradeOff, o.Needs}
+			if o.Unavailable != "" {
+				style = dimStyle
+				detail = []string{o.Unavailable, o.TradeOff}
+			}
+			out = append(out, pad(cursor+style.Render(fmt.Sprintf("%d. %s", i+1, o.Label))))
 			if !selected {
 				detail = detail[:max(0, 2-tight)]
 			}
