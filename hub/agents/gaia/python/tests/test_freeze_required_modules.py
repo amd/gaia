@@ -13,6 +13,9 @@ cover every such module, and the release workflow has to install them.
 from __future__ import annotations
 
 import importlib.util
+import os
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -167,3 +170,49 @@ def test_smoke_test_uses_the_runner_flag():
     smoke = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(smoke)
     assert smoke.RUN_PYTHON_FILE_FLAG == RUN_PYTHON_FILE_FLAG
+
+
+# ---------------------------------------------------------------------------
+# tiktoken (#5066): the binary counted tokens by estimate
+# ---------------------------------------------------------------------------
+
+
+def test_build_bundles_the_tokenizer_plugin_and_data(tmp_path, monkeypatch):
+    """The plugin is a hidden import and the staged cache is bundle data."""
+    tiktoken_bundle = freeze.tiktoken_bundle
+
+    captured = []
+    pyinstaller = types.ModuleType("PyInstaller")
+    pyinstaller_main = types.ModuleType("PyInstaller.__main__")
+    pyinstaller_main.run = captured.extend
+    pyinstaller.__main__ = pyinstaller_main
+    monkeypatch.setitem(sys.modules, "PyInstaller", pyinstaller)
+    monkeypatch.setitem(sys.modules, "PyInstaller.__main__", pyinstaller_main)
+    monkeypatch.setattr(freeze, "HERE", tmp_path)
+    monkeypatch.setattr(freeze, "_verify_collect_targets", lambda: None)
+    monkeypatch.setattr(freeze, "script_hidden_imports", lambda: [])
+
+    def fake_stage(dest):
+        dest.mkdir(parents=True)
+        return dest
+
+    monkeypatch.setattr(freeze.tiktoken_bundle, "stage_cache", fake_stage)
+
+    freeze.build(onefile=True)
+
+    pairs = list(zip(captured, captured[1:]))
+    assert ("--hidden-import", tiktoken_bundle.PLUGIN_MODULE) in pairs
+    staged = tmp_path / "build" / tiktoken_bundle.BUNDLE_DIR
+    assert (
+        "--add-data",
+        f"{staged}{os.pathsep}{tiktoken_bundle.BUNDLE_DIR}",
+    ) in pairs
+
+
+def test_smoke_test_checks_the_tokenizer_offline():
+    spec = importlib.util.spec_from_file_location(
+        "gaia_smoke_tokenizer", PACKAGING / "smoke_test.py"
+    )
+    smoke = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(smoke)
+    assert '"tiktoken:cl100k_base"' in smoke.TOKENIZER_SCRIPT

@@ -46,19 +46,48 @@ function parseErrorStatus(errorText: string): string | null {
     }
 }
 
+/** Request fields a 422 names, from the last part of each error's `loc` (e.g. `retention_days`). */
+export function parseErrorFields(errorText: string): string[] {
+    try {
+        const parsed = JSON.parse(errorText).detail;
+        if (!Array.isArray(parsed)) return [];
+        return parsed
+            .map((e) => (Array.isArray(e?.loc) ? e.loc[e.loc.length - 1] : undefined))
+            .filter((f): f is string => typeof f === 'string');
+    } catch {
+        return [];
+    }
+}
+
 /** A non-2xx answer: the message to show, the backend's own words, and its machine-readable reason. */
 export class ApiError extends Error {
     readonly httpStatus: number;
     readonly detail: string;
     readonly reason: string | null;
+    readonly fields: string[];
 
-    constructor(message: string, httpStatus: number, detail: string, reason: string | null) {
+    constructor(message: string, httpStatus: number, detail: string, reason: string | null, fields: string[] = []) {
         super(message);
         this.name = 'ApiError';
         this.httpStatus = httpStatus;
         this.detail = detail;
         this.reason = reason;
+        this.fields = fields;
     }
+}
+
+/** Starlette's bare body or the UI server's catch-all ("Internal server error") — no cause. */
+function isBareInternalError(detail: string): boolean {
+    return detail.trim().toLowerCase() === 'internal server error';
+}
+
+/**
+ * False when a 500 carries no real cause: a bare "Internal Server Error",
+ * a proxy HTML page, or a raw JSON body with an empty or missing `detail`.
+ */
+function hasUsefulServerDetail(detail: string): boolean {
+    const text = detail.trim();
+    return text !== '' && !isBareInternalError(text) && !/^[<{[]/.test(text);
 }
 
 function getFriendlyError(status: number, detail: string): string {
@@ -70,7 +99,7 @@ function getFriendlyError(status: number, detail: string): string {
         // filepath, not a missing file. See issue #728.
         case 404: return detail || 'The requested item was not found.';
         case 413: return detail || 'File too large to process.';
-        case 500: return 'Server error. Please try again.';
+        case 500: return hasUsefulServerDetail(detail) ? detail : 'Server error. Please try again.';
         case 502: return 'Service unavailable. Is the backend running?';
         case 503: return detail || 'Service unavailable.';
         default: return detail || `Request failed (HTTP ${status})`;
@@ -136,7 +165,7 @@ export async function apiFetch<T>(
         const errorText = await res.text().catch(() => '');
         log.api.error(`${method} ${url} - HTTP ${res.status}`, { errorText });
         const detail = parseErrorDetail(errorText);
-        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
+        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText), parseErrorFields(errorText));
     }
 
     // Some endpoints (DELETE, fire-and-forget POSTs) intentionally return no
@@ -270,8 +299,9 @@ export async function checkSetup(skipChatModel = false): Promise<SetupCheck> {
     return apiFetch('GET', `/setup/check?skip_chat_model=${skipChatModel}`);
 }
 
-export async function startSetup(skipChatModel: boolean): Promise<SetupRunStatus> {
-    return apiFetch('POST', '/setup/run', { skip_chat_model: skipChatModel });
+/** `gaiaLemonade` sets up, and saves, GAIA's own Lemonade Server instead of the user's. */
+export async function startSetup(skipChatModel: boolean, gaiaLemonade = false): Promise<SetupRunStatus> {
+    return apiFetch('POST', '/setup/run', { skip_chat_model: skipChatModel, gaia_lemonade: gaiaLemonade });
 }
 
 export async function getSetupStatus(): Promise<SetupRunStatus> {
@@ -315,7 +345,7 @@ export async function setLemonadeTarget(body: LemonadeTargetBody): Promise<Lemon
     } catch (err) {
         // A 502 here is "saved, but the daemon did not switch" — keep those words.
         if (err instanceof ApiError && err.httpStatus === 502 && err.detail) {
-            throw new ApiError(err.detail, err.httpStatus, err.detail, err.reason);
+            throw new ApiError(err.detail, err.httpStatus, err.detail, err.reason, err.fields);
         }
         throw err;
     }
@@ -690,7 +720,7 @@ async function consumeSSEResponse(
         log.stream.error(`SSE connection failed: HTTP ${res.status}`, errText);
         // The server's own words when it gave any, never a raw JSON body.
         const detail = parseErrorDetail(errText);
-        const message = detail && detail !== 'Internal Server Error' ? detail : getFriendlyError(res.status, detail);
+        const message = detail && !isBareInternalError(detail) ? detail : getFriendlyError(res.status, detail);
         callbacks.onError(new ApiError(message, res.status, detail, parseErrorStatus(errText)));
         return;
     }

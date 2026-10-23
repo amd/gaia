@@ -150,11 +150,24 @@ type Model struct {
 	Provider      string   `json:"cloud_provider"`
 	Downloaded    bool     `json:"downloaded"`
 	Labels        []string `json:"labels"`
+	// MaxContextWindow is the model's own window. For a cloud model it is the
+	// provider's, while ContextLength is the 4096 Lemonade "loaded" it at.
+	MaxContextWindow int `json:"max_context_window"`
 	// Size is the download size in GB as Lemonade's catalog reports it.
 	Size float64 `json:"size"`
 }
 
 func (m Model) Cloud() bool { return m.Recipe == "cloud" || m.Provider != "" || IsCloudID(m.ID) }
+
+// Window is the context window to show: the provider's for a cloud model, the
+// configured one for a local model. Older Lemonade lists only ContextLength.
+func (m Model) Window() int {
+	if m.Cloud() && m.MaxContextWindow > 0 {
+		return m.MaxContextWindow
+	}
+	return m.ContextLength
+}
+
 func IsCloudID(id string) bool {
 	return strings.HasPrefix(id, "fireworks.") || strings.HasPrefix(id, "amd.")
 }

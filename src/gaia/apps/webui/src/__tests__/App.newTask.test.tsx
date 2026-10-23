@@ -87,7 +87,7 @@ beforeEach(() => {
     useChatStore.setState({
         sessions: [], currentSessionId: null, messages: [], agents: [], pendingPrompt: null,
         draftPermissionMode: 'ask', defaultPermissionMode: 'ask', showMemoryDashboard: false, showSchedules: false, settingsSection: null,
-        draftDocumentIds: [],
+        draftDocumentIds: [], draftPrivate: false,
     });
 });
 
@@ -177,6 +177,41 @@ describe('a new chat', () => {
     });
 });
 
+describe('a private new chat', () => {
+    it('is created private before its first message goes out', async () => {
+        mocked.createSession.mockImplementation(async (data) => session({
+            id: 'sess-new-0001', title: 'New Task', message_count: 0, agent_type: 'gaia', private: !!data?.private,
+        }));
+        render(<App />);
+        const chip = await screen.findByRole('button', { name: 'Private chat' });
+        expect(chip).toHaveAttribute('aria-pressed', 'false');
+        await userEvent.click(chip);
+        expect(chip).toHaveAttribute('aria-pressed', 'true');
+        await sendFirstMessage('Please remember: my bank PIN hint is the dog');
+
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
+        expect(mocked.createSession).toHaveBeenCalledOnce();
+        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ private: true });
+        // The first message goes to the chat that already exists as private.
+        expect(mocked.sendMessageStream.mock.calls[0][0]).toBe('sess-new-0001');
+        expect(mocked.createSession.mock.invocationCallOrder[0])
+            .toBeLessThan(mocked.sendMessageStream.mock.invocationCallOrder[0]);
+        expect(mocked.toggleSessionPrivacy).not.toHaveBeenCalled();
+        expect(useChatStore.getState().sessions.find((s) => s.id === 'sess-new-0001')?.private).toBe(true);
+        expect(await screen.findByRole('button', { name: 'Private chat on' })).toHaveAttribute('aria-pressed', 'true');
+        // The next new chat starts non-private again.
+        expect(useChatStore.getState().draftPrivate).toBe(false);
+    });
+
+    it('is not private unless the toggle is on', async () => {
+        render(<App />);
+        await sendFirstMessage('hello');
+
+        await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
+        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ private: false });
+    });
+});
+
 describe('first-run setup', () => {
     it('a cold start shows a neutral loading screen until the setup check answers, never the chat', async () => {
         let answer!: (c: SetupCheck) => void;
@@ -221,6 +256,24 @@ describe('first-run setup', () => {
         await finishSetupWith({ skill: 'summarize', title: 'Summarize something', note: '', prompt: 'Summarize this: ', needs_input: true });
         expect(await screen.findByLabelText('Message')).toHaveValue('Summarize this: ');
         expect(mocked.createSession).not.toHaveBeenCalled();
+    });
+
+    it('re-reads the agents when setup finishes, so the agent it installed counts', async () => {
+        mocked.checkSetup.mockResolvedValue(NOT_READY);
+        mocked.startSetup.mockResolvedValue({ state: 'ready', steps: [] });
+        render(<App />);
+        await waitFor(() => expect(mocked.listAgents).toHaveBeenCalled());
+        mocked.listAgents.mockResolvedValue({
+            agents: [{ id: 'gaia', name: 'GAIA', namespaced_agent_id: 'installed:gaia' }] as never, total: 1,
+        });
+
+        await userEvent.click(await screen.findByRole('button', { name: 'Start setup' }));
+        await userEvent.click(await screen.findByRole('button', { name: 'Start chatting' }));
+
+        expect(await screen.findByLabelText('Message')).toBeInTheDocument();
+        await waitFor(() =>
+            expect(screen.queryByText(/The GAIA agent isn.t installed/)).not.toBeInTheDocument(),
+        );
     });
 
     it('shows the setup screen when GAIA is not set up', async () => {

@@ -952,7 +952,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have accessible names on sidebar buttons', () => {
-      expect(sidebarContent).toContain('title="New chat (Ctrl+Shift+O)"');
+      expect(sidebarContent).toContain("title={`New chat (${formatShortcut('Mod+Shift+O')})`}");
       expect(sidebarContent).toContain('aria-label="Settings"');
       expect(sidebarContent).toContain('aria-label="Search chats"');
       expect(sidebarContent).toContain("aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}");
@@ -989,7 +989,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have search with aria-label', () => {
-      expect(sidebarContent).toContain('aria-label="Search chats (Ctrl+K)"');
+      expect(sidebarContent).toContain("aria-label={`Search chats (${formatShortcut('Mod+K')})`}");
     });
   });
 

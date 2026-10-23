@@ -33,6 +33,7 @@ Phase I prompt-injection defense:
 from __future__ import annotations
 
 import re
+import threading
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
@@ -154,13 +155,35 @@ class _UnavailableCalendarBackend:
     any actual calendar operation raises the deferred, actionable error rather
     than silently doing the wrong thing. ``detect_meeting_request`` touches no
     backend, so it keeps working.
+
+    With ``resolve``, every use first tries to resolve the backend again and,
+    once that works, delegates to it: the calendar tools capture this object
+    for a session that can last hours, and a connection that was busy or not
+    yet connected at construction should not break calendar use until restart.
     """
 
-    def __init__(self, message: str) -> None:
+    def __init__(
+        self, message: str, resolve: Optional[Callable[[], Any]] = None
+    ) -> None:
         self._message = message
+        self._resolve = resolve
+        self._backend: Any = None
+        # Concurrent first uses must build one backend, not one each.
+        self._resolve_lock = threading.Lock()
 
     def __getattr__(self, name: str):
-        raise ConfigurationError(self._message)
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if self._backend is None:
+            if self._resolve is None:
+                raise ConfigurationError(self._message)
+            with self._resolve_lock:
+                if self._backend is None:
+                    # The resolver's own error (busy, reconnect, missing
+                    # scope) is the actionable one; the calendar tools format
+                    # ConnectorsError, so it propagates unchanged.
+                    self._backend = self._resolve()
+        return getattr(self._backend, name)
 
 
 class _UnavailableMailBackend:
@@ -850,7 +873,9 @@ class EmailTriageAgent(
         try:
             self._calendar = config.resolve_calendar_backend()
         except (ConfigurationError, ConnectorsError) as exc:
-            self._calendar = _UnavailableCalendarBackend(str(exc))
+            self._calendar = _UnavailableCalendarBackend(
+                str(exc), resolve=config.resolve_calendar_backend
+            )
 
         # I3 — batch-organize counters. Reset per process_query() call by
         # ``_reset_organize_counter``. Per-turn isolation is sufficient
