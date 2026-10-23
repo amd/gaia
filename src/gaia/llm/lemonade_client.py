@@ -766,9 +766,13 @@ def free_memory_verdict(url: str, requirement: "ModelRequirement", window: int):
     disagree with it. None when this machine does not report free memory for
     that pool. Raises like :func:`_free_memory_snapshot`.
     """
+    return _verdict_for(*_free_memory_snapshot(url), requirement, window)
+
+
+def _verdict_for(free, resident, requirement: "ModelRequirement", window: int):
+    """:func:`free_memory_verdict` on an already-read snapshot."""
     from gaia.llm.model_fit import check_free_memory, kv_cache_gb
 
-    free, resident = _free_memory_snapshot(url)
     if free is None:
         return None
     free = _with_own_memory(free, resident, requirement)
@@ -2025,18 +2029,28 @@ def _free_memory_rules_out(client, requirement, capacity) -> Optional[str]:
         return None
     window = min(MIN_CONTEXT_TOKENS, context_for_capacity(requirement, capacity))
     try:
-        verdict = free_memory_verdict(url, requirement, window)
+        free, resident = _free_memory_snapshot(url)
     except (ModelFitError, LemonadeClientError) as e:
         return f"cannot read the memory free on this PC, so cannot tell it loads: {e}"
+    verdict = _verdict_for(free, resident, requirement, window)
     if verdict is None or verdict.fits:
         return None
+    others = [n for n in resident if not _model_ids_match(n, requirement.model_id)]
+    holder = (
+        f"Lemonade has {', '.join(others)} loaded, which may be holding it. "
+        "Unload it or close apps that use a lot of memory"
+        if others
+        else "Close apps that use a lot of memory"
+    )
     return (
-        f"not enough free memory to load it now: {verdict.reason}. Close apps "
-        "that use a lot of memory, then re-run `gaia init` to use it"
+        f"not enough free memory to load it now: {verdict.reason}. {holder}, "
+        "then re-run `gaia init` to use it"
     )
 
 
-def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
+def recommend_default_chat_model(
+    client: "LemonadeClient", judge_free_memory: bool = True
+) -> Tuple[str, list, Any]:
     """Pick the default chat model this machine can run, from Lemonade's view of it.
 
     Returns ``(model_id, skipped, capacity)``: ``skipped`` lists
@@ -2044,7 +2058,8 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
     say why a big machine did not get the big model. When Lemonade's report
     does not say how much memory this PC has, the floor model is picked —
     the model every PC ran before this choice existed — with that as the
-    reason, and ``capacity`` is None.
+    reason, and ``capacity`` is None. ``judge_free_memory=False`` judges
+    capacity alone, a pick that does not move as apps open and close.
     """
     from gaia.llm.model_fit import (
         ModelFitError,
@@ -2091,7 +2106,11 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
             if not verdict.fits:
                 unsupported.append((model_id, verdict.reason))
                 continue
-            reason = _free_memory_rules_out(client, mr, capacity)
+            reason = (
+                _free_memory_rules_out(client, mr, capacity)
+                if judge_free_memory
+                else None
+            )
             if reason:
                 unsupported.append((model_id, reason))
                 continue
