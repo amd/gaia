@@ -15,6 +15,7 @@ stays at 9am local across DST changes. ``next_run_at`` is stored in UTC.
 """
 
 import asyncio
+import calendar
 import json
 import logging
 import re
@@ -88,100 +89,6 @@ _ALL_DAY_NAMES = {**_DAY_FULL, **_DAY_ABBR}
 _MAX_SCHEDULE_INPUT_LEN = 256
 
 
-def parse_interval(interval_str: str) -> int:
-    """Parse a human-readable interval string into seconds.
-
-    Supported formats:
-        - "every 30m" or "every 30 minutes"
-        - "every 6h" or "every 6 hours"
-        - "every 2d" or "every 2 days"
-        - "every 30s" or "every 30 seconds"
-        - "every 2w" or "every 2 weeks"
-        - "every monday", "every friday", etc. (weekly on that day)
-        - "daily" (alias for every 24h)
-        - "hourly" (alias for every 1h)
-        - "weekly" (alias for every 7d)
-
-    Args:
-        interval_str: Human-readable interval string.
-
-    Returns:
-        Interval in seconds.
-
-    Raises:
-        ValueError: If the interval string cannot be parsed.
-    """
-    if len(interval_str) > _MAX_SCHEDULE_INPUT_LEN:
-        raise ValueError(
-            f"Interval string is too long ({len(interval_str)} chars, "
-            f"max {_MAX_SCHEDULE_INPUT_LEN}). Use a short form like 'every 6h'."
-        )
-    s = interval_str.strip().lower()
-
-    # Handle aliases
-    if s == "daily":
-        return 86400
-    if s == "hourly":
-        return 3600
-    if s == "weekly":
-        return 604800
-
-    # Handle "every monday", "every tuesday", etc. (treat as weekly = 7 days)
-    day_names = (
-        "monday",
-        "tuesday",
-        "wednesday",
-        "thursday",
-        "friday",
-        "saturday",
-        "sunday",
-    )
-    match_day = re.match(r"every\s+(" + "|".join(day_names) + r")\b", s)
-    if match_day:
-        return 604800  # 7 days in seconds
-
-    # Try "every Xunit" pattern
-    match = re.match(
-        r"every\s+(\d{1,9})\s*(s|sec|seconds?|m|min|minutes?|h|hr|hours?|d|days?|w|wk|weeks?)",
-        s,
-    )
-    if match:
-        value = int(match.group(1))
-        unit = match.group(2)
-        if unit.startswith("s"):
-            return value
-        elif unit.startswith("m"):
-            return value * 60
-        elif unit.startswith("h"):
-            return value * 3600
-        elif unit.startswith("d"):
-            return value * 86400
-        elif unit.startswith("w"):
-            return value * 604800
-
-    # Try bare "Xh", "Xm", etc.
-    match = re.match(r"(\d{1,9})\s*(s|m|h|d|w)", s)
-    if match:
-        value = int(match.group(1))
-        unit = match.group(2)
-        if unit == "s":
-            return value
-        elif unit == "m":
-            return value * 60
-        elif unit == "h":
-            return value * 3600
-        elif unit == "d":
-            return value * 86400
-        elif unit == "w":
-            return value * 604800
-
-    raise ValueError(
-        f"Cannot parse interval: '{interval_str}'. "
-        "Use formats like 'every 30m', 'every 6h', 'every 2d', "
-        "'every 2w', 'every monday', 'daily', 'hourly', 'weekly'."
-    )
-
-
 # ── ScheduleConfig ───────────────────────────────────────────────────────────
 
 
@@ -224,59 +131,134 @@ class ScheduleConfig:
             ) from e
 
 
-# ── Time parsing helpers ─────────────────────────────────────────────────────
+# ── Natural language schedule parser ─────────────────────────────────────────
+
+#: Shortest gap between runs. Each run is a full agent turn on a model, and
+#: ``gaia schedule`` (cron) can't run more often than once a minute either.
+MIN_INTERVAL_SECONDS = 60
+#: Longest gap between runs.
+MAX_INTERVAL_SECONDS = 366 * 86400
+
+_MINUTE = 60
+_HOUR = 3600
+_DAY = 86400
+_WEEK = 604800
+
+_EXAMPLES = (
+    "'every 30m', 'daily at 9am', 'every monday at 3pm' or "
+    "'every hour from 8am to 6pm on weekdays'"
+)
+_RECURRING_HINT = "Try a repeating form like 'daily at 9am' or 'every friday at 9am'."
+
+_DAY_ALIASES = {"tues": 1, "weds": 2, "thur": 3, "thurs": 3}
+_DAY_WORDS = {**_ALL_DAY_NAMES, **_DAY_ALIASES}
+# Longest first, so "sunday" wins over "sun".
+_DAY_RE = "|".join(sorted(_DAY_WORDS, key=len, reverse=True))
+
+_MONTHS = {
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "sept": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+_MONTH_RE = "|".join(sorted(_MONTHS, key=len, reverse=True))
+_MONTH_DISPLAY = [
+    "",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+]
+
+# Input is whitespace-collapsed before matching, so single spaces are literal.
+_TIME_RE = r"(?:noon|midnight|\d{1,2}(?::\d{2})?(?: ?(?:am|pm))?)"
+_UNIT_RE = r"(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|wks?|w)"
+_UNIT_SECONDS = {"s": 1, "m": _MINUTE, "h": _HOUR, "d": _DAY, "w": _WEEK}
+_SINGLE_UNITS = {
+    "second": 1,
+    "minute": _MINUTE,
+    "hour": _HOUR,
+    "day": _DAY,
+    "week": _WEEK,
+}
+_INTERVAL_WORDS = {
+    "minutely": _MINUTE,
+    "hourly": _HOUR,
+    "daily": _DAY,
+    "weekly": _WEEK,
+}
 
 
-def _parse_time(text: str) -> Optional[str]:
-    """Parse a time string into HH:MM 24-hour format.
+class _ScheduleInputError(ValueError):
+    """The schedule text can't be read exactly as written."""
 
-    Supports: "9pm", "9:30pm", "9am", "noon", "midnight", "21:00".
 
-    Args:
-        text: Time string to parse.
+def _parse_time(text: str) -> str:
+    """Parse "9pm", "9:30am", "21:00", "noon" or "midnight" into "HH:MM".
 
-    Returns:
-        "HH:MM" string or None if not parseable.
+    Raises:
+        _ScheduleInputError: the text is not a valid time of day.
     """
-    text = text.strip().lower()
-
-    if text == "noon":
+    t = text.strip().lower()
+    if t == "noon":
         return "12:00"
-    if text == "midnight":
+    if t == "midnight":
         return "00:00"
-
-    # 24-hour format "HH:MM"
-    m = re.match(r"^(\d{1,2}):(\d{2})$", text)
-    if m:
-        h, mi = int(m.group(1)), int(m.group(2))
-        if 0 <= h <= 23 and 0 <= mi <= 59:
-            return f"{h:02d}:{mi:02d}"
-
-    # 12-hour format with optional minutes: "9pm", "9:30am"
-    m = re.match(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$", text)
-    if m:
-        h = int(m.group(1))
-        mi = int(m.group(2)) if m.group(2) else 0
-        period = m.group(3)
-        if h == 12:
-            h = 0 if period == "am" else 12
-        elif period == "pm":
-            h += 12
-        if 0 <= h <= 23 and 0 <= mi <= 59:
-            return f"{h:02d}:{mi:02d}"
-
-    return None
+    m = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?(?: ?(am|pm))?", t)
+    if not m:
+        raise _ScheduleInputError(
+            f"'{text}' isn't a time — use a form like 9am, 9:30pm or 21:00."
+        )
+    hour, minute, period = int(m.group(1)), int(m.group(2) or 0), m.group(3)
+    if period:
+        if not 1 <= hour <= 12 or minute > 59:
+            raise _ScheduleInputError(
+                f"{text} isn't a time — use 1–12 with am or pm (like 9:30am), "
+                "or 0:00–23:59."
+            )
+        return f"{hour % 12 + (12 if period == 'pm' else 0):02d}:{minute:02d}"
+    if hour > 23 or minute > 59:
+        raise _ScheduleInputError(f"{text} isn't a time — use 0:00–23:59.")
+    if m.group(2) is None:
+        if hour > 12:
+            raise _ScheduleInputError(f"Write the time as {hour}:00.")
+        raise _ScheduleInputError(
+            f"'{text}' could be morning or evening — say {hour}am, {hour}pm "
+            f"or {hour}:00."
+        )
+    return f"{hour:02d}:{minute:02d}"
 
 
 def _format_time_12h(time_24: str) -> str:
-    """Convert HH:MM to human-readable 12-hour format.
-
-    Args:
-        time_24: Time in "HH:MM" 24-hour format.
-
-    Returns:
-        Human-readable string like "9:00 AM" or "3:30 PM".
-    """
+    """Convert "HH:MM" to "9:00 AM" / "3:30 PM"."""
     h, m = map(int, time_24.split(":"))
     if h == 0:
         return f"12:{m:02d} AM"
@@ -288,29 +270,15 @@ def _format_time_12h(time_24: str) -> str:
         return f"{h - 12}:{m:02d} PM"
 
 
-def _format_interval_human(seconds: int) -> str:
-    """Convert interval seconds to a human-readable string.
-
-    Args:
-        seconds: Interval in seconds.
-
-    Returns:
-        Human-readable string like "30 minutes", "1 hour", "2 hours".
-    """
-    if seconds < 60:
-        return f"{seconds} second{'s' if seconds != 1 else ''}"
-    elif seconds < 3600:
-        mins = seconds // 60
-        return f"{mins} minute{'s' if mins != 1 else ''}"
-    elif seconds < 86400:
-        hours = seconds // 3600
-        return f"{hours} hour{'s' if hours != 1 else ''}"
-    elif seconds < 604800:
-        days = seconds // 86400
-        return f"{days} day{'s' if days != 1 else ''}"
+def _format_every(seconds: int) -> str:
+    """ "Every 30 minutes", "Every hour", "Every 90 minutes" — never rounded."""
+    for size, unit in ((_WEEK, "week"), (_DAY, "day"), (_HOUR, "hour")):
+        if seconds >= size and seconds % size == 0:
+            break
     else:
-        weeks = seconds // 604800
-        return f"{weeks} week{'s' if weeks != 1 else ''}"
+        size, unit = (_MINUTE, "minute") if seconds % _MINUTE == 0 else (1, "second")
+    count = seconds // size
+    return f"Every {unit}" if count == 1 else f"Every {count} {unit}s"
 
 
 _DAY_NAMES_DISPLAY = [
@@ -325,14 +293,7 @@ _DAY_NAMES_DISPLAY = [
 
 
 def _format_days(days: List[int]) -> str:
-    """Format a list of day indices into a human-readable string.
-
-    Args:
-        days: List of day indices (0=Monday through 6=Sunday).
-
-    Returns:
-        Human-readable string like "Monday", "weekdays", "Mon, Wed, Fri".
-    """
+    """ "weekdays", "weekends", "every day", or "Monday, Wednesday"."""
     days_sorted = sorted(days)
     if days_sorted == [0, 1, 2, 3, 4]:
         return "weekdays"
@@ -343,251 +304,278 @@ def _format_days(days: List[int]) -> str:
     return ", ".join(_DAY_NAMES_DISPLAY[d] for d in days_sorted)
 
 
-# ── Natural language schedule parser ─────────────────────────────────────────
+def _take(pattern: str, s: str):
+    """First match of *pattern* in *s*, and *s* with that match removed."""
+    m = re.search(pattern, s)
+    if not m:
+        return None, s
+    return m, f"{s[: m.start()]} {s[m.end() :]}"
+
+
+def _reject_dates_and_one_offs(s: str) -> None:
+    """Reject calendar dates and one-time phrasing: every schedule repeats."""
+    one_time = (
+        "One-time tasks aren't supported yet — a schedule repeats. " + _RECURRING_HINT
+    )
+    for pattern, month_group, day_group in (
+        (rf"\b({_MONTH_RE})\.? (\d{{1,2}})(?:st|nd|rd|th)?\b", 1, 2),
+        (rf"\b(\d{{1,2}})(?:st|nd|rd|th)? (?:of )?({_MONTH_RE})\b", 2, 1),
+    ):
+        m = re.search(pattern, s)
+        if m:
+            month = _MONTHS[m.group(month_group)]
+            day = int(m.group(day_group))
+            # 2024 is a leap year, so only dates no year has are refused.
+            if not 1 <= day <= calendar.monthrange(2024, month)[1]:
+                raise _ScheduleInputError(
+                    f"{_MONTH_DISPLAY[month]} {day} isn't a date. "
+                    "One-time tasks aren't supported yet either — a schedule "
+                    "repeats. " + _RECURRING_HINT
+                )
+            raise _ScheduleInputError(one_time)
+    if re.search(r"\b(?:\d{1,2}/\d{1,2}(?:/\d{2,4})?|\d{4}-\d{1,2}-\d{1,2})\b", s):
+        raise _ScheduleInputError(one_time)
+    if re.search(
+        r"\b(?:monthly|yearly|annually|every (?:other |\d{1,9} )?(?:months?|years?))\b",
+        s,
+    ):
+        raise _ScheduleInputError(
+            "Monthly and yearly schedules aren't supported yet — use days or "
+            "weeks, like 'every 4 weeks' or 'every monday at 9am'."
+        )
+    if re.search(
+        rf"\b(?:tomorrow|today|tonight|once(?! (?:a|an|every|per)\b)|"
+        rf"(?:next|this) (?:week|month|year|morning|afternoon|evening|{_DAY_RE})|"
+        rf"in (?:a|an|\d{{1,9}}) ?{_UNIT_RE})\b",
+        s,
+    ):
+        raise _ScheduleInputError(one_time)
+
+
+def _take_days(s: str):
+    """Pull every weekday reference out of *s*; returns (days, rest)."""
+    found = set()
+    prefix = r"\b(?:(?:every|on) )?"
+
+    def group(match):
+        found.update(range(0, 5) if match.group(1) == "weekday" else (5, 6))
+        return " "
+
+    s = re.sub(prefix + r"(weekday|weekend)s?\b", group, s)
+
+    def span(match):
+        start, end = _DAY_WORDS[match.group(1)], _DAY_WORDS[match.group(2)]
+        found.update(
+            range(start, end + 1)
+            if start <= end
+            else [*range(start, 7), *range(0, end + 1)]
+        )
+        return " "
+
+    s = re.sub(
+        prefix + rf"({_DAY_RE})s? ?(?:-|to|through|thru) ?({_DAY_RE})s?\b", span, s
+    )
+
+    def single(match):
+        found.add(_DAY_WORDS[match.group(1)])
+        return " "
+
+    s = re.sub(prefix + rf"({_DAY_RE})s?\b", single, s)
+    return sorted(found), s
+
+
+def _take_interval(s: str):
+    """Pull one interval out of *s*; returns (seconds, phrase, rest)."""
+    m, rest = _take(rf"\bevery (\d{{1,9}}) ?{_UNIT_RE}\b", s)
+    if m is None:
+        m, rest = _take(rf"\b(\d{{1,9}}) ?{_UNIT_RE}\b", s)
+    if m is not None:
+        unit = m.group(2)
+        # "m" is minutes; the month forms were rejected earlier.
+        seconds = int(m.group(1)) * _UNIT_SECONDS[unit[0]]
+        return seconds, m.group(0), rest
+    m, rest = _take(r"\bevery (second|minute|hour|day|week)\b", s)
+    if m is not None:
+        return _SINGLE_UNITS[m.group(1)], m.group(0), rest
+    m, rest = _take(r"\b(minutely|hourly|daily|weekly)\b", s)
+    if m is not None:
+        return _INTERVAL_WORDS[m.group(1)], m.group(0), rest
+    return None, None, s
+
+
+def _parse_schedule(text: str) -> ScheduleConfig:
+    """Strict parse; raises :class:`_ScheduleInputError` with what to fix."""
+    if len(text) > _MAX_SCHEDULE_INPUT_LEN:
+        raise _ScheduleInputError(
+            f"That schedule is too long ({len(text)} characters, max "
+            f"{_MAX_SCHEDULE_INPUT_LEN}). Use a short form like {_EXAMPLES}."
+        )
+    s = " ".join(text.lower().split()).rstrip(".")
+    if not s:
+        raise _ScheduleInputError(f"Describe when to run it, for example {_EXAMPLES}.")
+
+    _reject_dates_and_one_offs(s)
+
+    config = ScheduleConfig(raw_input=text)
+
+    times = re.findall(rf"\bat ({_TIME_RE})\b", s)
+    if len(times) > 1:
+        raise _ScheduleInputError(
+            "Give one time per schedule — for two times a day, create two schedules."
+        )
+    if times:
+        config.time_of_day = _parse_time(times[0])
+        _, s = _take(rf"\bat {_TIME_RE}\b", s)
+
+    window, s = _take(
+        rf"\b(?:from|between) ({_TIME_RE})(?: (?:to|until|till|and) | ?- ?)"
+        rf"({_TIME_RE})\b",
+        s,
+    )
+    if window:
+        start, end = _parse_time(window.group(1)), _parse_time(window.group(2))
+        if not (start.endswith(":00") and end.endswith(":00")):
+            raise _ScheduleInputError(
+                "A time window starts and ends on the hour — use a form like "
+                "'from 9am to 5pm'."
+            )
+        config.start_hour, config.end_hour = int(start[:2]), int(end[:2])
+
+    other = re.search(rf"\bevery other ((?:{_DAY_RE})s?|weekdays?|weekends?)\b", s)
+    if other:
+        day = other.group(1)
+        raise _ScheduleInputError(
+            f"'every other {day}' isn't supported yet — use 'every {day}' to "
+            "run weekly, or 'every 2 weeks' to run every two weeks from now."
+        )
+    s = re.sub(r"\bevery other (?=(?:second|minute|hour|day|week)s?\b)", "every 2 ", s)
+
+    days, s = _take_days(s)
+    interval, phrase, s = _take_interval(s)
+
+    leftover = " ".join(re.sub(r"[,&]|\band\b", " ", s).split())
+    if leftover:
+        stray_time = re.search(rf"(?<![\w:]){_TIME_RE}(?![\w:])", leftover)
+        if stray_time and re.search(r"[:a-z]", stray_time.group(0)):
+            _parse_time(stray_time.group(0))
+            raise _ScheduleInputError(
+                f"Put 'at' before the time, like 'daily at {stray_time.group(0)}'."
+            )
+        raise _ScheduleInputError(
+            f"GAIA couldn't read '{leftover}'. Use a form like {_EXAMPLES}."
+        )
+
+    if days:
+        config.days_of_week = days
+    if window and config.time_of_day:
+        raise _ScheduleInputError(
+            "Use either a time ('at 9am') or a window ('from 8am to 6pm'), not both."
+        )
+    if window:
+        if interval is None:
+            raise _ScheduleInputError(
+                "Say how often to run inside the window, like 'every hour from "
+                "8am to 6pm'."
+            )
+        if interval >= _DAY:
+            raise _ScheduleInputError(
+                f"'{phrase}' doesn't fit inside a daily window — use a shorter "
+                "interval, like 'every 2 hours from 8am to 6pm'."
+            )
+    elif config.time_of_day or days:
+        if interval is None:
+            interval = _WEEK if len(days) == 1 else _DAY
+        elif interval == _DAY and len(days) == 1:
+            interval = _WEEK
+        if interval == _WEEK and not days:
+            raise _ScheduleInputError(
+                "Say which day to run on, like 'every monday at 9am'."
+            )
+        if config.time_of_day and interval not in (_DAY, _WEEK):
+            raise _ScheduleInputError(
+                f"'{phrase}' can't be combined with a time of day yet — use "
+                f"'daily at {times[0]}', or drop the time to run "
+                f"{phrase.lower()} from now."
+            )
+        if days and interval > _DAY and interval != _WEEK:
+            raise _ScheduleInputError(
+                f"'{phrase}' can't be combined with set days yet — name the "
+                f"days alone ('every monday' runs weekly), or use '{phrase}' "
+                "alone to count from now."
+            )
+    elif interval is None:
+        raise _ScheduleInputError(f"Say how often to run it, like {_EXAMPLES}.")
+
+    if interval < MIN_INTERVAL_SECONDS:
+        raise _ScheduleInputError(
+            f"'{phrase}' is too often — each run is a full agent turn, so a "
+            "schedule can run at most once a minute. Use 'every 1m' or longer."
+        )
+    if interval > MAX_INTERVAL_SECONDS:
+        raise _ScheduleInputError(
+            f"'{phrase}' is too far apart — a schedule must run at least once a "
+            "year."
+        )
+    config.interval_seconds = interval
+    config.description = _build_description(config)
+    return config
 
 
 def parse_schedule_input(text: str) -> ScheduleConfig:
     """Parse a natural language schedule description into a ScheduleConfig.
 
     Handles inputs such as:
-        - Simple intervals: "every 30m", "daily", "hourly", "weekly"
-        - Time-of-day: "daily at 9pm", "at 9:30am", "every day at 10am"
-        - Day + time: "every monday at 3pm", "weekdays at 10am",
-          "weekends at noon"
-        - Windowed: "every hour from 8am to 6pm",
-          "every 2 hours from 8am to 6pm on weekdays",
-          "every 30m from 9am to 5pm"
+        - Intervals: "every 30m", "every 2 hours", "every other day", "daily",
+          "hourly", "weekly"
+        - Time of day: "daily at 9pm", "at 9:30am", "every day at 10am"
+        - Days and time: "every monday at 3pm", "weekdays at 10am",
+          "every weekday", "mon-fri at noon"
+        - Windows: "every hour from 8am to 6pm",
+          "every 2 hours from 8am to 6pm on weekdays"
 
-    Args:
-        text: Natural language schedule description.
+    Every word must be understood. Anything else — an invalid time, a date,
+    one-time phrasing ("tomorrow"), an interval under
+    :data:`MIN_INTERVAL_SECONDS`, or leftover words — is rejected rather
+    than read as something close.
 
     Returns:
-        ScheduleConfig with parsed fields. If the input cannot be parsed,
-        interval_seconds will be 0 and description will indicate the error.
+        ScheduleConfig with parsed fields. If the input is rejected,
+        interval_seconds is 0 and description says what to change.
     """
-    config = ScheduleConfig(raw_input=text)
-
-    if len(text) > _MAX_SCHEDULE_INPUT_LEN:
-        config.description = (
-            f"Could not parse schedule: input too long ({len(text)} chars, "
-            f"max {_MAX_SCHEDULE_INPUT_LEN})"
-        )
-        return config
-
-    s = text.strip().lower()
-
-    if not s:
-        config.description = "Could not parse schedule: empty input"
-        return config
-
-    # ── 1. Extract time-of-day: "at HH:MM", "at Ham/pm", "at noon" ──
-    time_match = re.search(
-        r"\bat\s+(noon|midnight|\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?|\d{1,2}:\d{2})\b",
-        s,
-    )
-    if time_match:
-        parsed_time = _parse_time(time_match.group(1))
-        if parsed_time:
-            config.time_of_day = parsed_time
-        # Remove the matched portion so it doesn't interfere with interval parsing
-        s = s[: time_match.start()] + s[time_match.end() :]
-
-    # ── 2. Extract window: "from Ham/pm to Ham/pm" ──
-    # NOTE: "(?:\s*(?:am|pm))?" (not "\s*(?:am|pm)?") — an unconditional \s*
-    # next to the following \s+ makes whitespace runs ambiguous → ReDoS.
-    window_match = re.search(
-        r"\bfrom\s+(noon|midnight|\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s+"
-        r"to\s+(noon|midnight|\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\b",
-        s,
-    )
-    if window_match:
-        start_time = _parse_time(window_match.group(1))
-        end_time = _parse_time(window_match.group(2))
-        if start_time and end_time:
-            config.start_hour = int(start_time.split(":")[0])
-            config.end_hour = int(end_time.split(":")[0])
-        s = s[: window_match.start()] + s[window_match.end() :]
-
-    # ── 3. Extract days ──
-    # "weekdays"
-    if re.search(r"\bweekdays?\b", s):
-        config.days_of_week = [0, 1, 2, 3, 4]
-        s = re.sub(r"\bon\s+weekdays?\b", "", s)
-        s = re.sub(r"\bweekdays?\b", "", s)
-    # "weekends"
-    elif re.search(r"\bweekends?\b", s):
-        config.days_of_week = [5, 6]
-        s = re.sub(r"\bon\s+weekends?\b", "", s)
-        s = re.sub(r"\bweekends?\b", "", s)
-    # "mon-fri" style ranges
-    elif re.search(
-        r"\b(mon|tue|wed|thu|fri|sat|sun)-(mon|tue|wed|thu|fri|sat|sun)\b", s
-    ):
-        range_match = re.search(
-            r"\b(mon|tue|wed|thu|fri|sat|sun)-(mon|tue|wed|thu|fri|sat|sun)\b", s
-        )
-        if range_match:
-            start_day = _ALL_DAY_NAMES[range_match.group(1)]
-            end_day = _ALL_DAY_NAMES[range_match.group(2)]
-            if start_day <= end_day:
-                config.days_of_week = list(range(start_day, end_day + 1))
-            else:
-                config.days_of_week = list(range(start_day, 7)) + list(
-                    range(0, end_day + 1)
-                )
-            s = s[: range_match.start()] + s[range_match.end() :]
-    else:
-        # Individual day names: "on monday and wednesday", "every monday"
-        # Also handle "on monday, wednesday, and friday"
-        found_days = []
-        for name, idx in _ALL_DAY_NAMES.items():
-            if re.search(r"\b" + name + r"\b", s):
-                if idx not in found_days:
-                    found_days.append(idx)
-        if found_days:
-            config.days_of_week = sorted(found_days)
-            # Remove day references from remaining string
-            for name in _ALL_DAY_NAMES:
-                s = re.sub(r"\bevery\s+" + name + r"\b", "every", s)
-                s = re.sub(r"\bon\s+" + name + r"\b", "", s)
-                s = re.sub(r"\b" + name + r"\b", "", s)
-
-    # Clean up residual connectors
-    s = re.sub(r"\bon\s*$", "", s)
-    s = re.sub(r"\band\b", "", s)
-    s = s.strip().strip(",").strip()
-
-    # ── 4. Extract interval ──
-    # "every Xunit" pattern
-    interval_match = re.match(
-        r"every\s+(\d+)\s*(s|sec|seconds?|m|min|minutes?|h|hr|hours?|d|days?|w|wk|weeks?)",
-        s,
-    )
-    if interval_match:
-        value = int(interval_match.group(1))
-        unit = interval_match.group(2)
-        if unit.startswith("s"):
-            config.interval_seconds = value
-        elif unit.startswith("m"):
-            config.interval_seconds = value * 60
-        elif unit.startswith("h"):
-            config.interval_seconds = value * 3600
-        elif unit.startswith("d"):
-            config.interval_seconds = value * 86400
-        elif unit.startswith("w"):
-            config.interval_seconds = value * 604800
-    elif re.search(r"\bevery\s+second\b", s):
-        config.interval_seconds = 1
-    elif re.search(r"\bevery\s+minute\b", s):
-        config.interval_seconds = 60
-    elif re.search(r"\bevery\s+hour\b", s):
-        config.interval_seconds = 3600
-    elif re.search(r"\bevery\s+day\b", s) or re.search(r"\bdaily\b", s):
-        config.interval_seconds = 86400
-    elif re.search(r"\bevery\s+week\b", s):
-        config.interval_seconds = 604800
-    elif re.search(r"\bhourly\b", s):
-        config.interval_seconds = 3600
-    elif re.search(r"\bweekly\b", s):
-        config.interval_seconds = 604800
-    elif re.search(r"\bminutely\b", s):
-        config.interval_seconds = 60
-    elif (
-        re.search(r"\bevery\b", s)
-        and config.days_of_week
-        and len(config.days_of_week) == 1
-    ):
-        # "every monday" style -> weekly
-        config.interval_seconds = 604800
-    else:
-        # Try bare "Xh", "Xm" patterns
-        bare_match = re.match(r"(\d{1,9})\s*(s|m|h|d|w)", s)
-        if bare_match:
-            value = int(bare_match.group(1))
-            unit = bare_match.group(2)
-            if unit == "s":
-                config.interval_seconds = value
-            elif unit == "m":
-                config.interval_seconds = value * 60
-            elif unit == "h":
-                config.interval_seconds = value * 3600
-            elif unit == "d":
-                config.interval_seconds = value * 86400
-            elif unit == "w":
-                config.interval_seconds = value * 604800
-
-    # ── 5. Default: if time_of_day set but no interval, default to daily ──
-    if config.time_of_day and config.interval_seconds == 0:
-        if config.days_of_week and len(config.days_of_week) == 1:
-            config.interval_seconds = 604800  # weekly for single day
-        else:
-            config.interval_seconds = 86400  # daily
-
-    # ── 6. If days are set and interval is daily but only 1 day, use weekly ──
-    if (
-        config.days_of_week
-        and len(config.days_of_week) == 1
-        and config.interval_seconds == 86400
-    ):
-        config.interval_seconds = 604800
-
-    # ── 7. Build human-readable description ──
-    if config.interval_seconds > 0:
-        config.description = _build_description(config)
-    else:
-        config.description = f"Could not parse schedule: '{text}'"
-
-    return config
+    try:
+        return _parse_schedule(text)
+    except _ScheduleInputError as e:
+        return ScheduleConfig(raw_input=text, description=str(e))
 
 
 def _build_description(config: ScheduleConfig) -> str:
-    """Build a human-readable description from a ScheduleConfig.
-
-    Args:
-        config: Parsed schedule configuration.
-
-    Returns:
-        Human-readable description string.
-    """
-    parts = []
-
-    # Interval part
+    """Human-readable description of a parsed schedule."""
+    days = config.days_of_week
     if config.start_hour is not None:
-        parts.append(f"Every {_format_interval_human(config.interval_seconds)}")
+        start = _format_time_12h(f"{config.start_hour:02d}:00")
+        end_h = config.end_hour if config.end_hour is not None else 0
+        text = f"{_format_every(config.interval_seconds)}, {start} - "
+        text += _format_time_12h(f"{end_h:02d}:00")
+        return f"{text}, {_format_days(days)}" if days else text
+
+    if days and config.interval_seconds in (_DAY, _WEEK):
+        named = _format_days(days)
+        if named == "every day":
+            text = "Daily"
+        elif named in ("weekdays", "weekends"):
+            text = named.capitalize()
+        else:
+            text = f"Every {named}"
     elif config.time_of_day:
-        if config.days_of_week and len(config.days_of_week) == 1:
-            day_name = _DAY_NAMES_DISPLAY[config.days_of_week[0]]
-            parts.append(f"Every {day_name}")
-        elif config.interval_seconds == 86400 or (
-            config.days_of_week and len(config.days_of_week) > 1
-        ):
-            parts.append("Daily")
-        else:
-            parts.append("Daily")
+        text = "Daily"
     else:
-        parts.append(f"Every {_format_interval_human(config.interval_seconds)}")
+        text = _format_every(config.interval_seconds)
+        if days:
+            text += f" on {_format_days(days)}"
 
-    # Time part
-    if config.time_of_day and config.start_hour is None:
-        parts.append(f"at {_format_time_12h(config.time_of_day)}")
-
-    # Window part
-    if config.start_hour is not None:
-        start_str = _format_time_12h(f"{config.start_hour:02d}:00")
-        end_h = config.end_hour if config.end_hour is not None else 24
-        end_str = _format_time_12h(f"{end_h:02d}:00") if end_h < 24 else "12:00 AM"
-        parts.append(f"{start_str} - {end_str}")
-
-    # Days part
-    if config.days_of_week:
-        days_str = _format_days(config.days_of_week)
-        # Avoid duplicating if already in the interval part
-        if config.time_of_day and len(config.days_of_week) == 1:
-            pass  # Already handled above: "Every Monday at ..."
-        else:
-            parts.append(days_str)
-
-    return ", ".join(parts)
+    if config.time_of_day:
+        text += f" at {_format_time_12h(config.time_of_day)}"
+    return text
 
 
 # ── Next-run computation ─────────────────────────────────────────────────────
@@ -712,6 +700,15 @@ def compute_next_run(config: ScheduleConfig, after: datetime = None) -> datetime
                 candidate = _at_local(window_day, start_h, 0, zone)
 
         return candidate
+
+    if config.interval_seconds in (_DAY, _WEEK):
+        # "every tuesday" with no time: the next listed day, at this clock time.
+        day = local_now.date()
+        for _ in range(7):
+            day += timedelta(days=1)
+            if day.weekday() in days:
+                return _at_local(day, local_now.hour, local_now.minute, zone)
+        raise ValueError(f"No valid run day in schedule config {config!r}")
 
     # Day-specific without fixed time: find the next valid day
     candidate = now + interval
@@ -905,9 +902,8 @@ class Scheduler:
     ) -> Dict[str, Any]:
         """Create a new scheduled task.
 
-        Tries the natural-language parser first (``parse_schedule_input``).
-        Falls back to the simpler ``parse_interval`` for backward
-        compatibility.
+        The schedule is read by ``parse_schedule_input``; anything it
+        rejects is rejected here too, with its explanation.
 
         Args:
             name: Unique task name.
@@ -924,22 +920,12 @@ class Scheduler:
             ValueError: If name is duplicate, interval is invalid, or ``tz``
                 is not a known time zone.
         """
-        # Try natural-language parser first
         config = parse_schedule_input(interval)
-        if config.interval_seconds > 0:
-            config.timezone = resolve_zone(tz).key
-            interval_seconds = config.interval_seconds
-            schedule_config_json = config.to_json()
-        else:
-            # Fall back to legacy parse_interval
-            interval_seconds = parse_interval(interval)
-            config = None
-            schedule_config_json = None
-        if interval_seconds <= 0:
-            raise ValueError(
-                f"Interval '{interval}' is zero; a schedule must wait at least "
-                "1 second between runs. Use a form like 'every 30m'."
-            )
+        if config.interval_seconds <= 0:
+            raise ValueError(config.description)
+        config.timezone = resolve_zone(tz).key
+        interval_seconds = config.interval_seconds
+        schedule_config_json = config.to_json()
 
         async with self._lock:
             if name in self._tasks:
@@ -948,10 +934,7 @@ class Scheduler:
             task_id = str(uuid.uuid4())
             now = datetime.now(timezone.utc)
 
-            if config:
-                next_run = compute_next_run(config, after=now)
-            else:
-                next_run = now + timedelta(seconds=interval_seconds)
+            next_run = compute_next_run(config, after=now)
 
             task = ScheduledTask(
                 task_id=task_id,

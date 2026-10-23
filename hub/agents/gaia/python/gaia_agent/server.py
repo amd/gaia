@@ -1080,7 +1080,45 @@ async def _finish_changes(run: _QueryRun) -> List[Dict[str, Any]]:
     return []
 
 
-@router.post("/query")
+#: The documented stream, so the OpenAPI contract names the SSE events rather
+#: than an empty application/json body.
+_QUERY_SSE_RESPONSES = {
+    200: {
+        "description": (
+            "Server-Sent Events stream (text/event-stream). Each `data:` line is "
+            "one canonical event discriminated on `type`: status {message, "
+            "phase?, queue?} | token {delta} | tool_call {tool, args} | "
+            "tool_result {tool, data, render?} | needs_confirmation {run_id, "
+            "action, summary, confirm_id?, always_scope?, risk?, tool_label?, "
+            "args?, args_truncated?, prompt_context?} | needs_input {run_id, "
+            "request_id, question, options, allow_free_text, sensitive, "
+            "respond_url, timeout_seconds?} | final {answer, usage?, failed?} | "
+            "error {detail, status}. A needs_confirmation's `args` are exactly "
+            "the arguments the model sent for the gated call, each value capped "
+            "at 64,000 characters (`args_truncated: true` when one was cut); "
+            "what the agent adds to its prompt is in `prompt_context` "
+            "{working_directory?, risk_note?}, never in `args`. The stream ends "
+            "with exactly one `final` or `error`. `:`-prefixed heartbeat "
+            "comments carry no payload."
+        ),
+        "content": {
+            "text/event-stream": {
+                "schema": {
+                    "type": "string",
+                    "example": (
+                        'data: {"type": "needs_confirmation", "run_id": "…", '
+                        '"action": "run_shell_command", "summary": "git push", '
+                        '"confirm_id": "…", "risk": "execute", '
+                        '"args": {"command": "git push"}}\n\n'
+                    ),
+                }
+            }
+        },
+    }
+}
+
+
+@router.post("/query", response_class=StreamingResponse, responses=_QUERY_SSE_RESPONSES)
 async def query(request: QueryRequest):
     """Run the flagship agent loop for one request, streaming canonical SSE."""
     from gaia.ui.sse_handler import SSEOutputHandler

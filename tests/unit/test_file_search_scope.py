@@ -887,6 +887,10 @@ class TestCommonFoldersAreMatchedByPathNotPrefix:
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.setenv("USERPROFILE", str(home))
         monkeypatch.chdir(tmp_path)
+        # On macOS an undirected search skips ~/Documents (#5578).
+        monkeypatch.setattr(
+            "gaia.agents.tools.protected_folders.MACOS_PROTECTED_HOME_FOLDERS", ()
+        )
         search_file = _register_search_file(_Sandbox(home / "Doc"))
 
         result = search_file("quarterly_report")
