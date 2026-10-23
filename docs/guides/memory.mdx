@@ -335,6 +335,8 @@ Agent: "Saved -- I've marked Sarah's email as private and linked it to her profi
 
 <Warning>
   Sensitive data is still stored in plaintext in `~/.gaia/memory.db`. The `sensitive` flag controls **visibility**, not encryption. Do not store passwords or tokens in agent memory -- use your OS keyring for credentials.
+
+  GAIA refuses to remember anything shaped like a credential: API keys, passwords, PINs and passcodes, card security codes, card numbers and SSNs. The same shapes are replaced with `[secret removed]` before a turn is saved to the conversation log, so past-conversation search can't read them back. Detection is by shape, so a secret with no recognizable form can still slip through.
 </Warning>
 
 ---

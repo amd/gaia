@@ -3645,8 +3645,45 @@ class MemoryMixin(ProceduralMemoryMixin):
             # generic dash/underscore-joined high-entropy-looking token, e.g.
             # HALIBUT-4417-ZULU: 2+ alnum groups with at least one numeric group.
             r"\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b",
+            # a PIN, passcode or card security code next to its digits
+            r"\b(?:pin|passcode|pass code|cvv2?|cvc|security code)\b"
+            r"(?:\s+(?:number|code))?\s*(?:is|:|=)?\s*\d{3,8}\b",
+            r"\b\d{3}-\d{2}-\d{4}\b",  # US social security number
         )
     )
+
+    #: 13-19 digits, optionally grouped by spaces or dashes: a card number when
+    #: it also passes the Luhn check, so an order number does not.
+    _CARD_NUMBER: ClassVar[re.Pattern] = re.compile(r"\b\d(?:[ -]?\d){12,18}\b")
+
+    @staticmethod
+    def _luhn_valid(digits: str) -> bool:
+        total = 0
+        for i, ch in enumerate(reversed(digits)):
+            d = int(ch)
+            if i % 2:
+                d = d * 2 - 9 if d > 4 else d * 2
+            total += d
+        return total % 10 == 0
+
+    @classmethod
+    def _card_spans(cls, text: str) -> List[tuple]:
+        return [
+            m.span()
+            for m in cls._CARD_NUMBER.finditer(text)
+            if cls._luhn_valid(re.sub(r"[ -]", "", m.group()))
+        ]
+
+    @classmethod
+    def _mask_credentials(cls, text: str) -> str:
+        """*text* with every credential-shaped span replaced, for the conversation log."""
+        if not text:
+            return text
+        for start, end in reversed(cls._card_spans(text)):
+            text = text[:start] + "[secret removed]" + text[end:]
+        for pattern in cls._CREDENTIAL_PATTERNS:
+            text = pattern.sub("[secret removed]", text)
+        return text
 
     @classmethod
     def _looks_like_credential(cls, text: str) -> bool:
@@ -3660,7 +3697,9 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         if not text:
             return False
-        return any(p.search(text) for p in cls._CREDENTIAL_PATTERNS)
+        return any(p.search(text) for p in cls._CREDENTIAL_PATTERNS) or bool(
+            cls._card_spans(text)
+        )
 
     #: Argument keys naming what a call acted on, in priority order. A shell
     #: command is keyed by its binary, so ``pytest -q`` working again retires
@@ -4127,13 +4166,14 @@ class MemoryMixin(ProceduralMemoryMixin):
                     MAX_EXTRACTION_TURN_LENGTH,
                 )
             else:
+                # A secret refused as a memory must not sit in the searchable log.
                 self._memory_store.store_turn(
-                    session_id, "user", clean_input, context=ctx
+                    session_id, "user", self._mask_credentials(clean_input), context=ctx
                 )
                 self._memory_store.store_turn(
                     session_id,
                     "assistant",
-                    response,
+                    self._mask_credentials(response),
                     context=ctx,
                     preserve_full=preserve_full,
                 )
