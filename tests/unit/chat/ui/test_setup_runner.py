@@ -8,7 +8,6 @@ replaced with fakes that assert the argv the runner would have used.
 """
 
 import io
-import json
 import subprocess
 import sys
 import threading

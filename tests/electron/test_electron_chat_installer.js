@@ -726,29 +726,33 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   // ── CI AppImage Smoke Contract ───────────────────────────────────
 
   describe('CI AppImage smoke configuration', () => {
-    it('should not need to skip gaia init: the installer never runs it', () => {
+    it('never runs gaia init from the app installer', () => {
       const installer = fs.readFileSync(
         path.join(CHAT_APP_PATH, 'services/backend-installer.cjs'),
         'utf8',
       );
+      expect(installer).not.toMatch(/\["init"/);
+    });
+
+    it('still skips gaia init for the published release the CI installs', () => {
+      // A PR run installs the latest published release, and one before #5629
+      // runs gaia init (several GB of models) on first launch.
       const workflow = fs.readFileSync(
         path.join(__dirname, '../../.github/workflows/build-installers.yml'),
         'utf8',
       );
-
-      expect(installer).not.toMatch(/\["init"/);
-      expect(workflow).not.toContain('GAIA_SKIP_GAIA_INIT');
-    });
-
-    it('should still skip gaia init when the upgrade journey launches the previous release', () => {
-      // That release's installer runs gaia init (several GB of models) unless told not to.
-      const journey = fs.readFileSync(
+      const windows = fs.readFileSync(
         path.join(__dirname, '../../installer/headless/windows-journey.ps1'),
         'utf8',
       );
-      const upgrade = journey.slice(journey.indexOf("'win-setup-upgrade' {\n                # The state"));
-      expect(upgrade).toMatch(/Start-AgentUi -PreviousRelease/);
-      expect(journey).toMatch(/if \(\$PreviousRelease\) \{[^}]*GAIA_SKIP_GAIA_INIT = '1'/);
+      const posix = fs.readFileSync(
+        path.join(__dirname, '../../installer/headless/posix-journey.sh'),
+        'utf8',
+      );
+      expect(workflow).toContain('GAIA_SKIP_GAIA_INIT: "1"');
+      const startUi = windows.slice(windows.indexOf('function Start-AgentUi'));
+      expect(startUi.slice(0, startUi.indexOf('Start-Process'))).toContain("$env:GAIA_SKIP_GAIA_INIT = '1'");
+      expect(posix).toContain('export GAIA_SKIP_GAIA_INIT=1');
     });
   });
 });
