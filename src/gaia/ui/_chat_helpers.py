@@ -4165,10 +4165,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     )
             if turn_place:
                 inference_stats = {**(inference_stats or {}), "place": turn_place}
-            # Settings › Model shows each model's speed measured on this PC. Not
-            # "model": a kept Retry with… answer uses that key to name its model.
+            # Settings › Model shows each model's speed measured on this PC.
             if inference_stats is not None and model_id:
                 inference_stats["measured_model"] = model_id
+            # The model that wrote this answer, so a later model switch can't relabel it.
+            # A relayed turn has no agent here, but ran on the model it sent.
+            answered_by = result_holder.get("model") or model_id
+            if answered_by:
+                inference_stats = {**(inference_stats or {}), "model": answered_by}
             turn_summary = _turn_summary(
                 sse_handler,
                 result_holder.get("agent"),
