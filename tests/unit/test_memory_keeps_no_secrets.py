@@ -33,6 +33,9 @@ NOT_SECRETS = [
     "Connect the wire to pin 3",
     "I pinned 12 tabs",
     "Order 1234567890123 shipped",
+    # Luhn-valid, but no card network starts with 1 or 9.
+    "Tracking 1000000000009 is out for delivery",
+    "Logged at 9000000000001 ms",
     "My zip code is 97201",
 ]
 

@@ -3653,8 +3653,13 @@ class MemoryMixin(ProceduralMemoryMixin):
     )
 
     #: 13-19 digits, optionally grouped by spaces or dashes: a card number when
-    #: it also passes the Luhn check, so an order number does not.
+    #: it also starts with a card network's prefix and passes the Luhn check, so
+    #: a tracking number or a millisecond timestamp does not.
     _CARD_NUMBER: ClassVar[re.Pattern] = re.compile(r"\b\d(?:[ -]?\d){12,18}\b")
+    #: Visa, Mastercard, Amex, Discover, JCB, Diners Club, UnionPay.
+    _CARD_PREFIX: ClassVar[re.Pattern] = re.compile(
+        r"4|5[1-5]|2[2-7]|3[47]|6011|65|64[4-9]|35|30[0-5]|36|38|62"
+    )
 
     @staticmethod
     def _luhn_valid(digits: str) -> bool:
@@ -3668,11 +3673,12 @@ class MemoryMixin(ProceduralMemoryMixin):
 
     @classmethod
     def _card_spans(cls, text: str) -> List[tuple]:
-        return [
-            m.span()
-            for m in cls._CARD_NUMBER.finditer(text)
-            if cls._luhn_valid(re.sub(r"[ -]", "", m.group()))
-        ]
+        spans = []
+        for m in cls._CARD_NUMBER.finditer(text):
+            digits = re.sub(r"[ -]", "", m.group())
+            if cls._CARD_PREFIX.match(digits) and cls._luhn_valid(digits):
+                spans.append(m.span())
+        return spans
 
     @classmethod
     def _mask_credentials(cls, text: str) -> str:
