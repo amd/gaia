@@ -244,6 +244,37 @@ class TestIndexDocumentKinds:
         assert "Could not read PDF" in str(exc_info.value)
 
     @pytest.mark.asyncio
+    async def test_zero_byte_file_is_a_permanent_failure(self):
+        from gaia.ui._chat_helpers import _index_document
+
+        rag = MagicMock()
+        rag.index_document.return_value = {
+            "success": False,
+            "error": "File is empty",
+            "empty_file": True,
+        }
+        with (
+            patch("gaia.rag.sdk.RAGSDK", return_value=rag),
+            patch("gaia.rag.sdk.RAGConfig"),
+        ):
+            with pytest.raises(UnreadableDocumentError) as exc_info:
+                await _index_document(Path("empty.txt"))
+
+        assert exc_info.value.kind == "empty_file"
+
+    def test_rag_marks_a_zero_byte_file(self, tmp_path):
+        from gaia.rag.sdk import RAGSDK, RAGConfig
+
+        empty = tmp_path / "empty.txt"
+        empty.write_bytes(b"")
+        rag = RAGSDK(RAGConfig(allowed_paths=[str(tmp_path)], show_stats=False))
+
+        result = rag.index_document(str(empty))
+
+        assert result["error"] == "File is empty"
+        assert result["empty_file"] is True
+
+    @pytest.mark.asyncio
     async def test_other_failures_stay_plain_runtime_errors(self):
         from gaia.ui._chat_helpers import _index_document
 

@@ -3011,6 +3011,7 @@ These positions indicate where to split the text."""
                 print(f"❌ File is empty: {file_path}")
                 print("   The file has no content to index")
             stats["error"] = "File is empty"
+            stats["empty_file"] = True
             return stats
 
         # Enforce maximum file size limit (prevent OOM)

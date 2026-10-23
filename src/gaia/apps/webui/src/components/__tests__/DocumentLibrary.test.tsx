@@ -200,6 +200,25 @@ describe('DocumentLibrary failure reasons', () => {
         const retry = screen.getByRole('button', { name: /Retry indexing broken\.pdf/i });
         expect(retry.className).toContain('btn-retry-quiet');
     });
+
+    it('says an empty file needs content instead of offering a plain Retry', async () => {
+        const empty: Document = {
+            ...FAILED_DOC,
+            filename: 'empty.txt',
+            file_size: 0,
+            error_kind: 'empty_file',
+            last_error: 'RAG indexing failed for empty.txt: File is empty',
+        };
+        mockedApi.listDocuments.mockResolvedValue({ documents: [empty], total: 1, total_size_bytes: 0, total_chunks: 0 });
+        render(<DocumentLibrary />);
+
+        await screen.findByText('empty.txt');
+
+        expect(screen.getByText("Can't be read")).toBeTruthy();
+        expect(screen.getByText('This file is empty. Add content to it, then index it again.')).toBeTruthy();
+        const retry = screen.getByRole('button', { name: /Retry indexing empty\.txt/i });
+        expect(retry.className).toContain('btn-retry-quiet');
+    });
 });
 
 describe('DocumentLibrary path box', () => {

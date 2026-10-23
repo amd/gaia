@@ -17,6 +17,7 @@ const PERMANENT_FAILURE_HINTS: Record<string, string> = {
     corrupted: 'The file looks damaged. Re-download or re-export it, then index the new copy.',
     encrypted: 'The PDF needs a password to open. Save a copy without the password, then index that.',
     empty: 'The PDF has no readable text, which usually means it is a scan. Run OCR on it, then index it again.',
+    empty_file: 'This file is empty. Add content to it, then index it again.',
 };
 
 /** Split a stored indexing error into a one-line summary and the rest. */

@@ -691,7 +691,8 @@ class DocumentResponse(BaseModel):
     )
     last_error: Optional[str] = None
     # Set with last_error when retrying can't help until the file is fixed:
-    # "corrupted", "encrypted" or "empty" (no extractable text).
+    # "corrupted", "encrypted", "empty" (no extractable text) or "empty_file"
+    # (0 bytes).
     error_kind: Optional[str] = None
 
 

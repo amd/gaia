@@ -472,7 +472,7 @@ export interface Document {
     sessions_using: number;
     indexing_status?: 'pending' | 'indexing' | 'complete' | 'failed' | 'cancelled' | 'missing';
     last_error?: string | null;
-    /** Set when retrying can't help until the file is fixed: corrupted, encrypted or empty. */
+    /** Set when retrying can't help until the file is fixed: corrupted, encrypted, empty (no text) or empty_file (0 bytes). */
     error_kind?: string | null;
 }
 
