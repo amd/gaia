@@ -40,6 +40,8 @@ from typing import Any, Dict, Iterator, List, Optional
 
 MANIFEST = "manifest.json"
 MANIFEST_VERSION = 1
+#: The answer a turn belongs to, when another process recorded the turn.
+MESSAGE_LINK = "message.json"
 
 #: Default retention; the user changes both in Settings (``gaia config``).
 DEFAULT_RETENTION_DAYS = 7
@@ -55,6 +57,9 @@ MAX_DIFF_BYTES = 2 * 1024 * 1024
 MAX_AFTER_COPY_BYTES = 8 * 1024 * 1024
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+
+#: What :func:`new_turn_id` makes; a turn's folders sort in the order they ran.
+TURN_ID_PATTERN = r"^\d{14}-[0-9a-f]{8}$"
 
 
 class SnapshotError(RuntimeError):
@@ -84,6 +89,11 @@ def _check_id(kind: str, value: str) -> str:
     if not isinstance(value, str) or not _SAFE_ID.match(value) or value in (".", ".."):
         raise SnapshotError(f"Invalid {kind} {value!r}.")
     return value
+
+
+def new_turn_id() -> str:
+    """A fresh turn id, starting with the time so turns sort by when they ran."""
+    return f"{time.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
 
 def _now_iso() -> str:
@@ -155,6 +165,7 @@ class TurnRecorder:
         }
         self._index: Dict[str, Dict[str, Any]] = {}
         self._closed = False
+        self._finished = False
 
     @property
     def has_changes(self) -> bool:
@@ -265,10 +276,17 @@ class TurnRecorder:
         _write_json_atomic(path, manifest)
 
     def finish(self) -> None:
-        """Save the state the turn left each file in; drop an empty turn."""
+        """Save the state the turn left each file in; drop an empty turn.
+
+        A call after one that succeeded does nothing: by then an undo may have
+        been saved. One after a failure tries again.
+        """
         with self._lock:
+            if self._finished:
+                return
             self._closed = True
             if not self.has_changes:
+                self._finished = True
                 return
             (self.dir / "blobs").mkdir(parents=True, exist_ok=True)
             for i, entry in enumerate(self._manifest["files"]):
@@ -296,6 +314,7 @@ class TurnRecorder:
                     )
             self._manifest["finished_at"] = _now_iso()
             self._save()
+            self._finished = True
 
     def link_message(self, message_id: int) -> None:
         """Tie this turn to the assistant message that answered it."""
@@ -325,7 +344,7 @@ def recording_turn(
     a worker thread sees it only when that thread copies this context (the
     agent's tool runner does).
     """
-    turn_id = turn_id or f"{time.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    turn_id = turn_id or new_turn_id()
     recorder = TurnRecorder(session_id, turn_id, root or snapshots_root())
     token = _ACTIVE.set(recorder)
     try:
@@ -418,7 +437,30 @@ def _load(session_id: str, turn_id: str, root: Optional[Path] = None) -> _Turn:
             f"{path} was written by a different GAIA version "
             f"(format {manifest.get('version')!r}); it cannot be restored here."
         )
+    link = turn_dir / MESSAGE_LINK
+    if link.is_file():
+        try:
+            manifest["message_id"] = json.loads(link.read_text(encoding="utf-8"))[
+                "message_id"
+            ]
+        except (OSError, json.JSONDecodeError, KeyError, TypeError) as e:
+            raise SnapshotError(f"Cannot read {link}: {e}") from e
     return _Turn(turn_dir, manifest)
+
+
+def link_turn_message(
+    session_id: str, turn_id: str, message_id: int, root: Optional[Path] = None
+) -> bool:
+    """Tie a turn another process recorded to the answer it belongs to.
+
+    Saved beside the manifest, never in it, so it cannot overwrite that
+    process's own save. Returns False when the turn changed nothing.
+    """
+    turn_dir = _turn_dir(session_id, turn_id, root)
+    if not (turn_dir / MANIFEST).is_file():
+        return False
+    _write_json_atomic(turn_dir / MESSAGE_LINK, {"message_id": message_id})
+    return True
 
 
 def _change_kind(entry: Dict[str, Any]) -> str:

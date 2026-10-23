@@ -227,6 +227,10 @@ def _dispatch_one(
         tool = str(event.get("tool") or "unknown")
         args = event.get("args") or {}
         label = _tool_label(tool, profile)
+        # The ledger is what the turn's summary, and so the chat's Outputs, is
+        # built from; the in-process handler feeds it from print_tool_usage.
+        handler.turn_ledger.tool_started(tool)
+        handler.turn_ledger.tool_args(args)
         start: Dict[str, Any] = {"type": "tool_start", "tool": tool, "detail": label}
         start.update({k: event[k] for k in MCP_TOOL_FIELDS if event.get(k)})
         handler._emit(start)
@@ -249,11 +253,13 @@ def _dispatch_one(
     elif etype == "tool_result":
         tool = str(event.get("tool") or "unknown")
         data = event.get("data")
+        success = _derive_success(data)
+        handler.turn_ledger.tool_result(data, success)
         out: Dict[str, Any] = {
             "type": "tool_result",
             "tool": tool,
             "summary": _derive_summary(tool, data, profile),
-            "success": _derive_success(data),
+            "success": success,
             "data": data if data is not None else {},
         }
         if isinstance(data, dict) and isinstance(data.get("mcp_output"), dict):
@@ -384,8 +390,13 @@ def relay_query(
     documents: Optional[List[str]] = None,
     allowed_paths: Optional[List[str]] = None,
     memory: Optional[str] = None,
+    changes_turn_id: Optional[str] = None,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
+
+    *changes_turn_id* — the undo-history turn the sidecar records this run's
+    file changes under, for a sidecar the caller has established takes it
+    (``profiles.changes_supported``).
 
     *allowed_paths* — the chat's file scope, for a sidecar the caller has
     established takes it (``profiles.scope_supported``); ``None`` leaves the
@@ -465,6 +476,8 @@ def relay_query(
         body["allowed_paths"] = list(allowed_paths)
     if memory is not None:
         body["memory"] = memory
+    if changes_turn_id is not None:
+        body["changes_turn_id"] = changes_turn_id
 
     syncs_mode = full_access is not None and bool(session_id)
     enable_after_start = False

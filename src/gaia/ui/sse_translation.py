@@ -108,6 +108,9 @@ SUMMARY_VIEW_KEYS = (
     "command_output",
     "latency_ms",
     "mcp_output",
+    # What the tool wrote (``RESULT_PATH_KEYS`` in ``gaia.ui.sse_handler``).
+    "file_path",
+    "image_path",
 )
 
 #: Which connector an MCP tool call belongs to, carried from ``tool_start``.
