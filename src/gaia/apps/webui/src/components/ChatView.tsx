@@ -31,13 +31,16 @@ import * as messageQueue from '../utils/messageQueue';
 import type { QueuedMessage } from '../utils/messageQueue';
 import { SessionPanel, SessionPanelToggle } from './session-panel/SessionPanel';
 import { OfflineNotice } from './session-panel/OfflineNotice';
+import { ExportErrorBar } from './ExportErrorBar';
 import { useSessionPanelStore } from '../stores/sessionPanelStore';
 import { useAttachments } from '../hooks/useAttachments';
 import { useAnswerComparison } from '../hooks/useAnswerComparison';
 import { useContextUsage } from '../hooks/useContextUsage';
 import { useJumpToMessage } from '../hooks/useJumpToMessage';
+import { useChatExport } from '../hooks/useChatExport';
 import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
+import { isPlaceholderTitle } from '../utils/sessionTitle';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
@@ -261,6 +264,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
     const [policyToast, setPolicyToast] = useState<{ tool: string; receiptId?: string } | null>(null);
+    const { exportChat, exportError, clearExportError } = useChatExport(sessionId, session?.title);
     // A chat made by a retired agent (chat/doc/file) can be read but not continued.
     const retiredAgent = session?.agent_type && session.agent_type !== FLAGSHIP_AGENT_ID ? session.agent_type : null;
 
@@ -704,7 +708,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
             // The view closed while the server answered; the run goes on without it.
             if (outcome.kind === 'accepted' && isStale()) streamController?.abort();
         };
-        const accepted = () => settleQueued({ kind: 'accepted' });
+        // The server names a new chat after its first question when it takes it.
+        let titleShown = reattach || (!!session && !isPlaceholderTitle(session.title));
+        const accepted = () => {
+            settleQueued({ kind: 'accepted' });
+            if (titleShown) return;
+            titleShown = true;
+            api.getSession(sessionId)
+                .then((s) => updateSessionInList(sessionId, { title: s.title }))
+                .catch((err) => log.chat.warn('Could not refresh the chat title', err));
+        };
         streamBufferRef.current = '';
         stopRequestedRef.current = false;
         setStopping(false);
@@ -1235,18 +1248,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         })
                         .catch((err) => log.chat.error(`Could not refresh messages for session=${sessionId}`, err));
                 }, 300);
-
-                // Auto-title on first message
-                // Skip client-side auto-title when re-attaching (no user text in
-                // hand and the run's lifecycle already titles server-side, #1580).
-                if (!reattach && session && session.title === 'New Task') {
-                    const autoTitle = text.slice(0, 50) + (text.length > 50 ? '...' : '');
-                    // Not a user choice — leave unpinned so the server-side
-                    // LLM titler can still replace it (#2165).
-                    api.updateSession(sessionId, { title: autoTitle, title_is_custom: false })
-                        .then(() => updateSessionInList(sessionId, { title: autoTitle }))
-                        .catch((err) => log.chat.error('Auto-title failed', err));
-                }
             },
             onError: (err) => {
                 const interrupted = isStreamInterrupted(err);
@@ -1575,24 +1576,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     }, [sessionId, updateSessionInList]);
 
-    // Export
-    const handleExport = async () => {
-        try {
-            const data = await api.exportSession(sessionId);
-            const blob = new Blob([data.content], { type: 'text/markdown' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            // Sanitize title for use as filename: remove path separators and special chars
-            const safeTitle = (session?.title || 'chat').replace(/[/\\:*?"<>|]/g, '_').slice(0, 100);
-            a.download = `${safeTitle}.md`;
-            a.click();
-            URL.revokeObjectURL(url);
-        } catch (err) {
-            log.chat.error('Export failed', err);
-        }
-    };
-
     /** Detach a document from this session via the context bar (does not delete from library). */
     const handleRemoveDocument = useCallback(async (e: React.MouseEvent, docId: string) => {
         e.stopPropagation(); // Don't trigger the context bar click
@@ -1735,7 +1718,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files on this PC" aria-label="Browse files on this PC">
                         <FolderSearch size={15} />
                     </button>
-                    <button className="btn-icon-sm" onClick={handleExport} title="Export as Markdown" aria-label="Export chat">
+                    <button className="btn-icon-sm" onClick={exportChat} title="Export as Markdown" aria-label="Export chat">
                         <Download size={15} />
                     </button>
                     <SessionPanelToggle messages={messages} busy={isStreaming} />
@@ -1929,6 +1912,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
             <div className="input-area">
                 <div className="input-column">
+                    <ExportErrorBar message={exportError} onDismiss={clearExportError} />
                     {lastIsConnectorError && lastMessage && (
                         <ConnectorRetryBanner content={lastMessage.content} onRetry={handleRetryLast} />
                     )}
