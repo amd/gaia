@@ -297,20 +297,38 @@ def _is_cloud(agent: Any) -> bool:
     )
 
 
-def context_window(agent: Any) -> int:
-    """The context window, in tokens, the agent's model is admitted with."""
+#: Reply room reserved when the answering agent's own setting is not known.
+DEFAULT_REPLY_TOKENS = 8192
+
+
+def model_context_window(
+    model: Optional[str],
+    *,
+    device: Optional[str] = None,
+    claude: bool = False,
+    cloud: bool = False,
+) -> int:
+    """The context window, in tokens, a turn on *model* is admitted with."""
     from gaia.llm.lemonade_client import GPU_CTX_SIZE, resolve_ctx_size
 
-    if getattr(agent, "_use_claude", False):
+    if claude:
         from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
 
         return CLAUDE_CTX_SIZE
-    if _is_cloud(agent):
+    if cloud:
         # Remote admission policy, not a claim about the provider's context ceiling.
         return GPU_CTX_SIZE
-    return resolve_ctx_size(
-        model=getattr(agent, "model_id", None),
+    return resolve_ctx_size(model=model, device=device)
+
+
+def context_window(agent: Any) -> int:
+    """The context window, in tokens, the agent's model is admitted with."""
+    claude = bool(getattr(agent, "_use_claude", False))
+    return model_context_window(
+        getattr(agent, "model_id", None),
         device=getattr(agent, "device", None),
+        claude=claude,
+        cloud=not claude and _is_cloud(agent),
     )
 
 
@@ -320,7 +338,11 @@ def _reply_reserve(agent: Any) -> int:
     if _is_cloud(agent) and not getattr(agent, "_use_claude", False):
         return 0
     config = getattr(getattr(agent, "chat", None), "config", None)
-    return getattr(config, "max_tokens", 8192)
+    return getattr(config, "max_tokens", DEFAULT_REPLY_TOKENS)
+
+
+def _budget_in_window(ctx: int, overhead: int, reply_reserve: int) -> int:
+    return min(ctx // 2, ctx - overhead - reply_reserve - 2048)
 
 
 def history_budget(agent: Any, query: str) -> int:
@@ -329,7 +351,26 @@ def history_budget(agent: Any, query: str) -> int:
     prompt = getattr(agent, "system_prompt", "")
     tools = getattr(agent, "_openai_tools", [])
     overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))
-    return min(ctx // 2, ctx - overhead - _reply_reserve(agent) - 2048)
+    return _budget_in_window(ctx, overhead, _reply_reserve(agent))
+
+
+def relayed_history_budget(model: Optional[str], query: str, *, cloud: bool) -> int:
+    """History budget for a turn another process answers with *model*.
+
+    That agent's prompt and tools are not visible here, so only the query is
+    reserved; the ``ctx // 2`` cap leaves the other half of the window for
+    them, as in process. *cloud* is whether *model* is a Lemonade cloud model.
+    """
+    claude = bool(model) and model.startswith("claude-")
+    cloud = cloud and not claude
+    ctx = model_context_window(model, claude=claude, cloud=cloud)
+    reserve = 0 if cloud else DEFAULT_REPLY_TOKENS
+    return _budget_in_window(ctx, count_tokens(query), reserve)
+
+
+def turn_cost(turn: list[dict[str, Any]]) -> int:
+    """Estimated tokens one turn takes in the history budget."""
+    return _turn_cost(turn)
 
 
 #: Tools whose results are document text, so the meter can show what files cost.

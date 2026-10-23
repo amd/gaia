@@ -1803,30 +1803,146 @@ def _session_mail_provider(session: dict) -> str | None:
 # before the first POST.
 
 
-_RELAY_CONTEXT_PAIRS = 5
-
-# Last history view per in-process chat session, so a model switch that hides
-# more turns is announced too.
+# Last history view per chat session, so a model switch that hides more
+# turns is announced too.
 _history_cuts: dict = {}
+# Messages each relayed chat last showed clipped, so a clip is announced once.
+_relay_clips: dict = {}
 
 
-def _query_context_from_history(history_pairs: list) -> list[dict]:
-    """Flatten (user, assistant) history pairs into ``QueryContextItem``-shaped
-    dicts for the sidecar's ``/query`` request body (#2109).
+def _clip_marker(cut: int, total: int) -> str:
+    return (
+        f"\n\n[GAIA cut the last {cut:,} of this message's {total:,} characters "
+        "to fit the model's context window; that part is not visible to you.]"
+    )
 
-    Mirrors the truncation the in-process chat branches already apply, so an
-    email session's context window stays comparable: last 5 pairs, 2000 chars
-    per turn.
+
+def _clip_message(turn: list[dict], index: int, budget: int) -> int:
+    """Keep the longest head of ``turn[index]`` that lets *turn* fit *budget*.
+
+    The rest is replaced by a marker; returns how many characters were cut.
     """
-    _MAX_CHARS = 2000
-    context: list[dict] = []
-    for user_msg, assistant_msg in history_pairs[-_RELAY_CONTEXT_PAIRS:]:
-        u = user_msg[:_MAX_CHARS]
-        a = assistant_msg[:_MAX_CHARS]
-        if len(assistant_msg) > _MAX_CHARS:
-            a += "... (truncated)"
-        context.append({"role": "user", "content": u})
-        context.append({"role": "assistant", "content": a})
+    from gaia.agents.base.history import turn_cost
+
+    text = turn[index]["content"]
+
+    def clipped(keep: int) -> str:
+        return text[:keep] + _clip_marker(len(text) - keep, len(text))
+
+    low, high = 0, len(text) - 1
+    while low < high:
+        mid = (low + high + 1) // 2
+        turn[index]["content"] = clipped(mid)
+        if turn_cost(turn) <= budget:
+            low = mid
+        else:
+            high = mid - 1
+    turn[index]["content"] = clipped(low)
+    return len(text) - low
+
+
+def _clip_turn(turn: list[dict], budget: int) -> tuple[list[dict], list[tuple]]:
+    """Cut the turn's longest messages until it fits *budget*, marking each cut.
+
+    Returns the turn and ``(index, cut, total)`` for every message cut.
+    """
+    from gaia.agents.base.history import turn_cost
+
+    turn = [dict(m) for m in turn]
+    clips = []
+    for index in sorted(range(len(turn)), key=lambda i: -len(turn[i]["content"])):
+        if turn_cost(turn) <= budget:
+            break
+        total = len(turn[index]["content"])
+        if total <= len(_clip_marker(total, total)):
+            continue
+        clips.append((index, _clip_message(turn, index, budget), total))
+    return turn, clips
+
+
+def _relayed_history(
+    history_pairs: list,
+    model_id: str | None,
+    query: str,
+    sse_handler,
+    session_id: str | None,
+) -> list[dict]:
+    """The chat's earlier turns as ``QueryContextItem`` dicts for ``/query``.
+
+    The in-process policy: whole turns, newest first, within *model_id*'s
+    history budget. A turn larger than the whole budget has its longest
+    messages cut, with a marker saying how much, and anything newly out of the
+    model's view streams a ``history_cut`` status.
+    """
+    from gaia.agents.base.history import (
+        CutReporter,
+        relayed_history_budget,
+        select_history,
+        turn_cost,
+    )
+
+    budget = relayed_history_budget(
+        model_id, query, cloud=bool(model_id) and bool(_ui_cloud_provider(model_id))
+    )
+    turns = []
+    clipped = {}
+    clipped_tokens = {}
+    for pair, (user_msg, assistant_msg) in enumerate(history_pairs):
+        turn = [
+            {"role": "user", "content": user_msg},
+            {"role": "assistant", "content": assistant_msg},
+        ]
+        if budget > 0 and turn_cost(turn) > budget:
+            # To half, where overflow evicts down to, so the next turn keeps it.
+            fitted, clips = _clip_turn(turn, budget // 2)
+            for index, cut, total in clips:
+                clipped[(pair, index)] = (cut, total)
+            if clips:
+                clipped_tokens[pair] = turn_cost(turn) - turn_cost(fitted)
+            turn = fitted
+        turns.append(turn)
+
+    cuts = []
+    reporter = (
+        _history_cuts.setdefault(session_id, CutReporter()) if session_id else None
+    )
+    context = select_history(turns, budget, cuts.append, reporter)
+
+    # select_history returns the turns' own message dicts, so identity says
+    # which clipped messages the model still sees.
+    in_view = {id(message) for message in context}
+    shown = {key for key in clipped if id(turns[key[0]][key[1]]) in in_view}
+    seen = _relay_clips.get(session_id, set()) if session_id else set()
+    if session_id:
+        _relay_clips[session_id] = shown
+    new_keys = [key for key in clipped if key in shown and key not in seen]
+    new_clips = [clipped[key] for key in new_keys]
+    notices = [cut.notice for cut in cuts]
+    if new_clips:
+        cut_chars = sum(c[0] for c in new_clips)
+        if len(new_clips) == 1:
+            notices.append(
+                f"An earlier message is too long for the model's context window, so "
+                f"the last {cut_chars:,} of its {new_clips[0][1]:,} characters are "
+                "out of its view."
+            )
+        else:
+            notices.append(
+                f"{len(new_clips)} earlier messages are too long for the model's "
+                f"context window, so {cut_chars:,} of their characters are out of "
+                "its view."
+            )
+    if notices:
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": " ".join(notices),
+                "turns": sum(cut.turns for cut in cuts),
+                "tokens": sum(cut.tokens for cut in cuts)
+                + sum(clipped_tokens[pair] for pair in {key[0] for key in new_keys}),
+            }
+        )
     return context
 
 
@@ -2019,14 +2135,15 @@ def _dispatch_sidecar_query(
     immediately after calling this — it never falls through to the shared
     agent trunk, which assumes a constructed in-process ``agent`` and calls
     ``agent.process_query``/``_maybe_load_expected_model``. The sidecar owns
-    its own model lifecycle; nothing about Lemonade ctx/model selection
-    happens here.
+    its own model lifecycle; nothing here loads or selects a model. The
+    model's window is only read, to size the earlier turns sent with the query.
 
     Every exception the sidecar manager/proxy can raise is caught HERE and
     turned into a terminal SSE error — never left to reach
     ``_classify_chat_exception``, whose substring matching would misclassify
     a sidecar connection error as a Lemonade error and show the wrong remedy.
     """
+    from gaia.llm.lemonade_client import LemonadeClientError
     from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.email_sidecar.errors import SidecarError
     from gaia.ui.email_sidecar.relay import relay_query
@@ -2149,25 +2266,22 @@ def _dispatch_sidecar_query(
     if sse_handler.cancelled.is_set():
         return
 
-    context = _query_context_from_history(history_pairs)
-    if len(history_pairs) == _RELAY_CONTEXT_PAIRS + 1:
-        from gaia.agents.base.turn_metrics import count_tokens
-
-        # The window slides from here on; say so once, when it first does.
+    try:
+        context = _relayed_history(
+            history_pairs, model_id, request.message, sse_handler, session_id
+        )
+    except LemonadeClientError as exc:
         sse_handler._emit(
             {
-                "type": "status",
-                "status": "history_cut",
-                "message": (
-                    "Older messages are now out of the model's view: this agent "
-                    f"sees the last {_RELAY_CONTEXT_PAIRS} exchanges of the chat."
-                ),
-                "turns": 1,
-                "tokens": count_tokens(
-                    json.dumps(list(history_pairs[0]), ensure_ascii=False)
+                "type": "agent_error",
+                "content": (
+                    "Could not size this chat's earlier messages to the model's "
+                    f"context window: {exc}"
                 ),
             }
         )
+        return
+
     from gaia.ui.email_sidecar.profiles import full_access_supported
 
     relay_query(

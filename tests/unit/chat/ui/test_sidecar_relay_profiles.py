@@ -29,7 +29,7 @@ import pytest
 import gaia.ui._chat_helpers as chat_helpers_module
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
-from gaia.ui._chat_helpers import _dispatch_sidecar_query, _query_context_from_history
+from gaia.ui._chat_helpers import _dispatch_sidecar_query
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
@@ -282,7 +282,10 @@ class TestGaiaDispatch:
         _, kwargs = calls[0]
         assert kwargs["profile"] is GAIA_PROFILE
         assert kwargs["session_id"] == "sess-1"
-        assert kwargs["context"] == _query_context_from_history([("a", "b")])
+        assert kwargs["context"] == [
+            {"role": "user", "content": "a"},
+            {"role": "assistant", "content": "b"},
+        ]
         assert handler.events == []
 
     def test_old_binary_is_refused_with_gaia_copy(self, monkeypatch):
