@@ -60,15 +60,6 @@ from gaia.ui.sse_translation import SUMMARY_VIEW_KEYS
 
 logger = get_logger(__name__)
 
-#: Terminal error surfaced when the sidecar stream closes unexpectedly — a
-#: crash, a dropped connection, a forced close from the cancel path, or the
-#: stream simply ending without ever producing a ``final``/``error`` event
-#: (the canonical contract's "exactly one terminal event" guarantee broken).
-#: Pinned as a module constant so tests can assert equality and the copy the
-#: user sees stays stable.
-STREAM_ENDED_UNEXPECTEDLY = EMAIL_PROFILE.stream_ended_message
-
-
 #: Surfaced both by the dispatch layer's pre-flight version gate (a pre-2.4
 #: Hub binary passes the manager's MAJOR-only handshake, see
 #: ``profiles.api_version_supported``) AND here, as the
@@ -84,6 +75,10 @@ EMAIL_QUERY_VERSION_UPGRADE_MESSAGE = EMAIL_PROFILE.version_upgrade_message
 #: Root fix (actionable copy sidecar-side) ships via the agent release
 #: pipeline, not this repo — see the #2109 PR notes.
 LEMONADE_CONNECTION_HINT = EMAIL_PROFILE.lemonade_hint
+
+#: ``source`` on the terminal ``error`` the daemon synthesizes when an agent's
+#: stream ends with no terminal event (``gaia.daemon.relay``).
+_DAEMON_RELAY_SOURCE = "daemon_relay"
 
 #: Connection/timeout-shaped fragments of requests/urllib3 error reprs.
 #: Deliberately narrow: a non-match passes through untouched.
@@ -308,14 +303,24 @@ def _dispatch_one(
         return True
 
     elif etype == "error":
-        detail = (
-            event.get("detail")
-            or f"Unknown error from the {profile.display_name} agent."
-        )
+        if event.get("source") == _DAEMON_RELAY_SOURCE:
+            # The daemon's crash frame is worded for API callers, not chat users.
+            logger.warning(
+                "%s relay: daemon reported the agent ended mid-run: %s",
+                profile.agent_id,
+                event.get("detail"),
+            )
+            content = profile.stream_ended_text()
+        else:
+            detail = (
+                event.get("detail")
+                or f"Unknown error from the {profile.display_name} agent."
+            )
+            content = _augment_error_detail(str(detail), profile)
         handler._emit(
             {
                 "type": "agent_error",
-                "content": _augment_error_detail(str(detail), profile),
+                "content": content,
                 # Ends the turn, unlike an in-process tool's agent_error.
                 "fatal": True,
             }
@@ -517,7 +522,7 @@ def relay_query(
 
     terminated = False
     crashed = False
-    crash_message = profile.stream_ended_message
+    crash_message = profile.stream_ended_text()
     try:
         events = proxy.query_stream(
             body, read_timeout=read_timeout, on_response=_register_response
@@ -561,7 +566,7 @@ def relay_query(
                 # Surface the sidecar's own actionable detail (e.g. the
                 # zero-connector 502) instead of masking it as a generic
                 # crash — #2419. Bodyless transport failures still fall
-                # through to STREAM_ENDED_UNEXPECTEDLY.
+                # through to profile.stream_ended_text().
                 crash_message = _augment_error_detail(detail, profile)
             logger.warning(
                 "%s relay: stream failed for run_id=%s: %s",
@@ -607,7 +612,6 @@ def relay_query(
 __all__ = [
     "relay_query",
     "RelayProfile",
-    "STREAM_ENDED_UNEXPECTEDLY",
     "EMAIL_QUERY_VERSION_UPGRADE_MESSAGE",
     "LEMONADE_CONNECTION_HINT",
 ]

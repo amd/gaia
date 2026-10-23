@@ -1965,6 +1965,12 @@ def _dispatch_sidecar_query(
     relayed_documents = None
     if documents and profile.min_documents_api_version is not None:
         if not documents_supported(profile, handle.api_version):
+            logger.warning(
+                "%s agent at contract %s can't read documents (needs %s)",
+                agent_type,
+                handle.api_version,
+                profile.min_documents_api_version,
+            )
             sse_handler._emit(
                 {"type": "agent_error", "content": profile.documents_upgrade_message}
             )
@@ -1987,6 +1993,13 @@ def _dispatch_sidecar_query(
         if memory_supported(profile, handle.api_version):
             relayed_memory = memory
         elif memory != "on":
+            logger.warning(
+                "%s agent at contract %s can't take memory=%s (needs %s)",
+                agent_type,
+                handle.api_version,
+                memory,
+                profile.min_memory_api_version,
+            )
             sse_handler._emit(
                 {"type": "agent_error", "content": profile.memory_upgrade_message}
             )

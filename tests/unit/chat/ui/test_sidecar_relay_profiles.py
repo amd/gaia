@@ -624,11 +624,13 @@ class TestSessionIdGating:
 
 class TestCopyIsAgentSpecific:
     def test_stream_ended_message_names_gaia(self):
-        assert GAIA_PROFILE.stream_ended_message.startswith("GAIA agent stream ended")
+        assert GAIA_PROFILE.stream_ended_message.startswith(
+            "GAIA stopped unexpectedly while answering."
+        )
 
-    def test_email_keeps_its_pinned_string(self):
-        assert EMAIL_PROFILE.stream_ended_message == (
-            relay_module.STREAM_ENDED_UNEXPECTEDLY
+    def test_email_crash_copy_names_the_email_agent(self):
+        assert EMAIL_PROFILE.stream_ended_message.startswith(
+            "The email agent stopped unexpectedly while working."
         )
 
     def test_the_lemonade_hint_names_the_right_agent(self):
@@ -663,6 +665,125 @@ class TestCopyIsAgentSpecific:
             handler, {"type": "tool_call", "tool": "some_new_tool"}, GAIA_PROFILE
         )
         assert handler.events[0]["detail"] == "some new tool"
+
+
+# ── Crash and out-of-date copy is plain, with a real log path ────────────────
+
+_USER_COPY_FIELDS = (
+    "stream_ended_message",
+    "version_upgrade_message",
+    "documents_upgrade_message",
+    "skills_upgrade_message",
+    "memory_upgrade_message",
+)
+
+
+class TestPlainUserCopy:
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    @pytest.mark.parametrize("field_name", _USER_COPY_FIELDS)
+    def test_no_internal_jargon_or_hub(self, profile, field_name):
+        text = getattr(profile, field_name).lower()
+        for word in ("sidecar", "stream", "hub", "contract", "~/"):
+            assert word not in text, f"{profile.agent_id}.{field_name}: {text!r}"
+
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    def test_crash_copy_keeps_the_partial_answer_and_asks_to_resend(self, profile):
+        text = profile.stream_ended_message
+        assert "stopped unexpectedly" in text
+        assert "kept above" in text
+        assert "Send your message again." in text
+
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    def test_upgrade_copy_says_update_gaia(self, profile):
+        assert "Update GAIA" in profile.version_upgrade_message
+
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    def test_crash_text_names_the_real_log_folder(self, profile, tmp_path, monkeypatch):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        log_dir = tmp_path / "agents" / profile.agent_id / "logs"
+        log_dir.mkdir(parents=True)
+
+        text = profile.stream_ended_text()
+
+        assert text.startswith(profile.stream_ended_message)
+        assert text.endswith(str(log_dir))
+        assert log_dir.is_absolute()
+        assert "~" not in text
+
+    def test_crash_text_omits_a_log_folder_that_does_not_exist(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        assert GAIA_PROFILE.stream_ended_text() == GAIA_PROFILE.stream_ended_message
+
+    def test_relay_shows_the_crash_text_when_the_stream_just_stops(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        log_dir = tmp_path / "agents" / "gaia" / "logs"
+        log_dir.mkdir(parents=True)
+
+        class _P:
+            agent_id = "gaia"
+
+            def query_stream(self, body, **kw):
+                return iter([{"type": "status", "message": "thinking"}])
+
+            def cancel_query(self, run_id):
+                return None
+
+        handler = _FakeSSEHandler()
+        relay_module.relay_query(
+            handler, _P(), query="q", context=[], profile=GAIA_PROFILE
+        )
+
+        errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert [e["content"] for e in errors] == [
+            f"{GAIA_PROFILE.stream_ended_message} "
+            f"The details are in this log folder: {log_dir}"
+        ]
+
+    def test_relay_replaces_the_daemons_api_wording(self, tmp_path, monkeypatch):
+        """The daemon's synthetic crash frame names an HTTP endpoint for API
+        callers; a chat user gets the profile's plain copy instead."""
+        from gaia.daemon.relay import stream_ended_unexpectedly_detail
+
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        daemon_frame = {
+            "type": "error",
+            "detail": stream_ended_unexpectedly_detail("gaia"),
+            "source": "daemon_relay",
+        }
+
+        class _P:
+            agent_id = "gaia"
+
+            def query_stream(self, body, **kw):
+                return iter([{"type": "status", "message": "x"}, daemon_frame])
+
+        handler = _FakeSSEHandler()
+        relay_module.relay_query(
+            handler, _P(), query="q", context=[], profile=GAIA_PROFILE
+        )
+
+        errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert [e["content"] for e in errors] == [GAIA_PROFILE.stream_ended_message]
+        assert errors[0]["fatal"] is True
+
+    def test_a_sidecar_error_detail_still_passes_through(self):
+        class _P:
+            agent_id = "gaia"
+
+            def query_stream(self, body, **kw):
+                return iter([{"type": "error", "detail": "Model not found"}])
+
+        handler = _FakeSSEHandler()
+        relay_module.relay_query(
+            handler, _P(), query="q", context=[], profile=GAIA_PROFILE
+        )
+
+        errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert [e["content"] for e in errors] == ["Model not found"]
 
 
 @pytest.mark.skipif(
