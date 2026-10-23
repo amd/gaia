@@ -60,6 +60,9 @@ Images are indexed by the text the vision model (`RAGConfig.vlm_model`) reads
 from them. If that model isn't available on Lemonade, or `use_vlm=False`,
 indexing an image fails with an error that says how to fix it. It never
 indexes empty text. GIF and TIFF files are read from their first frame only.
+`gaia init` doesn't download the default vision model; run
+`lemonade pull Qwen3-VL-4B-Instruct-GGUF` to get it. The Agent UI's folder
+indexing skips images, so add them one at a time.
 </Note>
 
 ---

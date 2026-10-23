@@ -140,17 +140,48 @@ def test_the_request_reaching_lemonade_carries_the_image(tmp_path):
 
 
 def test_no_vlm_fails_with_the_model_and_where_to_get_it(tmp_path):
+    from gaia.llm.lemonade_launcher import StartHint
+
     vlm = _vlm(available=False)
-    with patch("gaia.llm.VLMClient", return_value=vlm):
+    pull = StartHint(
+        instruction="Run: lemonade pull Qwen3-VL-4B-Instruct-GGUF",
+        command="lemonade pull Qwen3-VL-4B-Instruct-GGUF",
+    )
+    with (
+        patch("gaia.llm.VLMClient", return_value=vlm),
+        patch(
+            "gaia.llm.lemonade_launcher.describe_client_hint", return_value=pull
+        ) as hint,
+    ):
         with pytest.raises(ImageExtractionError) as excinfo:
             _sdk(tmp_path)._extract_text_from_image(str(_image(tmp_path)))
 
     message = str(excinfo.value)
+    hint.assert_called_once_with("pull", "Qwen3-VL-4B-Instruct-GGUF")
     assert "scan.png" in message
-    assert "Qwen3-VL-4B-Instruct-GGUF" in message
+    assert "Run: lemonade pull Qwen3-VL-4B-Instruct-GGUF" in message
     assert "Lemonade Model Manager (http://localhost:13305)" in message
     assert "gaia init" in message
+    assert "lemonade-server" not in message
     vlm.extract_from_page_images.assert_not_called()
+
+
+def test_no_vlm_and_no_lemonade_cli_names_no_command(tmp_path):
+    from gaia.llm.lemonade_launcher import LemonadeTooling
+
+    with (
+        patch("gaia.llm.VLMClient", return_value=_vlm(available=False)),
+        patch(
+            "gaia.llm.lemonade_launcher.resolve_lemonade",
+            return_value=LemonadeTooling(found=False, kind="none"),
+        ),
+    ):
+        with pytest.raises(ImageExtractionError) as excinfo:
+            _sdk(tmp_path)._extract_text_from_image(str(_image(tmp_path)))
+
+    message = str(excinfo.value)
+    assert "no Lemonade client CLI was found" in message
+    assert "Run:" not in message
 
 
 def test_use_vlm_off_fails_without_asking_the_vlm(tmp_path):

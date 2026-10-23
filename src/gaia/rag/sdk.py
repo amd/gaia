@@ -2132,6 +2132,9 @@ These positions indicate where to split the text."""
         from PIL import Image  # pylint: disable=import-outside-toplevel
 
         from gaia.llm import VLMClient  # pylint: disable=import-outside-toplevel
+        from gaia.llm.lemonade_launcher import (  # pylint: disable=import-outside-toplevel
+            describe_client_hint,
+        )
         from gaia.llm.vlm_client import (  # pylint: disable=import-outside-toplevel
             VLMExtractionError,
         )
@@ -2164,15 +2167,18 @@ These positions indicate where to split the text."""
 
         vlm = VLMClient(vlm_model=model, base_url=self.config.base_url)
         if not vlm.check_availability():
+            # `gaia init` does not download the RAG vision model.
+            pull = describe_client_hint("pull", model).instruction
             raise ImageExtractionError(
                 f"Cannot index image {file_name}: vision model {model} is not "
                 f"available at {vlm.server_url}.\n"
                 "Images are indexed by reading their text with the vision model.\n"
                 "To fix:\n"
-                "  1. Make sure Lemonade Server is running (`gaia init` sets it up)\n"
-                f"  2. Download {model} in the Lemonade Model Manager "
-                f"({vlm.server_url})\n"
-                "  3. Index the image again"
+                f"  1. Download it. {pull}\n"
+                f"     Or download {model} in the Lemonade Model Manager "
+                f"({vlm.server_url}).\n"
+                "  2. Index the image again.\n"
+                "If Lemonade Server isn't installed or running, run `gaia init` first."
             )
 
         if self.config.show_stats:
