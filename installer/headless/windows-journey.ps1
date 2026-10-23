@@ -150,9 +150,11 @@ function Check-TuiVersion([string[]]$Expected) {
 }
 
 # ── The Agent UI ──────────────────────────────────────────────────────────────
-function Start-AgentUi {
+function Start-AgentUi([switch]$PreviousRelease) {
     $dir = Ui-Dir
     if (-not $dir -or -not (Test-Path "$dir\gaia-desktop.exe")) { Fail "no installed gaia-desktop.exe to launch (InstallLocation: '$dir')" }
+    # Releases before #5629 run gaia init (several GB of models) on first launch.
+    if ($PreviousRelease) { $env:GAIA_SKIP_GAIA_INIT = '1' } else { Remove-Item Env:GAIA_SKIP_GAIA_INIT -ErrorAction SilentlyContinue }
     $p = Start-Process -FilePath "$dir\gaia-desktop.exe" -WindowStyle Hidden -PassThru
     Set-Content -Path "$work\app.pid" -Value $p.Id
     Start-Sleep -Seconds 10
@@ -326,7 +328,7 @@ switch ($Step) {
                 $rc = Invoke-Installer "$work\dl\$($prev.Name)" $args0
                 if ($rc -ne 0) { Fail "the $($rel.prev_tag) installer exited $rc" }
                 $script:pep440 = $rel.prev_pep440
-                Start-AgentUi
+                Start-AgentUi -PreviousRelease
                 Wait-AgentUiHealth
                 Stop-AgentUi
                 $marker = "$gaiaHome\headless-upgrade-marker"
