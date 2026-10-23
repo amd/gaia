@@ -7,7 +7,7 @@ import { ModelSettings } from '../ModelSettings';
 import { useModelStore } from '../../../stores/modelStore';
 import { useChatStore } from '../../../stores/chatStore';
 import * as api from '../../../services/api';
-import type { ActiveModel, ProviderInfo } from '../../../types';
+import type { ActiveModel, ProviderInfo, ProviderModel } from '../../../types';
 
 vi.mock('../../../services/api');
 
@@ -96,5 +96,21 @@ describe('ModelSettings provider keys', () => {
         fireEvent.click(within(card).getByRole('button', { name: 'Forget key' }));
         await waitFor(() => expect(mockedApi.forgetProviderKey).toHaveBeenCalledWith('fireworks'));
         expect(await within(card).findByRole('status')).toHaveTextContent('Key cleared');
+    });
+});
+
+describe('ModelSettings model list', () => {
+    it('tells apart two Fireworks models that share a short name, as the picker does', async () => {
+        withProviders(fireworks({ models_discovered: true, key_source: 'stored' }));
+        const cloud = (id: string): ProviderModel => ({
+            id, context_length: null, downloaded: true, labels: [], rank: null, note: null, evidence: null,
+        });
+        mockedApi.listProviderModels.mockImplementation(async (id) => (id === 'fireworks'
+            ? { provider: 'fireworks', models: [cloud('fireworks.auto'), cloud('fireworks.firerouter/auto'), cloud('fireworks.glm-5p3-flash')] }
+            : { provider: 'local', models: [] }));
+        await openFireworks();
+        expect(await screen.findByRole('button', { name: 'Use firerouter/auto' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Use auto' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Use glm-5p3-flash' })).toBeInTheDocument();
     });
 });
