@@ -43,7 +43,7 @@ const pricesAsOf = "2026-09-13"
 const pricesSource = "https://docs.fireworks.ai/serverless/pricing"
 
 // builtinPrices are the provider's published serverless rates, in dollars per
-// million tokens, read on the date above.
+// million tokens, read on the date above unless an entry carries its own asOf.
 //
 // Shipping them is the difference between a feature that costs your work and
 // one that asks you to go and look the numbers up first. The staleness risk is
