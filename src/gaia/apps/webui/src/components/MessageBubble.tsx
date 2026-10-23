@@ -829,7 +829,8 @@ const MARKDOWN_COMPONENTS: Components = {
     // <pre><code>, inline in just <code>. We use our `pre`
     // override to render fenced blocks as CodeBlock, so the
     // `code` component only handles inline code.
-    code({ className, children, ...props }) {
+    // `node` is the markdown AST; spread onto <code> it renders as node="[object Object]".
+    code({ className, children, node: _node, ...props }) {
         // If we get here, it's inline code (fenced blocks are
         // handled by the `pre` override below).
         const path = inlineCodePath(children);
