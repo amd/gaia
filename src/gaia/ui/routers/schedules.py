@@ -64,6 +64,7 @@ class ScheduleResponse(BaseModel):
     session_id: Optional[str] = None
     schedule_config: Optional[str] = None
     description: str
+    last_error: Optional[str] = None
 
 
 class ScheduleListResponse(BaseModel):
