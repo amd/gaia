@@ -1933,14 +1933,16 @@ Available agents: chat, talk, rag, vlm, minimal, mcp
     )
     download_parser.add_argument(
         "--host",
-        default="localhost",
-        help="Lemonade server host (default: localhost)",
+        default=None,
+        help="Lemonade server host (default: the server GAIA uses — "
+        "LEMONADE_BASE_URL, else GAIA's own Lemonade)",
     )
     download_parser.add_argument(
         "--port",
         type=int,
-        default=13305,
-        help="Lemonade server port (default: 13305)",
+        default=None,
+        help="Lemonade server port (default: the server GAIA uses — "
+        "LEMONADE_BASE_URL, else GAIA's own Lemonade)",
     )
     download_parser.set_defaults(action="download")
 
@@ -5081,13 +5083,15 @@ Let me know your answer!
 
         log.info(f"Download models command - agent: {args.agent}")
         verbose = getattr(args, "verbose", False)
+        # A host named on its own means Lemonade's standard port there, not GAIA's.
+        port = DEFAULT_PORT if args.host and args.port is None else args.port
         try:
-            client = LemonadeClient(host=args.host, port=args.port, verbose=verbose)
+            client = LemonadeClient(host=args.host, port=port, verbose=verbose)
 
             # Clear cache mode: delete all GAIA models (including partial downloads)
             if args.clear_cache:
                 # Check if Lemonade server is running
-                if not check_lemonade_health(args.host, args.port):
+                if not check_lemonade_health(args.host, port):
                     LemonadeManager.print_server_error()
                     return
 
@@ -5193,7 +5197,7 @@ Let me know your answer!
                 return
 
             # Check if Lemonade server is running
-            if not check_lemonade_health(args.host, args.port):
+            if not check_lemonade_health(args.host, port):
                 LemonadeManager.print_server_error()
                 return
 
