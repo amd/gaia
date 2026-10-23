@@ -315,6 +315,7 @@ def _run_scheduled_prompt(
     # (shell, file writes) are denied here — same posture as an
     # autonomous background tick (#2210).
     config = GaiaAgentConfig(
+        model_id=_scheduled_model(db),
         max_steps=_SCHEDULED_MAX_STEPS,
         silent_mode=True,
         debug=False,
@@ -335,6 +336,11 @@ def _run_scheduled_prompt(
             raise RuntimeError(str(answer or "The GAIA agent's run failed."))
         return answer
     return str(result) if result else ""
+
+
+def _scheduled_model(db: ChatDatabase) -> Optional[str]:
+    """The model a new chat would run: the user's pick, else the agent default."""
+    return (db.get_setting("custom_model") or "").strip() or None
 
 
 def _scheduled_import_error(error: ImportError) -> str:
@@ -377,7 +383,7 @@ def _relay_scheduled_prompt(
         handler,
         ChatRequest(session_id="", message=prompt, agent_type=_SCHEDULED_AGENT),
         history_pairs=[],
-        model_id=None,
+        model_id=_scheduled_model(db),
         agent_type=_SCHEDULED_AGENT,
         memory=_memory_mode({}, db),
         max_steps=_SCHEDULED_MAX_STEPS,

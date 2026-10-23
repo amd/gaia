@@ -141,6 +141,52 @@ def test_a_desktop_install_relays_the_scheduled_prompt_to_the_sidecar(
     assert body["memory"] == ("on" if memory_on else "off")
 
 
+def test_a_relayed_scheduled_run_uses_the_model_the_user_picked(
+    monkeypatch, sidecar_flagship, db
+):
+    """Not the local default, which may not even fit this machine."""
+    db.set_setting("custom_model", "fireworks.deepseek-v4p1-flash")
+    monkeypatch.setattr(
+        chat_helpers_module, "_replay_cloud_key_for_relay", lambda *_a: None
+    )
+    proxy, _ = _sidecar_answers(monkeypatch, [_final("PONG")])
+
+    server._run_scheduled_prompt(
+        db, "Reply PONG", console=SSEOutputHandler(background_mode=True)
+    )
+
+    [body] = proxy.bodies
+    assert body["model"] == "fireworks.deepseek-v4p1-flash"
+
+
+def test_an_in_process_scheduled_run_uses_the_model_the_user_picked(monkeypatch, db):
+    db.set_setting("custom_model", "Qwen3.6-35B-A3B-GGUF")
+    registry = SimpleNamespace(
+        get=lambda _id: SimpleNamespace(is_sidecar=False),
+        get_load_error=lambda _id: None,
+    )
+    monkeypatch.setattr(chat_helpers_module, "_agent_registry", registry)
+    built = []
+
+    class _Agent:
+        def __init__(self, config):
+            built.append(config)
+
+        def process_query(self, prompt):
+            return {"result": "ok"}
+
+    fake_mod = types.ModuleType("gaia_agent.agent")
+    fake_mod.GaiaAgent = _Agent
+    fake_mod.GaiaAgentConfig = SimpleNamespace
+    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("gaia_agent"))
+    monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
+
+    server._run_scheduled_prompt(db, "hi")
+
+    [config] = built
+    assert config.model_id == "Qwen3.6-35B-A3B-GGUF"
+
+
 def test_a_relayed_scheduled_run_raises_the_agents_error(
     monkeypatch, sidecar_flagship, db
 ):
