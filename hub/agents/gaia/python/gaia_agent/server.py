@@ -60,6 +60,7 @@ from gaia_agent_chat.session import validate_session_id
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.responses import StreamingResponse
 
+from gaia.agents.base import file_snapshots
 from gaia.agents.base.readiness import start_advice, version_meets_min
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.logger import get_logger
@@ -80,7 +81,8 @@ AGENT_ID = "gaia"
 #: 2.16 (#4166) added ``/query``'s ``documents`` field.
 #: 2.17 added ``GET /skills`` for the Agent UI's Skills settings.
 #: 2.18 added ``/query``'s ``allowed_paths`` and ``memory`` fields.
-API_VERSION = "2.18"
+#: 2.19 added ``/query``'s ``changes_turn_id`` field.
+API_VERSION = "2.19"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -219,6 +221,28 @@ class QueryRequest(_Strict):
             "leave memory as the agent has it."
         ),
     )
+
+    changes_turn_id: Optional[str] = Field(
+        default=None,
+        pattern=file_snapshots.TURN_ID_PATTERN,
+        description=(
+            "Record this turn's file changes for undo, under this turn of the "
+            "session (contract >= 2.19). Needs session_id. A copy of each file "
+            "the agent writes is saved first, in the snapshot store of the "
+            "agent's GAIA home, keyed by session_id and this id, and the "
+            "recording is complete before the terminal event is sent. Use "
+            "file_snapshots.new_turn_id() to make one. Omit it to record nothing."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _changes_need_a_session(self) -> "QueryRequest":
+        if self.changes_turn_id is not None and not self.session_id:
+            raise ValueError(
+                "changes_turn_id needs session_id: a turn's file changes are "
+                "recorded under the session they belong to."
+            )
+        return self
 
     @field_validator("documents")
     @classmethod
@@ -379,6 +403,8 @@ class _QueryRun:
         #: step boundary; see Agent._drain_followups.
         self.followups: "queue.Queue[str]" = queue.Queue()
         self.result: Optional[Dict[str, Any]] = None
+        #: Records the run's file changes when the caller asked for it.
+        self.recorder: Optional[file_snapshots.TurnRecorder] = None
 
 
 class DuplicateRunError(RuntimeError):
@@ -522,7 +548,10 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
         for key in ("answer", "response", "result", "output"):
             value = result.get(key)
             if isinstance(value, str) and value.strip():
-                return {"type": "final", "answer": value}
+                final: Dict[str, Any] = {"type": "final", "answer": value}
+                if result.get("model_failed"):
+                    final["failed"] = True
+                return final
         error = result.get("error")
         if isinstance(error, str) and error.strip():
             return {"type": "error", "detail": error, "status": 500}
@@ -1022,6 +1051,24 @@ def _release_abandoned_turn(checked_out: Optional[Tuple[Any, bool]]) -> None:
         checked_out[0].run_lock.release()
 
 
+async def _finish_changes(run: _QueryRun) -> List[Dict[str, Any]]:
+    """Complete the run's undo recording ahead of its terminal event.
+
+    The caller reads the recording as soon as the stream ends. Returns the
+    status event to send first when it could not be saved.
+    """
+    if run.recorder is None:
+        return []
+    try:
+        await asyncio.to_thread(run.recorder.finish)
+    except OSError as exc:
+        logger.error("Undo history for run_id=%s: %s", run.run_id, exc)
+        return [
+            {"type": "status", "message": f"Undo may not work for this turn: {exc}"}
+        ]
+    return []
+
+
 @router.post("/query")
 async def query(request: QueryRequest):
     """Run the flagship agent loop for one request, streaming canonical SSE."""
@@ -1230,16 +1277,30 @@ async def query(request: QueryRequest):
             status_code=500, detail=f"Failed to start the query run: {exc}"
         ) from exc
 
+    def _process() -> None:
+        if request.documents:
+            _index_attached_documents(agent, request.documents, handler)
+        if request.max_steps is not None:
+            run.result = agent.process_query(request.query, max_steps=request.max_steps)
+        else:
+            run.result = agent.process_query(request.query)
+
     def _run_agent() -> None:
         try:
-            if request.documents:
-                _index_attached_documents(agent, request.documents, handler)
-            if request.max_steps is not None:
-                run.result = agent.process_query(
-                    request.query, max_steps=request.max_steps
-                )
+            if request.changes_turn_id is None:
+                _process()
             else:
-                run.result = agent.process_query(request.query)
+                # Tools find the recorder through a context variable set here.
+                with file_snapshots.recording_turn(
+                    request.session_id, request.changes_turn_id
+                ) as recorder:
+                    run.recorder = recorder
+                    _process()
+        except file_snapshots.SnapshotError as exc:
+            logger.error("Undo history for run_id=%s: %s", run.run_id, exc)
+            handler._emit(
+                {"type": "status", "message": f"Undo may not work for this turn: {exc}"}
+            )
         except Exception as exc:  # surface loudly as a terminal error event
             logger.exception("%s /query run failed for run_id=%s", AGENT_ID, run.run_id)
             handler.print_error(_terminal_error_detail(exc))
@@ -1322,6 +1383,9 @@ async def query(request: QueryRequest):
 
                 for canonical in translator.translate(event):
                     ctype = canonical.get("type")
+                    if ctype in TERMINAL_TYPES:
+                        for warning in await _finish_changes(run):
+                            yield _sse(warning)
                     yield _sse(canonical)
                     last_write = time.monotonic()
                     if ctype == "needs_input":
@@ -1339,6 +1403,8 @@ async def query(request: QueryRequest):
                         # Nobody can answer — refusing is the honest end, and
                         # far better than parking a run on a prompt no one will
                         # ever see.
+                        for warning in await _finish_changes(run):
+                            yield _sse(warning)
                         yield _sse(_confirmation_refusal(canonical.get("action", "")))
                         handler.cancelled.set()
                         run.cancel_event.set()
@@ -1351,6 +1417,9 @@ async def query(request: QueryRequest):
             # Queue closed. Flush any buffered tool_call, then guarantee the one
             # terminal event the contract mandates.
             for canonical in translator.flush():
+                if canonical.get("type") in TERMINAL_TYPES:
+                    for warning in await _finish_changes(run):
+                        yield _sse(warning)
                 yield _sse(canonical)
                 if canonical.get("type") in TERMINAL_TYPES:
                     terminated = True

@@ -141,7 +141,7 @@ class TestSystemStatus:
         assert data["version"] == __version__
 
     def test_unreadable_config_is_reported_not_hidden(
-        self, client, tmp_path, monkeypatch
+        self, client, tmp_path, monkeypatch, gaia_owned_lemonade
     ):
         bad = tmp_path / "config.json"
         bad.write_text("{not json", encoding="utf-8")

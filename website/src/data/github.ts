@@ -1,16 +1,16 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// GitHub + npm traction data for the homepage stats row and release stream.
+// GitHub + npm data for the homepage: the download buttons, the stats row and
+// the release stream.
 //
-// Same discipline as ./catalog.ts: a build-time fetch with no bundled fixture
-// and no silent fallback — a malformed response or an unreachable endpoint
-// fails the build loudly rather than shipping a stale or zeroed number. The
-// one deliberate difference is auth: HUB_CATALOG_URL is REQUIRED because no
-// fixture exists at all, but GITHUB_TOKEN is OPTIONAL — GitHub's and npm's
-// read endpoints work fine unauthenticated for a public repo/package, so its
-// absence must never fail the build. It only raises the GitHub rate limit
-// from 60/hr to 5,000/hr, which matters for CI, not for an occasional local build.
+// A build-time fetch with no bundled fixture and no silent fallback — a
+// malformed response or an unreachable endpoint fails the build loudly rather
+// than shipping a stale number or a dead download link. GITHUB_TOKEN is
+// OPTIONAL: GitHub's and npm's read endpoints work unauthenticated for a public
+// repo/package, so its absence must never fail the build. It only raises the
+// GitHub rate limit from 60/hr to 5,000/hr, which matters for CI, not for an
+// occasional local build.
 
 const REPO = "amd/gaia";
 const NPM_PACKAGE = "@amd-gaia/gaia";
@@ -60,6 +60,21 @@ export interface GithubReleaseAsset {
   download_count: number;
 }
 
+/** One file attached to the stable release, as a download button needs it. */
+export interface ReleaseAsset {
+  name: string;
+  url: string;
+  sizeBytes: number;
+}
+
+/** The newest stable release: what every main download button links into. */
+export interface StableRelease {
+  tag: string;
+  // The tag without its "v", e.g. "0.25.0" — the version in the asset names.
+  version: string;
+  assets: ReleaseAsset[];
+}
+
 export interface GithubRelease {
   tag_name: string;
   draft: boolean;
@@ -83,7 +98,7 @@ export function isMainReleaseTag(tag: string): boolean {
 }
 
 // A release candidate: "v0.25.0-rc1". publish.yml marks its GitHub release a
-// pre-release; the hub catalog never carries one.
+// pre-release.
 const RC_TAG_RE = /^v(\d+)\.(\d+)\.(\d+)-rc([1-9]\d*)$/;
 
 export interface ReleaseCandidateDownload {
@@ -132,12 +147,18 @@ export function isReleaseCandidateTag(tag: string): boolean {
   return RC_TAG_RE.test(tag);
 }
 
-function latestStableParts(live: GithubRelease[]): number[] | undefined {
+// Highest version, not newest date or GitHub's "latest" flag: a hotfix to an
+// older line published after a newer release must not take over the buttons.
+function latestStable(live: GithubRelease[]): GithubRelease | undefined {
   return live
-    .filter((r) => !r.prerelease && isMainReleaseTag(r.tag_name))
-    .map((r) => versionParts(r.tag_name.slice(1)))
-    .sort(compareParts)
+    .filter((r) => !r.draft && !r.prerelease && isMainReleaseTag(r.tag_name))
+    .sort((a, b) => compareParts(versionParts(a.tag_name.slice(1)), versionParts(b.tag_name.slice(1))))
     .at(-1);
+}
+
+function latestStableParts(live: GithubRelease[]): number[] | undefined {
+  const stable = latestStable(live);
+  return stable ? versionParts(stable.tag_name.slice(1)) : undefined;
 }
 
 // Release candidates still worth trying: marked pre-release, in the vX.Y.Z-rcN
@@ -193,6 +214,25 @@ export function pickReleaseCandidate(releases: GithubRelease[]): ReleaseCandidat
   };
 }
 
+/**
+ * The newest stable release, with its assets, or null when there is none.
+ * Pre-releases and drafts are skipped: a release candidate is offered in its
+ * own section (pickReleaseCandidate), never behind the main buttons.
+ */
+export function pickStableRelease(releases: GithubRelease[]): StableRelease | null {
+  const release = latestStable(releases);
+  if (!release) return null;
+  return {
+    tag: release.tag_name,
+    version: release.tag_name.slice(1),
+    assets: release.assets.map((a) => ({
+      name: a.name,
+      url: a.browser_download_url,
+      sizeBytes: a.size,
+    })),
+  };
+}
+
 export function sumAssetDownloads(assets: { download_count: number }[]): number {
   return assets.reduce((sum, a) => sum + a.download_count, 0);
 }
@@ -213,6 +253,18 @@ export function formatRelativeDate(date: Date, now: Date = new Date()): string {
   if (days <= 0) return "Today";
   if (days === 1) return "1 day ago";
   return `${days} days ago`;
+}
+
+/** Human-readable download size, e.g. "2.3 MB". */
+export function formatBytes(bytes: number): string {
+  if (bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const i = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+    units.length - 1,
+  );
+  const value = bytes / Math.pow(1024, i);
+  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 export function formatCount(n: number): string {
@@ -247,7 +299,7 @@ async function githubFetch(url: string): Promise<Response> {
   } catch (e) {
     throw new Error(
       `[github] Failed to fetch ${url}: ${(e as Error).message}. Check network ` +
-        `connectivity; the homepage stats row has no bundled fallback.`,
+        `connectivity; the download links and stats row have no bundled fallback.`,
     );
   }
   if (!res.ok) {
@@ -340,6 +392,7 @@ let repoStatsPromise: Promise<RepoStats> | null = null;
 let allReleasesPromise: Promise<GithubRelease[]> | null = null;
 let releaseStatsPromise: Promise<ReleaseStats> | null = null;
 let releaseCandidatePromise: Promise<ReleaseCandidate | null> | null = null;
+let stableReleasePromise: Promise<StableRelease> | null = null;
 let npmStatsPromise: Promise<NpmDownloadStats> | null = null;
 
 export async function getRepoStats(): Promise<RepoStats> {
@@ -368,6 +421,23 @@ export async function getReleaseStats(): Promise<ReleaseStats> {
 export async function getReleaseCandidate(): Promise<ReleaseCandidate | null> {
   releaseCandidatePromise ??= getAllReleases().then(pickReleaseCandidate);
   return releaseCandidatePromise;
+}
+
+/** The release the download buttons link into. Throws when there is none. */
+export async function getStableRelease(): Promise<StableRelease> {
+  stableReleasePromise ??= getAllReleases().then((all) => {
+    const stable = pickStableRelease(all);
+    if (!stable) {
+      throw new Error(
+        `[github] ${REPO} has no published stable release (a non-draft, non-pre-release ` +
+          `vX.Y.Z tag), so the download buttons have nothing to link to. Check ` +
+          `https://github.com/${REPO}/releases.`,
+      );
+    }
+    console.log(`[github] Download links come from ${stable.tag} (${stable.assets.length} assets)`);
+    return stable;
+  });
+  return stableReleasePromise;
 }
 
 export async function getNpmDownloadStats(): Promise<NpmDownloadStats> {

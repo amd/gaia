@@ -210,32 +210,28 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    > - **Triage your inbox from the terminal** — `gaia email` sorts mail, drafts replies to
    >   routine messages, and flags what needs you. Runs locally. (PR [#1234](https://github.com/amd/gaia/pull/1234))
 
-4. **Update [docs/docs.json](../../../docs/docs.json):**
-   - Add `releases/v<version>` to the Releases tab.
-   - Bump the navbar label (e.g. `v<previous-version> · Lemonade <previous-lemonade>` → `v<version> · Lemonade <current-lemonade>`). Read [src/gaia/version.py](../../../src/gaia/version.py) for the `LEMONADE_VERSION` constant — it is the source of truth, and the navbar may be drifted from it (Lemonade bumps land outside release PRs).
+4. **Add the release page to [docs/docs.json](../../../docs/docs.json):** add `releases/v<version>` to the Releases tab. Step 5 stamps the navbar label.
 
-5. **Sync the UI package version.**
+5. **Set the version and stamp every field that follows it.** Edit `__version__` in [src/gaia/version.py](../../../src/gaia/version.py) if it doesn't already read `<version>` (the post-prior-release bump usually handles it, but a squash-merge can revert it silently). Then:
    ```bash
-   node installer/version/bump-ui-version.mjs
+   grep -E '^__version__' src/gaia/version.py   # must read <version>
+   python util/release_versions.py --stamp      # writes every field from version.py
+   python util/release_versions.py --check      # what lint runs; must exit 0
    ```
-   Confirm [src/gaia/apps/webui/package.json](../../../src/gaia/apps/webui/package.json) now reads the new version.
+   `--stamp` writes, from `version.py`:
+   - the Agent UI's `package.json` and lockfile (formerly `bump-ui-version.mjs`);
+   - the Terminal UI's hub manifest `version` (`hub/components/terminal-hub/gaia-agent.yaml`). Its six raw binaries publish to the Agent Hub R2 catalog because the flagship's `binaries.lock.json` pins them there, and `release_components.yml` gates the tag against the manifest. R2 paths are immutable, so a mismatch **fails the release** by design. `hub/components/agent-ui/` is no longer published and needs no bump;
+   - the `docs.json` navbar label, `v<version> · Lemonade <LEMONADE_VERSION>`. It can lag `LEMONADE_VERSION`, because Lemonade bumps land outside release PRs;
+   - the flagship and chat agents' `amd-gaia>=` floors and `min_gaia_version`, and the minimum core the flagship's npm `README.md` and `SKILL.md` quote.
 
-6. **Bump the hub component manifests.** The Terminal UI (component id `terminal-hub`) and Agent UI publish to
-   the Agent Hub R2 catalog on a version tag, and `release_components.yml` gates
-   the tag against each manifest — R2 paths are immutable, so publishing under a
-   stale version cannot be undone. A mismatch **fails the release**, by design.
-   ```bash
-   sed -i '' "s/^version: .*/version: <version>/" \
-     hub/components/terminal-hub/gaia-agent.yaml \
-     hub/components/agent-ui/gaia-agent.yaml     # GNU sed: drop the ''
-   grep -H '^version:' hub/components/*/gaia-agent.yaml   # both must read <version>
-   ```
+   Two consequences of the floors moving. The flagship's next `npm/CHANGELOG.md` entry must quote the new minimum (``Python CLI <version>+ on `PATH` ``): `test_npm_doc_min_version.py` reads the first such line, and the stamp never edits a past entry. And the floors live in files the flagship binary is frozen from, so a final needs a flagship release cut from this commit (Phase 3, step 4).
 
-   Then bump the Terminal UI's **`min_gaia_version`** to `<version>` too. It needs
+   It leaves the flagship and chat agents' own versions alone: they follow their own sources until they join core's (#5172). Two `HELD` lines, the chat agent's `__init__.py` and the flagship npm lockfile's root version, are known drift held for the same reason. They print but don't fail.
+
+6. **Bump the Terminal UI's `min_gaia_version` by hand** to `<version>`. It is not stamped. It needs
    daemon host API v1.1, which no release before this one ships — so the release it
    publishes alongside *is* its minimum, and `release_components.yml` refuses to
-   publish it under an older core. Leave `agent-ui`'s alone: it talks to
-   `gaia.ui.server`, not the daemon control plane.
+   publish it under an older core.
    ```bash
    sed -i '' "s/^min_gaia_version: .*/min_gaia_version: \"<version>\"/" \
      hub/components/terminal-hub/gaia-agent.yaml     # GNU sed: drop the ''
@@ -244,11 +240,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    The guard reads what each published release shipped straight from PyPI, so it
    needs network access and there is no table of releases to update.
 
-7. **Confirm `__version__` is correct.**
-   ```bash
-   grep -E '^__version__' src/gaia/version.py
-   ```
-   The post-prior-release bump usually handles this, but a squash-merge can revert it silently. If it's wrong, edit it. If it's right but reverted later (see Phase 3), the validator will catch it.
+7. **Re-read `git diff --stat`.** Expect the notes, `docs.json`, `version.py`, and the files `--stamp` listed as `STAMP`. Anything else is a drive-by; take it out.
 
 8. **Validate — both checks.** Run from the repo's activated venv (`source .venv/bin/activate` on Linux/macOS, `.venv\Scripts\activate` on Windows; the bare-`python` Microsoft Store stub will fail). If you're working from a git worktree without its own venv, run from the parent checkout's venv.
    ```bash
@@ -285,17 +277,15 @@ Show the diff (`git diff --stat` plus the new `.mdx` file inline). Ask: **"Appro
 1. **Branch and commit.**
    ```bash
    git checkout -b v<version>-release
-   git add docs/releases/v<version>.mdx docs/docs.json src/gaia/version.py \
-           src/gaia/apps/webui/package.json src/gaia/apps/webui/package-lock.json \
-           hub/components/terminal-hub/gaia-agent.yaml \
-           hub/components/agent-ui/gaia-agent.yaml
+   git add docs/releases/v<version>.mdx
+   git add -u              # version.py, docs.json, and every field --stamp wrote
    git status              # confirm scope-clean — no drive-by edits
    git diff --cached --stat
    git commit -m "Release v<version>"
    git push -u origin v<version>-release
    ```
 
-   If `git status` shows anything outside those five files, stop and ask (`bump-ui-version.mjs` rewrites `package-lock.json` too — the prior release commit carries all five). The release PR must be scope-clean.
+   If `git status` shows anything beyond the notes, `docs.json`, `version.py`, and the files `release_versions.py --stamp` reported, stop and ask. The release PR must be scope-clean.
 
 2. **Read the most recent release PR body to match shape.**
    ```bash
@@ -376,10 +366,10 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    python util/check_flagship_release.py --ref "$MERGED_SHA"
    ```
    If it fails, release the flagship in this order. Skipping step 2 deadlocks: `release_agent_gaia.yml` refuses to run until the Terminal UI (`terminal-hub`) version the lock pins is on the hub, and it normally publishes only on the final tag, which this gate blocks.
-   1. Bump the flagship in a PR: edit `__version__` in `hub/agents/gaia/python/gaia_agent/__init__.py`, run `python hub/agents/gaia/python/packaging/stamp_version.py`, add a `hub/agents/gaia/npm/CHANGELOG.md` entry.
-   2. **Publish the Terminal UI (`terminal-hub`) first.** Dispatch **Publish Hub Components (R2)** (`release_components.yml`) on main with `dry_run` unchecked; a dispatch skips this gate. Its agent-ui and Windows-setup legs fail because there is no GitHub release or new flagship yet; they publish nothing. Skip this if `hub/components/terminal-hub/gaia-agent.yaml`'s version is already on the hub.
+   1. Bump the flagship in a PR: edit `__version__` in `hub/agents/gaia/python/gaia_agent/__init__.py`, run `python util/release_versions.py --stamp`, add a `hub/agents/gaia/npm/CHANGELOG.md` entry. (`hub/agents/gaia/python/packaging/stamp_version.py` writes the same flagship fields and still works; `release_agent_gaia.yml` runs its `--check`.)
+   2. **Publish the Terminal UI (`terminal-hub`) first.** Dispatch **Publish Hub Components (R2)** (`release_components.yml`) on main with `dry_run` unchecked; a dispatch skips this gate. Its Windows-setup leg fails because there is no GitHub release or new flagship yet, and its installer-attach job finds no GitHub release, warns, and attaches nothing; neither publishes anything. **Publish terminal-hub** going green is what this step needs. Skip this if `hub/components/terminal-hub/gaia-agent.yaml`'s version is already on the hub.
    3. Tag `agent-pkg-gaia-v<flagship-version>` on the merged commit and approve `release_agent_gaia.yml`.
-   4. Land the `binaries.lock.json` it regenerated (its log prints it) and re-run Phase 3 on that commit. Code the binary is frozen from must not change between the agent tag and the core tag.
+   4. Merge the PR the release opens once it publishes: its `pin-lock` job commits the regenerated `binaries.lock.json` (real hashes) to branch `flagship-lock/v<flagship-version>` and opens `chore(release): pin flagship agent <version>'s published hashes`. It is a bot PR, so CI only runs when the merge queue picks it up. Never hand-edit the hashes; if the PR is missing, re-run that release run's `pin-lock` job, which never opens a second PR and does nothing when main already matches. Then re-run Phase 3 on the merged commit. Code the binary is frozen from must not change between the agent tag and the core tag.
 
 5. **Trigger Build Installers via `workflow_dispatch` against the merged SHA.** This builds the same artifacts the tag push will build, on the same code, *before* the tag exists.
    ```bash
@@ -413,13 +403,13 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 | GitHub Release | normal, becomes latest | pre-release, never latest |
 | PyPI | `<version>` | `<version>rcN` — `pip install amd-gaia` ignores it without `--pre` |
 | npm `@amd-gaia/agent-ui` | dist-tag `latest` | `<version>-rc.N` under dist-tag `next` |
-| Agent Hub R2 (`release_components.yml`) | publishes | does not run — the catalog has no pre-release channel |
+| `release_components.yml` | attaches the terminal installers to the release; publishes only the terminal's raw binaries to the Agent Hub (R2), where the flagship lock pins them | does not run — the catalog has no pre-release channel |
 | Website | stable downloads | a collapsed "Try the release candidate" entry, hidden once the final ships |
 | Flagship agent (`gaia-agent`) | the hub's, from `release_agent_gaia.yml` | frozen from the RC's commit by `rc-flagship`, attached to the pre-release; the RC core installs it from there and never from the hub |
 | `release` branch, release-notes bot | run | skipped |
 | Release notes | `docs/releases/v<version>.mdx` | the same file — no RC-specific notes |
 
-`version.py` stays `<version>`; the pipeline stamps the RC suffix from the tag (`util/release_tag.py`), so the final can be tagged on the RC's commit with no further version bump. The terminal's `.pkg`/`.deb`/`.rpm` packages are not built for an RC (they need a numeric-only version); the RC carries the one-step Windows setup (`gaia-X.Y.Z-rc.N-win-x64-setup.exe`, built by `publish.yml`'s `rc-windows-setup` around that run's own desktop app build — never published to R2), the desktop app installers, the raw terminal binaries, and the wheel/sdist. A failed setup leaves it off the pre-release and turns the run red via `rc-windows-setup-missing`.
+`version.py` stays `<version>`; the pipeline stamps the RC suffix from the tag (`util/release_tag.py`), so the final can be tagged on the RC's commit with no further version bump. The RC carries the terminal's `.pkg` (arm64 + x64) and `.deb`/`.rpm`, named `gaia-X.Y.Z-rc.N-darwin-<arch>.pkg`, `gaia_X.Y.Z-rc.N_amd64.deb` and `gaia-X.Y.Z-rc.N.x86_64.rpm` with `gaia-installers-SHA256SUMS.txt`: `publish.yml`'s `rc-tui` builds them around the RC's own flagship, `approve-publish` refuses to publish unless every leg installed cleanly, and `rc-github-release-installers` attaches them. Inside, the `.deb`/`.rpm` say `X.Y.Z~rc.N`, so the final upgrades over them (`installer/tui/linux/README.md`). It also carries the one-step Windows setup (`gaia-X.Y.Z-rc.N-win-x64-setup.exe`, built by `publish.yml`'s `rc-windows-setup` around that run's own desktop app build — never published to R2), the desktop app installers, the raw terminal binaries, and the wheel/sdist. A failed setup leaves it off the pre-release and turns the run red via `rc-windows-setup-missing`.
 
 ### Steps
 
@@ -447,6 +437,11 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
    gaia init && gaia hub list                           # gaia agent version ends in +v<version>-rc1
    ```
    Then install the desktop app from the pre-release and walk the golden paths the release notes advertise.
+
+   The one-line installers take a candidate too: `GAIA_RELEASE_TAG=v<version>-rc1` makes them install `amd-gaia==<version>rc1`, that pre-release's terminal binary, and the agent frozen on it — the same set an RC core uses (installer/README.md). The RC release notes print both commands. Run them only on a test machine or a throwaway account; they install for real.
+   ```bash
+   curl -fsSL https://amd-gaia.ai/install.sh | GAIA_RELEASE_TAG=v<version>-rc1 sh
+   ```
 
 5. **Problems → fix forward, then `-rc2`.** Land the fix on `main` through a normal PR, re-run Phase 3 on the new merged SHA, and tag `v<version>-rc2` from step 2. Never move or delete an RC tag — each one is a published version on PyPI and npm.
 

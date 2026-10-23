@@ -5,6 +5,7 @@ Chat Agent - Interactive chat with RAG and file search capabilities.
 """
 
 import dataclasses
+import errno
 import os
 import platform
 import re
@@ -30,8 +31,11 @@ except ImportError as _watchdog_err:
 from gaia_agent_chat.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
 from gaia_agent_chat.python_jobs import (
     DEFAULT_PYTHON_TIMEOUT,
+    describe_code,
+    files_written_by,
     finished_job_note,
     folders_named_in,
+    may_write_files,
     resolve_python_timeout,
     run_python_job,
     stop_requested,
@@ -100,6 +104,7 @@ from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
 from gaia.security import PathValidator, narrow_allowed_paths, stable_scratch_dir
+from gaia.utils.file_lock import held_by_another_program
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.vlm.mixin import VLMToolsMixin
 
@@ -1102,6 +1107,10 @@ class ChatAgent(
             use_openai=bool(getattr(config, "use_chatgpt", False)),
         )
 
+    def _model_service_label(self) -> Optional[str]:
+        """Names the provider in a failed turn's message: "Fireworks AI: …"."""
+        return self._inference_location().display
+
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
         profile = getattr(self.config, "prompt_profile", "full")
@@ -1798,19 +1807,37 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 try:
                     project = self._script_project_root()
                     run_dir, env = _python_script_run_context(p, project)
-                    note_untracked("execute_python_file", str(p))
-                    job = run_python_job(
-                        cmd,
-                        cwd=str(run_dir),
-                        env=env,
-                        timeout=timeout,
-                        should_stop=lambda: stop_requested(self),
-                        # The script's own output folders first: the search is bounded.
-                        watch=watch_folders(
-                            *folders_named_in(source), run_dir, project
-                        ),
-                        ignore=[p.resolve()],
-                    )
+                    writes = may_write_files(source)
+                    if writes:
+                        note_untracked("execute_python_file", str(p))
+                    # The script's own output folders first: the search is bounded.
+                    watch = watch_folders(*folders_named_in(source), run_dir, project)
+                    started = time.time()
+                    try:
+                        job = run_python_job(
+                            cmd,
+                            cwd=str(run_dir),
+                            env=env,
+                            timeout=timeout,
+                            should_stop=lambda: stop_requested(self),
+                            watch=watch,
+                            ignore=[p.resolve()],
+                        )
+                    except BaseException:
+                        if not writes:  # it may have run part-way: assume it wrote
+                            note_untracked("execute_python_file", str(p))
+                        raise
+                    if not writes:
+                        # Read-only by its code; the folders it ran in confirm it.
+                        written, complete = files_written_by(
+                            job, watch, started, [p.resolve()]
+                        )
+                        note_untracked(
+                            "execute_python_file",
+                            str(p),
+                            written,
+                            may_write=bool(written) or not complete,
+                        )
                     if job.stopped:
                         return stopped_job_result(job, timeout)
                     r = job.run
@@ -1940,20 +1967,39 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     handle.write(code)
                     snippet = Path(handle.name)
                 cmd = python_command(snippet)
-                note_untracked(
-                    "run_python", code.strip().splitlines()[0] if code.strip() else ""
-                )
+                detail = describe_code(code)
+                writes = may_write_files(code)
+                if writes:
+                    note_untracked("run_python", detail)
+                watch = watch_folders(*folders_named_in(code), run_dir, project)
+                started = time.time()
                 start = time.monotonic()
                 try:
-                    job = run_python_job(
-                        cmd,
-                        cwd=str(run_dir),
-                        env=env,
-                        timeout=timeout,
-                        should_stop=lambda: stop_requested(self),
-                        watch=watch_folders(*folders_named_in(code), run_dir, project),
-                        ignore=[snippet],
-                    )
+                    try:
+                        job = run_python_job(
+                            cmd,
+                            cwd=str(run_dir),
+                            env=env,
+                            timeout=timeout,
+                            should_stop=lambda: stop_requested(self),
+                            watch=watch,
+                            ignore=[snippet],
+                        )
+                    except BaseException:
+                        if not writes:  # it may have run part-way: assume it wrote
+                            note_untracked("run_python", detail)
+                        raise
+                    if not writes:
+                        # Read-only by its code; the folders it ran in confirm it.
+                        written, complete = files_written_by(
+                            job, watch, started, [snippet]
+                        )
+                        note_untracked(
+                            "run_python",
+                            detail,
+                            written,
+                            may_write=bool(written) or not complete,
+                        )
                     if job.stopped:
                         return stopped_job_result(job, timeout)
                     r = job.run
@@ -2839,7 +2885,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         self.reindex_file(dest_path)
 
     def reindex_file(self, file_path: str) -> None:
-        """Reindex a file that was modified or created."""
+        """Reindex a file that was modified or created.
+
+        Raises:
+            PermissionError: Windows refused the read, because another program
+                holds the file exclusively or has locked part of it. The file
+                watcher retries on this, so it must not be caught here.
+        """
         if not self.rag:
             logger.warning(
                 f"Cannot reindex {file_path}: RAG dependencies not installed"
@@ -2854,18 +2906,36 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             logger.warning(f"Re-indexing skipped: Path not allowed {real_file_path}")
             return
 
+        logger.info(f"Reindexing: {real_file_path}")
         try:
-            logger.info(f"Reindexing: {real_file_path}")
-            # Use the new reindex_document method which removes old chunks first
+            # Catches a whole-file lock on formats whose parser hides the OS error.
+            if os.path.isfile(real_file_path):
+                with open(real_file_path, "rb") as f:
+                    f.read(1)
+        except FileNotFoundError:
+            # Its delete event removes it from the index.
+            logger.info(f"Not reindexing {real_file_path}: deleted before it was read")
+            return
+        except OSError as e:
+            if held_by_another_program(e):
+                raise
+            logger.exception(f"Failed to reindex {real_file_path}")
+            return
+        try:
             result = self.rag.reindex_document(real_file_path)
-            if result.get("success"):
-                self.indexed_files.add(file_path)
-                logger.info(f"Successfully reindexed {real_file_path}")
-            else:
-                error = result.get("error", "Unknown error")
-                logger.error(f"Failed to reindex {real_file_path}: {error}")
-        except Exception as e:
-            logger.error(f"Failed to reindex {real_file_path}: {e}")
+        except Exception:
+            # Runs on the file watcher's thread; nothing above it can report this.
+            logger.exception(f"Failed to reindex {real_file_path}")
+            return
+        if result.get("success"):
+            self.indexed_files.add(file_path)
+            logger.info(f"Successfully reindexed {real_file_path}")
+            return
+        error = result.get("error", "Unknown error")
+        if result.get("error_type") == "file_locked":
+            # A partial lock, or one taken after the probe: let the watcher retry.
+            raise PermissionError(errno.EACCES, error, real_file_path)
+        logger.error(f"Failed to reindex {real_file_path}: {error}")
 
     def stop_watching(self) -> None:
         """Stop all file system observers."""

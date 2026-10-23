@@ -33,6 +33,12 @@ PR_TRIGGER_ALLOWED = {
     # The offline retrieval `pr` suite is one step of the RAG integration tests.
     "test_rag.yml",
 }
+# Self-hosted evals that may run on a schedule, and why. Weekly at most.
+SCHEDULE_ALLOWED = {
+    # The weekly backlog lane (maintainer-approved): always-fail and high-flip
+    # scenarios on 3 machines, skipped while a release eval holds the pool.
+    "eval_flagship.yml",
+}
 
 
 # --- the decision -------------------------------------------------------------
@@ -183,11 +189,20 @@ def test_no_self_hosted_eval_runs_on_prs_or_a_schedule():
         if not isinstance(workflow, dict) or not _runs_gaia_eval(workflow):
             continue
         triggers = workflow["on"]
-        if "schedule" in triggers:
+        if "schedule" in triggers and path.name not in SCHEDULE_ALLOWED:
             offenders.append(f"{path.name}: schedule")
         if "pull_request" in triggers and path.name not in PR_TRIGGER_ALLOWED:
             offenders.append(f"{path.name}: pull_request")
     assert not offenders, f"evals run only on release tags or dispatch: {offenders}"
+
+
+@pytest.mark.parametrize("name", sorted(SCHEDULE_ALLOWED))
+def test_an_allowed_schedule_is_one_weekly_cron(name):
+    crons = [entry["cron"] for entry in _load(name)["on"]["schedule"]]
+    assert len(crons) == 1, crons
+    minute, hour, dom, month, dow = crons[0].split()
+    assert dom == "*" and month == "*", crons[0]
+    assert dow.isdigit(), f"{name} must run on one weekday, not {dow!r}"
 
 
 @pytest.mark.parametrize("name", TAG_EVAL_WORKFLOWS)
