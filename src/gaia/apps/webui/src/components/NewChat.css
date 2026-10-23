@@ -54,9 +54,13 @@
 .new-chat-greeting {
     margin-bottom: 14px;
     color: var(--text-primary);
-    font-size: 20px;
-    font-weight: 600;
+    font-family: var(--font-greeting);
+    font-size: 30px;
+    font-weight: 300;
+    font-optical-sizing: auto;
+    line-height: 1.2;
     text-align: center;
+    text-wrap: balance;
 }
 
 .new-chat-meta {
@@ -113,4 +117,46 @@
     font-family: var(--font-mono);
     font-size: 11.5px;
     white-space: pre-wrap;
+}
+
+.new-chat-docs {
+    margin-top: 8px;
+}
+
+.new-chat-doc-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.new-chat-doc {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    padding: 3px 4px 3px 9px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-full);
+    color: var(--text-secondary);
+    font-size: 12.5px;
+}
+
+.new-chat-doc span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.new-chat-doc-remove {
+    display: inline-flex;
+    padding: 2px;
+    border-radius: var(--radius-full);
+    color: var(--text-muted);
+}
+
+.new-chat-doc-remove:hover {
+    color: var(--text-primary);
 }

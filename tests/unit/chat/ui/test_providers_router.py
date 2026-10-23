@@ -12,6 +12,8 @@ OS credential store is never touched: ``gaia.llm.cloud_keys`` is mocked.
 import json
 import logging
 import re
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from gaia import config as config_mod
+from gaia.connectors import credential_wait
 from gaia.connectors.errors import ConnectorsError
 from gaia.llm import cloud_keys
 from gaia.llm import custom_models as cm
@@ -133,8 +136,10 @@ def keys(monkeypatch):
             raise state["forget_error"]
         return state["stored"].pop(provider, None) is not None
 
-    def ensure_authenticated(provider, client=None):
+    def ensure_authenticated(provider, client=None, recall=None):
         state["ensure"].append(provider)
+        if recall is not None:
+            recall()  # as the real one reads the kept key
         if isinstance(state["ensure_result"], Exception):
             raise state["ensure_result"]
         return state["ensure_result"]
@@ -259,7 +264,7 @@ def test_stored_key_is_handed_to_a_lemonade_that_lost_it(
     lemonade.cloud["fireworks"] = {"name": "fireworks"}
     keys["stored"]["fireworks"] = KEY
 
-    def ensure(provider, client=None):
+    def ensure(provider, client=None, recall=None):
         keys["ensure"].append(provider)
         lemonade.cloud[provider].update(runtime_key_set=True, models_discovered=True)
         return True
@@ -280,6 +285,129 @@ def test_stored_key_replay_failure_is_reported_on_the_provider(client, lemonade,
     fw = client.get("/api/providers").json()["providers"][1]
     assert fw["key_source"] == "stored"
     assert "500" in fw["error"]
+
+
+# ── A keychain read the OS holds for permission (#5570) ────────────────────
+
+
+@pytest.fixture
+def keychain_prompt(monkeypatch, keys):
+    """The Fireworks key read blocks, as macOS does while its access dialog is open."""
+    state = {"answered": threading.Event(), "reads": 0}
+
+    def recall_key(provider):
+        if provider != "fireworks":
+            return keys["stored"].get(provider)
+        state["reads"] += 1
+        state["answered"].wait(timeout=30)
+        return keys["stored"].get(provider)
+
+    monkeypatch.setattr(cloud_keys, "recall_key", recall_key)
+    monkeypatch.setattr(credential_wait, "WAIT_SECONDS", 0.2)
+    yield state
+    state["answered"].set()
+    _wait_for_reads_to_drain()
+    credential_wait._in_flight.clear()  # a finished, unconsumed read
+
+
+def _wait_for_reads_to_drain():
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and _credential_threads():
+        time.sleep(0.01)
+
+
+def _credential_threads():
+    return [t for t in threading.enumerate() if t.name.startswith("credential-read:")]
+
+
+def test_a_keychain_prompt_is_reported_as_waiting_not_as_no_key(
+    client, lemonade, keys, keychain_prompt, caplog
+):
+    lemonade.cloud["fireworks"] = {"name": "fireworks"}
+    keys["stored"]["fireworks"] = KEY
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            started = time.monotonic()
+            body = client.get("/api/providers").json()
+            assert time.monotonic() - started < 2
+            fw = body["providers"][1]
+            assert fw["key_state"] == "waiting_for_os_permission"
+            assert fw["key_source"] is None
+            assert "Look for a system dialog" in fw["key_message"]
+            assert body["providers"][2]["key_state"] == "read"
+    # One read in flight however often the UI polls, and one warning for it.
+    assert keychain_prompt["reads"] == 1
+    assert len(_credential_threads()) == 1
+    assert caplog.text.count("has not returned") == 1
+    assert keys["ensure"] == []
+
+    keychain_prompt["answered"].set()
+    _wait_for_reads_to_drain()
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert fw["key_state"] == "read"
+    assert fw["key_message"] is None
+    assert keys["ensure"] == ["fireworks"]
+    assert credential_wait.in_flight_count() == 0
+
+
+def test_restore_waits_for_a_keychain_prompt_then_restores(
+    client, lemonade, keys, db, keychain_prompt
+):
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    _write_config({"last_model": model})
+    lemonade.models = _cloud_models()
+    keys["stored"]["fireworks"] = KEY
+
+    started = time.monotonic()
+    body = client.get("/api/providers/active").json()
+    assert time.monotonic() - started < 2
+    assert body["restore"] == {"status": "pending", "message": None}
+    assert db.get_setting("custom_model") is None
+
+    keychain_prompt["answered"].set()
+    _wait_for_reads_to_drain()
+    again = client.get("/api/providers/active").json()
+    assert again["restore"]["status"] == "restored"
+    assert db.get_setting("custom_model") == model
+
+
+def test_select_while_a_keychain_prompt_is_open_says_so(
+    client, lemonade, keys, db, keychain_prompt
+):
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    lemonade.models = _cloud_models()
+    keys["stored"]["fireworks"] = KEY
+
+    started = time.monotonic()
+    resp = client.post("/api/providers/select", json={"model": model})
+    assert time.monotonic() - started < 2
+    assert resp.status_code == 409, resp.text
+    assert "Look for a system dialog" in resp.json()["detail"]
+    assert db.get_setting("custom_model") is None
+
+    keychain_prompt["answered"].set()
+    _wait_for_reads_to_drain()
+    resp = client.post("/api/providers/select", json={"model": model})
+    assert resp.status_code == 200, resp.text
+    assert db.get_setting("custom_model") == model
+
+
+def test_a_saved_key_is_read_afresh_after_connect_or_forget():
+    """A read nobody collected is not served once the user changes the key."""
+    credential_wait._in_flight.clear()
+    assert (
+        credential_wait.read_within("cloud-key:fireworks", lambda: "old", "k") == "old"
+    )
+    stale = credential_wait.Future()
+    stale.set_result("old")
+    credential_wait._in_flight["cloud-key:fireworks"] = stale
+
+    credential_wait.discard("cloud-key:fireworks")
+
+    assert (
+        credential_wait.read_within("cloud-key:fireworks", lambda: "new", "k") == "new"
+    )
 
 
 # ── GET /api/providers/active ──────────────────────────────────────────────

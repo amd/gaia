@@ -6,6 +6,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Local models with a large window can write longer replies.** The output
+  cap is a quarter of the loaded window (16K at 64K, between 8K and 32K)
+  instead of a flat 8K, and a reply cut off at the cap is told to write the
+  file in smaller parts.
+- **`search_file_content` searches the workspace.** A relative or default
+  directory resolved against the sidecar's own folder and reported "0 files";
+  it now resolves against the workspace, searches text files of any extension,
+  and says when nothing was searched.
+- **Token counts are exact in the published binary, offline too.** The binary
+  could not load its tokenizer, so every turn trimmed history and sized
+  context from an estimate that overcounts, and logged `Unknown encoding
+  cl100k_base`. The tokenizer and its data now ship inside the binary, so it
+  no longer downloads anything to count tokens.
+
 ### For integrators
 
 - **A tool result keeps the tool's own status.** When a tool's result had no
@@ -24,6 +38,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   changing it into the snapshot store the Agent UI reads, and finishes the
   recording before the terminal event. Older binaries refuse the field with
   `422`, so probe `/version` before sending it.
+- **A confirmation's `args` are only what the model sent.** `needs_confirmation`
+  `args` also carried keys the agent adds to its own prompt — a risk note, a
+  scratch-folder marker, and the folder a shell call runs in — so a policy
+  client auto-approving on `args` matched fields the model never sent. `args`
+  is now exactly the call's arguments; the folder and risk note moved to a new
+  `prompt_context` object.
 - **A tool result names the file it wrote.** When a tool's result carries
   `file_path` or `image_path`, the `tool_result` event's `data` now keeps it, so
   a client can list the files a turn produced.

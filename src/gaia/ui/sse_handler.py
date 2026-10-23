@@ -514,6 +514,10 @@ class SSEOutputHandler(OutputHandler):
     #: Set when the client denied the live prompt because nobody answered.
     _confirm_timed_out: bool = False
 
+    #: The arguments the model sent for the call about to be confirmed, when
+    #: the prompt shows more than that (see :meth:`note_call_args`).
+    _noted_call: Optional["tuple[str, Dict[str, Any]]"] = None
+
     #: The sidecar prompt a relayed run is parked on (see __init__).
     _relay_confirm_id: Optional[str] = None
 
@@ -598,6 +602,8 @@ class SSEOutputHandler(OutputHandler):
         self.active_relay_run_id: Optional[str] = None
         # Only this id may be answered, so a late click cannot approve a newer one.
         self._relay_confirm_id = None
+        # A relayed needs_input question the sidecar run is parked on.
+        self._relay_question_id: Optional[str] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
@@ -1709,6 +1715,18 @@ class SSEOutputHandler(OutputHandler):
         """
         return scripted_user.declines(tool_name, tool_args)
 
+    def note_call_args(self, tool_name: str, call_args: Dict[str, Any]) -> None:
+        """Record what the model sent for the call the next prompt asks about.
+
+        The prompt's arguments can carry what GAIA adds for display (the folder
+        a shell call runs in, a risk note), so when they differ the
+        ``permission_request`` also carries these as ``call_args``. Its only
+        reader is ``CanonicalTranslator`` (the ``/query`` wire's ``args``); the
+        Agent UI ignores it. Consumed by the next :meth:`confirm_tool_execution`,
+        and only for the same tool.
+        """
+        self._noted_call = (tool_name, dict(call_args))
+
     def confirm_tool_execution(
         self,
         tool_name: str,
@@ -1733,6 +1751,8 @@ class SSEOutputHandler(OutputHandler):
         """
         if timeout is _USE_HANDLER_TIMEOUT:
             timeout = self.confirm_timeout_seconds
+        noted, self._noted_call = self._noted_call, None
+        call_args = noted[1] if noted is not None and noted[0] == tool_name else None
 
         # Before auto-approve: the eval runs with it on, and this is its only no.
         if scripted_user.declines(tool_name, tool_args):
@@ -1832,6 +1852,8 @@ class SSEOutputHandler(OutputHandler):
             "args": tool_args,
             "confirm_id": confirm_id,
         }
+        if call_args is not None and call_args != tool_args:
+            request["call_args"] = call_args
         # Present only when an "always" answer would create a grant, and it
         # names exactly what that grant covers. A front-end must not offer the
         # choice without it: an unqualified "always" is read as far broader
@@ -1922,7 +1944,9 @@ class SSEOutputHandler(OutputHandler):
             ) or self._relay_confirm_id is not None:
                 return "permission"
         with self._user_input_lock:
-            if any(not evt.is_set() for evt in self._user_input_events.values()):
+            if self._relay_question_id is not None or any(
+                not evt.is_set() for evt in self._user_input_events.values()
+            ):
                 return "question"
         return None
 
@@ -2090,7 +2114,7 @@ class SSEOutputHandler(OutputHandler):
         if self._confirm_id is not None or self._relay_confirm_id is not None:
             return True
         with self._user_input_lock:
-            return bool(self._user_input_queue)
+            return bool(self._user_input_queue) or self._relay_question_id is not None
 
     def request_user_input_blocking(
         self,
@@ -2239,7 +2263,16 @@ class SSEOutputHandler(OutputHandler):
         if proxy is None or run_id is None:
             return False
         proxy.respond_query(run_id, request_id, value)
+        with self._user_input_lock:
+            # A newer question may already be pending; only this one is answered.
+            if self._relay_question_id == request_id:
+                self._relay_question_id = None
         return True
+
+    def set_relay_question(self, request_id: Optional[str]) -> None:
+        """Record (or clear, with ``None``) the relayed question now pending."""
+        with self._user_input_lock:
+            self._relay_question_id = request_id
 
     def set_relay_confirmation(self, confirm_id: Optional[str]) -> None:
         """Record (or clear, with ``None``) the sidecar prompt now pending."""

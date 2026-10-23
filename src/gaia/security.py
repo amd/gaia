@@ -17,9 +17,10 @@ import re
 import shutil
 import stat
 import tempfile
+import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from gaia.utils.terminal import stdin_is_interactive
 
@@ -426,6 +427,25 @@ def _system_temp_roots() -> Set[str]:
     return {tempfile.gettempdir(), "/tmp", "/var/tmp"}
 
 
+def _make_private_dir(path: Path) -> None:
+    """Create *path* private, or confirm the existing one is ours to use.
+
+    Raises:
+        OSError: If *path* exists but is a link, not a directory, or (POSIX)
+            owned by another user, or cannot be created.
+    """
+    path.mkdir(mode=0o700, exist_ok=True)
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise OSError(f"{path} is not a directory")
+    # getuid is POSIX-only; the hasattr guard keeps Windows off this path.
+    if (
+        hasattr(os, "getuid")
+        and info.st_uid != os.getuid()  # pylint: disable=no-member
+    ):
+        raise OSError(f"{path} is owned by another user")
+
+
 def stable_scratch_dir(anchor: str) -> Path:
     """The agent's scratch directory for *anchor* (a project), the same every session.
 
@@ -435,6 +455,11 @@ def stable_scratch_dir(anchor: str) -> Path:
     under a shared temp dir must not be an invitation: the directory is created
     private, and one that already exists but is not a directory this user owns is
     refused, loudly, in favour of a fresh private one.
+
+    The same path is handed to every agent on *anchor*, so several chats in one
+    long-lived process share it: take it with :func:`acquire_scratch_dir` and
+    give it back with :func:`release_scratch_dir`, which says when it is safe to
+    delete.
     """
     owner = (
         str(os.getuid()) if hasattr(os, "getuid") else os.environ.get("USERNAME", "")
@@ -444,16 +469,7 @@ def stable_scratch_dir(anchor: str) -> Path:
     ).hexdigest()[:12]
     path = Path(tempfile.gettempdir()) / f"gaia-scratch-{digest}"
     try:
-        path.mkdir(mode=0o700, exist_ok=True)
-        info = path.lstat()
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            raise OSError("not a directory")
-        # getuid is POSIX-only; the hasattr guard keeps Windows off this path.
-        if (
-            hasattr(os, "getuid")
-            and info.st_uid != os.getuid()  # pylint: disable=no-member
-        ):
-            raise OSError("owned by another user")
+        _make_private_dir(path)
     except OSError as exc:
         fallback = Path(tempfile.mkdtemp(prefix="gaia-scratch-"))
         logger.warning(
@@ -464,6 +480,67 @@ def stable_scratch_dir(anchor: str) -> Path:
         )
         return fallback
     return path
+
+
+_scratch_holders: Dict[str, int] = {}
+_scratch_lock = threading.Lock()
+
+
+def _scratch_key(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def acquire_scratch_dir(anchor: str) -> Path:
+    """:func:`stable_scratch_dir` for *anchor*, counted as held by one more agent.
+
+    Every chat in a long-lived sidecar that shares a project shares this path,
+    so one chat's cleanup must not delete it while another is still using it.
+    """
+    path = stable_scratch_dir(anchor)
+    with _scratch_lock:
+        key = _scratch_key(path)
+        _scratch_holders[key] = _scratch_holders.get(key, 0) + 1
+    return path
+
+
+def release_scratch_dir(path: Path) -> bool:
+    """Give back one hold on *path*; True when no agent in this process holds it.
+
+    A path never acquired (or already fully released) answers True, so a
+    caller that set the directory up by hand still cleans it up.
+    """
+    with _scratch_lock:
+        key = _scratch_key(path)
+        held = _scratch_holders.get(key, 0)
+        if held <= 1:
+            _scratch_holders.pop(key, None)
+            return True
+        _scratch_holders[key] = held - 1
+        return False
+
+
+def ensure_scratch_dir(path: Path) -> bool:
+    """Make sure *path* exists before anything runs in it.
+
+    The directory lives in the shared temp folder, so it can vanish under a
+    live agent: another GAIA process on the same project cleaned it up, or a
+    temp cleaner (Storage Sense, ``systemd-tmpfiles``) swept it. Re-creating it
+    is safe — it holds only throwaway files — and keeps the path the system
+    prompt already names.
+
+    Returns:
+        True if it had to be re-created, False if it was already there.
+
+    Raises:
+        OSError: If it cannot be re-created as a private directory this user
+            owns.
+    """
+    path = Path(path)
+    if path.is_dir() and not path.is_symlink():
+        return False
+    _make_private_dir(path)
+    logger.warning("Scratch directory %s had been deleted; re-created it", path)
+    return True
 
 
 #: Narrows every agent's file scope for one run; see :func:`env_allowed_paths`.

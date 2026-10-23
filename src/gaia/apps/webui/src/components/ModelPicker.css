@@ -15,6 +15,14 @@
     min-width: 0;
 }
 
+/* One width for every state mark, so the info icons line up. */
+.popover-row-state {
+    display: flex;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 52px;
+}
+
 .popover-item-note.is-warning,
 .model-row-meta.is-warning,
 .model-status-warning {

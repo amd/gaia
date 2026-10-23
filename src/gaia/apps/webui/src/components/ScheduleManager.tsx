@@ -190,6 +190,9 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
                 <span>Last: {formatTime(schedule.last_run_at)}</span>
                 <span>Next: {formatNextRun(schedule.next_run_at, now)}</span>
             </div>
+            {schedule.last_error && (
+                <div className="schedule-card-error">Last run failed: {schedule.last_error}</div>
+            )}
             <div className="schedule-card-actions">
                 {schedule.session_id && (
                     <button className="btn-sm chat" onClick={handleOpenChat} title="Open chat session">

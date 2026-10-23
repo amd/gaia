@@ -163,4 +163,19 @@ describe('UploadErrorToast', () => {
         expect(screen.getByText(/failed to index/i)).toBeInTheDocument();
         expect(screen.getByRole('link', { name: /report this issue/i })).toBeInTheDocument();
     });
+
+    it('treats a refused path as a limit to work around, not a bug', () => {
+        render(
+            <UploadErrorToast
+                filename="spec.pdf"
+                error="GAIA can only read documents under /home/u."
+                status={403}
+                onDismiss={() => {}}
+                timeout={0}
+            />
+        );
+
+        expect(screen.getByText(/can't read "spec\.pdf" where it is/)).toBeInTheDocument();
+        expect(screen.queryByRole('link')).toBeNull();
+    });
 });

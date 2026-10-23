@@ -46,6 +46,7 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional
 
+from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.logger import get_logger
 from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
@@ -183,6 +184,8 @@ def _dispatch_one(
     if answers_confirmations:
         # Any event after a prompt means the sidecar has stopped waiting on it.
         handler.set_relay_confirmation(None)
+    # Likewise for a question: the run is parked until it is answered.
+    handler.set_relay_question(None)
 
     if etype == "needs_confirmation" and answers_confirmations:
         confirm_id = str(event.get("confirm_id") or "")
@@ -202,12 +205,24 @@ def _dispatch_one(
             if event.get("tool_label"):
                 request["tool_label"] = str(event["tool_label"])
             # The whole call: the summary shortens code, and a path prompt is
-            # worded from the path's kind.
-            if isinstance(event.get("args"), dict):
-                request["args"] = event["args"]
+            # worded from the path's kind. The card reads GAIA's folder and risk
+            # note from args, as in-process, so prompt_context goes back there.
+            args = dict(event["args"]) if isinstance(event.get("args"), dict) else {}
+            context = event.get("prompt_context")
+            if isinstance(context, dict):
+                if context.get("working_directory"):
+                    args["working_directory"] = str(context["working_directory"])
+                if context.get("risk_note"):
+                    args[RISK_NOTE_ARG] = str(context["risk_note"])
+            if args:
+                request["args"] = args
                 if event.get("args_truncated"):
                     request["args_truncated"] = True
             handler._emit(request)
+            if getattr(handler, "background_mode", False) is True:
+                # Unattended run (a schedule): nobody can answer, so deny now
+                # rather than park the sidecar until it times out.
+                handler.resolve_relay_confirmation(False, confirm_id)
             return False
 
     if etype == "status":
@@ -275,6 +290,8 @@ def _dispatch_one(
         # answer, so every field the frontend needs to build and submit the
         # prompt must cross this hop; run continues on the same stream.
         options = event.get("options")
+        # Recorded so the chat list shows the chat as waiting on the user.
+        handler.set_relay_question(str(event.get("request_id") or "") or None)
         handler._emit(
             {
                 "type": "needs_input",
@@ -593,6 +610,7 @@ def relay_query(
     finally:
         if answers_confirmations:
             handler.set_relay_confirmation(None)
+        handler.set_relay_question(None)
         handler.active_relay_response = None
         handler.active_relay_proxy = None
         handler.active_relay_run_id = None
