@@ -330,7 +330,7 @@ export async function setLemonadeTarget(body: LemonadeTargetBody): Promise<Lemon
     } catch (err) {
         // A 502 here is "saved, but the daemon did not switch" — keep those words.
         if (err instanceof ApiError && err.httpStatus === 502 && err.detail) {
-            throw new ApiError(err.detail, err.httpStatus, err.detail, err.reason);
+            throw new ApiError(err.detail, err.httpStatus, err.detail, err.reason, err.fields);
         }
         throw err;
     }

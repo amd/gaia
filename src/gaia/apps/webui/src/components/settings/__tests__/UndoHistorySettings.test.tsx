@@ -52,6 +52,8 @@ describe('UndoHistorySettings limits', () => {
         const error = screen.getByText(message);
         expect(input).toHaveAttribute('aria-invalid', 'true');
         expect(input.getAttribute('aria-describedby')).toBe(error.id);
+        // Inline errors are not live regions, so typing digit by digit doesn't re-announce them.
+        expect(screen.queryByRole('alert')).toBeNull();
         expect(inputs.save).toBeDisabled();
         fireEvent.click(inputs.save);
         expect(api.updateUndoSettings).not.toHaveBeenCalled();
@@ -85,6 +87,7 @@ describe('UndoHistorySettings limits', () => {
         expect(mb).toHaveAttribute('aria-invalid', 'true');
         expect(screen.queryByText(DAYS_ERROR)).toBeNull();
         expect(screen.queryByText(/Input should be/)).toBeNull();
+        expect(screen.getByRole('alert')).toHaveTextContent('Not saved. Fix the limit marked above.');
     });
 });
 

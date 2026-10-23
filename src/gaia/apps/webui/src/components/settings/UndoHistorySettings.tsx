@@ -55,6 +55,7 @@ export function UndoHistorySettings() {
             if (badDays || badMb) {
                 // Reword the backend's pydantic errors per field instead of showing them raw.
                 setRejected({ days: badDays, mb: badMb });
+                setResult({ ok: false, text: 'Not saved. Fix the limit marked above.' });
             } else {
                 setResult({ ok: false, text: err instanceof Error ? err.message : String(err) });
             }
@@ -86,7 +87,7 @@ export function UndoHistorySettings() {
                             onChange={(e) => { setDays(e.target.value); setRejected((r) => ({ ...r, days: false })); }}
                         />
                     </div>
-                    {daysInvalid && <p id="undo-days-error" className="settings-error" role="alert">{DAYS_ERROR}</p>}
+                    {daysInvalid && <p id="undo-days-error" className="settings-error">{DAYS_ERROR}</p>}
                     <div className="setting-row">
                         <label htmlFor="undo-mb">Use at most (MB)</label>
                         <input
@@ -101,7 +102,7 @@ export function UndoHistorySettings() {
                             onChange={(e) => { setMb(e.target.value); setRejected((r) => ({ ...r, mb: false })); }}
                         />
                     </div>
-                    {mbInvalid && <p id="undo-mb-error" className="settings-error" role="alert">{MB_ERROR}</p>}
+                    {mbInvalid && <p id="undo-mb-error" className="settings-error">{MB_ERROR}</p>}
                     <div className="setting-row setting-row-path">
                         <span>In use</span>
                         <span>
