@@ -12,12 +12,23 @@ const EDGE = 8;
 /**
  * An info icon whose details open in a bubble on hover or keyboard focus.
  * The bubble renders on document.body so a scrolling popover can't clip it.
+ * `pinned` opens it from outside (e.g. a list's keyboard focus); `onUnpin` hears it close on scroll.
  */
-export function InfoBubble({ label, warning, children }: { label: string; warning?: boolean; children: ReactNode }) {
-    const id = useId();
+export function InfoBubble({ label, warning, children, id: givenId, pinned = false, onUnpin, tabIndex }: {
+    label: string;
+    warning?: boolean;
+    children: ReactNode;
+    id?: string;
+    pinned?: boolean;
+    onUnpin?: () => void;
+    tabIndex?: number;
+}) {
+    const ownId = useId();
+    const id = givenId ?? ownId;
     const icon = useRef<HTMLButtonElement>(null);
     const bubble = useRef<HTMLDivElement>(null);
-    const [open, setOpen] = useState(false);
+    const [hovered, setOpen] = useState(false);
+    const open = hovered || pinned;
     const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
     useLayoutEffect(() => {
@@ -52,10 +63,13 @@ export function InfoBubble({ label, warning, children }: { label: string; warnin
     useEffect(() => {
         if (!open) return;
         // Placed once on open; a scroll would leave it beside the wrong row.
-        const close = () => setOpen(false);
+        const close = () => {
+            setOpen(false);
+            onUnpin?.();
+        };
         window.addEventListener('scroll', close, true);
         return () => window.removeEventListener('scroll', close, true);
-    }, [open]);
+    }, [open, onUnpin]);
 
     return (
         <>
@@ -64,6 +78,7 @@ export function InfoBubble({ label, warning, children }: { label: string; warnin
                 type="button"
                 className={`info-bubble-icon${warning ? ' is-warning' : ''}`}
                 aria-label={label}
+                tabIndex={tabIndex}
                 aria-describedby={open ? id : undefined}
                 onMouseEnter={() => setOpen(true)}
                 onMouseLeave={() => setOpen(false)}

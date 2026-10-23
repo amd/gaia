@@ -94,7 +94,7 @@ describe('ModelChip during a turn', () => {
         useChatStore.setState({ isStreaming: true });
         render(<ModelChip />);
         const dialog = await openPicker();
-        fireEvent.click(within(dialog).getByRole('button', { name: /^Qwen3 4B/ }));
+        fireEvent.click(within(dialog).getByRole('option', { name: /^Qwen3 4B/ }));
 
         expect(mockedApi.selectModel).not.toHaveBeenCalled();
         expect(useModelStore.getState().queued).toBe('Qwen3-4B-GGUF');
@@ -116,7 +116,7 @@ describe('ModelChip during a turn', () => {
     it('switches at once when no reply is running', async () => {
         render(<ModelChip />);
         const dialog = await openPicker();
-        fireEvent.click(within(dialog).getByRole('button', { name: /^Qwen3 4B/ }));
+        fireEvent.click(within(dialog).getByRole('option', { name: /^Qwen3 4B/ }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-4B-GGUF'));
         expect(useModelStore.getState().queued).toBeNull();
     });
@@ -126,7 +126,7 @@ describe('ModelChip model states', () => {
     it('shows exactly one state per local model, each with a text label', async () => {
         render(<ModelChip />);
         const dialog = await openPicker();
-        const row = (name: RegExp) => within(dialog).getByRole('button', { name }).closest('.popover-row') as HTMLElement;
+        const row = (name: RegExp) => within(dialog).getByRole('option', { name }).closest('.popover-row') as HTMLElement;
         expect(within(row(/^Gemma 4 E4B/)).getByRole('img', { name: 'Loaded' })).toBeInTheDocument();
         expect(within(row(/^Qwen3 4B/)).getByTitle('Downloaded, ready to load')).toHaveTextContent('Ready');
         expect(within(row(/^Qwen3.6 35B A3B/)).getByRole('button', { name: 'Download Qwen3.6 35B A3B' })).toBeInTheDocument();
@@ -199,7 +199,7 @@ describe('ModelChip model states', () => {
         render(<ModelChip />);
         const dialog = await openPicker();
         expect(within(dialog).getByText('Fireworks AI')).toBeInTheDocument();
-        fireEvent.click(within(dialog).getByRole('button', { name: /^Add your key/ }));
+        fireEvent.click(within(dialog).getByRole('option', { name: /^Add your key/ }));
         expect(useChatStore.getState().settingsSection).toBe('model');
         expect(screen.queryByText('AMD LLM Gateway')).not.toBeInTheDocument();
         expect(mockedApi.listProviderModels).not.toHaveBeenCalledWith('fireworks');

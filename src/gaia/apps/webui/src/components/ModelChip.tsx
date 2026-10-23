@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { AlertCircle, Check, ChevronDown, Cloud, Cpu, Download, HelpCircle, KeyRound, Loader2 } from 'lucide-react';
 import { Popover } from './Popover';
 import './ModelPicker.css';
@@ -57,6 +57,8 @@ function StateMark({ m, onDownload, busy }: { m: ProviderModel; onDownload: () =
                 disabled={busy}
                 aria-label={`Download ${m.display_name ?? m.id}`}
                 title={STATE_LABELS.not_downloaded}
+                // Picking the row downloads it too, so the list keeps one Tab stop.
+                tabIndex={-1}
             >
                 <Download size={13} aria-hidden="true" />
             </button>
@@ -98,9 +100,20 @@ export function ModelChip() {
     // List refreshes that found the picked model missing, or neither downloading nor downloaded.
     const pollsWithoutProgress = useRef(0);
     const lastCountedList = useRef<ProviderModels[] | null>(null);
+    const listId = useId();
+    const list = useRef<HTMLDivElement>(null);
+    // The row holding the list's one Tab stop, and the row whose info bubble a key opened.
+    const [activeRow, setActiveRow] = useState<string | null>(null);
+    const [infoRow, setInfoRow] = useState<string | null>(null);
+    const closeInfo = useCallback(() => setInfoRow(null), []);
+    // Stable, so Popover's focus-on-open doesn't re-run (and refocus its first button) on each render.
+    const close = useCallback(() => setOpen(false), []);
+    // Set when a fresh list lands after opening, so focus moves to the current model once.
+    const focusOnLoad = useRef(false);
 
     const load = useCallback(async (quiet = false) => {
         if (!quiet) {
+            focusOnLoad.current = false;
             setError(null);
             setGroups(null);
         }
@@ -119,6 +132,7 @@ export function ModelChip() {
             }));
             rememberNames(lists.flatMap((g) => g.models));
             setUnavailable(lists.flatMap((g) => g.models).filter((m) => m.available === false).length);
+            if (!quiet) focusOnLoad.current = true;
             setGroups(lists.map((g) => ({ ...g, models: g.models.filter((m) => m.available !== false) })));
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
@@ -128,9 +142,51 @@ export function ModelChip() {
     useEffect(() => {
         if (open) {
             setPendingCloud(null);
+            setActiveRow(null);
+            setInfoRow(null);
             void load();
         }
     }, [open, load]);
+
+    useEffect(() => {
+        if (!open || !groups || !focusOnLoad.current) return;
+        const row = list.current?.querySelector<HTMLElement>('[role="option"][tabindex="0"]');
+        if (!row) return;
+        focusOnLoad.current = false;
+        row.focus();
+        row.scrollIntoView?.({ block: 'nearest' });
+    }, [open, groups]);
+
+    const onListKey = (e: KeyboardEvent<HTMLDivElement>) => {
+        if (e.altKey || e.ctrlKey || e.metaKey) return;
+        const rows = Array.from(list.current?.querySelectorAll<HTMLElement>('[role="option"]:not(:disabled)') ?? []);
+        if (!rows.length) return;
+        const at = rows.indexOf(document.activeElement as HTMLElement);
+        let next: number;
+        switch (e.key) {
+            case 'ArrowDown': next = at < 0 ? 0 : Math.min(at + 1, rows.length - 1); break;
+            case 'ArrowUp': next = at < 0 ? rows.length - 1 : Math.max(at - 1, 0); break;
+            case 'Home': next = 0; break;
+            case 'End': next = rows.length - 1; break;
+            case 'ArrowRight':
+            case 'i': {
+                const row = at < 0 ? undefined : rows[at].dataset.row;
+                if (!row) return;
+                e.preventDefault();
+                setInfoRow((r) => (e.key === 'i' && r === row ? null : row));
+                return;
+            }
+            case 'ArrowLeft':
+                e.preventDefault();
+                setInfoRow(null);
+                return;
+            default:
+                return;
+        }
+        e.preventDefault();
+        rows[next].focus();
+        rows[next].scrollIntoView?.({ block: 'nearest' });
+    };
 
     const anyDownloading = !!groups?.some((g) => g.models.some(isDownloading));
     useEffect(() => {
@@ -226,6 +282,23 @@ export function ModelChip() {
         });
     }, [groups, pickAfterDownload, requestsPending, choose]);
 
+    // The row Tab lands on: the last one focused, else the current model, else the first.
+    const pickable = groups?.flatMap(({ provider, models }) => [
+        ...(provider.remote && !provider.models_discovered ? [`key:${provider.id}`] : []),
+        ...models.filter((m) => switching === null && !isDownloading(m)).map((m) => m.id),
+    ]) ?? [];
+    const currentModel = queued ?? active?.model;
+    const tabRow = activeRow && pickable.includes(activeRow)
+        ? activeRow
+        : currentModel && pickable.includes(currentModel) ? currentModel : pickable[0];
+    const rowProps = (row: string) => ({
+        role: 'option' as const,
+        tabIndex: row === tabRow ? 0 : -1,
+        'data-row': row,
+        onFocus: () => setActiveRow(row),
+        onBlur: () => setInfoRow(null),
+    });
+
     const Icon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
     const name = chipModel ? displayModelName(chipModel) : 'Model';
     const label = `${name}${place ? ` · ${place.label}` : ''}`;
@@ -264,7 +337,7 @@ export function ModelChip() {
                 {autoSwitchError && <AlertCircle size={12} aria-label="Model switch failed" />}
                 <ChevronDown size={12} aria-hidden="true" />
             </button>
-            <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} label="Choose a model" align="end">
+            <Popover open={open} onClose={close} anchor={anchor} label="Choose a model" align="end">
                 {turnRunning && (
                     <div className="popover-message" role="status">
                         This reply keeps {chipModel ? displayModelName(chipModel) : 'its model'}. A model you pick
@@ -277,14 +350,18 @@ export function ModelChip() {
                 {!groups && !error && (
                     <div className="popover-message"><Loader2 size={13} className="spin" /> Loading models…</div>
                 )}
-                {groups?.map(({ provider, models, error: groupError }) => (
-                    <div key={provider.id}>
-                        <div className="popover-heading">{provider.name}</div>
+                {groups && (
+                <div ref={list} role="listbox" aria-label="Models" onKeyDown={onListKey}>
+                {groups.map(({ provider, models, error: groupError }) => (
+                    <div key={provider.id} role="group" aria-labelledby={`${listId}-${provider.id}`}>
+                        <div className="popover-heading" id={`${listId}-${provider.id}`}>{provider.name}</div>
                         {groupError && <div className="popover-message is-error">{groupError}</div>}
                         {provider.remote && !provider.models_discovered && (
                             <button
                                 type="button"
                                 className="popover-item"
+                                {...rowProps(`key:${provider.id}`)}
+                                aria-selected={false}
                                 onClick={() => { setOpen(false); openSettings('model'); }}
                             >
                                 <span className="popover-item-check"><KeyRound size={13} aria-hidden="true" /></span>
@@ -302,6 +379,7 @@ export function ModelChip() {
                             const needsDownload = !provider.remote && modelState(m) === 'not_downloaded';
                             const modelName = m.display_name ?? displayModelName(m.id);
                             const details = modelDetails(m, provider.remote);
+                            const infoId = `${listId}-info-${provider.id}-${m.id}`;
                             return (
                                 <div key={m.id} className="popover-row">
                                     <button
@@ -319,7 +397,9 @@ export function ModelChip() {
                                             void download(m.id);
                                         }}
                                         disabled={switching !== null || isDownloading(m)}
-                                        aria-current={current ? 'true' : undefined}
+                                        {...rowProps(m.id)}
+                                        aria-selected={current}
+                                        aria-describedby={infoRow === m.id ? infoId : undefined}
                                     >
                                         <span className="popover-item-check" aria-hidden="true">
                                             {switching === m.id ? <Loader2 size={13} className="spin" /> : current ? <Check size={13} /> : null}
@@ -328,7 +408,15 @@ export function ModelChip() {
                                             <span className="popover-item-title">{modelName}</span>
                                         </span>
                                     </button>
-                                    <InfoBubble label={`About ${modelName}`} warning={!!m.placement?.warning}>
+                                    <InfoBubble
+                                        label={`About ${modelName}`}
+                                        warning={!!m.placement?.warning}
+                                        id={infoId}
+                                        pinned={infoRow === m.id}
+                                        onUnpin={closeInfo}
+                                        // The row's ArrowRight opens it, so the icon needs no Tab stop.
+                                        tabIndex={-1}
+                                    >
                                         <div className="info-bubble-title">{modelName}</div>
                                         {details.length > 0 && (
                                             <ul className="info-bubble-lines">
@@ -352,6 +440,8 @@ export function ModelChip() {
                         })}
                     </div>
                 ))}
+                </div>
+                )}
                 {pendingCloud && (
                     <div className="popover-message" role="alert">
                         {pendingCloud.provider.privacy_notice}{' '}

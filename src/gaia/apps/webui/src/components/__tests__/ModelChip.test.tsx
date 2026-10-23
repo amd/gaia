@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelChip } from '../ModelChip';
 import { useModelStore } from '../../stores/modelStore';
@@ -149,7 +150,7 @@ describe('ModelChip', () => {
         });
         render(<ModelChip />);
         const dialog = await openPicker();
-        fireEvent.click(await within(dialog).findByRole('button', { name: /^Qwen3-8B-GGUF/ }));
+        fireEvent.click(await within(dialog).findByRole('option', { name: /^Qwen3-8B-GGUF/ }));
 
         expect(await screen.findByRole('button', { name: /Qwen3-8B-GGUF · Local/ })).toBeInTheDocument();
         expect(mockedApi.listSessions).toHaveBeenCalledTimes(1);
@@ -159,7 +160,7 @@ describe('ModelChip', () => {
         mockedApi.listSessions.mockRejectedValue(new Error('backend restarting'));
         render(<ModelChip />);
         const dialog = await openPicker();
-        fireEvent.click(await within(dialog).findByRole('button', { name: /^kimi-k2/ }));
+        fireEvent.click(await within(dialog).findByRole('option', { name: /^kimi-k2/ }));
         fireEvent.click(within(dialog).getByRole('button', { name: 'Use kimi-k2' }));
 
         await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -174,15 +175,15 @@ describe('ModelChip', () => {
         expect(within(dialog).getByText('Local')).toBeInTheDocument();
         expect(within(dialog).queryByText('AMD LLM Gateway')).not.toBeInTheDocument();
         expect(mockedApi.listProviderModels).not.toHaveBeenCalledWith('amd');
-        expect(within(dialog).getByRole('button', { name: /^kimi-k2/ })).toBeInTheDocument();
-        expect(within(dialog).getByRole('button', { name: /^Gemma-4-E4B-it-GGUF/ })).toHaveAttribute('aria-current', 'true');
+        expect(within(dialog).getByRole('option', { name: /^kimi-k2/ })).toBeInTheDocument();
+        expect(within(dialog).getByRole('option', { name: /^Gemma-4-E4B-it-GGUF/ })).toHaveAttribute('aria-selected', 'true');
         expect(within(dialog).getByRole('button', { name: 'Download Qwen3-8B-GGUF' })).toBeInTheDocument();
     });
 
     it('asks before moving a local chat to a cloud model, then switches', async () => {
         render(<ModelChip />);
         const dialog = await openPicker();
-        fireEvent.click(await within(dialog).findByRole('button', { name: /^kimi-k2/ }));
+        fireEvent.click(await within(dialog).findByRole('option', { name: /^kimi-k2/ }));
 
         expect(mockedApi.selectModel).not.toHaveBeenCalled();
         expect(within(dialog).getByRole('alert')).toHaveTextContent('Chat history is sent to Fireworks AI.');
@@ -200,7 +201,7 @@ describe('ModelChip', () => {
         mockedApi.selectModel.mockResolvedValue({ ...LOCAL_ACTIVE, model: 'Qwen3-8B-GGUF' });
         render(<ModelChip />);
         const dialog = await openPicker();
-        fireEvent.click(await within(dialog).findByRole('button', { name: /^Qwen3-8B-GGUF/ }));
+        fireEvent.click(await within(dialog).findByRole('option', { name: /^Qwen3-8B-GGUF/ }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
     });
 
@@ -385,7 +386,7 @@ describe('ModelChip', () => {
         useModelStore.setState({ active: CLOUD_ACTIVE });
         render(<ModelChip />);
         const dialog = await openPicker();
-        fireEvent.click(await within(dialog).findByRole('button', { name: /^Gemma-4-E4B-it-GGUF/ }));
+        fireEvent.click(await within(dialog).findByRole('option', { name: /^Gemma-4-E4B-it-GGUF/ }));
         expect(await within(dialog).findByRole('alert')).toHaveTextContent('Model failed to load');
     });
 
@@ -401,5 +402,123 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
         fireEvent.click(within(dialog).getByRole('button', { name: 'Providers and keys…' }));
         expect(useChatStore.getState().settingsSection).toBe('model');
+    });
+});
+
+describe('ModelChip keyboard', () => {
+    const KIMI = 'fireworks.accounts/fireworks/models/kimi-k2';
+
+    beforeEach(() => {
+        // A busy row sits between Gemma and Qwen; the Fireworks heading sits before kimi.
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local'
+                ? [
+                    model('Gemma-4-E4B-it-GGUF'),
+                    model('Busy-GGUF', { downloaded: false, download_progress: { state: 'downloading', percent: 10 } as never }),
+                    model('Qwen3-8B-GGUF'),
+                ]
+                : [model(KIMI)],
+        }));
+    });
+    async function openWithKeyboard(user: ReturnType<typeof userEvent.setup>) {
+        screen.getByRole('button', { name: /Gemma|kimi|Model/ }).focus();
+        await user.keyboard('{Enter}');
+        const dialog = await screen.findByRole('dialog', { name: 'Choose a model' });
+        await within(dialog).findByRole('option', { name: /^kimi-k2/ });
+        return dialog;
+    }
+    const option = (dialog: HTMLElement, name: RegExp) => within(dialog).getByRole('option', { name });
+
+    it('opens on the current model, scrolled into view, as the only Tab stop', async () => {
+        useModelStore.setState({ active: CLOUD_ACTIVE });
+        const user = userEvent.setup();
+        render(<ModelChip />);
+        const dialog = await openWithKeyboard(user);
+
+        const kimi = option(dialog, /^kimi-k2/);
+        await waitFor(() => expect(kimi).toHaveFocus());
+        expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+        expect(kimi).toHaveAttribute('aria-selected', 'true');
+        expect(within(dialog).getByRole('listbox', { name: 'Models' })).toBeInTheDocument();
+        const stops = within(dialog).getAllByRole('option').filter((o) => o.tabIndex === 0);
+        expect(stops).toEqual([kimi]);
+    });
+
+    it('moves with the arrows, Home and End, skipping headings and busy rows', async () => {
+        useModelStore.setState({ active: CLOUD_ACTIVE });
+        const user = userEvent.setup();
+        render(<ModelChip />);
+        const dialog = await openWithKeyboard(user);
+        await waitFor(() => expect(option(dialog, /^kimi-k2/)).toHaveFocus());
+
+        await user.keyboard('{ArrowUp}');
+        expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
+        await user.keyboard('{ArrowUp}');
+        expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus();
+        await user.keyboard('{ArrowUp}');
+        expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus();
+        await user.keyboard('{End}');
+        expect(option(dialog, /^kimi-k2/)).toHaveFocus();
+        await user.keyboard('{Home}');
+        expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus();
+        await user.keyboard('{ArrowDown}');
+        expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
+        await user.keyboard('{ArrowDown}');
+        expect(option(dialog, /^kimi-k2/)).toHaveFocus();
+        expect(option(dialog, /^kimi-k2/).tabIndex).toBe(0);
+        expect(option(dialog, /^Gemma-4-E4B-it-GGUF/).tabIndex).toBe(-1);
+    });
+
+    it('picks the focused row on Enter', async () => {
+        mockedApi.selectModel.mockResolvedValue({ ...LOCAL_ACTIVE, model: 'Qwen3-8B-GGUF' });
+        const user = userEvent.setup();
+        render(<ModelChip />);
+        const dialog = await openWithKeyboard(user);
+        await waitFor(() => expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus());
+
+        await user.keyboard('{ArrowDown}{Enter}');
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
+    });
+
+    it('closes on Escape and returns focus to the chip', async () => {
+        const user = userEvent.setup();
+        render(<ModelChip />);
+        const dialog = await openWithKeyboard(user);
+        await waitFor(() => expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus());
+
+        await user.keyboard('{Escape}');
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF · Local/ })).toHaveFocus();
+    });
+
+    it('leaves the list in one Tab, and Shift+Tab comes back to the same row', async () => {
+        const user = userEvent.setup();
+        render(<ModelChip />);
+        const dialog = await openWithKeyboard(user);
+        await waitFor(() => expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus());
+        await user.keyboard('{ArrowDown}');
+
+        await user.tab();
+        expect(within(dialog).getByRole('button', { name: 'Providers and keys…' })).toHaveFocus();
+        await user.tab({ shift: true });
+        expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
+    });
+
+    it("shows the focused row's details on ArrowRight and hides them on ArrowLeft", async () => {
+        const user = userEvent.setup();
+        render(<ModelChip />);
+        const dialog = await openWithKeyboard(user);
+        const gemma = option(dialog, /^Gemma-4-E4B-it-GGUF/);
+        await waitFor(() => expect(gemma).toHaveFocus());
+
+        await user.keyboard('{ArrowRight}');
+        const bubble = await screen.findByRole('tooltip');
+        expect(bubble).toHaveTextContent('Gemma-4-E4B-it-GGUF');
+        expect(gemma).toHaveAttribute('aria-describedby', bubble.id);
+
+        await user.keyboard('{ArrowLeft}');
+        expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+        expect(gemma).not.toHaveAttribute('aria-describedby');
     });
 });
