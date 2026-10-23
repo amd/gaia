@@ -297,3 +297,23 @@ func TestRecommendedModelIsPricedWithItsOwnDate(t *testing.T) {
 		t.Errorf("/cost help quotes the wrong date for DeepSeek:\n%s", help)
 	}
 }
+
+// A daemon-relayed session — what the desktop app and the terminal installers
+// run — opens on its model without a ping, so /cost and the status-bar spend
+// have to price the model it opened on.
+func TestARelayedSessionPricesTheModelItOpenedOn(t *testing.T) {
+	noPriceFile(t)
+	m, _, _ := relayedChat(t)
+	m = m.WithRelayedModel(StartupRestore, "fireworks", "fireworks.deepseek-v4p1-flash")
+	m.cost.add(turnCost{duration: time.Second, steps: 1, inTok: 1_000_000, outTok: 1_000_000, measured: true})
+
+	updated, _ := m.submit("/cost")
+	m = updated.(ChatModel)
+	got := m.messages[len(m.messages)-1].Content
+	if !strings.Contains(got, "$1.5000 USD") {
+		t.Errorf("/cost on a relayed session did not price the model:\n%s", got)
+	}
+	if hint := m.sessionSpendHint(); hint != "$1.500 this session" {
+		t.Errorf("status-bar spend = %q, want dollars", hint)
+	}
+}
