@@ -283,10 +283,39 @@ def capacity_from_system_info(info: Dict[str, Any]) -> MachineCapacity:
                 "Update Lemonade (`gaia init`) and retry."
             )
         pool = (ram, SYSTEM_RAM)
-    storage = info.get("model_storage") or {}
+    disk, _ = model_store_free_gb(info)
+    return MachineCapacity(memory_gb=pool[0], memory_source=pool[1], disk_free_gb=disk)
+
+
+def model_store_free_gb(info: Dict[str, Any]) -> Tuple[Optional[float], Optional[str]]:
+    """Free GB in Lemonade's model store and its path, from ``/system-info``.
+
+    Either is ``None`` when Lemonade did not report it.
+    """
+    storage = (info.get("model_storage") if isinstance(info, dict) else None) or {}
     free = storage.get("free_bytes")
     disk = float(free) / 1e9 if isinstance(free, (int, float)) else None
-    return MachineCapacity(memory_gb=pool[0], memory_source=pool[1], disk_free_gb=disk)
+    where = storage.get("path")
+    return disk, where if isinstance(where, str) and where else None
+
+
+def check_download_fits_disk(
+    download_gb: float, disk_free_gb: Optional[float], store_path: Optional[str] = None
+) -> FitVerdict:
+    """Whether ``download_gb`` of models fits the free space in the model store.
+
+    Unlike :func:`check_fit`, which judges one model, this is the whole set a
+    setup is about to pull: each may fit alone while together they do not.
+    """
+    if disk_free_gb is None or download_gb <= disk_free_gb:
+        return FitVerdict(True)
+    where = f" at {store_path}" if store_path else ""
+    return FitVerdict(
+        False,
+        f"the models need about {download_gb:.1f} GB of disk and the model "
+        f"store{where} has {disk_free_gb:.1f} GB free. Free up "
+        f"{download_gb - disk_free_gb:.1f} GB there, then re-run `gaia init`",
+    )
 
 
 def check_fit(

@@ -15,6 +15,7 @@ the profile's min_context_size, which is where that requirement is enforced.
 """
 
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -775,6 +776,116 @@ class _DownloadProgress:
             )
 
 
+class InitEvents:
+    """``gaia init --progress-json``: one JSON object per stdout line.
+
+    The desktop installer reads these to show the model download live. Every
+    object has an ``event`` key; human output still prints around them.
+    """
+
+    def __init__(self, enabled: bool = False, stream=None):
+        self.enabled = enabled
+        self._stream = stream
+
+    def emit(self, event: str, **fields) -> None:
+        if not self.enabled:
+            return
+        stream = self._stream or sys.stdout
+        stream.write(json.dumps({"event": event, **fields}) + "\n")
+        stream.flush()
+
+
+class _JsonDownloadProgress:
+    """Reports a model pull's streamed events as ``progress`` JSON lines.
+
+    Lemonade reports bytes per file, so a model's bytes are the files already
+    finished plus the one in flight.
+    """
+
+    EMIT_S = 0.5
+    SPEED_WINDOW_S = 2.0
+
+    def __init__(
+        self,
+        console,
+        events: InitEvents,
+        model_id: str,
+        index: int,
+        count: int,
+        planned_bytes: Optional[int] = None,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        self.console = console
+        self.emitter = events
+        self.model_id = model_id
+        self.index = index
+        self.count = count
+        self.planned_bytes = planned_bytes
+        self.events = 0
+        self.reported_error = False
+        self.bytes_done = 0
+        self.bytes_total = planned_bytes or 0
+        self.speed_bps = 0.0
+        self._clock = clock
+        self._finished = 0
+        self._file = None
+        self._file_total = 0
+        self._emitted_at = None
+        self._window = None
+
+    def __call__(self, event: dict) -> None:
+        self.events += 1
+        kind = event.get("event")
+        if kind == "progress":
+            self._tally(event)
+            now = self._clock()
+            if self._emitted_at is not None and now - self._emitted_at < self.EMIT_S:
+                return
+            self._emitted_at = now
+            self._emit()
+        elif kind == "error":
+            self.reported_error = True
+            message = str(event.get("error") or "unknown error")
+            self.console.print_download_error(message, self.model_id)
+            self.emitter.emit("error", model=self.model_id, message=message)
+
+    def _tally(self, event: dict) -> None:
+        name = event.get("file") or ""
+        if self._file is not None and name != self._file:
+            self._finished += self._file_total
+        self._file = name
+        self._file_total = int(event.get("bytes_total") or 0)
+        self.bytes_done = self._finished + int(event.get("bytes_downloaded") or 0)
+        total = int(event.get("total_download_size") or 0)
+        self.bytes_total = max(
+            total or self.planned_bytes or self._finished + self._file_total,
+            self.bytes_done,
+        )
+        now = self._clock()
+        # From the first event, so bytes a resumed pull already had don't count.
+        if self._window is None:
+            self._window = (now, self.bytes_done)
+        started, start_bytes = self._window
+        if now - started >= self.SPEED_WINDOW_S:
+            self.speed_bps = max(0.0, (self.bytes_done - start_bytes) / (now - started))
+            self._window = (now, self.bytes_done)
+
+    def _emit(self) -> None:
+        self.emitter.emit(
+            "progress",
+            model=self.model_id,
+            index=self.index,
+            count=self.count,
+            bytes_done=self.bytes_done,
+            bytes_total=self.bytes_total,
+            speed_bps=round(self.speed_bps),
+        )
+
+
+def _gb_to_bytes(size_gb) -> Optional[int]:
+    return int(size_gb * 1e9) if isinstance(size_gb, (int, float)) else None
+
+
 class InitCommand:
     """
     Main handler for the `gaia init` command.
@@ -805,6 +916,7 @@ class InitCommand:
         progress_callback: Optional[Callable[[InitProgress], None]] = None,
         lemonade_url: Optional[str] = None,
         gaia_lemonade: bool = False,
+        progress_json: bool = False,
     ):
         """
         Initialize the init command.
@@ -832,6 +944,8 @@ class InitCommand:
             lemonade_url: Use the Lemonade Server the user already runs at
                 this URL, and save that choice; GAIA installs no server.
             gaia_lemonade: Use GAIA's own Lemonade, and save that choice.
+            progress_json: Also print step and download progress as JSON
+                lines (see InitEvents), for the desktop installer.
         """
         if lemonade_url and gaia_lemonade:
             raise ValueError(
@@ -857,6 +971,7 @@ class InitCommand:
         self.remote = remote
         self.skip_chat_model = skip_chat_model
         self.progress_callback = progress_callback
+        self.events = InitEvents(progress_json)
 
         # A configured server is someone else's to run; init only checks it.
         # An explicit choice is applied first, in run(), so a broken saved
@@ -927,6 +1042,7 @@ class InitCommand:
 
     def _print_step(self, step: int, total: int, message: str):
         """Print step header."""
+        self.events.emit("step", step=step, total=total, message=message)
         if RICH_AVAILABLE and self.console:
             # Escape the message so brackets in it (e.g. "[rag]") aren't eaten
             # as Rich markup tags.
@@ -1810,6 +1926,41 @@ class InitCommand:
                 self._print(f"   Total download: about {total_gb:.1f} GB")
             self._print("")
 
+            disk_free_gb = None
+            if total_gb:
+                from gaia.llm.model_fit import (
+                    check_download_fits_disk,
+                    model_store_free_gb,
+                )
+
+                disk_free_gb, store = model_store_free_gb(
+                    client.get_system_info(timeout=15)
+                )
+                if disk_free_gb is None:
+                    self._print_warning(
+                        "Lemonade did not report the free space in its model "
+                        f"store, so GAIA could not check that {total_gb:.1f} GB fits."
+                    )
+                fits = check_download_fits_disk(total_gb, disk_free_gb, store)
+                if not fits.fits:
+                    message = f"Not enough disk space: {fits.reason}."
+                    self._print_error(message)
+                    self.events.emit("error", message=message)
+                    return False
+            self.events.emit(
+                "plan",
+                models=[
+                    {
+                        "id": m,
+                        "bytes_total": _gb_to_bytes(sizes.get(m)),
+                        "downloaded": sizes.get(m) == 0,
+                    }
+                    for m in model_ids
+                ],
+                bytes_total=_gb_to_bytes(total_gb) or 0,
+                disk_free_bytes=_gb_to_bytes(disk_free_gb),
+            )
+
             if not self._prompt_yes_no("Continue?", default=True):
                 self._print("   Skipping model downloads")
                 return True
@@ -1848,7 +1999,7 @@ class InitCommand:
 
             recipe = profile_config.get("recipe")
             success = True
-            for model_id in model_ids:
+            for index, model_id in enumerate(model_ids, start=1):
                 self._print("")
                 mr = find_model_requirement(model_id)
                 label = f"{model_id} (recipe={recipe})" if recipe else model_id
@@ -1864,7 +2015,17 @@ class InitCommand:
                 # time proportional to its size (~5 MB/s floor).
                 if mr and mr.size_gb:
                     pull_kwargs["timeout"] = max(7200, int(mr.size_gb * 200))
-                progress = _DownloadProgress(self.agent_console, model_id)
+                if self.events.enabled:
+                    progress = _JsonDownloadProgress(
+                        self.agent_console,
+                        self.events,
+                        model_id,
+                        index,
+                        len(model_ids),
+                        _gb_to_bytes(sizes.get(model_id)),
+                    )
+                else:
+                    progress = _DownloadProgress(self.agent_console, model_id)
                 if client.ensure_model_downloaded(
                     model_id, on_progress=progress, **pull_kwargs
                 ):
@@ -1872,18 +2033,28 @@ class InitCommand:
                         self._print_success(f"Downloaded {model_id}")
                     else:
                         self._print_success(f"Already downloaded: {model_id}")
+                    self.events.emit(
+                        "model_done", model=model_id, downloaded=bool(progress.events)
+                    )
                     if self._chat_choice and model_id == self._chat_choice.model_id:
                         self._chat_model_ready = True
                 else:
                     if not progress.reported_error:
                         self._print_error(f"Failed to download {model_id}")
+                        self.events.emit(
+                            "error",
+                            model=model_id,
+                            message=f"Failed to download {model_id}",
+                        )
                     self._print(f"   {self._server_problem_hint()}")
                     success = False
 
+            self.events.emit("done", ok=success)
             return success
 
         except Exception as e:
             self._print_error(f"Error downloading models: {e}")
+            self.events.emit("error", message=f"Error downloading models: {e}")
             return False
 
     def _test_model_inference(self, client, model_id: str) -> tuple:
@@ -2698,6 +2869,7 @@ def run_init(
     skip_chat_model: bool = False,
     lemonade_url: Optional[str] = None,
     gaia_lemonade: bool = False,
+    progress_json: bool = False,
 ) -> int:
     """
     Entry point for `gaia init` command.
@@ -2715,6 +2887,7 @@ def run_init(
             (see InitCommand's docstring — for a Claude-backed session)
         lemonade_url: Use (and save) the Lemonade Server the user runs here
         gaia_lemonade: Use (and save) GAIA's own Lemonade Server
+        progress_json: Also print progress as JSON lines (see InitEvents)
 
     Returns:
         Exit code (0 for success, non-zero for failure)
@@ -2732,6 +2905,7 @@ def run_init(
             skip_chat_model=skip_chat_model,
             lemonade_url=lemonade_url,
             gaia_lemonade=gaia_lemonade,
+            progress_json=progress_json,
         )
         return cmd.run()
     except ValueError as e:
