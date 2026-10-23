@@ -21,6 +21,30 @@
     font-size: 13px;
 }
 
+.new-chat-setup-failed {
+    margin-bottom: 14px;
+    padding: 10px 14px;
+    border-left: 2px solid var(--danger);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--danger) 6%, transparent);
+    color: var(--text-secondary);
+    font-size: 13px;
+    text-align: left;
+}
+
+.new-chat-setup-failed p + p {
+    margin-top: 6px;
+}
+
+.new-chat-setup-failed-title {
+    color: var(--danger);
+    font-weight: 600;
+}
+
+.new-chat-setup-failed-error {
+    overflow-wrap: anywhere;
+}
+
 .new-chat-warmup {
     margin-top: 10px;
     color: var(--text-muted);
@@ -30,9 +54,13 @@
 .new-chat-greeting {
     margin-bottom: 14px;
     color: var(--text-primary);
-    font-size: 20px;
-    font-weight: 600;
+    font-family: var(--font-greeting);
+    font-size: 30px;
+    font-weight: 300;
+    font-optical-sizing: auto;
+    line-height: 1.2;
     text-align: center;
+    text-wrap: balance;
 }
 
 .new-chat-meta {

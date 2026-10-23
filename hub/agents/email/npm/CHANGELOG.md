@@ -6,6 +6,16 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **Token counts are exact in the published binary, offline too.** The
+  binary could not load its tokenizer and counted tokens by an estimate that
+  overcounts. The tokenizer and its data now ship inside the binary, so it
+  no longer downloads anything to count tokens.
+- **A mailbox connection being saved is reported as transient.** When another
+  GAIA process or request is mid-save on the mailbox connection, a mailbox
+  route now answers `502` with a detail saying the connection "is being saved
+  by another GAIA operation" (it used to answer `403`, as if the account needed
+  reconnecting), and the `/v1/email/agent/*` routes answer `503` with
+  `Retry-After`. Treat both as transient and retry; see SPEC.md.
 - **A request waiting for the model says so.** When another GAIA process or
   request is using the local model, `/v1/email/query` now streams a `status`
   every ~2 s with `phase: "model_queue"` and the request's place in line, who

@@ -16,6 +16,7 @@ import {
     groupSessionsForList, hiddenAutomatedCount, sessionRowStatus, type LiveRuns, type RowStatus,
 } from '../utils/sessionGrouping';
 import { ordinal } from '../utils/chatAlerts';
+import { formatShortcut } from '../utils/platform';
 import { cleanupAbandonedDraft } from '../utils/sessionCleanup';
 import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
 import gaiaRobot from '../assets/gaia-robot.png';
@@ -285,14 +286,14 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                     className="sb-icon-btn"
                     onClick={isMobile ? () => setSidebarOpen(false) : toggleCollapsed}
                     aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                    title={isCollapsed ? 'Expand sidebar (Ctrl+B)' : 'Collapse sidebar (Ctrl+B)'}
+                    title={`${isCollapsed ? 'Expand' : 'Collapse'} sidebar (${formatShortcut('Mod+B')})`}
                 >
                     {isMobile ? <X size={17} /> : isCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
                 </button>
             </div>
 
             <div className="sb-actions">
-                <button type="button" className="sb-nav-item" onClick={() => { onNewChat(); closeOnMobile(); }} title="New chat (Ctrl+Shift+O)">
+                <button type="button" className="sb-nav-item" onClick={() => { onNewChat(); closeOnMobile(); }} title={`New chat (${formatShortcut('Mod+Shift+O')})`}>
                     <SquarePen size={16} aria-hidden="true" />
                     {!isCollapsed && <span>New chat</span>}
                 </button>
@@ -311,7 +312,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                             onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setQuery(''); searchRef.current?.blur(); } }}
                             {...CLAIMS_ESCAPE}
                             placeholder="Search chats"
-                            aria-label="Search chats (Ctrl+K)"
+                            aria-label={`Search chats (${formatShortcut('Mod+K')})`}
                         />
                     </label>
                 )}
@@ -399,7 +400,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                             <Smartphone size={16} />
                         </button>
                     )}
-                    <button type="button" className="sb-icon-btn" onClick={() => openSettings()} aria-label="Settings" title="Settings (Ctrl+,)">
+                    <button type="button" className="sb-icon-btn" onClick={() => openSettings()} aria-label="Settings" title={`Settings (${formatShortcut('Mod+,')})`}>
                         <Settings size={16} />
                     </button>
                 </div>

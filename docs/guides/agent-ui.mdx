@@ -162,6 +162,11 @@ Pick the install path that fits you best:
     the default model are downloaded automatically on first launch. This is
     the simplest path for non-developer end users.
 
+    If that first-launch setup fails (for example, too little free memory to
+    load the model), the new-chat screen shows GAIA's error and a **Choose a
+    model** button, so you can switch to a cloud model or a smaller one before
+    your first message. Setup runs again on the next launch.
+
     **Artifact naming** (`electron-builder.yml`):
     `gaia-agent-ui-<version>-<arch>-setup.<ext>` — e.g. `gaia-agent-ui-0.17.2-x64-setup.exe`
     and `gaia-agent-ui-0.17.2-amd64.deb`.
@@ -307,7 +312,7 @@ and where that model runs.
   scheduled runs are hidden behind **Show background runs** at the end of
   the list. At the bottom: where answers are generated right now (for example
   `Local · Gemma-4-E4B-it-GGUF` or `Fireworks AI · glm-5p3-flash`),
-  notifications, mobile access and Settings. Collapse it with `Ctrl+B`.
+  notifications, mobile access and Settings. Collapse it with `Ctrl+B` (`⌘B` on macOS).
 - **Message box:** **+** attaches files (or drag them in), the shield picks the
   permission mode, the model chip picks the model, and Send turns into Stop
   while GAIA is working.
@@ -401,6 +406,16 @@ Open **Settings → Model** (or the model chip in the message box):
   store, and are refused over mobile access. When a key is already set (in the
   environment or from the TUI) the screen says so; leave the field blank to keep
   using it. **Forget key** removes it here and for future sessions.
+- On macOS, the first read of a saved key after reinstalling GAIA opens a
+  Keychain dialog. Until you answer it, the model list says macOS is asking for
+  keychain access instead of offering to add a key. Click **Always Allow** and
+  the list fills in on its own.
+- The AMD LLM Gateway is greyed out, here and on the first-run setup screen,
+  when its host can't be reached from this network. It reads "No network
+  available — can't reach llm-api.amd.com (needs AMD's network or VPN)". Connect
+  to AMD's network or VPN, then press **Check again**. When Lemonade runs on
+  another machine, or a proxy carries this PC's traffic, the check is skipped and
+  the gateway stays choosable.
 - Recommended Fireworks models are ranked first, each with the benchmark result
   behind the pick.
 - The model you choose is remembered across restarts (shared with the TUI). If
@@ -600,6 +615,12 @@ tell from its code that it just reads files, and no files changed in the folders
 it ran in. When in doubt — a library GAIA doesn't know, a file opened in a mode
 it can't read off the code — it is listed.
 
+A plain shell delete of named files in your workspace, such as `del notes.txt`,
+`rm notes.txt` or `powershell Remove-Item notes.txt`, is the exception: GAIA copies those
+files first, so they show as deleted files with a diff and Undo puts them back.
+A delete with a wildcard, a variable, a folder or a file outside the workspace
+is still listed as a command GAIA can't track.
+
 **Settings → Privacy → Undo history** sets how long copies are kept (7 days by
 default) and how much space they may use (500 MB, oldest first), and shows how
 much they use now.
@@ -710,6 +731,8 @@ Sessions let you organize conversations by topic. They sync between the CLI (`ga
 | `Ctrl+B` | Show or hide the sidebar |
 | `Ctrl+,` | Settings |
 
+On macOS, press `⌘` where this table says `Ctrl`; the app labels its shortcuts that way there.
+
 When GAIA asks permission, the prompt takes focus and `Enter` does nothing, so a message you were typing can't approve it. `Escape` denies (it takes priority over stopping the reply); `Tab` to **Allow once** or **Always allow** and press `Enter` or `Space` to approve. The prompt counts down the time the agent will wait, and GAIA denies when it runs out.
 
 ---
@@ -727,7 +750,7 @@ gaia chat --ui
 
 An invalid value (not a whole number, or out of range) stops the Agent UI server at startup with an error naming the variable, rather than quietly using the default.
 
-**If the PC sleeps mid-reply,** the time it spends asleep doesn't count toward this limit, the model-stall check, a running tool's time limit or the retry budget, so the reply isn't cut off the moment the PC wakes. A local model and a running tool pick up where they left off. A hosted model's connection may have dropped during the sleep; that is handled like any other dropped connection. A model that stays silent after the PC wakes is still caught.
+**If the PC sleeps mid-reply** (S3 sleep or hibernation), that time doesn't count toward this limit, the model-stall check, a running tool's time limit or the retry budget, so the reply isn't cut off the moment the PC wakes. A local model and a running tool pick up where they left off. A hosted model's connection may have dropped during the sleep; that is handled like any other dropped connection. A model that stays silent after the PC wakes is still caught. Modern Standby, the sleep most current Windows laptops use, counts as running time.
 
 ---
 
@@ -762,14 +785,26 @@ Describe the schedule in natural language; the parser previews the interpretatio
 | `every 30m` | Every 30 minutes |
 | `every 6 hours` | Every 6 hours |
 | `daily at 9pm` | Once a day at 21:00 |
+| `every other day` | Every 2 days |
 | `every monday at 8am` | Weekly on Mondays at 08:00 |
+| `weekdays at 10am` | Monday to Friday at 10:00 |
 | `every hour from 8am to 6pm` | Hourly inside a time window |
+
+GAIA reads every word or rejects the schedule and says what to change; it never drops part of what you typed. It rejects:
+
+- Invalid times such as `25:00` or `9:75`, and a bare `at 9` (say `9am`, `9pm` or `9:00`).
+- One-time tasks (`tomorrow at noon`, `next friday`, `on feb 30`). Schedules repeat, so use a form like `every friday at 9am`.
+- Runs more often than once a minute. Each run is a full agent turn.
+- A weekly time with no day, such as `weekly at 9am` or `every 7d at 9am`. Name the day: `every monday at 9am`.
+- Combinations that can't be honored yet: `every other tuesday`, `every 2 days at 9am`, monthly schedules, and windows that don't start and end on the hour.
 
 Each schedule runs in its own chat session, so the full history of runs (prompt + response per run) is one click away via the session list. Pause, resume, or delete schedules from the panel; run counts and the next-run countdown update live.
 
 Behavior notes:
 
 - Scheduled runs use the GAIA agent and the model you picked; with a local model nothing leaves your machine.
+- Nobody is there to approve a tool call during a scheduled run, so tools that need approval (shell commands, file writes) are refused.
+- A run that fails shows its error on the schedule card and raises a notification in the notification center's **Errors** tab.
 - Runs are **suspended while mobile access (tunnel) is active**, matching the autonomous agent loop's security posture. Set `GAIA_AUTONOMOUS_ALLOW_TUNNEL=1` to override.
 - One run executes at a time; overlapping schedules queue.
 - Per-run timeout defaults to 300 s; override with `GAIA_SCHEDULE_TIMEOUT`.

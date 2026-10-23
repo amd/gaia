@@ -8,13 +8,14 @@
  * edited and nothing runs until the user confirms.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CornerDownRight, FileDiff as FileDiffIcon, GitBranch, GitCommit, GitPullRequest, Loader2, Undo2, X } from 'lucide-react';
 import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
 import { log } from '../../utils/logger';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { refreshTurnChanges } from '../../hooks/useTurnChanges';
 import { announceUndo, useUndoEvents } from '../../utils/undoEvents';
 import { untrackedWarning } from '../../utils/untrackedWork';
@@ -239,8 +240,10 @@ function note(file: ChatFileChange): string | undefined {
 /** Every file the chat changed, from before its first turn to after its last. */
 function ChatChangesReview({ changes, onClose }: { changes: SessionChanges; onClose: () => void }) {
     useEscapeToClose(true, onClose);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useFocusTrap(dialogRef, true);
     return (
-        <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Review this chat's changes">
+        <div ref={dialogRef} className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Review this chat's changes">
             <div className="modal-panel changes-review" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
                     <h3>Changes in this chat · {totalText(changes)}</h3>
@@ -346,6 +349,8 @@ function GitDialog({ sessionId, kind, repo, onClose, onDone }: {
     const [running, setRunning] = useState(false);
     const [error, setError] = useState<string | null>(null);
     useEscapeToClose(true, onClose, !running);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useFocusTrap(dialogRef, true);
 
     const run = async () => {
         setRunning(true);
@@ -368,6 +373,7 @@ function GitDialog({ sessionId, kind, repo, onClose, onDone }: {
     return (
         <div className="modal-overlay" onClick={running ? undefined : onClose}>
             <div
+                ref={dialogRef}
                 className="modal-panel sp-git-dialog"
                 role="dialog"
                 aria-modal="true"

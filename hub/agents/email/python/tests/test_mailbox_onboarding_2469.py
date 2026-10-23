@@ -205,6 +205,16 @@ def test_missing_oauth_client_is_not_reported_as_missing_scopes(connectors):
     assert ms.inspect_provider("google")["state"] == ms.STATE_REAUTH_REQUIRED
 
 
+def test_a_connection_being_saved_elsewhere_is_not_reported_as_missing_scopes(
+    connectors,
+):
+    """Another GAIA operation is mid-save: retry, never "reconnect" or "grant"."""
+    connectors["connection"] = _connection(scopes=[], email="", error="busy")
+    state = ms.inspect_provider("google")
+    assert state["state"] == ms.STATE_ERROR
+    assert "another GAIA operation" in state["detail"]
+
+
 # ---------------------------------------------------------------------------
 # The conversation — a DIFFERENT opening question per state
 # ---------------------------------------------------------------------------
