@@ -116,6 +116,18 @@ class MCPClientManager:
 
         logger.debug(f"Successfully removed MCP server: {name}")
 
+    def refuse_server(self, name: str, error: str) -> None:
+        """Disconnect a connected server and report it failed with ``error``."""
+        logger.error("Refusing MCP server '%s': %s", name, error)
+        client = self._clients.pop(name, None)
+        if client is not None:
+            client.disconnect()
+        self._failed[name] = error
+
+    def failure(self, name: str) -> Optional[str]:
+        """Why ``name`` failed to load, or ``None`` if no failure is recorded."""
+        return self._failed.get(name)
+
     def get_client(self, name: str) -> Optional[MCPClient]:
         """Get a client by name.
 

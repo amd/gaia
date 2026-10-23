@@ -17,6 +17,10 @@ logger = get_logger(__name__)
 MCP_DEDUP_KEY_META = "ai.amd-gaia/dedup_key"
 
 
+class MCPToolDeclarationError(ValueError):
+    """An MCP server declared tool metadata GAIA cannot honor."""
+
+
 class MCPClientMixin:
     """Mixin to add MCP client capabilities to agents.
 
@@ -185,6 +189,10 @@ class MCPClientMixin:
                 )
                 return False
 
+        except MCPToolDeclarationError as e:
+            self._mcp_manager.refuse_server(name, str(e))
+            self._console_print("print_error", str(e))
+            return False
         except Exception as e:
             self._console_print(
                 "print_error", f"Error connecting to MCP server '{name}': {e}"
@@ -240,7 +248,8 @@ class MCPClientMixin:
                     n = len(tools)
                     lines.append(f"  ✓ {name} ({n} tool{'s' if n != 1 else ''})")
                 else:
-                    lines.append(f"  ✗ {name} (failed to connect)")
+                    error = self._mcp_manager.failure(name) or "failed to connect"
+                    lines.append(f"  ✗ {name} ({error})")
         else:
             lines.append("No servers configured")
 
@@ -264,15 +273,19 @@ class MCPClientMixin:
         # Load servers from config (quiet — summary printed after)
         self._mcp_manager.load_from_config()
 
-        # Print config source + per-server connection results
-        self._print_mcp_load_summary()
-
         # Register tools from all loaded servers
         server_count = 0
         for server_name in self._mcp_manager.list_servers():
             client = self._mcp_manager.get_client(server_name)
-            self._register_mcp_tools(client)
+            try:
+                self._register_mcp_tools(client)
+            except MCPToolDeclarationError as e:
+                self._mcp_manager.refuse_server(server_name, str(e))
+                continue
             server_count += 1
+
+        # After registration, so a refused server shows as failed
+        self._print_mcp_load_summary()
 
         # Update system prompt with all newly registered tools
         if server_count > 0 and hasattr(self, "rebuild_system_prompt"):
@@ -350,11 +363,17 @@ class MCPClientMixin:
             gaia_tool = tool.to_gaia_format(client.prefix, client.name)
             declared = tool.meta.get(MCP_DEDUP_KEY_META)
             if declared is not None:
-                gaia_tool["dedup_key"] = validate_dedup_key(
-                    f"{tool.name} (MCP server {client.name!r})",
-                    declared,
-                    gaia_tool["parameters"],
-                )
+                try:
+                    gaia_tool["dedup_key"] = validate_dedup_key(
+                        tool.name, declared, gaia_tool["parameters"]
+                    )
+                except (TypeError, ValueError) as e:
+                    raise MCPToolDeclarationError(
+                        f"MCP server {client.name!r} declares a bad "
+                        f"{MCP_DEDUP_KEY_META} {declared!r}: {e} None of its "
+                        "tools were registered; fix the declaration in the "
+                        "server's tool _meta."
+                    ) from e
             converted.append((tool, gaia_tool))
 
         # Registered only after every tool converted, so a bad one adds none.

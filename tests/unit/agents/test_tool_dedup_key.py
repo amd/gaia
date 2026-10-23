@@ -18,7 +18,8 @@ import pytest
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.mcp.client.mcp_client import MCPClient, MCPTool
-from gaia.mcp.mixin import MCP_DEDUP_KEY_META, MCPClientMixin
+from gaia.mcp.client.mcp_client_manager import MCPClientManager
+from gaia.mcp.mixin import MCP_DEDUP_KEY_META, MCPClientMixin, MCPToolDeclarationError
 
 _KEYED = "dedup_probe_keyed"
 _PLAIN = "dedup_probe_plain"
@@ -243,13 +244,18 @@ def restore_registry():
     _TOOL_REGISTRY.update(saved)
 
 
-def _register(*tools: MCPTool) -> None:
-    client = SimpleNamespace(
-        name="catalyst",
-        prefix="catalyst",
+def _fake_client(name: str, *tools: MCPTool) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        prefix=name,
         list_tools=lambda: list(tools),
         create_tool_wrapper=lambda tool: lambda **kw: {"ok": True},
+        disconnect=Mock(),
     )
+
+
+def _register(*tools: MCPTool) -> None:
+    client = _fake_client("catalyst", *tools)
     MCPClientMixin._register_mcp_tools(object.__new__(MCPClientMixin), client)
 
 
@@ -263,12 +269,63 @@ def test_mcp_tool_declares_its_key_through_meta(restore_registry):
 
 
 def test_mcp_bad_key_registers_none_of_the_servers_tools(restore_registry):
-    with pytest.raises(ValueError, match=r"read \(MCP server 'catalyst'\).*'pth'"):
+    with pytest.raises(
+        MCPToolDeclarationError, match=r"'catalyst'.*\['pth'\].*'read'.*'pth'"
+    ):
         _register(
             _mcp_tool("write", {}),
             _mcp_tool("read", {MCP_DEDUP_KEY_META: ["pth"]}),
         )
     assert "mcp_catalyst_write" not in _TOOL_REGISTRY
+
+
+def _host_with(*clients: SimpleNamespace) -> MCPClientMixin:
+    manager = MCPClientManager(config=Mock())
+    manager.config.load_report = {"mode": "explicit", "config_file": "mcp.json"}
+    manager.config.get_servers.return_value = {c.name: {} for c in clients}
+    manager._clients.update({c.name: c for c in clients})
+    manager.load_from_config = Mock()
+    host = object.__new__(MCPClientMixin)
+    host._mcp_manager = manager
+    host.console = Mock()
+    return host
+
+
+def test_a_bad_server_is_refused_and_the_others_still_load(restore_registry):
+    good = _fake_client("good", _mcp_tool("read", {MCP_DEDUP_KEY_META: ["path"]}))
+    bad = _fake_client("bad", _mcp_tool("read", {MCP_DEDUP_KEY_META: ["pth"]}))
+    host = _host_with(good, bad)
+
+    assert host.load_mcp_servers_from_config() == 1
+
+    assert _TOOL_REGISTRY["mcp_good_read"]["dedup_key"] == ("path",)
+    assert "mcp_bad_read" not in _TOOL_REGISTRY
+    bad.disconnect.assert_called_once()
+    assert host._mcp_manager.list_servers() == ["good"]
+    [status] = [
+        s for s in host._mcp_manager.get_status_report() if s["name"] == "bad"
+    ]
+    assert status["connected"] is False and "'pth'" in status["error"]
+    summary = host.console.print_info.call_args[0][0]
+    assert "✓ good" in summary
+    assert "✗ bad (MCP server 'bad' declares a bad" in summary
+
+
+def test_connecting_a_bad_server_is_refused_loudly(restore_registry):
+    bad = _fake_client("bad", _mcp_tool("read", {MCP_DEDUP_KEY_META: []}))
+    host = _host_with()
+    host._mcp_manager.add_server = Mock(
+        side_effect=lambda name, config: host._mcp_manager._clients.setdefault(
+            name, SimpleNamespace(is_connected=lambda: True, **vars(bad))
+        )
+    )
+
+    assert host.connect_mcp_server("bad", {"command": "x"}) is False
+
+    assert "mcp_bad_read" not in _TOOL_REGISTRY
+    assert host._mcp_manager.list_servers() == []
+    assert host._mcp_manager.failure("bad").startswith("MCP server 'bad'")
+    assert "non-empty list" in host.console.print_error.call_args[0][0]
 
 
 def test_list_tools_keeps_the_meta_object():

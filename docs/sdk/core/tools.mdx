@@ -991,7 +991,8 @@ Notable implementation details:
   repeats whatever the others say. A name that is not a parameter of the tool
   raises `ValueError`; anything but a non-empty list of names raises
   `TypeError`. An MCP server declares the same list in a tool's `_meta` under
-  `"ai.amd-gaia/dedup_key"`.
+  `"ai.amd-gaia/dedup_key"`; a bad declaration refuses that server's tools
+  with an error naming the server, tool and key, and other servers still load.
 - Unsupported decorator keywords raise `TypeError` at decoration time and
   identify the invalid argument, tool name, and accepted keyword set.
 
