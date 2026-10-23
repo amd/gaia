@@ -8,6 +8,7 @@ replaced with fakes that assert the argv the runner would have used.
 """
 
 import io
+import json
 import subprocess
 import sys
 import threading
@@ -144,6 +145,42 @@ def test_check_timeout_is_an_error(monkeypatch):
 
 
 # ── marker ─────────────────────────────────────────────────────────────────
+
+
+def _desktop_state(gaia_home, text):
+    gaia_home.mkdir(parents=True, exist_ok=True)
+    (gaia_home / sr.DESKTOP_INSTALL_STATE).write_text(text, encoding="utf-8")
+
+
+def test_desktop_setup_error_is_none_without_a_desktop_install(gaia_home):
+    assert sr.desktop_setup_error() is None
+
+
+@pytest.mark.parametrize("init", ["done", "skipped", None])
+def test_desktop_setup_error_is_none_when_init_did_not_fail(gaia_home, init):
+    _desktop_state(gaia_home, json.dumps({"state": "ready", "init": init}))
+    assert sr.desktop_setup_error() is None
+
+
+def test_desktop_setup_error_is_the_reason_init_gave(gaia_home):
+    reason = "Gemma-4-E4B-it-GGUF - Not enough free memory to load it."
+    _desktop_state(
+        gaia_home,
+        json.dumps({"state": "ready", "init": "failed", "initError": reason}),
+    )
+    assert sr.desktop_setup_error() == reason
+
+
+def test_desktop_setup_error_without_a_reason_points_at_the_log(gaia_home):
+    _desktop_state(gaia_home, json.dumps({"state": "ready", "init": "failed"}))
+    error = sr.desktop_setup_error()
+    assert "gaia init --profile gaia" in error
+    assert "electron-install.log" in error
+
+
+def test_an_unreadable_desktop_setup_record_is_reported(gaia_home):
+    _desktop_state(gaia_home, "{not json")
+    assert sr.DESKTOP_INSTALL_STATE in sr.desktop_setup_error()
 
 
 def test_marker_lives_under_gaia_home(gaia_home):

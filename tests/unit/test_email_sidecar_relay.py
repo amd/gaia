@@ -3,7 +3,7 @@
 """Contract tests for ``gaia.ui.email_sidecar.relay`` (#2109 query relay).
 
 ``relay.py`` does not exist yet — this file pins its designed public surface
-(``relay.relay_query`` + the ``STREAM_ENDED_UNEXPECTEDLY`` constant) as a
+(``relay.relay_query`` + the crash text from ``stream_ended_text()``) as a
 red-phase TDD contract. Every test in this file is expected to fail at
 collection with ``ModuleNotFoundError`` / ``ImportError`` until the module
 lands.
@@ -51,7 +51,7 @@ class _FakeHandler:
 
     Mirrors the real handler's attribute names relay_query depends on:
     ``_emit``, ``cancelled`` (a ``threading.Event``), ``active_relay_response``,
-    ``signal_done()`` and ``turn_ledger``.
+    ``signal_done()``, ``turn_ledger``, and the ``record_tool_*`` turn-state hooks.
     """
 
     def __init__(self) -> None:
@@ -67,6 +67,15 @@ class _FakeHandler:
 
     def set_relay_question(self, request_id):
         self.relay_question = request_id
+
+    def record_tool_started(self, tool_name):
+        self.turn_ledger.tool_started(tool_name)
+
+    def record_tool_args(self, args):
+        self.turn_ledger.tool_args(args)
+
+    def record_tool_result(self, data, success):
+        self.turn_ledger.tool_result(data, success)
 
     def signal_done(self):
         self.done_calls += 1
@@ -639,7 +648,7 @@ class TestStreamFailureHandling:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
         # Ends the turn: the chat is recorded failed, not done.
         assert agent_errors[0]["fatal"] is True
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
@@ -653,7 +662,7 @@ class TestStreamFailureHandling:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
 
     def test_generator_exhausted_without_terminal_event(self):
@@ -667,7 +676,7 @@ class TestStreamFailureHandling:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
 
     def test_crash_while_a_question_is_open_clears_it(self):
@@ -764,7 +773,7 @@ class TestSidecarHTTPErrorDetail:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
 
 
 # --- Orphaned-generation cleanup (#2158) -------------------------------------
@@ -844,7 +853,7 @@ class TestOrphanCancelOnCrash:
         assert proxy.cancel_calls == ["rid-t7"]
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
 
 
 # --- Cancellation mid-stream -------------------------------------------------
@@ -1249,7 +1258,7 @@ class TestReadTimeoutMidStream:
         elapsed = time.monotonic() - start
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
         assert elapsed < 5.0
 
 

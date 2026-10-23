@@ -55,6 +55,25 @@ func TestConfigureKeepsKeyOutOfInstallAndDiscoversModels(t *testing.T) {
 		t.Fatal(calls)
 	}
 }
+
+// A cloud model Lemonade has "loaded" lists context_length 4096; a local
+// model's context_length is the window it is configured at.
+func TestWindowIsTheProvidersForCloudAndConfiguredForLocal(t *testing.T) {
+	cases := []struct {
+		model Model
+		want  int
+	}{
+		{Model{ID: "fireworks.deepseek-v4p1-flash", Recipe: "cloud", ContextLength: 4096, MaxContextWindow: 1048576}, 1048576},
+		{Model{ID: "fireworks.older", Recipe: "cloud", ContextLength: 262144}, 262144},
+		{Model{ID: "Gemma-4-E4B-it-GGUF", Recipe: "llamacpp", ContextLength: 65536, MaxContextWindow: 131072}, 65536},
+	}
+	for _, c := range cases {
+		if got := c.model.Window(); got != c.want {
+			t.Errorf("%s: Window() = %d, want %d", c.model.ID, got, c.want)
+		}
+	}
+}
+
 func TestRecommendedModelsAreRankedAndLookedUpByID(t *testing.T) {
 	if len(RecommendedModels) < 2 || TopRecommendation() != RecommendedModels[0] {
 		t.Fatal("top recommendation must be the first ranked entry")

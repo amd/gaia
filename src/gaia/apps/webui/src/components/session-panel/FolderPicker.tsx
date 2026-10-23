@@ -1,11 +1,12 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUp, Folder, Loader2, X } from 'lucide-react';
 import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import type { BrowseResponse } from '../../types';
 
 /** Pick a folder on this PC to give the chat, by browsing or by pasting its path. */
@@ -15,6 +16,8 @@ export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => vo
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     useEscapeToClose(true, onClose);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useFocusTrap(dialogRef, true);
 
     const open = useCallback((path?: string) => {
         setLoading(true);
@@ -35,6 +38,7 @@ export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => vo
     return (
         <div className="modal-overlay" onClick={onClose}>
             <div
+                ref={dialogRef}
                 className="modal-panel sp-picker"
                 role="dialog"
                 aria-modal="true"
