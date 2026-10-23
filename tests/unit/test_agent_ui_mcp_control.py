@@ -35,10 +35,12 @@ SCOPE = "writing files in C:/work"
 
 
 class Run:
-    def __init__(self, session_id, scenario, prompt_timeout, always_scope):
+    def __init__(self, session_id, scenario, prompt_timeout, always_scope, wait=None):
         self.session_id = session_id
         self.scenario = scenario
         self.prompt_timeout = prompt_timeout
+        # How long this run really waits; defaults to the timeout it advertises.
+        self.wait = prompt_timeout if wait is None else wait
         self.always_scope = always_scope
         self.log = []
         self.cond = threading.Condition()
@@ -58,7 +60,7 @@ class Run:
             self.cond.notify_all()
 
     def wait_decision(self):
-        deadline = time.monotonic() + self.prompt_timeout
+        deadline = time.monotonic() + self.wait
         with self.cond:
             while self.decision is None and not self.cancelled:
                 left = deadline - time.monotonic()
@@ -184,6 +186,7 @@ class FakeBackend:
         self.cancels = []
         self.inputs = []
         self.prompt_timeout = 30.0
+        self.prompt_wait = None
         self.always_scope = SCOPE
         self.confirm_delay = 0.0
         self.lingering = set()  # sessions /active still lists after their done
@@ -317,7 +320,13 @@ class FakeBackend:
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     def start_run(self, sid):
-        run = Run(sid, self.sessions[sid], self.prompt_timeout, self.always_scope)
+        run = Run(
+            sid,
+            self.sessions[sid],
+            self.prompt_timeout,
+            self.always_scope,
+            self.prompt_wait,
+        )
         self.runs[sid] = run
         threading.Thread(target=run.produce, daemon=True).start()
         return run
@@ -465,6 +474,9 @@ def test_concurrent_answers_reach_the_backend_once(backend, turns):
 def test_expired_prompt_is_refused(backend, turns):
     backend.sessions["s1"] = "write"
     backend.prompt_timeout = 0.4
+    # The run outlives the 0.4 s it advertises, so a slow runner still sees the
+    # prompt before it ends; expiry is judged from the advertised timeout.
+    backend.prompt_wait = 30.0
     turns.start("s1", "go")
     cid = _prompt(turns, "s1")["confirm_id"]
     time.sleep(0.5)
