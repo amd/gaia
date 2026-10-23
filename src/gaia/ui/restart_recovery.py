@@ -34,6 +34,7 @@ from .sse_handler import clean_reply_text
 
 logger = logging.getLogger(__name__)
 
+# MessageBubble.tsx copies the three turn notices; a test keeps them in step.
 INTERRUPTED_TURN_NOTICE = (
     "This answer was interrupted when GAIA closed. Send again to retry."
 )

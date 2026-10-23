@@ -73,14 +73,45 @@ function registerIpcHandlers() {
   });
 }
 
+// ── Stage labels ────────────────────────────────────────────────────────────
+
+// Keyed by installer.STAGES values; the ids themselves stay in the install log.
+const STAGE_LABELS = Object.freeze({
+  "pre-checks": "Checking your PC",
+  "ensure-uv": "Getting the installer ready",
+  "create-venv": "Preparing GAIA's workspace",
+  "install-package": "Installing GAIA",
+  "gaia-init": "Getting the AI model ready",
+  verify: "Finishing up",
+});
+const NEUTRAL_STAGE_LABEL = "Setting up GAIA";
+
+const unlabeledStages = new Set();
+
+/** What the window shows for an installer stage id. */
+function stageLabel(stage) {
+  if (Object.prototype.hasOwnProperty.call(STAGE_LABELS, stage)) return STAGE_LABELS[stage];
+  if (stage && !unlabeledStages.has(stage)) {
+    unlabeledStages.add(stage);
+    installer.log(
+      `Warning: install stage "${stage}" has no label; the window shows "${NEUTRAL_STAGE_LABEL}"`
+    );
+  }
+  return NEUTRAL_STAGE_LABEL;
+}
+
 // ── Embedded HTML ───────────────────────────────────────────────────────────
+
+function escapeHtml(text) {
+  return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 /**
  * HTML payload for the progress window. Rendered via `loadURL('data:...')`.
  * The script uses `window.gaiaInstall` exposed by preload.cjs.
  */
 function buildProgressHtml({ logPath }) {
-  const escapedLog = String(logPath || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const escapedLog = escapeHtml(logPath || "");
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -133,8 +164,6 @@ function buildProgressHtml({ logPath }) {
   .stage {
     font-size: 12px;
     color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
     margin-bottom: 6px;
     min-height: 15px;
   }
@@ -202,11 +231,11 @@ function buildProgressHtml({ logPath }) {
 </head>
 <body>
   <h1>Setting up GAIA</h1>
-  <p class="subtitle">First-launch backend install — this can take a few minutes</p>
+  <p class="subtitle">First-time setup — this can take a few minutes</p>
   <div class="stage" id="stage">Starting…</div>
   <div class="bar"><div class="fill indeterminate" id="fill"></div></div>
   <div class="percent" id="percent"></div>
-  <div class="message" id="message">Running pre-flight checks…</div>
+  <div class="message" id="message">Checking your PC…</div>
   <div class="footer">Log: <code>${escapedLog}</code></div>
 <script>
   (function() {
@@ -217,7 +246,7 @@ function buildProgressHtml({ logPath }) {
 
     function onProgress(payload) {
       if (!payload) return;
-      const stage = payload.stage || '';
+      const stage = payload.label || '';
       const percent = typeof payload.percent === 'number' ? payload.percent : null;
       const message = payload.message || '';
 
@@ -307,7 +336,7 @@ function createProgressWindow() {
   });
 
   const onProgress = (stage, percent, message) => {
-    lastProgress = { stage, percent, message };
+    lastProgress = { stage, label: stageLabel(stage), percent, message };
     if (window.isDestroyed()) return;
     if (!rendererReady) return; // will be replayed on did-finish-load
     try {
@@ -468,6 +497,9 @@ async function showPreCheckFailureDialog(parentWindow, { title, message, detail 
 
 module.exports = {
   createProgressWindow,
+  buildProgressHtml,
+  stageLabel,
+  STAGE_LABELS,
   showFailureDialog,
   showPreCheckFailureDialog,
   // IPC channel names for preload.cjs

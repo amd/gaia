@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import type { AgentStep, CommandOutput, RetrievalChunk } from '../types';
 import * as api from '../services/api';
+import { CodeBlock } from './PermissionPrompt';
 import { log } from '../utils/logger';
 import { StepResult } from './LongContent';
 import './AgentActivity.css';
@@ -104,9 +105,18 @@ const DEFAULT_TOOL_META: ToolMeta = {
     label: 'Used tool', activeLabel: 'Using tool', icon: Wrench,
 };
 
-function getToolMeta(toolName?: string): ToolMeta {
+/** Which connector an MCP call went to, as the server names it. */
+type McpIdentity = Pick<AgentStep, 'mcpServerLabel' | 'mcpTool'>;
+
+function getToolMeta(toolName?: string, mcp?: McpIdentity): ToolMeta {
     if (!toolName) return DEFAULT_TOOL_META;
     if (toolName.startsWith('mcp_')) {
+        const server = mcp?.mcpServerLabel;
+        if (server) {
+            const what = mcp?.mcpTool ? `${server}: ${mcp.mcpTool}` : server;
+            return { label: `Used ${what}`, activeLabel: `Using ${what}`, icon: Globe };
+        }
+        // Saved turns from before the server named the connector.
         return { label: 'MCP tool', activeLabel: 'Running MCP tool', icon: Globe };
     }
     if (TOOL_META[toolName]) return TOOL_META[toolName];
@@ -118,13 +128,13 @@ function getToolMeta(toolName?: string): ToolMeta {
 }
 
 /** What the live line says while a tool runs: the step row's own wording, never the raw tool id. */
-export function toolActiveLabel(toolName?: string): string {
-    return getToolMeta(toolName).activeLabel;
+export function toolActiveLabel(toolName?: string, mcp?: McpIdentity): string {
+    return getToolMeta(toolName, mcp).activeLabel;
 }
 
 /** The fallback line for a tool row that arrived without a narration (older saved turns). */
 function toolFallbackLabel(step: AgentStep): string {
-    const meta = getToolMeta(step.tool);
+    const meta = getToolMeta(step.tool, step);
     // The done-label ("Wrote file") would claim a failed, denied or stopped call succeeded.
     const unfinished = step.success == null && !step.result;
     return step.active
@@ -135,10 +145,15 @@ function toolFallbackLabel(step: AgentStep): string {
 
 /** The one plain line a tool row shows by default. */
 export function toolRowText(step: AgentStep): string {
+    // Narration can only humanize the prefixed tool id; the connector's own name says more.
+    if (step.mcpServerLabel) return toolFallbackLabel(step);
     return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step);
 }
 
 const COMPACT_DETAIL_CHARS = 48;
+
+/** Lines of an MCP tool's output shown before "Show all". */
+const MCP_OUTPUT_PREVIEW_LINES = 5;
 
 /** Below this many call rows the list is short enough to scan without a filter. */
 const FILTER_MIN_TOOL_ROWS = 6;
@@ -676,7 +691,7 @@ interface FlowToolCardProps {
 }
 
 function FlowToolCard({ step, isExpanded, onToggle, now }: FlowToolCardProps) {
-    const Icon = getToolMeta(step.tool).icon;
+    const Icon = getToolMeta(step.tool, step).icon;
     const line = toolRowText(step);
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
@@ -741,8 +756,18 @@ function FlowToolCard({ step, isExpanded, onToggle, now }: FlowToolCardProps) {
                         <CommandOutputView output={step.commandOutput} />
                     )}
 
+                    {step.mcpOutput && (
+                        <div className="step-detail-result result-success">
+                            <span className="detail-section-label">Output</span>
+                            <CodeBlock code={step.mcpOutput.text} previewLines={MCP_OUTPUT_PREVIEW_LINES} testId="mcp-output" />
+                            {step.mcpOutput.truncated && (
+                                <div className="cmd-truncated">Output was truncated (exceeded size limit)</div>
+                            )}
+                        </div>
+                    )}
+
                     {/* Generic result */}
-                    {step.result && !step.commandOutput && (
+                    {step.result && !step.commandOutput && !step.mcpOutput && (
                         <div className={`step-detail-result ${step.success === false ? 'result-error' : 'result-success'}`}>
                             <span className="detail-section-label">
                                 {step.success === false ? 'Error' : 'Result'}

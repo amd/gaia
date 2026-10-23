@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Answers stream over `/query`.** The HTTP sidecar ran its agent with
+  streaming off, so a relayed turn (the Agent UI, and the TUI's later sessions)
+  showed "Waiting on the model" until the whole answer landed at once, Stop could
+  not cut a model call short, and a stopped turn kept no text. Every `/query`
+  turn now streams its model calls and sends the answer as `token` events before
+  `final`, the same as the stdio transport. A run cancelled mid-answer stops
+  within a token and ends with an empty `final`, as stdio does; text not yet
+  sent when the cancel lands is dropped.
 ### Fixed
 
 - **"Forget everything" forgets everything.** It deleted each memory a plain
@@ -58,6 +66,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chat saves nothing) from a saved one, and the Agent UI listed it as saved.
   `data` now also carries `status` when the tool returned one. Additive, so
   the contract version is unchanged.
+
+- **An MCP tool call says which connector it used and what came back.** A Git
+  connector call reached a client as a bare `mcp_git_git_log`, and its result
+  as "Tool 'git_log' returned data". `tool_call` gains optional `mcp_server`,
+  `mcp_server_label` ("Git") and `mcp_tool` ("git_log"), and the result's
+  `data` carries the tool's text in `mcp_output` (`{ text, truncated }`, capped
+  at 16,000 characters). Clients that ignore the fields see the same events.
 
 ### For integrators: contract 2.19
 
