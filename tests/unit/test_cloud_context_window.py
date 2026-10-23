@@ -73,6 +73,17 @@ def cold_cache():
         # Older Lemonade lists only context_length, which is then the real window.
         ({"id": "amd.x", "recipe": "cloud", "context_length": 200000}, 200000),
         ({"id": "amd.x", "recipe": "cloud"}, None),
+        # Same cloud rule as the provider list and the TUI: cloud_provider counts.
+        (
+            {
+                "id": "fireworks.y",
+                "recipe": "other",
+                "cloud_provider": "fireworks",
+                "context_length": 4096,
+                "max_context_window": WINDOW,
+            },
+            WINDOW,
+        ),
         ({"id": "local", "recipe": "llamacpp", "context_length": 0}, None),
     ],
 )

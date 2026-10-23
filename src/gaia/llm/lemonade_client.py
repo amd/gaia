@@ -2162,7 +2162,7 @@ def catalog_context_window(entry: Dict[str, Any]) -> Optional[int]:
         ok = isinstance(value, int) and not isinstance(value, bool) and value > 0
         return value if ok else None
 
-    if entry.get("recipe") == CLOUD_RECIPE:
+    if entry.get("recipe") == CLOUD_RECIPE or entry.get("cloud_provider"):
         # Older Lemonade lists only context_length, and there it is the real window.
         return positive(entry.get("max_context_window")) or positive(
             entry.get("context_length")
