@@ -720,6 +720,10 @@ class FileSearchToolsMixin:
                         # the sandbox is approvals that accumulated over time,
                         # and a zero-result search would traverse all of them.
                         search_location(root, max_depth=root_depth(root, roots))
+                    for hidden in search_scope.hidden_granted_roots(self, roots):
+                        search_location(
+                            hidden, max_depth=search_scope.SHALLOW_ROOT_DEPTH
+                        )
 
                     # Always also search common locations (Documents, Downloads, etc.)
                     # Wider than the allowed folders on purpose: a name search only

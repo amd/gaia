@@ -137,6 +137,55 @@ def search_roots(host: Any) -> List[Path]:
     return roots
 
 
+def _hidden_below(path: Path, root: Path, skipped: set[str]) -> bool:
+    """True when a walk from *root* skips a folder on the way down to *path*."""
+    return any(
+        part.startswith(".") or part in skipped for part in path.relative_to(root).parts
+    )
+
+
+def hidden_granted_roots(
+    host: Any, roots: List[Any], skipped: set[str] | frozenset[str] = frozenset()
+) -> List[Path]:
+    """GAIA's documents folder and the chat's folders a walk of *roots* misses.
+
+    Walks skip dot-folders, so ``~/.gaia/documents`` — where GAIA saves files —
+    was never searched. Only folders inside *roots* are returned: this widens
+    where a walk looks, never what it may reach.
+
+    Args:
+        host: The agent whose validator lists the chat's allowed paths.
+        roots: The folders the search walks.
+        skipped: Folder names the walk skips besides dot-folders.
+
+    Returns:
+        Folders to walk as extra roots, outermost first.
+    """
+    from gaia.config import gaia_home
+
+    validator = path_validator_of(host)
+    scratch_dir = getattr(validator, "scratch_dir", None)
+    candidates = {gaia_home() / "documents"}
+    candidates.update(
+        Path(p)
+        for p in (getattr(validator, "allowed_paths", None) or [])
+        if Path(p) != scratch_dir
+    )
+    walked = [Path(r).expanduser().resolve() for r in roots]
+    extra: List[Path] = []
+    for folder in sorted(
+        {c.expanduser().resolve() for c in candidates if c.is_dir()},
+        key=lambda p: (len(p.parts), str(p)),
+    ):
+        holders = [r for r in walked if r == folder or r in folder.parents]
+        if holders and all(
+            r != folder and _hidden_below(folder, r, skipped) for r in holders
+        ):
+            extra.append(folder)
+            walked.append(folder)
+    return extra
+
+
 def root_depth(root: Path, roots: List[Path]) -> int:
     """How deep to walk *root* given the whole set.
 
