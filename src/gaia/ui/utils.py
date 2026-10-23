@@ -29,6 +29,7 @@ from gaia.config import (
     unsafe_gaia_home_reason,
 )
 from gaia.llm.lemonade_embedded import gaia_home
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
 
 from .models import (
     DocumentResponse,
@@ -59,20 +60,14 @@ logger = logging.getLogger(__name__)
 #   .xls (legacy BIFF) — openpyxl only handles .xlsx; would raise on open
 # NOTE: .pptx and .docx ARE supported — python-pptx and python-docx ship with
 # GAIA. See ``_UNSUPPORTED_CATEGORIES`` below for the user-facing rejection hint.
-# Raster images are read by the vision model (``IMAGE_EXTENSIONS`` in the RAG SDK).
-ALLOWED_EXTENSIONS = frozenset(
+#
+# FOLDER_INDEX_EXTENSIONS is what a folder walk indexes. Images are indexable
+# only when the user picks the file (see ``gaia.utils.image_formats``).
+FOLDER_INDEX_EXTENSIONS = frozenset(
     {
         ".pdf",
         ".pptx",
         ".docx",
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".webp",
-        ".bmp",
-        ".gif",
-        ".tif",
-        ".tiff",
         ".txt",
         ".md",
         ".mdx",
@@ -106,6 +101,8 @@ ALLOWED_EXTENSIONS = frozenset(
         ".toml",
     }
 )
+
+ALLOWED_EXTENSIONS = FOLDER_INDEX_EXTENSIONS | IMAGE_EXTENSIONS
 
 # Text file extensions for preview endpoint
 TEXT_EXTENSIONS = frozenset(

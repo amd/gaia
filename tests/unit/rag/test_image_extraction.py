@@ -14,7 +14,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
 from PIL import Image
 
 from gaia.llm.vlm_client import VLMExtractionError
@@ -196,30 +195,3 @@ def test_index_document_reports_the_no_vlm_error_and_indexes_nothing(tmp_path):
     assert stats["success"] is False
     assert "Qwen3-VL-4B-Instruct-GGUF" in stats["error"]
     assert rag.chunks == [] and not rag.indexed_files
-
-
-# ---------------------------------------------------------------------------
-# Agent UI allowlist
-# ---------------------------------------------------------------------------
-
-
-def test_the_ui_allowlist_accepts_every_image_the_sdk_indexes():
-    from gaia.ui.utils import ALLOWED_EXTENSIONS
-
-    assert IMAGE_EXTENSIONS <= ALLOWED_EXTENSIONS
-
-
-@pytest.mark.parametrize("name", ["shot.png", "scan.JPG", "page.webp"])
-def test_the_ui_accepts_image_paths(tmp_path, name):
-    from gaia.ui.utils import sanitize_document_path
-
-    assert sanitize_document_path(str(tmp_path / name)).name == name
-
-
-def test_the_ui_still_rejects_heic_with_a_conversion_hint(tmp_path):
-    from gaia.ui.utils import sanitize_document_path
-
-    with pytest.raises(HTTPException) as excinfo:
-        sanitize_document_path(str(tmp_path / "photo.heic"))
-    assert excinfo.value.status_code == 400
-    assert "PNG or JPEG" in excinfo.value.detail

@@ -60,6 +60,7 @@ from gaia.utils.file_lock import (
     write_bytes_atomic,
     write_text_atomic,
 )
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
 
 # --- PDF extraction errors ---------------------------------------------------
 # These inherit from ValueError so existing `except ValueError` blocks in
@@ -95,12 +96,6 @@ class EmptyPDFError(PDFExtractionError):
     """
 
     status = "empty"
-
-
-# Raster formats Pillow decodes; each is re-encoded as PNG before the VLM sees it.
-IMAGE_EXTENSIONS = frozenset(
-    {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
-)
 
 
 class ImageExtractionError(ValueError):
