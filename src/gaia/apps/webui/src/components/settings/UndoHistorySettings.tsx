@@ -6,6 +6,15 @@ import * as api from '../../services/api';
 import type { UndoSettings } from '../../types/changes';
 import '../TurnChanges.css';
 
+const DAYS_ERROR = 'Keep for: enter a whole number of days from 1 to 365.';
+const MB_ERROR = 'Use at most: enter a whole number of MB from 10 to 100,000.';
+
+function isWholeInRange(value: string, min: number, max: number): boolean {
+    if (!/^\d+$/.test(value.trim())) return false;
+    const n = Number(value);
+    return n >= min && n <= max;
+}
+
 function formatBytes(bytes: number): string {
     if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -26,9 +35,13 @@ export function UndoHistorySettings() {
         );
     }, []);
 
+    const [rejected, setRejected] = useState<{ days: boolean; mb: boolean }>({ days: false, mb: false });
+    const daysInvalid = !isWholeInRange(days, 1, 365) || rejected.days;
+    const mbInvalid = !isWholeInRange(mb, 10, 100000) || rejected.mb;
     const dirty = settings !== null && (days !== String(settings.retention_days) || mb !== String(settings.max_mb));
 
     const save = async () => {
+        if (daysInvalid || mbInvalid) return;
         setSaving(true);
         setResult(null);
         try {
@@ -36,7 +49,15 @@ export function UndoHistorySettings() {
             setSettings(s);
             setResult({ ok: true, text: 'Saved. Older undo history beyond these limits was removed.' });
         } catch (err) {
-            setResult({ ok: false, text: err instanceof Error ? err.message : String(err) });
+            const fields = err instanceof api.ApiError && err.httpStatus === 422 ? err.fields : [];
+            const badDays = fields.includes('retention_days');
+            const badMb = fields.includes('max_mb');
+            if (badDays || badMb) {
+                // Reword the backend's pydantic errors per field instead of showing them raw.
+                setRejected({ days: badDays, mb: badMb });
+            } else {
+                setResult({ ok: false, text: err instanceof Error ? err.message : String(err) });
+            }
         } finally {
             setSaving(false);
         }
@@ -60,9 +81,12 @@ export function UndoHistorySettings() {
                             min={1}
                             max={365}
                             value={days}
-                            onChange={(e) => setDays(e.target.value)}
+                            aria-invalid={daysInvalid}
+                            aria-describedby={daysInvalid ? 'undo-days-error' : undefined}
+                            onChange={(e) => { setDays(e.target.value); setRejected((r) => ({ ...r, days: false })); }}
                         />
                     </div>
+                    {daysInvalid && <p id="undo-days-error" className="settings-error" role="alert">{DAYS_ERROR}</p>}
                     <div className="setting-row">
                         <label htmlFor="undo-mb">Use at most (MB)</label>
                         <input
@@ -72,9 +96,12 @@ export function UndoHistorySettings() {
                             min={10}
                             max={100000}
                             value={mb}
-                            onChange={(e) => setMb(e.target.value)}
+                            aria-invalid={mbInvalid}
+                            aria-describedby={mbInvalid ? 'undo-mb-error' : undefined}
+                            onChange={(e) => { setMb(e.target.value); setRejected((r) => ({ ...r, mb: false })); }}
                         />
                     </div>
+                    {mbInvalid && <p id="undo-mb-error" className="settings-error" role="alert">{MB_ERROR}</p>}
                     <div className="setting-row setting-row-path">
                         <span>In use</span>
                         <span>
@@ -82,7 +109,7 @@ export function UndoHistorySettings() {
                             {' '}in <code className="setting-path">{settings.path}</code>
                         </span>
                     </div>
-                    <button type="button" className="btn-model-save" onClick={() => void save()} disabled={!dirty || saving}>
+                    <button type="button" className="btn-model-save" onClick={() => void save()} disabled={!dirty || saving || daysInvalid || mbInvalid}>
                         {saving ? 'Saving…' : 'Save'}
                     </button>
                 </>
