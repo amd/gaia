@@ -200,6 +200,19 @@ const (
 		"reconnect with `gaia connectors connect google --scopes <scopes>` (or Settings -> " +
 		`Connections in the Agent UI)."}`
 
+	// Another GAIA operation held the connection mid-save. VERBATIM from
+	// gaia.connectors.errors.ConnectionBusyError via api_routes' 502 branch.
+	searchConnectionBusy = `{"detail":"The google connection is being saved by another GAIA ` +
+		"operation (in this process or another) right now, so it was left as is. Retry in a moment; if this keeps " +
+		"happening, look for a stuck `gaia daemon` or Agent UI process.\"}"
+
+	// The connector list while another GAIA operation is saving the connection:
+	// scopes and can_send are unknown, not missing.
+	connectorsBusy = `{"agent_id":"installed:email","providers":[` +
+		`{"provider":"google","connected":true,"account_email":"you@gmail.com",` +
+		`"scopes":[],"can_send":false,"busy":true},` +
+		`{"provider":"microsoft","connected":false,"account_email":null,"scopes":[],"can_send":false,"busy":false}]}`
+
 	// The RELAY's own 502: the sidecar died between the agents listing and this
 	// call. Says nothing about the mailbox, so it must not fail the row.
 	// VERBATIM from relay.py's httpx.HTTPError handler — the "sidecar for agent"
@@ -2235,6 +2248,46 @@ func TestALapsedForwardedTokenIsNotReportedAsADeadSignIn(t *testing.T) {
 	}
 	if !strings.Contains(row.Remedy.Action, "r") {
 		t.Errorf("the remedy does not tell the user to re-check: %q", row.Remedy.Action)
+	}
+}
+
+// A connection another GAIA operation is mid-save on refuses with a 502 that says
+// so. It clears in a moment, so it must not cost the user a browser sign-in.
+func TestAConnectionBeingSavedElsewhereIsNotReportedAsADeadSignIn(t *testing.T) {
+	rep := Check(context.Background(),
+		newFake().with("POST /v1/email/search", 502, searchConnectionBusy), EmailConfig())
+	row, _ := rep.Find(KeyMailbox)
+
+	if row.State != StateUnknown {
+		t.Fatalf("state = %s, want unknown\n%s", row.State.Word(), rep)
+	}
+	if rep.Blocked() {
+		t.Error("a connection being saved elsewhere blocked the launch")
+	}
+	if row.Fix == FixConnectMailbox || strings.Contains(row.Remedy.Command, "connectors connect") {
+		t.Errorf("a busy connection is answered with a sign-in: %q", row.Remedy.Command)
+	}
+	if !strings.Contains(row.Detail, "saving the mailbox connection") {
+		t.Errorf("the row does not say the connection was being saved: %q", row.Detail)
+	}
+}
+
+// A busy connector entry has empty scopes and can_send false because they are
+// unknown mid-save. Reading that as "send not allowed" sends the user to
+// reconnect for nothing.
+func TestABusyConnectorIsNotReportedAsSendNotAllowed(t *testing.T) {
+	rep := Check(context.Background(),
+		newFake().with("GET /v1/email/connectors", 200, connectorsBusy), EmailConfig())
+	row, _ := rep.Find(KeyMailbox)
+
+	if row.State != StateUnknown {
+		t.Fatalf("state = %s, want unknown\n%s", row.State.Word(), rep)
+	}
+	if row.Fix == FixConnectMailbox || strings.Contains(row.Remedy.Command, "connectors connect") {
+		t.Errorf("a busy connector is answered with a sign-in: %q", row.Remedy.Command)
+	}
+	if strings.Contains(row.Line, "send not allowed") {
+		t.Errorf("a busy connector is reported as unable to send: %q", row.Line)
 	}
 }
 

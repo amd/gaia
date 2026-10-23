@@ -52,6 +52,7 @@ export function ModelSettings() {
     const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
     const provider = providers?.find((p) => p.id === chosen) ?? null;
+    const offline = (p: ProviderInfo | null) => p?.network?.reachable === false;
     const connected = !!provider && (!provider.remote || !!provider.models_discovered);
 
     const loadProviders = useCallback(async () => {
@@ -244,8 +245,10 @@ export function ModelSettings() {
                         type="button"
                         role="radio"
                         aria-checked={chosen === p.id}
-                        className={`provider-tab${chosen === p.id ? ' is-active' : ''}`}
+                        className={`provider-tab${chosen === p.id ? ' is-active' : ''}${offline(p) ? ' is-disabled' : ''}`}
                         onClick={() => setChosen(p.id)}
+                        disabled={offline(p) && chosen !== p.id}
+                        title={offline(p) ? p.network?.detail ?? undefined : undefined}
                     >
                         {p.remote ? <Cloud size={14} aria-hidden="true" /> : <Cpu size={14} aria-hidden="true" />}
                         <span>{p.name}</span>
@@ -274,7 +277,16 @@ export function ModelSettings() {
                         </div>
                     )}
 
-                    {provider.remote && (
+                    {offline(provider) && (
+                        <div className="settings-field">
+                            <p className="settings-error" role="alert">{provider.network?.detail}</p>
+                            <button type="button" className="btn-secondary" onClick={() => void loadProviders()}>
+                                Check again
+                            </button>
+                        </div>
+                    )}
+
+                    {provider.remote && !offline(provider) && (
                         <form
                             className="settings-field"
                             onSubmit={(e) => { e.preventDefault(); void connect(); }}

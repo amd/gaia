@@ -1925,6 +1925,14 @@
     font-size: 12px;
     color: var(--text-muted);
 }
+.mem-about-due {
+    display: block;
+    margin-top: 2px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+.mem-about-due.is-overdue { color: var(--danger); }
 .mem-about-actions {
     display: flex;
     gap: 6px;
