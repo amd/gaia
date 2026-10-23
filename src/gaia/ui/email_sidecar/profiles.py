@@ -121,6 +121,9 @@ class RelayProfile:
     #: Shown instead of running a private or memory-off turn when the installed
     #: agent is below :attr:`min_memory_api_version` — it would save to memory.
     memory_upgrade_message: str = ""
+    #: Contract version from which ``/query`` takes ``changes_turn_id`` and
+    #: records the run's file changes for undo. ``None`` means never sent.
+    min_changes_api_version: Optional[Tuple[int, int]] = None
 
 
 # --- email ------------------------------------------------------------------
@@ -444,6 +447,8 @@ GAIA_PROFILE = RelayProfile(
         "told so and would save to memory (needs contract 2.18+). Update the "
         "GAIA agent from the Hub and retry, or turn memory back on for this chat."
     ),
+    # 2.19 added /query's changes_turn_id field.
+    min_changes_api_version=(2, 19),
 )
 
 
@@ -540,6 +545,15 @@ def memory_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     return floor is not None and _meets(api_version, floor)
 
 
+def changes_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``changes_turn_id`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_changes_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def _meets(api_version: Optional[str], floor: Tuple[int, int]) -> bool:
     if not api_version:
         return False
@@ -566,4 +580,5 @@ __all__ = [
     "skills_supported",
     "scope_supported",
     "memory_supported",
+    "changes_supported",
 ]

@@ -58,6 +58,7 @@ from gaia.ui.email_sidecar.profiles import (
     _NO_PROFILE,
     SIDECAR_AGENT_IDS,
     api_version_supported,
+    changes_supported,
     confirmations_supported,
     documents_supported,
     memory_supported,
@@ -1902,6 +1903,7 @@ def _dispatch_sidecar_query(
     documents: list | None = None,
     allowed_paths: list | None = None,
     memory: str = "on",
+    recording: TurnRecording | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
 
@@ -1916,6 +1918,10 @@ def _dispatch_sidecar_query(
     *memory* is the chat's memory mode (:func:`_memory_mode`). Likewise, a
     private or memory-off turn is stopped rather than sent to a sidecar that
     keeps memory but is too old to be told not to save.
+
+    *recording* is the turn's undo recording. A sidecar that takes it records
+    its own file changes under a turn of this chat, which is where Changes,
+    Outputs and Undo read them.
 
     Self-contained: every path here either relays the sidecar's ``/query``
     loop to completion or emits a terminal SSE error and returns. The CALLER
@@ -2081,6 +2087,13 @@ def _dispatch_sidecar_query(
         documents=relayed_documents,
         allowed_paths=relayed_scope,
         memory=relayed_memory,
+        changes_turn_id=(
+            recording.relay()
+            if recording is not None
+            and session_id
+            and changes_supported(profile, handle.api_version)
+            else None
+        ),
     )
 
 
@@ -3501,6 +3514,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         documents=_relayed_documents(rag_file_paths, attached),
                         allowed_paths=allowed,
                         memory=_memory_mode(session, db),
+                        recording=recording,
                     )
                     return
 

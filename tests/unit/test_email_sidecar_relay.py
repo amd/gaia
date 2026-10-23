@@ -39,6 +39,7 @@ from gaia.ui.email_sidecar.errors import (  # noqa: E402
     SidecarError,
     SidecarHTTPError,
 )
+from gaia.ui.turn_summary import TurnLedger  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Part 2 — unit tests: hand-rolled fakes, no real HTTP
@@ -50,13 +51,14 @@ class _FakeHandler:
 
     Mirrors the real handler's attribute names relay_query depends on:
     ``_emit``, ``cancelled`` (a ``threading.Event``), ``active_relay_response``,
-    ``signal_done()``, and the question / model-slot hooks a ``needs_input``
-    drives (no slot here, so stepping away is a no-op).
+    ``signal_done()``, ``turn_ledger``, and the question / model-slot hooks a
+    ``needs_input`` drives (no slot here, so stepping away is a no-op).
     """
 
     def __init__(self) -> None:
         self.events: list = []
         self.cancelled = threading.Event()
+        self.turn_ledger = TurnLedger()
         self.active_relay_response = None
         self.done_calls = 0
         self.relay_question = None
