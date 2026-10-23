@@ -364,21 +364,19 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
     .filter(Boolean)
     .join("\n");
 
-  // Loop so that certain actions (Copy/Open log) return control to the
-  // same dialog rather than exiting the flow. The dialog includes a
-  // one-click "Install uv" action which attempts the packaged rescue
-  // installer and then returns 'retry' on success so the caller can
-  // re-run the full backend install.
-  const buttons = [
-    "Install uv (auto)",
-    "Retry",
-    "Manual install instructions",
-    "Copy log path",
-    "Open log file",
-    "Quit",
+  // Copy/Open log return to the same dialog. "Install uv" is offered only
+  // when uv is what failed; for any other stage it would just repeat Retry.
+  const uvFailed = stage === "ensure-uv";
+  const actions = [
+    ...(uvFailed ? [["install-uv", "Install uv (auto)"]] : []),
+    ["retry", "Retry"],
+    ["manual", "Manual install instructions"],
+    ["copy-log", "Copy log path"],
+    ["open-log", "Open log file"],
+    ["quit", "Quit"],
   ];
+  const buttons = actions.map(([, label]) => label);
 
-  // Helper to show the dialog and handle the response.
   const show = async () => {
     const result = await dialog.showMessageBox(parentWindow || null, {
       type: "error",
@@ -391,15 +389,12 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
       noLink: true,
     });
 
-    switch (result.response) {
-      case 0: {
-        // Run the full packaged install flow (ensureBackend) so the user
-        // gets a single-click recovery that attempts the entire backend
-        // install rather than only uv provisioning. Show progress UI
-        // while the operation runs. On success, tell the caller to retry
-        // (which will detect READY and proceed); on failure, re-show the
-        // dialog with augmented details.
-        const { window, onProgress, close } = createProgressWindow();
+    const action = (actions[result.response] || ["quit"])[0];
+    switch (action) {
+      case "install-uv": {
+        // Run the full packaged install (ensureBackend), with progress, so one
+        // click retries everything, not only uv; re-show with the new error.
+        const { onProgress, close } = createProgressWindow();
         try {
           await installer.ensureBackend({ onProgress, isPackaged: true });
           try { close(); } catch {}
@@ -414,9 +409,9 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
           return showFailureDialog(parentWindow, nextInfo);
         }
       }
-      case 1:
+      case "retry":
         return "retry";
-      case 2: {
+      case "manual": {
         try {
           await shell.openExternal("https://amd-gaia.ai/docs/quickstart#cli-install");
         } catch {
@@ -424,7 +419,7 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
         }
         return "manual";
       }
-      case 3: {
+      case "copy-log": {
         try {
           clipboard.writeText(logPath);
         } catch {
@@ -432,7 +427,7 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
         }
         return showFailureDialog(parentWindow, errorInfo);
       }
-      case 4: {
+      case "open-log": {
         try {
           await shell.openPath(logPath);
         } catch {
@@ -440,7 +435,6 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
         }
         return showFailureDialog(parentWindow, errorInfo);
       }
-      case 5:
       default:
         return "quit";
     }

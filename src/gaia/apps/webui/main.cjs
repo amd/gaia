@@ -21,6 +21,7 @@ const {
   dialog,
   ipcMain,
   powerMonitor,
+  session,
   shell,
 } = require("electron");
 const path = require("path");
@@ -82,6 +83,7 @@ const NotificationService = require("./services/notification-service.cjs");
 const KeepAwake = require("./services/keep-awake.cjs");
 const PortManager = require("./services/port-manager.cjs");
 const { isGaiaBackendProcess } = require("./services/backend-orphan.cjs");
+const { showBackendCrashDialog } = require("./services/backend-crash-dialog.cjs");
 const { buildIndexQuery } = require("./services/index-query.cjs");
 const backendInstaller = require("./services/backend-installer.cjs");
 const installerProgressDialog = require("./services/backend-installer-progress-dialog.cjs");
@@ -446,46 +448,23 @@ async function startBackend() {
 }
 
 /**
- * Show a user-facing crash dialog with the last ~20 stderr lines and
- * offer to write a diagnostics bundle. Invoked from child.on("exit")
- * when the kill was NOT initiated by us.
+ * Tell the user the backend stopped and offer Restart / Save diagnostics /
+ * Quit. Invoked from child.on("exit") when the kill was NOT initiated by us.
  */
 async function handleBackendCrash(code, signal) {
-  const tail = backendStderrTail.slice(-20).join("\n") || "(no stderr captured)";
-  const detail =
-    `The GAIA backend exited unexpectedly (code=${code}, signal=${signal}).\n\n` +
-    `Recent log output:\n${tail}`;
-
   try {
-    const choice = await dialog.showMessageBox({
-      type: "error",
-      title: "GAIA backend crashed",
-      message: "GAIA backend crashed",
-      detail,
-      buttons: ["Copy diagnostics", "Quit"],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
+    const choice = await showBackendCrashDialog({
+      dialog,
+      app,
+      code,
+      signal,
+      tailLines: backendStderrTail.slice(-8),
+      writeDiagnostics: () => portManager.writeDiagnosticsBundle(),
+      // The backend is gone, so there is no running work to ask about.
+      beforeQuit: () => { fatalQuitting = true; },
+      parent: mainWindow,
     });
-
-    if (choice.response === 0) {
-      try {
-        const bundlePath = await portManager.writeDiagnosticsBundle();
-        await dialog.showMessageBox({
-          type: "info",
-          title: "Diagnostics saved",
-          message: "Diagnostics bundle written",
-          detail: `Attach this file to your bug report:\n${bundlePath}`,
-          buttons: ["OK"],
-        });
-      } catch (err) {
-        console.error("[main] Could not write diagnostics bundle:", err.message);
-        dialog.showErrorBox(
-          "Could not write diagnostics",
-          `Failed to write diagnostics bundle: ${err.message}`
-        );
-      }
-    }
+    console.log(`[main] Backend crash: user chose ${choice}`);
   } catch (err) {
     console.error("[main] handleBackendCrash failed:", err.message);
   }
@@ -588,6 +567,17 @@ ipcMain.handle("window:set-titlebar-colors", (_event, colors) => {
   }
   return true;
 });
+
+// Registered once: createWindow runs again on every macOS reopen, and the session is shared.
+function titleDownloadSaveDialogs() {
+  // An export is a blob: download, and Chromium titles its Save dialog with the blob URL.
+  session.defaultSession.on("will-download", (_event, item) => {
+    item.setSaveDialogOptions({
+      title: "Save from GAIA",
+      defaultPath: path.join(app.getPath("downloads"), item.getFilename()),
+    });
+  });
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -843,8 +833,17 @@ function setupJumpList() {
 // ── Backend Bootstrap (Phase A) ───────────────────────────────────────────
 
 /** First install found a Lemonade already running: use it, or install GAIA's own? */
-async function chooseLemonadeInDialog(found) {
-  const { response } = await dialog.showMessageBox({
+async function chooseLemonadeInDialog(found, parent) {
+  // Modal to the progress window and in front: otherwise it can open behind
+  // other windows while the install sits at 70% waiting for it.
+  const owner = parent && !parent.isDestroyed() ? parent : null;
+  if (owner) {
+    if (owner.isMinimized()) owner.restore();
+    owner.show();
+    owner.focus();
+    owner.flashFrame(true);
+  }
+  const box = {
     type: "question",
     title: "Lemonade Server found",
     message: `A Lemonade Server (v${found.version}) is already running at ${found.url}. Use it instead of installing GAIA's own?`,
@@ -853,7 +852,11 @@ async function chooseLemonadeInDialog(found) {
     defaultId: 0,
     cancelId: 1,
     noLink: true,
-  });
+  };
+  const { response } = owner
+    ? await dialog.showMessageBox(owner, box)
+    : await dialog.showMessageBox(box);
+  if (owner && !owner.isDestroyed()) owner.flashFrame(false);
   return response === 0 ? "external" : "gaia";
 }
 
@@ -904,7 +907,7 @@ async function bootstrapBackend() {
       await backendInstaller.ensureBackend({
         onProgress: progress.onProgress,
         isPackaged: app.isPackaged,
-        chooseLemonade: chooseLemonadeInDialog,
+        chooseLemonade: (found) => chooseLemonadeInDialog(found, progress.window),
       });
       progress.close();
       console.log("[main] Backend bootstrap complete");
@@ -1231,6 +1234,7 @@ app.whenReady().then(async () => {
   }
 
   // Create the window (hidden until ready-to-show)
+  titleDownloadSaveDialogs();
   createWindow();
   isBootstrapping = false; // progress dialog is gone; window-all-closed may now quit
 

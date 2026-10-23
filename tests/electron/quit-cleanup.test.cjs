@@ -91,6 +91,26 @@ describe("installQuitCleanup", () => {
     }
   });
 
+  test("an instant cleanup still quits, though Electron ignores a re-quit in the same tick", async () => {
+    // Electron is still unwinding the prevented will-quit until the next task.
+    const app = new EventEmitter();
+    app.exited = 0;
+    let unwinding = false;
+    app.quit = jest.fn(() => {
+      if (unwinding) return;
+      let prevented = false;
+      unwinding = true;
+      app.emit("will-quit", { preventDefault: () => (prevented = true) });
+      setImmediate(() => (unwinding = false));
+      if (!prevented) app.exited += 1;
+    });
+    const state = installQuitCleanup({ app, cleanup: async () => {}, logger: quietLogger });
+
+    app.quit();
+    await state.running;
+    expect(app.exited).toBe(1);
+  });
+
   test("a cleanup that throws is logged and the app still quits", async () => {
     const app = fakeApp();
     const logger = { log: () => {}, error: jest.fn() };
@@ -170,6 +190,8 @@ describe("a fatal error quits through cleanup", () => {
     expect(order).toEqual(["beforeQuit", "cleanup"]);
     expect(exitSpy).not.toHaveBeenCalled();
     gate.resolve();
+    // The re-quit waits a task (setImmediate), which fake timers hold until advanced.
+    await jest.advanceTimersByTimeAsync(0);
     await state.running;
     expect(app.exited).toBe(1);
   });
@@ -198,6 +220,8 @@ describe("a fatal error quits through cleanup", () => {
     expect(log).toMatch(/FATAL \(while already quitting\).*EPIPE during cleanup/);
 
     gate.resolve();
+    // The re-quit waits a task (setImmediate), which fake timers hold until advanced.
+    await jest.advanceTimersByTimeAsync(0);
     await state.running;
     expect(app.exited).toBe(1);
   });
