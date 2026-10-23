@@ -4841,9 +4841,12 @@ class LemonadeClient:
                         response.text,
                         response.headers,
                     )
+                # The body stays last: the overflow classifier parses JSON from
+                # its first brace to the end of the text.
                 error_msg = (
                     f"Error in chat completions "
-                    f"(status {response.status_code}): {response.text}"
+                    f"(status {response.status_code}){self._from_server()}: "
+                    f"{response.text}"
                 )
                 self.log.error(error_msg)
                 raise tag_http_failure(
@@ -5303,15 +5306,16 @@ class LemonadeClient:
                     state,
                 ) from None
             error_type = e.__class__.__name__
-            error_msg = str(e)
-            self.log.error(f"OpenAI {error_type}: {error_msg}")
-            raise attach_retry_state(
-                LemonadeClientError(f"OpenAI {error_type}: {error_msg}"), state
-            )
+            error_msg = f"OpenAI {error_type}{self._from_server()}: {e}"
+            self.log.error(error_msg)
+            raise attach_retry_state(LemonadeClientError(error_msg), state)
         except Exception as e:
             self.log.error(f"Error using OpenAI client for streaming: {str(e)}")
+            label = _endpoint_label(self.base_url)
+            # An inner error from this client already names the server.
+            where = "" if label and label in str(e) else self._from_server()
             raise attach_retry_state(
-                LemonadeClientError(f"Streaming request failed: {str(e)}"), state
+                LemonadeClientError(f"Streaming request failed{where}: {e}"), state
             )
         finally:
             self._record_retries(state)
@@ -5805,6 +5809,15 @@ class LemonadeClient:
     def cloud_model_provider(self, model: str) -> Optional[str]:
         """Return the provider for a built-in or previously discovered cloud model."""
         return cloud_model_provider(model, self._model_metadata.get(model))
+
+    def _from_server(self) -> str:
+        """`` from the model server at host:port`` for an error, or ``""``.
+
+        Says "model server", not Lemonade: the base URL may be any
+        OpenAI-compatible endpoint, and nothing here tells them apart.
+        """
+        label = _endpoint_label(self.base_url)
+        return f" from the model server at {label}" if label else ""
 
     def _cloud_failure(
         self, status: Optional[int], model: str, reason: Optional[str] = None

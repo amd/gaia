@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A turn whose local model failed on a base URL the user set
+  (`LEMONADE_BASE_URL` or an external Lemonade) now names that server — "The
+  model server at 192.168.1.20:8080" — instead of "Lemonade on this machine",
+  which pointed at a Lemonade install that wasn't involved (#5295). Only the
+  host and port are shown, never credentials or a query string.
 - A `run_python` snippet or `execute_python_file` script whose code only reads
   files no longer marks the turn's undo as incomplete, unless files changed in
   the folders it ran in. The check fails closed: an import it doesn't know,

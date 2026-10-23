@@ -14,6 +14,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, FrozenSet, List, Optional
+from urllib.parse import urlsplit
 
 from gaia.config import gaia_home
 from gaia.logger import get_logger
@@ -96,6 +97,7 @@ from gaia.llm.inference_location import (
     resolve_inference_location,
 )
 from gaia.llm.lemonade_client import (
+    configured_lemonade_url,
     is_tool_calling_model,
     resolve_default_chat_model,
     resolve_lemonade_base_url,
@@ -1109,7 +1111,24 @@ class ChatAgent(
 
     def _model_service_label(self) -> Optional[str]:
         """Names the provider in a failed turn's message: "Fireworks AI: …"."""
-        return self._inference_location().display
+        location = self._inference_location()
+        if location.provider != "lemonade" or configured_lemonade_url() is None:
+            return location.display
+        # A base URL the user chose may be any OpenAI-compatible server.
+        live = getattr(
+            getattr(getattr(self, "chat", None), "llm_client", None),
+            "current_base_url",
+            None,
+        )
+        try:
+            parts = urlsplit(live() if callable(live) else resolve_lemonade_base_url())
+            host, port = parts.hostname, parts.port
+        except ValueError:
+            host = port = None
+        if not host:
+            return "The configured model server"
+        host = f"[{host}]" if ":" in host else host
+        return f"The model server at {host}" + (f":{port}" if port else "")
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""

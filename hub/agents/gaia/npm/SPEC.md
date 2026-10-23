@@ -332,9 +332,10 @@ the turn as untracked. Omit the field to record nothing. Pre-2.19 binaries
 error tells the user where to fix it: `"service"` (the default), `"tui"`,
 `"agent_ui"` or `"cli"`. A headless caller can omit it: under `"service"` the
 advice points at the model server the GAIA host uses (`LEMONADE_BASE_URL`), not
-at the TUI's or Agent UI's settings. A failed hosted-model request also names
-the `host:port` it went through. Pre-2.20 binaries `422` the field and word
-every such error for the TUI.
+at the TUI's or Agent UI's settings. A failed model request also names the
+`host:port` it went through; on a base URL the user set, a local model's failure
+reads "the model server at `host:port`", not "Lemonade on this machine".
+Pre-2.20 binaries `422` the field and word every such error for the TUI.
 
 ```json
 {

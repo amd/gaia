@@ -13,8 +13,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   hosted model returned HTTP 502 was told the "cloud request through Lemonade
   failed" and to check "the TUI provider settings", though no TUI was
   involved. The error now names the provider and the `host:port` the request
-  went through, and its advice follows the new `surface` field: `"service"`
-  (the default) points at the model server the GAIA host uses; `"tui"`,
+  went through. A local model on a base URL you set is reported as "the model
+  server at `host:port`" instead of "Lemonade on this machine", since GAIA
+  can't tell what serves it. The advice follows the new `surface` field:
+  `"service"` (the default) points at the model server the GAIA host uses; `"tui"`,
   `"agent_ui"` and `"cli"` keep their own settings screens. Older binaries
   refuse the field with `422`, so probe `/version` before sending it.
 
