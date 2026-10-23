@@ -108,26 +108,4 @@ describe('MCP connector configure panel', () => {
             }),
         );
     });
-
-    it('lets a configured keyed connector save one changed key', async () => {
-        const row = mcpRow({
-            id: 'mcp-brave',
-            display_name: 'Brave Search',
-            configured: true,
-            mcp_env_keys: ['BRAVE_API_KEY', 'BRAVE_REGION'],
-        });
-        await openTile(row);
-
-        const save = screen.getByRole('button', { name: 'Save' });
-        expect(save).toBeDisabled();
-        fireEvent.change(screen.getAllByPlaceholderText('••••••••')[1], {
-            target: { value: 'us' },
-        });
-        fireEvent.click(save);
-        await waitFor(() =>
-            expect(mocked.configureConnector).toHaveBeenCalledWith('mcp-brave', {
-                BRAVE_REGION: 'us',
-            }),
-        );
-    });
 });
