@@ -61,9 +61,10 @@
 .msg:focus-within .msg-actions { opacity: 1; }
 
 /* The actions hang below the message, over the next one; lift the message
- * being used so they stay clickable instead of the next message taking the click. */
-.msg:hover,
+ * being used so they stay clickable instead of the next message taking the click.
+ * Hover outranks focus: a clicked button keeps focus on the message below. */
 .msg:focus-within { z-index: 1; }
+.msg:hover { z-index: 2; }
 
 .msg-action-btn,
 .msg-copy {

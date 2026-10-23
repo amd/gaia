@@ -18,6 +18,12 @@ describe('MessageBubble hover actions stay clickable', () => {
     });
 
     it('lift the message being hovered or focused above its neighbours', () => {
-        expect(flat).toMatch(/\.msg:hover, \.msg:focus-within \{ z-index: 1; \}/);
+        expect(flat).toMatch(/\.msg:focus-within \{ z-index: 1; \}/);
+    });
+
+    it('let a hovered message cover a focused later one', () => {
+        // Clicking Copy leaves focus on that message; hovering the one above
+        // must still lift it higher, or its actions stay covered.
+        expect(flat).toMatch(/\.msg:hover \{ z-index: 2; \}/);
     });
 });
