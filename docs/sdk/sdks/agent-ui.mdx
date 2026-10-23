@@ -2211,7 +2211,9 @@ First-run hardware scan (issues #1726, #1727).
     whether this machine can run the first-run model, with a coarse tier
     recommendation. `recommended_model` is the model chat will load on this
     machine (the `default_model` `gaia init` chose, else Gemma-4-E4B), and
-    `required_disk_gb` is sized for that model's download.
+    `required_disk_gb` is sized for that model's download. `disk_blocker` is
+    the disk entry of `blockers` (null when the disk fits): an estimate the
+    setup screen replaces with the plan's real download once it knows it.
   </Accordion>
 
   <Accordion title="GET /api/onboarding/start">
@@ -2248,7 +2250,9 @@ so the two can never disagree about whether GAIA is set up.
   <Accordion title="GET /api/setup/plan">
     What setup will use, before it starts, from the same functions `gaia init`
     decides with: `lemonade` (`mode`, `url`, `reachable`), the `chat_model`
-    (`id`, `user_set`, `size_gb`, `downloaded`), `recommended_model`, the
+    (`id`, `user_set`, `size_gb`, `downloaded`, and `memory_warning`: the
+    message its load would fail with in the memory free now, else null; the
+    screen shows it without blocking the download), `recommended_model`, the
     default chat models as `options` with whether each fits this PC and the
     memory free now, `passed_over` (`id`, `reason`) for each larger model the
     pick skipped, every model to download with its size, `download_gb`,

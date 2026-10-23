@@ -142,6 +142,7 @@ def test_use_mine_on_a_big_pc_names_the_large_model_and_its_real_size(running):
         "user_set": False,
         "size_gb": 23.3,
         "downloaded": False,
+        "memory_warning": None,
     }
     assert plan["decided_after_server"] is False
     assert plan["recommended_model"] == LARGE_DEFAULT_MODEL_NAME
@@ -242,6 +243,36 @@ def test_free_memory_decides_the_pick_and_the_plan_says_why(
     assert "20.4 GB is free" in options[LARGE_DEFAULT_MODEL_NAME]["reason"]
     with pytest.raises(sp.SetupPlanError, match="won't fit"):
         sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
+
+
+def test_the_plan_says_when_the_chosen_model_cannot_load_right_now(
+    running, monkeypatch
+):
+    """The floor model is always setup's pick, so the plan warns instead of
+    hiding that its load will fail until memory is freed."""
+    from gaia.llm import lemonade_client
+
+    warning = (
+        f"Not enough free memory to load {DEFAULT_MODEL_NAME} with a 32,768-token "
+        "window: it needs about 7.8 GB and only 6.2 GB is free."
+    )
+    seen = []
+
+    def load_warning(url, requirement, _capacity):
+        seen.append((url, requirement.model_id))
+        return warning
+
+    monkeypatch.setattr(lemonade_client, "free_memory_load_warning", load_warning)
+    running(SMALL_GPU)
+    plan = sp.build_plan()
+    assert plan["chat_model"]["id"] == DEFAULT_MODEL_NAME
+    assert plan["chat_model"]["memory_warning"] == warning
+    assert seen == [("http://127.0.0.1:9/api/v1", DEFAULT_MODEL_NAME)]
+    assert plan["disk_problem"] is None
+
+
+def test_no_memory_warning_before_the_server_answers(no_server):
+    assert sp.build_plan()["chat_model"]["memory_warning"] is None
 
 
 def test_a_user_chosen_model_names_nothing_passed_over(running, config_file):

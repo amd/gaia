@@ -2868,6 +2868,17 @@
         ],
         "title": "Detected Platform"
       },
+      "disk_blocker": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Disk Blocker"
+      },
       "disk_free_gb": {
         "anyOf": [
           {

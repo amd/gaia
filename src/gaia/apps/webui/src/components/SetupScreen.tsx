@@ -421,7 +421,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                         </div>
                         {!run && (
                             <div className="setup-step-body">
-                                <SystemCheck hardware={hardware} error={hardwareError} />
+                                <SystemCheck hardware={hardware} error={hardwareError} plan={cloud ? null : plan} />
                             </div>
                         )}
                     </li>

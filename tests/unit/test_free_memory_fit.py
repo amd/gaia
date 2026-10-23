@@ -415,6 +415,27 @@ class TestDefaultModelFollowsFreeMemory:
         with pytest.raises(model_fit.ModelFitError, match="10.0 GB is free"):
             cmd._chat_model(_Machine(MAC_48))
 
+    def test_the_plan_warns_when_even_the_smallest_model_cannot_load_now(self, machine):
+        """Setup named Gemma, then its load failed: 7.8 GB needed, 6.2 GB free."""
+        machine(CPU_16, _ram(16, 6.2))
+        capacity = model_fit.capacity_from_system_info(CPU_16)
+        warning = lc.free_memory_load_warning(
+            URL, lc.find_model_requirement(GEMMA), capacity
+        )
+        assert warning.startswith(
+            f"Not enough free memory to load {GEMMA} with a 32,768-token window"
+        )
+        assert "7.8 GB" in warning and "6.2 GB is free" in warning
+        assert "Close apps" in warning
+
+    def test_no_plan_warning_when_the_model_fits_free_memory(self, machine):
+        machine(CPU_16, _ram(16, 12))
+        capacity = model_fit.capacity_from_system_info(CPU_16)
+        assert (
+            lc.free_memory_load_warning(URL, lc.find_model_requirement(GEMMA), capacity)
+            is None
+        )
+
     def test_a_remote_server_is_not_judged_by_this_pcs_memory(self, machine):
         machine(MAC_48, _ram(48, 2))
         remote = _Lemonade(MAC_48)

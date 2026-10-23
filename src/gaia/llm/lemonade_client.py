@@ -1991,6 +1991,28 @@ def optional_chat_models_that_fit(capacity: Any) -> List[str]:
     return out
 
 
+def insufficient_memory_message(model_id: str, window: int, reason: str) -> str:
+    """What a load refused for free memory says, and what to do about it."""
+    return (
+        f"Not enough free memory to load {model_id} with a {window:,}-token "
+        f"window: {reason}. Close apps that use a lot of memory (web browsers, "
+        "games, other AI apps, or another Lemonade server and the models it "
+        f"holds), then try again. See {FREE_MEMORY_HELP_URL}"
+    )
+
+
+def free_memory_load_warning(
+    base_url: str, requirement: "ModelRequirement", capacity
+) -> Optional[str]:
+    """The message a load of *requirement*'s model would fail with right now,
+    or None when it fits or free memory can't be told here."""
+    checked = _free_memory_check(base_url, requirement, capacity)
+    if checked is None or checked[0].fits:
+        return None
+    verdict, window = checked
+    return insufficient_memory_message(requirement.model_id, window, verdict.reason)
+
+
 def free_memory_verdict(base_url: str, requirement: "ModelRequirement", capacity):
     """Whether *requirement*'s model fits the memory free right now, at the
     smallest window a load falls back to.
@@ -2000,9 +2022,23 @@ def free_memory_verdict(base_url: str, requirement: "ModelRequirement", capacity
     told here: a Lemonade on another machine, a GPU whose free memory nothing
     reports, or free memory that could not be read (the load re-reads it).
     """
+    from gaia.llm.model_fit import FitVerdict
+
+    checked = _free_memory_check(base_url, requirement, capacity)
+    if checked is None or checked[0].fits:
+        return checked[0] if checked else None
+    return FitVerdict(
+        False,
+        f"not enough free memory right now: {checked[0].reason}. Close apps that "
+        "use a lot of memory, then run setup again to get it",
+    )
+
+
+def _free_memory_check(base_url: str, requirement: "ModelRequirement", capacity):
+    """``(FitVerdict, window)`` for *requirement*'s model now; see
+    :func:`free_memory_verdict` for when it is None."""
     from gaia.llm.model_fit import (
         MIN_CONTEXT_TOKENS,
-        FitVerdict,
         ModelFitError,
         check_free_memory,
         kv_cache_gb,
@@ -2029,13 +2065,7 @@ def free_memory_verdict(base_url: str, requirement: "ModelRequirement", capacity
         kv_cache_gb(requirement.kv_bytes_per_token, window),
         free.limit_gb,
     )
-    if verdict.fits:
-        return verdict
-    return FitVerdict(
-        False,
-        f"not enough free memory right now: {verdict.reason}. Close apps that "
-        "use a lot of memory, then run setup again to get it",
-    )
+    return verdict, window
 
 
 def recommend_default_chat_model(
@@ -7293,11 +7323,7 @@ class LemonadeClient:
         if not verdict.fits:
             _forget_fitted_ctx(self.base_url, requirement.model_id)
             raise InsufficientMemoryError(
-                f"Not enough free memory to load {model_name} with a "
-                f"{window:,}-token window: {verdict.reason}. Close apps that use "
-                "a lot of memory (web browsers, games, other AI apps, or another "
-                "Lemonade server and the models it holds), then try again. "
-                f"See {FREE_MEMORY_HELP_URL}"
+                insufficient_memory_message(model_name, window, verdict.reason)
             )
 
     def load_model(

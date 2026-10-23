@@ -625,6 +625,8 @@ export interface PreflightReport {
     required_memory_gb: number;
     compatible: boolean;
     blockers: string[];
+    /** The disk entry of `blockers`: an estimate the setup plan replaces once it knows the download. */
+    disk_blocker?: string | null;
     warnings: string[];
 }
 
@@ -1014,7 +1016,11 @@ export interface SetupDownload {
 /** GET /api/setup/plan: what setup will use and download, before it starts. */
 export interface SetupPlan {
     lemonade: { mode: 'gaia' | 'external'; url: string; reachable: boolean };
-    chat_model: { id: string; user_set: boolean; size_gb: number | null; downloaded: boolean | null };
+    chat_model: {
+        id: string; user_set: boolean; size_gb: number | null; downloaded: boolean | null;
+        /** How its load would fail in the memory free now; advisory, as memory can be freed first. */
+        memory_warning?: string | null;
+    };
     recommended_model: string | null;
     /** GAIA's own server isn't running yet, so the final pick comes once it is. */
     decided_after_server: boolean;

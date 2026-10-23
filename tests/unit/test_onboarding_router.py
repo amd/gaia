@@ -152,6 +152,17 @@ def test_preflight_low_disk_is_blocker(client, monkeypatch):
     body = client.get("/api/onboarding/preflight").json()
     assert body["compatible"] is False
     assert any("disk" in b.lower() for b in body["blockers"])
+    # Named on its own, so setup can replace it once it knows the real download.
+    assert body["disk_blocker"] in body["blockers"]
+    assert "0.5 GB is free" in body["disk_blocker"]
+
+
+@pytest.mark.allow_network
+def test_preflight_names_no_disk_blocker_when_the_disk_fits(client, monkeypatch):
+    monkeypatch.setattr(onboarding_mod, "_probe_lemonade_devices", _stub_devices())
+    monkeypatch.setattr(compatibility, "detect_total_memory_gb", lambda: 32.0)
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+    assert client.get("/api/onboarding/preflight").json()["disk_blocker"] is None
 
 
 @pytest.mark.allow_network

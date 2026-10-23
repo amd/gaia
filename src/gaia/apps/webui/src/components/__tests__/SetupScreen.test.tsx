@@ -186,6 +186,34 @@ describe('SetupScreen', () => {
         expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
     });
 
+    it("warns, without blocking, when the chosen model can't load in the memory free now", async () => {
+        const warning = 'Not enough free memory to load Gemma-4-E4B-it-GGUF with a 32,768-token window: '
+            + 'it needs about 7.8 GB and only 6.2 GB is free. Close apps that use a lot of memory, then try again.';
+        mockedApi.getSetupPlan.mockResolvedValue({
+            ...PLAN,
+            chat_model: { id: 'Gemma-4-E4B-it-GGUF', user_set: false, size_gb: 5.6, downloaded: true, memory_warning: warning },
+            recommended_model: 'Gemma-4-E4B-it-GGUF',
+            options: [{ ...PLAN.options[0], fits: false, reason: 'needs ~27 GB of memory' }, PLAN.options[1]],
+            download_gb: 0.3,
+        });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText(warning)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Download under 1 GB and finish setup' })).toBeEnabled();
+    });
+
+    it("replaces the first disk estimate with the plan's real download", async () => {
+        const estimate = 'Not enough disk space: install needs ~8.0 GB but only 4.4 GB is free on /Users/u/.gaia.';
+        mockedApi.getOnboardingPreflight.mockResolvedValue({
+            ...HARDWARE, disk_free_gb: 4.4, compatible: false, blockers: [estimate], disk_blocker: estimate,
+        });
+        mockedApi.getSetupPlan.mockResolvedValue({ ...PLAN, download_gb: 0.3, disk_free_gb: 4.4, disk_problem: null });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        const list = await screen.findByRole('list', { name: 'This PC' });
+        await waitFor(() => expect(list).toHaveTextContent('4 GB free · under 1 GB to download'));
+        expect(screen.queryByText(estimate)).not.toBeInTheDocument();
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
     it("won't start a download that doesn't fit the disk, and says why", async () => {
         const problem = 'The models need 29.2 GB and the disk that holds them has 10.0 GB free.';
         mockedApi.getSetupPlan.mockResolvedValue({ ...PLAN, disk_free_gb: 10, disk_problem: problem });

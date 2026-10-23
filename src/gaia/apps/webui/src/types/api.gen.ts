@@ -890,6 +890,7 @@ export interface PreflightReport {
   blockers?: string[];
   compatible?: boolean;
   detected_platform?: string | null;
+  disk_blocker?: string | null;
   disk_free_gb?: number | null;
   gpu_name?: string | null;
   gpu_vram_gb?: number | null;

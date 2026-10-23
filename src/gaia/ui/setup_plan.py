@@ -171,6 +171,7 @@ def build_plan() -> Dict[str, Any]:
 
     chat["size_gb"] = sizes.get(chat["id"], _registry_size(chat["id"]))
     chat["downloaded"] = sizes.get(chat["id"]) == 0.0 if client else None
+    chat["memory_warning"] = _memory_warning(client, chat["id"], capacity, lemonade)
     download_gb = (
         round(sum(s for s in sizes.values() if s), 1)
         if all(s is not None for s in sizes.values())
@@ -198,6 +199,22 @@ def build_plan() -> Dict[str, Any]:
         "disk_free_gb": disk_free_gb,
         "disk_problem": _disk_problem(download_gb, disk_free_gb),
     }
+
+
+def _memory_warning(client, model_id: str, capacity, lemonade) -> Optional[str]:
+    """How the chosen model's load would fail on the memory free now, else None.
+
+    The floor model is setup's pick whatever is free, so this warns rather than
+    blocks: the user can free memory before the load.
+    """
+    from gaia.llm import lemonade_client
+
+    requirement = lemonade_client.find_model_requirement(model_id)
+    if client is None or capacity is None or requirement is None:
+        return None
+    return lemonade_client.free_memory_load_warning(
+        lemonade["url"], requirement, capacity
+    )
 
 
 def _disk_problem(download_gb: Optional[float], disk_free_gb: Optional[float]):

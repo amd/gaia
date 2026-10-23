@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useState } from 'react';
-import { Check, Info, Loader2 } from 'lucide-react';
+import { AlertCircle, Check, Info, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
 import { shortModelName } from '../stores/modelStore';
 import { formatGb } from '../utils/modelLabels';
@@ -27,8 +27,13 @@ function deviceText(hw: PreflightReport): { value: string; ok: boolean } {
     return { value: 'No GPU or NPU reported; models run on the CPU', ok: false };
 }
 
-/** Device, memory and disk, read the moment setup opens. */
-export function SystemCheck({ hardware, error }: { hardware: PreflightReport | null; error: string | null }) {
+/**
+ * Device, memory and disk, read the moment setup opens. Once the plan knows
+ * the real download, the disk line follows it instead of the first estimate.
+ */
+export function SystemCheck({ hardware, error, plan = null }: {
+    hardware: PreflightReport | null; error: string | null; plan?: SetupPlan | null;
+}) {
     if (error) return <p className="setup-hint">This PC&rsquo;s hardware couldn&rsquo;t be read ({error}). Setup still checks it as it goes.</p>;
     if (!hardware) {
         return (
@@ -42,6 +47,16 @@ export function SystemCheck({ hardware, error }: { hardware: PreflightReport | n
     const warnings = hardware.lemonade_running
         ? hardware.warnings
         : hardware.warnings.filter((w) => !/\bNPU\b/.test(w));
+    // The plan's own disk check (shown by the download button) replaces the estimate.
+    const planned = plan?.download_gb != null && plan.disk_free_gb != null;
+    const blockers = planned ? hardware.blockers.filter((b) => b !== hardware.disk_blocker) : hardware.blockers;
+    const compatible = planned ? blockers.length === 0 : hardware.compatible;
+    const disk = planned
+        ? { value: `${Math.round(plan.disk_free_gb as number)} GB free · ${formatGb(plan.download_gb as number)} to download`, ok: !plan.disk_problem }
+        : {
+            value: hardware.disk_free_gb != null ? `${Math.round(hardware.disk_free_gb)} GB free` : 'Not reported',
+            ok: hardware.disk_free_gb != null && hardware.compatible,
+        };
     return (
         <>
             <ul className="setup-check" aria-label="This PC">
@@ -51,14 +66,10 @@ export function SystemCheck({ hardware, error }: { hardware: PreflightReport | n
                     value={hardware.ram_gb != null ? `${hardware.ram_gb} GB` : 'Not reported'}
                     ok={hardware.ram_gb != null}
                 />
-                <CheckRow
-                    label="Disk"
-                    value={hardware.disk_free_gb != null ? `${Math.round(hardware.disk_free_gb)} GB free` : 'Not reported'}
-                    ok={hardware.disk_free_gb != null && hardware.compatible}
-                />
+                <CheckRow label="Disk" value={disk.value} ok={disk.ok} />
             </ul>
-            {!hardware.compatible && hardware.blockers.length > 0 && (
-                <p className="setup-error" role="alert">{hardware.blockers.join(' ')}</p>
+            {!compatible && blockers.length > 0 && (
+                <p className="setup-error" role="alert">{blockers.join(' ')}</p>
             )}
             {warnings.length > 0 && <p className="setup-hint">{warnings.join(' ')}</p>}
         </>
@@ -158,6 +169,11 @@ export function ChatModelChoice({ plan, planError, chosen, passedOver, locked, o
                 {own && ' It’s your default_model; change it in Settings → Model after setup.'}
             </p>
             {!chat.user_set && <PassedOver items={plan.passed_over} />}
+            {chat.memory_warning && (
+                <p className="setup-hint">
+                    <AlertCircle size={13} aria-hidden="true" /> {chat.memory_warning}
+                </p>
+            )}
             {choosable && (
                 <div className="setup-choices" role="radiogroup" aria-label="Chat model">
                     {plan.options.map((o) => (
