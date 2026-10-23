@@ -848,6 +848,9 @@ class InitCommand:
         self._chat_choice: Optional[ChatModelChoice] = None
         # Set once that model is confirmed on disk; only then is it recorded.
         self._chat_model_ready = False
+        # Cleared when setup's verify step fails; a model it could not load
+        # must not be pinned as everyone's default.
+        self._setup_verified = True
         self.skip_models = skip_models
         self.skip_webui_build = skip_webui_build
         self.force_reinstall = force_reinstall
@@ -1238,6 +1241,7 @@ class InitCommand:
             self._print("")
             self._print_step(step_num, total_steps, "Verifying setup...")
             verify_ok = self._verify_setup()
+            self._setup_verified = verify_ok
 
             # Saved even when verification fails -- the models may be fine.
             # Persist profile choice to ~/.gaia/config.json
@@ -1684,7 +1688,8 @@ class InitCommand:
         """Save a hardware-picked chat model as ``default_model`` so every agent
         resolves to it. Never overwrites a model the user chose, and records
         nothing when the pick is the floor model every agent already defaults to
-        or when setup did not download it (declined, or ``--skip-models``).
+        or when setup did not download it (declined, or ``--skip-models``) or
+        could not verify it.
         """
         from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
@@ -1693,6 +1698,8 @@ class InitCommand:
             return
         # An undownloaded default would make every agent's first load fail.
         if not self._chat_model_ready:
+            return
+        if not self._setup_verified:
             return
         if choice.model_id != DEFAULT_MODEL_NAME:
             config.default_model = choice.model_id

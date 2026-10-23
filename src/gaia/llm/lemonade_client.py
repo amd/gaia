@@ -758,6 +758,27 @@ def _with_own_memory(free, resident, requirement: "ModelRequirement"):
     return free
 
 
+def free_memory_verdict(url: str, requirement: "ModelRequirement", window: int):
+    """Whether *requirement*'s model, at a *window*-token context, fits the
+    memory free now on the Lemonade at *url*.
+
+    The rule every load is refused by, so a choice made up front cannot
+    disagree with it. None when this machine does not report free memory for
+    that pool. Raises like :func:`_free_memory_snapshot`.
+    """
+    from gaia.llm.model_fit import check_free_memory, kv_cache_gb
+
+    free, resident = _free_memory_snapshot(url)
+    if free is None:
+        return None
+    free = _with_own_memory(free, resident, requirement)
+    return check_free_memory(
+        requirement.size_gb or 0.0,
+        kv_cache_gb(requirement.kv_bytes_per_token, window),
+        free.limit_gb,
+    )
+
+
 def _forget_fitted_ctx(url: str, model_id: str) -> None:
     """Drop the windows decided for *model_id* at *url*, so they are re-measured."""
     url = url.rstrip("/")
@@ -1991,6 +2012,30 @@ def optional_chat_models_that_fit(capacity: Any) -> List[str]:
     return out
 
 
+def _free_memory_rules_out(client, requirement, capacity) -> Optional[str]:
+    """Why the memory free now cannot load *requirement*'s model, or None.
+
+    Judged at the smallest window a load shrinks to, so a model refused here
+    is one setup's verify step would also refuse.
+    """
+    from gaia.llm.model_fit import MIN_CONTEXT_TOKENS, ModelFitError
+
+    url = getattr(client, "base_url", None)
+    if not _is_local_url(url):
+        return None
+    window = min(MIN_CONTEXT_TOKENS, context_for_capacity(requirement, capacity))
+    try:
+        verdict = free_memory_verdict(url, requirement, window)
+    except (ModelFitError, LemonadeClientError) as e:
+        return f"cannot read the memory free on this PC, so cannot tell it loads: {e}"
+    if verdict is None or verdict.fits:
+        return None
+    return (
+        f"not enough free memory to load it now: {verdict.reason}. Close apps "
+        "that use a lot of memory, then re-run `gaia init` to use it"
+    )
+
+
 def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
     """Pick the default chat model this machine can run, from Lemonade's view of it.
 
@@ -2045,6 +2090,10 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
             )
             if not verdict.fits:
                 unsupported.append((model_id, verdict.reason))
+                continue
+            reason = _free_memory_rules_out(client, mr, capacity)
+            if reason:
+                unsupported.append((model_id, reason))
                 continue
         candidates.append((model_id, size, kv))
     model_id, skipped = pick_default_model(candidates, capacity)
@@ -7201,10 +7250,11 @@ class LemonadeClient:
             or not _is_local_url(self.base_url)
         ):
             return
-        from gaia.llm.model_fit import ModelFitError, check_free_memory, kv_cache_gb
+        from gaia.llm.model_fit import ModelFitError
 
+        window = ctx_size or requirement.min_ctx_size
         try:
-            free, resident = _free_memory_snapshot(self.base_url)
+            verdict = free_memory_verdict(self.base_url, requirement, window)
         except ModelFitError as e:
             raise LemonadeClientError(
                 f"Cannot tell whether {model_name} fits in memory, so it was not "
@@ -7216,20 +7266,13 @@ class LemonadeClient:
                 f"loading {model_name}: {e} Check that Lemonade is running "
                 "(`gaia init --check`)."
             ) from e
-        if free is None:
+        if verdict is None:
             self.log.debug(
                 f"Free GPU memory is not reported here; loading {model_name} "
                 "without a free-memory check (Lemonade fails a load that does "
                 "not fit the GPU)."
             )
             return
-        free = _with_own_memory(free, resident, requirement)
-        window = ctx_size or requirement.min_ctx_size
-        verdict = check_free_memory(
-            requirement.size_gb,
-            kv_cache_gb(requirement.kv_bytes_per_token, window),
-            free.limit_gb,
-        )
         if not verdict.fits:
             _forget_fitted_ctx(self.base_url, requirement.model_id)
             raise InsufficientMemoryError(
