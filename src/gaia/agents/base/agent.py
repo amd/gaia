@@ -2063,6 +2063,8 @@ class Agent(abc.ABC):
     _pre_turn_spans: Optional[List[Any]] = None
     # Per-step timing for the running turn (always on); ``None`` between turns.
     _step_timer: Optional[StepTimer] = None
+    # Whether the open step's stats record was written; see _record_unrecorded_step.
+    _step_stats_recorded: bool = False
 
     # Skills (#888): lazily built manager + the skills loaded into this agent.
     # Instance-level once set, so one agent's skills never leak into a sibling.
@@ -2880,12 +2882,18 @@ Do NOT wrap conversational replies in JSON.
         step: int,
         step_timer: StepTimer,
         conversation: List[Dict[str, Any]],
+        poll: bool = True,
     ) -> None:
-        """Append this step's backend stats, timed by *step_timer*, to the trace."""
-        perf_stats = response_stats or self.chat.get_stats()
+        """Append this step's backend stats, timed by *step_timer*, to the trace.
+
+        *poll* False uses only the step's own response stats: a step whose call
+        failed must not borrow the server's last-request numbers.
+        """
+        perf_stats = response_stats or (self.chat.get_stats() if poll else None)
         # A step whose backend reported no stats still took model time.
         if not (perf_stats or step_timer.has_llm_calls()):
             return
+        self._step_stats_recorded = True
         stats_record = {
             "type": "stats",
             "step": step,
@@ -2898,6 +2906,25 @@ Do NOT wrap conversational replies in JSON.
         if self._context_evictor is not None:
             self._context_evictor.note_prompt_tokens(perf_stats)
         conversation.append({"role": "system", "content": stats_record})
+
+    def _record_unrecorded_step(
+        self,
+        response_stats: Optional[Dict[str, Any]],
+        step: Optional[int],
+        step_timer: StepTimer,
+        conversation: List[Dict[str, Any]],
+    ) -> None:
+        """Record a step that called the model but left the loop early (a cut-off
+        reply, a parse retry), so its tokens and time stay in the turn's totals."""
+        if step is None or self._step_stats_recorded or not step_timer.has_llm_calls():
+            return
+        self._record_step_stats(
+            response_stats,
+            step,
+            step_timer,
+            conversation,
+            poll=step_timer.last_call_finished(),
+        )
 
     def _attach_step_timer(self) -> StepTimer:
         """Start this turn's step timer and route the SDK's call timings to it."""
@@ -9122,6 +9149,10 @@ Do NOT wrap conversational replies in JSON.
         """Inner implementation of ``process_query`` — see public method docstring."""
         start_time = time.time()  # Track query processing start time
         step_timer = self._attach_step_timer()
+        # Set per step; a step that exits early is recorded at the next boundary.
+        response_stats = None
+        open_step: Optional[int] = None
+        self._step_stats_recorded = False
 
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
@@ -9379,8 +9410,13 @@ Do NOT wrap conversational replies in JSON.
 
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array
+            self._record_unrecorded_step(
+                response_stats, open_step, step_timer, conversation
+            )
             steps_taken += 1
             step_timer.begin_step(steps_taken)
+            open_step = steps_taken
+            self._step_stats_recorded = False
             logger.debug(f"Step {steps_taken}/{steps_limit}")
             if self._context_evictor is not None:
                 from gaia.agents.base.artifacts import store_for
@@ -11956,6 +11992,9 @@ Do NOT wrap conversational replies in JSON.
 
         # Closes the last step, filling its stats record before anyone reads
         # it. After the step-cap call above, so that call's time is counted.
+        self._record_unrecorded_step(
+            response_stats, open_step, step_timer, conversation
+        )
         timing_summary = step_timer.finish()
 
         # Cancelled mid-generation via the Agent UI Stop (#2157): end the turn

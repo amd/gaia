@@ -646,3 +646,59 @@ def test_a_step_whose_native_tool_call_fails_still_records_its_stats(
         sum(t["seconds"] for r in records for t in r["tools"]), abs=1e-3
     )
     assert sum(r["performance_stats"]["completion_tokens"] for r in records) == 40
+
+
+def _stats_records(result):
+    return [
+        m["content"]
+        for m in result["conversation"]
+        if m.get("role") == "system"
+        and isinstance(m.get("content"), dict)
+        and m["content"].get("type") == "stats"
+    ]
+
+
+class _FinishPerCall(FakeProvider):
+    """Reports each reply's own finish reason, in order."""
+
+    def __init__(self, replies, finishes, **kwargs):
+        super().__init__(replies, **kwargs)
+        self.finishes = list(finishes)
+
+    def chat(self, messages, model=None, stream=False, **kwargs):
+        self.finish = self.finishes.pop(0)
+        return super().chat(messages, model=model, stream=stream, **kwargs)
+
+
+def test_a_step_cut_off_and_continued_keeps_its_tokens(_clean_registry):
+    """Any early exit after a model call records the step, not just tool failures."""
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _TimedAgent(silent_mode=True, skip_lemonade=True)
+    agent.streaming = False
+    provider = _FinishPerCall(
+        ["The value is", json.dumps({"thought": "done", "answer": "Done."})],
+        ["length", "stop"],
+        delay=LLM_DELAY,
+        usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+    )
+    agent.chat = _sdk(provider)
+
+    result = agent.process_query("Go.", max_steps=5)
+
+    records = _stats_records(result)
+    assert result["timing_summary"]["llm_calls"] == len(records) == 2
+    assert sum(r["performance_stats"]["completion_tokens"] for r in records) == 40
+    assert sum(r["llm_seconds"] for r in records) == pytest.approx(
+        result["timing_summary"]["llm_seconds"], abs=1e-3
+    )
+
+
+def test_last_call_finished_tells_a_reply_from_a_failure():
+    clock = FakeClock()
+    timer = StepTimer(clock=clock)
+    timer.begin_step(1)
+    assert not timer.last_call_finished()
+    timer.record_llm_call(_call(1.0, finish=None, completion=None))
+    assert not timer.last_call_finished()
+    timer.record_llm_call(_call(1.0, finish="stop", completion=5))
+    assert timer.last_call_finished()
