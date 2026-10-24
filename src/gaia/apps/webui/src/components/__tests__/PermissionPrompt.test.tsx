@@ -56,6 +56,25 @@ describe('PermissionPrompt', () => {
         expect(screen.getByRole('button', { name: 'Show less' })).toHaveAttribute('aria-expanded', 'true');
     });
 
+    it('splits a relayed command summary with no args into the command and its risk note', () => {
+        useNotificationStore.getState().addNotification(request({
+            toolArgs: undefined,
+            summary: 'powershell -Command "Get-ChildItem"\nCan run any code, with your permissions.',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(document.querySelector('.perm-card-exact')?.textContent).toBe('powershell -Command "Get-ChildItem"');
+        expect(screen.getByRole('note')).toHaveTextContent('Can run any code, with your permissions.');
+    });
+
+    it('keeps a no-args summary for other tools as plain text', () => {
+        useNotificationStore.getState().addNotification(request({
+            tool: 'send_email', toolArgs: undefined, summary: 'Send to a@b.c\nSubject: hi',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(document.querySelector('.perm-card-exact')).toBeNull();
+        expect(document.querySelector('.perm-card-detail')?.textContent).toBe('Send to a@b.c\nSubject: hi');
+    });
+
     it('renders nothing when this chat has no pending request', () => {
         useNotificationStore.getState().addNotification(request({ sessionId: 'other-chat' }));
         const { container } = render(<PermissionPrompt sessionId="chat-1" />);
