@@ -532,7 +532,7 @@ class TestRealLemonadeReports:
         cap = capacity_from_system_info(self._windows_igpu("128 GB"))
         assert cap.memory_gb < 128.0
 
-    @pytest.mark.parametrize("physical", [None, "", "unknown", "0 GB"])
+    @pytest.mark.parametrize("physical", [None, "", "unknown", "0 GB", "1.2.3 GB"])
     def test_windows_igpu_carve_out_without_ram_fails_loudly(
         self, monkeypatch, physical
     ):

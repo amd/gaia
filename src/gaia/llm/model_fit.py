@@ -162,7 +162,11 @@ def _num(value: Any) -> float:
 def _physical_memory_gb(info: Dict[str, Any]) -> float:
     raw = str(info.get("Physical Memory") or "")
     match = re.search(r"([\d.]+)\s*GB", raw)
-    return float(match.group(1)) if match else 0.0
+    try:
+        return float(match.group(1)) if match else 0.0
+    except ValueError:
+        # Unreadable counts as absent; callers then raise ModelFitError.
+        return 0.0
 
 
 def format_gb(gb: float) -> str:

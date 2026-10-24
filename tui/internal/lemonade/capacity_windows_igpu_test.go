@@ -69,7 +69,7 @@ func TestWindowsIGPUPoolIsCarveOutPlusSharedRAM(t *testing.T) {
 
 func TestWindowsIGPUCarveOutWithoutRAMIsAnError(t *testing.T) {
 	withCarveOut(t, 4)
-	for _, physical := range []string{"", "unknown", "0 GB"} {
+	for _, physical := range []string{"", "unknown", "0 GB", "1.2.3 GB"} {
 		var info systemInfo
 		if err := json.Unmarshal([]byte(windowsIGPU(physical)), &info); err != nil {
 			t.Fatal(err)
