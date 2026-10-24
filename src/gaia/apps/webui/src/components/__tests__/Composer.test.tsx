@@ -4,7 +4,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Composer } from '../Composer';
+import { Composer, MAX_MESSAGE_CHARS } from '../Composer';
 import { useAttachments } from '../../hooks/useAttachments';
 import * as api from '../../services/api';
 
@@ -204,5 +204,27 @@ describe('Composer height', () => {
         rerender(<Harness disabledReason={null} />);
         expect(box.style.height).toBe('24px');
         spy.mockRestore();
+    });
+});
+
+describe('Composer message length (#5716)', () => {
+    it('blocks a message over the limit and says what to do instead', () => {
+        const onSubmit = vi.fn();
+        render(<Harness initial={'x'.repeat(MAX_MESSAGE_CHARS + 1)} onSubmit={onSubmit} />);
+
+        expect(screen.getByRole('alert')).toHaveTextContent('Too long to send');
+        expect(screen.getByRole('alert')).toHaveTextContent('attach it');
+        expect(screen.getByLabelText('Send')).toBeDisabled();
+        fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+        expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it('sends a message right at the limit', () => {
+        const onSubmit = vi.fn();
+        render(<Harness initial={'x'.repeat(MAX_MESSAGE_CHARS)} onSubmit={onSubmit} />);
+
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+        expect(onSubmit).toHaveBeenCalledTimes(1);
     });
 });
