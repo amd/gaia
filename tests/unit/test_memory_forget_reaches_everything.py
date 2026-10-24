@@ -88,6 +88,9 @@ def test_something_said_again_after_forgetting_is_found(store):
             category="fact", content="Trip to Lisbon December 10 to 17 with Sam"
         )
     )
+    # A forget in the turn's own clock tick still applies, so the user says it later.
+    earlier = (datetime.now().astimezone() - timedelta(seconds=1)).isoformat()
+    store._conn.execute("UPDATE forgotten SET forgotten_at = ?", (earlier,))
     store.store_turn(
         "s-new", "user", "New plan: Lisbon December 10 to 17 with Sam after all"
     )
