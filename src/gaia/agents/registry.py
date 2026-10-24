@@ -66,6 +66,7 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     ),
     "audio": ("gaia.agents.tools.audio_tools", "AudioToolsMixin"),
     "wait": ("gaia.agents.tools.wait_tools", "WaitToolsMixin"),
+    "follow_up": ("gaia.agents.tools.follow_up_tools", "FollowUpToolsMixin"),
     "reasoning_effort": (
         "gaia.agents.tools.reasoning_tools",
         "ReasoningEffortToolsMixin",

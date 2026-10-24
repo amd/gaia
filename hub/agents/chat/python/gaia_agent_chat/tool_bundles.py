@@ -190,11 +190,11 @@ DOC_BUNDLES = [
 
 # -- "full" profile (the flagship GaiaAgent) ---------------------------------
 #
-# Same contract as the DOC_* pair above, sized for the ``full`` registry: 66
+# Same contract as the DOC_* pair above, sized for the ``full`` registry: 69
 # tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
 # tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
-# Always-on set (16 tools). Deliberately a smaller share of the registry than
+# Always-on set (17 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
 # memory (recall is relevant to every turn), loop control (protocol-level turn
 # signalling, plus ``sleep``: a rate limit arrives mid-turn, when no selection
@@ -231,6 +231,8 @@ FULL_CORE_TOOLS = frozenset(
         "set_loop_state",
         "request_user_input",
         "sleep",
+        # "remind me" / "check back" must always reach it, whatever the shortlist
+        "schedule_follow_up",
         # escape hatch (#1450)
         "load_tools",
         "read_tool_output",
@@ -503,6 +505,16 @@ FULL_BUNDLES = [
             }
         ),
         description="Persistent memory: store, recall, update, and forget facts.",
+    ),
+    ToolBundle(
+        name="follow_ups",
+        members=frozenset(
+            {"schedule_follow_up", "list_follow_ups", "cancel_follow_up"}
+        ),
+        description=(
+            "Do something later on your own: check on a job or result, follow "
+            "up, remind; list or cancel what is scheduled."
+        ),
     ),
     ToolBundle(
         name="loop_control",

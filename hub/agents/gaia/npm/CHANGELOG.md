@@ -33,6 +33,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `final`, the same as the stdio transport. A run cancelled mid-answer stops
   within a token and ends with an empty `final`, as stdio does; text not yet
   sent when the cancel lands is dropped.
+
+### Added
+
+- **The agent schedules its own follow-ups.** "Check on the build in 2 hours"
+  or "remind me tomorrow at 9" becomes a one-shot job on the GAIA daemon's
+  clock (`schedule_follow_up`, `list_follow_ups`, `cancel_follow_up`), from a
+  minute to 7 days ahead, at most 10 waiting. When it comes due the daemon runs
+  the task as a fresh turn on the model the chat used, posts a desktop
+  notification, and the next turn on any front end opens with the result. The
+  fired run cannot use a tool that needs approval, and the agent is told so.
+  A reminder at a time is scheduled as well as remembered, so it alerts.
+
 ### Fixed
 
 - **Full access in the Agent UI asks before a gated shell command instead of

@@ -364,7 +364,7 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Twelve of the agent's 95 tools mutate the machine and need explicit approval
+Twelve of the agent's 98 tools mutate the machine and need explicit approval
 before they run. Nine sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
 **`wait_for_condition`**, which re-runs a shell command until it succeeds,
@@ -636,6 +636,10 @@ There is no silent null.
 - **A placeholder hash in `binaries.lock.json` blocks the fetch before any
   network call.** Between releases that is the *expected* state — it is not a
   broken install, and there is no override.
+- **`schedule_follow_up` returns an error on a bare sidecar.** Follow-ups live
+  on the GAIA daemon's clock; a sidecar started without the daemon cannot
+  schedule one. Under the daemon, a fired follow-up's result arrives at the
+  start of the next turn's context, so the agent mentions it unprompted.
 - **No `linux-arm64` / `win32-arm64` sidecar.** The TUI has both. A `PlatformError`
   on those hosts is the design, not a missing artifact.
 - **A `401` from `/v1/gaia/*` is the caller-auth token, not a bug.** The sidecar

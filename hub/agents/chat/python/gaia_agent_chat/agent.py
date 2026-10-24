@@ -82,6 +82,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     FileIOToolsMixin,
     FileSearchToolsMixin,
     FileToolsMixin,
+    FollowUpToolsMixin,
     RAGToolsMixin,
     ReasoningEffortToolsMixin,
     ScreenshotToolsMixin,
@@ -266,7 +267,8 @@ _AGENT_UI_SCHEDULE_LINE = (
     '**Scheduled tasks** in the sidebar (schedules like "every 6h", "daily at '
     '9am", "every monday at 3pm"). For a recurring request, point the user '
     "there and help them word a valid schedule and prompt; never say scheduling "
-    "is unavailable.\n"
+    "is unavailable. For a one-off check later, call schedule_follow_up "
+    "yourself.\n"
 )
 
 
@@ -420,6 +422,7 @@ class ChatAgent(
     SDToolsMixin,
     AudioToolsMixin,
     WaitToolsMixin,
+    FollowUpToolsMixin,
     ReasoningEffortToolsMixin,
     MCPClientMixin,
 ):
@@ -782,8 +785,18 @@ class ChatAgent(
 
     def get_memory_dynamic_context(self) -> str:
         """Per-turn context, plus which documents are indexed right now."""
-        parts = (super().get_memory_dynamic_context(), self._indexed_documents_line())
+        parts = (
+            super().get_memory_dynamic_context(),
+            self._indexed_documents_line(),
+            self.follow_up_context(),
+        )
         return "\n".join(part for part in parts if part)
+
+    def _after_process_query(self, user_input: str, assistant_response: str) -> None:
+        super()._after_process_query(user_input, assistant_response)
+        # Only an answered turn has told the user its follow-up results.
+        status = (getattr(self, "last_result", None) or {}).get("status")
+        self.follow_ups_told(status != "failed" and bool(assistant_response.strip()))
 
     # ── lazy subsystems (#2323 Increment 3) ────────────────────────────────
 
@@ -1185,7 +1198,9 @@ class ChatAgent(
             "current_base_url",
             None,
         )
-        label = _endpoint_label(live() if callable(live) else resolve_lemonade_base_url())
+        label = _endpoint_label(
+            live() if callable(live) else resolve_lemonade_base_url()
+        )
         if not label:
             return "The configured model server"
         return f"The model server at {label}"
@@ -2916,6 +2931,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     # - FileSearchToolsMixin (shared): File and directory search across drives
     # - FileIOToolsMixin (code/tools/file_io.py): read_file, write_file, edit_file (3 generic tools only)
     # - WaitToolsMixin (wait_tools.py): sleep, to wait out a rate limit
+    # - FollowUpToolsMixin (follow_up_tools.py): schedule/list/cancel own follow-ups
     # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from <gaia_home>/mcp_servers.json)
 
     def _register_external_tools_conditional(self) -> None:

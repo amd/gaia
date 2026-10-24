@@ -195,6 +195,10 @@ def create_app(
             }
         return payload
 
+    from gaia.daemon import followup_routes
+
+    followup_routes.mount(app, require_token, clock)
+
     @app.post(f"{API_PREFIX}/shutdown")
     def shutdown(_: None = Depends(require_token)) -> dict:
         # uvicorn polls should_exit in its serving loop; setting it triggers a
