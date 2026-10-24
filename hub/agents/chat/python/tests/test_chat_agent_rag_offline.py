@@ -12,6 +12,7 @@ for real.
 import hashlib
 import platform
 import re
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, create_autospec, patch
 
@@ -397,3 +398,115 @@ def test_shell_command_lists_allowed_directory(agent, workdir):
 
     assert result["status"] == "success", result
     assert "marker.txt" in result["stdout"], result
+
+
+def _write_office_document(path, text, extension):
+    extension = extension.lower()
+    if extension == ".docx":
+        from docx import Document
+
+        document = Document()
+        document.add_paragraph(text)
+        document.save(path)
+    elif extension == ".pptx":
+        from pptx import Presentation
+
+        document = Presentation()
+        slide = document.slides.add_slide(document.slide_layouts[5])
+        slide.shapes.title.text = text
+        document.save(path)
+    elif extension == ".xlsx":
+        from openpyxl import Workbook
+
+        document = Workbook()
+        document.active["A1"] = text
+        document.save(path)
+        document.close()
+    else:
+        path.write_text(text, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "extension", [".docx", ".pptx", ".xlsx", ".DOCX", ".PPTX", ".XLSX", ".txt"]
+)
+def test_watched_documents_reindex_after_save(agent, workdir, extension):
+    path = workdir / f"report{extension}"
+    _write_office_document(path, "The current project code is ALPHA.", extension)
+    agent.reindex_file(str(path))
+    assert any("ALPHA" in chunk for chunk in agent.rag.chunks)
+
+    reindexed = threading.Event()
+    reindex = agent.rag.reindex_document
+
+    def record_reindex(filename):
+        result = reindex(filename)
+        reindexed.set()
+        return result
+
+    with patch.object(agent.rag, "reindex_document", side_effect=record_reindex):
+        agent._watch_directory(str(workdir))
+        _write_office_document(path, "The current project code is BRAVO.", extension)
+        assert reindexed.wait(10), f"Saving {extension} was not reindexed"
+        assert agent.file_handlers[0].wait_idle(timeout=30)
+
+    assert any("BRAVO" in chunk for chunk in agent.rag.chunks)
+    assert not any("ALPHA" in chunk for chunk in agent.rag.chunks)
+    assert str(path) in agent.indexed_files
+
+
+@pytest.mark.parametrize("extension", [".docx", ".pptx", ".xlsx"])
+def test_watched_office_owner_files_are_ignored(agent, workdir, extension):
+    owner = workdir / f"~$report{extension}"
+    with patch.object(
+        agent.rag, "reindex_document", wraps=agent.rag.reindex_document
+    ) as reindex:
+        agent._watch_directory(str(workdir))
+        handler = agent.file_handlers[0]
+        _write_office_document(owner, "Owner file", extension)
+        assert not handler._should_process(str(owner))
+        assert not handler._should_process(str(owner.with_suffix(extension.upper())))
+        assert handler.wait_idle(timeout=30)
+        reindex.assert_not_called()
+
+
+def test_watched_office_save_by_rename_ignores_temporary_files(agent, workdir):
+    path = workdir / "report.docx"
+    _write_office_document(path, "The project code is ALPHA.", ".docx")
+    agent.reindex_file(str(path))
+
+    removed = threading.Event()
+    reindexed = threading.Event()
+    remove = agent.rag.remove_document
+    reindex = agent.rag.reindex_document
+
+    def record_remove(filename):
+        result = remove(filename)
+        removed.set()
+        return result
+
+    def record_reindex(filename):
+        result = reindex(filename)
+        reindexed.set()
+        return result
+
+    with (
+        patch.object(agent.rag, "remove_document", side_effect=record_remove),
+        patch.object(
+            agent.rag, "reindex_document", side_effect=record_reindex
+        ) as indexed,
+    ):
+        agent._watch_directory(str(workdir))
+        path.rename(workdir / "~WRL0001.tmp")
+        assert removed.wait(10), "Moving the document away did not remove it"
+        assert agent.file_handlers[0].wait_idle(timeout=30)
+        indexed.assert_not_called()
+
+        replacement = workdir / "~WRD0002.tmp"
+        _write_office_document(replacement, "The project code is BRAVO.", ".docx")
+        replacement.rename(path)
+        assert reindexed.wait(10), "The replacement document was not indexed"
+        assert agent.file_handlers[0].wait_idle(timeout=30)
+        assert all(call.args[0] == str(path) for call in indexed.call_args_list)
+
+    assert any("BRAVO" in chunk for chunk in agent.rag.chunks)
+    assert not any("ALPHA" in chunk for chunk in agent.rag.chunks)
