@@ -71,8 +71,10 @@ Lemonade:
 
 A model fits when its size plus 5% and 1 GB of working room fits the memory
 llama.cpp loads into — on a Strix Halo that is the GPU carve-out plus shared
-memory — and its download fits the free disk. If Lemonade cannot report this PC's
-memory, every download is disabled rather than guessed.
+memory, which on Windows is half of the RAM left after the carve-out — and its
+download fits the free disk.
+If Lemonade cannot report this PC's memory, every download is disabled rather
+than guessed.
 
 Selecting a cloud provider before setup downloads only the local embedding
 models, not an unused local chat model.
