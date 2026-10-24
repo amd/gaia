@@ -2206,6 +2206,42 @@ class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
         self.assertEqual(npu["pip_extras"], INIT_PROFILES["gaia"]["pip_extras"])
 
 
+class TestUnverifiedChatModelIsNotPinned(_HubInstallWiringTestBase):
+    """A hardware-picked model setup could not load must not become everyone's
+    ``default_model`` (#5582); the profile is still saved."""
+
+    def _run(self, verify_ok):
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import ChatModelChoice
+        from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
+
+        cmd = self._make_cmd("minimal")
+        self._patch_common_steps(cmd)
+        cmd._chat_choice = ChatModelChoice(LARGE_DEFAULT_MODEL_NAME, False, [])
+        cmd._chat_model_ready = True
+        cfg = GaiaConfig()
+        config_cls = MagicMock()
+        config_cls.update.side_effect = lambda fn, **_: fn(cfg)
+        with (
+            patch.object(cmd, "_verify_setup", return_value=verify_ok),
+            patch("gaia.config.GaiaConfig", config_cls),
+        ):
+            rc = cmd.run()
+        return rc, cfg
+
+    def test_verify_failed_leaves_default_model_unset(self):
+        rc, cfg = self._run(verify_ok=False)
+        self.assertEqual(rc, 1)
+        self.assertIsNone(cfg.default_model)
+        self.assertEqual(cfg.profile, "minimal")
+
+    def test_verified_model_is_recorded(self):
+        from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
+
+        _rc, cfg = self._run(verify_ok=True)
+        self.assertEqual(cfg.default_model, LARGE_DEFAULT_MODEL_NAME)
+
+
 class TestWebuiBuildGatesInitCompletion(_HubInstallWiringTestBase):
     """AC4/4b/5 (#2880): a hard Agent UI build failure (too-old Node, or a
     build failure with no usable dist/) must not let `gaia init` report

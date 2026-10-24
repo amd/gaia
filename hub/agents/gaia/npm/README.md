@@ -226,6 +226,13 @@ live on the daemon's clock, which runs the task when it comes due, posts a
 desktop notification, and puts the result at the start of the agent's next
 turn. A sidecar run with no daemon gets an error back from the tool instead.
 
+**Calling it headless?** From contract 2.20 a failed model request names the
+host it went through, and its advice points at the model server the GAIA host
+uses (`LEMONADE_BASE_URL`) rather than at the TUI's settings. A front-end with
+its own settings screen sends `surface` (`"tui"`, `"agent_ui"` or `"cli"`) to
+get its own wording; a headless caller omits it. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
 that names what failed and what to do about it.

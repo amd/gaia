@@ -22,7 +22,12 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.cli import GaiaCliClient
-from gaia.llm.lemonade_client import LemonadeClientError, _cloud_request_error
+from gaia.llm.lemonade_client import (
+    LemonadeClient,
+    LemonadeClientError,
+    _cloud_request_error,
+    _endpoint_label,
+)
 from gaia.llm.providers.lemonade import (
     LemonadeAuthRejectedError,
     classify_lemonade_exception,
@@ -32,6 +37,9 @@ from gaia.llm.surface_hints import (
     AGENT_UI_PROVIDER_SETTINGS,
     CLI_MODEL_SWITCH_HINT,
     CLI_PROVIDER_AUTH_HINT,
+    SERVICE_MODEL_SWITCH_HINT,
+    SERVICE_PROVIDER_SETTINGS,
+    SURFACES,
     TUI_MODEL_SWITCH_HINT,
     TUI_PROVIDER_AUTH_HINT,
     TUI_PROVIDER_SETTINGS,
@@ -94,7 +102,7 @@ def test_the_tui_keeps_its_own_wording_and_rewording_is_idempotent():
     for status in (401, 403, 404, 429, 412, None):
         tui = str(_cloud_request_error(status, "amd"))
         assert surface_wording(tui, "tui") == tui
-        for surface in ("agent_ui", "cli"):
+        for surface in ("agent_ui", "cli", "service"):
             once = surface_wording(tui, surface)
             assert surface_wording(once, surface) == once
 
@@ -113,6 +121,69 @@ def test_text_without_tui_advice_is_untouched(text):
 def test_the_model_switch_hint_has_a_cli_form():
     assert surface_wording(TUI_MODEL_SWITCH_HINT, "cli") == CLI_MODEL_SWITCH_HINT
     assert "TUI" not in CLI_MODEL_SWITCH_HINT
+
+
+# --- the failing endpoint, and a headless caller (#5295) ----------------------
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 429, 412, 502, None])
+def test_a_headless_caller_gets_no_front_end_advice(status):
+    service = surface_wording(str(_cloud_request_error(status, "amd")), "service")
+    assert not _tui_only(service), service
+    assert "Settings > Model" not in service
+    assert surface_wording(TUI_MODEL_SWITCH_HINT, "service") == (
+        SERVICE_MODEL_SWITCH_HINT
+    )
+    assert "service" in SURFACES
+
+
+@pytest.mark.parametrize(
+    "status,reason",
+    [(502, None), (500, None), (None, None), (None, "connection dropped")],
+)
+def test_an_unexplained_failure_names_the_endpoint_and_provider(status, reason):
+    text = str(
+        _cloud_request_error(status, "fireworks", reason, endpoint="10.0.0.5:8080")
+    )
+    assert "through 10.0.0.5:8080" in text
+    assert "Fireworks AI" in text
+    # Nothing here proves the hop was a Lemonade server, so it isn't claimed.
+    assert "Lemonade" not in text
+    if status is not None:
+        assert f"HTTP {status}" in text
+
+
+def test_a_502_on_a_headless_caller_reads_as_an_endpoint_problem():
+    text = surface_wording(
+        str(_cloud_request_error(502, "amd", endpoint="gpu-box.lan:8000")),
+        "service",
+    )
+    assert text.startswith("The amd cloud request through gpu-box.lan:8000 failed")
+    assert SERVICE_PROVIDER_SETTINGS in text and "TUI" not in text
+
+
+@pytest.mark.parametrize(
+    "url,label",
+    [
+        ("http://user:secret@10.1.2.3:9000/api/v1?key=abc#frag", "10.1.2.3:9000"),
+        ("https://models.example.com/v1", "models.example.com"),
+        ("http://[::1]:13305/api/v1", "[::1]:13305"),
+        ("not a url", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_the_endpoint_label_is_host_and_port_only(url, label):
+    assert _endpoint_label(url) == label
+
+
+def test_the_client_names_its_own_endpoint_without_credentials():
+    client = LemonadeClient(
+        base_url="http://user:secret@10.1.2.3:9000/api/v1?token=t0k", verbose=False
+    )
+    text = str(client._cloud_failure(502, "fireworks.some-model"))
+    assert "10.1.2.3:9000" in text
+    assert "secret" not in text and "t0k" not in text and "user" not in text
 
 
 # --- classification: 401 vs 403 vs 429 ---------------------------------------
