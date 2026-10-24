@@ -287,6 +287,64 @@ class TestStrixHaloUnchanged:
         assert model_id == QWEN
 
 
+MAC_48 = {
+    "devices": {
+        "metal": {"available": True, "name": "Apple M4 Pro", "vram_gb": 36.0},
+    },
+    "model_storage": {"free_bytes": 900e9},
+}
+
+
+class TestDefaultPickedByFreeMemory:
+    """The default must load in the memory free now, or init downloads a model
+    its own verify step then refuses (#5582)."""
+
+    @pytest.fixture
+    def recommend(self, machine, monkeypatch):
+        def run(info, os_memory):
+            machine(info, os_memory)
+            monkeypatch.setattr(
+                lc.LemonadeClient,
+                "health_check",
+                lambda self, timeout=None: {
+                    "version": "2026.40.0",
+                    "all_models_loaded": [],
+                },
+            )
+            model_id, skipped, _ = lc.recommend_default_chat_model(
+                lc.LemonadeClient(base_url=URL, verbose=False)
+            )
+            return model_id, dict(skipped)
+
+        return run
+
+    def test_a_mac_that_holds_qwen_but_has_little_free_gets_gemma(self, recommend):
+        model_id, skipped = recommend(MAC_48, _ram(48, 20.4))
+        assert model_id == GEMMA
+        assert "free memory" in skipped[QWEN] and "20.4 GB" in skipped[QWEN]
+        assert "re-run `gaia init`" in skipped[QWEN]
+
+    def test_the_same_mac_with_room_free_gets_qwen(self, recommend):
+        assert recommend(MAC_48, _ram(48, 40))[0] == QWEN
+
+    def test_the_pick_agrees_with_the_load_guard(self, recommend, client):
+        """Whatever is skipped for free memory, the load refuses too."""
+        recommend(MAC_48, _ram(48, 20.4))
+        with pytest.raises(lc.InsufficientMemoryError):
+            client.load_model(QWEN, ctx_size=model_fit.MIN_CONTEXT_TOKENS)
+
+    def test_unreadable_free_memory_keeps_the_floor_and_says_why(
+        self, recommend, monkeypatch
+    ):
+        def unreadable(url):
+            raise model_fit.ModelFitError("no memory reported")
+
+        monkeypatch.setattr(lc, "_free_memory_snapshot", unreadable)
+        model_id, skipped = recommend(MAC_48, _ram(48, 40))
+        assert model_id == GEMMA
+        assert "no memory reported" in skipped[QWEN]
+
+
 # ── The check before every load ────────────────────────────────────────────
 
 
