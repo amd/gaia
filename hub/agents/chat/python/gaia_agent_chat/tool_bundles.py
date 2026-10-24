@@ -25,7 +25,7 @@ from typing import Dict, FrozenSet, List
 
 from gaia.agents.base.tool_loader import ToolBundle
 
-# Always-on set (11 tools): memory v2, file-read + RAG-query entry points, loop
+# Always-on set (12 tools): memory v2, file-read + RAG-query entry points, loop
 # control, and the Part-2 escape hatch. The design sketch listed a "finish" tool,
 # dropped here — turn completion is protocol-level in GAIA, there is no such
 # registry tool. ``load_tools`` (#1450) is CORE-only — never in a bundle — so it
@@ -39,6 +39,7 @@ DOC_CORE_TOOLS = frozenset(
         "recall",
         "update_memory",
         "forget",
+        "forget_everything",
         "search_past_conversations",
         # file-read + RAG-query entry points — the doc profile's reason to exist
         "read_file",
@@ -175,6 +176,7 @@ DOC_BUNDLES = [
                 "recall",
                 "update_memory",
                 "forget",
+                "forget_everything",
                 "search_past_conversations",
             }
         ),
@@ -190,11 +192,11 @@ DOC_BUNDLES = [
 
 # -- "full" profile (the flagship GaiaAgent) ---------------------------------
 #
-# Same contract as the DOC_* pair above, sized for the ``full`` registry: 66
+# Same contract as the DOC_* pair above, sized for the ``full`` registry: 67
 # tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
 # tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
-# Always-on set (16 tools). Deliberately a smaller share of the registry than
+# Always-on set (17 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
 # memory (recall is relevant to every turn), loop control (protocol-level turn
 # signalling, plus ``sleep``: a rate limit arrives mid-turn, when no selection
@@ -217,6 +219,7 @@ FULL_CORE_TOOLS = frozenset(
         "recall",
         "update_memory",
         "forget",
+        "forget_everything",
         "search_past_conversations",
         # universal entry points
         "read_file",
@@ -499,6 +502,7 @@ FULL_BUNDLES = [
                 "recall",
                 "update_memory",
                 "forget",
+                "forget_everything",
                 "search_past_conversations",
             }
         ),
@@ -599,6 +603,7 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "recall",
         "update_memory",
         "forget",
+        "forget_everything",
         "search_past_conversations",
         "index_codebase",
         "search_code_index",

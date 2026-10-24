@@ -8,7 +8,8 @@ Hooks into the Agent lifecycle at 3 points:
 2. Tool execution wrapper (_execute_tool) — auto-logs calls + learns from errors
 3. Post-query storage (_after_process_query) — stores conversations + LLM extraction
 
-Provides 5 LLM-facing tools: remember, recall, update_memory, forget, search_past_conversations.
+Provides 6 LLM-facing tools: remember, recall, update_memory, forget, forget_everything,
+search_past_conversations.
 Valid categories: fact, preference, error, skill, note, reminder, system.
 
 v2 additions:
@@ -529,7 +530,14 @@ Item B (stored {date_b}): {content_b}"""
 
 # Memory tools that should NOT be logged to tool_history
 _MEMORY_TOOLS = frozenset(
-    {"remember", "recall", "update_memory", "forget", "search_past_conversations"}
+    {
+        "remember",
+        "recall",
+        "update_memory",
+        "forget",
+        "forget_everything",
+        "search_past_conversations",
+    }
 )
 
 #: Guards the one-time creation of each instance's extraction bookkeeping.
@@ -766,7 +774,8 @@ class MemoryMixin(ProceduralMemoryMixin):
     - Hybrid search: FAISS vector + BM25 FTS5 + RRF fusion
     - Conversation consolidation for old sessions
     - Background memory reconciliation for conflict detection
-    - 5 CRUD tools for the LLM (remember, recall, update_memory, forget, search_past_conversations)
+    - 6 tools for the LLM (remember, recall, update_memory, forget, forget_everything,
+      search_past_conversations)
     """
 
     def init_memory(
@@ -2272,6 +2281,12 @@ class MemoryMixin(ProceduralMemoryMixin):
         store = self._memory_store
         target_context = context if context is not None else self._memory_context
         applied = 0
+        if said_at is not None and store.erased_after(said_at):
+            logger.info(
+                "[MemoryMixin] extraction: not stored, the user erased all memory "
+                "after this turn was said"
+            )
+            return applied
 
         for op in operations:
             try:
@@ -4637,6 +4652,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             if (gone := _store_gone()) is not None:
                 return gone
             _recall_t0 = time.perf_counter()
+            withheld = 0
             unfiltered = not any(
                 [query, category, domain, context, entity, time_from, time_to]
             )
@@ -4762,6 +4778,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                     (time.perf_counter() - _db_t0) * 1000,
                 )
                 results = page.get("items", [])
+                if unfiltered:
+                    withheld = mixin._memory_store.get_all_knowledge(
+                        context=context or None, sensitive=True, limit=1
+                    ).get("total", 0)
 
             total_ms = (time.perf_counter() - _recall_t0) * 1000
             logger.info(
@@ -4780,13 +4800,22 @@ class MemoryMixin(ProceduralMemoryMixin):
             # and on a remote backend sends it off the machine.
             results = self._redact_credentials(results)
 
-            return {
+            found = {
                 "status": "found" if results else "empty",
                 "count": len(results),
                 "offset": offset,
                 "has_more": len(results) == limit,  # hint: call again with offset+limit
                 "results": results,
             }
+            if withheld:
+                # Unsaid, "forget everything" left these behind and reported done.
+                found["sensitive_withheld"] = withheld
+                found["note"] = (
+                    f"{withheld} sensitive entr{'y' if withheld == 1 else 'ies'} "
+                    "not listed. Recall with any filter (for example a category "
+                    "or a time range) to see them, e.g. to forget them."
+                )
+            return found
 
         @tool
         def update_memory(
@@ -4912,6 +4941,23 @@ class MemoryMixin(ProceduralMemoryMixin):
             return {"status": "not_found", "knowledge_id": knowledge_id}
 
         @tool
+        def forget_everything() -> dict:
+            """Erase all of memory: every fact, preference and reminder, sensitive ones included, and the stored past conversations. Only when the user asks to forget everything; it cannot be undone."""
+            if (gone := _store_gone()) is not None:
+                return gone
+            cleared = mixin._memory_store.clear_all()
+            mixin._rebuild_faiss_index()
+            mixin._refresh_stable_memory_prompt()
+            return {
+                "status": "cleared",
+                **cleared,
+                "message": (
+                    "Everything is erased, past conversations included. This "
+                    "chat's own messages stay on screen until it is closed."
+                ),
+            }
+
+        @tool
         def search_past_conversations(
             query: str = "",
             days: int = 0,
@@ -4998,11 +5044,37 @@ class MemoryMixin(ProceduralMemoryMixin):
                     filtered.append(r)
                 results = filtered[:limit]
 
+            # A turn said before the user forgot something it mentions would
+            # hand the forgotten memory straight back.
+            store = mixin._memory_store
+            kept = [
+                r
+                for r in results
+                if not store.mentions_forgotten(
+                    r.get("content", ""), said_before=r.get("timestamp") or None
+                )
+            ]
+            hidden = len(results) - len(kept)
+            results = kept
             if results:
-                return {
+                found = {
                     "status": "found",
                     "count": len(results),
                     "results": self._redact_credentials(results),
+                }
+                if hidden:
+                    found["forgotten_hidden"] = hidden
+                return found
+            if hidden:
+                return {
+                    "status": "empty",
+                    "count": 0,
+                    "results": [],
+                    "forgotten_hidden": hidden,
+                    "message": (
+                        f"{hidden} matching turn(s) mention something the user "
+                        "asked GAIA to forget, so they are not shown."
+                    ),
                 }
             earlier_turns = mixin._memory_store.count_conversation_turns(
                 exclude_session=getattr(mixin, "_memory_session_id", None)

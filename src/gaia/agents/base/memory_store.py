@@ -4476,6 +4476,16 @@ class MemoryStore:
                 raise
         logger.info("[MemoryStore] FTS5 indexes rebuilt")
 
+    _ERASED_META_KEY = "erased_at"
+
+    def erased_after(self, said_at: str) -> bool:
+        """Whether all of memory was erased at or after *said_at* (an ISO timestamp)."""
+        with self._locked():
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key = ?", (self._ERASED_META_KEY,)
+            ).fetchone()
+        return row is not None and _as_datetime(row[0]) >= _as_datetime(said_at)
+
     def clear_all(self) -> Dict:
         """Permanently delete all knowledge, tool history, and conversation data.
 
@@ -4496,6 +4506,12 @@ class MemoryStore:
                 self._rebuild_conversations_fts_locked()
                 # No conversation is left to relearn from.
                 self._conn.execute("DELETE FROM forgotten")
+                # A learning job still queued from before must not refill memory.
+                self._conn.execute(
+                    "INSERT INTO meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (self._ERASED_META_KEY, datetime.now().astimezone().isoformat()),
+                )
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()

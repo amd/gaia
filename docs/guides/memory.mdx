@@ -228,6 +228,17 @@ You: "Forget what you know about the old deployment process"
 Agent: [recalls the entry, deletes it]
 ```
 
+Searching past conversations doesn't bring a forgotten memory back: a turn said before you forgot it is left out of the results.
+
+### forget_everything
+
+Erases all of memory: every fact, preference and reminder, sensitive ones included, and the stored past conversations. GAIA asks you to approve it first, because it can't be undone. The current chat stays on screen until you close it.
+
+```
+You: "Forget everything you know about me"
+Agent: [asks to erase all of memory, then erases it]
+```
+
 ### search_past_conversations
 
 Searches across all past conversation sessions by keyword (`query`), time range (`days` or `time_from`/`time_to`), or both.
@@ -419,7 +430,7 @@ The **Advanced** tab keeps the full view for troubleshooting:
 
 - **Stats overview** -- total memories, sessions, tool calls, success rate, and embedding coverage
 - **Knowledge browser** -- filterable, sortable table of all memory entries, including confidence and source, with inline editing
-- **Tool performance** -- per-tool success rates, error history, average duration. Memory tools (`remember`, `recall`, `update_memory`, `forget`, `search_past_conversations`) are not logged, so they never appear here or in the **Tool Calls** count
+- **Tool performance** -- per-tool success rates, error history, average duration. Memory tools (`remember`, `recall`, `update_memory`, `forget`, `forget_everything`, `search_past_conversations`) are not logged, so they never appear here or in the **Tool Calls** count
 - **Upcoming and overdue** -- time-sensitive items due soon or past due
 - **Conversation history** -- searchable archive of all past sessions with consolidation status
 - **Superseded items** -- toggle to see fact history and how knowledge evolved over time

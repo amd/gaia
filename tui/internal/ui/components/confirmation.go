@@ -132,6 +132,8 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"update_gaia_md":      RiskWrite,
 	"install_skill":       RiskWrite,
 	"remove_skill":        RiskWrite,
+	// Erases every memory and past conversation; nothing brings them back.
+	"forget_everything": RiskDestructive,
 	// Not a tool: PathValidator asking to widen this session's scope by one path (reads and changes).
 	"allow_path_access": RiskWrite,
 }
@@ -155,6 +157,7 @@ var actionTitles = map[string]string{
 	"update_gaia_md":      "Update GAIA.md?",
 	"install_skill":       "Install this skill?",
 	"remove_skill":        "Remove this skill?",
+	"forget_everything":   "Erase all of GAIA's memory?",
 	"allow_path_access":   "Allow access to this location?",
 }
 

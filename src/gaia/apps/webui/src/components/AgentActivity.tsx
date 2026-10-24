@@ -89,6 +89,7 @@ const TOOL_META: Record<string, ToolMeta> = {
     remember:              { label: 'Saved to memory',    activeLabel: 'Saving to memory',    icon: Brain },
     update_memory:         { label: 'Updated memory',     activeLabel: 'Updating memory',     icon: Brain },
     forget:                { label: 'Deleted from memory', activeLabel: 'Deleting from memory', icon: Brain },
+    forget_everything:     { label: 'Erased all memory', activeLabel: 'Erasing all memory', icon: Brain },
     search_past_conversations: { label: 'Searched past chats', activeLabel: 'Searching past chats', icon: Brain },
     request_user_input:    { label: 'Asked you',          activeLabel: 'Asking you',          icon: MessageCircleQuestionMark },
 };

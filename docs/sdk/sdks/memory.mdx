@@ -217,7 +217,7 @@ Registers the 5 LLM-facing memory tools with the agent's tool registry. Call thi
 def register_memory_tools(self) -> None
 ```
 
-Registers: `remember`, `recall`, `update_memory`, `forget`, `search_past_conversations`.
+Registers: `remember`, `recall`, `update_memory`, `forget`, `forget_everything`, `search_past_conversations`.
 
 ### set_memory_context()
 
@@ -461,6 +461,8 @@ A session stays eligible until every turn is consolidated. `prune()` holds its o
 A forgotten memory is not learned again from old conversations (#4730). The `forget` tool and the Memory page's **Forget** call `MemoryStore.forget()`, which deletes the row and records its content and the time in the `forgotten` table, in one transaction. A sensitive row keeps only its word stems there, and is never named in a prompt. The conversation that stated the fact stays in the log, so consolidation could otherwise distil it again. Instead each consolidation window is told what the user forgot after the window began (`get_forgotten(said_before=...)`), so a forget later in the same chat counts and the model skips reworded copies and leaves them out of the session summary. Any item that is the same memory (`is_forgotten`), or summary that repeats one (`mentions_forgotten`), is dropped. Extraction applies the same check from the moment the turn started, so a forget made by that turn's own tools counts.
 
 Something the user says *after* forgetting it is the user telling GAIA again, and is learned as usual; storing it from a teaching source (`user` from the Memory page, `tool` from `remember`) also clears the forgotten record. A plain `delete()` — used when newer information replaces a memory — records nothing, and neither does deleting one of GAIA's own records (a tool lesson or session summary) from the Memory page: `DELETE /api/memory/knowledge/{id}` forgets only rows `is_about_user()` accepts.
+
+`search_past_conversations` applies the same rule to what it returns: a turn that repeats something forgotten after it was said (`mentions_forgotten(content, said_before=timestamp)`) is left out, and the result counts it as `forgotten_hidden`. A `recall` with no filter holds back sensitive rows, so it says how many it held back (`sensitive_withheld`); any filter lists them. `forget_everything` calls `MemoryStore.clear_all()` (every row, sensitive ones included, the conversation log and tool history) and is in `TOOLS_REQUIRING_CONFIRMATION`, so the user approves it first. It records when it ran (`erased_after`), and an extraction job for a turn said before then is dropped, so learning still queued from earlier in the chat can't refill memory.
 
 ### Reconciliation
 
@@ -1052,7 +1054,7 @@ class TestAgent(MemoryMixin, Agent):
 
 ## Memory Tools Reference
 
-These 5 tools are registered by `register_memory_tools()` and exposed to the LLM:
+These 6 tools are registered by `register_memory_tools()` and exposed to the LLM:
 
 <CardGroup cols={2}>
   <Card title="remember" icon="plus">
@@ -1070,13 +1072,17 @@ These 5 tools are registered by `register_memory_tools()` and exposed to the LLM
   <Card title="forget" icon="trash">
     Delete a specific memory entry by ID.
   </Card>
+
+  <Card title="forget_everything" icon="eraser">
+    Erase all memory, sensitive rows included, plus past conversations and tool history. Asks the user first; nothing brings it back.
+  </Card>
 </CardGroup>
 
 <Card title="search_past_conversations" icon="clock-rotate-left">
   Search conversation history by keywords, time range, or both. Returns matching turns with timestamps and session IDs. An empty result carries `past_conversation_turns` (turns stored by earlier sessions) and a `message` that says plainly when there are none to search.
 </Card>
 
-These map to CRUD operations: `remember` = create, `recall` = read, `update_memory` = update, `forget` = delete, plus `search_past_conversations` for history.
+These map to CRUD operations: `remember` = create, `recall` = read, `update_memory` = update, `forget` = delete (`forget_everything` deletes all of it), plus `search_past_conversations` for history.
 
 ---
 

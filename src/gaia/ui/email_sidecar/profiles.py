@@ -345,6 +345,7 @@ _GAIA_MUTATING_TOOLS = frozenset(
         "edit_file",
         "remember",
         "forget",
+        "forget_everything",
         "update_memory",
         "execute_python_file",
         "run_python",
@@ -469,6 +470,7 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     # Memory — the agent's own long-term store
     "remember": "Saving to memory",
     "forget": "Deleting from memory",
+    "forget_everything": "Erasing all memory",
     "update_memory": "Updating memory",
     "recall": "Recalling from memory",
     "search_past_conversations": "Searching past conversations",
