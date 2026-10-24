@@ -13,6 +13,7 @@ import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import { displayModelName, useModelNames, useModelStore } from '../stores/modelStore';
+import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { STARTING_REASON } from '../utils/constants';
 import { log } from '../utils/logger';
@@ -192,10 +193,18 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         return setVisibleInterval(() => loadStart(true), START_RETRY_MS);
     }, [startError, loadStart]);
 
-    // Set before any re-render, so keypresses landing in the same tick are dropped too.
+    // Set before any re-render, so keypresses landing in the same tick are held too.
     const sendingRef = useRef(false);
+    // Sent while the chat was still being created: they wait in its queue, never dropped.
+    const heldRef = useRef<string[]>([]);
     const send = useCallback(async (message: string) => {
-        if (!message || sendingRef.current) return;
+        if (!message) return;
+        if (sendingRef.current) {
+            heldRef.current.push(message);
+            setText('');
+            attachments.clear();
+            return;
+        }
         sendingRef.current = true;
         setSending(true);
         setError(null);
@@ -203,7 +212,16 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
             await onSend(message);
             setText('');
             attachments.clear();
+            const held = heldRef.current.splice(0);
+            const sessionId = useChatStore.getState().currentSessionId;
+            if (held.length > 0 && sessionId) {
+                useChatStore.getState().updateQueue(sessionId, (q) =>
+                    held.reduce((items, text) => messageQueue.enqueue(items, text, 'queued'), q));
+            }
         } catch (err) {
+            // Nothing was sent, so every message goes back in the box.
+            const held = heldRef.current.splice(0);
+            if (held.length > 0) setText([message, ...held].join('\n\n'));
             setError(err instanceof Error ? err.message : String(err));
         } finally {
             sendingRef.current = false;
@@ -240,7 +258,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                     onChange={setText}
                     onSubmit={submit}
                     attachments={attachments}
-                    disabledReason={starting ? STARTING_REASON : sending ? 'Starting the chat…' : null}
+                    disabledReason={starting ? STARTING_REASON : null}
                     autoFocus
                     inputRef={inputRef}
                     leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /></>}
