@@ -227,13 +227,22 @@ class SkillLoader:
 
     @staticmethod
     def _doc_text(skill: "Skill") -> str:
-        """The text embedded for a skill: ``"{name}: {first line of description}"``."""
-        description = ""
-        for line in (skill.description or "").splitlines():
-            if line.strip():
-                description = line.strip()
-                break
-        return f"{skill.name}: {description}" if description else skill.name
+        """The text embedded for a skill — see :func:`skill_doc_text`."""
+        return skill_doc_text(skill)
+
+
+def skill_doc_text(skill: "Skill") -> str:
+    """The text embedded for a skill: ``"{name}: {first line of description}"``.
+
+    Shared with :mod:`gaia.agents.base.skill_suggester` so a skill is described
+    to the embedder the same way whether it is loaded or not.
+    """
+    description = ""
+    for line in (skill.description or "").splitlines():
+        if line.strip():
+            description = line.strip()
+            break
+    return f"{skill.name}: {description}" if description else skill.name
 
 
 def _sha256(text: str) -> str:
@@ -241,4 +250,9 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-__all__ = ["SkillLoader", "DEFAULT_SKILL_THRESHOLD", "dynamic_skills_env_override"]
+__all__ = [
+    "SkillLoader",
+    "DEFAULT_SKILL_THRESHOLD",
+    "dynamic_skills_env_override",
+    "skill_doc_text",
+]
