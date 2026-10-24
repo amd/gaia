@@ -232,7 +232,7 @@ export async function resolveTargets(nav: NavigatorLike): Promise<PlatformKey[]>
  * The header Install button's download for a visitor, or null to keep it on
  * the install section. Only a machine placed on exactly ONE platform gets a
  * file: a Mac of unknown architecture resolves to two, an unplaceable machine
- * to none, and a platform with no desktop build on this release has no entry
+ * to none, and a platform with no Install file on this release has no entry
  * -- each keeps the section, where every option shows.
  */
 export function pickInstallTarget<T>(

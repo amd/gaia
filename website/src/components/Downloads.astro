@@ -15,9 +15,10 @@
 // terminal — never shown a disabled button, a dead link, or wording that
 // implies a build is on the way.
 //
-// Every platform renders server-side, so a visitor with no JS gets the full
-// list below, folded, and a working link for both surfaces. JS reveals each
-// card's button for the machine it can place; a Mac behind Safari reports no
+// At first glance a placed machine sees one download per card, or on Windows
+// x64 with the combined setup that one installer under both cards. Every other
+// file is in the folded list, which a visitor with no JS can open too. JS
+// reveals the blocks for the machine it can place; a Mac behind Safari reports no
 // architecture and so matches BOTH Mac blocks (which is why the desktop card
 // reads "Apple Silicon download" and "no Intel build" together there), and a
 // machine it cannot place at all gets the full list opened rather than a guess.
@@ -30,13 +31,13 @@
 
 import SurfacePreview from './SurfacePreview.astro';
 import { formatBytes, getStableRelease, type ReleaseAsset } from '../data/github';
+import { windowsCombinedSetup } from '../data/install-targets';
 import {
   DESKTOP_DOWNLOAD_LABELS,
   DESKTOP_MISSING_PLATFORMS,
   DESKTOP_PLATFORMS,
   DOWNLOAD_LABELS,
   INSTALLERS_FOR,
-  INSTALLER_CTA_LABELS,
   PLATFORM_LABELS,
   PLATFORM_ORDER,
   artifactFileName,
@@ -117,11 +118,9 @@ if (!tuiRows.length) {
 
 // Whether this release's win-x64-setup is the setup that asks desktop app /
 // terminal / both, rather than the terminal-only one earlier releases used the
-// same filename for.
+// same filename for. Shared with the header's Install button.
 const windowsCombined = windowsSetupOffersChoice(version);
-const windowsSetup = windowsCombined
-  ? tuiRow('win-x64').installers.find((i) => i.key === 'win-x64-setup')?.artifact
-  : undefined;
+const windowsSetup = windowsCombinedSetup(release);
 
 // The terminal's Windows row in the full list keeps only its raw binary: the
 // setup, which installs either app or both, has a line of its own there.
@@ -133,10 +132,19 @@ const tuiListRows = windowsCombined
 const desktopListLabel = (p: PlatformKey) =>
   windowsSetup && isWindowsX64(p) ? 'Desktop app only (.exe)' : DESKTOP_DOWNLOAD_LABELS[p];
 
-// Until a release publishes installers none of these exist — a valid state, and
-// the terminal card is the binary offer it was before. Naming the architectures
-// that have no installer only makes sense once some architecture has one.
-const anyInstaller = tuiRows.some((r) => r.installers.length > 0);
+// One button per card at first glance; every other file is in the folded list.
+// A release with the combined Windows setup offers Windows x64 that one
+// installer under both cards instead of a button in each.
+const cardPlatform = (p: PlatformKey) => !(windowsSetup && isWindowsX64(p));
+const desktopCtaRows = desktopRows.filter((r) => cardPlatform(r.platform));
+const tuiCtaRows = tuiRows.filter((r) => cardPlatform(r.platform)).flatMap((r) => {
+  const installer = r.installers[0];
+  if (installer) {
+    return [{ platform: r.platform, kind: 'installer', artifact: installer.artifact, caption: DOWNLOAD_LABELS[installer.key] }];
+  }
+  if (!r.binary) return [];
+  return [{ platform: r.platform, kind: 'binary', artifact: r.binary, caption: DOWNLOAD_LABELS[r.platform] }];
+});
 
 // "a, b or c" — the missing-desktop platforms read as a sentence, not a list.
 const joinWithOr = (parts: string[]): string =>
@@ -174,15 +182,14 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
           revealed at once (the Apple Silicon download and the "no Intel
           build" line) with nothing between them otherwise. */}
       <div class="mt-5 space-y-3">
-        {desktopRows.map((row) => (
+        {desktopCtaRows.map((row) => (
           <div data-dl-cta data-surface="desktop" data-kind="build" data-platform={row.platform} hidden>
             <a href={row.artifact.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
               <Fragment set:html={DOWNLOAD_ICON} />
               <span>Download for {PLATFORM_LABELS[row.platform]}</span>
             </a>
             <p class="g-body mt-2.5 text-[13px]">
-              {DESKTOP_DOWNLOAD_LABELS[row.platform]} · v{version} ·{' '}
-              {formatBytes(row.artifact.sizeBytes)}
+              {DESKTOP_DOWNLOAD_LABELS[row.platform]} · v{version} · {formatBytes(row.artifact.sizeBytes)}
             </p>
           </div>
         ))}
@@ -191,10 +198,7 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
             build for these three, so there is nothing to wait for. */}
         {DESKTOP_MISSING_PLATFORMS.map((platform) => (
           <div data-dl-cta data-surface="desktop" data-kind="none" data-platform={platform} hidden>
-            <p class="g-body text-[13.5px]">
-              There is no desktop build for {PLATFORM_LABELS[platform]}. The terminal runs
-              there — take that one instead.
-            </p>
+            <p class="g-body text-[13.5px]">No desktop app for {PLATFORM_LABELS[platform]}. Use the terminal.</p>
           </div>
         ))}
       </div>
@@ -213,68 +217,47 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
         work over SSH, or would rather stay in a terminal.
       </p>
 
-      <div class="mt-5">
-        {/* Same reason as the desktop card: a Safari Mac reveals the Apple
-            Silicon and Intel blocks together. The captions stay outside so
-            they keep their tighter gap to the block they describe. */}
-        <div class="space-y-3">
-          {tuiRows.map((row) => (
-            <div
-              data-dl-cta
-              data-surface="tui"
-              data-kind={row.installers.length ? 'installer' : 'binary'}
-              data-platform={row.platform}
-              hidden
-            >
-              <div class="flex flex-wrap items-center gap-3">
-                {/* One installer reads like the desktop card's button, so two cards
-                    side by side do not offer "Download" against "Install GAIA" for
-                    the same machine. Linux keeps its package-format labels. */}
-                {row.installers.length > 0
-                  ? row.installers.map((i) => (
-                      <a href={i.artifact.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
-                        <Fragment set:html={DOWNLOAD_ICON} />
-                        <span>
-                          {row.installers.length > 1
-                            ? INSTALLER_CTA_LABELS[i.key]
-                            : `Download for ${PLATFORM_LABELS[row.platform]}`}
-                        </span>
-                      </a>
-                    ))
-                  : row.binary && (
-                      <a href={row.binary.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
-                        <Fragment set:html={DOWNLOAD_ICON} />
-                        <span>Download for {PLATFORM_LABELS[row.platform]}</span>
-                      </a>
-                    )}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* One caption per kind, at card level: with two Mac blocks revealed at
-            once, a caption inside each would say the same thing twice. */}
-        <p data-dl-note="installer" class="g-body mt-2.5 text-[13px]" hidden>
-          Installs the agent and puts <code class="text-g-text">gaia-tui</code> on your PATH.
-          v{version}.
-        </p>
-        <p data-dl-note="binary" class="g-body mt-2.5 text-[13px]" hidden>
-          {anyInstaller
-            ? 'No installer is published for this architecture, so this is the standalone binary — put it on your PATH yourself.'
-            : 'The standalone binary — put it on your PATH and run gaia-tui.'}
-          {' '}v{version}.
-        </p>
+      {/* Same reason as the desktop card: a Safari Mac reveals the Apple Silicon
+          and Intel blocks together. */}
+      <div class="mt-5 space-y-3">
+        {tuiCtaRows.map((row) => (
+          <div data-dl-cta data-surface="tui" data-kind={row.kind} data-platform={row.platform} hidden>
+            <a href={row.artifact.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
+              <Fragment set:html={DOWNLOAD_ICON} />
+              <span>Download for {PLATFORM_LABELS[row.platform]}</span>
+            </a>
+            <p class="g-body mt-2.5 text-[13px]">
+              {row.caption} · v{version} · {formatBytes(row.artifact.sizeBytes)}
+            </p>
+          </div>
+        ))}
       </div>
     </section>
   </div>
 
+  {/* Windows x64's one installer, under both cards: it asks for either app or
+      both. A plain wrapper carries `hidden`; a display class would override it. */}
+  {windowsSetup && (
+    <div data-dl-cta data-surface="setup" data-kind="setup" data-platform="win-x64" hidden>
+      <div class="mx-auto mt-6 w-full max-w-[720px] text-center">
+        <a href={windowsSetup.url} class="g-btn g-btn-primary px-6 py-3.5 text-[15px]">
+          <Fragment set:html={DOWNLOAD_ICON} />
+          <span>Download for {PLATFORM_LABELS['win-x64']}</span>
+        </a>
+        <p class="g-body mt-2.5 text-[13px]">
+          One installer for both apps · v{version} · {formatBytes(windowsSetup.sizeBytes)}
+        </p>
+      </div>
+    </div>
+  )}
+
   {/* Every download, both surfaces, grouped so each version and each coverage
-      gap is stated once beside the thing it applies to. Folded: the cards
-      already offer this machine's files. */}
+      gap is stated once beside the thing it applies to. Folded so the page
+      leads with this machine's one download. */}
   <details data-dl-list class="group mx-auto mt-8 w-full max-w-[720px] text-left">
     <summary class="g-label inline-flex cursor-pointer list-none items-center gap-2 py-1 transition-colors hover:text-g-text [&::-webkit-details-marker]:hidden">
       <span aria-hidden="true" class="inline-block transition-transform group-open:rotate-90">›</span>
-      Download for your platform
+      Other platforms and installers
     </summary>
     <div class="mt-4">
       {windowsSetup && (
@@ -398,12 +381,5 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
     }
 
     for (const block of matched) block.hidden = false;
-
-    // The captions live at card level, so reveal the ones whose kind is now on
-    // screen. Two Mac blocks can share a caption; that is the point of it.
-    const kinds = new Set(matched.map((b) => b.dataset.kind));
-    root.querySelectorAll<HTMLElement>('[data-dl-note]').forEach((note) => {
-      if (kinds.has(note.dataset.dlNote)) note.hidden = false;
-    });
   });
 </script>

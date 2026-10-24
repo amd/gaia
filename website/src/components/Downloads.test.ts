@@ -251,8 +251,8 @@ describe('Downloads.astro', () => {
       .filter((href) => !rendered.publishedUrls.has(href));
     expect(invented).toEqual([]);
 
-    // 3 desktop buttons + 7 terminal buttons + 3 + 11 in the all-downloads list.
-    expect(links).toHaveLength(24);
+    // 3 desktop buttons + 6 terminal buttons + 3 + 11 in the folded list.
+    expect(links).toHaveLength(23);
     expect(rendered.publishedUrls.size).toBe(17);
     // Never the pre-release, though it is newer and carries the same names.
     expect(links.filter((a) => String(a.attrs.href).includes('-rc'))).toEqual([]);
@@ -263,35 +263,32 @@ describe('Downloads.astro', () => {
     const name = (e: El) =>
       'data-dl-cta' in e.attrs
         ? `cta ${e.attrs['data-surface']}:${e.attrs['data-platform']}`
-        : 'data-dl-note' in e.attrs
-          ? `note ${e.attrs['data-dl-note']}`
-          : `${e.tag}#${all.indexOf(e)}`;
+        : `${e.tag}#${all.indexOf(e)}`;
 
     const hidden = all.filter((e) => 'hidden' in e.attrs).map(name);
-    const reveals = all
-      .filter((e) => 'data-dl-cta' in e.attrs || 'data-dl-note' in e.attrs)
-      .map(name);
+    const reveals = all.filter((e) => 'data-dl-cta' in e.attrs).map(name);
 
-    // 6 desktop blocks (3 builds, 3 "no build"), 6 terminal rows, 2 captions.
-    expect(reveals.length).toBe(14);
+    // 6 desktop blocks (3 builds, 3 "no build") and 6 terminal rows.
+    expect(reveals.length).toBe(12);
     expect(hidden.sort()).toEqual([...reveals].sort());
   });
 
-  it('folds the full list into a disclosure that starts closed', () => {
+  it('folds every other file into a labelled disclosure that starts closed', () => {
     const list = theList();
-    // A native <details> opens without JS, so the folded list stays the no-JS offer.
+    // A native <details> opens by keyboard and without JS.
     expect(list.tag).toBe('details');
     expect('open' in list.attrs).toBe(false);
     expect('hidden' in list.attrs).toBe(false);
 
     const summaries = descendants(list).filter((e) => e.tag === 'summary');
     expect(summaries).toHaveLength(1);
-    expect(textOf(summaries[0])).toBe('Download for your platform');
-    // Nothing else is folded: the card buttons lead.
+    expect(textOf(summaries[0])).toBe('Other platforms and installers');
+    // A visible chevron beside the label.
+    expect(descendants(summaries[0]).some((e) => e.attrs['aria-hidden'] === 'true')).toBe(true);
     expect(descendants(rendered.root).filter((e) => e.tag === 'details')).toHaveLength(1);
   });
 
-  it('offers each block only its own platform, and no build where there is none', () => {
+  it('offers each block one button for its own platform, and none where there is no build', () => {
     const expected: Record<string, string[]> = {
       'desktop:win-x64': [desktopUrl('win-x64')],
       'desktop:darwin-arm64': [desktopUrl('darwin-arm64')],
@@ -302,7 +299,8 @@ describe('Downloads.astro', () => {
       'desktop:linux-arm64': [],
       'tui:win-x64': [tuiUrl('win-x64-setup')],
       'tui:darwin-arm64': [tuiUrl('darwin-arm64-pkg')],
-      'tui:linux-x64': [tuiUrl('linux-x64-deb'), tuiUrl('linux-x64-rpm')],
+      // The .rpm is in the folded list.
+      'tui:linux-x64': [tuiUrl('linux-x64-deb')],
       'tui:win-arm64': [tuiUrl('win-arm64')],
       'tui:darwin-x64': [tuiUrl('darwin-x64-pkg')],
       'tui:linux-arm64': [tuiUrl('linux-arm64')],
@@ -315,6 +313,7 @@ describe('Downloads.astro', () => {
       ]),
     );
     expect(actual).toEqual(expected);
+    expect(hrefsIn(theList())).toContain(tuiUrl('linux-x64-rpm'));
   });
 
   it('puts each surface button under its own preview card', () => {
@@ -329,22 +328,29 @@ describe('Downloads.astro', () => {
     expect(surfaces).toEqual([['desktop'], ['tui']]);
   });
 
-  it('labels a lone terminal installer like the desktop button, and keeps Linux formats', () => {
-    const label = (surface: string, platform: string) =>
-      blockFor(surface, platform)
-        .flatMap((b) => descendants(b).filter((e) => e.tag === 'a'))
-        .map(textOf);
+  it('labels every card button by platform and captions what the file is', () => {
+    const view = (surface: string, platform: string) =>
+      blockFor(surface, platform).map((b) => ({
+        button: descendants(b).filter((e) => e.tag === 'a').map(textOf),
+        caption: textOf(descendants(b).find((e) => e.tag === 'p')!),
+      }));
 
-    expect(label('tui', 'win-x64')).toEqual(['Download for Windows (x64)']);
-    expect(label('desktop', 'win-x64')).toEqual(['Download for Windows (x64)']);
-    expect(label('tui', 'darwin-arm64')).toEqual(['Download for macOS (Apple Silicon)']);
-    expect(label('tui', 'linux-x64')).toEqual([
-      'Debian / Ubuntu (.deb)',
-      'Fedora / RHEL / SUSE (.rpm)',
+    expect(view('desktop', 'linux-x64')).toEqual([
+      { button: ['Download for Linux (x64)'], caption: 'AppImage · v0.24.1 · 94.2 MB' },
     ]);
+    expect(view('tui', 'linux-x64')).toEqual([
+      {
+        button: ['Download for Linux (x64)'],
+        caption: 'Installer (.deb — Debian, Ubuntu) · v0.24.1 · 94.2 MB',
+      },
+    ]);
+    expect(view('tui', 'linux-arm64')).toEqual([
+      { button: ['Download for Linux (ARM64)'], caption: 'Standalone binary · v0.24.1 · 94.2 MB' },
+    ]);
+    expect(textOf(blockFor('desktop', 'darwin-x64')[0])).toBe('No desktop app for macOS (Intel). Use the terminal.');
   });
 
-  it('names the platform in every link of the all-downloads list', () => {
+  it('names the platform in every link of the folded list', () => {
     const names = descendants(theList())
       .filter((e) => e.tag === 'a')
       .map((a) => (typeof a.attrs['aria-label'] === 'string' ? a.attrs['aria-label'] : textOf(a)));
@@ -367,7 +373,7 @@ describe('Downloads.astro', () => {
   it('spaces the blocks a Mac reveals together', () => {
     // Safari reports no architecture, so both Mac blocks unhide at once. The
     // wrappers carry no margin of their own; the container has to provide it.
-    for (const block of ctas()) {
+    for (const block of ctas().filter((b) => b.attrs['data-surface'] !== 'setup')) {
       expect(String(block.parent?.attrs.class ?? '')).toMatch(/\bspace-y-\d/);
     }
   });
@@ -382,14 +388,19 @@ describe('Downloads.astro', () => {
       'GAIA Terminal UI',
     ]);
   });
+
+  // Before 0.25.0 the Windows setup was terminal-only: no one-installer block.
+  it('offers no combined installer for a release before the setup asked', () => {
+    expect(ctas().filter((b) => b.attrs['data-surface'] === 'setup')).toEqual([]);
+  });
 });
 
 // ---- The one Windows setup (0.25.0 on) -------------------------------------
 //
 // From 0.25.0 the terminal's win-x64-setup is the setup that asks desktop
 // app / terminal / both. Same filename pattern as the terminal-only 0.24.1
-// setup above, which is why the list is gated on the version as well as on the
-// file being on the release.
+// setup above, which is why it is gated on the version as well as on the file
+// being on the release.
 
 const SETUP_VERSION = '0.25.0';
 const SETUP_DESKTOP_FILES = {
@@ -419,12 +430,21 @@ const releaseAt = (tuiFiles: readonly string[]) => [
 ];
 
 describe('Downloads.astro with the one Windows setup', () => {
-  it('keeps the desktop card on the desktop app, never the combined setup', async () => {
+  it('offers Windows x64 the one installer under both cards, and no per-card file', async () => {
     RELEASES = releaseAt(Object.values(SETUP_RELEASE_FILES));
     rendered = await render();
-    expect(blockFor('desktop', 'win-x64').flatMap(hrefsIn)).toEqual([setupDesktopUrl('win-x64')]);
-    // The terminal card installs through the setup, which offers the terminal.
-    expect(blockFor('tui', 'win-x64').flatMap(hrefsIn)).toEqual([setupUrl('win-x64-setup')]);
+
+    const setup = blockFor('setup', 'win-x64');
+    expect(setup).toHaveLength(1);
+    expect('hidden' in setup[0].attrs).toBe(true);
+    expect(hrefsIn(setup[0])).toEqual([setupUrl('win-x64-setup')]);
+    expect(textOf(setup[0])).toContain('One installer for both apps');
+    // Outside the two cards, not inside one of them.
+    const cards = descendants(rendered.root).filter((e) => e.tag === 'section');
+    expect(cards.some((c) => descendants(c).includes(setup[0]))).toBe(false);
+
+    expect(blockFor('desktop', 'win-x64')).toEqual([]);
+    expect(blockFor('tui', 'win-x64')).toEqual([]);
 
     const invented = hrefsIn(rendered.root).filter((href) => !rendered.publishedUrls.has(href));
     expect(invented).toEqual([]);
@@ -447,16 +467,17 @@ describe('Downloads.astro with the one Windows setup', () => {
     expect(names.find((n) => n.includes('Desktop app only'))).toContain('Windows (x64)');
   });
 
-  it('falls the terminal card back to the raw binary when the release carries no setup', async () => {
+  it('gives each Windows card its own file when the release carries no setup', async () => {
     const { 'win-x64-setup': _setup, ...rest } = SETUP_RELEASE_FILES;
     RELEASES = releaseAt(Object.values(rest));
     rendered = await render();
 
+    expect(blockFor('setup', 'win-x64')).toEqual([]);
     const [tui] = blockFor('tui', 'win-x64');
     expect(tui.attrs['data-kind']).toBe('binary');
     expect(hrefsIn(tui)).toEqual([setupUrl('win-x64')]);
     expect(blockFor('desktop', 'win-x64').flatMap(hrefsIn)).toEqual([setupDesktopUrl('win-x64')]);
-    expect(hrefsIn(rendered.root).filter((h) => h.includes('win-x64-setup'))).toEqual([]);
+    expect(hrefsIn(rendered.root).filter((h) => h.includes('win-x64-setup.exe') && !h.includes('agent-ui'))).toEqual([]);
     // With no setup line to contrast with, the desktop file is not "only" anything.
     const listNames = descendants(theList()).filter((e) => e.tag === 'a').map(textOf);
     expect(listNames.filter((n) => n.includes('Desktop app only'))).toEqual([]);
@@ -466,9 +487,9 @@ describe('Downloads.astro with the one Windows setup', () => {
 
 // ---- The card buttons, per machine -----------------------------------------
 //
-// The script reveals the card blocks whose platform resolveTargets returns;
-// these run the same resolution on fake navigators against v0.25.0 as GitHub
-// carries it once the installers are attached.
+// The script reveals the blocks whose platform resolveTargets returns; these
+// run the same resolution on fake navigators against v0.25.0 as GitHub carries
+// it once the installers are attached.
 
 const FULL_FILES = [
   ...Object.values(SETUP_DESKTOP_FILES),
@@ -502,7 +523,7 @@ const fakeNav = (userAgent: string, architecture?: string) => ({
       : { getHighEntropyValues: async () => ({ architecture }) },
 });
 
-/** The card blocks the script reveals for this navigator. */
+/** The blocks the script reveals for this navigator. */
 async function landing(navigator: ReturnType<typeof fakeNav>) {
   const { resolveTargets } = await import('../scripts/download-target');
   const targets: string[] = await resolveTargets(navigator);
@@ -510,7 +531,7 @@ async function landing(navigator: ReturnType<typeof fakeNav>) {
     ctas().filter(
       (b) => b.attrs['data-surface'] === surface && targets.includes(String(b.attrs['data-platform'])),
     );
-  return { desktop: shown('desktop'), tui: shown('tui') };
+  return { desktop: shown('desktop'), tui: shown('tui'), setup: shown('setup') };
 }
 
 describe('Downloads.astro card buttons', () => {
@@ -519,23 +540,27 @@ describe('Downloads.astro card buttons', () => {
     rendered = await render();
   });
 
-  it('gives Windows x64 the desktop app, and the setup for the terminal', async () => {
-    const { desktop, tui } = await landing(fakeNav(UA.win, 'x86'));
-    expect(desktop.map(hrefsIn)).toEqual([[fullUrl('gaia-agent-ui-0.25.0-x64-setup.exe')]]);
-    expect(tui.map(hrefsIn)).toEqual([[fullUrl('gaia-0.25.0-win-x64-setup.exe')]]);
+  it('shows Windows x64 only the one installer', async () => {
+    const { desktop, tui, setup } = await landing(fakeNav(UA.win, 'x86'));
+    expect(desktop).toEqual([]);
+    expect(tui).toEqual([]);
+    expect(setup.map(hrefsIn)).toEqual([[fullUrl('gaia-0.25.0-win-x64-setup.exe')]]);
   });
 
   it('gives an Apple Silicon Mac the .dmg and the terminal .pkg', async () => {
-    const { desktop, tui } = await landing(fakeNav(UA.mac, 'arm'));
+    const { desktop, tui, setup } = await landing(fakeNav(UA.mac, 'arm'));
     expect(desktop.map(hrefsIn)).toEqual([[fullUrl('gaia-agent-ui-0.25.0-arm64.dmg')]]);
     expect(tui.map(hrefsIn)).toEqual([[fullUrl('gaia-0.25.0-darwin-arm64.pkg')]]);
+    expect(setup).toEqual([]);
   });
 
-  it('gives Linux x64 the AppImage, and keeps the desktop .deb to the list', async () => {
+  it('gives Linux x64 the AppImage and the terminal .deb, the rest folded', async () => {
     const { desktop, tui } = await landing(fakeNav(UA.linux, 'x86'));
     expect(desktop.map(hrefsIn)).toEqual([[fullUrl('gaia-agent-ui-0.25.0-x86_64.AppImage')]]);
-    expect(tui.map(hrefsIn)).toEqual([[fullUrl('gaia_0.25.0_amd64.deb'), fullUrl('gaia-0.25.0.x86_64.rpm')]]);
-    expect(hrefsIn(theList())).toContain(fullUrl('gaia-agent-ui-0.25.0-amd64.deb'));
+    expect(tui.map(hrefsIn)).toEqual([[fullUrl('gaia_0.25.0_amd64.deb')]]);
+    expect(hrefsIn(theList())).toEqual(
+      expect.arrayContaining([fullUrl('gaia-agent-ui-0.25.0-amd64.deb'), fullUrl('gaia-0.25.0.x86_64.rpm')]),
+    );
   });
 
   it('tells the no-build platforms there is no desktop app, and offers the terminal', async () => {
@@ -549,7 +574,7 @@ describe('Downloads.astro card buttons', () => {
       expect(desktop).toHaveLength(1);
       expect(desktop[0].attrs['data-kind']).toBe('none');
       expect(hrefsIn(desktop[0])).toEqual([]);
-      expect(textOf(desktop[0])).toContain(`There is no desktop build for ${platform}`);
+      expect(textOf(desktop[0])).toContain(`No desktop app for ${platform}`);
       expect(tui.map(hrefsIn)).toEqual([[fullUrl(file)]]);
     }
   });
@@ -568,9 +593,10 @@ describe('Downloads.astro card buttons', () => {
 // ---- What the release does not carry ---------------------------------------
 
 describe('Downloads.astro against an incomplete release', () => {
-  // v0.25.0 with the desktop app and the raw terminal binaries but none of the
-  // terminal installers. Each missing installer is absent — never a link built
-  // from a name the release does not carry.
+  // v0.25.0 as GitHub has it: the desktop app and the raw terminal binaries,
+  // and installers for macOS and Linux but no combined Windows setup. Each
+  // missing installer is absent — never a link built from a name the release
+  // does not carry.
   it('renders no button for an installer the release does not carry', async () => {
     const {
       'win-x64-setup': _setup,
@@ -598,7 +624,7 @@ describe('Downloads.astro against an incomplete release', () => {
       .filter((e) => e.tag === 'a')
       .map((a) => a.attrs.href as string);
     expect(hrefs.filter((h) => !rendered.publishedUrls.has(h))).toEqual([]);
-    expect(hrefs.filter((h) => /\.(pkg|deb|rpm)$|win-x64-setup/.test(h))).toEqual([]);
+    expect(hrefs.filter((h) => /\.(pkg|deb|rpm)$|gaia-0\.25\.0-win-x64-setup/.test(h))).toEqual([]);
   });
 
   it('drops a desktop platform the release does not carry, and keeps the rest', async () => {
@@ -646,10 +672,11 @@ describe('Downloads.astro against an incomplete release', () => {
 
 // ---- The header's Install button -------------------------------------------
 //
-// Install starts the desktop app download, the same file as the Agent UI
-// card's button. The script swaps the href in once pickInstallTarget places
-// the machine on exactly one platform; these read the per-platform targets the
-// header ships and run the same picker the script does.
+// Install starts the same file the install section leads with: the combined
+// setup on Windows x64, the desktop app on Apple Silicon and Linux x64. The
+// script swaps the href in once pickInstallTarget places the machine on exactly
+// one platform; these read the per-platform targets the header ships and run
+// the same picker the script does.
 
 async function renderHeader(): Promise<El> {
   vi.resetModules();
@@ -679,7 +706,7 @@ describe('Header.astro Install button', () => {
     RELEASES = [stable(SETUP_VERSION, FULL_FILES)];
   });
 
-  it('ships a target for exactly the three desktop builds, each the Agent UI card file', async () => {
+  it('starts the same file the install section leads with, on every platform it has', async () => {
     rendered = await render();
     const links = installLinks(await renderHeader());
     // The desktop nav and the mobile menu.
@@ -689,30 +716,34 @@ describe('Header.astro Install button', () => {
       // No JS, or a machine the script cannot place, lands on the section.
       expect(link.attrs.href).toBe('/#install');
       const targets = targetsOf(link);
-      expect(Object.keys(targets)).toEqual(['win-x64', 'darwin-arm64', 'linux-x64']);
-      for (const [platform, { href }] of Object.entries(targets)) {
-        expect(blockFor('desktop', platform).flatMap(hrefsIn)).toEqual([href]);
-      }
-      expect(targets['darwin-arm64'].label).toBe(
-        'Download the GAIA desktop app for macOS (Apple Silicon) (gaia-agent-ui-0.25.0-arm64.dmg)',
+      expect(Object.keys(targets).sort()).toEqual(['darwin-arm64', 'linux-x64', 'win-x64']);
+      expect(blockFor('setup', 'win-x64').flatMap(hrefsIn)).toEqual([targets['win-x64'].href]);
+      expect(blockFor('desktop', 'darwin-arm64').flatMap(hrefsIn)).toEqual([targets['darwin-arm64'].href]);
+      expect(blockFor('desktop', 'linux-x64').flatMap(hrefsIn)).toEqual([targets['linux-x64'].href]);
+      expect(targets['win-x64'].label).toBe(
+        'Download the GAIA installer for Windows (x64): desktop app, terminal, or both (gaia-0.25.0-win-x64-setup.exe)',
       );
     }
   });
 
-  it('starts the desktop app on each platform it builds for, never the combined setup', async () => {
+  it('starts the combined setup on Windows x64, never the desktop-only setup', async () => {
     const targets = targetsOf(installLinks(await renderHeader())[0]);
-    const winApp = fullUrl('gaia-agent-ui-0.25.0-x64-setup.exe');
-    expect(await installHref(targets, fakeNav(UA.win, 'x86'))).toBe(winApp);
+    const setup = fullUrl('gaia-0.25.0-win-x64-setup.exe');
+    expect(await installHref(targets, fakeNav(UA.win, 'x86'))).toBe(setup);
     // A browser with no client hints: the UA's Win64 places it.
-    expect(await installHref(targets, fakeNav(UA.win))).toBe(winApp);
+    expect(await installHref(targets, fakeNav(UA.win))).toBe(setup);
+    expect(Object.values(targets).map((t) => t.href)).not.toContain(fullUrl('gaia-agent-ui-0.25.0-x64-setup.exe'));
+  });
+
+  it('starts the desktop app on Apple Silicon and Linux x64', async () => {
+    const targets = targetsOf(installLinks(await renderHeader())[0]);
     expect(await installHref(targets, fakeNav(UA.mac, 'arm'))).toBe(fullUrl('gaia-agent-ui-0.25.0-arm64.dmg'));
     expect(await installHref(targets, fakeNav(UA.linux, 'x86'))).toBe(
       fullUrl('gaia-agent-ui-0.25.0-x86_64.AppImage'),
     );
-    expect(Object.values(targets).map((t) => t.href)).not.toContain(fullUrl('gaia-0.25.0-win-x64-setup.exe'));
   });
 
-  it('keeps the section for every machine with no desktop build, or one it cannot place', async () => {
+  it('keeps the section for every other machine, or one it cannot place', async () => {
     const targets = targetsOf(installLinks(await renderHeader())[0]);
     const cases: [string, ReturnType<typeof fakeNav>][] = [
       ['Intel Mac', fakeNav(UA.mac, 'x86')],
@@ -730,20 +761,27 @@ describe('Header.astro Install button', () => {
     }
   });
 
-  it('keeps the section on a platform whose desktop build is missing, and the rest', async () => {
-    RELEASES = [stable(SETUP_VERSION, FULL_FILES.filter((f) => f !== 'gaia-agent-ui-0.25.0-x64-setup.exe'))];
+  it('keeps Windows on the section when the release carries no combined setup', async () => {
+    RELEASES = [stable(SETUP_VERSION, FULL_FILES.filter((f) => f !== 'gaia-0.25.0-win-x64-setup.exe'))];
     const targets = targetsOf(installLinks(await renderHeader())[0]);
     expect(Object.keys(targets)).toEqual(['darwin-arm64', 'linux-x64']);
-    // Not the combined setup or the terminal binary promoted in its place.
+    // Not the desktop-only setup or the terminal binary promoted in its place.
     expect(await installHref(targets, fakeNav(UA.win, 'x86'))).toBe('/#install');
     expect(await installHref(targets, fakeNav(UA.mac, 'arm'))).toBe(fullUrl('gaia-agent-ui-0.25.0-arm64.dmg'));
   });
 
-  it('fails the build when the release carries no desktop build', async () => {
-    RELEASES = [stable(SETUP_VERSION, Object.values(SETUP_RELEASE_FILES))];
-    stubReleases(() => Response.json(RELEASES));
+  it('keeps Windows on the section for a terminal-only setup from before 0.25.0', async () => {
+    RELEASES = defaultReleases();
+    const targets = targetsOf(installLinks(await renderHeader())[0]);
+    expect(targets['win-x64']).toBeUndefined();
+    expect(await installHref(targets, fakeNav(UA.win, 'x86'))).toBe('/#install');
+  });
+
+  it('fails the build when the release carries nothing Install can download', async () => {
+    const { 'win-x64-setup': _setup, ...rest } = SETUP_RELEASE_FILES;
+    RELEASES = [stable(SETUP_VERSION, Object.values(rest))];
     await expect(renderHeader()).rejects.toThrow(
-      /\[install\] v0\.25\.0 carries \d+ assets, none of which is a desktop app build/,
+      /\[install\] v0\.25\.0 carries \d+ assets, none of which the header's Install button can download/,
     );
   });
 });
