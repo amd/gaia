@@ -221,6 +221,8 @@ interface ChatState {
     defaultPermissionModeKnown: boolean;
     /** Library documents picked with no chat open; the next new chat starts with them. */
     draftDocumentIds: string[];
+    /** The next new chat is created private, so its first message is never remembered. */
+    draftPrivate: boolean;
     sidebarOpen: boolean;
     sidebarCollapsed: boolean;
     isLoadingMessages: boolean;
@@ -246,6 +248,7 @@ interface ChatState {
     setDefaultPermissionMode: (mode: PermissionMode) => void;
     /** After a chat is created: the next draft starts from the default again. */
     resetDraftPermissionMode: () => void;
+    setDraftPrivate: (on: boolean) => void;
     addDraftDocuments: (ids: string[]) => void;
     removeDraftDocument: (id: string) => void;
     clearDraftDocuments: () => void;
@@ -481,6 +484,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     defaultPermissionMode: 'ask',
     defaultPermissionModeKnown: false,
     draftDocumentIds: [],
+    draftPrivate: false,
     setThemePreference: (pref) => {
         writePref('gaia-chat-theme', pref);
         const theme = resolveTheme(pref);
@@ -533,6 +537,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })),
     resetDraftPermissionMode: () =>
         set((state) => ({ draftPermissionMode: state.defaultPermissionMode, draftPermissionModeChosen: false })),
+    setDraftPrivate: (on) => set({ draftPrivate: on }),
     addDraftDocuments: (ids) =>
         set((state) => {
             const toAdd = ids.filter((id) => !state.draftDocumentIds.includes(id));

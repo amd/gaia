@@ -64,7 +64,6 @@
     overflow: hidden;
     white-space: nowrap;
     padding-right: 24px;
-    margin-right: -24px;
     -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
     mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
 }

@@ -294,8 +294,8 @@ def test_direct_real_writes_still_run(writer):
     ]
 
 
-def test_kw03_direct_placeholder_write_is_refused_then_rewritten(writer):
-    """kw-03: a direct write_file of "PLACEHOLDER" ran, then was overwritten."""
+def test_direct_placeholder_write_is_refused_then_rewritten(writer):
+    """A direct write_file of "PLACEHOLDER" ran, then was overwritten."""
     memo = "C:/scratch/gaia-scratch-1/make_memo.py"
     real = "print(1)\n"
     sent = _script(

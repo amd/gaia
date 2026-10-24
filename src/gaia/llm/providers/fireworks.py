@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from gaia.llm.retry import http_body_text
+
 #: Fireworks' OpenAI-compatible endpoint — the same base Lemonade routes to.
 FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1"
 
@@ -150,7 +152,7 @@ def fetch_models(
     if response.status_code != 200:
         raise FireworksError(
             f"Fireworks returned HTTP {response.status_code} for {url}: "
-            f"{response.text[:300]}"
+            f"{http_body_text(response)[:300]}"
         )
 
     try:
@@ -261,7 +263,7 @@ def fetch_library(
         if response.status_code != 200:
             raise FireworksError(
                 f"Fireworks returned HTTP {response.status_code} for {url}: "
-                f"{response.text[:300]}"
+                f"{http_body_text(response)[:300]}"
             )
         try:
             payload = response.json()
