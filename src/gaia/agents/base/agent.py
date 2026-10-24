@@ -1928,6 +1928,7 @@ def _with_resolved_target(prompt_args: Any, preflight: Any) -> Any:
     ):
         return prompt_args
     try:
+        # Relative to this process's cwd, as the tool body opens it at write time.
         target = os.path.abspath(str(target_of(prompt_args)))
     except (KeyError, TypeError, ValueError, OSError) as e:
         # Malformed arguments: the tool body reports them; the prompt shows them as sent.

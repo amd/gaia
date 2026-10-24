@@ -92,6 +92,29 @@ def test_an_absolute_path_is_shown_unchanged(agent, tmp_path):
     assert shown["file_path"] == target
 
 
+class _AlwaysConsole(_AskedConsole):
+    """Answers "always" to the first prompt for a call, as the user would."""
+
+    def confirm_tool_execution(self, tool_name, tool_args):
+        if self.call_is_granted(tool_name, tool_args):
+            return True
+        self.shown.append((tool_name, dict(tool_args)))
+        self.grant_call_for_session(tool_name, tool_args)
+        return True
+
+
+def test_always_on_a_relative_write_covers_the_same_file_next_time(agent, tmp_path):
+    agent.console = _AlwaysConsole()
+
+    agent._execute_tool("write_file", {"file_path": "shop2.txt", "content": "milk"})
+    agent._execute_tool("write_file", {"file_path": "shop2.txt", "content": "eggs"})
+
+    assert len(agent.console.shown) == 1
+    target = str(tmp_path.resolve() / "shop2.txt")
+    assert any(target in key for key in agent.console.session_grants())
+    assert (tmp_path / "shop2.txt").read_text(encoding="utf-8") == "eggs"
+
+
 def test_a_tool_without_a_target_is_left_alone():
     args = {"file_path": "x.txt"}
 
