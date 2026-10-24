@@ -334,8 +334,14 @@ the turn as untracked. Omit the field to record nothing. Pre-2.19 binaries
 `surface` (contract ≥ 2.20) is the front-end the turn comes from: `"agent_ui"`,
 `"tui"` or `"cli"`. With `"agent_ui"` the agent points recurring requests at the
 Agent UI's **Scheduled tasks** page instead of saying it cannot schedule. It is
-read when a session is built and kept for that session. Omit it when unknown.
-Pre-2.20 binaries `422` the field.
+read when a session is built and kept for that session. It also picks where a
+model-provider error tells the user to fix it: each front-end gets its own
+settings screen, and a headless caller, which omits it, is pointed at the model
+server the GAIA host uses (`LEMONADE_BASE_URL`). A failed model request also
+names the `host:port` it went through; on a base URL the user set, a local
+model's failure reads "the model server at `host:port`", not "Lemonade on this
+machine". Pre-2.20 binaries `422` the field and word every such error for the
+TUI.
 
 ```json
 {

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A turn whose local model failed on a base URL the user set
+  (`LEMONADE_BASE_URL` or an external Lemonade) now names that server — "The
+  model server at 192.168.1.20:8080" — instead of "Lemonade on this machine",
+  which pointed at a Lemonade install that wasn't involved (#5295). Only the
+  host and port are shown, never credentials or a query string.
 - In an Agent UI chat with no documents attached, the document tools now say
   no documents are attached to this chat, and that the user can attach them
   from the Document library, instead of "No documents are currently indexed".

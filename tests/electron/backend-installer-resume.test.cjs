@@ -161,6 +161,13 @@ describe("a setup that fails", () => {
     expect(
       installer.initFailureReason({ code: 1, stdout: "Step 1/5\nLemonade did not start\n", stderr: "" })
     ).toBe("Lemonade did not start");
+    expect(
+      installer.initFailureReason({
+        code: 1,
+        stdout: 'Lemonade did not start\n{"event": "done", "ok": false}\n',
+        stderr: "",
+      })
+    ).toBe("Lemonade did not start");
     expect(installer.initFailureReason({ code: 2, stdout: "", stderr: "" })).toBe(
       "gaia init exited with code 2 and printed nothing."
     );

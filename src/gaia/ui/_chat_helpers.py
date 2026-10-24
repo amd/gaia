@@ -2134,7 +2134,11 @@ def _dispatch_sidecar_query(
     try:
         handle = daemon_client.acquire_handle(agent_type)
     except SidecarError as exc:
-        sse_handler._emit({"type": "agent_error", "content": str(exc)})
+        # The daemon's text names its internals and can carry a traceback.
+        logger.error("chat: could not start the %s agent: %s", agent_type, exc)
+        sse_handler._emit(
+            {"type": "agent_error", "content": profile.start_failed_text(exc.kind)}
+        )
         return
 
     if not api_version_supported(profile, handle.api_version):
