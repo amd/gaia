@@ -23,6 +23,6 @@ describe('AgentActivity live status', () => {
 
     it('says it is waiting on the user, with no timer, while an approval is open', () => {
         render(<AgentActivity steps={[runningShell]} isActive awaitingUser />);
-        expect(live()).toBe('Waiting for your answer');
+        expect(live()).toBe('Waiting for you');
     });
 });

@@ -9,7 +9,7 @@ import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
 import remarkWindowsPaths from '../utils/remarkWindowsPaths';
 import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
-import { AgentActivity } from './AgentActivity';
+import { AgentActivity, WAITING_ON_USER_LABEL } from './AgentActivity';
 import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
@@ -123,8 +123,6 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
     );
 }
 
-
-const WAITING_ON_USER_LABEL = 'Waiting for you';
 
 /** A phase shorter than this needs no clock; past it, the count shows GAIA is still working. */
 const PHASE_ELAPSED_MIN_S = 3;

@@ -24,8 +24,32 @@ function summarize(n: GaiaNotification): string {
     return typeof primary === 'string' ? primary : '';
 }
 
-/** Tools whose relayed summary is the command line, then its risk note (`COMMAND_SUMMARY_TOOLS` in sse_translation.py). */
+/** Tools whose relayed summary is a command and its risk note (`COMMAND_SUMMARY_TOOLS` in sse_translation.py). */
 const COMMAND_SUMMARY_TOOLS = new Set(['run_shell_command', 'run_cli_command', 'wait_for_condition']);
+
+/**
+ * A relayed command prompt with no args: `command[\n…]\nin <folder>[\n(extras)]\n<risk note>`
+ * (`render_command_summary` in sse_translation.py). The command keeps its own lines.
+ */
+export function splitCommandSummary(summary: string): { command: string; folder: string; extras: string; note: string } | null {
+    const lines = summary.split('\n');
+    if (lines.length < 2) return null;
+    // No note when the call carries no risk worth naming: the folder is then last.
+    const hasNote = !lines[lines.length - 1].startsWith('in ');
+    const note = hasNote ? lines[lines.length - 1].trim() : '';
+    const body = hasNote ? lines.slice(0, -1) : lines;
+    let at = -1;
+    for (let i = body.length - 1; i > 0; i--) {
+        if (body[i].startsWith('in ')) { at = i; break; }
+    }
+    if (at < 0) return { command: body.join('\n'), folder: '', extras: '', note };
+    return {
+        command: body.slice(0, at).join('\n'),
+        folder: body[at].slice(3).trim(),
+        extras: body.slice(at + 1).join(' ').trim(),
+        note,
+    };
+}
 
 /** Lines of code a prompt shows before "Show all". */
 export const CODE_PREVIEW_LINES = 12;
@@ -106,10 +130,9 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const folder = riskNote && typeof args.working_directory === 'string' ? args.working_directory : '';
     // Code is approved as written, so all of it is one click away, never only a summary.
     const code = typeof args.code === 'string' && args.code.trim() ? args.code : '';
-    // A relayed command prompt with no args arrives as "<command>\n<risk note>".
-    const [summaryHead, ...summaryRest] = (notification.summary ?? '').split('\n');
-    const summaryCommand = !hasArgs && COMMAND_SUMMARY_TOOLS.has(notification.tool ?? '') && summaryRest.length > 0 ? summaryHead : '';
-    const summaryNote = summaryCommand ? summaryRest.join(' ').trim() : '';
+    const relayed = !hasArgs && COMMAND_SUMMARY_TOOLS.has(notification.tool ?? '')
+        ? splitCommandSummary(notification.summary ?? '')
+        : null;
 
     // Take focus from the composer so its Enter can't land on a button here.
     useEffect(() => { cardRef.current?.focus({ preventScroll: true }); }, []);
@@ -174,9 +197,11 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {folder && <p className="perm-card-detail">in <code>{folder}</code></p>}
                     {riskNote && <p className="perm-card-risk" role="note">{riskNote}</p>}
                     {code && <CodeBlock code={code} />}
-                    {!detail && !code && summaryCommand && <pre className="perm-card-pre perm-card-exact">{summaryCommand}</pre>}
-                    {!detail && !code && summaryNote && <p className="perm-card-risk" role="note">{summaryNote}</p>}
-                    {!detail && !code && notification.summary && !summaryCommand && <p className="perm-card-detail">{notification.summary}</p>}
+                    {relayed && <pre className="perm-card-pre perm-card-exact">{relayed.command}</pre>}
+                    {relayed?.folder && <p className="perm-card-detail">in <code>{relayed.folder}</code></p>}
+                    {relayed?.extras && <p className="perm-card-detail">{relayed.extras}</p>}
+                    {relayed?.note && <p className="perm-card-risk" role="note">{relayed.note}</p>}
+                    {!detail && !code && notification.summary && !relayed && <p className="perm-card-detail">{notification.summary}</p>}
                     {freshConsent && notification.message && <p className="perm-card-detail">{notification.message}</p>}
                 </div>
                 {remaining !== null && !expired && (

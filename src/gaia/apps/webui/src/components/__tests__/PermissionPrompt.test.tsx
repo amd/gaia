@@ -66,6 +66,39 @@ describe('PermissionPrompt', () => {
         expect(screen.getByRole('note')).toHaveTextContent('Can run any code, with your permissions.');
     });
 
+    it("keeps a relayed command's folder, extras and note apart, as the server sends them", () => {
+        useNotificationStore.getState().addNotification(request({
+            toolArgs: undefined,
+            summary: 'Get-ChildItem\nin C:\\Users\\me\n(timeout=30)\nCan run any code, with your permissions.',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(document.querySelector('.perm-card-exact')?.textContent).toBe('Get-ChildItem');
+        expect(screen.getByRole('note').textContent).toBe('Can run any code, with your permissions.');
+        expect(screen.getByText('C:\\Users\\me').tagName).toBe('CODE');
+        expect(screen.getByText('(timeout=30)')).toBeInTheDocument();
+    });
+
+    it('keeps a multi-line relayed command whole in the code block', () => {
+        useNotificationStore.getState().addNotification(request({
+            toolArgs: undefined,
+            summary: "cat <<'EOF' > notes.txt\nin the morning\nEOF\nin /home/me\nCan run any code, with your permissions.",
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(document.querySelector('.perm-card-exact')?.textContent).toBe("cat <<'EOF' > notes.txt\nin the morning\nEOF");
+        expect(screen.getByText('/home/me').tagName).toBe('CODE');
+    });
+
+    it('reads a relayed command with no risk note: the folder is last', () => {
+        useNotificationStore.getState().addNotification(request({
+            toolArgs: undefined,
+            summary: 'git status\nin /repo',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(document.querySelector('.perm-card-exact')?.textContent).toBe('git status');
+        expect(screen.getByText('/repo').tagName).toBe('CODE');
+        expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    });
+
     it('keeps a no-args summary for other tools as plain text', () => {
         useNotificationStore.getState().addNotification(request({
             tool: 'send_email', toolArgs: undefined, summary: 'Send to a@b.c\nSubject: hi',
