@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """A reloaded answer keeps its step panel.
 
-On rc13 (kw-13) one ``list_files`` step stored bare file names, which the
+On rc13 one ``list_files`` step stored bare file names, which the
 response model rejects, and the whole 46-step panel was dropped on reload.
 """
 

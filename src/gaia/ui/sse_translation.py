@@ -104,10 +104,19 @@ TERMINAL_TYPES = frozenset({"final", "error"})
 SUMMARY_VIEW_KEYS = (
     "summary",
     "success",
+    # The tool's own outcome word, e.g. "skipped" when a private chat saves nothing.
+    "status",
     "summary_truncated",
     "command_output",
     "latency_ms",
+    "mcp_output",
+    # What the tool wrote (``RESULT_PATH_KEYS`` in ``gaia.ui.sse_handler``).
+    "file_path",
+    "image_path",
 )
+
+#: Which connector an MCP tool call belongs to, carried from ``tool_start``.
+MCP_TOOL_FIELDS = ("mcp_server", "mcp_server_label", "mcp_tool")
 
 #: Counts a ``status`` carrying a ``phase`` may report alongside it: reasoning
 #: words so far, or characters of a tool call's arguments so far.
@@ -221,7 +230,7 @@ class CanonicalTranslator:
         etype = event.get("type")
 
         # tool_args merges into the buffered tool_call; every other event first
-        # flushes any pending tool_call (an argument-less tool), then maps.
+        # flushes any pending tool_call (its producer sent no tool_args), then maps.
         if etype == "tool_args":
             return self._on_tool_args(event)
 
@@ -269,24 +278,38 @@ class CanonicalTranslator:
             return []
         pending = self._pending_tool
         self._pending_tool = None
-        return [self._emit_tool_call(pending["tool"], pending.get("args") or {})]
+        return [
+            self._emit_tool_call(
+                pending["tool"], pending.get("args") or {}, pending.get("mcp")
+            )
+        ]
 
-    def _emit_tool_call(self, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _emit_tool_call(
+        self,
+        tool: str,
+        args: Dict[str, Any],
+        mcp: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         self._last_tool = tool
         self._result_seen_since_call = False
-        # ``narration`` is additive — ``tool`` and ``args`` keep their shape for
-        # clients that predate it (spec §4.1, additive-MINOR).
+        # ``narration`` and the MCP fields are additive — ``tool`` and ``args``
+        # keep their shape for clients that predate them (spec §4.1, additive-MINOR).
         return {
             "type": "tool_call",
             "tool": tool,
             "args": args,
             "narration": derive_narration(tool, args),
+            **(mcp or {}),
         }
 
     def _on_tool_start(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
-        # Flush a previous, arg-less pending tool_call before buffering this one.
+        # Flush a previous pending tool_call that never got its tool_args.
         out = self._flush_pending()
-        self._pending_tool = {"tool": event.get("tool") or "unknown", "args": {}}
+        self._pending_tool = {
+            "tool": event.get("tool") or "unknown",
+            "args": {},
+            "mcp": {k: event[k] for k in MCP_TOOL_FIELDS if event.get(k)},
+        }
         return out
 
     def _on_tool_args(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -294,9 +317,9 @@ class CanonicalTranslator:
         if not isinstance(args, dict):
             args = {}
         if self._pending_tool is not None:
-            tool = self._pending_tool["tool"]
+            pending = self._pending_tool
             self._pending_tool = None
-            return [self._emit_tool_call(tool, args)]
+            return [self._emit_tool_call(pending["tool"], args, pending.get("mcp"))]
         # tool_args with no buffered tool_start (defensive) — emit a standalone
         # tool_call keyed on whatever name the args event carries.
         return [self._emit_tool_call(event.get("tool") or "unknown", args)]
@@ -524,10 +547,21 @@ class CanonicalTranslator:
             canonical["tool_label"] = str(tool_label)
         # The call itself, so a front-end can show all of what it is approving
         # (the summary shortens code) and word a path prompt for what is there.
-        if args:
-            canonical["args"], truncated = bounded_prompt_args(args)
+        call_args = _model_call_args(event, args)
+        if call_args:
+            canonical["args"], truncated = bounded_prompt_args(call_args)
             if truncated:
                 canonical["args_truncated"] = True
+        # What GAIA adds to the prompt, kept out of ``args`` so a policy client
+        # never matches on a field the model did not send.
+        prompt_context: Dict[str, Any] = {}
+        folder = args.get("working_directory")
+        if folder and folder != call_args.get("working_directory"):
+            prompt_context["working_directory"] = str(folder)
+        if args.get(RISK_NOTE_ARG):
+            prompt_context["risk_note"] = str(args[RISK_NOTE_ARG])
+        if prompt_context:
+            canonical["prompt_context"] = prompt_context
         return [canonical]
 
     def _on_user_input_request(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -712,6 +746,24 @@ SUMMARY_CODE_LINES = 12
 PROMPT_ARG_VALUE_CHARS = 64_000
 
 
+#: Keys GAIA writes into a prompt's arguments; the agent refuses them from a model.
+PROMPT_ONLY_ARGS = frozenset({RISK_NOTE_ARG, SCRATCH_ARG})
+
+
+def _model_call_args(event: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
+    """The gated call's arguments as the model sent them.
+
+    ``call_args`` is set when the prompt adds to the noted call. Without it,
+    ``args`` lose only the prompt-only keys: the one path that adds a folder
+    (``Agent._execute_tool``) always notes the call, so any other folder is
+    the model's own, or part of a prompt GAIA raised itself (path access).
+    """
+    call_args = event.get("call_args")
+    if isinstance(call_args, dict):
+        return call_args
+    return {k: v for k, v in args.items() if k not in PROMPT_ONLY_ARGS}
+
+
 def bounded_prompt_args(args: Dict[str, Any]) -> "tuple[Dict[str, Any], bool]":
     """*args* made JSON-safe with every value capped; and whether any was cut.
 
@@ -771,14 +823,21 @@ def _short_location(path: str, workspace: str) -> str:
 
 
 def _strip_base(command: str, base: str) -> str:
-    """Drop ``base`` + separator where it starts a path token. Never a root."""
+    """Drop ``base`` + separator where it starts a path token. Never a root.
+
+    The home folder becomes ``~`` rather than nothing: stripped bare, ``ls ~/src``
+    reads as ``ls src``, which names a folder the user may be sitting in.
+    """
     base = os.path.normpath(base).rstrip("\\/") if base else ""
     if not base or os.path.dirname(base) == base or len(base) < 3:
         return command
+    flags = re.IGNORECASE if os.name == "nt" else 0
+    home = os.path.normpath(os.path.expanduser("~"))
+    if os.path.normcase(base) == os.path.normcase(home):
+        pattern = r"(^|[\s\"'=])" + re.escape(base) + r"([\\/])"
+        return re.sub(pattern, r"\1~\2", command, flags=flags)
     pattern = r"(^|[\s\"'=])" + re.escape(base) + r"[\\/]"
-    return re.sub(
-        pattern, r"\1", command, flags=re.IGNORECASE if os.name == "nt" else 0
-    )
+    return re.sub(pattern, r"\1", command, flags=flags)
 
 
 def _split_leading_cd(command: str) -> "tuple[str, str]":
@@ -802,7 +861,8 @@ def render_command_summary(
 
     A leading ``cd <folder> &&`` becomes an ``in <folder>`` line, folder paths
     inside the command become relative to it, and the workspace itself is never
-    spelled out. Anything long is shortened head AND tail, with the cut counted,
+    spelled out, except that a home-folder workspace shows as ``~``, so a path
+    under home can't read as one in the project. Anything long is shortened head AND tail, with the cut counted,
     so the end of the command stays visible. Arguments other than the command
     and its folder follow in brackets — a hidden key is a hidden side effect.
     """

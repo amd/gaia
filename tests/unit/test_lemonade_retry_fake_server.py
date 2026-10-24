@@ -330,7 +330,7 @@ def test_streaming_sdk_does_not_retry_on_its_own(make_client, monkeypatch):
 
 # ── the AMD LLM gateway's failures, as Lemonade relays them ──────────────
 #
-# kw-09 died on a gateway 429 and kw-03 on a 502 (#5087). A cloud failure that
+# Tasks died on a gateway 429 and on a 502 (#5087). A cloud failure that
 # arrives once the stream has opened comes as an SSE error frame inside an
 # HTTP 200 response, carrying the upstream status; this frame is the one
 # captured live from Lemonade 2026.40.0 (#4898).
@@ -414,11 +414,11 @@ def test_cloud_rate_limit_gives_up_with_its_own_message_and_retry_state(
     assert 0.0 <= client.sleeps[1] <= 4.0
 
 
-# kw-05 (#5087): the gateway sent no response headers for 34 s, then dropped
+# #5087: the gateway sent no response headers for 34 s, then dropped
 # the connection. Lemonade 2026.40.0 logged "Stream ended with: Failure when
 # receiving data from the peer (response code: 0)" and relayed this frame,
 # which carries no status_code.
-_KW05_DROP = (
+_SILENT_DROP = (
     "backend connection failed during SSE stream before DONE: "
     "CURL error: Failure when receiving data from the peer"
 )
@@ -430,7 +430,7 @@ def _streaming_error_frame(message):
 
 
 def test_status_less_cloud_drop_is_retried(make_client):
-    script = [_streaming_error_frame(_KW05_DROP), _GOOD_STREAM]
+    script = [_streaming_error_frame(_SILENT_DROP), _GOOD_STREAM]
     with FakeServer(script) as server:
         client = make_client(server)
         client.cloud_model_provider = lambda *a, **k: "amd"
@@ -441,7 +441,7 @@ def test_status_less_cloud_drop_is_retried(make_client):
 
 def test_status_less_cloud_drop_gives_up_in_plain_words(make_client, monkeypatch):
     monkeypatch.setenv("GAIA_LLM_RETRY_ATTEMPTS", "3")
-    script = [_streaming_error_frame(_KW05_DROP)] * 3
+    script = [_streaming_error_frame(_SILENT_DROP)] * 3
     with FakeServer(script) as server:
         client = make_client(server)
         client.cloud_model_provider = lambda *a, **k: "amd"
@@ -544,3 +544,42 @@ def test_connection_reset_before_output_is_retried(make_client):
         assert _complete(client, True) == "Hello"
     assert len(server.requests) == 3
     assert client.last_request_retries == 2
+
+
+# ── a local model behind a proxy that answers 502 (#5295) ─────────────────
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+def test_a_502_from_a_local_endpoint_names_the_server(make_client, monkeypatch, stream):
+    monkeypatch.setenv("GAIA_LLM_RETRY_ATTEMPTS", "2")
+    script = [_text(502, "Bad Gateway")] * 2
+    with FakeServer(script) as server:
+        client = make_client(server)
+        with pytest.raises(LemonadeClientError) as raised:
+            result = client.chat_completions(
+                model="gpt-oss-20b",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=stream,
+            )
+            if stream:
+                list(result)
+    message = str(raised.value)
+    assert f"the model server at 127.0.0.1:{server.port}" in message
+    assert "Lemonade" not in message and "TUI" not in message
+    if not stream:
+        assert message.startswith("Error in chat completions (status 502)")
+        assert message.endswith(": Bad Gateway")
+
+
+def test_the_backend_envelope_still_parses_after_the_server_name(make_client):
+    from gaia.llm.lemonade_client import _extract_backend_error_message
+
+    body = {"error": {"message": "tool_choice is not supported"}}
+    with FakeServer([_json(400, body)]) as server:
+        client = make_client(server)
+        with pytest.raises(LemonadeClientError) as raised:
+            _complete(client, False)
+    assert f"127.0.0.1:{server.port}" in str(raised.value)
+    assert _extract_backend_error_message(str(raised.value)) == (
+        "tool_choice is not supported"
+    )

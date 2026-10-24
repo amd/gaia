@@ -92,3 +92,19 @@ def test_the_truncation_is_its_own_error_type():
     err = ToolCallTruncated("Qwen3-30B", 8192)
     assert isinstance(err, ValueError) and err.cap == 8192
     assert "8192 max" in str(err)
+
+
+def test_a_truncated_run_python_is_told_to_build_the_file_in_steps(agent):
+    prompt = agent._tool_call_retry_prompt(
+        ToolCallTruncated("Qwen3.6", 8192, ["run_python"])
+    )
+    assert "split the work into parts" in prompt
+    assert "one run_python call per part" in prompt
+
+
+def test_the_truncation_names_the_cut_off_tool(agent):
+    """The parser hands the tool names on, so the advice can fit the tool."""
+    with pytest.raises(ToolCallTruncated) as caught:
+        agent._parse_llm_response(_truncated_call())
+    assert caught.value.tools == ("edit_file",)
+    assert "smaller parts" in str(caught.value)

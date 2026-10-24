@@ -42,6 +42,18 @@ run_python -- the binary is the only Python a release user has:
      script's exit code comes back unchanged. Before the fix the script path
      reached the stdio parser and exited 2 with ``unrecognized arguments``.
 
+Tokenizer -- token counts drive history trimming and context eviction:
+
+ 10. With tiktoken's download host unreachable and no cache folder set, the
+     agent's tokenizer is still ``tiktoken:cl100k_base``: the encoding plugin
+     and its data are in the binary, not fetched at runtime (#5066).
+
+Linux only -- the binary carries its build distro's OpenSSL:
+
+ 11. A ``run_python`` script's default SSL context holds CA certificates, so
+     HTTPS from a script verifies on a distro other than the one it was
+     built on (``rthook_linux_ca.py``).
+
 The handshake deliberately stops short of a real turn: an answer needs a running
 Lemonade Server and a downloaded model, which the release runners do not have.
 It still fails loudly on a broken binary -- the opening event is emitted with
@@ -91,7 +103,7 @@ STDIO_HANDSHAKE_DEADLINE_S = 300.0
 #: harness imports nothing outside the stdlib (a unit test pins the two).
 RUN_PYTHON_FILE_FLAG = "--gaia-run-python-file"
 
-#: What a knowledge-work ``run_python`` call does: office files, a table, a
+#: What a typical ``run_python`` call does: office files, a table, a
 #: chart, and stdlib modules nothing in GAIA itself imports.
 RUN_PYTHON_SCRIPT = """\
 import sys, statistics, sqlite3, zipfile, xml.etree.ElementTree, csv, decimal
@@ -401,7 +413,7 @@ def check_stdio_handshake(
         _kill_tree(proc)
 
 
-def _run_script(binary: Path, workdir: Path, body: str, *args: str):
+def _run_script(binary: Path, workdir: Path, body: str, *args: str, env=None):
     script = workdir / "snippet.py"
     script.write_text(body, encoding="utf-8")
     cmd = [str(binary), RUN_PYTHON_FILE_FLAG, str(script), *args]
@@ -417,6 +429,7 @@ def _run_script(binary: Path, workdir: Path, body: str, *args: str):
         errors="replace",
         timeout=300,
         check=False,
+        env=env,
     )
     log(f"exited {result.returncode} after {time.time() - t0:.1f}s")
     return result
@@ -450,6 +463,64 @@ def check_run_python(binary: Path) -> bool:
             )
             return False
     log("run_python check PASS -- scripts run on the bundled libraries")
+    return True
+
+
+#: Prints the estimator the agent's token counts use, from inside the binary.
+TOKENIZER_SCRIPT = """import sys
+from gaia.agents.base.turn_metrics import _tokenizer
+name = _tokenizer().name
+print("TOKENIZER", name)
+sys.exit(0 if name == "tiktoken:cl100k_base" else 5)
+"""
+
+#: Every request through a closed port, so a download attempt fails fast.
+_UNREACHABLE_PROXY = "http://127.0.0.1:9"
+
+
+def check_tokenizer(binary: Path) -> bool:
+    """cl100k_base loads from the binary alone, with its download host unreachable."""
+    dropped = {"TIKTOKEN_CACHE_DIR", "DATA_GYM_CACHE_DIR", "NO_PROXY"}
+    env = {k: v for k, v in os.environ.items() if k.upper() not in dropped}
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"):
+        env[name] = env[name.lower()] = _UNREACHABLE_PROXY
+    with tempfile.TemporaryDirectory(prefix="gaia-smoke-tokenizer-") as tmp:
+        # A fresh temp dir, so tiktoken's default cache cannot hold the file.
+        env["TMPDIR"] = env["TEMP"] = env["TMP"] = tmp
+        result = _run_script(binary, Path(tmp), TOKENIZER_SCRIPT, env=env)
+    log(f"tokenizer: {result.stdout.strip()[-300:]}")
+    if result.returncode != 0:
+        log(
+            "FAIL: the agent's token counts are an estimate, not cl100k_base: "
+            "the binary is missing tiktoken's encoding plugin or its data. "
+            f"stderr: {result.stderr[-3000:]!r}"
+        )
+        return False
+    log("tokenizer check PASS -- cl100k_base loads offline from the binary")
+    return True
+
+
+#: Prints how many CA certificates a script's default SSL context loaded.
+TLS_TRUST_SCRIPT = """import ssl, sys
+count = ssl.create_default_context().cert_store_stats()["x509_ca"]
+print("CA_CERTS", count, ssl.get_default_verify_paths())
+sys.exit(0 if count else 4)
+"""
+
+
+def check_tls_trust(binary: Path) -> bool:
+    """A script can verify HTTPS: its default context found the host's CAs."""
+    with tempfile.TemporaryDirectory(prefix="gaia-smoke-tls-") as tmp:
+        result = _run_script(binary, Path(tmp), TLS_TRUST_SCRIPT)
+    log(f"tls: {result.stdout.strip()[-600:]}")
+    if result.returncode != 0:
+        log(
+            "FAIL: a run_python script's default SSL context holds no CA "
+            "certificates, so its HTTPS calls fail verification on this distro. "
+            f"stderr: {result.stderr[-1500:]!r}"
+        )
+        return False
+    log("tls trust check PASS -- scripts find the host's CA certificates")
     return True
 
 
@@ -520,9 +591,16 @@ def main(argv=None) -> int:
 
     log("checking run_python on the frozen binary")
     results["run_python"] = check_run_python(binary)
+    log("checking the agent's tokenizer offline")
+    results["tokenizer"] = check_tokenizer(binary)
+    expected = 8
+    if sys.platform.startswith("linux"):
+        log("checking a script's TLS trust store")
+        results["tls_trust"] = check_tls_trust(binary)
+        expected += 1
 
     log(f"results: {results}")
-    ok = len(results) == 7 and all(results.values())
+    ok = len(results) == expected and all(results.values())
     log("VERDICT: PASS" if ok else "VERDICT: FAIL")
     return 0 if ok else 1
 

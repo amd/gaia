@@ -247,6 +247,37 @@ def _index_embedding_error(stats: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+_CACHE_LOCK_HINTS = {
+    "cache_busy": (
+        "Another process is using the document cache ({cache}). Tell the "
+        "user, and index the document again once it finishes."
+    ),
+    "cache_unwritable": (
+        "The document is fine: GAIA cannot write its document cache folder "
+        "({cache}). Tell the user to fix that folder's permissions; do not "
+        "suggest they check the document."
+    ),
+    "cache_lock_error": (
+        "The document is fine: GAIA could not open the lock file in its "
+        "document cache folder ({cache}). Tell the user the error; do not "
+        "suggest they check the document."
+    ),
+}
+
+
+def _index_cache_error(stats: Dict[str, Any], file_path: str) -> Dict[str, Any]:
+    """The result for a document whose cache lock could not be taken."""
+    error_type = stats["error_type"]
+    return {
+        "status": "error",
+        "error_type": error_type,
+        "error": stats.get("error"),
+        "file_name": stats.get("file_name", Path(file_path).name),
+        "cache_dir": stats.get("cache_dir"),
+        "hint": _CACHE_LOCK_HINTS[error_type].format(cache=stats.get("cache_dir")),
+    }
+
+
 def _require_rag(host: Any) -> Any:
     """Read ``host.rag``, raising loudly if never bound.
 
@@ -360,6 +391,14 @@ class RAGToolsMixin:
     are provided by FileSearchToolsMixin from gaia.agents.tools.file_tools
     """
 
+    def _no_documents_message(self) -> str:
+        """What an empty index means, as the tools report it to the model.
+
+        A host whose documents are scoped to one conversation overrides this:
+        "nothing is indexed" there reads as an empty library, which it may not be.
+        """
+        return "No documents are currently indexed."
+
     def register_rag_tools(self) -> None:
         """Register RAG-related tools."""
         from gaia.agents.base.tools import tool
@@ -381,11 +420,12 @@ class RAGToolsMixin:
             try:
                 # Check if RAG is initialized and has documents
                 if not rag or not rag.index or len(rag.chunks) == 0:
+                    message = self._no_documents_message()
                     return {
                         "status": "no_documents",
-                        "message": "No documents are currently indexed.",
+                        "message": message,
                         "instruction": (
-                            "No documents are indexed yet. "
+                            f"{message} "
                             "For domain-specific questions (HR policies, PTO, remote work, company procedures, "
                             "financial data, project plans, technical specs): use the SMART DISCOVERY WORKFLOW — "
                             "use search_file to find relevant files, index_document to index them, then query_specific_file to answer. "
@@ -888,6 +928,8 @@ class RAGToolsMixin:
                                 idx_result.get("error_type") == "embedding_unavailable"
                             ):
                                 return _index_embedding_error(idx_result)
+                            elif idx_result.get("error_type") in _CACHE_LOCK_HINTS:
+                                return _index_cache_error(idx_result, file_path)
                             else:
                                 return {
                                     "status": "error",
@@ -1313,7 +1355,7 @@ class RAGToolsMixin:
                 )
 
                 if not self.rag.chunks:
-                    return {"status": "error", "error": "No documents indexed."}
+                    return {"status": "error", "error": self._no_documents_message()}
 
                 # Search through chunks for pattern
                 matching_chunks = []
@@ -1549,6 +1591,8 @@ class RAGToolsMixin:
                             **_index_embedding_error(result),
                             "file_name": result.get("file_name", Path(file_path).name),
                         }
+                    if result.get("error_type") in _CACHE_LOCK_HINTS:
+                        return _index_cache_error(result, file_path)
                     err = result.get("error", f"Failed to index: {file_path}")
                     hint = (
                         "The file is empty (0 bytes) — tell the user there is no content to read."
@@ -1585,6 +1629,7 @@ class RAGToolsMixin:
                         "count": 0,
                         "total_chunks": 0,
                         "total_size_mb": 0,
+                        "message": self._no_documents_message(),
                     }
                 docs = list(self.rag.indexed_files)
 
@@ -1632,7 +1677,7 @@ class RAGToolsMixin:
                         doc_info["pages"] = num_pages
                     doc_details.append(doc_info)
 
-                return {
+                listing = {
                     "status": "success",
                     "documents": doc_details,
                     "count": len(docs),
@@ -1640,6 +1685,9 @@ class RAGToolsMixin:
                     "total_size_mb": round(total_size_bytes / (1024 * 1024), 2),
                     "document_types": type_counts,
                 }
+                if not docs:
+                    listing["message"] = self._no_documents_message()
+                return listing
             except Exception as e:
                 logger.error(f"Error in list_indexed_documents: {e}")
                 return {

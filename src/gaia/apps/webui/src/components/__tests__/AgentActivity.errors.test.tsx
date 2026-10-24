@@ -8,7 +8,7 @@ import type { AgentStep } from '../../types';
 
 vi.mock('../../services/api');
 
-const failure = "the daemon refused to ensure the 'gaia' sidecar";
+const failure = "GAIA couldn't start its agent. Send your message again.";
 
 it('shows a failed turn\'s error without a click', () => {
     const steps: AgentStep[] = [

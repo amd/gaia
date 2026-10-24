@@ -28,6 +28,7 @@ from gaia.ui.email_sidecar.errors import SidecarError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, api_version_supported
 from gaia.ui.email_sidecar.relay import EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
 from gaia.ui.models import ChatRequest
+from gaia.ui.turn_summary import TurnLedger
 
 # ── api_version_supported (email floor) ──────────────────────────────────────────
 
@@ -125,6 +126,7 @@ class _FakeSSEHandler:
     def __init__(self):
         self.events = []
         self.cancelled = threading.Event()
+        self.turn_ledger = TurnLedger()
 
     def _emit(self, event):
         self.events.append(event)
@@ -185,7 +187,10 @@ class TestDispatchEmailQuery:
         _dispatch_sidecar_query(handler, _make_request(), [], "some-model", "email")
 
         assert len(handler.events) == 1
-        assert handler.events[0] == {"type": "agent_error", "content": "boom"}
+        assert handler.events[0] == {
+            "type": "agent_error",
+            "content": EMAIL_PROFILE.start_failed_text(),
+        }
         assert relay_calls == []
 
     def test_version_below_floor_short_circuits_before_proxy(self, monkeypatch):

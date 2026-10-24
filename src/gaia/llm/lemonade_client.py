@@ -68,6 +68,7 @@ from gaia.llm.retry import (
     current_cancel_check,
     current_retry_listener,
     hosted_reply_timeout,
+    http_body_text,
     retry_state_of,
     sleep_unless_cancelled,
     tag_http_failure,
@@ -756,6 +757,31 @@ def _with_own_memory(free, resident, requirement: "ModelRequirement"):
             own = _footprint_gb(requirement, ctx or requirement.min_ctx_size)
             return FreeMemory(free.free_gb + own, free.limit_gb + own)
     return free
+
+
+def free_memory_verdict(url: str, requirement: "ModelRequirement", window: int):
+    """Whether *requirement*'s model, at a *window*-token context, fits the
+    memory free now on the Lemonade at *url*.
+
+    The rule every load is refused by, so a choice made up front cannot
+    disagree with it. None when this machine does not report free memory for
+    that pool. Raises like :func:`_free_memory_snapshot`.
+    """
+    return _verdict_for(*_free_memory_snapshot(url), requirement, window)
+
+
+def _verdict_for(free, resident, requirement: "ModelRequirement", window: int):
+    """:func:`free_memory_verdict` on an already-read snapshot."""
+    from gaia.llm.model_fit import check_free_memory, kv_cache_gb
+
+    if free is None:
+        return None
+    free = _with_own_memory(free, resident, requirement)
+    return check_free_memory(
+        requirement.size_gb or 0.0,
+        kv_cache_gb(requirement.kv_bytes_per_token, window),
+        free.limit_gb,
+    )
 
 
 def _forget_fitted_ctx(url: str, model_id: str) -> None:
@@ -1991,7 +2017,41 @@ def optional_chat_models_that_fit(capacity: Any) -> List[str]:
     return out
 
 
-def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
+def _free_memory_rules_out(client, requirement, capacity) -> Optional[str]:
+    """Why the memory free now cannot load *requirement*'s model, or None.
+
+    Judged at the smallest window a load shrinks to, so a model refused here
+    is one setup's verify step would also refuse.
+    """
+    from gaia.llm.model_fit import MIN_CONTEXT_TOKENS, ModelFitError
+
+    url = getattr(client, "base_url", None)
+    if not _is_local_url(url):
+        return None
+    window = min(MIN_CONTEXT_TOKENS, context_for_capacity(requirement, capacity))
+    try:
+        free, resident = _free_memory_snapshot(url)
+    except (ModelFitError, LemonadeClientError) as e:
+        return f"could not read this PC's free memory, so cannot confirm it would load: {e}"
+    verdict = _verdict_for(free, resident, requirement, window)
+    if verdict is None or verdict.fits:
+        return None
+    others = [n for n in resident if not _model_ids_match(n, requirement.model_id)]
+    holder = (
+        f"Lemonade has {', '.join(others)} loaded, which may be holding it. "
+        "Unload it or close apps that use a lot of memory"
+        if others
+        else "Close apps that use a lot of memory"
+    )
+    return (
+        f"not enough free memory to load it now: {verdict.reason}. {holder}, "
+        "then re-run `gaia init` to use it"
+    )
+
+
+def recommend_default_chat_model(
+    client: "LemonadeClient", judge_free_memory: bool = True
+) -> Tuple[str, list, Any]:
     """Pick the default chat model this machine can run, from Lemonade's view of it.
 
     Returns ``(model_id, skipped, capacity)``: ``skipped`` lists
@@ -1999,7 +2059,8 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
     say why a big machine did not get the big model. When Lemonade's report
     does not say how much memory this PC has, the floor model is picked —
     the model every PC ran before this choice existed — with that as the
-    reason, and ``capacity`` is None.
+    reason, and ``capacity`` is None. ``judge_free_memory=False`` judges
+    capacity alone, a pick that does not move as apps open and close.
     """
     from gaia.llm.model_fit import (
         ModelFitError,
@@ -2045,6 +2106,14 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
             )
             if not verdict.fits:
                 unsupported.append((model_id, verdict.reason))
+                continue
+            reason = (
+                _free_memory_rules_out(client, mr, capacity)
+                if judge_free_memory
+                else None
+            )
+            if reason:
+                unsupported.append((model_id, reason))
                 continue
         candidates.append((model_id, size, kv))
     model_id, skipped = pick_default_model(candidates, capacity)
@@ -2150,6 +2219,26 @@ def _remember_cloud_availability(model_id: Optional[str], ok: bool) -> None:
         log.warning(f"Could not record availability of {model_id}: {e}")
 
 
+def catalog_context_window(entry: Dict[str, Any]) -> Optional[int]:
+    """The context window one ``/api/v1/models`` entry should be shown with.
+
+    A cloud entry's ``context_length`` is the window Lemonade last "loaded" it
+    at (4096 once used), not the provider's; ``max_context_window`` is the
+    provider's. A local entry's ``context_length`` is its configured window.
+    """
+
+    def positive(value: Any) -> Optional[int]:
+        ok = isinstance(value, int) and not isinstance(value, bool) and value > 0
+        return value if ok else None
+
+    if entry.get("recipe") == CLOUD_RECIPE or entry.get("cloud_provider"):
+        # Older Lemonade lists only context_length, and there it is the real window.
+        return positive(entry.get("max_context_window")) or positive(
+            entry.get("context_length")
+        )
+    return positive(entry.get("context_length"))
+
+
 def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
     """Remember which ids in a ``/api/v1/models`` payload are cloud-routed.
 
@@ -2172,7 +2261,7 @@ def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
         discovered[model_id] = {
             "tool_calling": "tool-calling" in labels,
             "labels": list(labels),
-            "ctx_size": entry.get("context_length"),
+            "ctx_size": catalog_context_window(entry),
         }
     # Rebind rather than clear()+update(): the UI and daemon call list_models()
     # from several threads, and a reader landing between the two saw an empty
@@ -2469,16 +2558,34 @@ def _cloud_error_status(error: openai.APIError) -> Optional[int]:
 _CLOUD_BILLING = {"fireworks": ("Fireworks AI", "https://fireworks.ai/account/billing")}
 
 
+def _endpoint_label(base_url: Optional[str]) -> Optional[str]:
+    """``host:port`` of *base_url* for an error message; never credentials or query."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(base_url or "")
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return None
+    if not host:
+        return None
+    if ":" in host:
+        host = f"[{host}]"
+    return f"{host}:{port}" if port else host
+
+
 def _cloud_request_error(
     status: Optional[int],
     provider: Optional[str] = None,
     reason: Optional[str] = None,
     model: Optional[str] = None,
+    endpoint: Optional[str] = None,
 ) -> LemonadeClientError:
     """Actionable cloud failures without reflecting provider response bodies.
 
     *reason* is the retry classifier's verdict (``gaia.llm.retry``); it tells a
-    status-less hop failure apart from an unexplained one.
+    status-less hop failure apart from an unexplained one. *endpoint* is the
+    ``host:port`` the request went to (:func:`_endpoint_label`).
     """
     if status in {401, 403}:
         return LemonadeAuthError(
@@ -2513,27 +2620,32 @@ def _cloud_request_error(
             "message again, or switch to a local model "
             f"{TUI_PROVIDER_SETTINGS} to keep working now."
         )
+    label = _CLOUD_BILLING.get(provider or "", (provider,))[0]
+    noun = f"{label} cloud request" if label else "cloud request"
+    via = f" through {endpoint}" if endpoint else ""
+    server = f"the server at {endpoint}" if endpoint else "the model server"
     if status is None:
         if reason == "upstream timeout":
             return LemonadeClientError(
-                "The cloud model did not answer within Lemonade's time limit. "
+                f"The cloud model did not answer within the time limit of {server}. "
                 "Send your message again; if it keeps happening the provider "
                 "is overloaded, so wait a few minutes or pick another model."
             )
         if reason in ("connection dropped", "upstream failure"):
             return LemonadeClientError(
                 "The cloud provider dropped the connection before the model "
-                "finished answering; no error code came back. This is usually "
-                "momentary, so send your message again."
+                f"finished answering (the {noun}{via}); no error code came "
+                "back. This is usually momentary, so send your message again."
             )
         return LemonadeClientError(
-            "The cloud request failed without an error code from the provider. "
-            "Send your message again; if it fails the same way, check the "
-            f"provider connection {TUI_PROVIDER_SETTINGS}."
+            f"The {noun}{via} failed without an error code. Send your message "
+            "again; if it fails the same way, check that the server is "
+            f"reachable and the provider connection {TUI_PROVIDER_SETTINGS}."
         )
     return LemonadeClientError(
-        f"Cloud request through Lemonade failed (HTTP {status}). Check the "
-        f"provider connection and selected model {TUI_PROVIDER_SETTINGS}."
+        f"The {noun}{via} failed (HTTP {status}). Check that the server is "
+        "reachable, and the provider connection and selected model "
+        f"{TUI_PROVIDER_SETTINGS}."
     )
 
 
@@ -4809,24 +4921,28 @@ class LemonadeClient:
                 )
 
             if response.status_code != 200:
+                body = http_body_text(response)
                 # The retry verdict is read from the body here, before the
                 # cloud branch drops it (provider bodies are never reflected).
                 if self.cloud_model_provider(model):
                     raise tag_http_failure(
                         self._cloud_failure(response.status_code, model),
                         response.status_code,
-                        response.text,
+                        body,
                         response.headers,
                     )
+                # The body stays last: the overflow classifier parses JSON from
+                # its first brace to the end of the text.
                 error_msg = (
                     f"Error in chat completions "
-                    f"(status {response.status_code}): {response.text}"
+                    f"(status {response.status_code}){self._from_server()}: "
+                    f"{body}"
                 )
                 self.log.error(error_msg)
                 raise tag_http_failure(
                     LemonadeClientError(error_msg),
                     response.status_code,
-                    response.text,
+                    body,
                     response.headers,
                 )
 
@@ -5280,15 +5396,16 @@ class LemonadeClient:
                     state,
                 ) from None
             error_type = e.__class__.__name__
-            error_msg = str(e)
-            self.log.error(f"OpenAI {error_type}: {error_msg}")
-            raise attach_retry_state(
-                LemonadeClientError(f"OpenAI {error_type}: {error_msg}"), state
-            )
+            error_msg = f"OpenAI {error_type}{self._from_server()}: {e}"
+            self.log.error(error_msg)
+            raise attach_retry_state(LemonadeClientError(error_msg), state)
         except Exception as e:
             self.log.error(f"Error using OpenAI client for streaming: {str(e)}")
+            label = _endpoint_label(self.base_url)
+            # An inner error from this client already names the server.
+            where = "" if label and label in str(e) else self._from_server()
             raise attach_retry_state(
-                LemonadeClientError(f"Streaming request failed: {str(e)}"), state
+                LemonadeClientError(f"Streaming request failed{where}: {e}"), state
             )
         finally:
             self._record_retries(state)
@@ -5393,12 +5510,15 @@ class LemonadeClient:
                 )
 
             if response.status_code != 200:
-                error_msg = f"Error in completions (status {response.status_code}): {response.text}"
+                body = http_body_text(response)
+                error_msg = (
+                    f"Error in completions (status {response.status_code}): {body}"
+                )
                 self.log.error(error_msg)
                 raise tag_http_failure(
                     LemonadeClientError(error_msg),
                     response.status_code,
-                    response.text,
+                    body,
                     response.headers,
                 )
 
@@ -5783,12 +5903,25 @@ class LemonadeClient:
         """Return the provider for a built-in or previously discovered cloud model."""
         return cloud_model_provider(model, self._model_metadata.get(model))
 
+    def _from_server(self) -> str:
+        """`` from the model server at host:port`` for an error, or ``""``.
+
+        Says "model server", not Lemonade: the base URL may be any
+        OpenAI-compatible endpoint, and nothing here tells them apart.
+        """
+        label = _endpoint_label(self.base_url)
+        return f" from the model server at {label}" if label else ""
+
     def _cloud_failure(
         self, status: Optional[int], model: str, reason: Optional[str] = None
     ) -> LemonadeClientError:
         """The error for a failed cloud call; a 404 is also recorded per model."""
         error = _cloud_request_error(
-            status, self.cloud_model_provider(model), reason, model
+            status,
+            self.cloud_model_provider(model),
+            reason,
+            model,
+            endpoint=_endpoint_label(self.base_url),
         )
         if isinstance(error, CloudModelUnavailableError):
             _remember_cloud_availability(model, ok=False)
@@ -6265,7 +6398,7 @@ class LemonadeClient:
                 )
 
             if response.status_code != 200:
-                error_msg = f"Error pulling model (status {response.status_code}): {response.text}"
+                error_msg = f"Error pulling model (status {response.status_code}): {http_body_text(response)}"
                 self.log.error(error_msg)
                 raise LemonadeClientError(error_msg)
 
@@ -6579,7 +6712,7 @@ class LemonadeClient:
                 )
 
             if response.status_code != 200:
-                error_msg = f"Error in responses (status {response.status_code}): {response.text}"
+                error_msg = f"Error in responses (status {response.status_code}): {http_body_text(response)}"
                 self.log.error(error_msg)
                 raise LemonadeClientError(error_msg)
 
@@ -6610,7 +6743,9 @@ class LemonadeClient:
         This is a simplified implementation that may need enhancement
         for full SSE specification compliance.
         """
-        for line in response.iter_lines(decode_unicode=True):
+        # Decoded here: requests reads text/event-stream as ISO-8859-1.
+        for raw in response.iter_lines():
+            line = raw.decode("utf-8", errors="replace")
             if line.startswith("data: "):
                 try:
                     data = line[6:]  # Remove "data: " prefix
@@ -7201,10 +7336,11 @@ class LemonadeClient:
             or not _is_local_url(self.base_url)
         ):
             return
-        from gaia.llm.model_fit import ModelFitError, check_free_memory, kv_cache_gb
+        from gaia.llm.model_fit import ModelFitError
 
+        window = ctx_size or requirement.min_ctx_size
         try:
-            free, resident = _free_memory_snapshot(self.base_url)
+            verdict = free_memory_verdict(self.base_url, requirement, window)
         except ModelFitError as e:
             raise LemonadeClientError(
                 f"Cannot tell whether {model_name} fits in memory, so it was not "
@@ -7216,20 +7352,13 @@ class LemonadeClient:
                 f"loading {model_name}: {e} Check that Lemonade is running "
                 "(`gaia init --check`)."
             ) from e
-        if free is None:
+        if verdict is None:
             self.log.debug(
                 f"Free GPU memory is not reported here; loading {model_name} "
                 "without a free-memory check (Lemonade fails a load that does "
                 "not fit the GPU)."
             )
             return
-        free = _with_own_memory(free, resident, requirement)
-        window = ctx_size or requirement.min_ctx_size
-        verdict = check_free_memory(
-            requirement.size_gb,
-            kv_cache_gb(requirement.kv_bytes_per_token, window),
-            free.limit_gb,
-        )
         if not verdict.fits:
             _forget_fitted_ctx(self.base_url, requirement.model_id)
             raise InsufficientMemoryError(
@@ -8518,7 +8647,8 @@ class LemonadeClient:
 
             if response.status_code >= 400:
                 raise LemonadeClientError(
-                    f"Request failed with status {response.status_code}: {response.text}"
+                    f"Request failed with status {response.status_code}: "
+                    f"{http_body_text(response)}"
                 )
 
             return response.json()
@@ -8537,7 +8667,7 @@ class LemonadeClient:
             raise LemonadeClientError(f"Request failed: {str(e)}") from e
         except json.JSONDecodeError as e:
             raise LemonadeClientError(
-                f"Failed to parse response as JSON: {response.text}"
+                f"Failed to parse response as JSON: {http_body_text(response)}"
             ) from e
 
 
