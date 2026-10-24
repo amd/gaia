@@ -127,7 +127,7 @@ describe('NewChat while the chat is being created (#5712)', () => {
         useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus, messageQueues: {}, currentSessionId: null });
     });
 
-    function sendTwo(onSend: (text: string) => Promise<void>) {
+    function sendTwo(onSend: (text: string) => Promise<boolean | void>) {
         render(<NewChat onSend={onSend} />);
         const box = screen.getByLabelText('Message');
         fireEvent.change(box, { target: { value: 'first' } });
@@ -152,6 +152,20 @@ describe('NewChat while the chat is being created (#5712)', () => {
         await act(async () => created());
 
         expect(useChatStore.getState().messageQueues['chat-1']?.map((m) => [m.text, m.state])).toEqual([['second', 'queued']]);
+    });
+
+    it('never sends held messages on their own when the first one was not sent', async () => {
+        let created!: () => void;
+        const onSend = vi.fn(() => new Promise<boolean>((resolve) => { created = () => {
+            useChatStore.setState({ currentSessionId: 'chat-1' });
+            resolve(false);
+        }; }));
+        sendTwo(onSend);
+
+        await act(async () => created());
+
+        expect(useChatStore.getState().messageQueues['chat-1']?.map((m) => [m.text, m.state, m.error]))
+            .toEqual([['second', 'failed', 'The first message was not sent.']]);
     });
 
     it('puts every message back in the box when the chat could not be created', async () => {

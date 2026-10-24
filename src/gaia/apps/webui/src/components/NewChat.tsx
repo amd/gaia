@@ -22,8 +22,11 @@ import type { StartCard, StartScreen } from '../types';
 import './NewChat.css';
 
 interface NewChatProps {
-    /** Creates the chat and sends the first message; rejects with the reason it could not. */
-    onSend: (text: string) => Promise<void>;
+    /**
+     * Creates the chat and sends the first message; rejects with the reason it could not.
+     * Resolves false when the chat was made but the message was not sent (it says why itself).
+     */
+    onSend: (text: string) => Promise<boolean | void>;
     /** Text to start the message box with, e.g. a task picked at the end of setup. */
     initialText?: string;
     /** Changes each time New chat is chosen, so the box takes focus even when already shown. */
@@ -211,13 +214,16 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         // Cleared now, so anything typed while the chat is created is a new message.
         setText('');
         try {
-            await onSend(message);
+            const sent = await onSend(message);
             attachments.clear();
             const held = heldRef.current.splice(0);
             const sessionId = useChatStore.getState().currentSessionId;
             if (held.length > 0 && sessionId) {
-                useChatStore.getState().updateQueue(sessionId, (q) =>
-                    held.reduce((items, text) => messageQueue.enqueue(items, text, 'queued'), q));
+                // The chat is open now; if its first message never went out, the rest wait for Send again.
+                const add = (items: messageQueue.QueuedMessage[], text: string) => sent === false
+                    ? [...items, { ...messageQueue.item(text, 'failed'), error: 'The first message was not sent.' }]
+                    : messageQueue.enqueue(items, text, 'queued');
+                useChatStore.getState().updateQueue(sessionId, (q) => held.reduce(add, q));
             }
         } catch (err) {
             // Nothing was sent, so every message goes back in the box.
