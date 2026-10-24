@@ -42,7 +42,9 @@ export function Composer({
     const fileRef = useRef<HTMLInputElement>(null);
     const disabled = !!disabledReason;
     const hasContent = value.trim().length > 0 || attachments.hasUploaded;
-    const tooLong = value.length > MAX_MESSAGE_CHARS;
+    // What is sent: the text plus a link for each attached file.
+    const sentLength = attachments.compose(value.trim()).length;
+    const tooLong = sentLength > MAX_MESSAGE_CHARS;
     const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong;
 
     const shownPlaceholder = disabledReason || placeholder;
@@ -126,7 +128,7 @@ export function Composer({
             />
             {tooLong && (
                 <p className="composer-limit-error" role="alert">
-                    Too long to send: {value.length.toLocaleString()} of {MAX_MESSAGE_CHARS.toLocaleString()} characters.
+                    Too long to send: {sentLength.toLocaleString()} of {MAX_MESSAGE_CHARS.toLocaleString()} characters.
                     {' '}Save it as a file and attach it with +, and GAIA can read all of it.
                 </p>
             )}

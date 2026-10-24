@@ -219,6 +219,18 @@ describe('Composer message length (#5716)', () => {
         expect(onSubmit).not.toHaveBeenCalled();
     });
 
+    it("counts an attached file's link, which goes out with the text", async () => {
+        mockedApi.uploadFile.mockResolvedValue({ url: '/u/a.txt' } as Awaited<ReturnType<typeof api.uploadFile>>);
+        const { container } = render(<Harness initial={'x'.repeat(MAX_MESSAGE_CHARS - 5)} />);
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+        const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+        fireEvent.change(input, { target: { files: [new File(['x'], 'a.txt')] } });
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Too long to send');
+        expect(screen.getByLabelText('Send')).toBeDisabled();
+    });
+
     it('sends a message right at the limit', () => {
         const onSubmit = vi.fn();
         render(<Harness initial={'x'.repeat(MAX_MESSAGE_CHARS)} onSubmit={onSubmit} />);
