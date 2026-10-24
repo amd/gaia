@@ -177,7 +177,8 @@ The v2 keystone (#2016): NL request in, the agent reasons and chains its tools, 
 `tool_result` / `needs_confirmation` / `needs_input` / `final` / `error`, terminated by
 exactly one `final` or `error`. This is the one loop every v2 front-door relays to. The **host
 mints `run_id`** and **pushes** the transcript slice in `context`, so the sidecar
-stays stateless. The typed client wraps it (#2097): `query()` returns an async
+stays stateless. A slice too big for the model's window beside the agent's prompt
+keeps only its newest whole turns, announced in a `status` event. The typed client wraps it (#2097): `query()` returns an async
 iterator of typed `QueryEvent`s; `cancelQuery(runId)` stops the run between steps:
 
 ```ts

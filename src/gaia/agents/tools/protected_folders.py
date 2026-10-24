@@ -5,15 +5,19 @@
 The first read of one of these folders makes macOS show "GAIA would like to
 access files in your Documents folder" and blocks the reading thread inside the
 kernel until someone answers. No time budget can interrupt that, so a search the
-user did not point at them must not enter them at all.
+user did not point at them must not enter them at all. A tool whose job is to
+read them asks :func:`macos_access` first, and reports the open dialog
+instead of waiting on it.
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from gaia.agents.tools.search_scope import is_broad_root, search_roots
 
@@ -29,6 +33,85 @@ MACOS_PROTECTED_HOME_FOLDERS = (
     "Music",
     "Pictures/Photos Library.photoslibrary",
 )
+
+#: How long the guarded folders' first reads may take, together, before a read
+#: still running counts as held by the macOS permission dialog. A granted folder
+#: answers in milliseconds.
+MACOS_PROMPT_WAIT_S = 2.0
+
+#: What a probe of a guarded folder found.
+GRANTED, DENIED, ASKING = "granted", "denied", "asking"
+
+_probes: Dict[Path, "_Probe"] = {}
+_probes_lock = threading.Lock()
+
+
+def is_macos_guarded(path: Any) -> bool:
+    """True on macOS when *path* is one of :data:`MACOS_PROTECTED_HOME_FOLDERS`."""
+    if sys.platform != "darwin":
+        return False
+    home = Path.home()
+    target = Path(path).expanduser().resolve()
+    return any(target == (home / rel).resolve() for rel in MACOS_PROTECTED_HOME_FOLDERS)
+
+
+class _Probe(threading.Thread):
+    """Reads a guarded folder's first entry; blocks while macOS's dialog is up."""
+
+    def __init__(self, folder: Path):
+        super().__init__(name=f"macos-permission-probe:{folder.name}", daemon=True)
+        self.folder = folder
+        self.outcome = GRANTED
+
+    def run(self) -> None:
+        self.outcome = _read_first_entry(self.folder)
+
+
+def macos_access(
+    folders: Iterable[Any], wait: Optional[float] = None
+) -> Dict[Path, str]:
+    """:data:`GRANTED`, :data:`DENIED` or :data:`ASKING` for each guarded folder.
+
+    Keyed by resolved path; folders macOS does not guard are left out. A read
+    blocks in the kernel until the user answers the dialog, so each runs on a
+    daemon thread, all started at once and joined against one shared *wait*
+    (default :data:`MACOS_PROMPT_WAIT_S`). One still running is
+    :data:`ASKING`, and ends by itself once the user answers. A probe already
+    waiting is reused, so asking again never stacks blocked threads.
+    """
+    if wait is None:
+        wait = MACOS_PROMPT_WAIT_S
+    probes: Dict[Path, _Probe] = {}
+    with _probes_lock:
+        for folder in folders:
+            if not is_macos_guarded(folder):
+                continue
+            key = Path(folder).expanduser().resolve()
+            probe = _probes.get(key)
+            if probe is None or not probe.is_alive():
+                probe = _Probe(key)
+                _probes[key] = probe
+                probe.start()
+            probes[key] = probe
+    deadline = time.monotonic() + wait
+    for probe in probes.values():
+        probe.join(max(0.0, deadline - time.monotonic()))
+    return {
+        key: ASKING if probe.is_alive() else probe.outcome
+        for key, probe in probes.items()
+    }
+
+
+def _read_first_entry(folder: Path) -> str:
+    try:
+        with os.scandir(folder) as entries:
+            next(entries, None)
+    except PermissionError:
+        return DENIED
+    except OSError:
+        # Gone, or unreadable for another reason: the caller's own read reports it.
+        return GRANTED
+    return GRANTED
 
 
 def _covers(granted: Path, folder: Path) -> bool:
