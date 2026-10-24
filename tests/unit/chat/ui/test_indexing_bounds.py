@@ -115,9 +115,10 @@ async def test_cancel_stops_the_work(slow_rag):
 
 async def test_a_large_document_that_keeps_moving_is_not_stopped(slow_rag):
     rag, doc = slow_rag
-    rag.steps = 30  # 1.5 s in all, progress every 0.05 s
-    with patch.object(helpers, "_INDEX_TIMEOUT_S", 0.4):
-        assert await asyncio.wait_for(helpers._index_document(doc), 10) == 30
+    # 3 s in all, twice the limit, with progress every 0.05 s: 30x headroom for a slow CI runner.
+    rag.steps = 60
+    with patch.object(helpers, "_INDEX_TIMEOUT_S", 1.5):
+        assert await asyncio.wait_for(helpers._index_document(doc), 20) == 60
 
 
 async def test_a_stalled_index_ends_with_an_error_and_stops(slow_rag):
