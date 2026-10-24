@@ -15,6 +15,15 @@
 @tailwind base;
 @tailwind components;
 
+/* The writing systems the headline scramble passes through: a subset of the
+   Noto fonts (SIL OFL 1.1, public/fonts/OFL.txt) holding only the characters
+   in src/data/scramble-scripts.ts, merged into one 15 KB file. */
+@font-face {
+  font-family: 'GAIA Scripts';
+  src: url('/fonts/gaia-scripts.woff2') format('woff2');
+  font-display: block;
+}
+
 @layer components {
   /* ---------------------------------------------------------------- layout */
 
@@ -217,14 +226,85 @@
     transform: none;
   }
 
-  /* A soft red glow for the one red phrase in the hero. */
-  .g-glow {
-    text-shadow: 0 0 14px rgb(var(--g-brand) / 0.35), 0 0 42px rgb(var(--g-brand) / 0.45);
+  /* The one red phrase in the hero: a size up from its line, with a soft glow
+     that slowly brightens and dims. */
+  .g-hero-lead {
+    font-size: var(--g-hero-lead, 1em);
+  }
+  /* From sm up, the lead line fits on one line: it runs 8.34em wide in
+     Antonio, and the column is at most 1200px less the 28px gutters. */
+  @media (min-width: 640px) {
+    .g-hero-lead,
+    .g-hero-red {
+      --g-hero-lead: min(1em, calc((min(100vw, 1200px) - 3.5rem) / 8.5));
+    }
+    .g-hero-lead {
+      white-space: nowrap;
+    }
+  }
+  .g-hero-red {
+    font-size: calc(var(--g-hero-lead, 1em) * 1.28);
+    margin-top: 0.06em;
+    text-shadow: 0 0 0.2em rgb(var(--g-brand) / 0.32);
+    animation: g-ai-glow 4.5s ease-in-out infinite;
+  }
+  @keyframes g-ai-glow {
+    0%, 100% { text-shadow: 0 0 0.2em rgb(var(--g-brand) / 0.32); }
+    50% { text-shadow: 0 0 0.34em rgb(var(--g-brand) / 0.5), 0 0 0.8em rgb(var(--g-brand) / 0.16); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .g-hero-red { animation: none; }
+  }
+
+  /* The headline scramble (src/scripts/scramble.ts). Each letter keeps its
+     place in the line while a glyph from an old writing system sits over it,
+     so nothing reflows as the glyphs change width. */
+  .g-scr-word {
+    white-space: nowrap;
+  }
+  .g-scr {
+    position: relative;
+    display: inline-block;
+  }
+  .g-scr.is-waiting {
+    visibility: hidden;
+  }
+  .g-scr.is-scrambling {
+    color: transparent;
+    text-shadow: none;
+  }
+  .g-scr-glyph {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgb(var(--g-text));
+    pointer-events: none;
+  }
+  .g-hero-red .g-scr-glyph {
+    color: rgb(var(--g-brand));
+  }
+  .g-scr-inner {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .g-scr-char {
+    font-family: 'GAIA Scripts', Antonio, 'Arial Narrow', Arial, sans-serif;
+    font-weight: 400;
+    font-size: 0.58em;
+    line-height: 1;
+  }
+  .g-scr-glyph svg {
+    width: 0.55em;
+    height: 0.55em;
   }
 
   /* Paused from the footer: the starfield holds a still frame (starfield.ts)
      and nothing else loops either. */
-  html[data-motion='paused'] .animate-g-breathe {
+  html[data-motion='paused'] .animate-g-breathe,
+  html[data-motion='paused'] .g-hero-red {
     animation: none;
   }
 

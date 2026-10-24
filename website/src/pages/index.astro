@@ -205,14 +205,14 @@ const ARCHITECTURE = [
         ))}
       </ul>
 
-      <!-- The visible lines resolve out of noise on load (script below); the
-           label carries the real sentence so a screen reader never hears it.
-           Capitals are typed, not text-transformed, so "PCs" keeps its
-           lowercase s instead of becoming "PCS". -->
-      <h1 class="g-h-hero animate-g-rise mt-7 text-balance normal-case" style="animation-delay:0.15s" aria-label="The agent factory for AI PCs.">
-        <span aria-hidden="true" data-decode class="sm:whitespace-nowrap">THE AGENT FACTORY</span>
-        <span aria-hidden="true" data-decode>FOR</span>
-        <span aria-hidden="true" data-decode class="g-glow whitespace-nowrap text-g-brand">AI PCs.</span>
+      <!-- The visible lines resolve out of old writing systems on load
+           (src/scripts/scramble.ts); the label carries the real sentence so a
+           screen reader never hears them. Capitals are typed, not
+           text-transformed, so "PCs" keeps its lowercase s instead of
+           becoming "PCS". -->
+      <h1 class="g-h-hero animate-g-rise mt-7 normal-case" style="animation-delay:0.15s" aria-label="The agent factory for AI PCs">
+        <span aria-hidden="true" data-decode class="g-hero-lead block text-balance">THE AGENT FACTORY FOR</span>
+        <span aria-hidden="true" data-decode class="g-hero-red block whitespace-nowrap text-g-brand">AI PCs</span>
       </h1>
 
       <p class="g-lede animate-g-rise mt-7 max-w-[600px] text-center" style="animation-delay:0.3s">
@@ -381,24 +381,12 @@ const ARCHITECTURE = [
 </Layout>
 
 <script>
-  // The headline resolves out of noise, left to right, one line after another.
-  // Purely visual: the h1's aria-label carries the sentence, and with reduced
-  // motion the text is simply there.
-  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    const GLYPHS = '#/<>*+=%&01';
-    document.querySelectorAll<HTMLElement>('[data-decode]').forEach((el, line) => {
-      const text = el.textContent ?? '';
-      const start = performance.now() + 250 + line * 260;
-      const duration = 700;
-      const step = (now: number) => {
-        const done = Math.floor(Math.max(0, (now - start) / duration) * text.length);
-        el.textContent = [...text]
-          .map((ch, i) => (i < done || ch === ' ' ? ch : GLYPHS[(Math.random() * GLYPHS.length) | 0]))
-          .join('');
-        if (done < text.length) requestAnimationFrame(step);
-        else el.textContent = text;
-      };
-      requestAnimationFrame(step);
-    });
-  }
+  import { mountScramble } from '../scripts/scramble';
+  import { STARFIELD_READY, starFieldMounted } from '../scripts/starfield';
+
+  // The headline runs on the starfield's warp clock, and page scripts can run
+  // before the layout's, so wait for the field if it is not up yet.
+  const run = () => mountScramble([...document.querySelectorAll<HTMLElement>('[data-decode]')]);
+  if (starFieldMounted()) run();
+  else document.addEventListener(STARFIELD_READY, run, { once: true });
 </script>
