@@ -780,6 +780,10 @@ def _load_model_once(client, model_id: str) -> "ModelLoad":
     return ModelLoad(model_id, role, size_gb, True)
 
 
+class MemoryShortfall(str):
+    """A verification failure from too little free memory, not a broken model."""
+
+
 def _hf_hub_cache() -> str:
     """Where Lemonade keeps downloaded models: the Hugging Face hub cache."""
     if os.environ.get("HF_HUB_CACHE"):
@@ -2164,8 +2168,11 @@ class InitCommand:
             model_id: Model ID to test
 
         Returns:
-            Tuple of (success: bool, error_message: str or None)
+            Tuple of (success: bool, error_message: str or None). A load refused
+            for free memory returns its message as a :class:`MemoryShortfall`.
         """
+        from gaia.llm.lemonade_client import InsufficientMemoryError
+
         try:
             # Check if profile requires specific context size for this model
             profile_config = INIT_PROFILES.get(self.profile, {})
@@ -2307,6 +2314,9 @@ class InitCommand:
                     return (False, "Empty response")
                 return (False, "Invalid response format")
 
+        except InsufficientMemoryError as e:
+            # Kept whole: the remedy (close apps, or another model) is in it.
+            return (False, MemoryShortfall(str(e)))
         except Exception as e:
             error_msg = str(e)
             # Truncate long error messages
@@ -2474,8 +2484,27 @@ class InitCommand:
             # Summary
             total = len(model_ids)
             self.console.print()
+            short_of_memory = [
+                (m, e) for m, e in models_failed if isinstance(e, MemoryShortfall)
+            ]
+            broken = [
+                (m, e) for m, e in models_failed if not isinstance(e, MemoryShortfall)
+            ]
             if models_failed:
                 self._print_warning(f"Models verified: {models_passed}/{total} passed")
+            if short_of_memory:
+                names = ", ".join(m for m, _ in short_of_memory)
+                self.console.print()
+                self.console.print(
+                    f"   [bold]Downloaded but not tested ({names}): this PC does "
+                    "not have enough free memory right now.[/bold]"
+                )
+                self.console.print(
+                    "   [dim]Close memory-heavy apps and re-run, or choose a cloud "
+                    "model or a smaller local model in the Agent UI (Settings > "
+                    "Model).[/dim]"
+                )
+            if broken:
                 self.console.print()
                 self.console.print(
                     "   [bold]Failed models may be corrupted. To fix:[/bold]"
@@ -2494,13 +2523,16 @@ class InitCommand:
 
                 # Show path for each failed model
                 hf_cache = _hf_hub_cache()
-                for model_id, error in models_failed:
+                for model_id, error in broken:
                     # Find actual model directory (may have org prefix like ggml-org/model-name)
-                    # Search for directories containing the model name
-                    model_name_part = model_id.split("/")[-1]  # Get last part if has /
-                    matching_dirs = list(
-                        Path(hf_cache).glob(f"models--*{model_name_part}*")
-                    )
+                    # Search for directories containing the model name; the hub
+                    # lowercases some repo names (models--unsloth--gemma-4-...).
+                    model_name_part = model_id.split("/")[-1].lower()
+                    matching_dirs = [
+                        d
+                        for d in Path(hf_cache).glob("models--*")
+                        if model_name_part in d.name.lower()
+                    ]
 
                     if matching_dirs:
                         model_path = str(matching_dirs[0])
@@ -2527,7 +2559,7 @@ class InitCommand:
                 self.console.print(
                     f"     [dim]Then re-download:[/dim] [cyan]gaia init --profile {self.profile} --yes[/cyan]"
                 )
-            else:
+            if not models_failed:
                 self._print_success(f"All {models_passed} model(s) verified")
 
             if models_ctx_unverified:
@@ -2540,14 +2572,23 @@ class InitCommand:
                     f"Server and re-run `gaia init --profile {self.profile} --yes`."
                 )
 
-            if models_failed:
+            if broken:
                 self.console.print()
-                failed_ids = ", ".join(m for m, _ in models_failed)
+                failed_ids = ", ".join(m for m, _ in broken)
                 self._print_error(
                     f"Model verification failed for: {failed_ids}. "
-                    "If the error above looks transient (timeout, out of "
-                    "memory), re-run `gaia init` first. Otherwise follow the "
-                    "steps above to re-download them, then re-run `gaia init`."
+                    "If the error above looks transient (a timeout), re-run "
+                    "`gaia init` first. Otherwise follow the steps above to "
+                    "re-download them, then re-run `gaia init`."
+                )
+                return False
+            if short_of_memory:
+                self.console.print()
+                self._print_error(
+                    "Not enough free memory to test "
+                    f"{', '.join(m for m, _ in short_of_memory)}. Close "
+                    "memory-heavy apps and re-run `gaia init`, or choose another "
+                    "model; nothing needs re-downloading."
                 )
                 return False
 
