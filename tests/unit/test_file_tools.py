@@ -1246,6 +1246,21 @@ def test_recent_files_an_explicit_filter_lists_what_it_asked_for(tmp_path, monke
     assert result["other_types_not_listed"] == {".txt": 1}
 
 
+def test_recent_files_bounds_the_skipped_type_counts(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    for index in range(30):
+        (downloads / f"report.v{index:02}").write_bytes(b"\0")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        result = _TOOL_REGISTRY["list_recent_files"]["function"]()
+    assert len(result["other_types_not_listed"]) == 20
+    assert "Not listed: 30 other recent file(s)" in result["display_message"]
+
+
 def test_recent_files_does_not_count_old_files_of_other_types(tmp_path, monkeypatch):
     import os
     import time

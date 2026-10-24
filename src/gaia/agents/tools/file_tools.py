@@ -3254,7 +3254,8 @@ class FileSearchToolsMixin:
                     "display_message": "\n".join(display_parts),
                 }
                 if other_types:
-                    result["other_types_not_listed"] = dict(other_types)
+                    # Bounded: any text after a dot counts as a type, so a big tree has many.
+                    result["other_types_not_listed"] = dict(other_types.most_common(20))
                 if denied_locations:
                     result["locations_not_searched"] = denied_locations
                 return result
