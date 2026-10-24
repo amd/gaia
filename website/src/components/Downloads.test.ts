@@ -231,7 +231,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-
 const ctas = () => descendants(rendered.root).filter((e) => 'data-dl-cta' in e.attrs);
 const blockFor = (surface: string, platform: string) =>
   ctas().filter((b) => b.attrs['data-surface'] === surface && b.attrs['data-platform'] === platform);
