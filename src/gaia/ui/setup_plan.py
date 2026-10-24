@@ -81,10 +81,12 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
     """Each default chat model, and whether this PC and its Lemonade can run it.
 
     Judged as :func:`recommend_default_chat_model` judges them (registry size,
-    then the server's version); the size shown is the server's catalog size.
+    the server's version, then the memory free now); the size shown is the
+    server's catalog size.
     """
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_LADDER,
+        _free_memory_rules_out,
         _model_ids_match,
         find_model_requirement,
         kv_cache_for,
@@ -116,6 +118,10 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
             supported = check_server_supports(mr.min_lemonade_version, server_version)
             if not supported.fits:
                 fits, reason = False, supported.reason
+        if fits and client is not None and mr and model_id != DEFAULT_MODEL_LADDER[-1]:
+            busy = _free_memory_rules_out(client, mr, capacity)
+            if busy:
+                fits, reason = False, busy
         options.append(
             {
                 "id": model_id,
@@ -206,6 +212,8 @@ def choose_chat_model(model_id: str) -> None:
 
     Clearing it keeps setup's own behaviour for its pick (Gemma is still pulled
     for images); any other ladder model is saved as the user's ``default_model``.
+    The recommendation compared against is judged on capacity alone, so a pick
+    made while memory is busy is not undone by a later, idler `gaia init`.
     """
     from gaia.config import GaiaConfig, GaiaConfigError
     from gaia.llm.lemonade_client import (
@@ -227,12 +235,14 @@ def choose_chat_model(model_id: str) -> None:
             "checked. Start setup; you can change the chat model once it is up."
         )
     try:
-        recommended, _, capacity = recommend_default_chat_model(client)
+        recommended, _, capacity = recommend_default_chat_model(
+            client, judge_free_memory=False
+        )
     except LemonadeClientError as e:
         raise SetupPlanError(
             f"Could not read this PC's memory from Lemonade: {e}"
         ) from e
-    if model_id != recommended:
+    if model_id != DEFAULT_MODEL_LADDER[-1]:
         option = next(o for o in _options(client, capacity) if o["id"] == model_id)
         if option["fits"] is False:
             raise SetupPlanError(f"{model_id} won't fit this PC: {option['reason']}.")

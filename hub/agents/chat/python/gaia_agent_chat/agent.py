@@ -96,6 +96,8 @@ from gaia.llm.inference_location import (
     resolve_inference_location,
 )
 from gaia.llm.lemonade_client import (
+    _endpoint_label,
+    configured_lemonade_url,
     is_tool_calling_model,
     resolve_default_chat_model,
     resolve_lemonade_base_url,
@@ -1174,7 +1176,19 @@ class ChatAgent(
 
     def _model_service_label(self) -> Optional[str]:
         """Names the provider in a failed turn's message: "Fireworks AI: …"."""
-        return self._inference_location().display
+        location = self._inference_location()
+        if location.provider != "lemonade" or configured_lemonade_url() is None:
+            return location.display
+        # A base URL the user chose may be any OpenAI-compatible server.
+        live = getattr(
+            getattr(getattr(self, "chat", None), "llm_client", None),
+            "current_base_url",
+            None,
+        )
+        label = _endpoint_label(live() if callable(live) else resolve_lemonade_base_url())
+        if not label:
+            return "The configured model server"
+        return f"The model server at {label}"
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""

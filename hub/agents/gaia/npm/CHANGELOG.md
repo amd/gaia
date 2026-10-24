@@ -6,6 +6,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### For integrators: contract 2.20
+
+- **A failed model request says which endpoint failed, worded for your
+  front-end** (contract **2.20**, #5295). A headless caller of `/query` whose
+  hosted model returned HTTP 502 was told the "cloud request through Lemonade
+  failed" and to check "the TUI provider settings", though no TUI was
+  involved. The error now names the provider and the `host:port` the request
+  went through. A local model on a base URL you set is reported as "the model
+  server at `host:port`" instead of "Lemonade on this machine", since GAIA
+  can't tell what serves it. The advice follows the `surface` field: a caller
+  that omits it is pointed at the model server the GAIA host uses; `"tui"`,
+  `"agent_ui"` and `"cli"` keep their own settings screens. Older binaries
+  refuse the field with `422`, so probe `/version` before sending it.
+  Version skew: a front-end older than this release never sends `surface`, so
+  against this agent it gets the headless advice (the model server's
+  `LEMONADE_BASE_URL`) instead of its own settings screen. GAIA ships the TUI,
+  the Agent UI and this agent together, so this only shows when one of them is
+  updated without the others, or when the TUI's `/version` probe times out and
+  it can't confirm the agent takes the field.
 - **Answers stream over `/query`.** The HTTP sidecar ran its agent with
   streaming off, so a relayed turn (the Agent UI, and the TUI's later sessions)
   showed "Waiting on the model" until the whole answer landed at once, Stop could
