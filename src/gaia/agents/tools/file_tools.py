@@ -3148,6 +3148,7 @@ class FileSearchToolsMixin:
                 cutoff = datetime.now() - timedelta(days=days)
                 recent_files = []
                 total_found = 0
+                other_types: Counter = Counter()
                 denied_locations = {}
                 waiting_on_macos: List[str] = []
                 denied_by_macos: List[str] = []
@@ -3182,16 +3183,17 @@ class FileSearchToolsMixin:
                             if item.name.startswith("."):
                                 continue
 
-                            # Filter by extension
-                            if item.suffix.lower() not in allowed_extensions:
-                                continue
-
                             try:
                                 stat_info = item.stat()
                                 modified_dt = datetime.fromtimestamp(stat_info.st_mtime)
 
                                 # Check if within date range
                                 if modified_dt < cutoff:
+                                    continue
+
+                                # Counted, so the answer can say what the type filter left out.
+                                if item.suffix.lower() not in allowed_extensions:
+                                    other_types[item.suffix.lower() or "(none)"] += 1
                                     continue
 
                                 total_found += 1
@@ -3273,6 +3275,15 @@ class FileSearchToolsMixin:
                         f"Showing {len(shown)} of {total_found}; {total_found - len(shown)} "
                         "files omitted. Narrow location, file_types, or days to see other matches."
                     )
+                if other_types:
+                    kinds = ", ".join(
+                        f"{count} {ext}" for ext, count in other_types.most_common(8)
+                    )
+                    display_parts.append(
+                        f"Not listed: {sum(other_types.values())} other recent "
+                        f"file(s) of types outside the filter ({kinds}). Pass "
+                        "file_types to include them."
+                    )
                 if denied_locations:
                     display_parts.append(
                         "Not searched (outside the allowed folders): "
@@ -3293,6 +3304,9 @@ class FileSearchToolsMixin:
                     "days_range": days,
                     "display_message": "\n".join(display_parts),
                 }
+                if other_types:
+                    # Bounded: any text after a dot counts as a type, so a big tree has many.
+                    result["other_types_not_listed"] = dict(other_types.most_common(20))
                 if denied_locations:
                     result["locations_not_searched"] = denied_locations
                 if waiting_on_macos:
