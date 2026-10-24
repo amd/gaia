@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -80,9 +81,11 @@ func physicalMemoryGB(raw string) float64 {
 }
 
 // windowsSharedGB is the system RAM Windows lets an integrated GPU use beyond
-// its carve-out. Mirrors gaia.llm.model_fit._windows_shared_gb.
-func windowsSharedGB(physicalGB float64) float64 {
-	return physicalGB * fitRule.WindowsIGPUSharedRAMFraction
+// its carve-out: half of the RAM Windows sees. Lemonade's "Physical Memory" is
+// installed RAM, which still counts the carve-out. Mirrors
+// gaia.llm.model_fit._windows_shared_gb.
+func windowsSharedGB(physicalGB, carveOutGB float64) float64 {
+	return math.Max(0, physicalGB-carveOutGB) * fitRule.WindowsIGPUSharedRAMFraction
 }
 
 // formatGB mirrors gaia.llm.model_fit.format_gb: under 1 GB keeps a decimal so
@@ -133,7 +136,7 @@ func capacityFrom(info systemInfo) (Capacity, error) {
 			if physical <= 0 {
 				return c, fmt.Errorf("Lemonade reports an AMD integrated GPU (%s) but not this PC's 'Physical Memory', and the GPU's BIOS carve-out alone is not the memory it loads into, so GAIA cannot tell which models fit. Update Lemonade and retry, or choose the model yourself with `gaia config set default_model <model>`", g.Name)
 			}
-			c.MemoryGB, c.MemorySource = carveOut+windowsSharedGB(physical), "AMD iGPU"
+			c.MemoryGB, c.MemorySource = carveOut+windowsSharedGB(physical, carveOut), "AMD iGPU"
 			return c, nil
 		}
 	}

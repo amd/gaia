@@ -432,9 +432,9 @@ class TestFreeMemory:
     ):
         monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 0.5)
         info = self._windows_registry_igpu("128 GB")
-        # 100 GB free RAM, but Windows shares only 64 GB of it with the GPU.
+        # 100 GB free RAM, but Windows shares only half of its 127.5 GB.
         free = model_fit.free_memory(info, _ram(128, 100, swap=8))
-        assert free == FreeMemory(0.5 + 64.0, 0.5 + 64.0)
+        assert free == FreeMemory(0.5 + 63.75, 0.5 + 63.75)
         # Less free RAM than the shared cap: free RAM is the limit.
         free = model_fit.free_memory(info, _ram(128, 20, swap=8))
         assert free == FreeMemory(0.5 + 20.0, 0.5 + 28.0)

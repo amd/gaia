@@ -170,13 +170,15 @@ def format_gb(gb: float) -> str:
     return f"{gb:.1f}" if 0 < gb < 1 else f"{gb:.0f}"
 
 
-def _windows_shared_gb(physical_gb: float) -> float:
+def _windows_shared_gb(physical_gb: float, carve_out_gb: float) -> float:
     """System RAM Windows lets an integrated GPU use beyond its carve-out.
 
-    WDDM caps an adapter's shared system memory at half of RAM; it is the
-    Windows counterpart of the GTT pool Lemonade adds to the carve-out on Linux.
+    WDDM caps an adapter's shared system memory at half of the RAM Windows
+    sees; it is the Windows counterpart of the GTT pool Lemonade adds to the
+    carve-out on Linux. Lemonade's ``Physical Memory`` is installed RAM, which
+    still counts the carve-out, so the carve-out comes off before halving.
     """
-    return physical_gb * WINDOWS_IGPU_SHARED_RAM_FRACTION
+    return max(0.0, physical_gb - carve_out_gb) * WINDOWS_IGPU_SHARED_RAM_FRACTION
 
 
 #: GPU keys Lemonade has used in ``devices``, with a label and whether an entry
@@ -278,7 +280,7 @@ def _gpu_pool(
                     "and retry, or choose the model yourself with "
                     "`gaia config set default_model <model>`."
                 )
-            return carve_out + _windows_shared_gb(physical_gb), "AMD iGPU"
+            return carve_out + _windows_shared_gb(physical_gb, carve_out), "AMD iGPU"
     for vendor, _, gpu in entries:
         if _num(gpu.get("vram_gb")):
             return _num(gpu.get("vram_gb")), f"{vendor} GPU"
@@ -508,7 +510,7 @@ def free_memory(info: Dict[str, Any], os_memory: OsMemory) -> Optional[FreeMemor
             # Unknown, like a discrete card's: judging on RAM alone would
             # shrink or refuse a model the GPU holds.
             return None
-        shared = _windows_shared_gb(physical)
+        shared = _windows_shared_gb(physical, carve_out)
         return FreeMemory(
             carve_out + min(shared, ram), carve_out + min(shared, ram + swap)
         )

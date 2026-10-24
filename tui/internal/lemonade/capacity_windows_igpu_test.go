@@ -46,10 +46,13 @@ func TestWindowsIGPUPoolIsCarveOutPlusSharedRAM(t *testing.T) {
 		pool     float64
 		fitsQwen bool
 	}{
-		"auto 512 MB on 128 GB": {0.5, "127.28 GB", 0.5 + 127.28/2, true},
-		"4 GB on 128 GB":        {4, "123.8 GB", 4 + 123.8/2, true},
-		"96 GB carve-out":       {96, "32 GB", 96 + 16, true},
-		"16 GB laptop":          {0.5, "15.3 GB", 0.5 + 15.3/2, false},
+		// Lemonade's "Physical Memory" is installed RAM, carve-out included.
+		"auto 512 MB on 128 GB":  {0.5, "128.00 GB", 0.5 + 127.5/2, true},
+		"4 GB on 128 GB":         {4, "128.00 GB", 4 + 124.0/2, true},
+		"32 GB on 128 GB":        {32, "128.00 GB", 32 + 48, true},
+		"96 GB carve-out":        {96, "128.00 GB", 96 + 16, true},
+		"carve-out is all of it": {96, "96 GB", 96, true},
+		"16 GB laptop":           {0.5, "16 GB", 0.5 + 15.5/2, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			withCarveOut(t, tc.carveOut)

@@ -447,8 +447,8 @@ class TestRealLemonadeReports:
         cap = capacity_from_system_info(self._WINDOWS_STRIX_HALO)
 
         assert asked == ["AMD Radeon(TM) 8060S Graphics"]
-        # The carve-out plus the half of RAM Windows shares with the GPU.
-        assert (cap.memory_source, cap.memory_gb) == ("AMD iGPU", pytest.approx(128.0))
+        # Lemonade's 128 GB is installed RAM: Windows sees 64 GB and shares half.
+        assert (cap.memory_source, cap.memory_gb) == ("AMD iGPU", pytest.approx(96.0))
         assert check_fit(QWEN.size_gb, cap, QWEN_KV).fits
 
     def test_windows_igpu_from_the_driver_loads_qwen_at_its_native_window(
@@ -484,11 +484,13 @@ class TestRealLemonadeReports:
         "carve_out, physical, pool",
         [
             # #5050: BIOS GPU memory on Auto reserves a token 512 MB.
-            (0.5, "127.28 GB", 0.5 + 127.28 / 2),
+            (0.5, "128.00 GB", 0.5 + 127.5 / 2),
             # #5050: an HP ZBook Ultra G1a reserves 4 GB.
-            (4.0, "123.8 GB", 4.0 + 123.8 / 2),
+            (4.0, "128.00 GB", 4.0 + 124.0 / 2),
+            # A Strix Halo set to a 32 GB carve-out, as captured on hardware.
+            (32.0, "128.00 GB", 32.0 + 48.0),
             # A fixed 96 GB carve-out leaves Windows 32 GB to share half of.
-            (96.0, "32 GB", 96.0 + 16.0),
+            (96.0, "128.00 GB", 96.0 + 16.0),
         ],
     )
     def test_windows_igpu_small_carve_out_still_fits_qwen(
@@ -508,8 +510,8 @@ class TestRealLemonadeReports:
 
     def test_windows_igpu_on_a_16gb_pc_does_not_fit_qwen(self, monkeypatch):
         monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 0.5)
-        cap = capacity_from_system_info(self._windows_igpu("15.3 GB"))
-        assert cap.memory_gb == pytest.approx(0.5 + 15.3 / 2)
+        cap = capacity_from_system_info(self._windows_igpu("16 GB"))
+        assert cap.memory_gb == pytest.approx(0.5 + 15.5 / 2)
         verdict = check_fit(QWEN.size_gb, cap, QWEN_KV)
         assert not verdict.fits
         assert "this PC has 8 GB (AMD iGPU)" in verdict.reason
@@ -517,8 +519,18 @@ class TestRealLemonadeReports:
     def test_windows_igpu_never_fits_flash_on_its_shared_half(self, monkeypatch):
         # ~90 GB is more than 0.5 GB + half of 128 GB; it needs a big carve-out.
         monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 0.5)
-        cap = capacity_from_system_info(self._windows_igpu("127.28 GB"))
+        cap = capacity_from_system_info(self._windows_igpu("128.00 GB"))
         assert not check_fit(FLASH.size_gb, cap, FLASH_KV).fits
+
+    def test_windows_igpu_never_counts_its_carve_out_twice(self, monkeypatch):
+        # Installed RAM includes the carve-out; a carve-out at or above it
+        # leaves nothing for Windows to share.
+        monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 96.0)
+        cap = capacity_from_system_info(self._windows_igpu("96 GB"))
+        assert cap.memory_gb == pytest.approx(96.0)
+        monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 64.0)
+        cap = capacity_from_system_info(self._windows_igpu("128 GB"))
+        assert cap.memory_gb < 128.0
 
     @pytest.mark.parametrize("physical", [None, "", "unknown", "0 GB"])
     def test_windows_igpu_carve_out_without_ram_fails_loudly(
