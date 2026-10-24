@@ -44,6 +44,12 @@
     outline: none;
 }
 
+.composer-limit-error {
+    margin: 4px 0 0;
+    color: var(--danger);
+    font-size: 12px;
+}
+
 .composer-row {
     display: flex;
     align-items: center;
