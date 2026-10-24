@@ -10,7 +10,7 @@ import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessT
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { refreshActiveRuns } from '../services/activeRuns';
-import { claimView, dispatchNext, idleByPoll, isBusyError, markActivity, QUEUE_BUSY_WAIT_MS, type QueuedSend, type SendOutcome } from '../services/queueDispatch';
+import { claimView, dispatchNext, idleByPoll, isBusyError, markActivity, requeueRefused, type QueuedSend, type SendOutcome } from '../services/queueDispatch';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
 import { describeStreamError, isStreamInterrupted, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
@@ -231,7 +231,7 @@ interface SendOptions {
     onQueuedOutcome?: (outcome: SendOutcome) => void;
     /** Re-attach attempt number for a stream that went silent. */
     reconnect?: number;
-    /** The message that opened the chat: it goes ahead of any typed while the chat was created. */
+    /** Opens the chat, so it goes ahead of anything queued. */
     opening?: boolean;
 }
 
@@ -449,7 +449,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Send a prompt queued before this view mounted (a new chat's first
     // message, or "Ask GAIA" from the file browser).
     const mountedRef = useRef(true);
-    // The opening message is between leaving pendingPrompt and being sent.
+    // Left pendingPrompt, not yet sent.
     const openingRef = useRef(false);
     useEffect(() => {
         mountedRef.current = true;
@@ -1268,7 +1268,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onError: (err) => {
                 const interrupted = isStreamInterrupted(err);
                 // A queued message the server never took goes back in line, or shows as failed with a retry.
-                if (!queuedSettled) {
+                // So does a direct send a busy chat refused.
+                const requeued = queuedSettled && !reattach && !interrupted && !!optimisticUser
+                    && requeueRefused(sessionId, messageText, err);
+                if (!queuedSettled || requeued) {
                     if (interrupted) {
                         accepted();
                     } else {
@@ -1329,21 +1332,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // A real error event arriving on a backgrounded stream isn't
                 // the active view's concern, so don't surface it (#1580).
                 if (isStale()) return;
-
-                // This chat was busy (409): the message waits in line and is tried again; it is not a reply.
-                if (!reattach && optimisticUser && (err as { httpStatus?: unknown }).httpStatus === 409) {
-                    log.chat.info(`Chat ${sessionId} was busy; queueing the message to try again`);
-                    removeMessage(optimisticUser.id);
-                    setQueue((q) => messageQueue.enqueue(q, messageText, 'queued'));
-                    useChatStore.getState().setQueueHold(sessionId, true);
-                    setTimeout(() => useChatStore.getState().setQueueHold(sessionId, false), QUEUE_BUSY_WAIT_MS);
-                    observedEndRef.current = true;
-                    setStreaming(false);
-                    clearStreamContent();
-                    clearAgentSteps();
-                    clearCards();
-                    return;
-                }
 
                 if (!interrupted) observedEndRef.current = true;
                 log.chat.error(`Chat error for session=${sessionId}`, err);
@@ -1539,7 +1527,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             }
             return;
         }
-        // The chat's opening message goes first; the queue waits for its turn to end.
+        // The opening message goes first.
         if (queue.length === 0 || queueHold || isLoadingMessages || pendingPrompt || openingRef.current || retiredAgent || systemStatus?.init_state === 'initializing') return;
         // Only once this chat's turn is over: seen ending here, or reported idle by a poll since.
         if (isStale() || (!observedEndRef.current && !idleHere)) return;
