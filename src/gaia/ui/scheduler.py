@@ -833,6 +833,7 @@ class ScheduledTask:
         self._timer_task: Optional[asyncio.Task] = None
         # A run is in flight, timed or Run now; a second one waits for the next.
         self._executing = False
+        self._manual_run: Optional[asyncio.Task] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
@@ -950,6 +951,7 @@ class Scheduler:
                     except asyncio.CancelledError:
                         pass
                     task._timer_task = None
+                await self._cancel_manual_run(task)
         logger.info("Scheduler shut down, all timers cancelled")
 
     async def create_task(
@@ -1160,6 +1162,7 @@ class Scheduler:
                     await task._timer_task
                 except asyncio.CancelledError:
                     pass
+            await self._cancel_manual_run(task)
 
             self._db_delete_task(task.id)
             del self._tasks[name]
@@ -1188,10 +1191,24 @@ class Scheduler:
         run = asyncio.create_task(
             self._execute_task(task, reschedule=False, claimed=True)
         )
+        task._manual_run = run
         self._manual_runs.add(run)
         run.add_done_callback(self._manual_run_done)
         logger.info("Scheduled task '%s': run now", name)
         return task.to_dict()
+
+    @staticmethod
+    async def _cancel_manual_run(task: ScheduledTask) -> None:
+        """Stop a Run now in flight, as a timer is stopped on delete and shutdown."""
+        run = task._manual_run
+        task._manual_run = None
+        if run is None or run.done():
+            return
+        run.cancel()
+        try:
+            await run
+        except asyncio.CancelledError:
+            pass
 
     def _manual_run_done(self, run: asyncio.Task) -> None:
         self._manual_runs.discard(run)

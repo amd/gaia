@@ -513,3 +513,31 @@ class TestRunNow:
     async def test_unknown_task(self, scheduler):
         with pytest.raises(KeyError):
             await scheduler.run_task_now("nope")
+
+
+class TestRunNowStops:
+    """Deleting a schedule or stopping GAIA stops its Run now, like its timer."""
+
+    async def _start_slow(self, fake_db):
+        async def slow(prompt):
+            await asyncio.Event().wait()
+
+        sched = Scheduler(db=fake_db, executor=slow)
+        await sched.start()
+        await sched.create_task("slow", "every 1h", "P")
+        await sched.run_task_now("slow")
+        await asyncio.sleep(0)
+        return sched, next(iter(sched._manual_runs))
+
+    async def test_delete_cancels_it(self, fake_db):
+        sched, run = await self._start_slow(fake_db)
+        try:
+            await sched.delete_task("slow")
+            assert run.cancelled()
+        finally:
+            await sched.shutdown()
+
+    async def test_shutdown_cancels_it(self, fake_db):
+        sched, run = await self._start_slow(fake_db)
+        await sched.shutdown()
+        assert run.cancelled()
