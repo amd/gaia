@@ -129,8 +129,9 @@ const isWindowsX64 = (p: PlatformKey) => p === 'win-x64';
 const tuiListRows = windowsCombined
   ? tuiRows.map((r) => (isWindowsX64(r.platform) ? { ...r, installers: [] } : r))
   : tuiRows;
+// "only" contrasts with the setup's line, so it needs that line on the page.
 const desktopListLabel = (p: PlatformKey) =>
-  windowsCombined && isWindowsX64(p) ? 'Desktop app only (.exe)' : DESKTOP_DOWNLOAD_LABELS[p];
+  windowsSetup && isWindowsX64(p) ? 'Desktop app only (.exe)' : DESKTOP_DOWNLOAD_LABELS[p];
 
 // Until a release publishes installers none of these exist — a valid state, and
 // the terminal card is the binary offer it was before. Naming the architectures

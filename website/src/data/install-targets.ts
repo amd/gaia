@@ -15,10 +15,10 @@ export interface InstallTarget {
 
 /** The header's per-platform targets on this release. */
 export function installTargets(
-  release: Pick<StableRelease, 'version' | 'assets'>,
+  release: Pick<StableRelease, 'tag' | 'version' | 'assets'>,
 ): Partial<Record<PlatformKey, InstallTarget>> {
   const byName = new Map(release.assets.map((a) => [a.name, a]));
-  return Object.fromEntries(
+  const targets = Object.fromEntries(
     DESKTOP_PLATFORMS.flatMap((platform) => {
       const name = desktopArtifactFileName(platform, release.version);
       const asset = name ? byName.get(name) : undefined;
@@ -27,4 +27,16 @@ export function installTargets(
       return [[platform, { href: asset.url, label }]];
     }),
   );
+  // No platform at all means the asset names drifted, not a coverage gap:
+  // Install would silently become a section link on every machine.
+  if (!Object.keys(targets).length) {
+    const expected = DESKTOP_PLATFORMS.map((p) => desktopArtifactFileName(p, release.version)).join(', ');
+    throw new Error(
+      `[install] ${release.tag} carries ${release.assets.length} assets, none of which is a ` +
+        `desktop app build (${expected}), so the header's Install button has nothing to download. ` +
+        `Check https://github.com/amd/gaia/releases/tag/${release.tag}; if the names changed, ` +
+        `update DESKTOP_FILENAMES in src/scripts/download-target.ts.`,
+    );
+  }
+  return targets;
 }
