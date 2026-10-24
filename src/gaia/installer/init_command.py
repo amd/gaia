@@ -2500,8 +2500,9 @@ class InitCommand:
                     "not have enough free memory right now.[/bold]"
                 )
                 self.console.print(
-                    "   [dim]Or choose a cloud model or a smaller local model in "
-                    "the Agent UI (Settings > Model).[/dim]"
+                    "   [dim]Close memory-heavy apps and re-run, or choose a cloud "
+                    "model or a smaller local model in the Agent UI (Settings > "
+                    "Model).[/dim]"
                 )
             if broken:
                 self.console.print()

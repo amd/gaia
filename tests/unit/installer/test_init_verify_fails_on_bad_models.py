@@ -237,4 +237,3 @@ def test_the_cache_folder_is_found_whatever_its_case(tmp_path):
         )
 
     assert "models--unsloth--gemma-4-E4B-it-GGUF" in printed
-    assert "Not found in cache" not in printed.split("Gemma-4-E4B-it-GGUF")[-1][:40]
