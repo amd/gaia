@@ -831,6 +831,8 @@ class ScheduledTask:
         # The last run's error, or None when it succeeded.
         self.last_error = last_error
         self._timer_task: Optional[asyncio.Task] = None
+        # A run is in flight, timed or Run now; a second one waits for the next.
+        self._executing = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
@@ -850,6 +852,7 @@ class ScheduledTask:
             "schedule_config": self.schedule_config,
             "description": self.describe(),
             "last_error": self.last_error,
+            "running": self._executing,
         }
 
     def describe(self) -> str:
@@ -903,6 +906,8 @@ class Scheduler:
         self._max_concurrent_runs = max_concurrent_runs
         self._run_semaphore: Optional[asyncio.Semaphore] = None
         self._tasks: Dict[str, ScheduledTask] = {}
+        # Run now runs outlive their request, so hold them until they finish.
+        self._manual_runs: set = set()
         self._lock = asyncio.Lock()
         self._running = False
         self._missed_since: Optional[datetime] = None
@@ -1162,6 +1167,40 @@ class Scheduler:
         logger.info("Deleted scheduled task '%s'", name)
         return True
 
+    async def run_task_now(self, name: str) -> Dict[str, Any]:
+        """Start one run of a task now, keeping its next scheduled time.
+
+        Returns at once with the task marked running; the run goes on in the
+        background and saves its reply in the task's chat as a timed run does.
+
+        Raises:
+            KeyError: If task not found.
+            ValueError: If a run of it is already in flight.
+        """
+        async with self._lock:
+            task = self._tasks.get(name)
+            if not task:
+                raise KeyError(f"Task '{name}' not found")
+            if task._executing:
+                raise ValueError(f"'{name}' is already running")
+            # Claimed before returning, so a second click can't start another.
+            task._executing = True
+        run = asyncio.create_task(
+            self._execute_task(task, reschedule=False, claimed=True)
+        )
+        self._manual_runs.add(run)
+        run.add_done_callback(self._manual_run_done)
+        logger.info("Scheduled task '%s': run now", name)
+        return task.to_dict()
+
+    def _manual_run_done(self, run: asyncio.Task) -> None:
+        self._manual_runs.discard(run)
+        if not run.cancelled() and run.exception() is not None:
+            logger.error(
+                "A Run now run failed outside its executor",
+                exc_info=run.exception(),
+            )
+
     def get_task(self, name: str) -> Optional[Dict[str, Any]]:
         """Get task info by name.
 
@@ -1420,7 +1459,29 @@ class Scheduler:
         logger.warning("Scheduled task '%s': %s", task.name, message)
         self._db_store_result(task.id, plan.last_missed.isoformat(), error=message)
 
-    async def _execute_task(self, task: ScheduledTask):
+    async def _execute_task(
+        self, task: ScheduledTask, reschedule: bool = True, claimed: bool = False
+    ):
+        """Run *task* once, unless a run of it is already in flight.
+
+        *reschedule* moves its next run on from now (a timed run); Run now
+        passes False to keep it. *claimed* means the caller already marked
+        the task running.
+        """
+        if not claimed:
+            if task._executing:
+                logger.info(
+                    "Scheduled task '%s' is still running; skipping this run",
+                    task.name,
+                )
+                return
+            task._executing = True
+        try:
+            await self._execute_task_once(task, reschedule)
+        finally:
+            task._executing = False
+
+    async def _execute_task_once(self, task: ScheduledTask, reschedule: bool):
         """Execute a single task run.
 
         If the database supports sessions (i.e. is a full ChatDatabase),
@@ -1526,19 +1587,19 @@ class Scheduler:
                     exc_info=True,
                 )
 
-        # Update next run
-        config = (
-            ScheduleConfig.from_json(task.schedule_config)
-            if task.schedule_config
-            else None
-        )
-        if config:
-            next_run = compute_next_run(config)
-        else:
-            next_run = datetime.now(timezone.utc) + timedelta(
-                seconds=task.interval_seconds
+        if reschedule:
+            config = (
+                ScheduleConfig.from_json(task.schedule_config)
+                if task.schedule_config
+                else None
             )
-        task.next_run_at = next_run.isoformat()
+            if config:
+                next_run = compute_next_run(config)
+            else:
+                next_run = datetime.now(timezone.utc) + timedelta(
+                    seconds=task.interval_seconds
+                )
+            task.next_run_at = next_run.isoformat()
         task.last_result = error if error else (result or "completed")
         task.last_error = error
 

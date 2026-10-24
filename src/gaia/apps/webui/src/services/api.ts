@@ -1145,6 +1145,11 @@ export async function updateSchedule(name: string, status: string): Promise<Sche
     return apiFetch('PUT', `/schedules/${encodeURIComponent(name)}`, { status });
 }
 
+/** Run a schedule once now; its next scheduled time stays as it was. */
+export async function runScheduleNow(name: string): Promise<Schedule> {
+    return apiFetch('POST', `/schedules/${encodeURIComponent(name)}/run`);
+}
+
 export async function deleteSchedule(name: string): Promise<void> {
     return apiFetch('DELETE', `/schedules/${encodeURIComponent(name)}`);
 }
