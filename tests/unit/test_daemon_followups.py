@@ -27,8 +27,8 @@ NOW = datetime(2026, 10, 23, 14, 30).astimezone()
 def clock(tmp_path):
     asked, notified = [], []
 
-    def ask(agent_id, prompt, model):
-        asked.append((agent_id, prompt, model))
+    def ask(agent_id, prompt, model, session_id):
+        asked.append((agent_id, prompt, model, session_id))
         return "The build passed in 12 minutes.\nAll 340 tests green."
 
     def notify(title, text):
@@ -117,7 +117,9 @@ def test_a_due_follow_up_runs_notifies_and_keeps_its_answer(clock):
     fired = clock.fire_due(now=job["fire_at"] + 1)
 
     assert fired["fired"] == [job["id"]]
-    agent_id, prompt, model = clock.asked[0]
+    agent_id, prompt, model, session_id = clock.asked[0]
+    assert followups.is_run_session(session_id)
+    assert session_id == followups.run_session_id(job["id"])
     assert agent_id == "gaia" and "Check CI run 4012" in prompt
     assert model == "fireworks.deepseek-v4p1-flash"
     assert "search for files" in prompt and "shell commands" in prompt
@@ -134,7 +136,7 @@ def test_a_follow_up_that_is_not_due_does_not_run(clock):
 
 
 def test_a_failed_follow_up_is_kept_so_the_user_hears_about_it(tmp_path):
-    def ask(agent_id, prompt, model):
+    def ask(agent_id, prompt, model, session_id):
         raise RuntimeError("the gaia agent's stream ended without an answer")
 
     c = DaemonClock(
@@ -156,7 +158,7 @@ def test_a_notification_that_cannot_post_still_keeps_the_answer(tmp_path):
     c = DaemonClock(
         str(tmp_path / "s.db"),
         executors={
-            followups.KIND: followups.make_executor(lambda a, p, m: "Done.", notify)
+            followups.KIND: followups.make_executor(lambda a, p, m, s: "Done.", notify)
         },
     )
     db = _db(c)
@@ -218,3 +220,36 @@ def test_cancel_job_leaves_a_fired_job_alone(clock):
     job = followups.create(db, agent_id="gaia", task="x", fire_at=time.time() + 120)
     clock.fire_due(now=job["fire_at"] + 1)
     assert not store.cancel_job(_db(clock), job_id=job["id"])
+
+
+def test_a_wall_clock_time_keeps_its_hour_across_a_dst_change(monkeypatch):
+    """9am the day after the clocks go back is 9am PST, not 9am PDT (8am PST)."""
+    import time as time_module
+
+    if not hasattr(time_module, "tzset"):
+        pytest.skip("needs tzset to set the system time zone")
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    time_module.tzset()
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 31, 10, 0)
+
+    monkeypatch.setattr(followups, "datetime", _Clock)
+    try:
+        when = followups.parse_when("tomorrow at 9am")
+    finally:
+        monkeypatch.undo()
+        time_module.tzset()
+
+    assert (when.month, when.day, when.hour, when.minute) == (11, 1, 9, 0)
+    assert when.utcoffset() == timedelta(hours=-8)
+
+
+def test_a_run_session_is_a_valid_agent_session_id():
+    from gaia_agent_chat.session import validate_session_id
+
+    validate_session_id(followups.run_session_id("0" * 32))
+    assert not followups.is_run_session("2b6f0a1c-9d3e-4f5a-8b7c-1e2d3f4a5b6c")
+    assert not followups.is_run_session(None)

@@ -21,7 +21,9 @@ import math
 import re
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime
+from datetime import time as dtime
+from datetime import timedelta
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.daemon.scheduler import store
@@ -36,6 +38,9 @@ MIN_DELAY_SECONDS = 60
 MAX_DELAY_SECONDS = 7 * 24 * 3600
 MAX_PENDING = 10
 MAX_TASK_CHARS = 2000
+#: A fired run's session id starts with this, so the agent knows nobody is
+#: reading that turn and leaves the other results for the user.
+RUN_SESSION_PREFIX = "follow-up-"
 
 RESULTS_DDL = """
 CREATE TABLE IF NOT EXISTS daemon_follow_up_results (
@@ -82,9 +87,11 @@ def parse_when(text: str, now: Optional[datetime] = None) -> datetime:
     or an ISO 8601 timestamp. Raises :class:`FollowUpError` when it names none,
     or a time outside :data:`MIN_DELAY_SECONDS`..:data:`MAX_DELAY_SECONDS`.
     """
+    # No zone given: the system's own rules, so "tomorrow at 9am" stays 9am across a DST change.
+    zone = now.tzinfo if now is not None else None
     now = now or datetime.now().astimezone()
     phrase = " ".join((text or "").strip().lower().split())
-    when = _parse(phrase, now)
+    when = _parse(phrase, now, zone)
     if when is None:
         raise FollowUpError(
             f"Can't tell when {text!r} is. Use a phrase like 'in 2 hours', "
@@ -106,7 +113,12 @@ def parse_when(text: str, now: Optional[datetime] = None) -> datetime:
     return when
 
 
-def _parse(phrase: str, now: datetime) -> Optional[datetime]:
+def _wall_clock(day: date, hour: int, minute: int, zone) -> datetime:
+    at = datetime.combine(day, dtime(hour, minute))
+    return at.replace(tzinfo=zone) if zone is not None else at.astimezone()
+
+
+def _parse(phrase: str, now: datetime, zone=None) -> Optional[datetime]:
     if not phrase:
         return None
     m = _IN.match(phrase)
@@ -124,11 +136,12 @@ def _parse(phrase: str, now: datetime) -> Optional[datetime]:
         if hour > 23 or minute > 59:
             return None
         day = m.group(1) or m.group(5)
-        when = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if day == "tomorrow":
-            when += timedelta(days=1)
-        elif day is None and when <= now:
-            when += timedelta(days=1)
+        today = now.date()
+        when = _wall_clock(
+            today + timedelta(days=1 if day == "tomorrow" else 0), hour, minute, zone
+        )
+        if day is None and when <= now:
+            when = _wall_clock(today + timedelta(days=1), hour, minute, zone)
         return when
     try:
         when = datetime.fromisoformat(phrase.upper().replace(" ", "T"))
@@ -242,8 +255,8 @@ def _view(job: Dict[str, Any]) -> Dict[str, Any]:
 
 # -- Firing ---------------------------------------------------------------
 
-#: ``(agent_id, prompt, model) -> answer``. Raises when the agent gave no answer.
-AskAgent = Callable[[str, str, Optional[str]], str]
+#: ``(agent_id, prompt, model, session_id) -> answer``. Raises when the agent gave no answer.
+AskAgent = Callable[[str, str, Optional[str], str], str]
 #: ``(title, text) -> None``. Raises when the notification could not be posted.
 Notify = Callable[[str, str], None]
 
@@ -275,7 +288,12 @@ def make_executor(
         agent_id = payload["agent_id"]
         task = payload.get("task", "")
         try:
-            answer = ask_agent(agent_id, prompt_for(payload), payload.get("model"))
+            answer = ask_agent(
+                agent_id,
+                prompt_for(payload),
+                payload.get("model"),
+                run_session_id(job["job_id"]),
+            )
         except Exception as e:
             # Kept so the next turn says the follow-up failed; the clock marks it too.
             _record(db, job, agent_id, task, answer=None, error=str(e), note=None)
@@ -315,19 +333,32 @@ def _first_line(text: str, limit: int = 200) -> str:
     return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
+def run_session_id(job_id: str) -> str:
+    """The session a fired follow-up runs in, one per job."""
+    return f"{RUN_SESSION_PREFIX}{job_id}"
+
+
+def is_run_session(session_id: Optional[str]) -> bool:
+    """True for the session of a fired follow-up, where no user reads the turn."""
+    return bool(session_id) and session_id.startswith(RUN_SESSION_PREFIX)
+
+
 def ask_sidecar(registry, *, read_timeout: float) -> AskAgent:
     """Ask *agent_id*'s sidecar one question over its own ``/query`` stream."""
     import requests
 
     from gaia.daemon.agent_query import _iter_sse_events
 
-    def ask(agent_id: str, prompt: str, model: Optional[str]) -> str:
+    def ask(agent_id: str, prompt: str, model: Optional[str], session_id: str) -> str:
         registry.ensure(agent_id)
         base_url, token = registry.connection(agent_id)
         body: Dict[str, Any] = {
             "query": prompt,
             "run_id": str(uuid.uuid4()),
             "context": [],
+            "session_id": session_id,
+            # Nobody is there to answer a question mid-run.
+            "can_answer_questions": False,
         }
         if model:
             body["model"] = model

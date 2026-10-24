@@ -74,25 +74,93 @@ def test_a_refusal_from_the_daemon_reaches_the_model(monkeypatch):
     assert out["status"] == "error" and "already waiting" in out["error"]
 
 
-def test_the_turn_reports_finished_follow_ups_once(calls):
-    host = _Host()
+def _result(job_id, task, answer="Passed."):
+    return {
+        "job_id": job_id,
+        "task": task,
+        "answer": answer,
+        "error": None,
+        "note": None,
+        "finished_at": time.time(),
+    }
+
+
+def _enabled(host=None):
+    host = host or _Host()
     host._follow_ups_enabled = True
-    calls.state["results"] = [
-        {
-            "job_id": "j1",
-            "task": "Check CI run 4012",
-            "answer": "Passed.",
-            "error": None,
-            "note": None,
-            "finished_at": time.time(),
-        }
-    ]
+    return host
+
+
+class _Config:
+    def __init__(self, session):
+        self.ui_session_id = session
+
+
+def test_the_turn_reports_finished_follow_ups_once(calls):
+    host = _enabled()
+    calls.state["results"] = [_result("j1", "Check CI run 4012")]
 
     line = host.follow_up_context()
+    host.follow_ups_told(answered=True)
 
     assert "Check CI run 4012" in line and "Passed." in line
     assert host.follow_up_context() == ""
-    assert all(c["start"] is False for c in calls if c["method"] == "GET")
+    assert all(c["start"] is False for c in calls)
+
+
+def test_a_turn_that_failed_shows_the_result_again(calls):
+    host = _enabled()
+    calls.state["results"] = [_result("j1", "Check CI run 4012")]
+
+    host.follow_up_context()
+    host.follow_ups_told(answered=False)
+
+    assert "Check CI run 4012" in host.follow_up_context()
+    assert not [c for c in calls if c["path"] == "/seen"]
+
+
+def test_a_fired_run_never_takes_another_follow_ups_result(calls):
+    """A fires, B fires, the user chats: B's own run must not use up A's result."""
+    from gaia.daemon import followups
+
+    fired = _enabled()
+    fired.config = _Config(followups.run_session_id("b"))
+    calls.state["results"] = [_result("a", "Check build A")]
+
+    assert fired.follow_up_context() == ""
+    fired._list_follow_ups()
+    fired.follow_ups_told(answered=True)
+    assert not [c for c in calls if c["path"] == "/seen"]
+
+    calls.state["results"].append(_result("b", "Check build B"))
+    user = _enabled()
+    line = user.follow_up_context()
+    assert "Check build A" in line and "Check build B" in line
+
+
+def test_listing_mid_turn_adds_to_what_the_turn_showed(calls):
+    host = _enabled()
+    calls.state["results"] = [_result("j1", "first")]
+    host.follow_up_context()
+    calls.state["results"] = [_result("j1", "first"), _result("j2", "second")]
+
+    host._list_follow_ups()
+    host.follow_ups_told(answered=True)
+
+    [seen] = [c for c in calls if c["path"] == "/seen"]
+    assert seen["json"]["ids"] == ["j1", "j2"]
+
+
+def test_marking_seen_without_a_daemon_never_fails_the_turn(calls, monkeypatch):
+    host = _enabled()
+    calls.state["results"] = [_result("j1", "x")]
+    host.follow_up_context()
+
+    def gone(*a, **k):
+        raise DaemonError("no GAIA daemon is running")
+
+    monkeypatch.setattr(client, "followups_request", gone)
+    host.follow_ups_told(answered=True)
 
 
 def test_an_agent_without_the_tools_never_asks_the_daemon(calls):

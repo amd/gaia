@@ -792,6 +792,12 @@ class ChatAgent(
         )
         return "\n".join(part for part in parts if part)
 
+    def _after_process_query(self, user_input: str, assistant_response: str) -> None:
+        super()._after_process_query(user_input, assistant_response)
+        # Only an answered turn has told the user its follow-up results.
+        status = (getattr(self, "last_result", None) or {}).get("status")
+        self.follow_ups_told(status != "failed" and bool(assistant_response.strip()))
+
     # ── lazy subsystems (#2323 Increment 3) ────────────────────────────────
 
     @property
@@ -1192,7 +1198,9 @@ class ChatAgent(
             "current_base_url",
             None,
         )
-        label = _endpoint_label(live() if callable(live) else resolve_lemonade_base_url())
+        label = _endpoint_label(
+            live() if callable(live) else resolve_lemonade_base_url()
+        )
         if not label:
             return "The configured model server"
         return f"The model server at {label}"

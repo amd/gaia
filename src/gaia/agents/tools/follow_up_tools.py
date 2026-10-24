@@ -9,7 +9,7 @@ front end opens with what came back.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from gaia.logger import get_logger
 
@@ -25,7 +25,8 @@ class FollowUpToolsMixin:
     - list_follow_ups: what is waiting, and results not yet shown
     - cancel_follow_up: drop one that is no longer needed
 
-    ``follow_up_context()`` is the per-turn line that reports finished ones.
+    ``follow_up_context()`` is the per-turn line that reports finished ones;
+    ``follow_ups_told()`` marks them seen once that turn has answered.
     """
 
     #: The agent the daemon runs a fired follow-up as.
@@ -110,8 +111,11 @@ class FollowUpToolsMixin:
             for p in found["pending"]
         ]
         results = [_result_view(r) for r in found["results"]]
-        if results:
-            self._mark_follow_ups_seen([r["job_id"] for r in found["results"]])
+        # Told once this turn answers, like the per-turn line; never in a fired run.
+        if not self._in_follow_up_run():
+            shown = getattr(self, "_follow_ups_shown", [])
+            ids = [r["job_id"] for r in found["results"]]
+            self._follow_ups_shown = list(dict.fromkeys([*shown, *ids]))
         return {"status": "found", "pending": pending, "results": results}
 
     def _cancel_follow_up(self, follow_up_id: str) -> Dict[str, Any]:
@@ -128,23 +132,55 @@ class FollowUpToolsMixin:
             return {"status": "error", "error": str(e)}
         return {"status": "cancelled", "id": follow_up_id}
 
-    def _mark_follow_ups_seen(self, ids: List[str]) -> None:
-        from gaia.daemon import client
+    def _in_follow_up_run(self) -> bool:
+        """True in the turn the daemon runs for a fired follow-up."""
+        from gaia.daemon import followups
 
-        client.followups_request(
-            "POST", "/seen", json={"agent_id": self.FOLLOW_UP_AGENT_ID, "ids": ids}
-        )
+        config = getattr(self, "config", None)
+        return followups.is_run_session(getattr(config, "ui_session_id", None))
+
+    def follow_ups_told(self, answered: bool) -> None:
+        """Mark the results this turn showed as told, if the turn answered.
+
+        A turn that failed keeps them for the next one. A daemon that cannot be
+        reached is logged and the results stay unseen; it never fails the turn.
+        """
+        shown, self._follow_ups_shown = getattr(self, "_follow_ups_shown", []), []
+        if not shown or not answered:
+            return
+        from gaia.daemon import client
+        from gaia.daemon.errors import DaemonError
+
+        try:
+            # Attach only: a turn must never start a daemon.
+            client.followups_request(
+                "POST",
+                "/seen",
+                json={"agent_id": self.FOLLOW_UP_AGENT_ID, "ids": shown},
+                timeout=3.0,
+                start=False,
+            )
+        except DaemonError as e:
+            logger.info(
+                "follow-up results not marked seen; shown again next turn: %s", e
+            )
 
     def follow_up_context(self) -> str:
-        """Finished follow-ups the user has not been told about yet, then marks them told.
+        """Finished follow-ups the user has not been told about yet.
 
-        Empty when there are none, or when this agent never registered the tools. A daemon that cannot be asked is logged and
-        leaves the turn without the line; the results stay for the next turn.
+        Empty when there are none, when this agent never registered the tools,
+        or in a fired follow-up's own run, where no user reads the answer. A
+        daemon that cannot be asked is logged and leaves the turn without the
+        line. What is shown is marked told by :meth:`follow_ups_told`.
         """
+        self._follow_ups_shown = []
         if not getattr(self, "_follow_ups_enabled", False):
             return ""
         from gaia.daemon import client
         from gaia.daemon.errors import DaemonError
+
+        if self._in_follow_up_run():
+            return ""
 
         try:
             # Attach only: a turn must never start a daemon just to ask.
@@ -165,7 +201,7 @@ class FollowUpToolsMixin:
             view = _result_view(r)
             outcome = view.get("answer") or f"FAILED: {view.get('error')}"
             lines.append(f"- {view['finished']}: {view['task']}\n  Result: {outcome}")
-        self._mark_follow_ups_seen([r["job_id"] for r in results])
+        self._follow_ups_shown = [r["job_id"] for r in results]
         return "\n".join(lines)
 
 
