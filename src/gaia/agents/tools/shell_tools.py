@@ -415,7 +415,8 @@ def _reaches_the_prompt(error: Optional[Dict[str, Any]]) -> bool:
 
 def _call_key(command: Any, working_directory: Any) -> Tuple[Any, Any]:
     """The identity an approval is bound to: this text, in this folder."""
-    return command, working_directory or None
+    # As run: the tool expands ~ before checking, so the key must too.
+    return command, _expand_home(working_directory) or None
 
 
 # The binaries a developer session needs and a read-only session must not have
