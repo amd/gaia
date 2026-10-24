@@ -266,11 +266,16 @@ def test_json_progress_states_the_downloads_and_their_total_first(capsys):
         client.list_models.return_value = {
             "data": [{"id": "Gemma-4-E4B-it-GGUF", "size": 5.6, "downloaded": False}]
         }
+        client.get_system_info.return_value = {"model_storage": {"free_bytes": 400e9}}
         client.ensure_model_downloaded.side_effect = pull
         client_class.return_value = client
         assert cmd._download_models()
 
-    events = _events(capsys.readouterr().out)
+    events = [
+        e
+        for e in _events(capsys.readouterr().out)
+        if e["event"] in ("downloads", "download")
+    ]
     assert events[0] == {
         "event": "downloads",
         "models": [{"id": "Gemma-4-E4B-it-GGUF", "size_gb": 5.6}],

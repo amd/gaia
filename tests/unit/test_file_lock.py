@@ -15,7 +15,6 @@ from pathlib import Path
 
 import pytest
 
-from gaia.utils import file_lock as file_lock_module
 from gaia.utils.file_lock import (
     FileLockError,
     FileLockTimeout,
@@ -28,6 +27,16 @@ from gaia.utils.file_lock import (
 from tests.unit.denied_folder import cannot_create_files_in
 
 REPO_SRC = Path(__file__).resolve().parents[2] / "src"
+
+
+@pytest.fixture(autouse=True)
+def _forget_aged_out_entries():
+    """Aged-out entries are remembered per process; no test may see another's."""
+    from gaia.utils import file_lock as mod
+
+    mod._stale_entries.clear()
+    yield
+    mod._stale_entries.clear()
 
 
 def test_lock_file_sits_beside_its_target(tmp_path):
@@ -285,7 +294,7 @@ def test_an_entry_that_cannot_be_checked_is_named_in_the_timeout(tmp_path, monke
             pass
     assert exc.value.ahead == 1
     assert str(unknown) in str(exc.value)
-    assert "delete them" in str(exc.value)
+    assert "delete it." in str(exc.value)
     assert unknown.exists()
 
 
@@ -370,12 +379,12 @@ def test_an_earlier_entry_seen_before_its_owner_locked_it_still_counts(tmp_path)
     lock = lock_path_for(target)
     earlier = mod._create_entry(lock, target)  # created, not locked yet
     me = mod._join_queue(lock, target)
-    spent, dead = set(), set()
+    dead = set()
     try:
         assert me.place > earlier.place
-        assert mod._ahead(lock, me, spent, dead)[0] == 0  # looks dead for now
+        assert mod._ahead(lock, me, dead)[0] == 0  # looks dead for now
         assert mod.try_lock(earlier.fd)  # its owner locks it
-        assert mod._ahead(lock, me, spent, dead)[0] == 1
+        assert mod._ahead(lock, me, dead)[0] == 1
     finally:
         me.leave()
         earlier.leave()
@@ -422,68 +431,194 @@ def test_an_uncontended_lock_does_not_slow_down_in_a_crowded_folder(tmp_path):
     assert statistics.median(times) < 0.002, f"median {statistics.median(times)}"
 
 
-def test_the_next_waiter_takes_the_lock_within_milliseconds(tmp_path, monkeypatch):
-    """The waiter at the front notices a release fast, not on a 20 ms poll."""
-    target = tmp_path / "state.json"
-    intervals, polling = [], threading.Event()
-    real_poll_interval = file_lock_module._poll_interval
+def _median_hand_off(target, rounds=40):
+    """Median time from a release to the queued waiter holding the lock.
 
-    def recorded_poll_interval(listed_ahead):
-        interval = real_poll_interval(listed_ahead)
-        intervals.append(interval)
-        polling.set()
-        return interval
+    The release comes at a random point in the waiter's poll, so a 20 ms poll
+    averages about 10 ms and a 1 ms poll about 0.5 ms.
+    """
+    import random
 
-    monkeypatch.setattr(file_lock_module, "_poll_interval", recorded_poll_interval)
-    delays = []
-    for _ in range(30):
-        polling.clear()
+    gaps = []
+    for _ in range(rounds):
         took = []
 
         def waiter():
-            with file_lock(target, timeout=10):
+            with file_lock(target, timeout=60):
                 took.append(time.perf_counter())
 
         with file_lock(target):
             thread = threading.Thread(target=waiter)
             thread.start()
-            # Released as the waiter starts a poll's sleep: the whole interval
-            # stands between it and the lock.
-            assert polling.wait(10), "the waiter never polled"
+            deadline = time.monotonic() + 30
+            while _live_entries(target) < 1:
+                assert time.monotonic() < deadline, "the waiter never queued"
+                time.sleep(0.001)
+            time.sleep(random.uniform(0.02, 0.04))
             released = time.perf_counter()
         thread.join()
-        delays.append(took[0] - released)
-    assert max(intervals) <= 0.002, f"the front waiter polled every {max(intervals)}s"
-    # A 20 ms poll waits at least 20 ms every time; a 1 ms one stays well
-    # under this even where a busy macOS runner stretches each sleep.
-    assert statistics.median(delays) < 0.015, f"median {statistics.median(delays)}"
+        gaps.append(took[0] - released)
+    return statistics.median(gaps)
 
 
-def test_a_busy_lock_keeps_its_throughput(tmp_path):
-    """Four threads taking turns hand the lock on in a few milliseconds each."""
+def test_a_busy_lock_hands_off_far_faster_than_a_flat_poll(tmp_path, monkeypatch):
+    """The waiter at the front notices a release fast, not on a 20 ms poll.
+
+    Timed against a flat 20 ms poll in the same run. A loaded runner, or one
+    that overshoots short sleeps (macOS CI), adds about the same delay to both,
+    so the test asserts the margin rather than a fixed bound.
+    """
+    from gaia.utils import file_lock as mod
+
+    real = _median_hand_off(tmp_path / "real.json")
+    monkeypatch.setattr(mod, "_poll_interval", lambda listed_ahead: 0.02)
+    flat = _median_hand_off(tmp_path / "flat.json")
+    assert flat - real >= 0.004, f"{real * 1000:.1f} ms vs {flat * 1000:.1f} ms flat"
+    assert _queue_files(tmp_path / "real.json") == []
+
+
+def test_waiters_far_back_poll_slowly_and_the_front_fast():
+    from gaia.utils import file_lock as mod
+
+    assert mod._poll_interval(0) == mod._NEXT_POLL_SECONDS
+    assert mod._poll_interval(5) == 5 * mod._NEXT_POLL_SECONDS
+    assert mod._poll_interval(1000) == mod._POLL_SECONDS
+
+
+def test_an_unchecked_entry_stops_counting_once_older_than_the_timeout(
+    tmp_path, monkeypatch
+):
+    """Another user's dead entry on NFS cannot be tested or cleared by anyone;
+    it must not block every later waiter for good."""
+    from gaia.utils import file_lock as mod
+
     target = tmp_path / "state.json"
-    cycles, threads = 100, 4
-    durations = []
+    queue = queue_dir_for(lock_path_for(target))
+    queue.mkdir()
+    stuck = queue / _entry_name(0)
+    stuck.write_text("", encoding="utf-8")
+    old = time.time() - mod.LOCK_TIMEOUT_SECONDS - 5
+    os.utime(stuck, (old, old))
+    monkeypatch.setattr(mod, "_probe_lock", lambda fd: None)
+    with file_lock(target, timeout=0.5):
+        pass
+    assert stuck.exists()  # never deleted: it might still be someone's
 
-    def work():
-        for _ in range(cycles):
-            started = time.perf_counter()
-            with file_lock(target, timeout=60):
+
+class _SkewedClock:
+    """This machine's clock, *offset* seconds off the file server's."""
+
+    def __init__(self, offset):
+        self.offset = offset
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    def time(self):
+        return time.time() + self.offset
+
+
+@pytest.mark.parametrize("offset", [-3600, 3600])
+def test_an_unchecked_entrys_age_ignores_this_machines_clock(
+    tmp_path, monkeypatch, offset
+):
+    """Age is taken on the file server's clock, so skew neither blocks a waiter
+    for an hour nor skips a waiter that only just queued."""
+    from gaia.utils import file_lock as mod
+
+    target = tmp_path / "state.json"
+    queue = queue_dir_for(lock_path_for(target))
+    queue.mkdir()
+    old, young = queue / _entry_name(0), queue / _entry_name(1)
+    for entry in (old, young):
+        entry.write_text("", encoding="utf-8")
+    long_ago = time.time() - mod.LOCK_TIMEOUT_SECONDS - 5
+    os.utime(old, (long_ago, long_ago))
+    monkeypatch.setattr(mod, "_probe_lock", lambda fd: None)
+    monkeypatch.setattr(mod, "time", _SkewedClock(offset))
+    with pytest.raises(FileLockTimeout) as exc:
+        with file_lock(target, timeout=0.3):
+            pass
+    # The young entry still holds its place; the old one does not.
+    assert exc.value.ahead == 1, str(exc.value)
+    young.unlink()
+    with file_lock(target, timeout=0.3):
+        pass
+
+
+def test_a_waiter_polling_past_an_aged_out_entry_warns_once(
+    tmp_path, monkeypatch, caplog
+):
+    """Every poll meets the stale entry again; it must be named only once."""
+    import logging
+
+    from gaia.utils import file_lock as mod
+
+    target = tmp_path / "state.json"
+    queue = queue_dir_for(lock_path_for(target))
+    queue.mkdir()
+    stuck = queue / _entry_name(0)
+    stuck.write_text("", encoding="utf-8")
+    long_ago = time.time() - mod.LOCK_TIMEOUT_SECONDS - 5
+    os.utime(stuck, (long_ago, long_ago))
+    monkeypatch.setattr(mod, "_probe_lock", lambda fd: None)
+    polls = []
+    real_ahead = mod._ahead
+    monkeypatch.setattr(
+        mod, "_ahead", lambda *a, **k: polls.append(1) or real_ahead(*a, **k)
+    )
+
+    def wait_while_held():
+        with pytest.raises(FileLockTimeout):
+            with file_lock(target, timeout=0.2):
                 pass
-            durations.append(time.perf_counter() - started)
 
-    workers = [threading.Thread(target=work) for _ in range(threads)]
-    for worker in workers:
-        worker.start()
-    for worker in workers:
-        worker.join()
-    # A median, so one antivirus or GC stall on a shared runner cannot fail it.
-    typical = statistics.median(durations)
-    # macOS CI runners overshoot short sleeps (24-28 ms measured there, ~3 ms on
-    # Linux); a 20 ms poll would still be ~60 ms, so the bound still catches it.
-    limit = 0.040 if sys.platform == "darwin" else 0.008
-    assert typical < limit, f"{typical * 1000:.1f} ms per turn"
-    assert _queue_files(target) == []
+    with caplog.at_level(logging.WARNING):
+        _held_elsewhere(target, wait_while_held)
+    assert len(polls) >= 5, "the waiter did not poll repeatedly"
+    warnings = [r for r in caplog.records if str(stuck) in r.getMessage()]
+    assert len(warnings) == 1
+
+
+def test_an_aged_out_entry_is_reported_once_and_the_fast_path_returns(
+    tmp_path, monkeypatch, caplog
+):
+    """Nobody can delete it, so it must be named, once, and not slow every lock."""
+    import logging
+
+    from gaia.utils import file_lock as mod
+
+    target = tmp_path / "state.json"
+    queue = queue_dir_for(lock_path_for(target))
+    queue.mkdir()
+    stuck = queue / _entry_name(0)
+    stuck.write_text("", encoding="utf-8")
+    long_ago = time.time() - mod.LOCK_TIMEOUT_SECONDS - 5
+    os.utime(stuck, (long_ago, long_ago))
+    monkeypatch.setattr(mod, "_probe_lock", lambda fd: None)
+    joins = []
+    real_join = mod._join_queue
+    monkeypatch.setattr(mod, "_join_queue", lambda *a: joins.append(1) or real_join(*a))
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            with file_lock(target, timeout=0.5):
+                pass
+    warnings = [r for r in caplog.records if str(stuck) in r.getMessage()]
+    assert len(warnings) == 1
+    assert "delete it" in warnings[0].getMessage()
+    assert joins == [1], "later locks queued behind an entry known to be dead"
+
+    def wait_briefly():
+        # Queue behind the holder, past the stale entry.
+        monkeypatch.setattr(mod, "_may_be_waiting", lambda path: True)
+        with pytest.raises(FileLockTimeout) as exc:
+            with file_lock(target, timeout=0.1):
+                pass
+        return exc.value
+
+    error = _held_elsewhere(target, wait_briefly)
+    assert str(stuck) in str(error)
+    assert "delete it." in str(error)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")

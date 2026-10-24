@@ -212,19 +212,18 @@ def test_picking_the_recommendation_again_hands_the_choice_back_to_setup(
 def short_of_free_memory(monkeypatch):
     """The large model fits the PC's total memory but not what is free now."""
     from gaia.llm import lemonade_client
-    from gaia.llm.model_fit import FitVerdict
 
     reason = (
-        "not enough free memory right now: it needs about 26.1 GB and only "
+        "not enough free memory to load it now: it needs about 26.1 GB and only "
         "20.4 GB is free"
     )
 
-    def verdict(_url, requirement, _capacity):
+    def rules_out(_client, requirement, _capacity):
         if requirement.model_id == LARGE_DEFAULT_MODEL_NAME:
-            return FitVerdict(False, reason)
-        return FitVerdict(True)
+            return reason
+        return None
 
-    monkeypatch.setattr(lemonade_client, "free_memory_verdict", verdict)
+    monkeypatch.setattr(lemonade_client, "_free_memory_rules_out", rules_out)
     return reason
 
 
@@ -302,6 +301,55 @@ def test_a_model_that_does_not_fit_is_refused(running):
     running(SMALL_GPU)
     with pytest.raises(sp.SetupPlanError, match="won't fit"):
         sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
+
+
+@pytest.fixture
+def free_gb(monkeypatch):
+    """Set the memory free now on the fake server's PC, with *loaded* resident."""
+    from gaia.llm import lemonade_client
+    from gaia.llm.model_fit import FreeMemory
+
+    def use(fake, gb, loaded=None):
+        fake.base_url = "http://127.0.0.1:9/api/v1"
+        monkeypatch.setattr(
+            lemonade_client,
+            "_free_memory_snapshot",
+            lambda url: (FreeMemory(gb, gb), dict(loaded or {})),
+        )
+
+    return use
+
+
+def test_a_busy_big_pc_shows_why_the_large_model_does_not_fit_now(running, free_gb):
+    free_gb(running(BIG_GPU), 10)
+    plan = sp.build_plan()
+    assert plan["recommended_model"] == DEFAULT_MODEL_NAME
+    large = next(o for o in plan["options"] if o["id"] == LARGE_DEFAULT_MODEL_NAME)
+    assert large["fits"] is False and "free memory" in large["reason"]
+    with pytest.raises(sp.SetupPlanError, match="free memory"):
+        sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
+
+
+def test_picking_gemma_on_a_busy_pc_survives_a_later_idle_run(
+    running, free_gb, config_file
+):
+    fake = running(BIG_GPU)
+    free_gb(fake, 10)
+    sp.choose_chat_model(DEFAULT_MODEL_NAME)
+    free_gb(fake, 80)
+    assert json.loads(config_file.read_text())["default_model"] == DEFAULT_MODEL_NAME
+    plan = sp.build_plan()
+    assert plan["recommended_model"] == LARGE_DEFAULT_MODEL_NAME
+    assert plan["chat_model"]["id"] == DEFAULT_MODEL_NAME
+    assert plan["chat_model"]["user_set"] is True
+
+
+def test_a_loaded_model_is_named_as_what_may_hold_the_memory(running, free_gb):
+    free_gb(running(BIG_GPU), 10, loaded={DEFAULT_MODEL_NAME: 65536})
+    large = next(
+        o for o in sp.build_plan()["options"] if o["id"] == LARGE_DEFAULT_MODEL_NAME
+    )
+    assert f"{DEFAULT_MODEL_NAME} loaded" in large["reason"]
 
 
 def test_only_setups_own_models_can_be_picked(running):

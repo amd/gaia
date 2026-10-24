@@ -44,7 +44,7 @@ from gaia.agents.install_hints import (
     resolve_pip_frontend,
 )
 from gaia.installer._stdin import stdin_is_tty
-from gaia.llm.model_fit import MachineCapacity
+from gaia.llm.model_fit import MachineCapacity, format_gb
 from gaia.logger import get_logger
 from gaia.ui.build import WebuiBuildStatus
 from gaia.version import LEMONADE_MIN_VERSION
@@ -368,7 +368,7 @@ def resolve_init_chat_model(
         return ChatModelChoice(model_id=configured, user_set=True, skipped=[])
     model_id, skipped, capacity = recommend_default_chat_model(client)
     capacity_pick = (
-        recommend_default_chat_model(client, free_memory=False)[0]
+        recommend_default_chat_model(client, judge_free_memory=False)[0]
         if capacity is not None
         else None
     )
@@ -465,6 +465,67 @@ def pending_download_sizes(client, model_ids) -> dict:
             size = mr.size_gb if mr else None
         sizes[model_id] = float(size) if isinstance(size, (int, float)) else None
     return sizes
+
+
+def _model_checkpoint(entry: Optional[dict], model_id: str) -> Optional[str]:
+    from gaia.llm.lemonade_client import find_model_requirement
+
+    entry = entry or {}
+    checkpoint = entry.get("checkpoint") or (entry.get("checkpoints") or {}).get("main")
+    if not checkpoint:
+        mr = find_model_requirement(model_id)
+        checkpoint = mr.checkpoint if mr else None
+    return checkpoint if isinstance(checkpoint, str) and checkpoint else None
+
+
+def _snapshot_bytes(snapshot: Path) -> Optional[int]:
+    """Bytes in one snapshot: the files its download manifest lists, finished
+    or ``.partial``. None when the manifest cannot be read."""
+    manifest = snapshot / ".download_manifest.json"
+    if not manifest.is_file():
+        return sum(p.stat().st_size for p in snapshot.rglob("*.partial"))
+    try:
+        files = json.loads(manifest.read_text(encoding="utf-8"))["files"]
+        names = [f["name"] for f in files]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        log.warning("Cannot read Lemonade download manifest %s: %s", manifest, e)
+        return None
+    total = 0
+    for name in names:
+        for path in (snapshot / name, snapshot / f"{name}.partial"):
+            if path.is_file():
+                total += path.stat().st_size
+    return total
+
+
+def bytes_already_on_disk(client, model_ids, store_path: Optional[str]) -> dict:
+    """Bytes of each model Lemonade's store already holds: finished files and
+    the ``.partial`` ones an interrupted pull left. None for a model GAIA
+    cannot look up: a store not on this PC, or no known checkpoint."""
+    from gaia.llm.lemonade_client import _model_ids_match
+
+    store = Path(store_path) if store_path else None
+    if store is None or not store.is_dir():
+        return {m: None for m in model_ids}
+    catalog = client.list_models(show_all=True).get("data", [])
+    found = {}
+    for model_id in model_ids:
+        entry = next(
+            (e for e in catalog if _model_ids_match(e.get("id"), model_id)), None
+        )
+        checkpoint = _model_checkpoint(entry, model_id)
+        if not checkpoint:
+            found[model_id] = None
+            continue
+        repo = checkpoint.split(":", 1)[0]
+        snapshots = store / ("models--" + repo.replace("/", "--")) / "snapshots"
+        counted = (
+            [_snapshot_bytes(s) for s in snapshots.iterdir() if s.is_dir()]
+            if snapshots.is_dir()
+            else []
+        )
+        found[model_id] = None if None in counted else sum(counted)
+    return found
 
 
 def _size_note(size_gb) -> str:
@@ -843,6 +904,148 @@ class _DownloadProgress:
             )
 
 
+class InitEvents:
+    """``gaia init --progress-json``: one JSON object per stdout line.
+
+    The desktop installer reads these to show the model download live. Every
+    object has an ``event`` key; human output still prints around them.
+    """
+
+    def __init__(self, enabled: bool = False, stream=None):
+        self.enabled = enabled
+        self._stream = stream
+        #: Set while an in-place progress bar has not ended its line.
+        self.line_open = False
+
+    def emit(self, event: str, **fields) -> None:
+        if not self.enabled:
+            return
+        stream = self._stream or sys.stdout
+        start = "\n" if self.line_open else ""
+        self.line_open = False
+        stream.write(start + json.dumps({"event": event, **fields}) + "\n")
+        stream.flush()
+
+
+class _JsonDownloadProgress:
+    """Reports a model pull's streamed events as ``progress`` JSON lines.
+
+    Lemonade reports bytes per file, so a model's bytes are the files already
+    finished plus the one in flight.
+    """
+
+    EMIT_S = 0.5
+    SPEED_WINDOW_S = 2.0
+
+    def __init__(
+        self,
+        console,
+        events: InitEvents,
+        model_id: str,
+        index: int,
+        count: int,
+        planned_bytes: Optional[int] = None,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        self.console = console
+        self.emitter = events
+        self.model_id = model_id
+        self.index = index
+        self.count = count
+        self.planned_bytes = planned_bytes
+        self.events = 0
+        self.reported_error = False
+        self.bytes_done = 0
+        self.bytes_total = planned_bytes or 0
+        self.speed_bps = 0.0
+        self._clock = clock
+        self._finished = 0
+        self._file = None
+        self._file_total = 0
+        self._emitted_at = None
+        self._window = None
+
+    def __call__(self, event: dict) -> None:
+        self.events += 1
+        kind = event.get("event")
+        if kind == "progress":
+            self._tally(event)
+            now = self._clock()
+            if self._emitted_at is not None and now - self._emitted_at < self.EMIT_S:
+                return
+            self._emitted_at = now
+            self._emit()
+        elif kind == "error":
+            self.reported_error = True
+            message = str(event.get("error") or "unknown error")
+            self.console.print_download_error(message, self.model_id)
+            self.emitter.emit("error", model=self.model_id, message=message)
+
+    def _tally(self, event: dict) -> None:
+        name = event.get("file") or ""
+        done = int(event.get("bytes_downloaded") or 0)
+        if self._file is not None and name != self._file:
+            self._finished += self._file_total
+            self._file_total = 0
+        self._file = name
+        # Mid-file events can carry bytes_total 0, so keep the largest seen.
+        self._file_total = max(
+            self._file_total, int(event.get("bytes_total") or 0), done
+        )
+        self.bytes_done = self._finished + done
+        total = int(event.get("total_download_size") or 0)
+        self.bytes_total = max(
+            total or self.planned_bytes or self._finished + self._file_total,
+            self.bytes_done,
+        )
+        now = self._clock()
+        # From the first event, so bytes a resumed pull already had don't count.
+        if self._window is None:
+            self._window = (now, self.bytes_done)
+        started, start_bytes = self._window
+        if now - started >= self.SPEED_WINDOW_S:
+            self.speed_bps = max(0.0, (self.bytes_done - start_bytes) / (now - started))
+            self._window = (now, self.bytes_done)
+
+    def _emit(self) -> None:
+        self.emitter.emit(
+            "progress",
+            model=self.model_id,
+            index=self.index,
+            count=self.count,
+            bytes_done=self.bytes_done,
+            bytes_total=self.bytes_total,
+            speed_bps=round(self.speed_bps),
+        )
+
+
+class _BothJsonProgress:
+    """Feeds one pull to both ``--progress-json`` readers: the setup screen's
+    ``download`` events and the per-file ``progress`` events. The stream's
+    errors are printed once, by the second."""
+
+    def __init__(self, screen: "_DownloadProgress", files: "_JsonDownloadProgress"):
+        self.screen = screen
+        self.files = files
+
+    @property
+    def events(self) -> int:
+        return self.files.events
+
+    @property
+    def reported_error(self) -> bool:
+        return self.files.reported_error
+
+    def __call__(self, event: dict) -> None:
+        if event.get("event") != "error":
+            self.screen(event)
+        self.files(event)
+
+
+def _gb_to_bytes(size_gb) -> Optional[int]:
+    return int(size_gb * 1e9) if isinstance(size_gb, (int, float)) else None
+
+
 class InitCommand:
     """
     Main handler for the `gaia init` command.
@@ -902,9 +1105,9 @@ class InitCommand:
             lemonade_url: Use the Lemonade Server the user already runs at
                 this URL, and save that choice; GAIA installs no server.
             gaia_lemonade: Use GAIA's own Lemonade, and save that choice.
-            progress_json: Also print the chat model choice, the planned
-                downloads and download progress as JSON lines on stdout (see
-                :meth:`_emit`), for the Agent UI's setup screen.
+            progress_json: Also print step, chat model, plan and download
+                progress events as JSON lines on stdout (see :class:`InitEvents`
+                and :meth:`_emit`), for the Agent UI's setup screen.
             chat_model: The chat model to set up, as the setup screen showed it
                 (see :func:`resolve_init_chat_model`'s ``pinned``).
         """
@@ -929,6 +1132,9 @@ class InitCommand:
         self._chat_choice: Optional[ChatModelChoice] = None
         # Set once that model is confirmed on disk; only then is it recorded.
         self._chat_model_ready = False
+        # Cleared when setup's verify step fails; nothing unverified is
+        # pinned as everyone's default.
+        self._setup_verified = True
         self.skip_models = skip_models
         self.skip_webui_build = skip_webui_build
         self.force_reinstall = force_reinstall
@@ -938,7 +1144,7 @@ class InitCommand:
         self.remote = remote
         self.skip_chat_model = skip_chat_model
         self.progress_callback = progress_callback
-        self.progress_json = progress_json
+        self.events = InitEvents(progress_json)
 
         # A configured server is someone else's to run; init only checks it.
         # An explicit choice is applied first, in run(), so a broken saved
@@ -989,14 +1195,13 @@ class InitCommand:
             print(message, end=end, flush=True)
 
     def _emit(self, event: str, **fields) -> None:
-        """One ``{"event": ..., ...}`` line on stdout, only with ``--progress-json``.
+        """The setup screen's events, on the same stream as :class:`InitEvents`.
 
         Events: ``chat_model`` (model, user_set, skipped), ``downloads``
         (models with size_gb, total_gb) and ``download`` (model, bytes_done,
-        bytes_total, speed_bps). Plain print, so Rich never wraps or styles it.
+        bytes_total, speed_bps).
         """
-        if self.progress_json:
-            print(json.dumps({"event": event, **fields}), flush=True)
+        self.events.emit(event, **fields)
 
     def _print_header(self):
         """Print initialization header."""
@@ -1019,6 +1224,7 @@ class InitCommand:
 
     def _print_step(self, step: int, total: int, message: str):
         """Print step header."""
+        self.events.emit("step", step=step, total=total, message=message)
         if RICH_AVAILABLE and self.console:
             # Escape the message so brackets in it (e.g. "[rag]") aren't eaten
             # as Rich markup tags.
@@ -1093,6 +1299,7 @@ class InitCommand:
             if total > 0:
                 size_str += f"/{total / 1024 / 1024:.1f} MB"
             self._print(f"\r   [{bar}] {percent:.0f}% ({size_str})", end="")
+            self.events.line_open = True
 
     @staticmethod
     def _tui_installed() -> bool:
@@ -1330,6 +1537,7 @@ class InitCommand:
             self._print("")
             self._print_step(step_num, total_steps, "Verifying setup...")
             verify_ok = self._verify_setup()
+            self._setup_verified = verify_ok
 
             # Saved even when verification fails -- the models may be fine.
             # Persist profile choice to ~/.gaia/config.json
@@ -1776,10 +1984,11 @@ class InitCommand:
         """Save a hardware-picked chat model as ``default_model`` so every agent
         resolves to it. Never overwrites a model the user chose, and records
         nothing when the pick is the floor model every agent already defaults to
-        or when setup did not download it (declined, or ``--skip-models``). A
-        floor pick that free memory (or the setup screen) made on a PC whose
-        total memory holds a larger model is recorded too: otherwise the next
-        ``--check``, with more memory free, would expect the larger model.
+        or when setup did not download it (declined, or ``--skip-models``) or
+        could not verify it. A floor pick that free memory (or the setup screen)
+        made on a PC whose total memory holds a larger model is recorded too:
+        otherwise the next ``--check``, with more memory free, would expect the
+        larger model.
         """
         from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
@@ -1788,6 +1997,8 @@ class InitCommand:
             return
         # An undownloaded default would make every agent's first load fail.
         if not self._chat_model_ready:
+            return
+        if not self._setup_verified:
             return
         if choice.model_id != DEFAULT_MODEL_NAME or choice.keep:
             config.default_model = choice.model_id
@@ -1811,7 +2022,7 @@ class InitCommand:
             else:
                 cap = choice.capacity
                 where = (
-                    f" — this PC has {cap.memory_gb:.0f} GB for models "
+                    f" — this PC has {format_gb(cap.memory_gb)} GB for models "
                     f"({cap.memory_source})"
                     if cap
                     else ""
@@ -1922,6 +2133,61 @@ class InitCommand:
             if total_gb:
                 self._print(f"   Total download: about {total_gb:.1f} GB")
             self._print("")
+
+            disk_free_gb = None
+            if total_gb:
+                from gaia.llm.lemonade_client import LemonadeClientError
+                from gaia.llm.model_fit import (
+                    check_download_fits_disk,
+                    model_store_free_gb,
+                )
+
+                try:
+                    system_info = client.get_system_info(timeout=15)
+                    unread = ""
+                except LemonadeClientError as e:
+                    log.warning("Lemonade /system-info failed: %s", e)
+                    system_info = {}
+                    unread = f" ({e})"
+                disk_free_gb, store = model_store_free_gb(system_info)
+                if disk_free_gb is None:
+                    self._print_warning(
+                        "Lemonade did not report the free space in its model "
+                        f"store{unread}, so GAIA could not check that "
+                        f"{total_gb:.1f} GB fits."
+                    )
+                # An interrupted pull's bytes already take disk; count only the rest.
+                pending = [m for m in model_ids if sizes.get(m)]
+                on_disk = bytes_already_on_disk(client, pending, store)
+                still_gb = sum(
+                    max(0.0, sizes[m] - (on_disk[m] or 0) / 1e9) for m in pending
+                )
+                fits = check_download_fits_disk(still_gb, disk_free_gb, store)
+                if not fits.fits:
+                    if any(on_disk[m] is None for m in pending):
+                        self._print_warning(
+                            f"The disk may be too small: {fits.reason}. GAIA could "
+                            "not read what an earlier download left there, so it "
+                            "downloads anyway; Lemonade stops if the disk fills."
+                        )
+                    else:
+                        message = f"Not enough disk space: {fits.reason}."
+                        self._print_error(message)
+                        self.events.emit("error", message=message)
+                        return False
+            self.events.emit(
+                "plan",
+                models=[
+                    {
+                        "id": m,
+                        "bytes_total": _gb_to_bytes(sizes.get(m)),
+                        "downloaded": sizes.get(m) == 0,
+                    }
+                    for m in model_ids
+                ],
+                bytes_total=_gb_to_bytes(total_gb) or 0,
+                disk_free_bytes=_gb_to_bytes(disk_free_gb),
+            )
             self._emit(
                 "downloads",
                 models=[{"id": m, "size_gb": sizes.get(m)} for m in model_ids],
@@ -1966,7 +2232,7 @@ class InitCommand:
 
             recipe = profile_config.get("recipe")
             success = True
-            for model_id in model_ids:
+            for index, model_id in enumerate(model_ids, start=1):
                 self._print("")
                 mr = find_model_requirement(model_id)
                 label = f"{model_id} (recipe={recipe})" if recipe else model_id
@@ -1982,11 +2248,22 @@ class InitCommand:
                 # time proportional to its size (~5 MB/s floor).
                 if mr and mr.size_gb:
                     pull_kwargs["timeout"] = max(7200, int(mr.size_gb * 200))
-                progress = _DownloadProgress(
-                    self.agent_console,
-                    model_id,
-                    emit=self._emit if self.progress_json else None,
-                )
+                if self.events.enabled:
+                    progress = _BothJsonProgress(
+                        _DownloadProgress(
+                            self.agent_console, model_id, emit=self._emit
+                        ),
+                        _JsonDownloadProgress(
+                            self.agent_console,
+                            self.events,
+                            model_id,
+                            index,
+                            len(model_ids),
+                            _gb_to_bytes(sizes.get(model_id)),
+                        ),
+                    )
+                else:
+                    progress = _DownloadProgress(self.agent_console, model_id)
                 if client.ensure_model_downloaded(
                     model_id, on_progress=progress, **pull_kwargs
                 ):
@@ -1994,18 +2271,28 @@ class InitCommand:
                         self._print_success(f"Downloaded {model_id}")
                     else:
                         self._print_success(f"Already downloaded: {model_id}")
+                    self.events.emit(
+                        "model_done", model=model_id, downloaded=bool(progress.events)
+                    )
                     if self._chat_choice and model_id == self._chat_choice.model_id:
                         self._chat_model_ready = True
                 else:
                     if not progress.reported_error:
                         self._print_error(f"Failed to download {model_id}")
+                        self.events.emit(
+                            "error",
+                            model=model_id,
+                            message=f"Failed to download {model_id}",
+                        )
                     self._print(f"   {self._server_problem_hint()}")
                     success = False
 
+            self.events.emit("done", ok=success)
             return success
 
         except Exception as e:
             self._print_error(f"Error downloading models: {e}")
+            self.events.emit("error", message=f"Error downloading models: {e}")
             return False
 
     def _test_model_inference(self, client, model_id: str) -> tuple:
@@ -2839,7 +3126,7 @@ def run_init(
             (see InitCommand's docstring — for a Claude-backed session)
         lemonade_url: Use (and save) the Lemonade Server the user runs here
         gaia_lemonade: Use (and save) GAIA's own Lemonade Server
-        progress_json: Also print progress as JSON lines (see InitCommand._emit)
+        progress_json: Also print progress as JSON lines (see InitEvents)
         chat_model: The chat model to set up instead of re-picking one
 
     Returns:

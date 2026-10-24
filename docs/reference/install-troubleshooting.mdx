@@ -98,7 +98,13 @@ The Electron app launches but the backend install fails with an error dialog. Co
 
 **Symptom**: Error dialog says "Not enough free disk space. Required: 2048 MB, available: X MB".
 
-**Fix**: Free at least 2 GB of disk space and click **Retry**. That covers the Python environment; the installer downloads no model. The app's setup screen checks the disk again for the model you choose to run on this PC (about 6 GB, or about 30 GB for Qwen3.6).
+**Fix**: Free at least 2 GB of disk space and click **Retry**. That covers the Python environment; the installer downloads no model.
+
+The model comes next, from the app's setup screen, once you choose to run one on this PC. Before
+downloading, setup checks that it fits in Lemonade's model store: about 6 GB for Gemma 4 E4B,
+about 30 GB where the larger Qwen3.6 model fits. When it doesn't fit, the setup screen says how
+much the model needs and how much is free. Free that much, pick a smaller model, or choose a
+cloud provider.
 
 ### No internet connection
 

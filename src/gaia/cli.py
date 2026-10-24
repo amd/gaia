@@ -3854,9 +3854,10 @@ Examples:
     init_parser.add_argument(
         "--progress-json",
         action="store_true",
-        help="Also print the chat model choice, the planned downloads and "
-        "download progress (bytes, speed) as JSON lines on stdout, for a "
-        "program that drives setup (the Agent UI's first-run screen).",
+        help="Also print setup steps, the chat model choice, the planned "
+        "downloads and download progress (bytes, speed) as one JSON object per "
+        "line on stdout, for a program that drives setup (the Agent UI's "
+        "first-run screen). Human output is unchanged.",
     )
     init_parser.add_argument(
         "--check",

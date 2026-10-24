@@ -280,7 +280,7 @@
                 "type": "null"
               }
             ],
-            "description": "The front-end this turn comes from (contract >= 2.20). 'agent_ui' tells the agent that features like Scheduled tasks are in the caller's sidebar. Fixed when a session is built; omit it when unknown.",
+            "description": "The front-end this turn comes from (contract >= 2.20). 'agent_ui' tells the agent that features like Scheduled tasks are in the caller's sidebar, and each front-end gets model-provider errors worded for its own settings. Fixed when a session is built; omit it for a headless caller, whose provider advice then points at the model server this GAIA host uses.",
             "title": "Surface"
           }
         },

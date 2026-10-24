@@ -494,10 +494,11 @@ def test_ui_load_model_sends_the_chosen_backend(monkeypatch, config_file):
         json={"model_name": "Gemma-4-E4B-it-GGUF", "ctx_size": 65536},
     )
     assert resp.status_code == 202
-    for _ in range(200):
-        if _loads(calls):
-            break
+    # The load runs on a background thread a busy runner can take seconds to start.
+    deadline = time.monotonic() + 10
+    while not _loads(calls) and time.monotonic() < deadline:
         time.sleep(0.01)
+    assert _loads(calls), "the background load never reached Lemonade within 10 s"
     load = _loads(calls)[0]
     assert load["model_name"] == "Gemma-4-E4B-it-GGUF"
     assert load["ctx_size"] == 65536
