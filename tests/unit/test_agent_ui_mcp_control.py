@@ -46,6 +46,7 @@ class Run:
         self.decision = None
         self.cancelled = False
         self.live_confirm = None
+        self.advertised_timeout = None
 
     def emit(self, event):
         with self.cond:
@@ -108,7 +109,7 @@ class Run:
             "args": args,
             "confirm_id": cid,
             "risk": "write",
-            "timeout_seconds": self.prompt_timeout,
+            "timeout_seconds": self.advertised_timeout or self.prompt_timeout,
         }
         if self.always_scope:
             prompt["always_scope"] = self.always_scope
@@ -184,6 +185,7 @@ class FakeBackend:
         self.cancels = []
         self.inputs = []
         self.prompt_timeout = 30.0
+        self.advertised_timeout = None
         self.always_scope = SCOPE
         self.confirm_delay = 0.0
         self.lingering = set()  # sessions /active still lists after their done
@@ -318,6 +320,7 @@ class FakeBackend:
 
     def start_run(self, sid):
         run = Run(sid, self.sessions[sid], self.prompt_timeout, self.always_scope)
+        run.advertised_timeout = self.advertised_timeout
         self.runs[sid] = run
         threading.Thread(target=run.produce, daemon=True).start()
         return run
@@ -464,13 +467,14 @@ def test_concurrent_answers_reach_the_backend_once(backend, turns):
 
 def test_expired_prompt_is_refused(backend, turns):
     backend.sessions["s1"] = "write"
-    backend.prompt_timeout = 0.4
+    # Advertise a short timeout but keep the turn alive, so a slow runner still sees the prompt.
+    backend.advertised_timeout = 0.4
     turns.start("s1", "go")
     cid = _prompt(turns, "s1")["confirm_id"]
     time.sleep(0.5)
     out = turns.answer_prompt("s1", cid, "allow_once")
     assert out["status"] == "error"
-    assert out["refused"] in ("expired", "stale")
+    assert out["refused"] == "expired"
     assert backend.confirms == []
 
 

@@ -544,3 +544,42 @@ def test_connection_reset_before_output_is_retried(make_client):
         assert _complete(client, True) == "Hello"
     assert len(server.requests) == 3
     assert client.last_request_retries == 2
+
+
+# ── a local model behind a proxy that answers 502 (#5295) ─────────────────
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+def test_a_502_from_a_local_endpoint_names_the_server(make_client, monkeypatch, stream):
+    monkeypatch.setenv("GAIA_LLM_RETRY_ATTEMPTS", "2")
+    script = [_text(502, "Bad Gateway")] * 2
+    with FakeServer(script) as server:
+        client = make_client(server)
+        with pytest.raises(LemonadeClientError) as raised:
+            result = client.chat_completions(
+                model="gpt-oss-20b",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=stream,
+            )
+            if stream:
+                list(result)
+    message = str(raised.value)
+    assert f"the model server at 127.0.0.1:{server.port}" in message
+    assert "Lemonade" not in message and "TUI" not in message
+    if not stream:
+        assert message.startswith("Error in chat completions (status 502)")
+        assert message.endswith(": Bad Gateway")
+
+
+def test_the_backend_envelope_still_parses_after_the_server_name(make_client):
+    from gaia.llm.lemonade_client import _extract_backend_error_message
+
+    body = {"error": {"message": "tool_choice is not supported"}}
+    with FakeServer([_json(400, body)]) as server:
+        client = make_client(server)
+        with pytest.raises(LemonadeClientError) as raised:
+            _complete(client, False)
+    assert f"127.0.0.1:{server.port}" in str(raised.value)
+    assert _extract_backend_error_message(str(raised.value)) == (
+        "tool_choice is not supported"
+    )

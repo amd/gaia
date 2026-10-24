@@ -55,8 +55,8 @@ const GAIA_PYTHON_BIN = IS_WINDOWS
 const STATE_FILE = path.join(GAIA_HOME, "electron-install-state.json");
 const LOG_FILE = path.join(GAIA_HOME, "electron-install.log");
 
-// 5 GB — PyTorch wheels have grown significantly and `gaia init` downloads
-// additional model data on first run; 3 GB is no longer enough headroom.
+// Floor for uv, Python and the GAIA package only. The models, often 30 GB,
+// are checked by `gaia init` against Lemonade's model store, which it sizes.
 const MIN_DISK_SPACE_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
 const NETWORK_CHECK_HOSTS = Object.freeze([
   "https://pypi.org/simple/",
@@ -405,6 +405,148 @@ function makeProgressReporter(onProgress) {
   };
 }
 
+// ── gaia init progress (`gaia init --progress-json`) ─────────────────────────
+
+// Where the plan and the end of the downloads land in the GAIA_INIT slice; the
+// rest of the slice is Lemonade setup before and verification after.
+const INIT_PLAN_PERCENT = 5;
+const INIT_DOWNLOADED_PERCENT = 95;
+
+/**
+ * Read one line of `gaia init --progress-json` output. Returns `{ event }` for
+ * a progress event, `{ error }` for a line that looks like one but is not, and
+ * null for human output.
+ */
+function parseInitEventLine(line) {
+  const text = String(line || "").trim();
+  if (!text.startsWith("{")) return null;
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch (err) {
+    return { error: err.message };
+  }
+  if (!value || typeof value !== "object" || typeof value.event !== "string") {
+    return { error: 'no "event" field' };
+  }
+  return { event: value };
+}
+
+function formatGB(bytes) {
+  return `${(Math.max(0, bytes || 0) / 1e9).toFixed(1)} GB`;
+}
+
+function formatSpeed(bytesPerSecond) {
+  return `${(bytesPerSecond / 1e6).toFixed(1)} MB/s`;
+}
+
+function formatTimeLeft(seconds) {
+  if (seconds < 60) return "less than a minute left";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `about ${minutes} min left`;
+  return `about ${Math.floor(minutes / 60)} h ${minutes % 60} min left`;
+}
+
+/**
+ * Map `gaia init --progress-json` events onto the GAIA_INIT slice of the bar.
+ * `report(withinStagePercent, message)` receives a percent that never goes
+ * back. `onLine` returns true for the lines too frequent to log.
+ */
+function createInitProgress(report, logFn = log) {
+  const models = new Map();
+  let percent = 0;
+
+  const advance = (within, message) => {
+    percent = Math.max(percent, Math.round(within));
+    report(percent, message);
+  };
+  const totals = () => {
+    let done = 0;
+    let total = 0;
+    for (const m of models.values()) {
+      total += m.total;
+      done += Math.min(m.done, m.total);
+    }
+    return { done, total };
+  };
+  const downloadPercent = () => {
+    const { done, total } = totals();
+    const share = total > 0 ? done / total : 0;
+    return INIT_PLAN_PERCENT + (INIT_DOWNLOADED_PERCENT - INIT_PLAN_PERCENT) * share;
+  };
+  const model = (id) => {
+    if (!models.has(id)) models.set(id, { done: 0, total: 0 });
+    return models.get(id);
+  };
+
+  function handle(event) {
+    switch (event.event) {
+      case "step":
+        advance(percent, `Step ${event.step} of ${event.total}: ${event.message}`);
+        return true;
+      case "plan":
+        for (const m of event.models || []) {
+          if (!m.downloaded) model(m.id).total = m.bytes_total || 0;
+        }
+        advance(
+          INIT_PLAN_PERCENT,
+          event.bytes_total > 0
+            ? `Downloading ${formatGB(event.bytes_total)} of models`
+            : "Models already downloaded"
+        );
+        return true;
+      case "progress": {
+        const m = model(event.model);
+        m.done = event.bytes_done || 0;
+        m.total = Math.max(event.bytes_total || 0, m.done);
+        const parts = [
+          `Downloading ${event.model} (${event.index} of ${event.count}): ` +
+            `${formatGB(m.done)} of ${formatGB(m.total)}`,
+        ];
+        if (event.speed_bps > 0) {
+          const { done, total } = totals();
+          parts.push(
+            `at ${formatSpeed(event.speed_bps)}, ` +
+              formatTimeLeft((total - done) / event.speed_bps)
+          );
+        }
+        advance(downloadPercent(), parts.join(" "));
+        return true;
+      }
+      case "model_done": {
+        const m = model(event.model);
+        m.done = m.total;
+        advance(downloadPercent(), `${event.model} ready`);
+        return true;
+      }
+      case "done":
+        advance(
+          event.ok ? INIT_DOWNLOADED_PERCENT : percent,
+          event.ok ? "Models downloaded, finishing setup" : "Model download did not finish"
+        );
+        return true;
+      case "error":
+        advance(percent, String(event.message || "gaia init reported an error").trim());
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  function onLine(line) {
+    const parsed = parseInitEventLine(line);
+    if (!parsed) return false;
+    if (parsed.error) {
+      logFn(`Malformed gaia init progress line (${parsed.error}): ${line}`);
+      return false;
+    }
+    handle(parsed.event);
+    return parsed.event.event === "progress";
+  }
+
+  return { onLine, handle };
+}
+
 // ── Command helpers ──────────────────────────────────────────────────────────
 
 /**
@@ -436,8 +578,11 @@ function findGaiaBin() {
 /**
  * Run a child process and stream output to the log file in real time.
  * Returns a Promise that resolves with { code, stdout, stderr }.
+ *
+ * `onLine(line)` sees each whole stdout line as it arrives; a line it returns
+ * true for is left out of the log.
  */
-function runCommand(cmd, args, { env, stageLabel } = {}) {
+function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
   return new Promise((resolve) => {
     log(`$ ${cmd} ${args.join(" ")}`);
     let proc;
@@ -457,14 +602,42 @@ function runCommand(cmd, args, { env, stageLabel } = {}) {
 
     let stdout = "";
     let stderr = "";
+    let partial = "";
+    const logLine = (line) => {
+      if (line) log(`  ${stageLabel ? `[${stageLabel}] ` : ""}${line}`);
+    };
+    // An in-place progress bar redraws with \r, so each redraw is its own segment.
+    const takeLine = (line) => {
+      let quiet = true;
+      for (const segment of line.split("\r")) {
+        if (!segment) continue;
+        try {
+          quiet = onLine(segment) === true && quiet;
+        } catch (err) {
+          logError(`onLine callback threw: ${err.message}`);
+          quiet = false;
+        }
+      }
+      if (!quiet) logLine(line);
+    };
 
     proc.stdout.on("data", (data) => {
       const chunk = data.toString();
       stdout += chunk;
-      chunk.split(/\r?\n/).forEach((line) => {
-        if (line) log(`  ${stageLabel ? `[${stageLabel}] ` : ""}${line}`);
-      });
+      if (!onLine) {
+        chunk.split(/\r?\n/).forEach(logLine);
+        return;
+      }
+      const lines = (partial + chunk).split(/\r?\n/);
+      partial = lines.pop();
+      lines.forEach(takeLine);
     });
+    if (onLine) {
+      proc.stdout.on("end", () => {
+        if (partial) takeLine(partial);
+        partial = "";
+      });
+    }
 
     proc.stderr.on("data", (data) => {
       const chunk = data.toString();
@@ -1405,11 +1578,14 @@ async function runGaiaInit(gaiaBin, report, version, skipGaiaInit, chooseLemonad
   setState(STATES.INSTALLING, { stage: STAGES.GAIA_INIT, version });
   report(STAGES.GAIA_INIT, 0, GAIA_INIT_MESSAGE);
   const lemonadeArgs = await lemonadeInitArgs(gaiaBin, chooseLemonade, runCommand, report);
+  const progress = createInitProgress((within, message) =>
+    report(STAGES.GAIA_INIT, within, message)
+  );
   const initResult = await runCommand(
     gaiaBin,
-    ["init", "--profile", "gaia", "--yes", "--skip-webui-build", ...lemonadeArgs],
+    ["init", "--profile", "gaia", "--yes", "--skip-webui-build", "--progress-json", ...lemonadeArgs],
     // Unwrapped, so an error line reaches initFailureReason whole.
-    { stageLabel: "gaia-init", env: { ...process.env, COLUMNS: "1000" } }
+    { stageLabel: "gaia-init", env: { ...process.env, COLUMNS: "1000" }, onLine: progress.onLine }
   );
   if (initResult.code !== 0) {
     // Non-fatal: the app opens and its start screen shows initError, and the
@@ -1429,7 +1605,8 @@ function initFailureReason({ code, stdout, stderr }) {
   const lines = `${stdout || ""}\n${stderr || ""}`
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter(Boolean);
+    // --progress-json event lines are for the progress bar, not the user.
+    .filter((line) => line && !line.startsWith('{"event"'));
   const marked = lines.filter((line) => line.startsWith("❌"));
   const reason = marked.length
     ? marked[marked.length - 1].replace(/^❌\s*/, "")
@@ -2038,6 +2215,11 @@ module.exports = {
   getState,
   setState,
   clearState,
+
+  // gaia init progress
+  parseInitEventLine,
+  createInitProgress,
+  computeOverallPercent,
 
   // Logging
   openLog,

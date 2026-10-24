@@ -87,7 +87,9 @@ from gaia.chat.sdk import AgentSDK, LLMCallCancelled
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
+    _endpoint_label,
     backend_crash_remedy,
+    configured_lemonade_url,
 )
 
 if TYPE_CHECKING:
@@ -1273,6 +1275,21 @@ class MemoryMixin(ProceduralMemoryMixin):
         # behavior for anything we can't positively identify).
         detail = getattr(self, "_memory_unavailable_detail", None)
         detail_suffix = f" ({detail})" if detail else ""
+        chosen = configured_lemonade_url()
+        if chosen:
+            # A user-set URL may not be a Lemonade server at all.
+            label = _endpoint_label(chosen)
+            where = (
+                f"the model server at {label}"
+                if label
+                else "the configured model server"
+            )
+            return (
+                f"Memory is unavailable this session: {where} did not answer "
+                f"the embedding check at startup{detail_suffix}. Memory embeds "
+                f"on a Lemonade server, so check that {where} is one and is "
+                f"running, then restart the agent. {restart_note}"
+            )
         return (
             "Memory is unavailable this session: the Lemonade embedding service was "
             f"unreachable at startup{detail_suffix}. Start Lemonade Server, "
