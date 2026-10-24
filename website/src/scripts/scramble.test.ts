@@ -130,15 +130,17 @@ describe('eraAt', () => {
 
 describe('pickGlyph', () => {
   it('never shows the same glyph twice at once, nor a letter its previous glyph', () => {
-    const used = new Set<string>();
-    let previous: string | null = null;
-    // 17 letters on screen, the headline's count, all aiming at the same era.
-    for (let i = 0; i < 17; i++) {
-      const p = pickGlyph(WRITING_SYSTEMS, 3, used, previous, hash(i, 1));
-      expect(used.has(p.key)).toBe(false);
-      expect(p.key).not.toBe(previous);
-      used.add(p.key);
-      previous = p.key;
+    // 23 letters on screen, the headline's count, all aiming at the same era, over 50 ticks.
+    const previous: Array<string | null> = Array(23).fill(null);
+    for (let tick = 0; tick < 50; tick++) {
+      const used = new Set<string>();
+      previous.forEach((prev, letter) => {
+        const p = pickGlyph(WRITING_SYSTEMS, 3, used, prev, hash(letter, tick));
+        expect(used.has(p.key)).toBe(false);
+        expect(p.key).not.toBe(prev);
+        used.add(p.key);
+        previous[letter] = p.key;
+      });
     }
   });
 

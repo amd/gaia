@@ -16,7 +16,7 @@
 import { WRITING_SYSTEMS, type ScriptGlyph } from '../data/scramble-scripts';
 import { ARRIVE_S, CRUISE, WARP, starFieldMounted, warpElapsed, warpSpeed, warpTravelled } from './starfield';
 
-/** The tuning chosen on the review page. */
+/** Timing and jitter of the scramble. */
 export const SCRAMBLE = {
   /** How long a glyph shows at full warp; it lengthens as the stars slow. */
   glyphMs: 72,
@@ -75,7 +75,14 @@ export function pickGlyph(
   throw new Error(`[scramble] no free glyph: ${used.size} on screen across ${n} writing systems.`);
 }
 
-const glyphHTML = (g: ScriptGlyph): string => g.svg ?? `<span class="g-scr-char">${g.char}</span>`;
+/** A glyph as nodes: a drawing for the Ice Age signs, text (never markup) for a character. */
+function glyphNode(g: ScriptGlyph): Node {
+  if (g.svg) return document.createRange().createContextualFragment(g.svg);
+  const span = document.createElement('span');
+  span.className = 'g-scr-char';
+  span.textContent = g.char ?? '';
+  return span;
+}
 
 interface Letter {
   slot: HTMLElement;
@@ -209,7 +216,7 @@ export function mountScramble(lines: HTMLElement[]): () => void {
       if (chaos > 0) {
         inner.style.transform = `translate(${(q * chaos * 0.18).toFixed(3)}em, ${(r * chaos * 0.14).toFixed(3)}em) rotate(${(r * chaos * 28).toFixed(1)}deg) scale(${(1 + q * chaos * 0.35).toFixed(2)})`;
       }
-      inner.innerHTML = glyphHTML(systems[pick.system].glyphs[pick.glyph]);
+      inner.replaceChildren(glyphNode(systems[pick.system].glyphs[pick.glyph]));
       l.overlay?.replaceChildren(inner);
     }
 

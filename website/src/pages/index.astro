@@ -195,6 +195,8 @@ const ARCHITECTURE = [
   title="GAIA — the open agent factory for AI PCs"
   description="GAIA is AMD's open-source agent factory. Install the GAIA agent to work over your files, data and code locally on your PC, or build your own agent harness with skills, evals and an auto-fix loop."
 >
+  <!-- The scramble's glyphs need this font from its first frame. -->
+  <link slot="head" rel="preload" href="/fonts/gaia-scripts.woff2" as="font" type="font/woff2" crossorigin />
   <Header />
   <main id="main-content">
     <!-- 1. Hero — what GAIA is, then the one install. -->
@@ -205,11 +207,7 @@ const ARCHITECTURE = [
         ))}
       </ul>
 
-      <!-- The visible lines resolve out of old writing systems on load
-           (src/scripts/scramble.ts); the label carries the real sentence so a
-           screen reader never hears them. Capitals are typed, not
-           text-transformed, so "PCs" keeps its lowercase s instead of
-           becoming "PCS". -->
+      <!-- Typed capitals keep "PCs" from becoming "PCS"; the label is what a screen reader hears. -->
       <h1 class="g-h-hero animate-g-rise mt-7 normal-case" style="animation-delay:0.15s" aria-label="The agent factory for AI PCs">
         <span aria-hidden="true" data-decode class="g-hero-lead block text-balance">THE AGENT FACTORY FOR</span>
         <span aria-hidden="true" data-decode class="g-hero-red block whitespace-nowrap text-g-brand">AI PCs</span>

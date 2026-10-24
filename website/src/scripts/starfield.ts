@@ -60,6 +60,10 @@ const SPIKE_MAG = 0.9; // magnitude above which a star shows diffraction spikes
 const STEER = 0.1; // how far the pointer moves the vanishing point
 const DIMMED = 0.35; // field strength once the hero has scrolled away
 const TWINKLERS = 150; // backdrop points redrawn each frame; the rest are baked
+const FADE_IN_S = 0.5; // a reborn star fades in rather than popping
+const STREAK_MAX = 2.2; // px: streaks stay long but thin, however near the star
+const GLOW_MAX = 28; // px
+const CRUISE_FRAME_MS = 1000 / 30; // once settled, the slow drift needs no more than this
 
 // Star colour by temperature, weighted roughly like a deep Hubble field.
 const TEMPS: Array<[string, number]> = [
@@ -79,6 +83,8 @@ const COLS = 5;
 const GALAXY_CELLS = 16;
 const CLUSTER_CELLS = [16, 17, 18];
 const EDGE_ON = new Set([2, 7, 8, 13, 15]); // seen edge-on: they rock instead of spin
+const FACE_ON = [...Array(GALAXY_CELLS).keys()].filter((c) => !EDGE_ON.has(c));
+const EDGE_ON_SHARE = 0.15; // small edge-on dust lanes read as scratches, so they are rare
 
 interface Kind {
   cells: number[];
@@ -103,6 +109,8 @@ interface Star {
   z: number;
   rgb: string;
   mag: number;
+  /** Seconds since it was (re)born, for the fade-in. */
+  age: number;
 }
 interface SpaceObject {
   kind: Kind;
@@ -228,10 +236,12 @@ export function mountStarField(canvas: HTMLCanvasElement, opts: StarFieldOptions
   const objects: SpaceObject[] = [];
   let specks: Speck[] = [];
   let motes: Mote[] = [];
+  let baked: Mote[] = [];
   let backdrop: HTMLCanvasElement | null = null;
 
-  const spawnStar = (s: Star, z: number): Star => {
+  const spawnStar = (s: Star, z: number, age = 0): Star => {
     s.z = z;
+    s.age = age;
     s.x = rnd(-1, 1) * z * spreadX;
     s.y = rnd(-1, 1) * z * spreadY;
     s.rgb = pickTemp();
@@ -240,7 +250,8 @@ export function mountStarField(canvas: HTMLCanvasElement, opts: StarFieldOptions
   };
 
   const spawnObject = (o: SpaceObject, kind: Kind, z: number): SpaceObject => {
-    const cell = kind.cells[Math.floor(Math.random() * kind.cells.length)];
+    const pool = kind === KINDS.galaxy && Math.random() >= EDGE_ON_SHARE ? FACE_ON : kind.cells;
+    const cell = pool[Math.floor(Math.random() * pool.length)];
     const edgeOn = kind === KINDS.galaxy && EDGE_ON.has(cell);
     o.kind = kind;
     o.cell = cell;
@@ -276,40 +287,43 @@ export function mountStarField(canvas: HTMLCanvasElement, opts: StarFieldOptions
       vy = ty;
     }
     const n = Math.min(1500, Math.round(((opts.density ?? 1000) * W * H) / (1440 * 900)));
-    while (stars.length < n) stars.push(spawnStar({ x: 0, y: 0, z: 0, rgb: '', mag: 0 }, NEAR + Math.random() * (DEPTH - NEAR)));
+    while (stars.length < n) stars.push(spawnStar({ x: 0, y: 0, z: 0, rgb: '', mag: 0, age: 0 }, rnd(NEAR, DEPTH), FADE_IN_S));
     stars.length = n;
     if (!objects.length) {
       for (const kind of Object.values(KINDS)) {
         for (let i = 0; i < kind.count; i++) objects.push(spawnObject({} as SpaceObject, kind, rnd(...kind.z)));
       }
     }
-    // A Hubble deep field behind everything: tiny, still galaxies.
-    specks = Array.from({ length: 16 }, () => ({
-      x: Math.random(),
-      y: Math.random(),
-      size: rnd(4, 11),
-      rot: Math.random() * Math.PI * 2,
-      alpha: rnd(0.15, 0.35),
-      cell: Math.floor(Math.random() * GALAXY_CELLS),
-    }));
-    // The infinitely distant backdrop never moves, so it is drawn once; only its
-    // brightest points are redrawn each frame, to twinkle.
-    const all = Array.from({ length: Math.round(n * 0.75) }, () => ({
-      x: Math.random(),
-      y: Math.random(),
-      r: rnd(0.3, 0.85),
-      alpha: 0.05 + Math.random() ** 3 * 0.3,
-      phase: Math.random() * Math.PI * 2,
-      rgb: pickTemp(),
-    })).sort((a, b) => b.alpha - a.alpha);
-    motes = all.slice(0, TWINKLERS);
+    // Placed once, in 0..1 of the screen, so a resize redraws them where they were.
+    if (!specks.length) {
+      // A Hubble deep field behind everything: tiny, still galaxies.
+      specks = Array.from({ length: 16 }, () => ({
+        x: Math.random(),
+        y: Math.random(),
+        size: rnd(4, 11),
+        rot: Math.random() * Math.PI * 2,
+        alpha: rnd(0.15, 0.35),
+        cell: Math.floor(Math.random() * GALAXY_CELLS),
+      }));
+      // The backdrop never moves, so it is baked; only its brightest points twinkle.
+      const all = Array.from({ length: Math.round(n * 0.75) }, () => ({
+        x: Math.random(),
+        y: Math.random(),
+        r: rnd(0.3, 0.85),
+        alpha: 0.05 + Math.random() ** 3 * 0.3,
+        phase: Math.random() * Math.PI * 2,
+        rgb: pickTemp(),
+      })).sort((a, b) => b.alpha - a.alpha);
+      motes = all.slice(0, TWINKLERS);
+      baked = all.slice(TWINKLERS);
+    }
     backdrop = document.createElement('canvas');
     backdrop.width = W * dpr;
     backdrop.height = H * dpr;
     const bg = backdrop.getContext('2d');
     if (!bg) throw new Error('[starfield] 2D canvas context is unavailable.');
     bg.scale(dpr, dpr);
-    for (const m of all.slice(TWINKLERS)) {
+    for (const m of baked) {
       bg.fillStyle = `rgba(${m.rgb},${m.alpha.toFixed(3)})`;
       bg.beginPath();
       bg.arc(m.x * W, m.y * H, m.r, 0, Math.PI * 2);
@@ -373,7 +387,6 @@ export function mountStarField(canvas: HTMLCanvasElement, opts: StarFieldOptions
       }
       // Galaxies and clusters, far to near; near ones smear along the line of flight at warp.
       ctx.globalCompositeOperation = 'screen';
-      objects.sort((a, b) => b.z - a.z);
       for (const o of objects) {
         const k = o.kind;
         if (moving()) {
@@ -414,22 +427,23 @@ export function mountStarField(canvas: HTMLCanvasElement, opts: StarFieldOptions
       ctx.globalCompositeOperation = 'lighter';
     }
 
-    // Stars, back to front.
-    stars.sort((a, b) => b.z - a.z);
+    // Stars. Additive blending, so draw order does not matter and nothing is sorted.
     ctx.lineCap = 'round';
     for (const s of stars) {
       s.z -= step;
+      if (moving()) s.age += dt;
       if (s.z <= NEAR) {
         spawnStar(s, DEPTH);
         continue;
       }
       const X = vx + (s.x / s.z) * F;
       const Y = vy + (s.y / s.z) * F;
+      // Reborn at the same depth, so the near field does not empty out after the warp.
       if (X < -80 || X > W + 80 || Y < -80 || Y > H + 80) {
-        spawnStar(s, DEPTH);
+        spawnStar(s, s.z);
         continue;
       }
-      const fadeIn = Math.min(1, (DEPTH - s.z) * 1.5); // appear softly at the far plane
+      const fadeIn = Math.min(1, (DEPTH - s.z) * 1.5, s.age / FADE_IN_S);
       const bright = Math.min(1, ((0.35 + s.mag) * 1.5) / (s.z * 0.55 + 0.2)) * fadeIn * strength;
       if (bright < 0.015) continue;
       const size = (0.45 + s.mag * 1.6) * Math.min(5, 1 / s.z);
@@ -445,13 +459,13 @@ export function mountStarField(canvas: HTMLCanvasElement, opts: StarFieldOptions
         ctx.strokeStyle = `rgb(${s.rgb})`;
         if (len > 20 && bright > 0.25) {
           ctx.globalAlpha = 0.2 * bright;
-          ctx.lineWidth = Math.max(2.5, size * 2.6);
+          ctx.lineWidth = Math.min(STREAK_MAX * 2.2, Math.max(2.5, size * 2.6));
           ctx.beginPath();
           ctx.moveTo(MX, MY);
           ctx.lineTo(X, Y);
           ctx.stroke();
         }
-        ctx.lineWidth = Math.max(0.9, size * 0.85);
+        ctx.lineWidth = Math.min(STREAK_MAX, Math.max(0.9, size * 0.85));
         ctx.globalAlpha = bright * 0.35;
         ctx.beginPath();
         ctx.moveTo(TX, TY);
@@ -463,12 +477,12 @@ export function mountStarField(canvas: HTMLCanvasElement, opts: StarFieldOptions
         ctx.lineTo(X, Y);
         ctx.stroke();
       }
-      const glow = size * (2.6 + s.mag * 4) * (1 - warp * 0.35);
+      const glow = Math.min(GLOW_MAX, size * (2.6 + s.mag * 4) * (1 - warp * 0.35));
       ctx.globalAlpha = bright;
       ctx.drawImage(sprite(s.rgb, false), X - glow / 2, Y - glow / 2, glow, glow);
       // Spikes read at rest; at warp the streak carries the motion instead.
       if (s.mag > SPIKE_MAG && warp < 0.5) {
-        const sp = size * (8 + s.mag * 8);
+        const sp = Math.min(GLOW_MAX * 3, size * (8 + s.mag * 8));
         ctx.globalAlpha = bright * (1 - warp * 2);
         ctx.drawImage(sprite(s.rgb, true), X - sp / 2, Y - sp / 2, sp, sp);
       }
@@ -487,6 +501,10 @@ export function mountStarField(canvas: HTMLCanvasElement, opts: StarFieldOptions
   };
 
   const frame = (now: number) => {
+    if (elapsed >= ARRIVE_S && boost < 0.02 && now - last < CRUISE_FRAME_MS) {
+      raf = requestAnimationFrame(frame);
+      return;
+    }
     const dt = Math.min(now - last, 60) / 1000;
     last = now;
     draw(dt, now);
@@ -499,7 +517,7 @@ export function mountStarField(canvas: HTMLCanvasElement, opts: StarFieldOptions
     raf = requestAnimationFrame(frame);
   };
 
-  const still = () => draw(0, performance.now());
+  const still = () => draw(0, 0);
 
   // A still field has no loop to pick up the dimming, so scrolling redraws it —
   // at most once per frame, however many scroll events arrive.

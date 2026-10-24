@@ -15,9 +15,8 @@
 @tailwind base;
 @tailwind components;
 
-/* The writing systems the headline scramble passes through: a subset of the
-   Noto fonts (SIL OFL 1.1, public/fonts/OFL.txt) holding only the characters
-   in src/data/scramble-scripts.ts, merged into one 15 KB file. */
+/* The scramble's writing systems: a Noto subset (SIL OFL 1.1, public/fonts/OFL.txt).
+   Rebuild with tools/subset-scripts-font.py after changing a character. */
 @font-face {
   font-family: 'GAIA Scripts';
   src: url('/fonts/gaia-scripts.woff2') format('woff2');
@@ -226,13 +225,11 @@
     transform: none;
   }
 
-  /* The one red phrase in the hero: a size up from its line, with a soft glow
-     that slowly brightens and dims. */
+  /* The hero's red phrase: a size up from its line, with a slow glow. */
   .g-hero-lead {
     font-size: var(--g-hero-lead, 1em);
   }
-  /* From sm up, the lead line fits on one line: it runs 8.34em wide in
-     Antonio, and the column is at most 1200px less the 28px gutters. */
+  /* From sm up the lead line stays on one line: it is 8.34em wide in Antonio. */
   @media (min-width: 640px) {
     .g-hero-lead,
     .g-hero-red {
@@ -256,9 +253,7 @@
     .g-hero-red { animation: none; }
   }
 
-  /* The headline scramble (src/scripts/scramble.ts). Each letter keeps its
-     place in the line while a glyph from an old writing system sits over it,
-     so nothing reflows as the glyphs change width. */
+  /* The headline scramble (scramble.ts): a glyph sits over each letter, which keeps its place. */
   .g-scr-word {
     white-space: nowrap;
   }
