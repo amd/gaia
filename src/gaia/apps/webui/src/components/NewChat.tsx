@@ -197,20 +197,21 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
     const sendingRef = useRef(false);
     // Sent while the chat was still being created: they wait in its queue, never dropped.
     const heldRef = useRef<string[]>([]);
-    const send = useCallback(async (message: string) => {
+    const send = useCallback(async (message: string, draft = '') => {
         if (!message) return;
         if (sendingRef.current) {
-            heldRef.current.push(message);
+            // As typed: the attachments still belong to the first message.
+            heldRef.current.push(draft || message);
             setText('');
-            attachments.clear();
             return;
         }
         sendingRef.current = true;
         setSending(true);
         setError(null);
+        // Cleared now, so anything typed while the chat is created is a new message.
+        setText('');
         try {
             await onSend(message);
-            setText('');
             attachments.clear();
             const held = heldRef.current.splice(0);
             const sessionId = useChatStore.getState().currentSessionId;
@@ -221,7 +222,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         } catch (err) {
             // Nothing was sent, so every message goes back in the box.
             const held = heldRef.current.splice(0);
-            if (held.length > 0) setText([message, ...held].join('\n\n'));
+            setText([draft || message, ...held].join('\n\n'));
             setError(err instanceof Error ? err.message : String(err));
         } finally {
             sendingRef.current = false;
@@ -229,7 +230,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         }
     }, [attachments, onSend]);
 
-    const submit = useCallback(() => send(attachments.compose(text.trim())), [attachments, send, text]);
+    const submit = useCallback(() => send(attachments.compose(text.trim()), text.trim()), [attachments, send, text]);
 
     useEffect(() => {
         if (focusRequest) inputRef.current?.focus();

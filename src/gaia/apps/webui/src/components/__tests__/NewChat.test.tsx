@@ -132,6 +132,8 @@ describe('NewChat while the chat is being created (#5712)', () => {
         const box = screen.getByLabelText('Message');
         fireEvent.change(box, { target: { value: 'first' } });
         fireEvent.keyDown(box, { key: 'Enter' });
+        // Cleared at once, so what is typed next is its own message.
+        expect(box).toHaveValue('');
         expect(box).toBeEnabled();
         fireEvent.change(box, { target: { value: 'second' } });
         fireEvent.keyDown(box, { key: 'Enter' });
