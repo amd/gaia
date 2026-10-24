@@ -332,6 +332,11 @@
     background: var(--accent-dim);
 }
 
+.provider-tab.is-disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .provider-tab-dot {
     width: 7px;
     height: 7px;

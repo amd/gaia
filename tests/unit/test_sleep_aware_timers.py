@@ -27,8 +27,8 @@ EIGHT_HOURS = 8 * 60 * 60.0
 
 
 class _Clock:
-    def __init__(self):
-        self.now = 1000.0
+    def __init__(self, now=1000.0):
+        self.now = now
         self._lock = threading.Lock()
 
     def __call__(self):
@@ -44,7 +44,8 @@ class SleepingPC:
     """``time.monotonic`` as Windows has it (counts sleep), and the awake clock."""
 
     def __init__(self):
-        self.monotonic = _Clock()
+        # Different origins, so code reading the wrong clock for a limit shows.
+        self.monotonic = _Clock(50_000.0)
         self.awake = _Clock()
 
     def sleep(self, seconds):
@@ -292,3 +293,83 @@ def test_a_tool_that_overruns_while_awake_is_still_timed_out(pc):
             Agent._call_tool_bounded(_Host(), stuck_tool, {}, "stuck_tool")
     finally:
         release.set()
+
+
+def test_a_sleep_during_a_prompt_does_not_hide_a_hung_tool(pc):
+    """The prompt's wait is timed on the awake clock too.
+
+    Timed on a clock that counts sleep, an S3 sleep while the question is on
+    screen would come off the limit twice, and the tool would hang unnoticed
+    for that long after the answer.
+    """
+    from gaia.agents.base.agent import _TOOL_USER_WAIT, Agent, ToolExecutionTimeout
+
+    class _Host:
+        def _bounded_tool_timeout(self, _name, _args):
+            return 5.0
+
+    asked, answered, release = threading.Event(), threading.Event(), threading.Event()
+
+    def asks_then_hangs():
+        wait = _TOOL_USER_WAIT.get()
+        wait.begin()
+        asked.set()
+        assert answered.wait(10)
+        wait.end()
+        release.wait(10)  # hangs after the answer
+
+    def user_and_pc():
+        assert asked.wait(5)
+        time.sleep(0.2)
+        pc.run(1.0)  # the user reads the question
+        pc.sleep(EIGHT_HOURS)  # the PC sleeps with it on screen
+        pc.run(1.0)
+        answered.set()
+        time.sleep(0.3)  # the tool has the answer and hangs
+        pc.run(6.0)  # past 5 s of tool time, beyond the 2 s spent answering
+
+    helper = threading.Thread(target=user_and_pc)
+    helper.start()
+    began = time.perf_counter()
+    try:
+        with pytest.raises(ToolExecutionTimeout):
+            Agent._call_tool_bounded(_Host(), asks_then_hangs, {}, "asks_then_hangs")
+        assert time.perf_counter() - began < 5.0
+    finally:
+        release.set()
+        answered.set()
+        helper.join()
+
+
+def test_a_tool_whose_clock_fails_is_cancelled_not_left_running(monkeypatch):
+    """A broken awake clock fails the call; the tool body must be told to stop."""
+    from gaia.agents.base.agent import Agent
+    from gaia.tool_cancellation import tool_cancelled
+
+    class _Host:
+        def _bounded_tool_timeout(self, _name, _args):
+            return 180.0
+
+    reads = []
+
+    def failing_clock():
+        reads.append(1)
+        if len(reads) > 1:
+            raise awake_clock.AwakeClockError("Windows refused the clock")
+        return 1000.0
+
+    monkeypatch.setattr(awake_clock, "monotonic", failing_clock)
+    started, told_to_stop = threading.Event(), threading.Event()
+
+    def polite_tool():
+        started.set()
+        for _ in range(100):
+            if tool_cancelled():
+                told_to_stop.set()
+                return
+            time.sleep(0.05)
+
+    with pytest.raises(awake_clock.AwakeClockError):
+        Agent._call_tool_bounded(_Host(), polite_tool, {}, "polite_tool")
+    assert started.wait(5)
+    assert told_to_stop.wait(5)

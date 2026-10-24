@@ -108,7 +108,7 @@ class TestCreateSchedule:
             json={"name": "bad", "interval": "whenever", "prompt": "Prompt"},
         )
         assert resp.status_code == 400
-        assert "Cannot parse interval" in resp.json()["detail"]
+        assert "couldn't read 'whenever'" in resp.json()["detail"]
 
     def test_create_missing_fields(self, client):
         resp = client.post("/api/schedules", json={"name": "incomplete"})
@@ -143,6 +143,33 @@ class TestListSchedules:
         assert data["total"] == 2
         names = {s["name"] for s in data["schedules"]}
         assert names == {"task-a", "task-b"}
+
+    @pytest.mark.parametrize(
+        "phrase",
+        ["every weekday at 8am", "every 30m", "every hour from 8am to 6pm on weekdays"],
+    )
+    def test_list_describes_schedule_like_the_preview(self, client, phrase):
+        preview = client.post("/api/schedules/parse", json={"input": phrase}).json()
+        client.post(
+            "/api/schedules",
+            json={"name": "described", "interval": phrase, "prompt": "P"},
+        )
+        [row] = client.get("/api/schedules").json()["schedules"]
+        assert row["description"] == preview["description"]
+
+    def test_weekday_schedule_is_not_described_as_daily(self, client):
+        client.post(
+            "/api/schedules",
+            json={"name": "brief", "interval": "every weekday at 8am", "prompt": "P"},
+        )
+        [row] = client.get("/api/schedules").json()["schedules"]
+        assert row["description"] == "Weekdays at 8:00 AM"
+
+    def test_interval_only_row_says_how_often(self):
+        from gaia.ui.scheduler import ScheduledTask
+
+        task = ScheduledTask("id", "legacy", 86400, "P", schedule_config=None)
+        assert task.to_dict()["description"] == "Every day"
 
 
 # ── GET /api/schedules/{name} tests ──────────────────────────────────────────

@@ -20,6 +20,47 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Dict, FrozenSet, Mapping, Optional, Tuple
 
+from gaia.config import gaia_agents_dir
+from gaia.daemon import paths as daemon_paths
+from gaia.daemon.sidecars.errors import (
+    KIND_CAPACITY,
+    KIND_MODE_CONFLICT,
+    KIND_NOT_INSTALLED,
+    KIND_OUT_OF_DATE,
+    KIND_SERVICE_OUTDATED,
+    KIND_SERVICE_UNREACHABLE,
+)
+
+#: What to tell the user when the agent can't start for a reason of GAIA's own,
+#: not the agent's, keyed by :attr:`SidecarError.kind`. These name GAIA's
+#: service log, because the agent never ran and its own log says nothing.
+_SERVICE_START_FAILED_MESSAGES: Mapping[str, str] = MappingProxyType(
+    {
+        KIND_CAPACITY: (
+            "GAIA is already running as many agents as it can at once, so it "
+            "couldn't start another one. Restart your PC to stop them, then send "
+            "your message again."
+        ),
+        KIND_MODE_CONFLICT: (
+            "GAIA's agent is already running from another copy of GAIA on this "
+            "PC. Close that copy, or restart your PC, then send your message again."
+        ),
+        KIND_NOT_INSTALLED: (
+            "This agent isn't installed with your copy of GAIA. Update GAIA to "
+            "the latest version or reinstall it, then send your message again."
+        ),
+        KIND_SERVICE_UNREACHABLE: (
+            "GAIA's background service isn't responding, so the agent couldn't "
+            "start. Restart GAIA, then send your message again. If it still "
+            "fails, restart your PC."
+        ),
+        KIND_SERVICE_OUTDATED: (
+            "GAIA's background service is from a different version of GAIA than "
+            "this app. Update GAIA to the latest version, then restart your PC."
+        ),
+    }
+)
+
 
 @dataclass(frozen=True)
 class RelayProfile:
@@ -30,7 +71,7 @@ class RelayProfile:
     #: agent isn't ready yet"). Lower-case except for proper nouns.
     display_name: str
     #: Terminal error when the stream closes without a ``final``/``error``.
-    #: Per-agent so it names the log the reader should actually open.
+    #: Shown through :meth:`stream_ended_text`, which adds the log folder.
     stream_ended_message: str
     #: Contract floor, as ``(major, minor)``. A sidecar below this 404s or
     #: mis-speaks the relay's request shape, so it is refused BEFORE the first
@@ -124,6 +165,42 @@ class RelayProfile:
     #: Contract version from which ``/query`` takes ``changes_turn_id`` and
     #: records the run's file changes for undo. ``None`` means never sent.
     min_changes_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes ``surface``, the front-end
+    #: the turn comes from. ``None`` means the relay never sends it.
+    min_surface_api_version: Optional[Tuple[int, int]] = None
+    #: Shown when the agent itself fails to start (it crashed or never got
+    #: healthy). Shown through :meth:`start_failed_text`, which adds the log folder.
+    start_failed_message: str = ""
+
+    def stream_ended_text(self) -> str:
+        """:attr:`stream_ended_message`, plus the agent's log folder once it exists."""
+        return self._with_log_folder(self.stream_ended_message)
+
+    def start_failed_text(self, kind: str = "") -> str:
+        """What to tell the user when the agent can't start, for failure *kind*.
+
+        *kind* is a :attr:`SidecarError.kind`. A crash, or a kind with no
+        specific next step, gets :attr:`start_failed_message` and the agent's
+        log folder.
+        """
+        if kind == KIND_OUT_OF_DATE:
+            return self.version_upgrade_message
+        message = _SERVICE_START_FAILED_MESSAGES.get(kind)
+        if message is None:
+            return self._with_log_folder(self.start_failed_message)
+        log_path = daemon_paths.log_path()
+        if not log_path.is_file():
+            return message
+        return f"{message} The details are in this log: {log_path}"
+
+    def _with_log_folder(self, message: str) -> str:
+        # Resolved per call so it names the real folder under the current GAIA home.
+        if not self.agent_id:
+            return message
+        log_dir = gaia_agents_dir() / self.agent_id / "logs"
+        if not log_dir.is_dir():
+            return message
+        return f"{message} The details are in this log folder: {log_dir}"
 
 
 # --- email ------------------------------------------------------------------
@@ -227,12 +304,17 @@ EMAIL_PROFILE = RelayProfile(
     # daemon's MAJOR-only handshake and then 404s every call.
     min_api_version=(2, 4),
     stream_ended_message=(
-        "Email agent stream ended unexpectedly (the sidecar may have "
-        "crashed). Check the sidecar log under ~/.gaia/logs/ and retry."
+        "The email agent stopped unexpectedly while working. Anything it had "
+        "already written is kept above. Send your message again."
+    ),
+    start_failed_message=(
+        "The email agent couldn't start. Send your message again. If this keeps "
+        "happening, restart GAIA. If it still fails, update GAIA to the latest "
+        "version or reinstall it."
     ),
     version_upgrade_message=(
-        "The installed email agent doesn't support chat queries (needs contract "
-        "2.4+). Update it from the Hub and retry."
+        "The email agent is out of date and can't answer chat messages. Update "
+        "GAIA and the email agent to the latest version, then try again."
     ),
     tool_labels=MappingProxyType(_EMAIL_TOOL_LABELS),
     mutating_tools=_EMAIL_MUTATING_TOOLS,
@@ -404,12 +486,17 @@ GAIA_PROFILE = RelayProfile(
     # exists — it guards a downgrade, not a supported install.
     min_api_version=(2, 12),
     stream_ended_message=(
-        "GAIA agent stream ended unexpectedly (the sidecar may have "
-        "crashed). Check the sidecar log under ~/.gaia/logs/ and retry."
+        "GAIA stopped unexpectedly while answering. Anything it had already "
+        "written is kept above. Send your message again."
+    ),
+    start_failed_message=(
+        "GAIA couldn't start its agent. Send your message again. If this keeps "
+        "happening, restart GAIA. If it still fails, update GAIA to the latest "
+        "version or reinstall it."
     ),
     version_upgrade_message=(
-        "The installed GAIA agent is too old for the Agent UI (needs contract "
-        "2.12+). Update it from the Hub and retry."
+        "GAIA's agent is out of date and can't answer here. Update GAIA to the "
+        "latest version, then try again."
     ),
     tool_labels=MappingProxyType(_GAIA_TOOL_LABELS),
     mutating_tools=_GAIA_MUTATING_TOOLS,
@@ -428,27 +515,29 @@ GAIA_PROFILE = RelayProfile(
     min_documents_api_version=(2, 16),
     documents_upgrade_message=(
         "This chat has attached documents, but the installed GAIA agent can't "
-        "read them (needs contract 2.16+). Update the GAIA agent from the Hub, "
-        "or remove the documents from this chat, then retry."
+        "read them. Update GAIA to the latest version, or remove the documents "
+        "from this chat, then try again."
     ),
     # 2.17 added GET /skills.
     min_skills_api_version=(2, 17),
     # 2.18 added /query's allowed_paths field.
     min_scope_api_version=(2, 18),
     skills_upgrade_message=(
-        "The installed GAIA agent is too old to list its skills here (needs "
-        "contract 2.17+). Update the GAIA agent from the Hub, then reopen this "
-        "page. Its skills still work in chat."
+        "The installed GAIA agent is too old to list its skills here. Update "
+        "GAIA to the latest version, then reopen this page. Its skills still "
+        "work in chat."
     ),
     # 2.18 added /query's memory field.
     min_memory_api_version=(2, 18),
     memory_upgrade_message=(
         "Memory is off for this chat, but the installed GAIA agent can't be "
-        "told so and would save to memory (needs contract 2.18+). Update the "
-        "GAIA agent from the Hub and retry, or turn memory back on for this chat."
+        "told so and would save to memory. Update GAIA to the latest version, "
+        "then try again, or turn memory back on for this chat."
     ),
     # 2.19 added /query's changes_turn_id field.
     min_changes_api_version=(2, 19),
+    # 2.20 added /query's surface field.
+    min_surface_api_version=(2, 20),
 )
 
 
@@ -551,6 +640,15 @@ def changes_supported(profile: RelayProfile, api_version: Optional[str]) -> bool
     Same evidence rule as :func:`api_version_supported`: no version, no claim.
     """
     floor = profile.min_changes_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def surface_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``surface`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_surface_api_version
     return floor is not None and _meets(api_version, floor)
 
 

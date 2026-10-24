@@ -86,7 +86,9 @@ from gaia.chat.sdk import AgentSDK, LLMCallCancelled
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
+    _endpoint_label,
     backend_crash_remedy,
+    configured_lemonade_url,
 )
 
 if TYPE_CHECKING:
@@ -329,6 +331,53 @@ EXTRACTION_TOOL_RECORD_DETAIL_CHARS = 2000
 #: or material the turn read, neither of which is about the user.
 _EXTRACTION_GROUNDS = frozenset({"user"})
 
+#: First words of a question that asks for information. "How about Friday?"
+#: and "What about Friday?" propose something, so they are not among them.
+_INFO_QUESTION_OPENERS = frozenset(
+    "what what's whats where where's when who who's whom whose which why how "
+    "how's".split()
+)
+_FIRST_PERSON_SINGULAR = frozenset("i i'm im i've i'd i'll me my mine myself".split())
+
+
+def _user_statements(text: str) -> str:
+    """*text* without the questions that only ask for information.
+
+    "Where are the spare keys kept?" names the keys but says nothing about the
+    asker, so its words must not vouch for the answer as a fact about them. A
+    question in the first person ("what should I cook?") is kept.
+    """
+    kept = []
+    for sentence in re.split(r"(?<=[.?!])\s+|\n+", text.replace("’", "'")):
+        words = re.findall(r"[a-z']+", sentence.lower())
+        asks = (
+            sentence.rstrip().endswith("?")
+            and words
+            and words[0] in _INFO_QUESTION_OPENERS
+            and words[1:2] != ["about"]
+            and not _FIRST_PERSON_SINGULAR.intersection(words)
+        )
+        if not asks:
+            kept.append(sentence)
+    return " ".join(kept)
+
+
+def _lifted_from_tools(
+    content: str, user_input: str, tool_text: str, prior: str = ""
+) -> bool:
+    """Whether a proposed memory carries details only a tool result supplied.
+
+    A document's figures and names ("Desk 17C", "8,610 units") pass the
+    answer-based check when the user's question already names the subject.
+    Two such words, or one with a digit, mark the memory as the tool's.
+    """
+    if not tool_text:
+        return False
+    lifted = (
+        content_stems(content) - content_stems(prior) - content_stems(user_input)
+    ) & content_stems(tool_text)
+    return len(lifted) >= 2 or any(ch.isdigit() for word in lifted for ch in word)
+
 
 def _copied_from_material(
     content: str, user_input: str, material: str, prior: str = ""
@@ -347,9 +396,12 @@ def _copied_from_material(
     side: an answer that echoes it back ("I moved your dentist appointment to
     Friday") does not make a short correction look borrowed, and a borrowed
     addition to it still has to rest on the user's own words.
+
+    Only the user's statements count as their words: an information question
+    is answered by the material, not by the user (``_user_statements``).
     """
     words = content_stems(content) - content_stems(prior)
-    from_user = words & content_stems(user_input)
+    from_user = words & content_stems(_user_statements(user_input))
     from_material = (words - from_user) & content_stems(material)
     return len(from_material) >= 2 and (
         len(from_user) <= 1 or len(from_material) > 2 * len(from_user)
@@ -1214,6 +1266,21 @@ class MemoryMixin(ProceduralMemoryMixin):
         # behavior for anything we can't positively identify).
         detail = getattr(self, "_memory_unavailable_detail", None)
         detail_suffix = f" ({detail})" if detail else ""
+        chosen = configured_lemonade_url()
+        if chosen:
+            # A user-set URL may not be a Lemonade server at all.
+            label = _endpoint_label(chosen)
+            where = (
+                f"the model server at {label}"
+                if label
+                else "the configured model server"
+            )
+            return (
+                f"Memory is unavailable this session: {where} did not answer "
+                f"the embedding check at startup{detail_suffix}. Memory embeds "
+                f"on a Lemonade server, so check that {where} is one and is "
+                f"running, then restart the agent. {restart_note}"
+            )
         return (
             "Memory is unavailable this session: the Lemonade embedding service was "
             f"unreachable at startup{detail_suffix}. Start Lemonade Server, "
@@ -1889,9 +1956,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             assistant_response=assistant_response[:2000],
             now=datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M (%A)"),
         )
-        material = "\n".join(
-            [assistant_response] + [entry["text"] for entry in tool_record or []]
-        )
+        tool_text = "\n".join(entry["text"] for entry in tool_record or [])
+        material = "\n".join([assistant_response, tool_text])
 
         # Bound before the call: requests' JSONDecodeError subclasses the stdlib
         # one, so a truncated response body reaches the handler below without
@@ -2022,6 +2088,15 @@ class MemoryMixin(ProceduralMemoryMixin):
                     logger.info(
                         "[MemoryMixin] not stored: proposed memory restates what "
                         "this turn read, not what the user said: %s",
+                        str(op.get("content", ""))[:80],
+                    )
+                    continue
+                if op_type in ("add", "update") and _lifted_from_tools(
+                    str(op.get("content", "")), user_input, tool_text, prior
+                ):
+                    logger.info(
+                        "[MemoryMixin] not stored: proposed memory carries details "
+                        "from this turn's tool results, not the user: %s",
                         str(op.get("content", ""))[:80],
                     )
                     continue

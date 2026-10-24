@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.19"`                  |
+| Contract version   | `API_VERSION = "2.20"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -286,7 +286,8 @@ checked for drift in CI — the same pattern as the email agent's own
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
-`documents`, `allowed_paths`, `memory`, `changes_turn_id`) is optional.
+`documents`, `allowed_paths`, `memory`, `changes_turn_id`, `surface`) is
+optional.
 
 `documents` (contract ≥ 2.16) carries the absolute paths of the files the user
 attached to the conversation. Send the whole set on every turn. Before the turn
@@ -304,7 +305,10 @@ entry it lacks and drops none until the session ends — neither what the user
 granted mid-chat nor an entry the caller has since stopped sending. `GAIA_ALLOWED_PATHS`
 still narrows it, and a path outside it is asked about, never silently
 granted. Omit it for the agent's default scope. Pre-2.18 binaries `422` the
-field.
+field. Whatever the scope, its existing folders are named in the system prompt
+once, when the session is built, with GAIA's documents folder first; a folder
+added to a retained session later is usable but not named. A caller that omits
+the field, like the TUI, gets the default scope (the user's home folder) named.
 
 `memory` (contract ≥ 2.18) is `"on"`, `"private"` (a private chat) or `"off"`
 (memory turned off in the caller's settings). Under `"private"` or `"off"` the
@@ -327,6 +331,18 @@ is a `422`. Work the agent cannot copy, such as a shell command, is noted in
 the turn as untracked. Omit the field to record nothing. Pre-2.19 binaries
 `422` it.
 
+`surface` (contract ≥ 2.20) is the front-end the turn comes from: `"agent_ui"`,
+`"tui"` or `"cli"`. With `"agent_ui"` the agent points recurring requests at the
+Agent UI's **Scheduled tasks** page instead of saying it cannot schedule. It is
+read when a session is built and kept for that session. It also picks where a
+model-provider error tells the user to fix it: each front-end gets its own
+settings screen, and a headless caller, which omits it, is pointed at the model
+server the GAIA host uses (`LEMONADE_BASE_URL`). A failed model request also
+names the `host:port` it went through; on a base URL the user set, a local
+model's failure reads "the model server at `host:port`", not "Lemonade on this
+machine". Pre-2.20 binaries `422` the field and word every such error for the
+TUI.
+
 ```json
 {
   "query": "What's in this directory?",
@@ -336,6 +352,20 @@ the turn as untracked. Omit the field to record nothing. Pre-2.19 binaries
   "can_answer_questions": true
 }
 ```
+
+#### `needs_confirmation` arguments
+
+A `needs_confirmation` event carries the gated call in `args`: exactly the
+arguments the model sent, each value capped at 64,000 characters with a note
+saying how much was cut, and `args_truncated: true` when any was. `summary`
+shortens long code, so show `args` when the user should read all of it; a
+policy client matches its rules on `args` and should not auto-approve a call
+with `args_truncated`. The agent never adds a key to `args`. What it adds to
+its own prompt is in `prompt_context`: `working_directory` (where a shell call
+runs, when the model's arguments don't say it) and `risk_note` (why the
+agent's checks don't cover the call, which is then approved once). A prompt
+the agent raises on its own, such as `allow_path_access`, has the path it asks
+about in `args`.
 
 `/health` is liveness only. It says nothing about whether Lemonade is up or a
 model is loaded — `/v1/gaia/init` answers that.
@@ -355,6 +385,13 @@ roots the agent does — its bundled skills, `~/.gaia/skills`, Claude Code skill
 folders — so a host without the Python package (the bundled skills live inside
 the binary) can still show them. A skill root that cannot be read is a `500`
 naming it.
+
+`/query` streams the answer as `token` events before its terminal `final`. A
+run cancelled mid-answer (`/cancel`, or a dropped connection) ends with an
+empty `final` and sends no `token` after the cancel, so a host keeps the text
+the `token` events already delivered. Answer text the model produced but the
+stream had not yet sent when the cancel landed is discarded with the
+half-written tail.
 
 ### 5.2 `session_id` and agent retention
 
@@ -550,7 +587,10 @@ arbitrary code execution in the working directory, which is why it exists only
 on this transport: one local parent process on a private pipe. It is **not**
 reachable over HTTP, and the request body cannot ask for it —
 `POST /v1/gaia/sessions/{id}/bypass` stops an HTTP session's approval prompts
-but never lifts these shell gates. `rm` is excluded
+but never lifts these shell gates. A command those gates hold is never run
+unasked there: on a run someone can answer it still emits `needs_confirmation`
+and waits for `/tool_decision`, and on a run nobody can answer it is refused.
+`rm` is excluded
 from the developer set — not a boundary, since anything in the set can delete a
 file, but a tripwire against an accidental recursive delete. Redirection has one
 exception: a command that is nothing but a skill-granted CLI runs argv-only

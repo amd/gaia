@@ -12,9 +12,12 @@ the running agent is asked instead.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["skills"])
 
@@ -49,6 +52,11 @@ def _skills_from_agent() -> Dict[str, Any]:
             detail=f"The GAIA agent could not be started to list its skills: {e}",
         ) from e
     if not skills_supported(GAIA_PROFILE, handle.api_version):
+        logger.warning(
+            "GAIA agent at contract %s can't list skills (needs %s)",
+            handle.api_version,
+            GAIA_PROFILE.min_skills_api_version,
+        )
         raise HTTPException(status_code=503, detail=GAIA_PROFILE.skills_upgrade_message)
     try:
         return handle.proxy().skills()
