@@ -162,6 +162,8 @@ class PreflightReport(BaseModel):
     # ``compatible`` is False only when there is a hard blocker (e.g. no disk).
     compatible: bool = True
     blockers: List[str] = Field(default_factory=list)
+    # The disk entry of ``blockers``: an estimate setup replaces with its plan.
+    disk_blocker: Optional[str] = None
     warnings: List[str] = Field(default_factory=list)
 
 
@@ -220,6 +222,7 @@ async def onboarding_preflight() -> PreflightReport:
         required_memory_gb=_RECOMMENDED_MEMORY_GB,
         compatible=report.compatible,
         blockers=list(report.blockers),
+        disk_blocker=report.disk_blocker,
         warnings=list(report.warnings),
     )
 

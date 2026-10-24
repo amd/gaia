@@ -242,9 +242,9 @@ gaia init [OPTIONS]
 | `--skip-chat-model` | flag | false | Skip the profile's chat LLM but still install Lemonade and any embedding model the profile needs — for a session backed by a remote LLM (e.g. the Go TUI's `--use-claude`) that never calls the local chat model but still needs Lemonade for RAG/memory embeddings |
 | `--check` | flag | false | Report whether the profile is already set up and exit — no install, no download. A stopped GAIA Lemonade Server is started through the GAIA daemon (started too if needed), as any GAIA command would. Exit code `0` means ready, `1` means `gaia init` still has work to do. Used by the Go TUI's first-boot check and `/setup` command |
 | `--load` | flag | false | With `--check`: once everything is downloaded, load each model once — the chat model at its context size, the embedding model with a one-word embedding — so "downloaded but will not load" is caught before first use. Exit code `3` means a downloaded model would not load; re-running setup will not fix that. Used by the Go TUI's readiness gate |
-| `--chat-model` | string | — | With `--check`: the local chat model to check instead of the profile default |
+| `--chat-model` | string | — | With `--check`: the local chat model to check instead of the profile default. Without `--check`: the chat model to set up, as a setup screen showed it (one of setup's chat models, or your `default_model`). Setup uses it even if free memory has moved since, and refuses it, naming why, when it no longer fits |
 | `--json` | flag | false | With `--check`: print the result as one JSON object — `ready`, `stage` (`setup` or `load`), `reasons`, and per-model `id`, `role`, `size_gb`, `loaded`, `error` |
-| `--progress-json` | flag | false | Also print setup steps and model download progress as one JSON object per line on stdout, for a tool that shows it (the desktop app's installer). Human output still prints around them. See [Progress events](#progress-events) |
+| `--progress-json` | flag | false | Also print setup steps, the chat model choice and model download progress as one JSON object per line on stdout, for a program that drives setup (the Agent UI's setup screen). Human output still prints around them. See [Progress events](#progress-events) |
 
 **Available Profiles:**
 
@@ -296,8 +296,11 @@ not such an object, and any `event` you don't know.
 | `event` | Fields | When |
 |---------|--------|------|
 | `step` | `step`, `total`, `message` | A setup step starts |
+| `chat_model` | `model`, `user_set`, `skipped` (`id`, `reason` for each larger model passed over) | The chat model is chosen |
 | `plan` | `models` (`id`, `bytes_total` or `null` when unknown, `downloaded`), `bytes_total` (what is left to download), `disk_free_bytes` (`null` when Lemonade does not report it) | Before the downloads |
+| `downloads` | `models` (`id`, `size_gb`), `total_gb` | Right after `plan` |
 | `progress` | `model`, `index`, `count`, `bytes_done`, `bytes_total`, `speed_bps` | During a model's download, at most twice a second |
+| `download` | `model`, `bytes_done`, `bytes_total` (`null` when the server reports none), `speed_bps` (0 until measured and after 10 s without new bytes) | During a model's download, at most five times a second |
 | `model_done` | `model`, `downloaded` (`false` when it was already on disk) | A model is ready |
 | `done` | `ok` | The downloads finished, or one failed |
 | `error` | `message`, and `model` when one model failed | Something stopped setup |

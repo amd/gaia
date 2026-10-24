@@ -3,9 +3,8 @@
 
 /**
  * Source-level contract for main.cjs (it cannot be required without
- * Electron): the install-time "Lemonade Server found" question is modal to
- * the progress window and brought to the front, so it can't open hidden
- * behind other windows while the install waits on it.
+ * Electron): its dialogs have an owner window and a title, so they can't open
+ * hidden behind other windows or named after a blob: URL.
  */
 
 const fs = require("fs");
@@ -39,23 +38,4 @@ test("the will-download listener is added once, not on every window reopen", () 
 test("the backend-crash dialog is shown with the main window as its owner", () => {
   const fn = body("handleBackendCrash");
   expect(fn).toMatch(/showBackendCrashDialog\(\{[\s\S]*parent: mainWindow/);
-});
-
-test("the Lemonade question is shown with the progress window as its owner", () => {
-  expect(main).toMatch(/chooseLemonade: \(found\) => chooseLemonadeInDialog\(found, progress\.window\)/);
-  const fn = body("chooseLemonadeInDialog");
-  expect(fn).toMatch(/dialog\.showMessageBox\(owner, box\)/);
-  expect(fn).toMatch(/owner\.focus\(\)/);
-});
-
-test("the Lemonade question restores and raises its owner, flashing only when focus is refused", () => {
-  const fn = body("chooseLemonadeInDialog");
-  const restore = fn.indexOf("owner.restore()");
-  const raise = fn.indexOf("owner.moveTop()");
-  const flash = fn.indexOf("if (!owner.isFocused()) owner.flashFrame(true)");
-  const ask = fn.indexOf("dialog.showMessageBox(owner, box)");
-  expect(Math.min(restore, raise, flash)).toBeGreaterThan(-1);
-  expect(restore).toBeLessThan(raise);
-  expect(flash).toBeLessThan(ask);
-  expect(fn.indexOf("owner.flashFrame(false)")).toBeGreaterThan(ask);
 });

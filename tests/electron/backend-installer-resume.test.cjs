@@ -1,9 +1,10 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// "Installed" must mean `gaia init` finished, not that the venv exists: an
-// install interrupted during setup used to report "already installed" on the
-// next launch and never set up Lemonade or the models.
+// The installer installs the app and its Python backend, and downloads no
+// model: `gaia init` (Lemonade and the models) belongs to the app's first-run
+// setup, where the user chooses cloud or local and sees the download (#5629).
+// "Installed" therefore means the package is in place at the app's version.
 
 const fs = require("fs");
 const path = require("path");
@@ -15,21 +16,16 @@ const installerPath = path.resolve(
   "../../src/gaia/apps/webui/services/backend-installer.cjs"
 );
 
-// `initRun` is what `gaia init` prints and exits with; every other command succeeds.
-function loadInstaller(previousState, initRun = { code: 0 }) {
+function loadInstaller(previousState, { freeBytes = 1e9 * 4096 } = {}) {
   const files = new Map();
   if (previousState) {
     files.set("/fixture/.gaia/electron-install-state.json", JSON.stringify(previousState));
   }
-  const spawn = jest.fn((cmd, argv) => {
+  const spawn = jest.fn(() => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
-    const run = argv[0] === "init" ? initRun : { code: 0 };
-    queueMicrotask(() => {
-      if (run.stdout) child.stdout.emit("data", run.stdout);
-      child.emit("exit", run.code);
-    });
+    queueMicrotask(() => child.emit("exit", 0));
     return child;
   });
   const fakeFs = {
@@ -39,7 +35,7 @@ function loadInstaller(previousState, initRun = { code: 0 }) {
       files.has(String(file)) ? files.get(String(file)) : fs.readFileSync(file, enc),
     writeFileSync: (file, data) => files.set(String(file), String(data)),
     mkdirSync: jest.fn(),
-    statfsSync: () => ({ bavail: 1e9, bsize: 4096 }),
+    statfsSync: () => ({ bavail: freeBytes / 4096, bsize: 4096 }),
     createWriteStream: () => ({ write: jest.fn(), end: jest.fn(), on: jest.fn() }),
   };
   const offline = {
@@ -85,8 +81,25 @@ function loadInstaller(previousState, initRun = { code: 0 }) {
 const initRuns = (spawn) => spawn.mock.calls.filter(([, argv]) => argv[0] === "init");
 const pipRuns = (spawn) => spawn.mock.calls.filter(([, argv]) => argv[0] === "pip");
 
-describe("an install whose setup never finished", () => {
-  test("interrupted during gaia init: the next launch runs gaia init, not 'already installed'", async () => {
+describe("the installer downloads no model", () => {
+  test("a fresh install never runs gaia init", async () => {
+    const { installer, spawn, state } = loadInstaller(null);
+    const progress = [];
+
+    await installer.installBackend({
+      version: "0.25.0",
+      isPackaged: false,
+      onProgress: (stage, percent, message) => progress.push({ stage, percent, message }),
+    });
+
+    expect(pipRuns(spawn).length).toBeGreaterThan(0);
+    expect(initRuns(spawn)).toHaveLength(0);
+    expect(progress.some((p) => /model/i.test(p.message))).toBe(false);
+    expect(progress[progress.length - 1].percent).toBe(100);
+    expect(state()).toMatchObject({ state: "ready" });
+  });
+
+  test("an install stopped where an older installer ran gaia init is ready, with nothing re-run", async () => {
     const { installer, spawn, state } = loadInstaller({
       state: "installing",
       stage: "gaia-init",
@@ -95,16 +108,11 @@ describe("an install whose setup never finished", () => {
 
     await installer.ensureBackend({ version: "0.25.0", isPackaged: false });
 
-    expect(initRuns(spawn)).toHaveLength(1);
-    expect(initRuns(spawn)[0][1]).toEqual(
-      expect.arrayContaining(["--profile", "gaia", "--yes"])
-    );
-    // The package was already in place: setup resumes, nothing reinstalls.
-    expect(pipRuns(spawn)).toHaveLength(0);
-    expect(state()).toMatchObject({ state: "ready", init: "done" });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(state()).toMatchObject({ state: "ready" });
   });
 
-  test("a setup that failed last time runs again", async () => {
+  test("a setup an older installer failed is left to the app's first-run setup", async () => {
     const { installer, spawn, state } = loadInstaller({
       state: "ready",
       version: "0.25.0",
@@ -113,11 +121,11 @@ describe("an install whose setup never finished", () => {
 
     await installer.ensureBackend({ version: "0.25.0", isPackaged: false });
 
-    expect(initRuns(spawn)).toHaveLength(1);
-    expect(state()).toMatchObject({ state: "ready", init: "done" });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(state()).toMatchObject({ state: "ready" });
   });
 
-  test("interrupted while installing the package: it reinstalls, then sets up", async () => {
+  test("interrupted while installing the package: it reinstalls, and still sets nothing up", async () => {
     const { installer, spawn } = loadInstaller({
       state: "installing",
       stage: "install-package",
@@ -127,50 +135,16 @@ describe("an install whose setup never finished", () => {
     await installer.ensureBackend({ version: "0.25.0", isPackaged: false });
 
     expect(pipRuns(spawn).length).toBeGreaterThan(0);
-    expect(initRuns(spawn)).toHaveLength(1);
-  });
-});
-
-describe("a setup that fails", () => {
-  const memoryError =
-    "Gemma-4-E4B-it-GGUF - Not enough free memory to load Gemma-4-E4B-it-GGUF with a " +
-    "32,768-token window: needs about 7.8 GB and only 6.0 GB is free. See https://amd-gaia.ai/docs";
-
-  test("records what gaia init said, so the app can show it before the first message", async () => {
-    const { installer, spawn, state } = loadInstaller(
-      { state: "installing", stage: "gaia-init", version: "0.25.0" },
-      {
-        code: 1,
-        stdout:
-          "Step 5/5: Verifying setup...\n" +
-          `   ❌ ${memoryError}\n` +
-          "   ⚠️  Models verified: 1/2 passed\n" +
-          "   Failed models may be corrupted. To fix:\n",
-      }
-    );
-
-    await installer.ensureBackend({ version: "0.25.0", isPackaged: false });
-
-    expect(state()).toMatchObject({ state: "ready", init: "failed", initError: memoryError });
-    // Unwrapped, or the error line would be cut at 80 columns.
-    expect(initRuns(spawn)[0][2].env.COLUMNS).toBe("1000");
+    expect(initRuns(spawn)).toHaveLength(0);
   });
 
-  test("without an error line, the reason is its last line, else its exit code", () => {
-    const { installer } = loadInstaller(null);
-    expect(
-      installer.initFailureReason({ code: 1, stdout: "Step 1/5\nLemonade did not start\n", stderr: "" })
-    ).toBe("Lemonade did not start");
-    expect(
-      installer.initFailureReason({
-        code: 1,
-        stdout: 'Lemonade did not start\n{"event": "done", "ok": false}\n',
-        stderr: "",
-      })
-    ).toBe("Lemonade did not start");
-    expect(installer.initFailureReason({ code: 2, stdout: "", stderr: "" })).toBe(
-      "gaia init exited with code 2 and printed nothing."
-    );
+  test("the disk check asks only for room for the Python backend", async () => {
+    const { installer } = loadInstaller(null, { freeBytes: 3 * 1024 ** 3 });
+
+    const report = await installer.runPreChecks({});
+
+    expect(report.disk.ok).toBe(true);
+    expect(installer.MIN_DISK_SPACE_BYTES).toBeLessThan(3 * 1024 ** 3);
   });
 });
 
@@ -179,7 +153,6 @@ describe("a finished install", () => {
     const { installer, spawn } = loadInstaller({
       state: "ready",
       version: "0.25.0",
-      init: "done",
     });
 
     await installer.ensureBackend({ version: "0.25.0", isPackaged: false });

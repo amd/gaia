@@ -48,7 +48,7 @@ describe("backend installation package sources", () => {
   // the index pins its own `requests`, which once failed the whole install.
   test.each(["linux", "darwin", "win32"])("%s installs from PyPI alone", async (platform) => {
     const { installer, spawn } = loadInstaller(platform, "/work/amd_gaia-0.23.1-py3-none-any.whl");
-    await installer.installBackend({ skipGaiaInit: true, isPackaged: false });
+    await installer.installBackend({ isPackaged: false });
 
     const [command, args] = spawn.mock.calls.find(([, argv]) => argv[0] === "pip");
     expect(command).toBe("uv");
@@ -59,7 +59,7 @@ describe("backend installation package sources", () => {
 
   test("PyPI installs pin the matching backend version", async () => {
     const { installer, spawn } = loadInstaller("linux");
-    await installer.installBackend({ version: "0.23.1", skipGaiaInit: true, isPackaged: false });
+    await installer.installBackend({ version: "0.23.1", isPackaged: false });
     const [, args] = spawn.mock.calls.find(([, argv]) => argv[0] === "pip");
     expect(args).toContain("amd-gaia[ui]==0.23.1");
     expect(args.join(" ")).not.toContain("download.pytorch.org");
@@ -70,7 +70,7 @@ describe("release-candidate backend versions", () => {
   // The app carries npm's 0.25.0-rc.1; PyPI and `gaia --version` say 0.25.0rc1.
   test("an RC app pins the PEP 440 spelling of its version", async () => {
     const { installer, spawn } = loadInstaller("linux");
-    await installer.installBackend({ version: "0.25.0-rc.1", skipGaiaInit: true, isPackaged: false });
+    await installer.installBackend({ version: "0.25.0-rc.1", isPackaged: false });
     const [, args] = spawn.mock.calls.find(([, argv]) => argv[0] === "pip");
     expect(args).toContain("amd-gaia[ui]==0.25.0rc1");
   });

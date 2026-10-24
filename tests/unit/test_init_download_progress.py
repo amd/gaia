@@ -1,5 +1,6 @@
 """`gaia init` shows a model pull as it happens, and says why it failed."""
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -121,3 +122,211 @@ def test_a_pull_outlasts_the_servers_silent_hash_check(client):
         list(client.pull_model_stream("Qwen3.6-35B-A3B-GGUF"))
     _connect, idle = post.call_args.kwargs["timeout"]
     assert idle >= 15 * 60
+
+
+# ── --progress-json: what the Agent UI's setup screen reads ────────────────
+
+
+def _events(out):
+    return [json.loads(line) for line in out.splitlines() if line.startswith("{")]
+
+
+def test_json_progress_reports_bytes_and_speed_instead_of_a_bar():
+    console, seen = MagicMock(), []
+    progress = _DownloadProgress(
+        console, "m", emit=lambda kind, **fields: seen.append({"event": kind, **fields})
+    )
+    progress(
+        {
+            "event": "progress",
+            "percent": 10,
+            "bytes_downloaded": 100,
+            "bytes_total": 1000,
+        }
+    )
+    progress({"event": "progress", "percent": 0, "bytes_total": 0})
+    console.print_download_progress.assert_not_called()
+    assert seen == [
+        {
+            "event": "download",
+            "model": "m",
+            "bytes_done": 100,
+            "bytes_total": 1000,
+            "speed_bps": 0.0,
+        }
+    ]
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+def _json_progress(monkeypatch):
+    from gaia.installer import init_command
+
+    clock, seen = _Clock(), []
+    monkeypatch.setattr(init_command.time, "monotonic", clock)
+    progress = _DownloadProgress(
+        MagicMock(), "m", emit=lambda kind, **f: seen.append({"event": kind, **f})
+    )
+    return clock, seen, progress
+
+
+def _sample(progress, done, total=20_000_000_000):
+    progress({"event": "progress", "bytes_downloaded": done, "bytes_total": total})
+
+
+def test_a_resumed_download_measures_speed_from_its_first_sample(monkeypatch):
+    """10 GB already on disk is not 10 GB downloaded in the first second."""
+    clock, seen, progress = _json_progress(monkeypatch)
+    clock.now = 1.0
+    _sample(progress, 10_000_000_000)
+    clock.now = 2.0
+    _sample(progress, 10_050_000_000)
+    assert seen[0]["speed_bps"] == 0.0
+    assert seen[1]["speed_bps"] == pytest.approx(50_000_000, rel=0.01)
+
+
+def test_a_stalled_download_reports_no_speed(monkeypatch):
+    clock, seen, progress = _json_progress(monkeypatch)
+    clock.now = 1.0
+    _sample(progress, 1_000_000_000)
+    clock.now = 2.0
+    _sample(progress, 1_050_000_000)
+    clock.now = 30.0
+    _sample(progress, 1_050_000_000)
+    assert seen[-1]["speed_bps"] == 0.0
+
+
+def test_a_pull_with_no_total_still_reports_its_bytes(monkeypatch):
+    clock, seen, progress = _json_progress(monkeypatch)
+    clock.now = 1.0
+    progress({"event": "progress", "bytes_downloaded": 500_000_000, "bytes_total": 0})
+    assert seen == [
+        {
+            "event": "download",
+            "model": "m",
+            "bytes_done": 500_000_000,
+            "bytes_total": None,
+            "speed_bps": 0.0,
+        }
+    ]
+
+
+def test_json_progress_names_the_chat_model_and_why_others_were_passed_over(capsys):
+    from gaia.installer.init_command import ChatModelChoice, InitCommand
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAME
+
+    reason = "not enough free memory right now: it needs about 26.1 GB"
+    choice = ChatModelChoice(
+        model_id=DEFAULT_MODEL_NAME,
+        user_set=False,
+        skipped=[(LARGE_DEFAULT_MODEL_NAME, reason)],
+    )
+    cmd = InitCommand(profile="gaia", yes=True, progress_json=True)
+    with patch(
+        "gaia.installer.init_command.resolve_init_chat_model", return_value=choice
+    ):
+        cmd._chat_model(MagicMock())
+    out = capsys.readouterr().out
+    assert _events(out) == [
+        {
+            "event": "chat_model",
+            "model": DEFAULT_MODEL_NAME,
+            "user_set": False,
+            "skipped": [{"id": LARGE_DEFAULT_MODEL_NAME, "reason": reason}],
+        }
+    ]
+    # The terminal still gets the human lines.
+    assert f"Not using {LARGE_DEFAULT_MODEL_NAME}" in out
+
+
+def test_json_progress_states_the_downloads_and_their_total_first(capsys):
+    from gaia.installer.init_command import InitCommand
+
+    cmd = InitCommand(profile="minimal", yes=True, progress_json=True)
+
+    def pull(model_id, on_progress, **_kwargs):
+        on_progress(
+            {
+                "event": "progress",
+                "percent": 50,
+                "bytes_downloaded": 3,
+                "bytes_total": 6,
+            }
+        )
+        return True
+
+    with patch("gaia.llm.lemonade_client.LemonadeClient") as client_class:
+        client = MagicMock()
+        client.list_models.return_value = {
+            "data": [{"id": "Gemma-4-E4B-it-GGUF", "size": 5.6, "downloaded": False}]
+        }
+        client.get_system_info.return_value = {"model_storage": {"free_bytes": 400e9}}
+        client.ensure_model_downloaded.side_effect = pull
+        client_class.return_value = client
+        assert cmd._download_models()
+
+    events = [
+        e
+        for e in _events(capsys.readouterr().out)
+        if e["event"] in ("downloads", "download")
+    ]
+    assert events[0] == {
+        "event": "downloads",
+        "models": [{"id": "Gemma-4-E4B-it-GGUF", "size_gb": 5.6}],
+        "total_gb": 5.6,
+    }
+    assert events[1]["event"] == "download"
+    assert events[1]["model"] == "Gemma-4-E4B-it-GGUF"
+    assert (events[1]["bytes_done"], events[1]["bytes_total"]) == (3, 6)
+
+
+def test_without_the_flag_init_prints_no_json(capsys):
+    from gaia.installer.init_command import InitCommand
+
+    cmd = InitCommand(profile="minimal", yes=True)
+    with patch("gaia.llm.lemonade_client.LemonadeClient") as client_class:
+        client = MagicMock()
+        client.list_models.return_value = {"data": []}
+        client.ensure_model_downloaded.return_value = True
+        client_class.return_value = client
+        cmd._download_models()
+    assert _events(capsys.readouterr().out) == []
+
+
+def test_the_cli_passes_the_planned_chat_model_to_init(monkeypatch):
+    """Setup downloads the model the screen showed (--chat-model), not a re-pick."""
+    import sys
+
+    from gaia import cli
+    from gaia.installer import init_command
+
+    seen = {}
+
+    def run_init(**kwargs):
+        seen.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(init_command, "run_init", run_init)
+    argv = ["gaia", "init", "--yes", "--chat-model", "Gemma-4-E4B-it-GGUF"]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as done:
+        cli.main()
+    assert done.value.code == 0
+    assert seen["chat_model"] == "Gemma-4-E4B-it-GGUF"
+
+
+def test_the_cli_flag_reaches_init():
+    from gaia.cli import build_parser
+    from gaia.installer import init_command
+
+    assert build_parser().parse_args(["init", "--progress-json"]).progress_json
+    with patch.object(init_command, "InitCommand") as command:
+        command.return_value.run.return_value = 0
+        assert init_command.run_init(profile="gaia", progress_json=True) == 0
+    assert command.call_args.kwargs["progress_json"] is True

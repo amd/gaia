@@ -306,10 +306,19 @@ class ChatModelChoice:
     skipped: list
     #: What the machine was judged against; None when the user chose.
     capacity: Optional[MachineCapacity] = None
+    #: The model the PC's total memory alone gives. When it differs from
+    #: ``model_id``, free memory (or a pinned pick) decided, and setup saves
+    #: ``model_id`` so a later check doesn't expect the other one.
+    capacity_pick: Optional[str] = None
+
+    @property
+    def keep(self) -> bool:
+        """Whether this pick must be saved as ``default_model`` to stay the pick."""
+        return bool(self.capacity_pick) and self.capacity_pick != self.model_id
 
 
 def resolve_init_chat_model(
-    client, *, reset_corrupt: bool, enforce_fit: bool
+    client, *, reset_corrupt: bool, enforce_fit: bool, pinned: Optional[str] = None
 ) -> ChatModelChoice:
     """The chat model `gaia init` sets up: the user's ``default_model`` when it
     is a local Lemonade model, else the largest default that fits this machine
@@ -320,12 +329,18 @@ def resolve_init_chat_model(
     policy (it rewrites a corrupt config); the read-only check raises instead.
     ``enforce_fit`` refuses a user's model that cannot fit — only run(), which
     would download it, needs that; ``--check`` just reports it missing.
+    ``pinned`` is the model the setup screen showed the user (``--chat-model``):
+    it is set up even if free memory moved since, and refused when it no longer
+    fits, so the screen and the download never disagree.
     """
     from gaia.config import GaiaConfig, GaiaConfigError
     from gaia.llm.lemonade_client import (
+        DEFAULT_MODEL_LADDER,
+        _model_ids_match,
         cloud_model_provider,
         recommend_default_chat_model,
     )
+    from gaia.llm.model_fit import ModelFitError
 
     try:
         configured = GaiaConfig.load().default_model
@@ -342,12 +357,42 @@ def resolve_init_chat_model(
         and not cloud_model_provider(configured)
     )
     if is_local:
+        if pinned and not _model_ids_match(pinned, configured):
+            raise ModelFitError(
+                f"Setup was asked to set up {pinned}, but default_model is "
+                f"{configured}. Open setup again, or run `gaia init` without "
+                "--chat-model."
+            )
         if enforce_fit:
             _refuse_if_it_does_not_fit(client, configured)
         return ChatModelChoice(model_id=configured, user_set=True, skipped=[])
     model_id, skipped, capacity = recommend_default_chat_model(client)
+    capacity_pick = (
+        recommend_default_chat_model(client, judge_free_memory=False)[0]
+        if capacity is not None
+        else None
+    )
+    if pinned and not _model_ids_match(pinned, model_id):
+        # The floor always qualifies; a larger model must still be the pick now.
+        if pinned not in DEFAULT_MODEL_LADDER:
+            raise ModelFitError(
+                f"--chat-model {pinned} is not one of setup's chat models "
+                f"({', '.join(DEFAULT_MODEL_LADDER)}). Set it with "
+                f"`gaia config set default_model {pinned}` instead."
+            )
+        if pinned != DEFAULT_MODEL_LADDER[-1]:
+            reason = dict(skipped).get(pinned, f"setup now picks {model_id}")
+            raise ModelFitError(
+                f"{pinned} no longer fits this PC: {reason}. Open setup again "
+                "to see the model that fits now."
+            )
+        model_id, skipped = pinned, []
     return ChatModelChoice(
-        model_id=model_id, user_set=False, skipped=skipped, capacity=capacity
+        model_id=model_id,
+        user_set=False,
+        skipped=skipped,
+        capacity=capacity,
+        capacity_pick=capacity_pick,
     )
 
 
@@ -793,16 +838,32 @@ class _DownloadProgress:
     """Draws a model pull's streamed events as a live progress bar."""
 
     REDRAW_S = 0.2
+    #: No new bytes for this long reads as stalled: no speed, no time left.
+    STALL_S = 10.0
 
-    def __init__(self, console, model_id: str):
+    def __init__(self, console, model_id: str, emit=None):
         self.console = console
         self.model_id = model_id
+        # With --progress-json, a ``download`` event replaces the bar.
+        self.emit = emit
         self.events = 0
         self.reported_error = False
-        self._last_bytes = 0
-        self._last_time = time.monotonic()
+        # Set by the first sample: a resumed pull starts with bytes on disk.
+        self._last_bytes: Optional[int] = None
+        self._last_time = 0.0
         self._drawn_at = None
         self._speed_mbps = 0.0
+
+    def _measure(self, done: int, now: float) -> None:
+        if self._last_bytes is None or done < self._last_bytes:
+            self._last_bytes, self._last_time = done, now
+        elif done > self._last_bytes and now - self._last_time > 0.5:
+            self._speed_mbps = (
+                (done - self._last_bytes) / (now - self._last_time) / 1024**2
+            )
+            self._last_bytes, self._last_time = done, now
+        elif done == self._last_bytes and now - self._last_time > self.STALL_S:
+            self._speed_mbps = 0.0
 
     def __call__(self, event: dict) -> None:
         self.events += 1
@@ -812,23 +873,29 @@ class _DownloadProgress:
             total = event.get("bytes_total", 0)
             now = time.monotonic()
             # Lemonade streams thousands of events, many for 0-byte metadata.
-            if not total or (
+            # A pull with no total still reports its bytes; only the bar needs one.
+            if not (total or (done and self.emit is not None)) or (
                 self._drawn_at is not None and now - self._drawn_at < self.REDRAW_S
             ):
                 return
-            if now - self._last_time > 0.5 and done > self._last_bytes:
-                self._speed_mbps = (
-                    (done - self._last_bytes) / (now - self._last_time) / 1024**2
-                )
-                self._last_bytes, self._last_time = done, now
+            self._measure(done, now)
             self._drawn_at = now
+            if self.emit is not None:
+                self.emit(
+                    "download",
+                    model=self.model_id,
+                    bytes_done=done,
+                    bytes_total=total or None,
+                    speed_bps=round(self._speed_mbps * 1024**2, 1),
+                )
+                return
             self.console.print_download_progress(
                 percent=int(event.get("percent", 0)),
                 bytes_downloaded=done,
                 bytes_total=total,
                 speed_mbps=self._speed_mbps,
             )
-        elif kind == "complete" and self._drawn_at is not None:
+        elif kind == "complete" and self._drawn_at is not None and self.emit is None:
             print()  # end the in-place progress line
         elif kind == "error":
             self.reported_error = True
@@ -952,6 +1019,29 @@ class _JsonDownloadProgress:
         )
 
 
+class _BothJsonProgress:
+    """Feeds one pull to both ``--progress-json`` readers: the setup screen's
+    ``download`` events and the per-file ``progress`` events. The stream's
+    errors are printed once, by the second."""
+
+    def __init__(self, screen: "_DownloadProgress", files: "_JsonDownloadProgress"):
+        self.screen = screen
+        self.files = files
+
+    @property
+    def events(self) -> int:
+        return self.files.events
+
+    @property
+    def reported_error(self) -> bool:
+        return self.files.reported_error
+
+    def __call__(self, event: dict) -> None:
+        if event.get("event") != "error":
+            self.screen(event)
+        self.files(event)
+
+
 def _gb_to_bytes(size_gb) -> Optional[int]:
     return int(size_gb * 1e9) if isinstance(size_gb, (int, float)) else None
 
@@ -987,6 +1077,7 @@ class InitCommand:
         lemonade_url: Optional[str] = None,
         gaia_lemonade: bool = False,
         progress_json: bool = False,
+        chat_model: Optional[str] = None,
     ):
         """
         Initialize the init command.
@@ -1014,9 +1105,18 @@ class InitCommand:
             lemonade_url: Use the Lemonade Server the user already runs at
                 this URL, and save that choice; GAIA installs no server.
             gaia_lemonade: Use GAIA's own Lemonade, and save that choice.
-            progress_json: Also print step and download progress as JSON
-                lines (see InitEvents), for the desktop installer.
+            progress_json: Also print step, chat model, plan and download
+                progress events as JSON lines on stdout (see :class:`InitEvents`
+                and :meth:`_emit`), for the Agent UI's setup screen.
+            chat_model: The chat model to set up, as the setup screen showed it
+                (see :func:`resolve_init_chat_model`'s ``pinned``).
         """
+        if chat_model and (skip_chat_model or skip_models):
+            raise ValueError(
+                "--chat-model names the chat model to download; it can't be "
+                "combined with --skip-chat-model or --skip-models."
+            )
+        self.chat_model = chat_model
         if lemonade_url and gaia_lemonade:
             raise ValueError(
                 "Choose one: --lemonade-url uses your Lemonade Server, "
@@ -1093,6 +1193,15 @@ class InitCommand:
                 self.console.print(message)
         else:
             print(message, end=end, flush=True)
+
+    def _emit(self, event: str, **fields) -> None:
+        """The setup screen's events, on the same stream as :class:`InitEvents`.
+
+        Events: ``chat_model`` (model, user_set, skipped), ``downloads``
+        (models with size_gb, total_gb) and ``download`` (model, bytes_done,
+        bytes_total, speed_bps).
+        """
+        self.events.emit(event, **fields)
 
     def _print_header(self):
         """Print initialization header."""
@@ -1876,7 +1985,10 @@ class InitCommand:
         resolves to it. Never overwrites a model the user chose, and records
         nothing when the pick is the floor model every agent already defaults to
         or when setup did not download it (declined, or ``--skip-models``) or
-        could not verify it.
+        could not verify it. A floor pick that free memory (or the setup screen)
+        made on a PC whose total memory holds a larger model is recorded too:
+        otherwise the next ``--check``, with more memory free, would expect the
+        larger model.
         """
         from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
@@ -1888,7 +2000,7 @@ class InitCommand:
             return
         if not self._setup_verified:
             return
-        if choice.model_id != DEFAULT_MODEL_NAME:
+        if choice.model_id != DEFAULT_MODEL_NAME or choice.keep:
             config.default_model = choice.model_id
 
     def _chat_model_choice(self, client) -> "ChatModelChoice":
@@ -1900,7 +2012,7 @@ class InitCommand:
         """This machine's chat model; says why on first resolution."""
         if self._chat_choice is None:
             choice = resolve_init_chat_model(
-                client, reset_corrupt=True, enforce_fit=True
+                client, reset_corrupt=True, enforce_fit=True, pinned=self.chat_model
             )
             self._chat_choice = choice
             if choice.user_set:
@@ -1918,6 +2030,24 @@ class InitCommand:
                 self._print(f"   Chat model: {choice.model_id}{where}")
                 for skipped_id, reason in choice.skipped:
                     self._print(f"   Not using {skipped_id}: {reason}")
+                if choice.keep:
+                    self._print(
+                        f"   GAIA keeps using {choice.model_id} once it is set up "
+                        "(saved as default_model). To switch to "
+                        f"{choice.capacity_pick} later, free memory and run "
+                        f"`gaia config set default_model {choice.capacity_pick}`, "
+                        "then `gaia init`."
+                    )
+            self._emit(
+                "chat_model",
+                model=choice.model_id,
+                user_set=choice.user_set,
+                skipped=(
+                    []
+                    if choice.user_set
+                    else [{"id": m, "reason": r} for m, r in choice.skipped]
+                ),
+            )
             if self.skip_models:
                 self._print(
                     "   Not downloaded (--skip-models). Run `gaia init` without it "
@@ -2058,6 +2188,11 @@ class InitCommand:
                 bytes_total=_gb_to_bytes(total_gb) or 0,
                 disk_free_bytes=_gb_to_bytes(disk_free_gb),
             )
+            self._emit(
+                "downloads",
+                models=[{"id": m, "size_gb": sizes.get(m)} for m in model_ids],
+                total_gb=round(total_gb, 1),
+            )
 
             if not self._prompt_yes_no("Continue?", default=True):
                 self._print("   Skipping model downloads")
@@ -2114,13 +2249,18 @@ class InitCommand:
                 if mr and mr.size_gb:
                     pull_kwargs["timeout"] = max(7200, int(mr.size_gb * 200))
                 if self.events.enabled:
-                    progress = _JsonDownloadProgress(
-                        self.agent_console,
-                        self.events,
-                        model_id,
-                        index,
-                        len(model_ids),
-                        _gb_to_bytes(sizes.get(model_id)),
+                    progress = _BothJsonProgress(
+                        _DownloadProgress(
+                            self.agent_console, model_id, emit=self._emit
+                        ),
+                        _JsonDownloadProgress(
+                            self.agent_console,
+                            self.events,
+                            model_id,
+                            index,
+                            len(model_ids),
+                            _gb_to_bytes(sizes.get(model_id)),
+                        ),
                     )
                 else:
                     progress = _DownloadProgress(self.agent_console, model_id)
@@ -2968,6 +3108,7 @@ def run_init(
     lemonade_url: Optional[str] = None,
     gaia_lemonade: bool = False,
     progress_json: bool = False,
+    chat_model: Optional[str] = None,
 ) -> int:
     """
     Entry point for `gaia init` command.
@@ -2986,6 +3127,7 @@ def run_init(
         lemonade_url: Use (and save) the Lemonade Server the user runs here
         gaia_lemonade: Use (and save) GAIA's own Lemonade Server
         progress_json: Also print progress as JSON lines (see InitEvents)
+        chat_model: The chat model to set up instead of re-picking one
 
     Returns:
         Exit code (0 for success, non-zero for failure)
@@ -3004,6 +3146,7 @@ def run_init(
             lemonade_url=lemonade_url,
             gaia_lemonade=gaia_lemonade,
             progress_json=progress_json,
+            chat_model=chat_model,
         )
         return cmd.run()
     except ValueError as e:

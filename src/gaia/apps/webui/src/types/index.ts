@@ -629,6 +629,8 @@ export interface PreflightReport {
     required_memory_gb: number;
     compatible: boolean;
     blockers: string[];
+    /** The disk entry of `blockers`: an estimate the setup plan replaces once it knows the download. */
+    disk_blocker?: string | null;
     warnings: string[];
 }
 
@@ -1024,25 +1026,62 @@ export interface SetupRunStatus {
     command?: string;
     log_tail?: string[];
     skip_chat_model?: boolean;
+    /** Only the model server was set up; no model was downloaded. */
+    server_only?: boolean;
     /** The run is switching to GAIA's own server; a retry must keep switching. */
     gaia_lemonade?: boolean;
     /** The chat model setup chose, once it has said. */
     chat_model?: string | null;
+    /** Each larger model setup passed over, and why. */
+    passed_over?: SetupPassedOver[];
+    /** What setup downloads in all, once it has said. */
+    download_gb?: number | null;
+    /** The model being downloaded right now. */
+    download?: SetupDownload | null;
+}
+
+export interface SetupPassedOver {
+    id: string;
+    reason: string;
+}
+
+export interface SetupDownload {
+    model: string;
+    /** Its place among the models still to download (1-based), when known. */
+    index: number | null;
+    count: number | null;
+    bytes_done: number;
+    /** Null when the server reports no total; the screen then shows bytes only. */
+    bytes_total: number | null;
+    /** 0 until measured, and again once the pull goes quiet. */
+    speed_bps: number;
+    /** Seconds left at the current speed; null without a speed or a total. */
+    eta_s: number | null;
 }
 
 /** GET /api/setup/plan: what setup will use and download, before it starts. */
 export interface SetupPlan {
     /** `url` is null while GAIA's own server isn't running: it has no address yet. */
     lemonade: { mode: 'gaia' | 'external'; url: string | null; reachable: boolean };
-    chat_model: { id: string; user_set: boolean; size_gb: number | null; downloaded: boolean | null };
+    chat_model: {
+        id: string; user_set: boolean; size_gb: number | null; downloaded: boolean | null;
+        /** How its load would fail in the memory free now; advisory, as memory can be freed first. */
+        memory_warning?: string | null;
+    };
     recommended_model: string | null;
     /** GAIA's own server isn't running yet, so the final pick comes once it is. */
     decided_after_server: boolean;
     memory_gb: number | null;
     memory_source: string | null;
     options: Array<{ id: string; size_gb: number | null; fits: boolean | null; reason: string | null }>;
+    /** Larger models the hardware's pick passed over (memory, free memory, disk, version). */
+    passed_over?: SetupPassedOver[];
     models: Array<{ id: string; role: 'chat' | 'embedding'; size_gb: number | null }>;
     download_gb: number | null;
+    /** Free space on the disk Lemonade keeps models on; null before it runs. */
+    disk_free_gb?: number | null;
+    /** Why the download won't fit that disk; null when it fits or can't be told. */
+    disk_problem?: string | null;
 }
 
 /** A task a new chat offers, from an installed skill and what is set up. */

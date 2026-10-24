@@ -327,6 +327,8 @@ class SystemStatus(BaseModel):
     disk_space_gb: float = 0.0
     memory_available_gb: float = 0.0
     initialized: bool = False
+    # Why the last first-run setup failed; None once one has succeeded.
+    setup_error: Optional[str] = None
     version: str = "0.1.0"
 ```
 
@@ -470,9 +472,12 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "disk_space_gb": 128.5,
       "memory_available_gb": 12.3,
       "initialized": true,
+      "setup_error": null,
       "version": "0.1.0"
     }
     ```
+
+    `setup_error` is the error from the last first-run setup run (`/api/setup/run`) when it failed, so the new-chat screen can say why before the first message fails; a later run that succeeds clears it.
 
     `lemonade_probe` tells clients why Lemonade is or isn't reachable: `ok`, `down` (nothing listening, so it needs starting), `timed_out` (running but busy, or the probes ran past their 20-second budget), or `error` (Lemonade answered with an error, or the probe failed some other way; see `lemonade_error`).
   </Accordion>
@@ -2232,7 +2237,9 @@ First-run hardware scan (issues #1726, #1727).
     whether this machine can run the first-run model, with a coarse tier
     recommendation. `recommended_model` is the model chat will load on this
     machine (the `default_model` `gaia init` chose, else Gemma-4-E4B), and
-    `required_disk_gb` is sized for that model's download.
+    `required_disk_gb` is sized for that model's download. `disk_blocker` is
+    the disk entry of `blockers` (null when the disk fits): an estimate the
+    setup screen replaces with the plan's real download once it knows it.
   </Accordion>
 
   <Accordion title="GET /api/onboarding/start">
@@ -2269,15 +2276,19 @@ so the two can never disagree about whether GAIA is set up.
   <Accordion title="GET /api/setup/plan">
     What setup will use, before it starts, from the same functions `gaia init`
     decides with: `lemonade` (`mode`, `url`, `reachable`), the `chat_model`
-    (`id`, `user_set`, `size_gb`, `downloaded`), `recommended_model`, the
-    default chat models as `options` with whether each fits this PC, every
-    model to download with its size, and `download_gb`. Sizes and
-    `downloaded` come from the server setup will use: the user's when they
-    chose theirs, else GAIA's own. Before GAIA's own server runs it has no
-    address (`url` is null) and the hardware can't be read, so
-    `decided_after_server` is true and the chat model is named once setup
-    reports it; another Lemonade on the default port is never asked, since
-    its downloads aren't GAIA's. Loads and downloads
+    (`id`, `user_set`, `size_gb`, `downloaded`, and `memory_warning`: the
+    message its load would fail with in the memory free now, else null; the
+    screen shows it without blocking the download), `recommended_model`, the
+    default chat models as `options` with whether each fits this PC and the
+    memory free now, `passed_over` (`id`, `reason`) for each larger model the
+    pick skipped, every model to download with its size, `download_gb`,
+    `disk_free_gb`, and `disk_problem` (why the download won't fit the disk,
+    else null). Sizes and `downloaded` come from the server setup will use:
+    the user's when they chose theirs, else GAIA's own; another Lemonade on
+    the default port is never asked, since its downloads aren't GAIA's. Before
+    GAIA's own server runs it has no address (`url` is null) and the hardware
+    can't be read, so `decided_after_server` is true; run setup with
+    `server_only` first, then read the plan again. Loads and downloads
     nothing. **403** without `X-Gaia-UI: 1`; **503** when the plan can't be
     worked out.
   </Accordion>
@@ -2291,12 +2302,18 @@ so the two can never disagree about whether GAIA is set up.
   </Accordion>
 
   <Accordion title="POST /api/setup/run">
-    Start `gaia init --profile gaia --yes` in the background; follow it with
-    `/api/setup/status`. Body: `{"skip_chat_model": false, "gaia_lemonade":
-    false}`; `gaia_lemonade` runs `gaia init --gaia-lemonade`, which sets up
-    and saves GAIA's own server instead of the user's. **409** when setup is
-    already running, or `gaia_lemonade` is asked while `LEMONADE_BASE_URL`
-    picks the server.
+    Start `gaia init --profile gaia --yes --progress-json` in the background;
+    follow it with `/api/setup/status`. Body:
+    `{"skip_chat_model": false, "server_only": false, "chat_model": null, "gaia_lemonade": false}`.
+    `chat_model` is the plan's chat model, passed as `--chat-model` so the run
+    sets up the model the screen named. `skip_chat_model` is for
+    a cloud chat model (only the embedding model downloads); `server_only`
+    (`--skip-models`) installs and starts the model server and downloads
+    nothing, so the plan can name the model that fits before the download.
+    `gaia_lemonade` runs `gaia init --gaia-lemonade`, which sets up and saves
+    GAIA's own server instead of the user's. **409** when setup is already
+    running, or `gaia_lemonade` is asked while `LEMONADE_BASE_URL` picks the
+    server.
   </Accordion>
 
   <Accordion title="GET /api/setup/status">
@@ -2304,7 +2321,13 @@ so the two can never disagree about whether GAIA is set up.
     `failed`, `cancelled`, or `idle` when none has run), the three steps with
     their status, progress `text`, `percent` and `size` (e.g. `"1.20 GB of
     5.60 GB"`), `error`, the equivalent `command`, the last 40 output lines,
-    and `chat_model` once setup has said which chat model it chose. When the
+    `server_only`, and `chat_model` with `passed_over` once setup has said
+    which chat model it chose. `download_gb` is the total setup downloads;
+    `download` is the pull in progress (`model`, its `index` of `count`,
+    `bytes_done`, `bytes_total`, `speed_bps`, `eta_s`). `bytes_total` is null
+    when the server reports no total (no `percent` then); after 15 s with no
+    progress, `speed_bps` is 0 and `eta_s` null. A `server_only` run ends
+    `ready` without loading a model, with only the first step done. When the
     user chose their own Lemonade Server, the first step is "Use your Lemonade
     Server" rather than an install. When that server isn't answering, `error`
     says so in one sentence and `problem` carries the next steps: `start` (how
@@ -2312,7 +2335,8 @@ so the two can never disagree about whether GAIA is set up.
     own), and `switch_hint` (set when `LEMONADE_BASE_URL` picks the server, so
     only unsetting it switches). The raw error stays in the output lines.
     `gaia_lemonade` is true for a run switching to GAIA's own, so a retry
-    keeps switching.
+    keeps switching. A run that fails leaves its error for `setup_error` in
+    `/api/system/status`; one that succeeds clears it.
   </Accordion>
 
   <Accordion title="POST /api/setup/cancel">

@@ -726,25 +726,33 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   // ── CI AppImage Smoke Contract ───────────────────────────────────
 
   describe('CI AppImage smoke configuration', () => {
-    it('should let the userns AppImage smoke skip gaia init', () => {
-      const workflowPath = path.join(
-        __dirname,
-        '../../.github/workflows/build-installers.yml',
+    it('never runs gaia init from the app installer', () => {
+      const installer = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'services/backend-installer.cjs'),
+        'utf8',
       );
-      const workflow = fs.readFileSync(workflowPath, 'utf8');
-
-      expect(workflow).toContain('GAIA_SKIP_GAIA_INIT: "1"');
+      expect(installer).not.toMatch(/\["init"/);
     });
 
-    it('should honor GAIA_SKIP_GAIA_INIT in the shared backend installer', () => {
-      const installerPath = path.join(
-        CHAT_APP_PATH,
-        'services/backend-installer.cjs',
+    it('still skips gaia init for the published release the CI installs', () => {
+      // A PR run installs the latest published release, and one before #5629
+      // runs gaia init (several GB of models) on first launch.
+      const workflow = fs.readFileSync(
+        path.join(__dirname, '../../.github/workflows/build-installers.yml'),
+        'utf8',
       );
-      const installer = fs.readFileSync(installerPath, 'utf8');
-
-      expect(installer).toContain('process.env.GAIA_SKIP_GAIA_INIT');
-      expect(installer).toContain('Skipping gaia init');
+      const windows = fs.readFileSync(
+        path.join(__dirname, '../../installer/headless/windows-journey.ps1'),
+        'utf8',
+      );
+      const posix = fs.readFileSync(
+        path.join(__dirname, '../../installer/headless/posix-journey.sh'),
+        'utf8',
+      );
+      expect(workflow).toContain('GAIA_SKIP_GAIA_INIT: "1"');
+      const startUi = windows.slice(windows.indexOf('function Start-AgentUi'));
+      expect(startUi.slice(0, startUi.indexOf('Start-Process'))).toContain("$env:GAIA_SKIP_GAIA_INIT = '1'");
+      expect(posix).toContain('export GAIA_SKIP_GAIA_INIT=1');
     });
   });
 });

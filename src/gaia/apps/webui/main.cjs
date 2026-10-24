@@ -818,36 +818,6 @@ function setupJumpList() {
 
 // ── Backend Bootstrap (Phase A) ───────────────────────────────────────────
 
-/** First install found a Lemonade already running: use it, or install GAIA's own? */
-async function chooseLemonadeInDialog(found, parent) {
-  // Modal to the progress window and in front: otherwise it can open behind
-  // other windows while the install sits at 70% waiting for it.
-  const owner = parent && !parent.isDestroyed() ? parent : null;
-  if (owner) {
-    if (owner.isMinimized()) owner.restore();
-    owner.show();
-    owner.moveTop();
-    owner.focus();
-    // Windows can refuse focus to a background app; the taskbar flash is the hint.
-    if (!owner.isFocused()) owner.flashFrame(true);
-  }
-  const box = {
-    type: "question",
-    title: "Lemonade Server found",
-    message: `A Lemonade Server (v${found.version}) is already running at ${found.url}. Use it instead of installing GAIA's own?`,
-    detail: "This avoids running two servers and keeping two copies of each model.",
-    buttons: ["Use my Lemonade", "Install GAIA's own"],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
-  };
-  const { response } = owner
-    ? await dialog.showMessageBox(owner, box)
-    : await dialog.showMessageBox(box);
-  if (owner && !owner.isDestroyed()) owner.flashFrame(false);
-  return response === 0 ? "external" : "gaia";
-}
-
 /**
  * Ensure the Python backend is installed before the main window loads.
  *
@@ -895,7 +865,6 @@ async function bootstrapBackend() {
       await backendInstaller.ensureBackend({
         onProgress: progress.onProgress,
         isPackaged: app.isPackaged,
-        chooseLemonade: (found) => chooseLemonadeInDialog(found, progress.window),
       });
       progress.close();
       console.log("[main] Backend bootstrap complete");

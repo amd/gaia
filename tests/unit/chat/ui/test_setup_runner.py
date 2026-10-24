@@ -8,7 +8,6 @@ replaced with fakes that assert the argv the runner would have used.
 """
 
 import io
-import json
 import subprocess
 import sys
 import threading
@@ -62,12 +61,54 @@ def test_run_args_never_prompt_or_rebuild_the_running_ui():
 def test_run_command_is_what_a_person_would_type():
     assert sr.run_command(False) == "gaia init --profile gaia"
     assert sr.run_command(True) == "gaia init --profile gaia --skip-chat-model"
-    assert sr.run_command(False, True) == "gaia init --profile gaia --gaia-lemonade"
+    assert sr.run_command(False, server_only=True) == (
+        "gaia init --profile gaia --skip-models"
+    )
+    assert sr.run_command(False, gaia_lemonade=True) == (
+        "gaia init --profile gaia --gaia-lemonade"
+    )
+
+
+def test_run_args_ask_for_machine_readable_progress():
+    assert "--progress-json" in sr.run_args(False)
+    assert "--progress-json" not in sr.run_command(False)
+
+
+def test_a_run_sets_up_the_chat_model_the_screen_showed():
+    args = sr.run_args(False, chat_model="Gemma-4-E4B-it-GGUF")
+    assert args[-2:] == ["--chat-model", "Gemma-4-E4B-it-GGUF"]
+    assert sr.run_command(False, chat_model="Gemma-4-E4B-it-GGUF") == (
+        "gaia init --profile gaia --chat-model Gemma-4-E4B-it-GGUF"
+    )
+
+
+def test_run_route_pins_the_planned_chat_model(client, monkeypatch):
+    test_client, _ = client
+    calls = []
+    _popen(monkeypatch, _FakeProc(_BlockingStdout()), calls)
+    started = test_client.post(
+        "/api/setup/run", json={"chat_model": "Gemma-4-E4B-it-GGUF"}
+    )
+    assert started.status_code == 200
+    assert started.json()["chat_model"] == "Gemma-4-E4B-it-GGUF"
+    argv = calls[0][0]
+    assert argv[argv.index("--chat-model") + 1] == "Gemma-4-E4B-it-GGUF"
+    test_client.post("/api/setup/cancel")
+
+
+def test_a_server_only_run_downloads_no_models():
+    args = sr.run_args(False, server_only=True)
+    assert "--skip-models" in args
+    assert "--skip-models" not in sr.run_args(False)
 
 
 def test_run_args_switch_to_gaias_own_server():
     assert sr.run_args(False, gaia_lemonade=True)[-1] == "--gaia-lemonade"
     assert "--gaia-lemonade" not in sr.run_args(False)
+    assert sr.run_args(False, server_only=True, gaia_lemonade=True)[-2:] == [
+        "--skip-models",
+        "--gaia-lemonade",
+    ]
 
 
 # ── parse_status ───────────────────────────────────────────────────────────
@@ -158,40 +199,54 @@ def test_check_timeout_is_an_error(monkeypatch):
 # ── marker ─────────────────────────────────────────────────────────────────
 
 
-def _desktop_state(gaia_home, text):
-    gaia_home.mkdir(parents=True, exist_ok=True)
-    (gaia_home / sr.DESKTOP_INSTALL_STATE).write_text(text, encoding="utf-8")
+def test_setup_error_is_none_before_any_run(gaia_home):
+    assert sr.setup_error() is None
 
 
-def test_desktop_setup_error_is_none_without_a_desktop_install(gaia_home):
-    assert sr.desktop_setup_error() is None
-
-
-@pytest.mark.parametrize("init", ["done", "skipped", None])
-def test_desktop_setup_error_is_none_when_init_did_not_fail(gaia_home, init):
-    _desktop_state(gaia_home, json.dumps({"state": "ready", "init": init}))
-    assert sr.desktop_setup_error() is None
-
-
-def test_desktop_setup_error_is_the_reason_init_gave(gaia_home):
+def test_a_run_whose_models_fail_to_load_leaves_its_error(monkeypatch):
+    """The chat screen can open after this (models are downloaded), so it must say why."""
     reason = "Gemma-4-E4B-it-GGUF - Not enough free memory to load it."
-    _desktop_state(
-        gaia_home,
-        json.dumps({"state": "ready", "init": "failed", "initError": reason}),
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    monkeypatch.setattr(
+        sr, "check", lambda *a, **k: {"ready": False, "reasons": [reason]}
     )
-    assert sr.desktop_setup_error() == reason
+    runner = sr.SetupRunner()
+    runner.start(False)
+    assert _wait_done(runner)["state"] == "failed"
+    assert sr.setup_error() == reason
 
 
-def test_desktop_setup_error_without_a_reason_points_at_the_log(gaia_home):
-    _desktop_state(gaia_home, json.dumps({"state": "ready", "init": "failed"}))
-    error = sr.desktop_setup_error()
-    assert "gaia init --profile gaia" in error
-    assert "electron-install.log" in error
+def test_a_failed_init_leaves_its_error(monkeypatch):
+    out = _OUTPUT + b"   \xe2\x9d\x8c user.embeddinggemma-300m-GGUF - Request failed\n"
+    _popen(monkeypatch, _FakeProc(io.BytesIO(out), returncode=1))
+    runner = sr.SetupRunner()
+    runner.start(False)
+    assert _wait_done(runner)["state"] == "failed"
+    assert "Request failed" in sr.setup_error()
 
 
-def test_an_unreadable_desktop_setup_record_is_reported(gaia_home):
-    _desktop_state(gaia_home, "{not json")
-    assert sr.DESKTOP_INSTALL_STATE in sr.desktop_setup_error()
+def test_a_run_that_succeeds_clears_the_last_error(monkeypatch):
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    checks = iter([{"ready": False, "reasons": ["no memory"]}, {"ready": True}])
+    monkeypatch.setattr(sr, "check", lambda *a, **k: next(checks))
+    runner = sr.SetupRunner()
+    runner.start(False)
+    _wait_done(runner)
+    assert sr.setup_error() == "no memory"
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    runner.start(False)
+    assert _wait_done(runner)["state"] == "ready"
+    assert sr.setup_error() is None
+
+
+def test_a_cancelled_run_records_nothing(monkeypatch):
+    proc = _FakeProc(_BlockingStdout(_OUTPUT))
+    _popen(monkeypatch, proc)
+    runner = sr.SetupRunner()
+    runner.start(False)
+    assert runner.cancel() is True
+    assert _wait_done(runner)["state"] == "cancelled"
+    assert sr.setup_error() is None
 
 
 def test_marker_lives_under_gaia_home(gaia_home):
@@ -465,6 +520,167 @@ def test_a_run_follows_the_chat_model_and_the_users_server(monkeypatch):
     assert view["chat_model"] == "Qwen3.6-35B-A3B-GGUF"
     assert view["steps"][0]["label"] == "Use your Lemonade Server"
     assert "Qwen3.6-35B-A3B-GGUF" in view["steps"][1]["detail"]
+
+
+_JSON_OUTPUT = (
+    b"Step 1/5: Starting Lemonade Server...\n"
+    b'{"event": "chat_model", "model": "Gemma-4-E4B-it-GGUF", "user_set": false, '
+    b'"skipped": [{"id": "Qwen3.6-35B-A3B-GGUF", "reason": "not enough free memory '
+    b'right now: it needs about 26.1 GB and only 20.4 GB is free"}]}\n'
+    b"Step 2/5: Downloading models for 'gaia' profile...\n"
+    b'{"event": "downloads", "models": [{"id": "Gemma-4-E4B-it-GGUF", "size_gb": 5.6}, '
+    b'{"id": "user.embeddinggemma-300m-GGUF", "size_gb": 0.3}], "total_gb": 5.9}\n'
+    b"   Downloading: Gemma-4-E4B-it-GGUF\n"
+    b'{"event": "download", "model": "Gemma-4-E4B-it-GGUF", "bytes_done": 1000000000, '
+    b'"bytes_total": 4000000000, "speed_bps": 50000000.0}\n'
+)
+
+
+def test_json_progress_names_the_model_bytes_speed_and_time_left(monkeypatch):
+    stdout = _BlockingStdout(_JSON_OUTPUT)
+    _popen(monkeypatch, _FakeProc(stdout))
+    runner = sr.SetupRunner()
+    runner.start(False)
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        view = runner.status()
+        if view.get("download"):
+            break
+        time.sleep(0.02)
+    assert view["download"] == {
+        "model": "Gemma-4-E4B-it-GGUF",
+        "index": 1,
+        "count": 2,
+        "bytes_done": 1000000000,
+        "bytes_total": 4000000000,
+        "speed_bps": 50000000.0,
+        "eta_s": 60,
+    }
+    assert view["percent"] == 25
+    assert view["download_gb"] == 5.9
+    assert view["chat_model"] == "Gemma-4-E4B-it-GGUF"
+    assert view["passed_over"][0]["id"] == "Qwen3.6-35B-A3B-GGUF"
+    assert "20.4 GB is free" in view["passed_over"][0]["reason"]
+    assert "5.9 GB" in view["steps"][1]["detail"]
+    # The JSON is for the screen; the details stay readable.
+    assert not any(line.startswith("{") for line in view["log_tail"])
+    assert runner.cancel() is True
+    _wait_done(runner)
+
+
+def test_what_gaia_init_prints_is_what_the_screen_reads(capsys):
+    """The real producer feeds the real consumer, so a renamed field fails here."""
+    from unittest.mock import MagicMock, patch
+
+    from gaia.installer.init_command import ChatModelChoice, InitCommand
+
+    gemma, qwen = "Gemma-4-E4B-it-GGUF", "Qwen3.6-35B-A3B-GGUF"
+    choice = ChatModelChoice(
+        model_id=gemma,
+        user_set=False,
+        skipped=[(qwen, "not enough free memory right now: it needs about 26.1 GB")],
+    )
+    cmd = InitCommand(profile="minimal", yes=True, progress_json=True)
+    with patch(
+        "gaia.installer.init_command.resolve_init_chat_model", return_value=choice
+    ):
+        cmd._chat_model(MagicMock())
+
+    def pull(_model_id, on_progress, **_kwargs):
+        on_progress(
+            {
+                "event": "progress",
+                "bytes_downloaded": 1_000_000_000,
+                "bytes_total": 4_000_000_000,
+            }
+        )
+        return True
+
+    with patch("gaia.llm.lemonade_client.LemonadeClient") as client_class:
+        client = MagicMock()
+        client.list_models.return_value = {
+            "data": [{"id": gemma, "size": 5.6, "downloaded": False}]
+        }
+        client.ensure_model_downloaded.side_effect = pull
+        client_class.return_value = client
+        assert cmd._download_models()
+
+    run = sr.SetupRun(skip_chat_model=False)
+    for line in capsys.readouterr().out.splitlines():
+        event = sr.parse_event(line)
+        if event is not None:
+            run.apply(event)
+    view = run.view()
+    assert view["chat_model"] == gemma
+    assert [p["id"] for p in view["passed_over"]] == [qwen]
+    assert view["download_gb"] == 5.6
+    assert view["download"]["model"] == gemma
+    assert (view["download"]["index"], view["download"]["count"]) == (1, 1)
+    assert view["download"]["bytes_done"] == 1_000_000_000
+    assert view["download"]["bytes_total"] == 4_000_000_000
+    assert view["percent"] == 25
+
+
+def _download(done, total, speed):
+    return {
+        "event": "download",
+        "model": "m",
+        "bytes_done": done,
+        "bytes_total": total,
+        "speed_bps": speed,
+    }
+
+
+def test_a_download_with_no_total_shows_bytes_without_a_percentage():
+    run = sr.SetupRun(skip_chat_model=False)
+    run.apply(_download(500_000_000, None, 50_000_000.0))
+    view = run.view()
+    assert view["download"]["bytes_done"] == 500_000_000
+    assert view["download"]["bytes_total"] is None
+    assert view["download"]["eta_s"] is None
+    assert view["percent"] is None
+
+
+def test_a_download_that_goes_quiet_stops_claiming_a_speed(monkeypatch):
+    """Lemonade sends nothing while it stalls or hashes a file; stale numbers lie."""
+    clock = [100.0]
+    monkeypatch.setattr(sr.time, "monotonic", lambda: clock[0])
+    run = sr.SetupRun(skip_chat_model=False)
+    run.apply(_download(1_000_000_000, 4_000_000_000, 50_000_000.0))
+    assert run.view()["download"]["eta_s"] == 60
+    clock[0] += sr.STALE_DOWNLOAD_S + 1
+    view = run.view()
+    assert view["download"]["speed_bps"] == 0.0
+    assert view["download"]["eta_s"] is None
+    assert view["download"]["bytes_done"] == 1_000_000_000
+
+
+def test_unknown_or_broken_json_lines_are_kept_as_output(monkeypatch):
+    out = b'{"event": "something_new"}\n{not json\n'
+    _popen(monkeypatch, _FakeProc(io.BytesIO(out)))
+    monkeypatch.setattr(sr, "check", lambda *_a, **_k: {"ready": True})
+    runner = sr.SetupRunner()
+    runner.start(False)
+    view = _wait_done(runner)
+    assert "{not json" in view["log_tail"]
+
+
+def test_a_server_only_run_is_ready_without_loading_models(monkeypatch):
+    calls = []
+    _popen(
+        monkeypatch, _FakeProc(io.BytesIO(b"Step 1/2: Starting Lemonade...\n")), calls
+    )
+    monkeypatch.setattr(
+        sr, "check", lambda *a, **k: pytest.fail("no models to check yet")
+    )
+    runner = sr.SetupRunner()
+    runner.start(False, server_only=True)
+    view = _wait_done(runner)
+    assert view["state"] == "ready"
+    assert view["server_only"] is True
+    assert [s["status"] for s in view["steps"]] == ["done", "pending", "pending"]
+    assert "--skip-models" in calls[0][0]
+    assert not sr.is_initialized()
 
 
 def test_init_error_lines_are_not_wrapped_at_80_columns(monkeypatch):
@@ -902,11 +1118,24 @@ def test_run_status_and_cancel_routes(client, monkeypatch):
     assert test_client.post("/api/setup/cancel").json() == {"cancelled": False}
 
 
+def test_run_route_can_start_only_the_server(client, monkeypatch):
+    test_client, _ = client
+    calls = []
+    _popen(monkeypatch, _FakeProc(_BlockingStdout()), calls)
+    started = test_client.post("/api/setup/run", json={"server_only": True})
+    assert started.status_code == 200
+    assert started.json()["server_only"] is True
+    assert "--skip-models" in calls[0][0]
+    test_client.post("/api/setup/cancel")
+
+
 def test_run_route_passes_the_switch_to_gaias_own(client, monkeypatch):
     test_client, runner = client
     seen = []
     monkeypatch.setattr(
-        runner, "start", lambda skip, gaia: seen.append((skip, gaia)) or {}
+        runner,
+        "start",
+        lambda skip, gaia_lemonade=False, **_: seen.append((skip, gaia_lemonade)) or {},
     )
     test_client.post("/api/setup/run", json={"gaia_lemonade": True})
     test_client.post("/api/setup/run", json={})

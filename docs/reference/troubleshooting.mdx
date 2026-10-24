@@ -442,6 +442,12 @@ in, and about 11 GB free when GAIA starts gets it the full window.
 
 What GAIA does on a small PC:
 
+- **Setup picks a model that fits the memory free now.** Before it downloads
+  the larger default (Qwen3.6), `gaia init` and the Agent UI's setup screen
+  check free memory, not just the PC's total. When it won't fit, they pick
+  Gemma-4-E4B and say how much Qwen3.6 needs and how much is free. Gemma is
+  then saved as `default_model`, so a later launch with more memory free stays
+  set up instead of asking for Qwen3.6.
 - **The context window shrinks to fit.** Gemma-4-E4B loads with a 65,536-token
   window when there is room, and otherwise steps down in 8,192-token steps to no
   less than 32,768. The log says so. Restart GAIA after freeing memory to get the

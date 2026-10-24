@@ -2933,6 +2933,17 @@
         ],
         "title": "Detected Platform"
       },
+      "disk_blocker": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Disk Blocker"
+      },
       "disk_free_gb": {
         "anyOf": [
           {
@@ -3726,11 +3737,27 @@
     "type": "object"
   },
   "SetupRunRequest": {
-    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``gaia_lemonade`` to set up GAIA's own server instead of the user's.",
+    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``server_only`` to start the model server and download nothing yet;\n``chat_model`` the model the plan showed, so the run sets up that one;\n``gaia_lemonade`` to set up GAIA's own server instead of the user's.",
     "properties": {
+      "chat_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Chat Model"
+      },
       "gaia_lemonade": {
         "default": false,
         "title": "Gaia Lemonade",
+        "type": "boolean"
+      },
+      "server_only": {
+        "default": false,
+        "title": "Server Only",
         "type": "boolean"
       },
       "skip_chat_model": {

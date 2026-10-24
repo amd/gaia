@@ -2017,6 +2017,40 @@ def optional_chat_models_that_fit(capacity: Any) -> List[str]:
     return out
 
 
+def insufficient_memory_message(model_id: str, window: int, reason: str) -> str:
+    """What a load refused for free memory says, and what to do about it."""
+    return (
+        f"Not enough free memory to load {model_id} with a {window:,}-token "
+        f"window: {reason}. Close apps that use a lot of memory (web browsers, "
+        "games, other AI apps, or another Lemonade server and the models it "
+        f"holds), then try again. See {FREE_MEMORY_HELP_URL}"
+    )
+
+
+def free_memory_load_warning(
+    base_url: str, requirement: "ModelRequirement", capacity
+) -> Optional[str]:
+    """The message a load of *requirement*'s model would fail with right now,
+    or None when it fits or free memory can't be told here."""
+    from gaia.llm.model_fit import MIN_CONTEXT_TOKENS, ModelFitError
+
+    if not requirement.size_gb or not _is_local_url(base_url):
+        return None
+    window = min(MIN_CONTEXT_TOKENS, context_for_capacity(requirement, capacity))
+    try:
+        verdict = free_memory_verdict(base_url.rstrip("/"), requirement, window)
+    except (LemonadeClientError, ModelFitError) as e:
+        get_logger(__name__).warning(
+            "Cannot read free memory (%s); the load of %s checks it again.",
+            e,
+            requirement.model_id,
+        )
+        return None
+    if verdict is None or verdict.fits:
+        return None
+    return insufficient_memory_message(requirement.model_id, window, verdict.reason)
+
+
 def _free_memory_rules_out(client, requirement, capacity) -> Optional[str]:
     """Why the memory free now cannot load *requirement*'s model, or None.
 
@@ -2056,7 +2090,9 @@ def recommend_default_chat_model(
 
     Returns ``(model_id, skipped, capacity)``: ``skipped`` lists
     ``(model_id, reason)`` for each larger model passed over, so the caller can
-    say why a big machine did not get the big model. When Lemonade's report
+    say why a big machine did not get the big model. A larger model must also
+    fit the memory free right now (:func:`free_memory_verdict`), or setup would
+    download one that won't load. When Lemonade's report
     does not say how much memory this PC has, the floor model is picked —
     the model every PC ran before this choice existed — with that as the
     reason, and ``capacity`` is None. ``judge_free_memory=False`` judges
@@ -7362,11 +7398,7 @@ class LemonadeClient:
         if not verdict.fits:
             _forget_fitted_ctx(self.base_url, requirement.model_id)
             raise InsufficientMemoryError(
-                f"Not enough free memory to load {model_name} with a "
-                f"{window:,}-token window: {verdict.reason}. Close apps that use "
-                "a lot of memory (web browsers, games, other AI apps, or another "
-                "Lemonade server and the models it holds), then try again. "
-                f"See {FREE_MEMORY_HELP_URL}"
+                insufficient_memory_message(model_name, window, verdict.reason)
             )
 
     def load_model(

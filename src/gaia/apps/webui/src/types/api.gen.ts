@@ -903,6 +903,7 @@ export interface PreflightReport {
   blockers?: string[];
   compatible?: boolean;
   detected_platform?: string | null;
+  disk_blocker?: string | null;
   disk_free_gb?: number | null;
   gpu_name?: string | null;
   gpu_vram_gb?: number | null;
@@ -1074,10 +1075,14 @@ export interface SettingsUpdateRequest {
 }
 /**
  * ``skip_chat_model`` when the chat runs on a cloud provider;
+ * ``server_only`` to start the model server and download nothing yet;
+ * ``chat_model`` the model the plan showed, so the run sets up that one;
  * ``gaia_lemonade`` to set up GAIA's own server instead of the user's.
  */
 export interface SetupRunRequest {
+  chat_model?: string | null;
   gaia_lemonade?: boolean;
+  server_only?: boolean;
   skip_chat_model?: boolean;
 }
 export interface StartAgentServerRequest {

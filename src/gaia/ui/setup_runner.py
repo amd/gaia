@@ -10,7 +10,11 @@ does, and turns the output into numbered steps with progress. Readiness is read
 from the real state every time, never from a marker file.
 
 ``--skip-chat-model`` is passed when the user chose a cloud provider: the chat
-then runs remotely and only the embedding model is needed locally.
+then runs remotely and only the embedding model is needed locally. A
+``server_only`` run (``--skip-models``) installs and starts the model server
+and downloads nothing, so the screen can name the model that fits this PC
+before the user agrees to download it. ``--progress-json`` makes ``gaia init``
+report the chosen model, the planned downloads and their bytes and speed.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -37,6 +42,8 @@ VERIFY_TIMEOUT_S = CHECK_TIMEOUT_S + 150
 _NOT_READY_EXIT = 1
 _LOAD_FAILED_EXIT = 3
 _UNWRAPPED_COLUMNS = 1000
+#: A pull that reports nothing for this long shows no speed or time left.
+STALE_DOWNLOAD_S = 15.0
 
 PHASE_SERVER = "server"
 PHASE_MODELS = "models"
@@ -74,32 +81,39 @@ def mark_initialized() -> None:
     marker.write_text("ready", encoding="utf-8")
 
 
-#: Written by the desktop app's installer (``services/backend-installer.cjs``).
-DESKTOP_INSTALL_STATE = "electron-install-state.json"
-
-
-def desktop_setup_error() -> Optional[str]:
-    """Why the desktop app's first-run ``gaia init`` failed, or None.
-
-    The desktop app opens even when that run failed, so the UI says why
-    before the first message does.
-    """
+def _setup_error_path():
     from gaia.config import gaia_home
 
-    path = gaia_home() / DESKTOP_INSTALL_STATE
+    return gaia_home() / "chat" / "setup-error"
+
+
+def setup_error() -> Optional[str]:
+    """Why the last first-run setup failed, or None once one has succeeded.
+
+    ``gaia init --check`` without ``--load`` reads downloaded models as ready,
+    so the chat screen can open after a run whose models then failed to load;
+    this lets it say why before the first message does.
+    """
+    path = _setup_error_path()
     try:
-        state = json.loads(path.read_text(encoding="utf-8"))
+        return path.read_text(encoding="utf-8").strip() or None
     except FileNotFoundError:
         return None
-    except (OSError, ValueError) as e:
-        return f"GAIA could not read the desktop app's setup record at {path}: {e}"
-    if not isinstance(state, dict) or state.get("init") != "failed":
-        return None
-    reason = str(state.get("initError") or "").strip()
-    return reason or (
-        f"`{run_command(False)}` did not finish. Its output is in "
-        f"{path.parent / 'electron-install.log'}."
-    )
+    except OSError as e:
+        return f"GAIA could not read why setup failed from {path}: {e}"
+
+
+def _record_outcome(error: Optional[str]) -> None:
+    """Keep a failed run's error for :func:`setup_error`; a success clears it."""
+    path = _setup_error_path()
+    try:
+        if error:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(error, encoding="utf-8")
+        else:
+            path.unlink(missing_ok=True)
+    except OSError as e:
+        logger.warning("Could not record setup's outcome at %s: %s", path, e)
 
 
 def _gaia_argv(*args: str) -> List[str]:
@@ -116,23 +130,53 @@ def check_args(skip_chat_model: bool, load: bool) -> List[str]:
     return args
 
 
-def run_args(skip_chat_model: bool, gaia_lemonade: bool = False) -> List[str]:
+def _choice_flags(
+    skip_chat_model: bool,
+    server_only: bool,
+    chat_model: Optional[str],
+    gaia_lemonade: bool = False,
+) -> List[str]:
+    if server_only:
+        flags = ["--skip-models"]
+    elif skip_chat_model:
+        flags = ["--skip-chat-model"]
+    else:
+        # The model the screen showed, so the run can't re-pick a different one.
+        flags = ["--chat-model", chat_model] if chat_model else []
+    return flags + (["--gaia-lemonade"] if gaia_lemonade else [])
+
+
+def run_args(
+    skip_chat_model: bool,
+    server_only: bool = False,
+    chat_model: Optional[str] = None,
+    gaia_lemonade: bool = False,
+) -> List[str]:
     # --yes: nobody can answer a prompt on a pipe. --skip-webui-build: a source
     # checkout would otherwise rebuild the very UI that is running this.
-    args = ["init", "--profile", PROFILE, "--yes", "--skip-webui-build"]
-    if skip_chat_model:
-        args.append("--skip-chat-model")
-    if gaia_lemonade:
-        args.append("--gaia-lemonade")
-    return args
+    return [
+        "init",
+        "--profile",
+        PROFILE,
+        "--yes",
+        "--skip-webui-build",
+        "--progress-json",
+        *_choice_flags(skip_chat_model, server_only, chat_model, gaia_lemonade),
+    ]
 
 
-def run_command(skip_chat_model: bool, gaia_lemonade: bool = False) -> str:
+def run_command(
+    skip_chat_model: bool,
+    server_only: bool = False,
+    chat_model: Optional[str] = None,
+    gaia_lemonade: bool = False,
+) -> str:
     """What a person would type to do this themselves."""
-    return (
-        "gaia init --profile gaia"
-        + (" --skip-chat-model" if skip_chat_model else "")
-        + (" --gaia-lemonade" if gaia_lemonade else "")
+    return " ".join(
+        [
+            "gaia init --profile gaia",
+            *_choice_flags(skip_chat_model, server_only, chat_model, gaia_lemonade),
+        ]
     )
 
 
@@ -249,6 +293,24 @@ def describe(line: str) -> Optional[Progress]:
     return None
 
 
+#: The ``gaia init --progress-json`` events (see ``InitCommand._emit``).
+_EVENTS = frozenset({"chat_model", "downloads", "download"})
+
+
+def parse_event(line: str) -> Optional[Dict[str, Any]]:
+    """The ``--progress-json`` event on *line*, or None for any other output."""
+    line = line.strip()
+    if not line.startswith("{"):
+        return None
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(event, dict) or event.get("event") not in _EVENTS:
+        return None
+    return event
+
+
 def users_lemonade_url() -> Optional[str]:
     """The user's own Lemonade when they chose "Use mine", else None."""
     from gaia.config import GaiaConfigError
@@ -339,14 +401,22 @@ def step_labels(
     skip_chat_model: bool,
     users_server: Optional[str] = None,
     chat_model: Optional[str] = None,
+    download_gb: Optional[float] = None,
 ) -> List[Dict[str, str]]:
-    """The steps as the user reads them: their server, and the model setup chose."""
+    """The steps as the user reads them: their server, the model setup chose,
+    and (once setup has said) how much it downloads."""
     if skip_chat_model:
         models = "the embedding model, under 1 GB"
     elif chat_model:
         models = f"chat model {chat_model}, plus the embedding model"
     else:
         models = "the chat model that fits this PC, plus the embedding model"
+    if download_gb is not None:
+        models += (
+            f" ({download_gb:.1f} GB in all)"
+            if download_gb
+            else " (already downloaded)"
+        )
     return [
         (
             {
@@ -373,6 +443,10 @@ class SetupRun:
     skip_chat_model: bool
     users_server: Optional[str] = None
     chat_model: Optional[str] = None
+    #: Only the model server; no model is downloaded.
+    server_only: bool = False
+    #: The chat model the screen showed, passed as `--chat-model`.
+    pinned_model: Optional[str] = None
     gaia_lemonade: bool = False
     state: str = "running"  # running | verifying | ready | failed | cancelled
     phase: Optional[str] = None
@@ -384,23 +458,82 @@ class SetupRun:
     problem: Optional[Dict[str, Any]] = None
     log: List[str] = field(default_factory=list)
     status: Optional[Dict[str, Any]] = None
+    #: ``{"id", "reason"}`` for each larger model setup passed over.
+    passed_over: List[Dict[str, str]] = field(default_factory=list)
+    #: ``{"id", "size_gb"}`` for each model setup pulls; size 0 is already on disk.
+    downloads: List[Dict[str, Any]] = field(default_factory=list)
+    download_gb: Optional[float] = None
+    #: The pull in progress: model, its place in the queue, bytes, speed, time left.
+    download: Optional[Dict[str, Any]] = None
+    _download_at: float = 0.0
+
+    def command(self) -> str:
+        return run_command(
+            self.skip_chat_model,
+            self.server_only,
+            self.pinned_model,
+            self.gaia_lemonade,
+        )
+
+    def _step_status(self, i: int, reached: int) -> str:
+        if self.state == "ready":
+            return "pending" if self.server_only and i > 0 else "done"
+        if i < reached:
+            return "done"
+        if i == reached or (reached < 0 and i == 0):
+            if self.state == "failed":
+                return "failed"
+            return "cancelled" if self.state == "cancelled" else "active"
+        return "pending"
+
+    def apply(self, event: Dict[str, Any]) -> None:
+        """Take in one ``--progress-json`` event (see :func:`parse_event`)."""
+        kind = event["event"]
+        if kind == "chat_model":
+            self.chat_model = event.get("model") or self.chat_model
+            self.passed_over = list(event.get("skipped") or [])
+        elif kind == "downloads":
+            self.downloads = list(event.get("models") or [])
+            self.download_gb = event.get("total_gb")
+        elif kind == "download":
+            self._apply_download(event)
+
+    def _apply_download(self, event: Dict[str, Any]) -> None:
+        model = event.get("model")
+        done = int(event.get("bytes_done") or 0)
+        total = int(event.get("bytes_total") or 0) or None
+        speed = float(event.get("speed_bps") or 0.0)
+        queue = [m.get("id") for m in self.downloads if m.get("size_gb") != 0]
+        self.download = {
+            "model": model,
+            "index": queue.index(model) + 1 if model in queue else None,
+            "count": len(queue) or None,
+            "bytes_done": done,
+            "bytes_total": total,
+            "speed_bps": speed,
+            "eta_s": round((total - done) / speed) if speed > 0 and total else None,
+        }
+        self._download_at = time.monotonic()
+        self.phase = PHASE_MODELS
+        self.text = f"Downloading {model}"
+        self.percent = min(100, done * 100 // total) if total else None
+
+    def _download_view(self) -> Optional[Dict[str, Any]]:
+        """The pull in progress, without a speed once it has gone quiet."""
+        if self.download is None:
+            return None
+        if time.monotonic() - self._download_at <= STALE_DOWNLOAD_S:
+            return self.download
+        return {**self.download, "speed_bps": 0.0, "eta_s": None}
 
     def view(self) -> Dict[str, Any]:
         reached = PHASES.index(self.phase) if self.phase in PHASES else -1
         steps = []
-        labels = step_labels(self.skip_chat_model, self.users_server, self.chat_model)
+        labels = step_labels(
+            self.skip_chat_model, self.users_server, self.chat_model, self.download_gb
+        )
         for i, step in enumerate(labels):
-            if self.state == "ready" or i < reached:
-                status = "done"
-            elif i == reached or (reached < 0 and i == 0):
-                status = (
-                    "failed"
-                    if self.state == "failed"
-                    else "cancelled" if self.state == "cancelled" else "active"
-                )
-            else:
-                status = "pending"
-            steps.append({**step, "status": status})
+            steps.append({**step, "status": self._step_status(i, reached)})
         return {
             "state": self.state,
             "steps": steps,
@@ -409,11 +542,15 @@ class SetupRun:
             "size": self.size,
             "error": self.error,
             "problem": self.problem,
-            "command": run_command(self.skip_chat_model, self.gaia_lemonade),
+            "command": self.command(),
             "log_tail": self.log[-40:],
             "skip_chat_model": self.skip_chat_model,
+            "server_only": self.server_only,
             "gaia_lemonade": self.gaia_lemonade,
             "chat_model": None if self.skip_chat_model else self.chat_model,
+            "passed_over": self.passed_over,
+            "download_gb": self.download_gb,
+            "download": self._download_view(),
         }
 
 
@@ -430,7 +567,11 @@ class SetupRunner:
             return self._run.view() if self._run else None
 
     def start(
-        self, skip_chat_model: bool, gaia_lemonade: bool = False
+        self,
+        skip_chat_model: bool,
+        server_only: bool = False,
+        chat_model: Optional[str] = None,
+        gaia_lemonade: bool = False,
     ) -> Dict[str, Any]:
         """Start setup; *gaia_lemonade* sets up and saves GAIA's own server."""
         if gaia_lemonade:
@@ -444,15 +585,20 @@ class SetupRunner:
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
                 raise SetupError("Setup is already running.")
+            pinned = None if skip_chat_model or server_only else chat_model
             run = SetupRun(
                 skip_chat_model=skip_chat_model,
                 users_server=None if gaia_lemonade else users_lemonade_url(),
+                chat_model=pinned,
+                server_only=server_only,
+                pinned_model=pinned,
                 gaia_lemonade=gaia_lemonade,
             )
-            command = run_command(skip_chat_model, gaia_lemonade)
             try:
                 self._proc = subprocess.Popen(
-                    _gaia_argv(*run_args(skip_chat_model, gaia_lemonade)),
+                    _gaia_argv(
+                        *run_args(skip_chat_model, server_only, pinned, gaia_lemonade)
+                    ),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL,
@@ -463,7 +609,8 @@ class SetupRunner:
                 )
             except OSError as e:
                 raise SetupError(
-                    f"Could not start `{command}`: {e}. Run it in a terminal instead."
+                    f"Could not start `{run.command()}`: "
+                    f"{e}. Run it in a terminal instead."
                 ) from e
             self._run = run
             proc = self._proc
@@ -493,6 +640,7 @@ class SetupRunner:
                         f"Setup stopped on an unexpected error: {e}. "
                         "See the Agent UI backend log for details."
                     )
+                    _record_outcome(run.error)
 
     def _pump(self, run: SetupRun, proc: subprocess.Popen) -> None:
         buf = b""
@@ -534,12 +682,18 @@ class SetupRunner:
                 if problem is not None:
                     # The raw exception stays in the log, behind "Details".
                     run.problem, run.error = problem, problem["message"]
+                    _record_outcome(run.error)
                     return
                 run.error = (
-                    f"`{run_command(run.skip_chat_model, run.gaia_lemonade)}` "
-                    f"failed (exit {code}): "
-                    f"{run.error or _last_line(chr(10).join(run.log))}"
+                    f"`{run.command()}` failed "
+                    f"(exit {code}): {run.error or _last_line(chr(10).join(run.log))}"
                 )
+                _record_outcome(run.error)
+                return
+            if run.server_only:
+                # Nothing downloaded yet, so there is nothing to load.
+                run.state, run.text = "ready", "The model server is running"
+                run.percent = run.size = None
                 return
             run.state = "verifying"
             run.phase = PHASE_FINISH
@@ -553,6 +707,7 @@ class SetupRunner:
         except SetupError as e:
             with self._lock:
                 run.state, run.error = "failed", str(e)
+                _record_outcome(run.error)
             return
         with self._lock:
             run.status = status
@@ -563,10 +718,16 @@ class SetupRunner:
                 run.error = "; ".join(status.get("reasons") or []) or (
                     "Setup finished but GAIA is still not ready."
                 )
+            _record_outcome(run.error if run.state == "failed" else None)
 
     def _consume(self, run: SetupRun, line: str) -> None:
         line = line.strip()
         if not line:
+            return
+        event = parse_event(line)
+        if event is not None:
+            with self._lock:
+                run.apply(event)
             return
         progress = describe(line)
         with self._lock:
@@ -589,6 +750,7 @@ class SetupRunner:
                 ) >= PHASES.index(run.phase):
                     run.phase = progress.phase
                 run.percent = run.size = None
+                run.download = None
             if progress.text:
                 run.text = progress.text
 
