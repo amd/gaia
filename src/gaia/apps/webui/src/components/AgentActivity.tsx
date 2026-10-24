@@ -309,6 +309,9 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
     return result;
 }
 
+/** What a turn blocked on the user says, in the message header and its activity row. */
+export const WAITING_ON_USER_LABEL = 'Waiting for you';
+
 /** `8` -> "8s", `125` -> "2m 05s". */
 export function formatElapsed(seconds: number): string {
     const s = Math.max(0, Math.floor(seconds));
@@ -338,10 +341,12 @@ interface AgentActivityProps {
     variant?: 'inline' | 'summary';
     /** The agent's own step count; rows (thinking, plans, tools) are not steps. */
     agentStepCount?: number;
+    /** The turn is blocked on the user (an approval or a question), so nothing is running. */
+    awaitingUser?: boolean;
 }
 
 /** Displays agent activity as a single expandable "Thinking" panel with tool calls inline. */
-export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCount }: AgentActivityProps) {
+export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCount, awaitingUser = false }: AgentActivityProps) {
     // Always start collapsed — thinking text is shown via ThinkingIndicator
     // in the message header. Users can expand to see details if they want.
     const [expanded, setExpanded] = useState(false);
@@ -433,12 +438,14 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
         ? `Blocked by policy \u00b7 ${policySteps.length} alert${policySteps.length !== 1 ? 's' : ''}`
         : `${stepCount} step${stepCount !== 1 ? 's' : ''}`
             + (toolCallCount > 0 ? ` \u00b7 ${toolCallCount} tool${toolCallCount !== 1 ? 's' : ''}` : '');
-    // What GAIA is waiting on right now, and for how long.
-    const liveText = runningTool
-        ? `${toolRowText(runningTool)} \u00b7 ${formatElapsed((now - runningTool.timestamp) / 1000)}`
-        : isActive && lastStep
-            ? `Waiting on the model \u00b7 ${formatElapsed((now - lastStep.timestamp) / 1000)}`
-            : '';
+    // What GAIA is waiting on right now, and for how long. A turn blocked on the user isn't running anything.
+    const liveText = isActive && awaitingUser
+        ? WAITING_ON_USER_LABEL
+        : runningTool
+            ? `${toolRowText(runningTool)} \u00b7 ${formatElapsed((now - runningTool.timestamp) / 1000)}`
+            : isActive && lastStep
+                ? `Waiting on the model \u00b7 ${formatElapsed((now - lastStep.timestamp) / 1000)}`
+                : '';
 
     return (
         <div className={`agent-activity ${variant} ${isActive ? 'active' : 'done'} ${hasErrors ? 'has-errors' : ''} ${hasPolicyAlerts ? 'has-policy-alerts' : ''}`}>

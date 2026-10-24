@@ -6,6 +6,11 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **A long conversation no longer overflows a small model window.** The
+  agent used the history you pushed as-is, so on a 32K window (an NPU model)
+  it plus the agent's own prompt could exceed the window and fail the turn.
+  It now keeps the newest whole turns that fit and says so in a `status`
+  event when older ones drop out of view.
 - **Token counts are exact in the published binary, offline too.** The
   binary could not load its tokenizer and counted tokens by an estimate that
   overcounts. The tokenizer and its data now ship inside the binary, so it

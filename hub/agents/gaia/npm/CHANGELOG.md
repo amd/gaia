@@ -6,6 +6,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Pushed history that doesn't fit the model's window no longer overflows
+  it.** `/query` used the `context` you pushed as-is, but you size it without
+  seeing the agent's prompt and tools. On a 32K window the two together could
+  exceed the window and fail the turn. The agent now keeps the newest whole
+  turns that fit beside its prompt and streams a `status` event when older
+  ones drop out of view.
 ### For integrators: contract 2.20
 
 - **A failed model request says which endpoint failed, worded for your

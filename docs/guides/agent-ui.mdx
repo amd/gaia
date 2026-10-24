@@ -50,9 +50,11 @@ stored evidence remain on your machine. When more older turns leave the model's
 view — a long chat, or a switch to a smaller model — the chat shows one quiet
 line before the reply — "Older messages are now out of the model's view (N
 turns)" — and the TUI shows the same line in its transcript. Ask GAIA to recall
-anything from before it. A Hub-installed GAIA agent relayed from the Agent UI
-sees only the last 5 exchanges, and the chat says so once, when the sixth one
-lands. Earlier conversations saved before this feature retain text only.
+anything from before it. A GAIA agent relayed from the Agent UI gets the text of
+earlier turns under the same budget. A single message too long for that budget
+reaches the model cut short, with a note saying how many characters were cut,
+and the chat says so the same way. Earlier conversations saved before this
+feature retain text only.
 If the current prompt leaves no history budget, GAIA warns and sends no older
 turns; saved evidence remains intact. Switching to a model without native tool
 calling replays recorded calls and results as text.

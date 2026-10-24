@@ -543,8 +543,8 @@ gaia eval agent --audit-only
 
 Runs a static analysis of the Agent UI's internal constraints without making any LLM calls:
 
-- **History window size** (`_RELAY_CONTEXT_PAIRS` in `_chat_helpers.py`)
-- **Message truncation limits** (`_MAX_CHARS`)
+- **History window size** (`_RELAY_CONTEXT_PAIRS` in `_chat_helpers.py`, if one is set; relayed history is sized to the model's context window, so it reports `unknown`)
+- **Message truncation limits** (`_MAX_CHARS`, likewise)
 - **Tool result persistence** in conversation history
 - **Agent persistence model** (stateless per-message vs. persistent)
 
