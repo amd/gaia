@@ -206,7 +206,8 @@ describe('messages typed during a reply', () => {
                 current().onError(Object.assign(new api.ApiError('HTTP 409: busy', 409, 'busy', null), { httpStatus: 409 }));
             });
             expect(userBubbles()).toEqual(['first question']);
-            expect(screen.getByText('Queued. Sends when this reply ends.')).toBeTruthy();
+            // Nothing is replying here, so it says what it is waiting on (#5712).
+            expect(screen.getByText('GAIA is still busy in this chat. Trying again in a few seconds.')).toBeTruthy();
             expect(streams).toHaveLength(2);
 
             await act(async () => { vi.advanceTimersByTime(QUEUE_BUSY_WAIT_MS); });
