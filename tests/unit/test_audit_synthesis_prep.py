@@ -1261,7 +1261,10 @@ def test_long_evidence_is_trimmed_in_the_dossier_but_kept_whole_in_the_json(
     )
     backlog_file = tmp_path / "backlog.json"
     backlog_file.write_text(
-        json.dumps({"open_issues": [], "filed": [], "suppressed": []}), encoding="utf-8"
+        json.dumps(
+            {"open_issues": [], "filed": [], "suppressed": [], "closed_duplicates": []}
+        ),
+        encoding="utf-8",
     )
     out = tmp_path / "worklist.json"
     dossier = tmp_path / "dossier.md"
@@ -1572,7 +1575,14 @@ def test_main_writes_a_worklist_and_a_dossier_without_touching_gh(
     )
     backlog_file = tmp_path / "backlog.json"
     backlog_file.write_text(
-        json.dumps({"open_issues": backlog_issues, "filed": [], "suppressed": []}),
+        json.dumps(
+            {
+                "open_issues": backlog_issues,
+                "filed": [],
+                "suppressed": [],
+                "closed_duplicates": [],
+            }
+        ),
         encoding="utf-8",
     )
     out = tmp_path / "worklist.json"
@@ -1631,6 +1641,7 @@ def test_main_reports_no_new_defects_rather_than_an_empty_dossier(
                     }
                 ],
                 "suppressed": [],
+                "closed_duplicates": [],
             }
         ),
         encoding="utf-8",
@@ -1671,7 +1682,9 @@ def test_main_creates_the_output_directory(prep, tmp_path):
     write_findings(findings_dir, "findings-docs.json", [make_finding()])
     backlog_file = tmp_path / "backlog.json"
     backlog_file.write_text(
-        json.dumps({"open_issues": [], "filed": [], "suppressed": []}),
+        json.dumps(
+            {"open_issues": [], "filed": [], "suppressed": [], "closed_duplicates": []}
+        ),
         encoding="utf-8",
     )
     out = tmp_path / "sub" / "dir" / "worklist.json"
@@ -1715,7 +1728,9 @@ def test_main_quarantines_a_bad_finding_and_reports_it_three_ways(
     )
     backlog_file = tmp_path / "backlog.json"
     backlog_file.write_text(
-        json.dumps({"open_issues": [], "filed": [], "suppressed": []}),
+        json.dumps(
+            {"open_issues": [], "filed": [], "suppressed": [], "closed_duplicates": []}
+        ),
         encoding="utf-8",
     )
     out = tmp_path / "worklist.json"
@@ -1773,6 +1788,7 @@ def test_main_aborts_when_the_backlog_query_hit_its_own_limit(prep, tmp_path):
                 ],
                 "filed": [],
                 "suppressed": [],
+                "closed_duplicates": [],
             }
         ),
         encoding="utf-8",
@@ -1798,3 +1814,399 @@ def test_main_aborts_when_the_backlog_query_hit_its_own_limit(prep, tmp_path):
 
     assert "hitting the --limit of 3" in str(excinfo.value)
     assert "Raise --limit" in str(excinfo.value)
+
+
+# ----------------------------------------------------------------------
+# Closed duplicates keep pointing at their canonical
+# ----------------------------------------------------------------------
+#
+# Triage closes a duplicate with "Duplicate of #N." Before this, its markers fell
+# out of dedup with it, so the next run re-filed exactly what had just been
+# consolidated: 34 open duplicates were closed into 11 canonicals in one sweep,
+# and #1077 / #4331 carry none of their keys.
+
+
+def _closed_dup(number: int, key: str, *comments: str, body_extra: str = ""):
+    return {
+        "number": number,
+        "stateReason": "DUPLICATE",
+        "body": f"Something broke.{body_extra}\n<!-- audit-cluster: {key} -->",
+        "comments": [{"body": c} for c in comments],
+    }
+
+
+def test_a_closed_duplicate_hands_its_keys_to_the_open_canonical(prep, tmp_path):
+    redirected = prep.redirect_duplicates(
+        [
+            _closed_dup(
+                3422, "docs:lemonade-server-serve-removed", "Duplicate of #4331."
+            )
+        ],
+        open_numbers={4331},
+    )
+    clusters = _cluster(
+        prep, [make_finding(cluster_key="docs:lemonade-server-serve-removed")], tmp_path
+    )
+
+    prep.classify(clusters, prep.extract_keys(redirected), {})
+
+    assert clusters[0]["status"] == "already-filed"
+    assert clusters[0]["existing_issues"] == [4331]
+
+
+def test_a_duplicate_of_a_closed_canonical_is_not_redirected(prep):
+    """A fixed canonical means the defect may have regressed: let it re-file."""
+    redirected = prep.redirect_duplicates(
+        [_closed_dup(3422, "docs:x", "Duplicate of #4331.")], open_numbers={1}
+    )
+    assert redirected == []
+
+
+def test_a_duplicate_with_no_named_canonical_is_not_silenced(prep, tmp_path):
+    """Unknown canonical: go through the backlog search, never vanish."""
+    redirected = prep.redirect_duplicates(
+        [_closed_dup(3422, "docs:x", "closing, see the other one")], open_numbers={4331}
+    )
+    clusters = _cluster(prep, [make_finding(cluster_key="docs:x")], tmp_path)
+
+    prep.classify(clusters, prep.extract_keys(redirected), {})
+
+    assert redirected == []
+    assert clusters[0]["status"] == "new"
+
+
+def test_the_latest_duplicate_comment_wins(prep):
+    """A duplicate re-pointed at a better canonical must follow the new one."""
+    redirected = prep.redirect_duplicates(
+        [
+            _closed_dup(
+                9, "docs:x", "Duplicate of #3471.", "Actually duplicate of #3832."
+            )
+        ],
+        open_numbers={3471, 3832},
+    )
+    assert [r["number"] for r in redirected] == [3832]
+
+
+def test_the_canonical_can_be_named_in_the_body(prep):
+    redirected = prep.redirect_duplicates(
+        [_closed_dup(9, "docs:x", body_extra=" DUPLICATE OF #12")], open_numbers={12}
+    )
+    assert [r["number"] for r in redirected] == [12]
+
+
+def test_a_self_referencing_duplicate_is_ignored(prep):
+    redirected = prep.redirect_duplicates(
+        [_closed_dup(12, "docs:x", "Duplicate of #12.")], open_numbers={12}
+    )
+    assert redirected == []
+
+
+def test_a_redirect_never_overrides_wontfix(prep, tmp_path):
+    """Suppression stays the stronger verdict when both point at one key."""
+    redirected = prep.redirect_duplicates(
+        [_closed_dup(9, "docs:x", "Duplicate of #12.")], open_numbers={12}
+    )
+    clusters = _cluster(prep, [make_finding(cluster_key="docs:x")], tmp_path)
+    suppressed = prep.extract_keys(
+        [{"number": 7, "body": "<!-- audit-cluster: docs:x -->"}]
+    )
+
+    prep.classify(clusters, prep.extract_keys(redirected), suppressed)
+
+    assert clusters[0]["status"] == "suppressed"
+
+
+def _fake_graphql(closed, details):
+    """A GraphQL stand-in: one page of closed issues, then details by node id."""
+    calls = []
+
+    def graphql(query, variables):
+        calls.append((query, variables))
+        if "nodes(ids:" in query:
+            return {"nodes": [details[i] for i in variables["ids"]]}
+        return {
+            "repository": {
+                "issues": {
+                    "totalCount": len(closed),
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": closed,
+                }
+            }
+        }
+
+    return graphql, calls
+
+
+def test_fetch_backlog_keeps_only_closed_duplicates(prep, monkeypatch):
+    """Completed and not-planned closures must not redirect anything, and only the
+    duplicates' bodies and comments are read."""
+    monkeypatch.setattr(prep, "_gh_json", lambda args: [])
+    graphql, calls = _fake_graphql(
+        [
+            {"id": "I1", "number": 1, "state": "CLOSED", "stateReason": "DUPLICATE"},
+            {"id": "I2", "number": 2, "state": "CLOSED", "stateReason": "COMPLETED"},
+            {"id": "I3", "number": 3, "state": "CLOSED", "stateReason": "NOT_PLANNED"},
+        ],
+        {"I1": {"number": 1, "body": "", "comments": {"nodes": []}}},
+    )
+    monkeypatch.setattr(prep.closed_duplicates, "graphql", graphql)
+
+    backlog = prep.fetch_backlog("amd/gaia", "weekly-audit", 5000)
+
+    assert [i["number"] for i in backlog["closed_duplicates"]] == [1]
+    detail_calls = [v for q, v in calls if "nodes(ids:" in q]
+    assert detail_calls == [{"ids": ["I1"], "comments": 10}]
+    list_call = next(v for q, v in calls if "nodes(ids:" not in q)
+    assert list_call["states"] == ["CLOSED"] and list_call["label"] == "weekly-audit"
+    assert list_call["first"] <= 100
+
+
+def test_a_ui_close_as_duplicate_redirects_without_any_comment(
+    prep, monkeypatch, tmp_path
+):
+    """GitHub's "Close as duplicate" records an event and writes no comment."""
+    monkeypatch.setattr(prep, "_gh_json", lambda args: [])
+    graphql, _ = _fake_graphql(
+        [{"id": "I9", "number": 9, "state": "CLOSED", "stateReason": "DUPLICATE"}],
+        {
+            "I9": {
+                "number": 9,
+                "body": "<!-- audit-cluster: docs:x -->",
+                "comments": {"nodes": []},
+                "timelineItems": {
+                    "nodes": [
+                        {
+                            "__typename": "MarkedAsDuplicateEvent",
+                            "duplicate": {"number": 9},
+                            "canonical": {"number": 4331},
+                        }
+                    ]
+                },
+            }
+        },
+    )
+    monkeypatch.setattr(prep.closed_duplicates, "graphql", graphql)
+    backlog = prep.fetch_backlog("amd/gaia", "weekly-audit", 5000)
+
+    redirected = prep.redirect_duplicates(backlog["closed_duplicates"], {4331})
+    clusters = _cluster(prep, [make_finding(cluster_key="docs:x")], tmp_path)
+    prep.classify(clusters, prep.extract_keys(redirected), {})
+
+    assert clusters[0]["status"] == "already-filed"
+    assert clusters[0]["existing_issues"] == [4331]
+
+
+@pytest.mark.parametrize("which", ["filed", "suppressed"])
+def test_a_labelled_query_that_fills_its_limit_is_refused(prep, monkeypatch, which):
+    """`gh issue list` stops at --limit silently; a full page may be a cut one."""
+
+    def fake_gh(args):
+        wontfix = "audit-wontfix" in args
+        if "--label" in args and wontfix == (which == "suppressed"):
+            return [{"number": i, "body": ""} for i in range(50)]
+        return []
+
+    monkeypatch.setattr(prep, "_gh_json", fake_gh)
+    with pytest.raises(SystemExit) as excinfo:
+        prep.fetch_backlog("amd/gaia", "weekly-audit", 50)
+    assert "Raise --limit" in str(excinfo.value)
+
+
+# ----------------------------------------------------------------------
+# Matching sees an audit issue's own keys, not just its title
+# ----------------------------------------------------------------------
+
+
+@pytest.fixture
+def index_page_backlog(backlog_issues) -> list[dict[str, Any]]:
+    """#3471 from the real backlog: the guides-index defect #3832 re-filed."""
+    return backlog_issues + [
+        {
+            "number": 3471,
+            "title": (
+                "The guides hub mirrors the site's User Guides nav section-for-section "
+                "but silently drops 5 of its pages"
+            ),
+            "labels": [{"name": "weekly-audit"}],
+        }
+    ]
+
+
+INDEX_3471_BODY = (
+    "<!-- audit-key: walkthrough:docs/guides/index.mdx:card-sections-vs-nav-group -->"
+)
+
+
+def _index_cluster(prep, tmp_path):
+    return _cluster(
+        prep,
+        [
+            make_finding(
+                title="The guides index hides eight shipped guides the nav lists",
+                why="A reader who uses the landing page never discovers eight guides.",
+                cluster_key="docs:index-page-out-of-sync-with-docs-json-nav",
+                path="docs/guides/index.mdx",
+                symbol="card-sections",
+            )
+        ],
+        tmp_path,
+    )
+
+
+def test_title_only_matching_misses_a_same_location_duplicate(
+    prep, tmp_path, index_page_backlog
+):
+    """Pins the failure: without the keys, #3471 is not offered."""
+    clusters = _index_cluster(prep, tmp_path)
+    prep.find_backlog_candidates(clusters, index_page_backlog)
+    assert 3471 not in [c["number"] for c in clusters[0]["backlog_candidates"]]
+
+
+def test_an_audit_issues_own_keys_surface_a_same_location_duplicate(
+    prep, tmp_path, index_page_backlog
+):
+    clusters = _index_cluster(prep, tmp_path)
+    marker_text = prep.marker_text_by_issue([{"number": 3471, "body": INDEX_3471_BODY}])
+
+    prep.find_backlog_candidates(clusters, index_page_backlog, marker_text=marker_text)
+
+    assert clusters[0]["backlog_candidates"][0]["number"] == 3471
+
+
+def test_marker_text_belongs_only_to_the_issue_that_carries_it(
+    prep, tmp_path, index_page_backlog
+):
+    """Keys on #3471 must not lift an unrelated title into the candidates."""
+    clusters = _index_cluster(prep, tmp_path)
+    marker_text = prep.marker_text_by_issue([{"number": 3471, "body": INDEX_3471_BODY}])
+
+    prep.find_backlog_candidates(clusters, index_page_backlog, marker_text=marker_text)
+
+    assert [c["number"] for c in clusters[0]["backlog_candidates"]] == [3471]
+
+
+def test_a_receipt_stays_excluded_even_when_it_carries_markers(
+    prep, tmp_path, index_page_backlog
+):
+    clusters = _index_cluster(prep, tmp_path)
+    marker_text = prep.marker_text_by_issue([{"number": 3300, "body": INDEX_3471_BODY}])
+
+    prep.find_backlog_candidates(clusters, index_page_backlog, marker_text=marker_text)
+
+    assert 3300 not in [c["number"] for c in clusters[0]["backlog_candidates"]]
+
+
+def test_a_redirected_duplicates_keys_help_its_canonical_match(prep, tmp_path):
+    """#1077's title shares nothing with "[ui] extra"; its closed duplicates do."""
+    backlog = [
+        {
+            "number": 1077,
+            "title": "Guide prerequisites missing across ~14 guides",
+            "labels": [],
+        },
+        {
+            "number": 20,
+            "title": "Electron installer fails on Windows ARM",
+            "labels": [],
+        },
+        {"number": 21, "title": "Kokoro latency regression", "labels": []},
+    ]
+    redirected = prep.redirect_duplicates(
+        [
+            _closed_dup(
+                3477,
+                "walkthrough:docs/guides/npu.mdx:agent-ui-ui-extra-missing",
+                "Duplicate of #1077.",
+            )
+        ],
+        open_numbers={1077, 20, 21},
+    )
+    clusters = _cluster(
+        prep,
+        [
+            make_finding(
+                title="gaia chat --ui exits 1 on a stock install",
+                why="The [ui] extra is never installed.",
+                cluster_key="docs:ui-extra-missing",
+                path="docs/guides/email.mdx",
+            )
+        ],
+        tmp_path,
+    )
+
+    prep.find_backlog_candidates(
+        clusters, backlog, marker_text=prep.marker_text_by_issue(redirected)
+    )
+
+    assert clusters[0]["backlog_candidates"][0]["number"] == 1077
+
+
+def test_main_routes_a_redirected_key_to_already_filed(prep, tmp_path):
+    findings_dir = tmp_path / "findings"
+    write_findings(
+        findings_dir, "findings-docs.json", [make_finding(cluster_key="docs:dead-cmd")]
+    )
+    backlog_file = tmp_path / "backlog.json"
+    backlog_file.write_text(
+        json.dumps(
+            {
+                "open_issues": [
+                    {"number": 4331, "title": "Dead command", "labels": []}
+                ],
+                "filed": [],
+                "suppressed": [],
+                "closed_duplicates": [
+                    _closed_dup(3422, "docs:dead-cmd", "Duplicate of #4331.")
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "worklist.json"
+
+    prep.main(
+        [
+            "--findings-dir",
+            str(findings_dir),
+            "--repo",
+            "amd/gaia",
+            "--out",
+            str(out),
+            "--dossier",
+            str(tmp_path / "dossier.md"),
+            "--backlog-file",
+            str(backlog_file),
+        ]
+    )
+
+    worklist = json.loads(out.read_text(encoding="utf-8"))
+    assert worklist["counts"]["already_filed"] == 1
+    assert worklist["clusters"][0]["existing_issues"] == [4331]
+
+
+def test_an_old_backlog_snapshot_is_refused_by_name(prep, tmp_path):
+    """A snapshot missing a list must not be read as "that list is empty"."""
+    findings_dir = tmp_path / "findings"
+    write_findings(findings_dir, "findings-docs.json", [make_finding()])
+    backlog_file = tmp_path / "backlog.json"
+    backlog_file.write_text(
+        json.dumps({"open_issues": [], "filed": [], "suppressed": []}),
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        prep.main(
+            [
+                "--findings-dir",
+                str(findings_dir),
+                "--repo",
+                "amd/gaia",
+                "--out",
+                str(tmp_path / "out.json"),
+                "--dossier",
+                str(tmp_path / "dossier.md"),
+                "--backlog-file",
+                str(backlog_file),
+            ]
+        )
+    assert "closed_duplicates" in str(excinfo.value)

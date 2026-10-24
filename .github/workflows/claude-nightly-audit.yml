@@ -9,12 +9,12 @@
 # the missing proactive lens: a scheduled deep review that fans out one Claude job
 # per dimension, then files ONE issue per DEFECT.
 #
-# NAMING: the filename, `name:`, and cron all say NIGHTLY, because it is nightly. The
+# NAMING: the FILENAME still says nightly (it is referenced from docs, skills and tests);
+# the display name is "Claude Code Audit" since it now runs every third night. The
 # `weekly-audit` LABEL keeps its name deliberately — it is a PROVENANCE label ("a
-# proactive Claude audit filed this"), shared with the genuinely-weekly
-# claude-weekly-doc-walkthrough.yml, so no cadence word fits it. Nothing depends on the
-# label's spelling any more: dedup reads the audit-key/audit-cluster markers and searches
-# the whole open backlog, not one label.
+# proactive Claude audit filed this"), shared with claude-weekly-doc-walkthrough.yml, so
+# it names no cadence. Nothing depends on the label's spelling any more: dedup reads the
+# audit-key/audit-cluster markers and searches the whole open backlog, not one label.
 #
 # HUMAN-GATED — NOT an auto-merge bot. The workflow produces *findings*, never
 # commits. To turn an issue into a PR, a maintainer applies the `bug` label and
@@ -32,13 +32,22 @@
 # Filing a bookkeeping issue per run accumulated 19 of them in the tracker with nothing
 # actionable in any of them.
 #
-# MODES:
-#   normal (6 nights/wk) — reviews the last N days of merged work (window_days, default
-#                      1) + the subsystems it touched. Skips a night with no commits.
-#   deep   (Sundays)  — whole-codebase latent-debt sweep; also selectable via dispatch.
-#   The `auto` default resolves to deep on Sunday (ISO day-of-week 7), else normal.
-#   Keyed on DAY-OF-WEEK deliberately — see the selector comment in preflight for why
-#   the old day-of-month test breaks under a nightly cron.
+# CADENCE: every third night, dispatched by claude-audit-rotation.yml (one proactive
+# audit a night). Run by hand any time with `gh workflow run claude-nightly-audit.yml`.
+#
+# MODES (resolved by scripts/audit/audit_history.py from this workflow's own history):
+#   normal — reviews everything merged since the last ROTATION run that SUCCEEDED, so a
+#            turn lost to the Claude usage limit is covered by the next one instead of
+#            silently skipped. Skips a turn with no commits.
+#   deep   — whole-codebase latent-debt sweep whenever the last successful deep sweep is
+#            over 8 days old: every third turn (~9 days), and the very next turn after a
+#            deep sweep fails. Also used when there is no usable history or the gap
+#            exceeds 7 days. Interval-based on purpose: a weekday rule ("Sunday") would
+#            land on this audit's night only once in 21 days.
+#
+# QUOTA GATE: preflight probes Claude once before any lens starts. On the usage limit the
+# run stops there with the account and reset time in the job summary (5 of 10 nights in
+# October 2026 failed this way, each burning four lens jobs to say so).
 #
 # SECURITY is NOT a dimension here — it has its own dedicated workflow,
 # .github/workflows/claude-security-audit.yml (deterministic semgrep + a Claude
@@ -81,11 +90,13 @@
 # Claude Max subscription pool, so there is no per-run dollar cost — only shared quota.
 #
 # COST CEILING: 4 dimension jobs (--max-turns 150) + 1 synthesis job (--max-turns 100) =
-# a known per-run ceiling, now paid up to 7x/week instead of once since the cadence went
-# nightly. window_days=1 and skip-if-empty are what keep that affordable. This shares one
-# Max subscription pool with claude-security-audit.yml (also nightly) and the interactive
-# PR-review / auto-fix jobs — if those start getting rate-limited, the first lever is
-# trimming the nightly matrix and leaving all four lenses to the Sunday deep run. The dimension matrix runs `max-parallel: 1` (serialized) so
+# a known per-run ceiling, paid every third night. Measured October 2026: ~$10 of
+# API-equivalent subscription usage on a normal turn, ~$30 on a deep sweep. The
+# since-last-success window and skip-if-empty are what keep that affordable. This shares one
+# Max subscription pool with the security audit and doc walkthrough (the other rotation
+# nights) and the interactive PR-review / auto-fix jobs. If those start getting
+# rate-limited, the first lever is trimming the normal-turn matrix and leaving all four
+# lenses to the deep sweep. The dimension matrix runs `max-parallel: 1` (serialized) so
 # the run is a steady drip rather than a 4-job burst — this keeps it under the Max
 # subscription's rolling (5-hour) rate limit, at the cost of a longer wall-clock.
 # skip-if-empty exits before any Claude call on a quiet night. The concurrency group
@@ -95,34 +106,30 @@
 # with no Edit/Write) — they never `pip install` / run GAIA / execute checked-out code,
 # same rule as the claude.yml review jobs.
 
-name: Claude Nightly Audit
+name: Claude Code Audit
+run-name: ${{ inputs.rotation_night && format('Claude Code Audit — rotation night {0}', inputs.rotation_night) || 'Claude Code Audit' }}
 
 on:
-  schedule:
-    # 10:37 UTC nightly = 03:37 PDT / 02:37 PST. GitHub cron is UTC-only with no DST
-    # handling, so one fixed hour cannot be 3am year-round; the 1h winter drift is
-    # accepted. The off-the-hour minute is deliberate — ":00" slots are the busiest on
-    # the shared Actions fleet and get queued.
-    #
-    # Sundays → deep whole-codebase sweep; the other six nights → normal (last-day diff).
-    # See the mode selector in preflight: it keys off DAY-OF-WEEK, not day-of-month.
-    #
-    # Runs ~1.4h AFTER claude-security-audit.yml's nightly 09:13 UTC slot so the two
-    # proactive Claude runs don't stack on the shared subscription rate limit, and
-    # ~1.4h BEFORE claude-weekly-doc-walkthrough.yml's Monday 12:00 UTC slot.
-    - cron: "37 10 * * *"
+  # No cron of its own: claude-audit-rotation.yml dispatches this every third night
+  # (one proactive audit a night, 10:13 UTC = 03:13 PDT / 02:13 PST). Running every
+  # audit every night spent the Claude weekly cap mid-week.
   workflow_dispatch:
     inputs:
+      rotation_night:
+        # Set only by claude-audit-rotation.yml. Marks this run (via run-name) as a
+        # rotation night, the only runs scripts/audit/audit_history.py counts as history.
+        description: "Internal: set by claude-audit-rotation.yml. Leave empty."
+        default: ""
       mode:
         description: "Audit mode"
         type: choice
         options: [auto, normal, deep]
         default: auto
       window_days:
-        description: "Days of history to review in normal mode"
-        # 1, not 7: the schedule is nightly, so each run should audit the day that just
-        # passed. Leaving this at 7 would re-audit the same week seven times over.
-        default: "1"
+        description: "Days of history to review in normal mode (empty = since the last successful rotation run)"
+        # Empty, not a fixed day count: a fixed window silently skipped every commit
+        # merged on a night the run failed.
+        default: ""
       dry_run:
         # Files and comments NOTHING; writes what it WOULD have filed to the job summary.
         # This is how you validate a dedup change against the real backlog without adding
@@ -153,12 +160,20 @@ jobs:
   preflight:
     if: github.repository == 'amd/gaia'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Reads this workflow's own run history to find the last successful night.
+      actions: read
+      # Reads merged PR titles/bodies for the recent-changes context.
+      pull-requests: read
     outputs:
       skip: ${{ steps.scope.outputs.skip }}
       mode: ${{ steps.scope.outputs.mode }}
-      window_days: ${{ steps.scope.outputs.window_days }}
+      since: ${{ steps.scope.outputs.since }}
+      base_sha: ${{ steps.scope.outputs.base_sha }}
       dimensions: ${{ steps.dims.outputs.dimensions }}
       dimension_count: ${{ steps.dims.outputs.dimension_count }}
+      claude_verdict: ${{ steps.gate.outputs.verdict }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -179,42 +194,143 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Dimensions: $dimensions"
 
-      - name: Resolve mode and skip-if-empty
+      - name: Resolve mode, window and skip-if-empty
         id: scope
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DISPATCH_MODE: ${{ github.event.inputs.mode || 'auto' }}
-          WINDOW_DAYS: ${{ github.event.inputs.window_days || '1' }}
+          WINDOW_DAYS: ${{ github.event.inputs.window_days || '' }}
         run: |
           set -euo pipefail
-          mode="$DISPATCH_MODE"
-          if [ "$mode" = "auto" ]; then
-            # DAY-OF-WEEK, not day-of-month. This selector used to read
-            # `day-of-month <= 7` and relied on the cron firing only on Mondays to make
-            # that mean "first Monday". The cron is now NIGHTLY, so that test would match
-            # on the 1st through the 7th of every month — seven consecutive deep
-            # whole-codebase sweeps instead of one. Keyed off the weekday it is correct
-            # at any cadence: exactly one deep run per week.
-            # %u is ISO day-of-week (1=Mon .. 7=Sun). 10# forces base-10 for safety.
-            dow=$(date -u +%u)
-            if [ "$((10#$dow))" -eq 7 ]; then mode="deep"; else mode="normal"; fi
-          fi
+          # From this workflow's own history, not the clock: the window opens at the last
+          # rotation run that SUCCEEDED, and a whole-codebase sweep runs whenever the last
+          # successful one is over 8 days old (every third turn at a 3-night cadence; a
+          # failed deep turn is retried on the next). See scripts/audit/audit_history.py.
+          python3 scripts/audit/audit_history.py window \
+            --repo "${{ github.repository }}" --workflow claude-nightly-audit.yml \
+            --mode "$DISPATCH_MODE" --window-days "$WINDOW_DAYS" --deep-every-days 8 \
+            > "$RUNNER_TEMP/scope.txt"
+          cat "$RUNNER_TEMP/scope.txt"
+          mode=$(sed -n 's/^mode=//p' "$RUNNER_TEMP/scope.txt")
+          since=$(sed -n 's/^since=//p' "$RUNNER_TEMP/scope.txt")
+          reason=$(sed -n 's/^reason=//p' "$RUNNER_TEMP/scope.txt")
+          base_sha=$(sed -n 's/^base_sha=//p' "$RUNNER_TEMP/scope.txt")
           skip=false
           if [ "$mode" = "normal" ]; then
-            count=$(git log --since="$WINDOW_DAYS days ago" --oneline | wc -l | tr -d ' ')
-            echo "Commit activity in the last $WINDOW_DAYS days: $count"
+            count=$(git log --since="$since" --oneline | wc -l | tr -d ' ')
+            echo "Commits since $since: $count"
             [ "$count" = "0" ] && skip=true
           fi
           {
             echo "mode=$mode"
-            echo "window_days=$WINDOW_DAYS"
+            echo "since=$since"
+            echo "base_sha=$base_sha"
             echo "skip=$skip"
           } >> "$GITHUB_OUTPUT"
-          echo "Resolved: mode=$mode skip=$skip window_days=$WINDOW_DAYS"
+          {
+            echo "### Code audit scope"
+            echo ""
+            echo "**Mode:** $mode — $reason"
+            if [ "$skip" = "true" ]; then
+              echo ""
+              echo "No commits in the window, so no lens runs tonight."
+            fi
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # What merged since this audit's last successful run, once, deterministically, so
+      # no lens spends turns reconstructing it. Bounded (30 KB) so five sessions reading
+      # it stay cheap. Exact when the last run's commit is known; otherwise the last 3
+      # days, and the summary says so. See scripts/audit/recent_changes.py.
+      - name: Collect recent changes on main
+        if: steps.scope.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_SHA: ${{ steps.scope.outputs.base_sha }}
+        run: |
+          python3 scripts/audit/recent_changes.py --repo "${{ github.repository }}" \
+            --base-sha "$BASE_SHA" --fallback-days 3 --max-bytes 30000 \
+            --out recent-changes.md --paths-out changed-paths.txt \
+            --summary "$GITHUB_STEP_SUMMARY"
+      - name: Upload the recent-changes context
+        if: steps.scope.outputs.skip != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: recent-changes
+          path: |
+            recent-changes.md
+            changed-paths.txt
+          if-no-files-found: error
+
+      # One cheap probe before any lens. On the usage limit the run stops HERE, once, with
+      # the account and reset time in the summary, instead of four lenses each failing in
+      # under a second and synthesis blaming a missing artifact. A quota refusal makes
+      # request-account-switch dispatch claude-account-switch.yml; the window above
+      # carries the night's work forward.
+      - name: Show which Claude account this run uses
+        if: steps.scope.outputs.skip != 'true'
+        run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
+      - name: Probe the Claude account
+        id: probe
+        if: steps.scope.outputs.skip != 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
+        with:
+          anthropic_api_key: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "github-merge-queue,github-actions"
+          prompt: |
+            Reply with exactly the word: ok
+          claude_args: |
+            --max-turns 1
+            --model ${{ env.AUDIT_MODEL }}
+            --allowedTools Read
+      - name: Stop here if Claude cannot answer
+        id: gate
+        if: steps.scope.outputs.skip != 'true'
+        env:
+          CLAUDE_CONCLUSION: ${{ steps.probe.outputs.conclusion }}
+          CLAUDE_LOG: ${{ steps.probe.outputs.execution_file }}
+          ACCOUNT: ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'secondary' || 'primary' }}
+        run: |
+          python3 scripts/audit/require_claude.py --conclusion "${CLAUDE_CONCLUSION:-}" \
+            --log "${CLAUDE_LOG:-}" --account "$ACCOUNT" \
+            --what "Tonight's code audit" --summary "$GITHUB_STEP_SUMMARY" \
+            --github-output "$GITHUB_OUTPUT"
+
+  # A refused quota probe asks the account switch to run. Explicit, because this run
+  # is usually started by claude-audit-rotation.yml with GITHUB_TOKEN: GitHub documents
+  # that GITHUB_TOKEN events create no runs except workflow_dispatch and
+  # repository_dispatch, and does not document that claude-account-switch.yml's
+  # workflow_run hook fires when such a run completes. A dispatch is the documented
+  # exception. If the hook does fire as well, the switch's concurrency group runs the
+  # two one after the other and the second finds nothing left to change.
+  request-account-switch:
+    name: Ask the account switch to probe (Claude is out of quota)
+    needs: preflight
+    if: >-
+      github.repository == 'amd/gaia' && !cancelled() &&
+      needs.preflight.outputs.claude_verdict == 'quota'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch claude-account-switch.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run claude-account-switch.yml --repo "$GITHUB_REPOSITORY" --ref main
+          echo "::notice title=Claude account switch requested::The quota probe was refused, so claude-account-switch.yml was asked to move Claude CI to the other account. See its latest run."
 
   # One read-only Claude job per dimension. Each writes findings-<dimension>.json and
   # uploads it as an artifact for the synthesis job. continue-on-error so one dimension
   # crashing (e.g. an install-phase flake) doesn't sink the whole audit.
   audit:
+    # The mode is in the job name so audit_history.py can tell a past deep sweep
+    # from a normal one.
+    name: audit (${{ matrix.dimension }}, ${{ needs.preflight.outputs.mode }})
     needs: preflight
     # Explicit status check (#3929): run only after preflight succeeded and chose to
     # audit. The repo gate keeps a fork, where preflight is skipped, from running.
@@ -240,27 +356,40 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Download the recent-changes context
+        uses: actions/download-artifact@v8
+        with:
+          name: recent-changes
+          path: .
+
       - name: Build audit scope
         env:
           MODE: ${{ needs.preflight.outputs.mode }}
-          WINDOW_DAYS: ${{ needs.preflight.outputs.window_days }}
         run: |
           set -euo pipefail
           {
             echo "# Audit scope"
             echo "mode: $MODE"
+            echo ""
           } > audit-scope.txt
           if [ "$MODE" = "normal" ]; then
-            echo "## Commits (last $WINDOW_DAYS days)" >> audit-scope.txt
-            git log --since="$WINDOW_DAYS days ago" --oneline >> audit-scope.txt || true
-            echo "" >> audit-scope.txt
-            echo "## Changed files (last $WINDOW_DAYS days)" >> audit-scope.txt
-            base_sha=$(git rev-list -1 --before="$WINDOW_DAYS days ago" HEAD || true)
-            if [ -n "$base_sha" ]; then
-              git diff --name-status "$base_sha"...HEAD >> audit-scope.txt || true
-            fi
+            echo "Review what recent-changes.md lists, and the code next to it." >> audit-scope.txt
+            files=$(grep -E '\.py$' changed-paths.txt | while read -r f; do [ -f "$f" ] && echo "$f"; done || true)
           else
-            echo "## Deep sweep — review the whole codebase, not just recent changes." >> audit-scope.txt
+            echo "Deep sweep: review the whole codebase; recent-changes.md says where to start." >> audit-scope.txt
+            files=$(git ls-files 'src/*.py' 'hub/*.py')
+          fi
+          # Deterministic candidates for the "No deadline" class in
+          # scripts/audit/missed_bug_classes.md (the class audits missed most). A grep,
+          # so a timeout passed on a later line still shows up: the lens confirms each.
+          {
+            echo ""
+            echo "## Calls with no deadline (candidates; first 150, confirm each)"
+          } >> audit-scope.txt
+          if [ -n "$files" ]; then
+            printf '%s\n' "$files" | xargs grep -nE \
+              'subprocess\.(run|call|check_call|check_output)\(|\.communicate\(\)|\.wait\(\)|\.join\(\)|requests\.(get|post|put|delete|head|request)\(|httpx\.(get|post|put|delete|stream|request)\(|urlopen\(|\.acquire\(\)' \
+              | grep -v timeout | head -150 >> audit-scope.txt || true
           fi
           echo "Scope file lines: $(wc -l < audit-scope.txt)"
 
@@ -279,7 +408,7 @@ jobs:
           # scheduled run before Claude starts. Safe: schedule/dispatch only, no fork input.
           allowed_bots: "github-merge-queue,github-actions"
           prompt: |
-            You are one lens of GAIA's proactive nightly code audit. YOUR LENS IS: ${{ matrix.dimension }}
+            You are one lens of GAIA's proactive code audit. YOUR LENS IS: ${{ matrix.dimension }}
             Do ONLY that lens — ignore issues that belong to the other four.
 
             REPO: ${{ github.repository }}
@@ -287,10 +416,16 @@ jobs:
 
             ## First actions
             1. Read `CLAUDE.md` — project conventions and the rules the lenses enforce.
-            2. Read `audit-scope.txt` — it says whether this is a `normal` (recent-diff) or
-               `deep` (whole-codebase) run and, for normal runs, lists the commits and
-               changed files to focus on. In deep mode, review beyond the diff.
-            3. Investigate with Grep/Glob/Read/Bash (read-only — do NOT edit, install, or run repo code).
+            2. Read `audit-scope.txt` — whether this is a `normal` (recent-diff) or `deep`
+               (whole-codebase) run, plus deterministic candidates for the hang class.
+            3. Read `recent-changes.md` — what merged since this audit last ran, with PR
+               titles and the paths each touched. Look hardest there and at the code next
+               to it (regressions), re-check docs those PRs touched or made wrong, and do
+               not report anything a PR there already fixed.
+            4. Read `scripts/audit/missed_bug_classes.md` — the bug classes audits keep
+               missing, with a checklist per lens, and a "Don't report" list. Apply your
+               lens's checklist; report nothing on the don't-report list.
+            5. Investigate with Grep/Glob/Read/Bash (read-only — do NOT edit, install, or run repo code).
 
             ## Your lens — the four are mutually exclusive; claim ONLY yours
             The lenses overlap unless you respect these boundaries. The decisive question for a
@@ -298,6 +433,9 @@ jobs:
             (features), or contradicted by its docs (docs)?** SECURITY is out of scope for this
             audit — it has a dedicated workflow (claude-security-audit.yml); if you spot a security
             issue, leave it to that workflow rather than filing it here.
+            **Every tree is in scope, not just `src/gaia/` Python:** `hub/agents/**` and
+            `hub/skills/**`, `tui/` (Go), `src/gaia/apps/webui/` (TypeScript/React + Electron),
+            `installer/` (PowerShell/shell), `scripts/`, `util/`, and `.github/workflows/`.
             - **correctness**: code that IS wired and runs but silently does the wrong thing or
               nothing — a handler that flips a success flag without doing the work (a rollback
               that never rolls back), a poller that always returns a placeholder/null, a mode
@@ -312,7 +450,9 @@ jobs:
               clearly implies but didn't ship. If the code IS wired but behaves wrongly or does
               nothing, that is **correctness**, not features. Don't claim it here.
             - **docs**: a new/changed feature with no `docs/` page or no `docs.json` nav entry;
-              `docs/reference/cli.mdx` drift from the real `gaia` flags; any `amd-gaia.ai` URL in
+              `docs/reference/cli.mdx` drift from the real `gaia` flags; `docs/sdk/**` and the
+              rest of `docs/reference/**` drifting from the code they describe (signatures,
+              defaults, endpoints, env vars); any `amd-gaia.ai` URL in
               `src/gaia/` missing the `/docs/` prefix (CI rule, issue #1058); a hub agent under
               `hub/agents/<id>/python/` whose README/SPEC/SKILL/CHANGELOG contradict each other.
               A feature **documented as working whose implementation is a stub/NotImplementedError
@@ -531,8 +671,15 @@ jobs:
     needs: [preflight, audit]
     # Re-assert the repo gate (custom `if` drops the needs-succeeded guard). !cancelled()
     # so synthesis still files whatever the dimension jobs produced even if one crashed.
-    if: github.repository == 'amd/gaia' && !cancelled() && needs.preflight.outputs.skip != 'true'
+    if: >-
+      github.repository == 'amd/gaia' && !cancelled() &&
+      needs.preflight.result == 'success' && needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    # Shared with the doc walkthrough's synthesis: both read the backlog, then file. Run
+    # concurrently, each misses what the other is about to file and both file the defect.
+    concurrency:
+      group: claude-audit-issue-filing
+      cancel-in-progress: false
     permissions:
       contents: read
       issues: write
@@ -587,9 +734,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # `weekly-audit` is a PROVENANCE label, not a cadence one — it marks "a proactive
-          # Claude audit filed this" and is shared with the genuinely-weekly doc walkthrough.
+          # Claude audit filed this" and is shared with the doc walkthrough.
           gh label create weekly-audit --color 5319e7 \
-            --description "Filed by a proactive Claude audit (nightly code audit or weekly doc walkthrough)" \
+            --description "Filed by a proactive Claude audit (code audit or doc walkthrough)" \
             2>/dev/null && echo "created weekly-audit label" || echo "weekly-audit label already exists"
           # audit-wontfix permanently suppresses a finding — synthesis skips its key forever.
           gh label create audit-wontfix --color cccccc \
@@ -641,7 +788,7 @@ jobs:
           # See the dimension job's note — scheduled runs are actored by a bot.
           allowed_bots: "github-merge-queue,github-actions"
           prompt: |
-            You are the synthesis step of GAIA's nightly proactive audit. A deterministic
+            You are the synthesis step of GAIA's proactive code audit. A deterministic
             pass has ALREADY collapsed the four dimension jobs' raw findings into distinct
             defects and searched the whole open backlog for each one. Your job is the part
             a script cannot do: verify the evidence, decide whether a defect is genuinely
@@ -658,7 +805,11 @@ jobs:
                issues. Defects already filed or suppressed are listed at the bottom and are
                **already handled — do not act on them at all**.
             2. Read `CLAUDE.md` → "How You Communicate" for the tone to write in.
-            3. `synthesis-input.json` has the same data structured, if you need a field the
+            3. Before filing, check `audit-findings/recent-changes/recent-changes.md`: drop a
+               defect a PR listed there already fixed (open the code to confirm), and drop
+               anything `scripts/audit/missed_bug_classes.md` lists under "Don't report"
+               (for a known umbrella, comment on it instead).
+            4. `synthesis-input.json` has the same data structured, if you need a field the
                dossier elides — including the full location list when one is truncated.
             If the dossier reports malformed findings or that the lenses barely clustered,
             say so in the run report: that is a lens-prompt bug a human needs to see.

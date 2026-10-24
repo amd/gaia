@@ -93,23 +93,48 @@
 #   ever does block it, the fix is a runner allowlist entry, not a call-shape
 #   change here.
 #   A `.cmd` shim via path_to_claude_code_executable does work on this runner.
+# - Runs 37310122629 / 39252387512 (Oct 2026): two runner-side faults. The
+#   xsj-aimlab-stxp images have no Git for Windows at all -- only WSL's bash.exe
+#   launcher, which the action cannot use -- so "Ensure bash" failed every guide
+#   those runners picked up; it now unpacks a pinned, checksum-verified PortableGit
+#   there. And an executor that ran installer/scripts/start-lemonade.ps1 appended
+#   UTF-16 to the step's GITHUB_OUTPUT (Windows PowerShell 5.1 `>>`), so the action's
+#   own output write then failed to parse ("Unable to process file command 'output'")
+#   and a finished walk was reported as a crash; the script now uses Add-Content.
+#
+# CADENCE: every third night (claude-audit-rotation.yml), walking the 10 guides
+# walked least recently (scripts/audit/audit_history.py rotate). A full pass is ~30
+# guides x 16 min mean, 7-9 hours serial: it ran into the US workday on the shared
+# Strix Point pool (the 2026-10-12 run spent 57 hours queued) and spent ~$190 of the
+# weekly Claude budget in a single day. Ten a turn is ~2.5-3 hours, done by ~6am
+# Pacific, and reaches every guide about every 9 days. A guide counts as walked when
+# its own matrix job passed and that run's synthesis filed its findings, so a turn that
+# stops on the usage limit leaves its guides first in line for the next, and one guide
+# that keeps failing never stops the others being recorded. After 3 failed turns in a
+# row a guide is backed off (retried every 9 days, flagged in the summary) so it cannot
+# hold a slot every turn. Guides edited since their own last walk jump the queue, capped
+# at half the slots.
 
-name: Claude Weekly Doc Walkthrough
+name: Claude Doc Walkthrough
+run-name: ${{ inputs.rotation_night && format('Claude Doc Walkthrough — rotation night {0}', inputs.rotation_night) || 'Claude Doc Walkthrough' }}
 
 on:
-  schedule:
-    # 12:00 UTC every Monday. This one stays WEEKLY on purpose while its two static
-    # siblings went nightly: it drives a real Lemonade instance on the self-hosted
-    # Windows/STX box for hours, so it is hardware-bound rather than just token-bound
-    # and a nightly cadence would monopolise that runner.
-    # Ordering on a Monday: security audit 09:13 UTC -> static audit 10:37 UTC -> this
-    # at 12:00 UTC, so the three never compete for runner time or review attention.
-    - cron: "0 12 * * 1"
+  # No cron of its own: claude-audit-rotation.yml dispatches this every third night
+  # (one proactive audit a night, 10:13 UTC = 03:13 PDT / 02:13 PST). See CADENCE in
+  # the header for why it walks a rotating subset of guides.
   workflow_dispatch:
     inputs:
-      doc_filter:
-        description: "Glob to scope this run to one or a few docs (e.g. docs/quickstart.mdx). Empty = all discovered docs."
+      rotation_night:
+        # Set only by claude-audit-rotation.yml. Marks this run (via run-name) as a
+        # rotation night, the only runs scripts/audit/audit_history.py counts as history.
+        description: "Internal: set by claude-audit-rotation.yml. Leave empty."
         default: ""
+      doc_filter:
+        description: "Glob to scope this run to one or a few docs (e.g. docs/quickstart.mdx). Empty = tonight's rotation."
+        default: ""
+      max_docs:
+        description: "How many least-recently-walked guides to walk when doc_filter is empty"
+        default: "10"
       dry_run:
         # Files and comments NOTHING; writes what it WOULD have filed to the job summary.
         # This is how you validate a dedup change against the real backlog without adding
@@ -143,15 +168,52 @@ jobs:
   discover:
     if: github.repository == 'amd/gaia'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Reads this workflow's run history to pick the least recently walked guides.
+      actions: read
+      # Reads merged PR titles/bodies for the recent-changes context.
+      pull-requests: read
     outputs:
       docs: ${{ steps.discover.outputs.docs }}
+      claude_verdict: ${{ steps.gate.outputs.verdict }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      - name: Discover in-scope docs
+      # What merged since this workflow last filed findings, so synthesis does not
+      # re-file a defect a recent PR fixed. "Last filed" is the synthesize job, not the
+      # run: the run goes red whenever any one guide fails.
+      - name: Collect recent changes on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 scripts/audit/audit_history.py window \
+            --repo "${{ github.repository }}" \
+            --workflow claude-weekly-doc-walkthrough.yml \
+            --success-job synthesize > "$RUNNER_TEMP/scope.txt"
+          base_sha=$(sed -n 's/^base_sha=//p' "$RUNNER_TEMP/scope.txt")
+          python3 scripts/audit/recent_changes.py --repo "${{ github.repository }}" \
+            --base-sha "$base_sha" --fallback-days 3 --max-bytes 30000 \
+            --out recent-changes.md --paths-out changed-paths.txt \
+            --summary "$GITHUB_STEP_SUMMARY"
+      - name: Upload the recent-changes context
+        uses: actions/upload-artifact@v7
+        with:
+          name: recent-changes
+          path: |
+            recent-changes.md
+            changed-paths.txt
+          if-no-files-found: error
+
+      - name: Pick tonight's docs
         id: discover
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOC_FILTER: ${{ github.event.inputs.doc_filter }}
+          MAX_DOCS: ${{ github.event.inputs.max_docs || '10' }}
         run: |
           set -euo pipefail
           all_docs=$(python3 scripts/audit/discover_walkthrough_docs.py)
@@ -162,27 +224,81 @@ jobs:
           pattern = os.environ['DOC_FILTER']
           print(json.dumps([d for d in docs if fnmatch.fnmatch(d['path'], pattern)]))
           ")
+            echo "Filter: \`$DOC_FILTER\` (rotation bypassed)" > "$RUNNER_TEMP/rotation.md"
           else
-            docs="$all_docs"
+            docs=$(python3 scripts/audit/audit_history.py rotate \
+              --repo "${{ github.repository }}" \
+              --workflow claude-weekly-doc-walkthrough.yml \
+              --docs-json "$all_docs" --count "$MAX_DOCS" \
+              --summary "$RUNNER_TEMP/rotation.md")
           fi
           echo "docs=$docs" >> "$GITHUB_OUTPUT"
           echo "Resolved docs: $docs"
-
           {
             echo "## 📋 Doc walkthrough — scope for this run"
             echo ""
-            if [ -n "$DOC_FILTER" ]; then
-              echo "Filter: \`$DOC_FILTER\`"
-              echo ""
-            fi
-            count=$(echo "$docs" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
-            echo "**$count doc(s) in scope:**"
-            echo "$docs" | python3 -c "
-          import json, sys
-          for d in json.load(sys.stdin):
-              print(f\"- \`{d['path']}\`\")
-          "
+            cat "$RUNNER_TEMP/rotation.md"
+            echo ""
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # One cheap probe before any self-hosted job is queued. A spent account used to
+      # cost ~3 minutes of a Strix Point runner per guide just to be refused.
+      - name: Show which Claude account this run uses
+        if: steps.discover.outputs.docs != '[]'
+        run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
+      - name: Probe the Claude account
+        id: probe
+        if: steps.discover.outputs.docs != '[]'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
+        with:
+          anthropic_api_key: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "github-merge-queue,github-actions"
+          prompt: |
+            Reply with exactly the word: ok
+          claude_args: |
+            --max-turns 1
+            --model ${{ env.WALKTHROUGH_EXECUTOR_MODEL }}
+            --allowedTools Read
+      - name: Stop here if Claude cannot answer
+        id: gate
+        if: steps.discover.outputs.docs != '[]'
+        env:
+          CLAUDE_CONCLUSION: ${{ steps.probe.outputs.conclusion }}
+          CLAUDE_LOG: ${{ steps.probe.outputs.execution_file }}
+          ACCOUNT: ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'secondary' || 'primary' }}
+        run: |
+          python3 scripts/audit/require_claude.py --conclusion "${CLAUDE_CONCLUSION:-}" \
+            --log "${CLAUDE_LOG:-}" --account "$ACCOUNT" \
+            --what "Tonight's doc walkthrough" --summary "$GITHUB_STEP_SUMMARY" \
+            --github-output "$GITHUB_OUTPUT"
+
+  # A refused quota probe asks the account switch to run. Explicit, because this run
+  # is usually started by claude-audit-rotation.yml with GITHUB_TOKEN: GitHub documents
+  # that GITHUB_TOKEN events create no runs except workflow_dispatch and
+  # repository_dispatch, and does not document that claude-account-switch.yml's
+  # workflow_run hook fires when such a run completes. A dispatch is the documented
+  # exception. If the hook does fire as well, the switch's concurrency group runs the
+  # two one after the other and the second finds nothing left to change.
+  request-account-switch:
+    name: Ask the account switch to probe (Claude is out of quota)
+    needs: discover
+    if: >-
+      github.repository == 'amd/gaia' && !cancelled() &&
+      needs.discover.outputs.claude_verdict == 'quota'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch claude-account-switch.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run claude-account-switch.yml --repo "$GITHUB_REPOSITORY" --ref main
+          echo "::notice title=Claude account switch requested::The quota probe was refused, so claude-account-switch.yml was asked to move Claude CI to the other account. See its latest run."
 
   # One matrix entry per doc, each acting as a real user/developer walking
   # that guide on real hardware. Serialized (max-parallel: 1) -- same
@@ -210,34 +326,52 @@ jobs:
       max-parallel: 1
       matrix:
         doc: ${{ fromJson(needs.discover.outputs.docs) }}
-    # Ceiling for ONE guide, not the whole matrix -- the workflow overall may
-    # run for hours across many matrix entries, but a single stuck command
-    # must not eat the entire run silently.
-    timeout-minutes: 90
+    # Ceiling for ONE guide, not the whole matrix: a stuck command must not eat the
+    # night. The slowest successful guide in Sep-Oct 2026 took 41 minutes, mean 16.
+    timeout-minutes: 50
     steps:
       - name: Show which Claude account this job uses
         run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
       - uses: actions/checkout@v7
 
-      # FOUND ON A LIVE RUN (2026-07-18, run 29663253865): claude-code-action's
-      # own internal composite-action steps (its bun install + post-processing
-      # scripts) assume `bash` is on PATH and fail with "bash: command not
-      # found" before Claude ever runs -- the judge session never actually
-      # executed. Git for Windows IS installed on this runner (checkout uses
-      # C:\Program Files\Git\cmd\git.exe successfully) and ships bash.exe in
-      # the same install root; it's just never added to PATH. Fix at the
-      # source rather than working around it per-step.
+      # claude-code-action's own composite steps run with `shell: bash` and fail with
+      # "bash: command not found" without Git for Windows' bash on PATH (run 29663253865).
+      # Most runners have it under Program Files; the xsj-aimlab-stxp images have no Git
+      # for Windows at all (runs 37310122629, 39252387512 -- only WSL's bash.exe launcher,
+      # which the action cannot use), so there a pinned, checksum-verified PortableGit is
+      # unpacked, the same way the uv step below installs uv when it is missing.
       - name: Ensure bash is on PATH (claude-code-action requires it)
         shell: powershell
         run: |
-          $gitBash = "C:\Program Files\Git\bin"
-          if (Test-Path "$gitBash\bash.exe") {
-            Write-Host "Found bash.exe at $gitBash -- adding to PATH for this job."
-            Add-Content -Path $env:GITHUB_PATH -Value $gitBash
-          } else {
-            Write-Host "::error::No bash.exe at $gitBash -- claude-code-action's internal steps will fail. Runner may need Git for Windows (re)installed."
-            exit 1
+          $version = "2.56.0.2"
+          $sha256 = "075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b"
+          $portable = Join-Path $env:RUNNER_TOOL_CACHE "PortableGit-$version"
+          $candidates = @(
+            "C:\Program Files\Git\bin",
+            "C:\Program Files (x86)\Git\bin",
+            "$env:LOCALAPPDATA\Programs\Git\bin",
+            "$portable\bin"
+          )
+          $found = $candidates | Where-Object { Test-Path (Join-Path $_ "bash.exe") } | Select-Object -First 1
+          if (-not $found) {
+            Write-Host "No Git for Windows bash on this runner -- unpacking PortableGit $version."
+            $exe = Join-Path $env:RUNNER_TEMP "PortableGit-$version.7z.exe"
+            $url = "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-$version-64-bit.7z.exe"
+            Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing
+            $actual = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
+            if ($actual -ne $sha256) {
+              Write-Host "::error::PortableGit checksum mismatch (got $actual, expected $sha256) -- refusing to run it."
+              exit 1
+            }
+            $proc = Start-Process -FilePath $exe -ArgumentList "-o`"$portable`"", "-y" -Wait -PassThru
+            if ($proc.ExitCode -ne 0 -or -not (Test-Path "$portable\bin\bash.exe")) {
+              Write-Host "::error::PortableGit did not unpack (exit $($proc.ExitCode)); an Application Control policy on this runner may block it. Install Git for Windows on the runner image: $env:RUNNER_NAME"
+              exit 1
+            }
+            $found = "$portable\bin"
           }
+          Write-Host "Using bash.exe from $found"
+          Add-Content -Path $env:GITHUB_PATH -Value $found
 
       # FOUND ON A LIVE RUN (2026-08-24, run 32755389532): claude-code-action installs
       # the CLI with `curl https://claude.ai/install.sh | bash`, and that script refuses
@@ -415,7 +549,7 @@ jobs:
           # Skip the action's Linux-only installer — see the npm install step above.
           path_to_claude_code_executable: ${{ steps.claude_cli.outputs.path }}
           prompt: |
-            You are the EXECUTOR half of GAIA's weekly doc walkthrough. Your only job is
+            You are the EXECUTOR half of GAIA's doc walkthrough. Your only job is
             to run commands and capture their raw output -- judging correctness is a
             SEPARATE step that reads your transcript independently. Do not editorialize
             or decide what's a bug; just execute faithfully and record everything.
@@ -559,7 +693,7 @@ jobs:
           # Skip the action's Linux-only installer — see the npm install step above.
           path_to_claude_code_executable: ${{ steps.claude_cli.outputs.path }}
           prompt: |
-            You are the JUDGE half of GAIA's weekly doc walkthrough. Do not trust the
+            You are the JUDGE half of GAIA's doc walkthrough. Do not trust the
             executor's framing -- read its raw transcript and the doc yourself, and reach
             your own conclusion. This split exists because a single self-judging session
             is a known false-negative risk (see docs/plans/weekly-doc-walkthrough-audit.md
@@ -579,6 +713,9 @@ jobs:
             executor died into one issue instead of one issue per guide.
 
             ## What to do
+            0. Read `scripts/audit/missed_bug_classes.md`: the "Cold start", "Windows
+               behaviour" and "Doc claim vs behaviour" checklists are what walks like this
+               one have missed; its "Don't report" list is what gets closed as noise.
             1. Read `${{ matrix.doc.path }}` and the transcript file above, in full.
             2. For each step in the transcript, check: does the actual captured output
                match what the doc claims will happen? A step marked "not verifiable in
@@ -738,8 +875,15 @@ jobs:
   # evidence gate, job-summary report) -- see the weekly-audit-patterns skill.
   synthesize:
     needs: [discover, walkthrough]
-    if: github.repository == 'amd/gaia' && !cancelled() && needs.discover.outputs.docs != '[]'
+    if: >-
+      github.repository == 'amd/gaia' && !cancelled() &&
+      needs.discover.result == 'success' && needs.discover.outputs.docs != '[]'
     runs-on: ubuntu-latest
+    # Shared with claude-nightly-audit.yml's synthesis: both read the backlog, then file.
+    # Run concurrently, each misses what the other is about to file.
+    concurrency:
+      group: claude-audit-issue-filing
+      cancel-in-progress: false
     permissions:
       contents: read
       issues: write
@@ -786,23 +930,47 @@ jobs:
           echo "**$total_files findings file(s) reported in, $total_findings raw finding(s) before dedup/verification.**" >> "$GITHUB_STEP_SUMMARY"
           echo "Reported in: $total_files files, $total_findings raw findings before dedup"
 
-      # The static audit has always refused to synthesize off a partial sweep; the
-      # walkthrough only tallied and carried on, so a night where every guide's judge died
-      # reached synthesis with zero findings and reported "nothing to file" — a crash
-      # reading as a pass (#3058). Every discovered doc writes a findings file even when
-      # clean, so a short count means guides went unwalked. Fail instead of filing.
-      - name: Require every discovered doc to have reported in
+      # A night where every guide's judge died used to reach synthesis with zero findings
+      # and report "nothing to file", a crash reading as a pass (#3058). So zero reports is
+      # a hard failure. A partial night is filed, not thrown away: each guide is its own
+      # walk, and refusing all ten because one failed kept one always-failing guide from
+      # ever letting the rest be recorded. The guides that did not report are named here
+      # as errors, their failed matrix jobs keep the run red, and the rotation puts them
+      # back at the front of the queue (scripts/audit/audit_history.py).
+      - name: Require the discovered docs to have reported in
         env:
           EXPECTED_DOCS: ${{ needs.discover.outputs.docs }}
         run: |
           set -euo pipefail
           expected=$(printf '%s' "$EXPECTED_DOCS" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
           got=$(find walkthrough-findings -name 'findings-walkthrough-*.json' | wc -l)
-          if [ "$got" -lt "$expected" ]; then
-            echo "::error title=Doc walkthrough::Only $got/$expected guides produced findings — $((expected - got)) went unverified. Not synthesizing off a partial sweep."
+          if [ "$got" -eq 0 ]; then
+            echo "::error title=Doc walkthrough::None of the $expected guides produced findings, so nothing was verified. Not synthesizing an empty sweep."
             exit 1
           fi
-          echo "All $got/$expected guides reported in."
+          missing=$(EXPECTED_DOCS="$EXPECTED_DOCS" python3 -c '
+          import json, os, pathlib
+          have = {p.name for p in pathlib.Path("walkthrough-findings").rglob("findings-walkthrough-*.json")}
+          for doc in json.loads(os.environ["EXPECTED_DOCS"]):
+              if "findings-walkthrough-%s.json" % doc["slug"] not in have:
+                  print(doc["path"])
+          ')
+          if [ -n "$missing" ]; then
+            {
+              echo "### ⛔ Guides that went unverified"
+              echo ""
+              echo "These guides produced no findings, so they were not checked tonight. Everything the other guides found is filed below; these stay first in line for the next turn."
+              echo ""
+              while IFS= read -r path; do
+                echo "- \`$path\`"
+              done <<< "$missing"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+            while IFS= read -r path; do
+              echo "::error title=Doc walkthrough guide unverified::$path produced no findings tonight, so it was not verified. The other guides' findings are still filed."
+            done <<< "$missing"
+          fi
+          echo "$got/$expected guides reported in."
 
       - name: Ensure labels exist
         env:
@@ -811,7 +979,7 @@ jobs:
           # `weekly-audit` is a PROVENANCE label shared with claude-nightly-audit.yml, not a
           # cadence one. See that workflow's header for why it keeps the name.
           gh label create weekly-audit --color 5319e7 \
-            --description "Filed by a proactive Claude audit (nightly code audit or weekly doc walkthrough)" \
+            --description "Filed by a proactive Claude audit (code audit or doc walkthrough)" \
             2>/dev/null && echo "created weekly-audit label" || echo "weekly-audit label already exists"
           gh label create audit-wontfix --color cccccc \
             --description "Accepted debt -- the audits will never re-file this finding" \
@@ -847,7 +1015,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh issue list --repo "${{ github.repository }}" --state all --limit 1 \n            --json number --jq '.[0].number // 0' > .issue-watermark
+          gh issue list --repo "${{ github.repository }}" --state all --limit 1 \
+            --json number --jq '.[0].number // 0' > .issue-watermark
           echo "Highest issue before synthesis: $(cat .issue-watermark)"
 
       - name: Synthesize and file one issue per defect
@@ -861,8 +1030,8 @@ jobs:
           # See the executor step's note — scheduled runs are actored by a bot.
           allowed_bots: "github-merge-queue,github-actions"
           prompt: |
-            You are the synthesis step of GAIA's weekly DOC WALKTHROUGH (the
-            execution-based sibling of the static nightly audit -- see
+            You are the synthesis step of GAIA's DOC WALKTHROUGH (the
+            execution-based sibling of the static code audit -- see
             docs/plans/weekly-doc-walkthrough-audit.md). A deterministic pass has ALREADY
             merged the per-guide judges' findings into distinct defects and searched the
             whole open backlog for each. Your job is the part a script cannot do: verify
@@ -884,6 +1053,10 @@ jobs:
             If the dossier reports malformed findings or that the judges barely clustered,
             say so in the run report: that is a judge-prompt bug a human needs to see.
             You do NOT need to list issues or rebuild key sets -- that is done.
+            4. Before filing, check `walkthrough-findings/recent-changes/recent-changes.md`:
+               drop a defect a PR listed there already fixed, and drop anything
+               `scripts/audit/missed_bug_classes.md` lists under "Don't report" (for a
+               known umbrella such as #1077, comment on it instead).
 
             ## Merge across guides BEFORE you file -- this workflow's signature failure
             Each guide was judged by its own Claude job, blind to every other guide. One
@@ -990,7 +1163,8 @@ jobs:
         run: |
           set -euo pipefail
           before=$(cat .issue-watermark)
-          created=$(gh issue list --repo "${{ github.repository }}" --state all \n            --limit 100 --json number --jq "[.[] | select(.number > $before) | .number] | join(\", \")")
+          created=$(gh issue list --repo "${{ github.repository }}" --state all \
+            --limit 100 --json number --jq "[.[] | select(.number > $before) | .number] | join(\", \")")
           if [ -n "$created" ]; then
             echo "::error title=Dry run was not dry::The synthesis step created issue(s) $created despite dry_run=true. Close them, then fix the dry-run instruction in the prompt."
             exit 1
@@ -1027,10 +1201,10 @@ jobs:
             [ "$is_err" = "false" ] && ok=true
           fi
           if [ "$ok" = "true" ]; then
-            echo "✅ Weekly doc walkthrough synthesis completed (log: $EXEC_FILE)"
+            echo "✅ Doc walkthrough synthesis completed (log: $EXEC_FILE)"
           else
             # Hard-fail for the same reason as claude-nightly-audit.yml: a green run that
             # synthesised nothing is indistinguishable from one that found nothing.
-            echo "::error title=Weekly doc walkthrough did not complete::The synthesis step crashed or errored before finishing. Re-run: $RUN_URL"
+            echo "::error title=Doc walkthrough did not complete::The synthesis step crashed or errored before finishing. Re-run: $RUN_URL"
             exit 1
           fi

@@ -1,24 +1,73 @@
 ---
 name: "weekly-audit-patterns"
-description: "The non-obvious invariants of the proactive nightly Claude audit workflow (.github/workflows/claude-nightly-audit.yml): the day-of-week mode selector, the two-key dedup scheme (cluster_key per defect, dedup_key per location) that keeps one defect from becoming N issues, the four audit dimensions (security has its own nightly workflow, claude-security-audit.yml) and which one owns the Fail-Loudly check, and the `bug`-label → auto-fix promotion path. Read before editing that workflow, changing its cadence, changing how findings are filed/deduped, or adding an audit dimension."
+description: "The non-obvious invariants of GAIA's proactive Claude audits: the one-audit-a-night rotation (claude-audit-rotation.yml) over the code audit (claude-nightly-audit.yml), security audit and doc walkthrough; the quota gate and since-last-success carry-over; the two-key dedup scheme (cluster_key per defect, dedup_key per location) and closed-duplicate redirect that keep one defect from becoming N issues; the four code-audit dimensions and which owns the Fail-Loudly check; the missed-bug-classes doc the prompts read; and the `bug`-label → auto-fix promotion path. Read before editing any of those workflows, changing cadence, changing how findings are filed/deduped, or adding an audit or a dimension."
 ---
 
-# Nightly Audit Patterns
+# Proactive Audit Patterns
 
-`.github/workflows/claude-nightly-audit.yml` is the repo's one **proactive** Claude
-lens — a scheduled deep review (not triggered by a PR) that fans out one read-only
-Claude job per dimension and files **one issue per defect**. Everything else in
-`claude.yml` is reactive. These are the invariants a future editor will otherwise break.
+Three **proactive** Claude audits review the repo on a schedule (not on a PR): the code
+audit `.github/workflows/claude-nightly-audit.yml` (display name "Claude Code Audit"),
+`claude-security-audit.yml`, and `claude-weekly-doc-walkthrough.yml` ("Claude Doc
+Walkthrough"). The code audit fans out one read-only Claude job per dimension and files
+**one issue per defect**. Everything in `claude.yml` is reactive. These are the
+invariants a future editor will otherwise break.
 
-> **Naming:** this ran weekly before it moved to a nightly cron (10:37 UTC ≈ 3am Pacific,
-> deep on Sundays). The filename, `name:`, cron, and concurrency group now all say
-> **nightly**. Two identifiers still say `weekly` and are correct as they are:
+> **Naming:** filenames keep their history (`nightly`, `weekly`) because docs, skills,
+> tests and the dispatcher reference them; the display names are cadence-neutral. Two
+> more identifiers say `weekly` and are correct as they are:
 >
 > - the **`weekly-audit` label** — a **provenance** label ("a proactive Claude audit filed
->   this"), shared with the genuinely-weekly `claude-weekly-doc-walkthrough.yml`. No
->   cadence word fits both workflows, so it keeps the neutral name it happens to have;
->   its `--description` in both workflows says exactly that.
+>   this"), shared by the code audit and the doc walkthrough. It names no cadence.
 > - this **skill's `name`**, referenced from `CLAUDE.md`.
+>
+> `claude-account-switch.yml` watches the audits by **display name** (`workflow_run`), so
+> renaming one without updating its list silently unhooks the account switch; a contract
+> test checks it.
+
+## One audit a night — the rotation is the only scheduler
+
+`claude-audit-rotation.yml` fires once at 10:13 UTC (03:13 PDT / 02:13 PST; only
+10:00–11:00 UTC is inside 2–4am Pacific in both seasons) and dispatches **one** audit:
+`days since 1970-01-01 mod len(ROTATION)` in `scripts/audit/audit_rotation.py`. Each audit
+therefore runs every third night. Keyed on the epoch day so it never resets at a month or
+year end. **Adding an audit = append it to `ROTATION`** and give it a `rotation_night`
+input plus the `run-name` the others use. None of the audits may carry its own `schedule:`
+(a contract test fails if one does): three audits every night spent the subscription's
+**weekly** cap mid-week (both daily audits failed 5 of 10 nights in October 2026).
+
+**Carry-over, not retry.** A failed night is not re-run the next night (that belongs to
+another audit). Instead every audit scopes itself from its own last **successful
+rotation run** (`scripts/audit/audit_history.py`): the code audit reviews everything since
+then, the security audit's skip-if-empty counts commits since then, and the walkthrough
+walks the guides that waited longest. Only rotation runs (run-name "… rotation night N")
+and legacy cron runs count as history; a hand dispatch may be a dry run that filed
+nothing.
+
+**Quota gate.** Each audit's first job probes Claude once (`scripts/audit/require_claude.py`,
+same classifier as the canary and account switch). Refused → the run fails there with the
+account and reset time in the summary, before any lens or self-hosted job starts. On a
+quota verdict the `request-account-switch` job **dispatches** `claude-account-switch.yml`.
+Don't drop that for the switch's `workflow_run` hook: the rotation starts every audit with
+`GITHUB_TOKEN`, GitHub only promises that `workflow_dispatch`/`repository_dispatch` from that
+token create runs, and it does not document `workflow_run` firing for such a run's completion.
+A contract test checks every audit has the dispatch job.
+
+**Explicit modes are honoured.** Only `auto` (what the rotation sends) may escalate to a deep
+sweep. A hand-dispatched `mode=normal` with no recent successful run reviews the last 7 days
+and says in the summary what that leaves out.
+
+**Recent changes, read first.** The same first job writes `recent-changes.md`
+(`scripts/audit/recent_changes.py`): first-parent commits since the commit the last
+successful run checked out (exact; the run history is the state store), with PR titles,
+body excerpts and paths, capped at 30 KB. Without that commit it covers 3 days and says so.
+Lenses look there first; synthesis drops anything a listed PR already fixed.
+
+**Missed bug classes.** All three prompts read `scripts/audit/missed_bug_classes.md`:
+per-lens checklists for the classes fix PRs show the audits missing (no deadline, shared
+state across processes, dishonest status, cold start, Windows, model output, release
+ordering, doc drift, security) and a "Don't report" list from what got closed as noise.
+`python scripts/audit/miss_analysis.py` refreshes its evidence table; edit the checklists
+when a class climbs. Run it monthly.
 >
 > An earlier version of this note justified the label by claiming a rename "would re-file
 > every open finding." That is **false**, and worth correcting because it is the reasoning
@@ -27,7 +76,7 @@ Claude job per dimension and files **one issue per defect**. Everything else in
 > markers in issue bodies. The label only scopes which issues get scanned for those
 > markers (`--label` in `scripts/audit/prepare_synthesis.py`, one default to update).
 
-## The four dimensions are mutually exclusive
+## The four code-audit dimensions are mutually exclusive
 
 `correctness`, `docs`, `tests`, `features` — a matrix of one Claude job each. **Security
 is NOT a dimension here** — it moved to its own workflow, `claude-security-audit.yml`
@@ -151,6 +200,21 @@ gate), **comment** on the existing backlog issue the dossier surfaced, or **file
 issue. Commenting is the #1077 fix — err toward it, because a comment on the wrong issue
 is trivially undone and a duplicate issue is what created this backlog.
 
+Two more dedup rules, both from the October 2026 cleanup (34 open duplicates closed):
+
+- **A closed duplicate keeps pointing at its canonical.** Issues closed as duplicate hand
+  their markers to open issue M (`redirect_duplicates`). The canonical comes from GitHub's
+  own record first (the `MarkedAsDuplicateEvent` the UI's "Close as duplicate" writes, which
+  leaves no comment), then a "Duplicate of #M" comment or body line. Otherwise consolidating
+  into an umbrella like #1077 makes the next run re-file every duplicate it just closed. The
+  closed-issue scan (`scripts/audit/closed_duplicates.py`) pages through small GraphQL
+  queries and fails loudly at its hard cap rather than silently reading part of the list.
+- **Candidate matching reads an audit issue's own keys, not just its title.** Titles alone
+  let same-location duplicates through (#3832 scored 0.15 against #3471, same guide and
+  section); with the markers both rank first.
+- Both syntheses share the `claude-audit-issue-filing` concurrency group, so two runs never
+  read the backlog at the same time and file the same defect twice.
+
 **Suppression is load-bearing, and it is now SCOPED to the key that carries it.** Closing
 an issue with **`audit-wontfix`** (open or closed) is still the only way to permanently
 silence accepted debt, but which key that issue carries decides how much it silences:
@@ -216,27 +280,41 @@ route promotions through `bug` unless you deliberately widen the auto-fix `if`.
 - **Serialized dimensions**: the matrix runs `max-parallel: 1` so the run is a steady
   drip, not a 4-job burst — this keeps it under the Max subscription's rolling (5-hour)
   rate limit. If you re-parallelize, expect a token spike that can trip that limit.
-- **Skip-if-empty**: normal mode exits in `preflight` before any Claude call on a night
-  with no commits. Deep mode never skips. This matters more now the cadence is nightly.
-- **Cadence**: **nightly** at 10:37 UTC (≈3am Pacific). The sibling
-  `claude-security-audit.yml` also runs nightly, deliberately ~1.4h earlier at 09:13 UTC
-  so the two proactive Claude runs never stack on the shared subscription pool.
-- **Modes**: `normal` = last N days' diff (`window_days`, default **1**); `deep` = whole
-  codebase, auto-selected on **Sundays**.
-  ⚠️ The selector keys off **ISO day-of-week** (`date -u +%u`, 7 = Sunday), NOT
-  day-of-month. It previously read `day-of-month ≤ 7` and was only correct because the
-  cron fired on Mondays alone. Under the nightly cron that test matches the 1st–7th of
-  every month — **seven consecutive whole-codebase deep sweeps** instead of one. Do not
-  "simplify" it back to a day-of-month check.
+- **Skip-if-empty**: a normal-mode turn exits in `preflight` before any Claude call when
+  nothing merged since the last successful run. Deep mode never skips.
+- **Cadence**: every third night via `claude-audit-rotation.yml` (above). Measured October
+  2026, API-equivalent: code audit ~$10 a normal turn / ~$30 deep, security ~$10, walkthrough
+  ~$7 per guide (10 guides a turn).
+- **Modes**: `normal` = everything merged since the last successful rotation run; `deep` =
+  whole codebase, whenever the last successful deep sweep is **over 8 days old** (every
+  third turn, and the very next turn after a deep sweep fails), or when there is no usable
+  history or the gap exceeds 7 days. The lens job is named `audit (<dim>, <mode>)` so the
+  history can tell a past deep sweep from a normal one.
+  ⚠️ Never key deep mode off a weekday or day-of-month: at a 3-night cadence "Sunday" lands
+  on this audit's night once in 21 days, and a day-of-month test once ran seven consecutive
+  deep sweeps.
 - **Read-only**: dimension + synthesis jobs run `--allowedTools Read,Grep,Glob,Bash` —
   no Edit/Write, never install or run repo code (same rule as `claude.yml` review jobs).
-- **A partial sweep never synthesizes.** Every lens writes `{"findings": []}` even when
-  clean, so a missing file means the lens never ran: the upload fails on it, and synthesis
-  hard-fails if fewer files arrive than `preflight` declared dimensions. The doc
-  walkthrough gained the same gate per discovered guide (#3058) — without it a night where
-  every judge crashed reached synthesis, found nothing to file, and reported a clean run.
-- **Concurrency group** `claude-nightly-audit` (not cancel-in-progress) so two scheduled
-  runs never overlap and double-file.
+- **A partial code/security sweep never synthesizes.** Every lens writes
+  `{"findings": []}` even when clean, so a missing file means the lens never ran: the upload
+  fails on it, and synthesis hard-fails if fewer files arrive than `preflight` declared
+  dimensions.
+- **The walkthrough is per guide, not all-or-nothing.** Zero guides reporting is a hard
+  failure (#3058: a night where every judge crashed once reported a clean run). A partial
+  night files what the guides that finished found, and names each missing guide as an
+  `::error`; their failed matrix jobs keep the run red. Refusing the whole night instead let
+  one always-failing guide (`code-index.mdx` failed four turns running in Sep–Oct 2026) stop
+  every other guide from being recorded, so the rotation was stuck on the same ten.
+  `audit_history.py rotate` reads each guide's **own** job: walked = its job passed and that
+  run's `synthesize` job passed. After 3 failed turns in a row a guide is **backed off**
+  (one retry every 9 days, an `::error` and a table in the summary) so it can't hold a slot
+  every turn. Only turns where another guide finished count: a night where every guide
+  failed (usage limit, a runner with no Git) is the night's fault, and counting it backed
+  off 11 of 29 guides on the real Sep–Oct history. A guide is "changed" when its file differs from the commit of **its own** last
+  walk (never a run-wide base that only moves on a green run), and changed guides take at
+  most half the slots.
+- **Concurrency group** `claude-nightly-audit` (not cancel-in-progress) so two runs never
+  overlap and double-file.
 - **`dry_run` dispatch input** (both this workflow and the doc walkthrough): files and
   comments nothing, and reports what it *would* have done in the job summary. This is the
   only way to validate a dedup change against the live backlog without polluting it — a
