@@ -51,6 +51,10 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.logger import get_logger
 from gaia.security import PathValidator
+from gaia.utils.document_formats import (
+    UNSUPPORTED_DOCUMENTS,
+    unsupported_document_message,
+)
 from gaia.utils.file_lock import (
     FileLockError,
     FileLockTimeout,
@@ -2192,6 +2196,25 @@ These positions indicate where to split the text."""
         self.log.info(f"📄 Extracted {len(text):,} characters from Word file")
         return text
 
+    def _extract_text_from_epub(self, epub_path: str) -> tuple:
+        """Extract an EPUB book's text; returns ``(text, num_chapters)``."""
+        from gaia.rag.epub_utils import (  # pylint: disable=import-outside-toplevel
+            extract_epub_text,
+        )
+
+        try:
+            text, num_chapters = extract_epub_text(epub_path)
+        except ValueError as e:
+            self.log.error(f"Error reading EPUB file {epub_path}: {e}")
+            raise
+
+        if self.config.show_stats:
+            print(f"  ✅ Loaded EPUB ({num_chapters} chapters, {len(text):,} chars)")
+        self.log.info(
+            f"📖 Extracted {len(text):,} characters from EPUB ({num_chapters} chapters)"
+        )
+        return text, num_chapters
+
     def _extract_text_from_file(self, file_path: str) -> tuple:
         """
         Extract text from file based on type.
@@ -2240,12 +2263,21 @@ These positions indicate where to split the text."""
             return self._extract_text_from_json(file_path), metadata
 
         # Excel files
-        elif file_type in [".xlsx", ".xls"]:
+        elif file_type == ".xlsx":
             return self._extract_text_from_xlsx(file_path), metadata
 
         # Word files
         elif file_type == ".docx":
             return self._extract_text_from_docx(file_path), metadata
+
+        # E-books
+        elif file_type == ".epub":
+            text, num_chapters = self._extract_text_from_epub(file_path)
+            metadata["num_chapters"] = num_chapters
+            return text, metadata
+
+        elif file_type in UNSUPPORTED_DOCUMENTS:
+            raise ValueError(unsupported_document_message(file_path, file_type))
 
         # Code files (treat as text for Q&A purposes)
         elif file_type in [
@@ -2326,7 +2358,22 @@ These positions indicate where to split the text."""
             self.log.warning(
                 f"Unknown file type {file_type}, attempting to read as text"
             )
+            self._refuse_binary(file_path, file_type)
             return self._extract_text_from_text_file(file_path), metadata
+
+    def _refuse_binary(self, file_path: str, file_type: str) -> None:
+        """Raise when *file_path* holds binary data; latin-1 would "decode" it as garbage."""
+        with self._safe_open(file_path, "rb") as f:
+            head = f.read(8192)
+        if b"\x00" in head:
+            raise ValueError(
+                f"Cannot index {Path(file_path).name}: it is a binary file, not "
+                f"text, and GAIA has no reader for {file_type} files.\n"
+                "Supported: PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), "
+                "EPUB, plain text, Markdown, CSV, JSON, HTML and source code. "
+                "Convert the file to one of these (PDF works for most documents) "
+                "and index that copy."
+            )
 
     def _split_text_into_chunks(self, text: str) -> List[str]:
         """

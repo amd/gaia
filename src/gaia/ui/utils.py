@@ -73,6 +73,7 @@ ALLOWED_EXTENSIONS = frozenset(
         ".csv",
         ".json",
         ".xlsx",
+        ".epub",
         ".html",
         ".htm",
         ".xml",
@@ -390,7 +391,7 @@ def sanitize_document_path(user_path: str) -> Path:
 
         detail = (
             f"{hint} "
-            f"Supported formats: PDF, PPTX, TXT, MD, CSV, JSON, XLSX, "
+            f"Supported formats: PDF, DOCX, PPTX, XLSX, EPUB, TXT, MD, CSV, JSON, "
             f"HTML, XML, YAML, and 30+ code file formats. "
             f"Want support for {category + ' files' if category else 'this file type'}? "
             f"Request it at https://github.com/amd/gaia/issues/new?title=[Feature]%20Support%20{ext}%20file%20indexing"

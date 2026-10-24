@@ -155,8 +155,9 @@ model's tool-result budget (`limit` can shrink it) and ends on a line break:
 `start_line`/`end_line` work on the extracted text too. Extraction is cached
 per file while it is unchanged, so paging does not re-parse it. A scanned PDF
 with no text layer, an encrypted one, or a corrupt file is an error naming the
-file; `.doc`, `.pptx`, `.xls` and the OpenDocument formats are an error pointing
-at `index_document`.
+file; `.pptx` and `.epub` are an error pointing at `index_document`, and `.doc`,
+`.ppt`, `.xls` and the OpenDocument formats are an error saying to re-save the
+file as `.docx` / `.pptx` / `.xlsx` or PDF.
 
 When the agent also has `index_document`, the mixin adds a short
 `READING DOCUMENTS` prompt fragment: to review, compare, reconcile, audit or

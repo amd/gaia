@@ -122,7 +122,7 @@ export function getUnsupportedCategory(extension: string): FileTypeCategory | nu
  * legacy .doc/.ppt/.xls are intentionally excluded.
  */
 export const SUPPORTED_EXTENSIONS = new Set([
-    '.pdf', '.pptx', '.docx', '.txt', '.md', '.mdx', '.markdown', '.rst', '.csv', '.json', '.xlsx',
+    '.pdf', '.pptx', '.docx', '.txt', '.md', '.mdx', '.markdown', '.rst', '.csv', '.json', '.xlsx', '.epub',
     '.html', '.htm', '.xml', '.svg',
     '.yaml', '.yml', '.py', '.js', '.ts', '.java', '.c', '.cpp',
     '.h', '.rs', '.go', '.rb', '.sh', '.bat', '.ps1', '.log',

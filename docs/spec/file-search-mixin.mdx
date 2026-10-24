@@ -149,9 +149,9 @@ class FileSearchToolsMixin:
         - Markdown (.md): Headers + code blocks + links extraction
         - Word (.docx), PDF, Excel (.xlsx): extracted text in budget-sized
           parts ("offset", "total_chars", "next_offset"; None at the end).
-          Same contract as FileIOToolsMixin.read_file. Other binary document
-          formats (.doc, .pptx, .xls, OpenDocument) return an error pointing
-          at index_document.
+          Same contract as FileIOToolsMixin.read_file. .pptx and .epub
+          return an error pointing at index_document; .doc, .ppt, .xls and
+          OpenDocument return an error saying what to re-save them as.
         - Binary: Detection with size reporting
         - Text: Raw content with line count. A file with a UTF-16, UTF-32,
           or UTF-8 byte-order mark is decoded in that encoding and reports
