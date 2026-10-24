@@ -16,7 +16,9 @@ from types import SimpleNamespace
 import pytest
 
 from gaia.agents.base import history
+from gaia.config import GaiaConfigError
 from gaia.llm.lemonade_client import GPU_CTX_SIZE, LemonadeClientError
+from gaia.llm.model_fit import ModelFitError
 from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui.email_sidecar import daemon_client
@@ -262,3 +264,96 @@ def test_relayed_budget_follows_the_in_process_window_policy(monkeypatch):
         history.relayed_history_budget(LOCAL_MODEL, "q", cloud=False)
         == 16384 - 10 - history.DEFAULT_REPLY_TOKENS - 2048
     )
+
+
+@pytest.mark.parametrize("error", [ModelFitError, GaiaConfigError])
+def test_any_window_lookup_failure_stops_the_turn_loudly(monkeypatch, error):
+    def _broken(**_kw):
+        raise error("cannot read this machine's memory")
+
+    monkeypatch.setattr("gaia.llm.lemonade_client.resolve_ctx_size", _broken)
+
+    bodies, _, events = _relay(monkeypatch, [(LOG, ANSWER)])
+
+    assert bodies == []
+    errors = [e for e in events if isinstance(e, dict) and e["type"] == "agent_error"]
+    assert len(errors) == 1
+    assert "cannot read this machine's memory" in errors[0]["content"]
+
+
+def _sidecar_agent(prompt_words: int):
+    """What ``history_budget`` reads off the agent answering the relayed turn."""
+    return SimpleNamespace(
+        model_id=LOCAL_MODEL, system_prompt="word " * prompt_words, _openai_tools=[]
+    )
+
+
+def _pushed(turns: int, words: int) -> list:
+    messages = []
+    for n in range(turns):
+        messages.append({"role": "user", "content": f"q{n} " + "data " * words})
+        messages.append({"role": "assistant", "content": f"a{n}"})
+    return messages
+
+
+def test_the_sidecar_refits_pushed_history_to_its_own_prompt(monkeypatch):
+    # The relay can't see the sidecar's prompt, so on a 32K window it may
+    # send more than fits beside it; the sidecar has to drop the oldest.
+    _window(monkeypatch, 32768)
+    query = "next?"
+    agent = _sidecar_agent(12_000)
+    own = history.history_budget(agent, query)
+    relayed = history.relayed_history_budget(LOCAL_MODEL, query, cloud=False)
+    assert 0 < own < relayed
+
+    # One turn more than fits beside the sidecar's prompt, as a chat grows.
+    turn_tokens = history.turn_cost(_pushed(1, 2_000))
+    pushed = _pushed(own // turn_tokens + 1, 2_000)
+    pushed_cost = sum(
+        history.turn_cost(pushed[i : i + 2]) for i in range(0, len(pushed), 2)
+    )
+    assert own < pushed_cost <= relayed
+
+    cuts = []
+    fitted = history.fit_pushed_history(agent, pushed, query, cuts.append)
+
+    assert 0 < len(fitted) < len(pushed)
+    assert fitted == pushed[-len(fitted) :]
+    assert fitted[0]["role"] == "user"
+    kept = sum(history.turn_cost(fitted[i : i + 2]) for i in range(0, len(fitted), 2))
+    assert kept <= own
+    assert len(cuts) == 1
+    assert cuts[0].turns == (len(pushed) - len(fitted)) // 2
+
+
+def test_pushed_history_that_fits_arrives_unchanged(monkeypatch):
+    _window(monkeypatch, 65536)
+    pushed = _pushed(8, 50)
+    cuts = []
+
+    fitted = history.fit_pushed_history(_sidecar_agent(500), pushed, "q", cuts.append)
+
+    assert fitted == pushed
+    assert cuts == []
+
+
+def test_no_pushed_history_needs_no_window(monkeypatch):
+    def _unreadable(**_kw):
+        raise AssertionError("the window must not be read for an empty context")
+
+    monkeypatch.setattr("gaia.llm.lemonade_client.resolve_ctx_size", _unreadable)
+
+    assert history.fit_pushed_history(_sidecar_agent(10), [], "q") == []
+
+
+def test_a_pushed_assistant_message_without_a_question_stays_in_its_turn(
+    monkeypatch,
+):
+    _window(monkeypatch, 65536)
+    pushed = [
+        {"role": "assistant", "content": "Welcome back."},
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+    ]
+
+    assert history.fit_pushed_history(_sidecar_agent(10), pushed, "q") == pushed

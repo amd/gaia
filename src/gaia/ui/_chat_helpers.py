@@ -2233,7 +2233,9 @@ def _dispatch_sidecar_query(
     ``_classify_chat_exception``, whose substring matching would misclassify
     a sidecar connection error as a Lemonade error and show the wrong remedy.
     """
+    from gaia.config import GaiaConfigError
     from gaia.llm.lemonade_client import LemonadeClientError
+    from gaia.llm.model_fit import ModelFitError
     from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.email_sidecar.errors import SidecarError
     from gaia.ui.email_sidecar.relay import relay_query
@@ -2360,7 +2362,7 @@ def _dispatch_sidecar_query(
         context = _relayed_history(
             history_pairs, model_id, request.message, sse_handler, session_id
         )
-    except LemonadeClientError as exc:
+    except (LemonadeClientError, ModelFitError, GaiaConfigError) as exc:
         sse_handler._emit(
             {
                 "type": "agent_error",

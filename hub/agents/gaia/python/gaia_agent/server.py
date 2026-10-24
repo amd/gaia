@@ -61,6 +61,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from starlette.responses import StreamingResponse
 
 from gaia.agents.base import file_snapshots
+from gaia.agents.base.history import fit_pushed_history
 from gaia.agents.base.readiness import start_advice, version_meets_min
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.logger import get_logger
@@ -1338,6 +1339,14 @@ async def query(request: QueryRequest):
     def _process() -> None:
         if request.documents:
             _index_attached_documents(agent, request.documents, handler)
+        if request.context and hasattr(agent, "conversation_history"):
+            # The caller sized this without our prompt and tools; re-fit it.
+            agent.conversation_history = fit_pushed_history(
+                agent,
+                agent.conversation_history,
+                request.query,
+                lambda cut: handler.print_warning(cut.notice),
+            )
         if request.max_steps is not None:
             run.result = agent.process_query(request.query, max_steps=request.max_steps)
         else:

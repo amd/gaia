@@ -1005,3 +1005,50 @@ def test_cancel_ends_an_email_turn_waiting_for_the_model(monkeypatch):
     t.join(timeout=10)
 
     assert fake.cancelled is True
+
+
+# ---------------------------------------------------------------------------
+# Pushed history is re-fit to this agent's own prompt and window
+# ---------------------------------------------------------------------------
+
+
+class _PromptHeavyFakeAgent(_HappyFakeAgent):
+    """A large prompt on a 32K window: what the host could not budget for."""
+
+    def __init__(self):
+        super().__init__()
+        self.model_id = "Qwen3.6-35B-A3B-GGUF"
+        self.system_prompt = "word " * 12_000
+        self._openai_tools = []
+
+
+def _pushed_context(turns, words):
+    messages = []
+    for n in range(turns):
+        messages.append({"role": "user", "content": f"q{n} " + "data " * words})
+        messages.append({"role": "assistant", "content": f"a{n}"})
+    return messages
+
+
+def test_pushed_history_too_big_beside_the_prompt_is_refit(app_client, monkeypatch):
+    from gaia.agents.base import history
+
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.resolve_ctx_size", lambda **_kw: 32768
+    )
+    fake = _PromptHeavyFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    query = "next?"
+    own = history.history_budget(fake, query)
+    turn = history.turn_cost(_pushed_context(1, 2_000))
+    context = _pushed_context(own // turn + 1, 2_000)
+
+    resp = app_client.post("/v1/email/query", json=_req(query=query, context=context))
+
+    assert resp.status_code == 200
+    seen = fake.seen_history
+    assert 0 < len(seen) < len(context)
+    assert seen == context[-len(seen) :]
+    assert seen[0]["role"] == "user"
+    warnings = [e for e in _parse_sse(resp.text) if "out of the model's view" in str(e)]
+    assert len(warnings) == 1

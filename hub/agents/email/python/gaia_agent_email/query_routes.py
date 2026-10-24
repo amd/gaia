@@ -72,6 +72,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from gaia.agents.base.history import fit_pushed_history
 from gaia.agents.base.readiness import start_advice
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.logger import get_logger
@@ -640,6 +641,13 @@ async def query(request: QueryRequest) -> StreamingResponse:
         def _run_query() -> None:
             error_detail: Optional[str] = None
             try:
+                # The host sized this without our prompt and tools; re-fit it.
+                agent.conversation_history = fit_pushed_history(
+                    agent,
+                    agent.conversation_history,
+                    user_query,
+                    lambda cut: handler.print_warning(cut.notice),
+                )
                 if max_steps is not None:
                     run.result = agent.process_query(user_query, max_steps=max_steps)
                 else:

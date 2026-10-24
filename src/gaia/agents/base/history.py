@@ -399,6 +399,28 @@ def relayed_history_budget(model: Optional[str], query: str, *, cloud: bool) -> 
     return _budget_in_window(ctx, count_tokens(query), reserve)
 
 
+def fit_pushed_history(
+    agent: Any,
+    messages: list[dict[str, Any]],
+    query: str,
+    on_cut: Optional[Callable[[HistoryCut], None]] = None,
+) -> list[dict]:
+    """Fit history another process pushed into *agent*'s own budget.
+
+    The sender sized it without this agent's prompt, tools or reply cap, so it
+    can overflow a small window. Each user message starts a turn; only whole
+    older turns are dropped.
+    """
+    if not messages:
+        return []
+    turns: list[list[dict[str, Any]]] = []
+    for message in messages:
+        if message.get("role") == "user" or not turns:
+            turns.append([])
+        turns[-1].append(message)
+    return select_history(turns, history_budget(agent, query), on_cut)
+
+
 def turn_cost(turn: list[dict[str, Any]]) -> int:
     """Estimated tokens one turn takes in the history budget."""
     return _turn_cost(turn)

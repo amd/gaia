@@ -289,6 +289,11 @@ UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 `documents`, `allowed_paths`, `memory`, `changes_turn_id`, `surface`) is
 optional.
 
+`context` is the transcript you push. It replaces the agent's history for the
+turn. If it doesn't fit beside the agent's prompt and tools in the model's
+window, the agent drops the oldest whole turns until it does, and streams a
+`status` event saying older messages are out of the model's view.
+
 `documents` (contract ≥ 2.16) carries the absolute paths of the files the user
 attached to the conversation. Send the whole set on every turn. Before the turn
 runs, the agent indexes the ones it has not indexed yet, so a file attached
