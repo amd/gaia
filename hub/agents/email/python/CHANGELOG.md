@@ -9,6 +9,12 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Pushed history that doesn't fit the model's window no longer overflows
+  it.** `/v1/email/query` used the `context` the host pushed as-is, but the
+  host sizes it without seeing this agent's prompt and tools. On a 32K window
+  (an NPU model) the two together could exceed the window and fail the turn.
+  The agent now keeps the newest whole turns that fit beside its prompt and
+  streams a `status` event when older ones drop out of view.
 - **Outlook messages show their real age and the newest one is replied to.**
   The Outlook backend handed downstream Graph's ISO-8601 `receivedDateTime` in
   the `internalDate` field, which every consumer reads as epoch milliseconds

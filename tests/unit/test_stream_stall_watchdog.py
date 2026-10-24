@@ -165,11 +165,12 @@ def stall_mid_stream(io):
 
 
 def trickle_then_answer(io):
-    """Four gaps of 75% of the idle limit (3x the limit in all) before the
-    first token, each ended by one byte of an SSE comment."""
+    """Eight gaps of 40% of the idle limit (3.2x the limit in all) before the
+    first token, each ended by one byte of an SSE comment. 40% leaves a loaded
+    CI runner over a second of slack per gap."""
     io.send_headers()
-    for byte in (b":", b"\n", b":", b"\n"):
-        time.sleep(IDLE * 0.75)
+    for byte in (b":", b"\n") * 4:
+        time.sleep(IDLE * 0.4)
         io.send(byte)
     for frame in GOOD:
         io.send(frame)
