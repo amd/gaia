@@ -42,7 +42,12 @@ from gaia.agents.tools.path_access import (
     read_access_error,
     readable_entry,
 )
-from gaia.agents.tools.protected_folders import ProtectedFolders
+from gaia.agents.tools.protected_folders import (
+    ASKING,
+    DENIED,
+    ProtectedFolders,
+    macos_access,
+)
 from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
     confine_roots,
@@ -3144,13 +3149,28 @@ class FileSearchToolsMixin:
                 recent_files = []
                 total_found = 0
                 denied_locations = {}
+                waiting_on_macos: List[str] = []
+                denied_by_macos: List[str] = []
 
+                readable = []
                 for scan_dir in dirs_to_scan:
                     if not scan_dir.exists():
                         continue
                     denied = self._read_access_error(str(scan_dir))
                     if denied:
                         denied_locations[scan_dir.name] = denied["error"]
+                        continue
+                    readable.append(scan_dir)
+                # Listing these is the job, so ask first instead of freezing the turn.
+                access = macos_access(readable)
+
+                for scan_dir in readable:
+                    state = access.get(scan_dir.resolve())
+                    if state == ASKING:
+                        waiting_on_macos.append(scan_dir.name)
+                        continue
+                    if state == DENIED:
+                        denied_by_macos.append(scan_dir.name)
                         continue
 
                     try:
@@ -3202,13 +3222,40 @@ class FileSearchToolsMixin:
                 locations_searched = [
                     d.name
                     for d in dirs_to_scan
-                    if d.exists() and d.name not in denied_locations
+                    if d.exists()
+                    and d.name not in denied_locations
+                    and d.name not in waiting_on_macos
+                    and d.name not in denied_by_macos
                 ]
-                if denied_locations and not locations_searched:
+                waiting_note = (
+                    "macOS is asking whether GAIA may read "
+                    + ", ".join(f"~/{name}" for name in waiting_on_macos)
+                    + ". Ask the user to answer that dialog, then call "
+                    "list_recent_files again."
+                    if waiting_on_macos
+                    else ""
+                )
+                macos_denied_note = (
+                    "macOS denied GAIA access to "
+                    + ", ".join(f"~/{name}" for name in denied_by_macos)
+                    + ". The user can allow it in System Settings > Privacy & "
+                    "Security > Files and Folders, then ask again."
+                    if denied_by_macos
+                    else ""
+                )
+                if (
+                    denied_locations or waiting_on_macos or denied_by_macos
+                ) and not locations_searched:
                     return {
                         **NOT_EXECUTED,
                         "status": "error",
-                        "error": " ".join(denied_locations.values()),
+                        "error": " ".join(
+                            [
+                                *denied_locations.values(),
+                                waiting_note,
+                                macos_denied_note,
+                            ]
+                        ).strip(),
                         "has_errors": True,
                         "operation": "list_recent_files",
                     }
@@ -3231,6 +3278,10 @@ class FileSearchToolsMixin:
                         "Not searched (outside the allowed folders): "
                         + ", ".join(denied_locations)
                     )
+                if waiting_note:
+                    display_parts.append(f"Not searched yet: {waiting_note}")
+                if macos_denied_note:
+                    display_parts.append(f"Not searched: {macos_denied_note}")
 
                 result = {
                     "status": "success",
@@ -3244,6 +3295,10 @@ class FileSearchToolsMixin:
                 }
                 if denied_locations:
                     result["locations_not_searched"] = denied_locations
+                if waiting_on_macos:
+                    result["locations_waiting_for_macos"] = waiting_on_macos
+                if denied_by_macos:
+                    result["locations_denied_by_macos"] = denied_by_macos
                 return result
 
             except Exception as e:
