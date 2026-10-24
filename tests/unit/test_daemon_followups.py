@@ -247,9 +247,7 @@ def test_a_wall_clock_time_keeps_its_hour_across_a_dst_change(monkeypatch):
     assert when.utcoffset() == timedelta(hours=-8)
 
 
-def test_a_run_session_is_a_valid_agent_session_id():
-    from gaia_agent_chat.session import validate_session_id
-
-    validate_session_id(followups.run_session_id("0" * 32))
+def test_only_a_fired_run_has_a_run_session():
+    assert followups.is_run_session(followups.run_session_id("0" * 32))
     assert not followups.is_run_session("2b6f0a1c-9d3e-4f5a-8b7c-1e2d3f4a5b6c")
     assert not followups.is_run_session(None)

@@ -40,3 +40,11 @@ def test_only_an_answered_turn_marks_results_told(agent, status, answer, told):
     agent._after_process_query("what happened?", answer)
 
     assert agent.told == [told]
+
+
+def test_a_fired_runs_session_id_is_one_the_agent_accepts():
+    from gaia_agent_chat.session import validate_session_id
+
+    from gaia.daemon import followups
+
+    validate_session_id(followups.run_session_id("0" * 32))
