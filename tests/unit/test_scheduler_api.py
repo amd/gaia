@@ -283,3 +283,19 @@ class TestScheduleResults:
     def test_results_not_found(self, client):
         resp = client.get("/api/schedules/nonexistent/results")
         assert resp.status_code == 404
+
+
+class TestRunScheduleNow:
+    """POST /api/schedules/{name}/run (#5718)."""
+
+    def test_run_now(self, client):
+        client.post(
+            "/api/schedules",
+            json={"name": "now", "interval": "every 1h", "prompt": "N"},
+        )
+        resp = client.post("/api/schedules/now/run")
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "now"
+
+    def test_run_now_unknown(self, client):
+        assert client.post("/api/schedules/missing/run").status_code == 404

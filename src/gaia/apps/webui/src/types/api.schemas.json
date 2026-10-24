@@ -3324,6 +3324,11 @@
         "title": "Run Count",
         "type": "integer"
       },
+      "running": {
+        "default": false,
+        "title": "Running",
+        "type": "boolean"
+      },
       "schedule_config": {
         "anyOf": [
           {

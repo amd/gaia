@@ -60,6 +60,7 @@ interface ScheduleState {
     loadSchedules: () => Promise<void>;
     createSchedule: (name: string, interval: string, prompt: string) => Promise<void>;
     updateScheduleStatus: (name: string, status: string) => Promise<void>;
+    runScheduleNow: (name: string) => Promise<void>;
     deleteSchedule: (name: string) => Promise<void>;
     selectSchedule: (name: string | null) => void;
     loadResults: (name: string) => Promise<void>;
@@ -118,6 +119,19 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
         } catch (err) {
             log.api.error(`Failed to update schedule "${name}"`, err);
             set({ error: parseApiError(err, 'Failed to update schedule') });
+        }
+    },
+
+    runScheduleNow: async (name) => {
+        try {
+            const updated = await api.runScheduleNow(name);
+            set((state) => ({
+                schedules: state.schedules.map((s) => (s.name === name ? updated : s)),
+                error: null,
+            }));
+        } catch (err) {
+            log.api.error(`Failed to run schedule "${name}" now`, err);
+            set({ error: parseApiError(err, 'Could not run the schedule now') });
         }
     },
 

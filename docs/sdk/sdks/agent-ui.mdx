@@ -2213,6 +2213,11 @@ Recurring prompts run on a cron-like interval — see [`gaia schedule`](/referen
     Pause, resume, or cancel a scheduled task via `{"status": ...}`.
   </Accordion>
 
+  <Accordion title="POST /api/schedules/{name}/run">
+    Run a scheduled task once now; its next scheduled time stays as it was. Returns the task with
+    `running: true` and runs in the background. `409` while a run of it is already in flight.
+  </Accordion>
+
   <Accordion title="DELETE /api/schedules/{name}">
     Delete a scheduled task.
   </Accordion>
