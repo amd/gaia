@@ -7876,6 +7876,8 @@ Do NOT wrap conversational replies in JSON.
         cause = cause[:1].upper() + cause[1:]
         # pylint: disable-next=assignment-from-none
         label = self._model_service_label()
+        if label and label.lower() in cause.lower():
+            label = None  # the cause already names it
         lines = [
             f"The model {what} at step {steps_taken}, so this request is "
             f"unfinished. {label + ': ' if label else ''}{cause}."
