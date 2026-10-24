@@ -42,7 +42,7 @@ from gaia.agents.tools.path_access import (
     read_access_error,
     readable_entry,
 )
-from gaia.agents.tools.protected_folders import ProtectedFolders
+from gaia.agents.tools.protected_folders import ProtectedFolders, macos_prompt_pending
 from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
     confine_roots,
@@ -3144,6 +3144,7 @@ class FileSearchToolsMixin:
                 recent_files = []
                 total_found = 0
                 denied_locations = {}
+                waiting_on_macos: List[str] = []
 
                 for scan_dir in dirs_to_scan:
                     if not scan_dir.exists():
@@ -3151,6 +3152,10 @@ class FileSearchToolsMixin:
                     denied = self._read_access_error(str(scan_dir))
                     if denied:
                         denied_locations[scan_dir.name] = denied["error"]
+                        continue
+                    # Listing these is the job, so ask first instead of freezing the turn.
+                    if macos_prompt_pending(scan_dir):
+                        waiting_on_macos.append(scan_dir.name)
                         continue
 
                     try:
@@ -3202,13 +3207,25 @@ class FileSearchToolsMixin:
                 locations_searched = [
                     d.name
                     for d in dirs_to_scan
-                    if d.exists() and d.name not in denied_locations
+                    if d.exists()
+                    and d.name not in denied_locations
+                    and d.name not in waiting_on_macos
                 ]
-                if denied_locations and not locations_searched:
+                waiting_note = (
+                    "macOS is asking whether GAIA may read "
+                    + ", ".join(f"~/{name}" for name in waiting_on_macos)
+                    + ". Ask the user to answer that dialog, then call "
+                    "list_recent_files again."
+                    if waiting_on_macos
+                    else ""
+                )
+                if (denied_locations or waiting_on_macos) and not locations_searched:
                     return {
                         **NOT_EXECUTED,
                         "status": "error",
-                        "error": " ".join(denied_locations.values()),
+                        "error": " ".join(
+                            [*denied_locations.values(), waiting_note]
+                        ).strip(),
                         "has_errors": True,
                         "operation": "list_recent_files",
                     }
@@ -3231,6 +3248,8 @@ class FileSearchToolsMixin:
                         "Not searched (outside the allowed folders): "
                         + ", ".join(denied_locations)
                     )
+                if waiting_note:
+                    display_parts.append(f"Not searched yet: {waiting_note}")
 
                 result = {
                     "status": "success",
@@ -3244,6 +3263,8 @@ class FileSearchToolsMixin:
                 }
                 if denied_locations:
                     result["locations_not_searched"] = denied_locations
+                if waiting_on_macos:
+                    result["locations_waiting_for_macos"] = waiting_on_macos
                 return result
 
             except Exception as e:
