@@ -26,9 +26,14 @@ import requests
 
 from gaia.daemon import paths
 from gaia.daemon.client import UPGRADE_CORE_GUIDANCE, attach, start_or_attach
-from gaia.daemon.errors import DaemonError
+from gaia.daemon.errors import DaemonError, DaemonVersionError
 from gaia.daemon.instance import DaemonInstance
-from gaia.daemon.sidecars.errors import SidecarError
+from gaia.daemon.sidecars.errors import (
+    ERROR_KIND_HEADER,
+    KIND_SERVICE_OUTDATED,
+    KIND_SERVICE_UNREACHABLE,
+    SidecarError,
+)
 from gaia.daemon.sidecars.spec import resolve_caller_dev_src_dir, resolve_caller_mode
 from gaia.logger import get_logger
 
@@ -76,9 +81,15 @@ class SidecarHandle:
 
 
 def _wrap_daemon_error(e: DaemonError) -> SidecarError:
+    kind = (
+        KIND_SERVICE_OUTDATED
+        if isinstance(e, DaemonVersionError)
+        else KIND_SERVICE_UNREACHABLE
+    )
     return SidecarError(
         f"cannot use the GAIA daemon for the sidecar: {e} "
-        f"Check `gaia daemon status` and the daemon log at {paths.log_path()}."
+        f"Check `gaia daemon status` and the daemon log at {paths.log_path()}.",
+        kind=kind,
     )
 
 
@@ -92,7 +103,8 @@ def _check_agents_floor(inst: DaemonInstance) -> None:
         raise SidecarError(
             f"the running daemon (host API v{inst.api_version}) predates the "
             "sidecar control plane (needs v1.1+) — it would 404 every agents "
-            f"route. {UPGRADE_CORE_GUIDANCE}"
+            f"route. {UPGRADE_CORE_GUIDANCE}",
+            kind=KIND_SERVICE_OUTDATED,
         )
 
 
@@ -135,12 +147,14 @@ def acquire_handle(agent_id: str = "email") -> SidecarHandle:
         raise SidecarError(
             f"could not reach the daemon at {inst.base_url} to ensure the "
             f"'{agent_id}' sidecar: {e}. Check `gaia daemon status` and the "
-            f"daemon log at {paths.log_path()}."
+            f"daemon log at {paths.log_path()}.",
+            kind=KIND_SERVICE_UNREACHABLE,
         ) from e
     if r.status_code != 200:
         raise SidecarError(
             f"the daemon refused to ensure the '{agent_id}' sidecar: "
-            f"{_error_detail(r)}"
+            f"{_error_detail(r)}",
+            kind=r.headers.get(ERROR_KIND_HEADER, ""),
         )
     # Never log this body — it carries the sidecar bearer token.
     body = r.json()
