@@ -3852,6 +3852,13 @@ Examples:
         "RAG/memory embeddings.",
     )
     init_parser.add_argument(
+        "--progress-json",
+        action="store_true",
+        help="Also print setup steps and model download progress as one JSON "
+        "object per line on stdout, for tools that show it (the desktop "
+        "installer). Human output is unchanged.",
+    )
+    init_parser.add_argument(
         "--check",
         action="store_true",
         help="Report whether this profile is already set up and exit — no "
@@ -6012,6 +6019,7 @@ Let me know your answer!
             skip_chat_model=getattr(args, "skip_chat_model", False),
             lemonade_url=getattr(args, "lemonade_url", None),
             gaia_lemonade=getattr(args, "gaia_lemonade", False),
+            progress_json=getattr(args, "progress_json", False),
         )
         sys.exit(exit_code)
 
