@@ -174,6 +174,16 @@ describe('a new chat', () => {
 
         expect(await screen.findByRole('alert')).toHaveTextContent(/permission mode could not be set.*backend said no/);
         expect(mocked.sendMessageStream).not.toHaveBeenCalled();
+        // The unsent message waits in the new chat's own box, not back in New Chat.
+        expect(await screen.findByLabelText('Message')).toHaveValue('go');
+        expect(localStorage.getItem('gaia:draft:new-chat')).toBeNull();
+    });
+
+    it('forgets the first message once sent, so New Chat does not offer it again', async () => {
+        render(<App />);
+        await sendFirstMessage('summarise my notes');
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
+        expect(localStorage.getItem('gaia:draft:new-chat')).toBeNull();
     });
 });
 

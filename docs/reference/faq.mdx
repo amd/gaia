@@ -58,9 +58,9 @@ icon: "circle-question"
   </Accordion>
 
   <Accordion title="How do I update GAIA?" icon="arrow-up">
-    GAIA Agent UI checks for updates automatically (10 seconds after launch, then every 4 hours) and notifies you in the status bar. Click **Restart to update** when prompted — your chat history is preserved across updates.
+    GAIA checks for new releases and offers them; it doesn't install one unless you say so. In the desktop app click **Update now** on the corner chip, or use **Settings → General → Updates**, which also has **Check for updates**, **Install a specific version…**, and **Install updates automatically** (off by default). In the Terminal UI type `/update now`, or `/update v0.25.0` for an exact version.
 
-    To disable auto-updates, set the environment variable `GAIA_DISABLE_UPDATE=1` before launching. To force a manual check, relaunch the app (the in-app updater runs on startup). See the [installation guide](/guides/install#updating-gaia) for more.
+    To turn update checks off entirely, set `GAIA_DISABLE_UPDATE=1` before launching. See the [installation guide](/guides/install#updating-gaia) for more.
   </Accordion>
 
   <Accordion title="Can I reinstall GAIA?" icon="rotate">

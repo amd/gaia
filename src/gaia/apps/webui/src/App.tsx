@@ -25,7 +25,8 @@ import { createStatusPoller, type StatusOutcome } from './services/statusPoll';
 import { log, logBanner } from './utils/logger';
 import { announceMobileAccess, useMobileAccessRequests } from './utils/mobileAccessEvents';
 import { getSessionHash } from './utils/format';
-import { readUrlTarget, resolveUrlNavTarget } from './utils/sessionNav';
+import { lastSessionTarget, readUrlTarget, rememberLastSession, resolveUrlNavTarget } from './utils/sessionNav';
+import { NEW_CHAT_DRAFT_KEY, chatDraftKey, clearSavedDraft, readSavedDraft, writeSavedDraft } from './utils/savedDraft';
 import { getApiBase } from './utils/apiBase';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 import { FLAGSHIP_AGENT_ID, hasFlagshipAgent, isFlagshipMissingError } from './utils/newTask';
@@ -303,6 +304,7 @@ function App() {
 
     // Open a chat named in the URL (?session= or #hash), on load and on back/forward.
     const urlResolved = useRef(false);
+    const choseNewChatRef = useRef(false);
     useEffect(() => {
         const navigate = () => {
             const target = readUrlTarget(window.location);
@@ -319,8 +321,19 @@ function App() {
             if (urlResolved.current) return;
             urlResolved.current = true;
             // A link to a deleted chat: drop it, as the hash-sync effect would.
-            if (!navigate() && !useChatStore.getState().currentSessionId && window.location.hash) {
+            if (navigate() || useChatStore.getState().currentSessionId) return;
+            if (window.location.hash) {
                 window.history.replaceState(null, '', window.location.pathname + window.location.search);
+                return;
+            }
+            // No link: reopen the chat that was open when the app last closed —
+            // unless the user already chose a new chat, or was composing one.
+            if (choseNewChatRef.current || readSavedDraft(NEW_CHAT_DRAFT_KEY)) return;
+            const { sessions } = useChatStore.getState();
+            const last = resolveUrlNavTarget(lastSessionTarget(), null, sessions);
+            if (last) {
+                setCurrentSession(last);
+                setMessages([]);
             }
         };
         const unsubscribe = useChatStore.subscribe((state) => { if (state.sessions.length > 0) first(); });
@@ -375,6 +388,7 @@ function App() {
     }, [setCurrentSession, setMessages]);
 
     useEffect(() => {
+        if (urlResolved.current) rememberLastSession(currentSessionId);
         if (currentSessionId) {
             const hash = getSessionHash(currentSessionId);
             if (window.location.hash !== `#${hash}`) window.history.replaceState(null, '', `#${hash}`);
@@ -413,17 +427,25 @@ function App() {
         }
         store.clearDraftDocuments();
         store.setDraftPrivate(false);
+        // Always sent, so the chat runs in exactly the mode its chip showed.
+        // Set before the chat opens, so a refused message can wait in its box.
+        let modeError: unknown = null;
+        try {
+            await api.setPermissionMode(session.id, store.draftPermissionMode);
+        } catch (err) {
+            modeError = err;
+        }
+        // The message now belongs to the chat: sent below, or waiting in its box.
+        clearSavedDraft(NEW_CHAT_DRAFT_KEY);
+        if (modeError && !session.private) writeSavedDraft(chatDraftKey(session.id), text);
         addSession(session);
         setCurrentSession(session.id);
         setMessages([]);
         setDraftText('');
-        // Always sent, so the chat runs in exactly the mode its chip showed.
-        try {
-            await api.setPermissionMode(session.id, store.draftPermissionMode);
-        } catch (err) {
+        if (modeError) {
             setCreateError(
-                `The chat was created, but its permission mode could not be set, so your message was not sent: ${
-                    err instanceof Error ? err.message : err}`,
+                `The chat was created, but its permission mode could not be set, so your message was not sent${
+                    session.private ? '' : " — it is in the chat's box"}: ${modeError instanceof Error ? modeError.message : modeError}`,
             );
             return;
         }
@@ -437,6 +459,7 @@ function App() {
         if (outgoing && isAbandonedDraft(outgoing, store)) void cleanupAbandonedDraft(outgoing);
         store.setShowMemoryDashboard(false);
         store.setShowSchedules(false);
+        choseNewChatRef.current = true;
         setCurrentSession(null);
         setMessages([]);
         setNewChatFocus((n) => n + 1);

@@ -45,6 +45,8 @@ import { isPlaceholderTitle } from '../utils/sessionTitle';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
+import { useSavedDraft } from '../hooks/useSavedDraft';
+import { chatDraftKey } from '../utils/savedDraft';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -258,7 +260,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const session = sessions.find((s) => s.id === sessionId);
     const sessionDocIds = new Set(session?.document_ids ?? []);
     const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
-    const [input, setInput] = useState('');
+    // Saved, so an update restart never loses a half-typed message; a private
+    // chat's stays in memory.
+    const [input, setInput] = useSavedDraft(session?.private ? null : chatDraftKey(sessionId));
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
     const [isDragOver, setIsDragOver] = useState(false);

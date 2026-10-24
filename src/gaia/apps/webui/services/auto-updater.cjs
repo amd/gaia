@@ -23,7 +23,9 @@
  *     `app.whenReady`)
  *   - Subsequent checks every 4 hours via re-scheduling setTimeout
  *   - Concurrent-check guard so checks never overlap
- *   - Download silently in the background
+ *   - Auto-update is OFF by default (`autoUpdate` in ~/.gaia/update-config.json,
+ *     shared with the Terminal UI). Off, a found update is only offered: the
+ *     renderer's "Update now" calls downloadUpdate(). On, it downloads silently.
  *   - On `update-downloaded`, show a native dialog: "Update ready — restart?"
  *   - Renderer integration via IPC channel `gaia:update:status`
  *   - Disabled entirely via GAIA_DISABLE_UPDATE=1 env var (CI / dev / corp)
@@ -38,6 +40,9 @@
  *   - listReleases()          → fetch available releases from GitHub
  *   - installVersion(tag)     → downgrade/install a specific tagged release
  *   - clearPin()              → resume auto-updates (clear the version pin)
+ *   - setAutoUpdate(enabled)  → persist the auto-update preference
+ *   - downloadUpdate()        → download the offered update ("Update now")
+ *   - restartToInstall()      → restart into a downloaded update
  *   - STATES                  → string constants for valid states
  *
  * Design note: `electron` and `electron-updater` are lazy-required inside
@@ -103,6 +108,10 @@ const state = {
   error: null,
   currentVersion: null,
   pinnedVersion: null,
+  autoUpdate: false,
+  // update-config.json could not be read; kept apart from `error` so a later
+  // check's status never hides it.
+  configError: null,
 };
 
 let mainWindowRef = null;
@@ -163,13 +172,35 @@ function _loadPin() {
 }
 
 /**
- * Persist the version pin. Propagates write errors to the caller so that a
- * failed pin write can abort a rollback (AC2 must not be silently broken).
- * Callers that can tolerate a failed write (e.g. clearPin) should catch.
+ * Off unless the user turned it on: the app still changes fast. An unreadable
+ * file is reported (Settings shows it), and auto-update stays off until fixed.
  */
+function _loadAutoUpdate() {
+  if (!fs.existsSync(UPDATE_CONFIG_PATH)) return { autoUpdate: false, error: null };
+  try {
+    const cfg = JSON.parse(fs.readFileSync(UPDATE_CONFIG_PATH, "utf8"));
+    return { autoUpdate: Boolean(cfg && cfg.autoUpdate === true), error: null };
+  } catch (err) {
+    const error =
+      `${UPDATE_CONFIG_PATH} cannot be read (${(err && err.message) || err}), so auto-update is off — ` +
+      "fix the file by hand or delete it.";
+    log("error", error);
+    return { autoUpdate: false, error };
+  }
+}
+
 function _savePin(pinnedVersion) {
+  _writeConfig({ pinnedVersion });
+}
+
+/**
+ * Merge `patch` into update-config.json. Propagates write errors so a failed
+ * pin write can abort a rollback (AC2 must not be silently broken). Callers
+ * that can tolerate a failed write (e.g. clearPin) should catch.
+ */
+function _writeConfig(patch) {
   fs.mkdirSync(path.dirname(UPDATE_CONFIG_PATH), { recursive: true });
-  // Merge into any existing config so we don't clobber a persisted feedUrl.
+  // Merge so we don't clobber a persisted feedUrl or the Terminal UI's keys.
   let existing = {};
   try {
     if (fs.existsSync(UPDATE_CONFIG_PATH)) {
@@ -180,7 +211,7 @@ function _savePin(pinnedVersion) {
   }
   fs.writeFileSync(
     UPDATE_CONFIG_PATH,
-    JSON.stringify({ ...existing, pinnedVersion }, null, 2),
+    JSON.stringify({ ...existing, ...patch }, null, 2),
     "utf8"
   );
 }
@@ -414,6 +445,7 @@ async function installVersion(tag) {
   // the download completes but the user dismisses the restart prompt. If the
   // pin can't be persisted we ABORT — proceeding would let the next launch
   // silently auto-upgrade past the rollback (no silent fallbacks).
+  const previousPin = state.pinnedVersion;
   try {
     _savePin(tag);
   } catch (err) {
@@ -423,6 +455,8 @@ async function installVersion(tag) {
     );
   }
   setState({ pinnedVersion: tag });
+  // A pin always stops background downloads; this one is downloaded below.
+  autoUpdaterRef.autoDownload = false;
 
   checkInProgress = true;
   try {
@@ -441,12 +475,52 @@ async function installVersion(tag) {
     // in-flight rollback download (which outlives this checkInProgress window),
     // so it's intentionally deferred.
 
-    // Kick off the targeted check — will fire update-available → downloads →
-    // update-downloaded → our existing dialog prompts restart.
+    // Targeted check → update-available. autoDownload is off (default, and
+    // always while pinned), so download explicitly; update-downloaded then
+    // prompts the restart.
     await autoUpdaterRef.checkForUpdates();
+    if (state.status !== STATES.AVAILABLE) {
+      throw new Error(
+        `GAIA ${tag} has no installer for this platform at its release feed` +
+          (state.error ? `: ${state.error}` : ".") +
+          " Download it from https://github.com/amd/gaia/releases instead."
+      );
+    }
+    setState({ status: STATES.DOWNLOADING, progress: 0, error: null });
+    await autoUpdaterRef.downloadUpdate();
+  } catch (err) {
+    // Don't leave the app pinned to a version that never installed.
+    const pinNote = _restorePinAfterFailedInstall(previousPin, tag);
+    const msg = (err && err.message) || String(err);
+    setState({ status: STATES.ERROR, error: msg });
+    throw new Error(`${msg} ${pinNote}`);
   } finally {
     checkInProgress = false;
   }
+}
+
+/** Undo the pin a failed install wrote; returns the sentence saying where things stand. */
+function _restorePinAfterFailedInstall(previousPin, failedTag) {
+  try {
+    _savePin(previousPin || null);
+  } catch (err) {
+    // The file still pins failedTag; say so rather than claim otherwise.
+    log("error", "Failed to restore the pin after a failed install:", err && err.message);
+    return (
+      `The pin to ${failedTag} could not be undone in ${UPDATE_CONFIG_PATH} ` +
+      `(${(err && err.message) || err}) — fix that file, then use Unpin in Settings → General → Updates.`
+    );
+  }
+  if (!previousPin) {
+    clearPin();
+    return "Updates are not paused.";
+  }
+  setState({ pinnedVersion: previousPin });
+  autoUpdaterRef.setFeedURL({
+    provider: "generic",
+    url: `https://github.com/amd/gaia/releases/download/${previousPin}/`,
+  });
+  return `Still pinned to ${previousPin}.`;
 }
 
 // ── clearPin / resumeUpdates ──────────────────────────────────────────────────
@@ -470,7 +544,7 @@ function clearPin() {
   setState({ pinnedVersion: null });
 
   if (autoUpdaterRef) {
-    autoUpdaterRef.autoDownload = true;
+    autoUpdaterRef.autoDownload = state.autoUpdate;
     autoUpdaterRef.allowDowngrade = false;
     // Restore the forward channel (overrides any generic/tagged rollback feed
     // set by installVersion). Loud NO_CHANNEL if unconfigured.
@@ -478,6 +552,68 @@ function clearPin() {
   }
 
   log("info", "Version pin cleared — auto-updates resumed");
+}
+
+// ── Auto-update preference / user-driven install ─────────────────────────────
+
+/**
+ * Persist the auto-update preference. Throws when it can't be saved, so the
+ * Settings toggle never shows a value the next launch won't honour.
+ */
+async function setAutoUpdate(enabled) {
+  if (typeof enabled !== "boolean") {
+    throw new TypeError(`setAutoUpdate expects true or false, got ${typeof enabled}`);
+  }
+  try {
+    _writeConfig({ autoUpdate: enabled });
+  } catch (err) {
+    throw new Error(
+      `Couldn't save the auto-update setting to ${UPDATE_CONFIG_PATH}: ${(err && err.message) || err}`
+    );
+  }
+  setState({ autoUpdate: enabled });
+  if (autoUpdaterRef) {
+    autoUpdaterRef.autoDownload = enabled && !state.pinnedVersion;
+  }
+  log("info", `Auto-update ${enabled ? "enabled" : "disabled"}`);
+  // Turning it on with an update already offered means "install it".
+  if (enabled && !state.pinnedVersion && state.status === STATES.AVAILABLE) {
+    await downloadUpdate();
+  }
+}
+
+/** "Update now": download the update a check found; the restart dialog follows. */
+async function downloadUpdate() {
+  if (!autoUpdaterRef) {
+    throw new Error("downloadUpdate called before auto-updater was initialised");
+  }
+  if (state.status !== STATES.AVAILABLE) {
+    throw new Error(
+      `No update is waiting to download (status: ${state.status}) — check for updates first.`
+    );
+  }
+  log("info", `User asked to install ${state.version}`);
+  setState({ status: STATES.DOWNLOADING, progress: 0, error: null });
+  try {
+    await autoUpdaterRef.downloadUpdate();
+  } catch (err) {
+    const message = (err && err.message) || String(err);
+    setState({ status: STATES.ERROR, error: message });
+    throw new Error(`Downloading GAIA ${state.version || ""} failed: ${message}`);
+  }
+}
+
+/** Restart into a downloaded update, asking first if work would be cut off. */
+async function restartToInstall() {
+  if (!autoUpdaterRef || state.status !== STATES.DOWNLOADED) {
+    throw new Error(`No downloaded update to install (status: ${state.status}).`);
+  }
+  if (!(await confirmRestartRef())) {
+    log("info", "Restart put off: work is still running — will install on next quit");
+    return;
+  }
+  log("info", "User chose to restart from the update chip — calling quitAndInstall");
+  autoUpdaterRef.quitAndInstall(false, true);
 }
 
 // ── Core check ───────────────────────────────────────────────────────────────
@@ -669,6 +805,18 @@ function registerIpcHandlers() {
     clearPin();
     return getState();
   });
+  ipcMain.handle("gaia:update:set-auto-update", async (_event, enabled) => {
+    await setAutoUpdate(enabled);
+    return getState();
+  });
+  ipcMain.handle("gaia:update:download", async () => {
+    await downloadUpdate();
+    return getState();
+  });
+  ipcMain.handle("gaia:update:restart", async () => {
+    await restartToInstall();
+    return getState();
+  });
 
   ipcHandlersRegistered = true;
 }
@@ -682,6 +830,9 @@ function unregisterIpcHandlers() {
     "gaia:update:list-releases",
     "gaia:update:install-version",
     "gaia:update:resume",
+    "gaia:update:set-auto-update",
+    "gaia:update:download",
+    "gaia:update:restart",
   ];
   for (const ch of channels) {
     try {
@@ -739,6 +890,9 @@ function init(mainWindow, options = {}) {
     state.pinnedVersion = savedPin;
     log("info", `Found persisted version pin: ${savedPin} — autoDownload will be paused`);
   }
+  const loaded = _loadAutoUpdate();
+  state.autoUpdate = loaded.autoUpdate;
+  state.configError = loaded.error;
 
   // Lazy-load Electron and electron-updater. Any failure here is logged
   // and the updater stays in `idle` — we never crash the app.
@@ -780,9 +934,9 @@ function init(mainWindow, options = {}) {
 
   // Configure electron-updater.
   try {
-    // When pinned, suppress autoDownload so the scheduled forward-only check
-    // cannot silently download/install a newer version (AC2).
-    autoUpdaterRef.autoDownload = savedPin ? false : true;
+    // Off by default; a pin always suppresses it so the scheduled forward-only
+    // check cannot silently download/install a newer version (AC2).
+    autoUpdaterRef.autoDownload = !savedPin && state.autoUpdate;
     autoUpdaterRef.autoInstallOnAppQuit = true;
     autoUpdaterRef.disableWebInstaller = true;
     autoUpdaterRef.allowDowngrade = false;
@@ -872,5 +1026,8 @@ module.exports = {
   listReleases,
   installVersion,
   clearPin,
+  setAutoUpdate,
+  downloadUpdate,
+  restartToInstall,
   STATES,
 };
