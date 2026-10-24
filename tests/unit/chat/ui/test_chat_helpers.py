@@ -434,6 +434,17 @@ class TestEmptyAnswerOutcome:
         assert sse_type == "failed"
         assert keep_steps is True
 
+    def test_an_error_without_a_tool_keeps_the_error_and_adds_nothing(self):
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=False,
+            has_steps=False,
+            has_card=False,
+            turn_reported_error=True,
+        )
+        assert content == ""
+        assert sse_type == "failed"
+        assert keep_steps is True
+
     def test_nothing_with_a_backend_problem_reports_it_as_an_error(self):
         content, sse_type, keep_steps = _empty_answer_outcome(
             turn_cancelled=False,
