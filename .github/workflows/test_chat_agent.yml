@@ -17,6 +17,8 @@ on:
       # Only lane that installs the chat wheel, so the only lane where
       # test_registry.py's importorskip cases actually run (#2240).
       - 'src/gaia/agents/registry.py'
+      - 'src/gaia/daemon/__init__.py'
+      - 'src/gaia/daemon/followups.py'
       - 'tests/unit/agents/test_registry.py'
       - 'src/gaia/web/**'
       - 'src/gaia/rag/**'
@@ -100,6 +102,8 @@ on:
       # Only lane that installs the chat wheel, so the only lane where
       # test_registry.py's importorskip cases actually run (#2240).
       - 'src/gaia/agents/registry.py'
+      - 'src/gaia/daemon/__init__.py'
+      - 'src/gaia/daemon/followups.py'
       - 'tests/unit/agents/test_registry.py'
       - 'src/gaia/web/**'
       - 'src/gaia/rag/**'
