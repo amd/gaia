@@ -448,6 +448,9 @@ What GAIA does on a small PC:
   full window back.
 - **Below 32,768 tokens, GAIA refuses.** The flagship's prompt and tools alone
   take about 20,000 tokens, so a smaller window could not answer.
+- **`gaia init` picks the chat model by free memory too.** A PC that could hold
+  Qwen3.6-35B-A3B but is short on free memory at setup gets Gemma-4-E4B, and setup
+  says why. Close other apps and re-run `gaia init` to get Qwen3.6.
 - **Under 24 GB of RAM, the Agent UI loads the model with your first message**,
   not at startup. That first answer takes longer.
 - **Another Lemonade counts as used memory.** GAIA runs its own Lemonade, so a
