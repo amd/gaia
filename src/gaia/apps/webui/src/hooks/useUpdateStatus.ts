@@ -8,6 +8,8 @@ import { useEffect, useState } from 'react';
  * `gaiaUpdater` contextBridge API (see src/gaia/apps/webui/preload.cjs
  * and services/auto-updater.cjs). Phase F of the desktop installer plan.
  * Issue #1336: adds rollback support (listReleases, installVersion, resumeUpdates).
+ * Auto-update is opt-in (off by default): a found update is offered, and
+ * downloadUpdate() installs it.
  */
 export type UpdateStatus =
     | 'idle'
@@ -16,7 +18,8 @@ export type UpdateStatus =
     | 'downloading'
     | 'downloaded'
     | 'error'
-    | 'disabled';
+    | 'disabled'
+    | 'no-channel';
 
 export interface UpdateState {
     status: UpdateStatus;
@@ -28,6 +31,10 @@ export interface UpdateState {
     currentVersion: string | null;
     /** The pinned version tag (e.g. "v0.20.0") or null if not pinned. */
     pinnedVersion: string | null;
+    /** Download and install updates without asking. Off by default. */
+    autoUpdate: boolean;
+    /** ~/.gaia/update-config.json could not be read; why, or null. */
+    configError?: string | null;
 }
 
 /** Info about a single published release, as returned by listReleases(). */
@@ -40,13 +47,21 @@ export interface ReleaseInfo {
     isPinned: boolean;
 }
 
-interface GaiaUpdaterBridge {
+export interface GaiaUpdaterBridge {
     getStatus: () => Promise<UpdateState>;
     check: () => Promise<UpdateState>;
     onStatusChange: (cb: (state: UpdateState) => void) => () => void;
     listReleases: () => Promise<ReleaseInfo[] | { error: string }>;
     installVersion: (tag: string) => Promise<UpdateState>;
     resumeUpdates: () => Promise<UpdateState>;
+    setAutoUpdate: (enabled: boolean) => Promise<UpdateState>;
+    downloadUpdate: () => Promise<UpdateState>;
+    restart: () => Promise<UpdateState>;
+}
+
+/** The Electron updater bridge, or undefined outside the desktop app. */
+export function getUpdaterBridge(): GaiaUpdaterBridge | undefined {
+    return (window as unknown as { gaiaUpdater?: GaiaUpdaterBridge }).gaiaUpdater;
 }
 
 export const INITIAL_STATE: UpdateState = {
@@ -57,6 +72,7 @@ export const INITIAL_STATE: UpdateState = {
     error: null,
     currentVersion: null,
     pinnedVersion: null,
+    autoUpdate: false,
 };
 
 /**
@@ -71,9 +87,7 @@ export function useUpdateStatus(): UpdateState {
     const [state, setState] = useState<UpdateState>({ ...INITIAL_STATE });
 
     useEffect(() => {
-        const updater: GaiaUpdaterBridge | undefined = (window as unknown as {
-            gaiaUpdater?: GaiaUpdaterBridge;
-        }).gaiaUpdater;
+        const updater = getUpdaterBridge();
         if (!updater) return;
 
         let mounted = true;

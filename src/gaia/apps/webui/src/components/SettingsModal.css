@@ -279,7 +279,7 @@
     font-family: var(--font-sans);
 }
 
-.setting-actions { margin-top: 4px; }
+.setting-actions { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 8px; }
 
 .loading-text {
     font-size: 13px;
