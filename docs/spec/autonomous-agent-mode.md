@@ -201,10 +201,12 @@ AgentLoop
 └── _run_step(trigger)       — find session, acquire locks, run agent tick
 ```
 
-**Active session selection:**
-- Select most recently updated non-private session
-- Skip sessions where `session.private = true` — **always, unconditionally**
-- Skip sessions with no approved pending goals (avoids pointless LLM calls)
+**Session selection:**
+- Ticks run in their own "Background goals" chat (`kind = "scheduled"`, listed with
+  the other background runs), created on first use — never in a chat the user is in,
+  because a tick holds its chat's lock and a long one would refuse the user's messages (#5711)
+- A turn in a private chat never triggers a tick — **always, unconditionally**
+- No tick runs without approved pending goals (avoids pointless LLM calls)
 
 **Startup gate:** The loop does not process triggers until after the
 initialized marker exists (`~/.gaia/chat/initialized`). On first launch,
@@ -725,7 +727,7 @@ shows a three-way toggle: **Manual | Goal-driven | Autonomous**.
 
 Sessions with `private=True` are **never touched by the autonomous loop**,
 unconditionally. This applies to:
-- Active session selection in `_get_active_session()` — skipped entirely
+- Session selection — ticks never run in a user's chat, private or not
 - The `notify_user_message()` trigger — if the session is private, no
   autonomous continuation fires after the agent responds
 - The activity log — no entries for private sessions
@@ -947,7 +949,7 @@ async def _run_step(self, trigger: AgentTrigger, session: dict):
 - [ ] `SSEOutputHandler.background_mode` flag + immediate deny for destructive tools
 - [ ] `SSEOutputHandler` user input request queue (replace single slot with `deque`)
 - [ ] `PathValidator`: enforce `prompt_user=False` in background mode (no `input()` calls)
-- [ ] `AgentLoop._get_active_session()` skips private sessions unconditionally
+- [ ] `AgentLoop` runs ticks in its own background chat, and a private chat's turn triggers none
 - [ ] `set_loop_state` enforces `wake_in_seconds` floor (30s) and ceiling (86400s)
 - [ ] Per-tick step budget (default 20), hourly rate limit (default 30)
 - [ ] Daily agent-created goal limit (default 10)
