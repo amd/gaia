@@ -67,14 +67,14 @@ func DetectKind() (Kind, error) {
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
 	}
-	if home, err := homeDir(); err == nil && sameDir(filepath.Dir(exe), filepath.Join(home, ".gaia", "bin")) {
+	if home, err := homeDir(); err == nil && sameDir(dirOf(exe), filepath.Join(home, ".gaia", "bin")) {
 		return KindScript, nil
 	}
 	switch goos {
 	case "windows":
 		// Only the folder the GAIA setup recorded it installed to; a copied or
 		// extracted exe elsewhere is not one the setup can replace.
-		if dir := windowsSetupDir(); dir != "" && sameDir(filepath.Dir(exe), dir) {
+		if dir := windowsSetupDir(); dir != "" && sameDir(dirOf(exe), dir) {
 			return KindWindowsSetup, nil
 		}
 	case "darwin":
@@ -95,11 +95,27 @@ func DetectKind() (Kind, error) {
 		"install a release from %s, or run the installer from https://amd-gaia.ai", exe, ReleasesPage)
 }
 
-func sameDir(a, b string) bool {
-	if goos == "windows" {
-		return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+// dirOf and sameDir read Windows paths by Windows rules (either slash, any
+// case) whatever OS the code is built for, so the Windows logic is tested on
+// every CI runner.
+func dirOf(p string) string {
+	if goos != "windows" {
+		return filepath.Dir(p)
 	}
-	return filepath.Clean(a) == filepath.Clean(b)
+	if i := strings.LastIndexAny(p, `\/`); i >= 0 {
+		return p[:i]
+	}
+	return "."
+}
+
+func sameDir(a, b string) bool {
+	if goos != "windows" {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	norm := func(p string) string {
+		return strings.TrimRight(strings.ReplaceAll(p, "/", `\`), `\`)
+	}
+	return strings.EqualFold(norm(a), norm(b))
 }
 
 func packageOwns(tool string, args ...string) bool {
