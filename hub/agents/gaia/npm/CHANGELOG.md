@@ -16,6 +16,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   line from a document it read, or call it something you had saved. It now
   saves text from a file, page or tool result only when you ask it to keep
   something, and an empty memory search says that file text is not saved.
+
 ### For integrators: contract 2.20
 
 - **A failed model request says which endpoint failed, worded for your
