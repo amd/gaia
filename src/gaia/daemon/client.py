@@ -623,6 +623,46 @@ def _post_reconfigure(inst: DaemonInstance, timeout) -> dict:
     return r.json()
 
 
+def followups_request(
+    method: str,
+    path: str = "",
+    *,
+    json: Optional[dict] = None,
+    params: Optional[dict] = None,
+    timeout: float = 10.0,
+    start: bool = True,
+) -> dict:
+    """Call ``/daemon/v1/followups<path>``, starting the daemon unless *start* is False.
+
+    Raises :class:`DaemonError` naming the daemon's answer when it refuses, so
+    the agent can tell the user why a follow-up was not scheduled, and when
+    *start* is False and no daemon is running.
+    """
+    import requests
+
+    inst = start_or_attach() if start else attach(patient=False)
+    if inst is None:
+        raise DaemonError("no GAIA daemon is running, so no follow-up can have run.")
+    url = f"{inst.base_url}{API_PREFIX}/followups{path}"
+    try:
+        r = requests.request(
+            method,
+            url,
+            headers={"Authorization": f"{AUTH_SCHEME} {inst.token}"},
+            json=json,
+            params=params,
+            timeout=timeout,
+        )
+    except requests.exceptions.RequestException as e:
+        raise DaemonError(
+            f"could not reach the daemon at {inst.base_url} for follow-ups: {e}. "
+            "Check `gaia daemon status`."
+        ) from e
+    if r.status_code != 200:
+        raise DaemonError(_error_detail(r))
+    return r.json()
+
+
 def reconfigure_lemonade(timeout=_LEMONADE_ENSURE_TIMEOUT) -> Optional[dict]:
     """Make a running daemon follow the saved Lemonade choice.
 

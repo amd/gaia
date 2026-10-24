@@ -3023,6 +3023,13 @@ class MemoryMixin(ProceduralMemoryMixin):
             "  guess it got lost; offer to store it now.\n"
             "- NEVER say 'Noted', 'Logged', 'Stored' — call the tool silently and respond naturally.\n"
         )
+        if getattr(self, "_follow_ups_enabled", False):
+            # A reminder in memory only comes up in the next chat; this one fires.
+            instructions += (
+                "- A reminder at a time ('remind me at 9', 'tomorrow morning') → also\n"
+                "  schedule_follow_up(when, task='Remind the user to …'), so it alerts\n"
+                "  them then; remember() alone only shows it next time they chat.\n"
+            )
 
         head = instructions + "\n" + "\n\n".join(sections) if sections else instructions
         personal, self._stable_memory_ids = self._fit_personal_memories(

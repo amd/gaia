@@ -642,6 +642,13 @@ class TestContextManagement:
 class TestSystemPrompt:
     """Tests for get_memory_system_prompt()."""
 
+    def test_a_timed_reminder_is_scheduled_only_where_follow_ups_exist(
+        self, mixin_host
+    ):
+        assert "schedule_follow_up" not in mixin_host._build_stable_memory_prompt()
+        mixin_host._follow_ups_enabled = True
+        assert "schedule_follow_up(when" in mixin_host._build_stable_memory_prompt()
+
     def test_system_prompt_does_not_include_current_time(self, mixin_host):
         """Stable system prompt (frozen prefix) does not contain current time.
 

@@ -25,10 +25,7 @@ from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL as LEMONADE_DEFAULT_EMBEDDING_MODEL,
 )
-from gaia.llm.lemonade_client import (
-    GPU_CTX_SIZE,
-    NPU_CTX_SIZE,
-)
+from gaia.llm.lemonade_client import GPU_CTX_SIZE, NPU_CTX_SIZE
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -66,6 +63,7 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     ),
     "audio": ("gaia.agents.tools.audio_tools", "AudioToolsMixin"),
     "wait": ("gaia.agents.tools.wait_tools", "WaitToolsMixin"),
+    "follow_up": ("gaia.agents.tools.follow_up_tools", "FollowUpToolsMixin"),
     "reasoning_effort": (
         "gaia.agents.tools.reasoning_tools",
         "ReasoningEffortToolsMixin",

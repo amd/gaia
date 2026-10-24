@@ -136,12 +136,10 @@ def _build_clock(
 ) -> DaemonClock:
     """The daemon's single scheduled-job clock (#2379).
 
-    *executors* ships EMPTY in production — ``run()`` below calls this with no
-    ``executors`` argument at all. This lands the clock machinery only; no job
-    kind has a registered executor yet. Wiring a real one (email briefing/send
-    and beyond) is a deliberate follow-up (see the PR description), not an
-    oversight — reconciling jobs before an executor exists would permanently
-    fail-mark every one of them on first fire.
+    ``run()`` registers one executor: agent follow-ups
+    (:mod:`gaia.daemon.followups`). Email briefing/send jobs are not reconciled
+    onto it yet; doing that before their executor exists would fail-mark every
+    one of them on first fire.
     """
     return DaemonClock(db_path, executors=executors or {})
 
@@ -325,10 +323,20 @@ def run(host: str = HOST) -> None:
     os.environ[BROKER_URL_ENV_VAR] = f"http://{host}:{port}"
 
     # The daemon's single scheduled-job clock (#2379): built here so both the
-    # register/deregister hooks and the status route share one instance. Ships
-    # with NO executors — see _build_clock's docstring for why that is
-    # deliberate, not an oversight.
-    clock = _build_clock(str(scheduler_db_path()))
+    # register/deregister hooks and the status route share one instance. Its
+    # first executor runs the follow-ups an agent schedules for itself.
+    from gaia.daemon import followups
+    from gaia.daemon.timeouts import agent_read_timeout
+
+    clock = _build_clock(
+        str(scheduler_db_path()),
+        executors={
+            followups.KIND: followups.make_executor(
+                followups.ask_sidecar(registry, read_timeout=agent_read_timeout()),
+                followups.desktop_notify,
+            )
+        },
+    )
 
     # GAIA's own private, self-contained Lemonade instance (#3121), which the
     # daemon starts at boot and stops at shutdown.

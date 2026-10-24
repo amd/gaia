@@ -220,6 +220,12 @@ in `args`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 2.20), and the agent points recurring requests at the **Scheduled tasks** page
 instead of saying it cannot schedule. Older binaries reject it with `422`.
 
+**Follow-ups need the GAIA daemon.** The agent can schedule its own one-shot
+check-backs ("check on the build in 2 hours") with `schedule_follow_up`. They
+live on the daemon's clock, which runs the task when it comes due, posts a
+desktop notification, and puts the result at the start of the agent's next
+turn. A sidecar run with no daemon gets an error back from the tool instead.
+
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
 that names what failed and what to do about it.

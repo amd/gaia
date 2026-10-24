@@ -28,6 +28,7 @@ import {
     Brain,
     MessageCircleQuestionMark,
     Circle,
+    Clock,
     type LucideIcon,
 } from 'lucide-react';
 import type { AgentStep, CommandOutput, RetrievalChunk } from '../types';
@@ -89,6 +90,9 @@ const TOOL_META: Record<string, ToolMeta> = {
     remember:              { label: 'Saved to memory',    activeLabel: 'Saving to memory',    icon: Brain },
     update_memory:         { label: 'Updated memory',     activeLabel: 'Updating memory',     icon: Brain },
     forget:                { label: 'Deleted from memory', activeLabel: 'Deleting from memory', icon: Brain },
+    schedule_follow_up:    { label: 'Scheduled a follow-up', activeLabel: 'Scheduling a follow-up', icon: Clock },
+    list_follow_ups:       { label: 'Listed follow-ups', activeLabel: 'Listing follow-ups', icon: Clock },
+    cancel_follow_up:      { label: 'Cancelled a follow-up', activeLabel: 'Cancelling a follow-up', icon: Clock },
     search_past_conversations: { label: 'Searched past chats', activeLabel: 'Searching past chats', icon: Brain },
     request_user_input:    { label: 'Asked you',          activeLabel: 'Asking you',          icon: MessageCircleQuestionMark },
 };

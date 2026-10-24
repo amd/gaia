@@ -337,6 +337,13 @@ Agent UI's **Scheduled tasks** page instead of saying it cannot schedule. It is
 read when a session is built and kept for that session. Omit it when unknown.
 Pre-2.20 binaries `422` the field.
 
+Follow-ups: `schedule_follow_up`, `list_follow_ups` and `cancel_follow_up` call
+the daemon's `/daemon/v1/followups` routes with its client token. A due
+follow-up is run by the daemon as a fresh `/v1/gaia/query` turn on the model
+the scheduling chat used, with no one to approve a gated tool. Its answer is
+kept and prepended to the next turn's context (`follow_up_context`), then marked
+seen. With no daemon the tools return an error and a turn adds nothing.
+
 ```json
 {
   "query": "What's in this directory?",

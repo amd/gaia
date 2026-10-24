@@ -6,6 +6,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **The agent schedules its own follow-ups.** "Check on the build in 2 hours"
+  or "remind me tomorrow at 9" becomes a one-shot job on the GAIA daemon's
+  clock (`schedule_follow_up`, `list_follow_ups`, `cancel_follow_up`), from a
+  minute to 7 days ahead, at most 10 waiting. When it comes due the daemon runs
+  the task as a fresh turn on the model the chat used, posts a desktop
+  notification, and the next turn on any front end opens with the result. The
+  fired run cannot use a tool that needs approval, and the agent is told so.
+  A reminder at a time is scheduled as well as remembered, so it alerts.
+
 - **Answers stream over `/query`.** The HTTP sidecar ran its agent with
   streaming off, so a relayed turn (the Agent UI, and the TUI's later sessions)
   showed "Waiting on the model" until the whole answer landed at once, Stop could
