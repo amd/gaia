@@ -55,7 +55,9 @@ def test_lists_the_bundled_skills_without_the_engineering_one(
         "tier",
         "tools",
         "path",
+        "always_on",
     }
+    assert next(s for s in body["skills"] if s["name"] == "gaia-voice")["always_on"] is True
     assert isinstance(body["invalid"], dict)
 
 

@@ -926,12 +926,12 @@ async def skills() -> Dict[str, Any]:
     from gaia_agent.agent import ENGINEERING_SKILL, GaiaAgent
 
     from gaia.skills.errors import SkillError
-    from gaia.skills.listing import skills_listing
+    from gaia.skills.listing import skills_listing_for_agent
 
     try:
         # Off the event loop: discovery reads every skill folder.
         return await asyncio.to_thread(
-            skills_listing, GaiaAgent.SKILL_DIRS, (ENGINEERING_SKILL,)
+            skills_listing_for_agent, GaiaAgent, (ENGINEERING_SKILL,)
         )
     except SkillError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

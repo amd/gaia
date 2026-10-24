@@ -51,17 +51,18 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
                             <span className="skill-row-name">
                                 {s.name}
                                 {s.version && <span className="skill-row-meta"> v{s.version}</span>}
+                                {s.always_on && <span className="skill-row-meta"> · Always on</span>}
                             </span>
                             <span className="skill-row-desc">{s.description}</span>
                         </div>
-                        <button
+                        {!s.always_on && <button
                             type="button"
                             className="btn-secondary"
                             onClick={() => onUseSkill(s.name)}
                             aria-label={`Use ${s.name} in a new chat`}
                         >
                             Use
-                        </button>
+                        </button>}
                     </li>
                 ))}
             </ul>
