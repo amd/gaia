@@ -164,9 +164,11 @@ def test_the_ambiguity_refusal_names_the_cause(monkeypatch):
 
     error, _ = _validate("grep 'a|b' notes.txt")
 
-    assert "Cannot tell where this pipeline's commands begin and end" in (
-        error["error"]
+    # The fix leads, so a truncated error line still shows it (#5700).
+    assert error["error"].startswith(
+        "Not run: wrap any argument containing '|' in double quotes."
     )
+    assert "inside an argument" in error["error"]
     assert "double quotes" in error["hint"]
 
 

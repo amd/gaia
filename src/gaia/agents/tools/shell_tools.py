@@ -2091,13 +2091,21 @@ def _take_segment_envs(segments: list) -> tuple:
     return tuple(envs), stripped, None
 
 
+def _expand_home(path: Any) -> Any:
+    """``~/x`` -> the user's ``x``, as a shell would; anything else unchanged."""
+    if isinstance(path, str) and path.startswith("~"):
+        return os.path.expanduser(path)
+    return path
+
+
 def _ambiguous_pipe_refusal(piece: str, exc: ValueError) -> Dict[str, Any]:
     """The shell cuts at a ``|`` the argument quoting says is data."""
+    # The fix comes first: a cut-off error line still says what to do.
     return {
         "status": "error",
         "error": (
-            "Cannot tell where this pipeline's commands begin and end: the "
-            "shell would cut it at a '|' that the quoting puts inside an "
+            "Not run: wrap any argument containing '|' in double quotes. The "
+            "shell would cut this line at a '|' its quoting puts inside an "
             f"argument ({exc} in {piece.strip()!r})."
         ),
         "has_errors": True,
@@ -3229,6 +3237,7 @@ class ShellToolsMixin:
 
     def _call_cwd(self, working_directory: Any) -> Optional[Tuple[str, bool]]:
         """``(folder, explicit)`` a call runs in, or None when it names no real one."""
+        working_directory = _expand_home(working_directory)
         if working_directory:
             if not isinstance(working_directory, str) or not os.path.isdir(
                 working_directory
@@ -3539,7 +3548,7 @@ class ShellToolsMixin:
         the allowed paths is collected for the prompt instead of refused.
         """
         try:
-            resolved = str(Path(cwd).joinpath(target).resolve())
+            resolved = str(Path(cwd).joinpath(_expand_home(target)).resolve())
         except (OSError, ValueError) as exc:
             return cwd, {
                 **NOT_EXECUTED,
@@ -4518,6 +4527,7 @@ class ShellToolsMixin:
                 code), the applied 'timeout' and 'timeout_class'; one killed at
                 the limit carries 'timed_out'.
             """
+            working_directory = _expand_home(working_directory)
             try:
                 bypass = self.full_access_active()
                 try:
