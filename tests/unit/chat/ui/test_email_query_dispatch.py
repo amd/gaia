@@ -137,7 +137,10 @@ class TestDispatchEmailQuery:
         _dispatch_sidecar_query(handler, _make_request(), [], "some-model", "email")
 
         assert len(handler.events) == 1
-        assert handler.events[0] == {"type": "agent_error", "content": "boom"}
+        assert handler.events[0] == {
+            "type": "agent_error",
+            "content": EMAIL_PROFILE.start_failed_text(),
+        }
         assert relay_calls == []
 
     def test_version_below_floor_short_circuits_before_proxy(self, monkeypatch):

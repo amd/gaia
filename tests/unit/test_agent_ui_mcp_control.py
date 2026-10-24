@@ -474,7 +474,7 @@ def test_expired_prompt_is_refused(backend, turns):
     time.sleep(0.5)
     out = turns.answer_prompt("s1", cid, "allow_once")
     assert out["status"] == "error"
-    assert out["refused"] in ("expired", "stale")
+    assert out["refused"] == "expired"
     assert backend.confirms == []
 
 
