@@ -99,7 +99,7 @@ The default construction registers **96 tools** — the 67 of the Chat agent's `
 | Data | `analyze_data_file`, `create_table`, `insert_data`, `query_data`, `list_tables`, `drop_table` |
 | Web | `search_web`, `fetch_page`, `fetch_webpage`, `open_url`, `download_file`, `bookmark`, `search_documentation` |
 | Live browser | `browser_open`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_login`, `browser_sessions`, `browser_back`, `browser_find` |
-| Memory | `remember`, `recall`, `forget`, `update_memory`, `search_past_conversations` |
+| Memory | `remember`, `recall`, `forget`, `forget_everything`, `update_memory`, `search_past_conversations` |
 | Email | `check_mailbox_access`, `list_inbox`, `search_email`, `read_email`, `list_mail_folders` |
 | Images | `analyze_image`, `answer_question_about_image`, `generate_image`, `list_sd_models`, `get_generation_history` |
 | Audio | `transcribe_media`, `refine_transcript` |
@@ -175,7 +175,7 @@ Use it when you know the session is chat: a voice front-end, a quick question, a
 
 ### Tools that need your approval
 
-Thirteen tools mutate your machine or your accounts and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`wait_for_condition`** (it re-runs a shell command until it succeeds), **`execute_python_file`**, **`run_python`**, **`notify_desktop`** (on Windows it spawns a PowerShell child to draw the notification), **`install_cli`** and **`sign_in_cli`** (they install software and sign you in to an account), **`browser_login`** (it opens a window and persists a signed-in session), and — because installing or capturing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`**, **`capture_skill`**, and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory, and `check_cli_setup` — runs without asking.
+Fourteen tools mutate your machine or your accounts and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`wait_for_condition`** (it re-runs a shell command until it succeeds), **`execute_python_file`**, **`run_python`**, **`notify_desktop`** (on Windows it spawns a PowerShell child to draw the notification), **`install_cli`** and **`sign_in_cli`** (they install software and sign you in to an account), **`browser_login`** (it opens a window and persists a signed-in session), and — because installing or capturing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`**, **`capture_skill`**, and **`remove_skill`**, plus **`forget_everything`** (it erases all memory and past conversations, and nothing brings them back). Everything else — reading, indexing, querying, web fetching, the other memory tools, and `check_cli_setup` — runs without asking.
 
 The agent's own scratch folder (`gaia-scratch-…` in the system temp folder) holds no files of yours, so writing or editing a helper script there runs without asking; a write anywhere else still asks. Running a script from it asks every time, with "allow once" only, since what is in that folder changes without a prompt. The same goes for a shell command that runs there or names a path there (`cd` into it, `pytest`, `make` or `pip install` pointed at it), and for a script handed a scratch path as an argument — an earlier "always" does not cover them. Full access runs them unasked.
 

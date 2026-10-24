@@ -1793,7 +1793,7 @@ export function MemoryDashboard() {
                                 <div className="mem-section">
                                     <div className="mem-section-title">
                                         <Wrench size={14} /> Tool Performance
-                                        <span className="mem-section-note" title="remember, recall, update_memory, forget and search_past_conversations are not logged">excludes memory tools</span>
+                                        <span className="mem-section-note" title="remember, recall, update_memory, forget, forget_everything and search_past_conversations are not logged">excludes memory tools</span>
                                     </div>
                                     {tools.length > 0 ? (
                                         <div style={{ overflowX: 'auto' }}>

@@ -1054,7 +1054,7 @@ class TestAgent(MemoryMixin, Agent):
 
 ## Memory Tools Reference
 
-These 5 tools are registered by `register_memory_tools()` and exposed to the LLM:
+These 6 tools are registered by `register_memory_tools()` and exposed to the LLM:
 
 <CardGroup cols={2}>
   <Card title="remember" icon="plus">
@@ -1072,13 +1072,17 @@ These 5 tools are registered by `register_memory_tools()` and exposed to the LLM
   <Card title="forget" icon="trash">
     Delete a specific memory entry by ID.
   </Card>
+
+  <Card title="forget_everything" icon="eraser">
+    Erase all memory, sensitive rows included, plus past conversations and tool history. Asks the user first; nothing brings it back.
+  </Card>
 </CardGroup>
 
 <Card title="search_past_conversations" icon="clock-rotate-left">
   Search conversation history by keywords, time range, or both. Returns matching turns with timestamps and session IDs. An empty result carries `past_conversation_turns` (turns stored by earlier sessions) and a `message` that says plainly when there are none to search.
 </Card>
 
-These map to CRUD operations: `remember` = create, `recall` = read, `update_memory` = update, `forget` = delete, plus `search_past_conversations` for history.
+These map to CRUD operations: `remember` = create, `recall` = read, `update_memory` = update, `forget` = delete (`forget_everything` deletes all of it), plus `search_past_conversations` for history.
 
 ---
 

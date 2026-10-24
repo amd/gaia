@@ -8,7 +8,8 @@ Hooks into the Agent lifecycle at 3 points:
 2. Tool execution wrapper (_execute_tool) — auto-logs calls + learns from errors
 3. Post-query storage (_after_process_query) — stores conversations + LLM extraction
 
-Provides 5 LLM-facing tools: remember, recall, update_memory, forget, search_past_conversations.
+Provides 6 LLM-facing tools: remember, recall, update_memory, forget, forget_everything,
+search_past_conversations.
 Valid categories: fact, preference, error, skill, note, reminder, system.
 
 v2 additions:
@@ -771,7 +772,8 @@ class MemoryMixin(ProceduralMemoryMixin):
     - Hybrid search: FAISS vector + BM25 FTS5 + RRF fusion
     - Conversation consolidation for old sessions
     - Background memory reconciliation for conflict detection
-    - 5 CRUD tools for the LLM (remember, recall, update_memory, forget, search_past_conversations)
+    - 6 tools for the LLM (remember, recall, update_memory, forget, forget_everything,
+      search_past_conversations)
     """
 
     def init_memory(
