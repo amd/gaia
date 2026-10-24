@@ -32,7 +32,7 @@ class _PromptHeavyAgent:
 
     def __init__(self, **_kwargs):
         self.model_id = _MODEL
-        self.system_prompt = "word " * 12_000
+        self.system_prompt = "word " * 10_000
         self._openai_tools = []
         self.console = None
         self.conversation_history = []
@@ -96,8 +96,9 @@ def test_history_too_big_beside_the_prompt_is_refit_and_announced(client):
     http, agents = client
     query = "next?"
     own = history.history_budget(_PromptHeavyAgent(), query)
-    turn = history.turn_cost(_context(1, 2_000))
-    context = _context(own // turn + 1, 2_000)
+    # Sized from the budget: the token estimator differs between machines.
+    words = 1_000 * own // (4 * history.turn_cost(_context(1, 1_000)))
+    context = _context(own // history.turn_cost(_context(1, words)) + 1, words)
 
     response = http.post(
         "/v1/gaia/query",

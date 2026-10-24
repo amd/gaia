@@ -301,14 +301,15 @@ def test_the_sidecar_refits_pushed_history_to_its_own_prompt(monkeypatch):
     # send more than fits beside it; the sidecar has to drop the oldest.
     _window(monkeypatch, 32768)
     query = "next?"
-    agent = _sidecar_agent(12_000)
+    agent = _sidecar_agent(10_000)
     own = history.history_budget(agent, query)
     relayed = history.relayed_history_budget(LOCAL_MODEL, query, cloud=False)
     assert 0 < own < relayed
 
     # One turn more than fits beside the sidecar's prompt, as a chat grows.
-    turn_tokens = history.turn_cost(_pushed(1, 2_000))
-    pushed = _pushed(own // turn_tokens + 1, 2_000)
+    # Sized from the budget: the token estimator differs between machines.
+    words = 1_000 * own // (4 * history.turn_cost(_pushed(1, 1_000)))
+    pushed = _pushed(own // history.turn_cost(_pushed(1, words)) + 1, words)
     pushed_cost = sum(
         history.turn_cost(pushed[i : i + 2]) for i in range(0, len(pushed), 2)
     )

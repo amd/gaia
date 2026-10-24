@@ -1018,7 +1018,7 @@ class _PromptHeavyFakeAgent(_HappyFakeAgent):
     def __init__(self):
         super().__init__()
         self.model_id = "Qwen3.6-35B-A3B-GGUF"
-        self.system_prompt = "word " * 12_000
+        self.system_prompt = "word " * 10_000
         self._openai_tools = []
 
 
@@ -1040,8 +1040,10 @@ def test_pushed_history_too_big_beside_the_prompt_is_refit(app_client, monkeypat
     monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
     query = "next?"
     own = history.history_budget(fake, query)
-    turn = history.turn_cost(_pushed_context(1, 2_000))
-    context = _pushed_context(own // turn + 1, 2_000)
+    # Sized from the budget: the token estimator differs between machines.
+    words = 1_000 * own // (4 * history.turn_cost(_pushed_context(1, 1_000)))
+    turn = history.turn_cost(_pushed_context(1, words))
+    context = _pushed_context(own // turn + 1, words)
 
     resp = app_client.post("/v1/email/query", json=_req(query=query, context=context))
 
