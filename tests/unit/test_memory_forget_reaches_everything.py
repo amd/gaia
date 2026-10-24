@@ -44,6 +44,8 @@ def test_a_filterless_recall_says_what_it_held_back(store):
     assert out["count"] == 1
     assert out["sensitive_withheld"] == 1
     assert "category" in out["note"]
+    assert _tool("recall")(category="fact")["count"] == 2
+    assert _tool("recall")(time_from="2000-01-01")["count"] == 2
 
 
 def test_forget_everything_takes_sensitive_rows_and_past_conversations(store):

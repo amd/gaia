@@ -4793,8 +4793,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 found["sensitive_withheld"] = withheld
                 found["note"] = (
                     f"{withheld} sensitive entr{'y' if withheld == 1 else 'ies'} "
-                    "not listed. Recall with a category (for example "
-                    "category='fact') to see them, e.g. to forget them."
+                    "not listed. Recall with any filter (for example a category "
+                    "or a time range) to see them, e.g. to forget them."
                 )
             return found
 
