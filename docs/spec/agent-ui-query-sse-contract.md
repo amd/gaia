@@ -218,7 +218,10 @@ indistinguishable from a dead one.
   "properties": {
     "type": { "const": "tool_call" },
     "tool": { "type": "string" },
-    "args": { "type": "object" }     // {} when the tool takes no arguments
+    "args": { "type": "object" },    // {} when the tool takes no arguments
+    "mcp_server":       { "type": "string" },  // optional, MCP tools only: mcp_servers.json key
+    "mcp_server_label": { "type": "string" },  // optional: the connector's name, e.g. "Git"
+    "mcp_tool":         { "type": "string" }   // optional: the server's own tool name
   } }
 
 // tool_result
@@ -509,7 +512,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 
 | Source event | → Canonical | Transform |
 |---|---|---|
-| `tool_start` | `tool_call` | Rename; carry `tool`. `args` filled from the paired `tool_args` (§6.3). `detail`/`mcp_server` dropped (host derives its own label). |
+| `tool_start` | `tool_call` | Rename; carry `tool`. `args` filled from the paired `tool_args` (§6.3). `detail` dropped (host derives its own label). An MCP tool's `mcp_server`, `mcp_server_label` and `mcp_tool` ride along (additive): only the agent knows which connector a prefixed tool name belongs to. |
 | `chunk` | `token` | `content` → `delta`. |
 | `answer` | `final` | `content` → `answer`; `elapsed`/`steps`/`tools_used`/`tokens`/`ttft`/`tok_per_s`/`input_tokens`/`cached_tokens` → `usage`. An `answer` marked `streamed` (text pulled out of a streaming JSON reply, mid-turn) maps to a `token` instead: the agent's printed answer is the one `final`. |
 | `permission_request` | `needs_confirmation` | `tool` → `action`; render `args` as `summary` (for a shell command whose `risk` is `write` or `execute`, plus one plain line on what it can do; for a call GAIA's checks don't cover — `args._risk_note` set — the exact command unshortened, `in <folder>`, then that note, and no `always_scope`); the wire `args` are the source's `call_args` (what the model sent) when present, else its `args` without the prompt-only `_risk_note` / `_scratch_dir`; a folder or note the agent added goes to `prompt_context`; carry `run_id`; `confirm_url` per §5. |
@@ -538,8 +541,12 @@ The in-process handler emits `tool_start` (name only) and then, separately,
 `tool_args` (arguments) once they're known. The canonical `tool_call` carries
 `{tool, args}` **together**. The translation layer buffers the `tool_start`,
 attaches `args` from the following `tool_args`, and emits a single `tool_call`.
-If no `tool_args` arrives (argument-less tool), it emits `tool_call{tool,
-args:{}}`.
+Every call the agent loop makes sends `tool_args` before the tool runs, with
+`args: {}` for a tool that takes no arguments, so the `tool_call` is on the
+wire while the tool is still running. A host must treat that `tool_call` as a
+running tool: the messaging bridge stops counting idle time from it until the
+`tool_result`. If a producer sends `tool_start` with no `tool_args` at all,
+the next event (or stream close) flushes it as `tool_call{tool, args:{}}`.
 
 ---
 

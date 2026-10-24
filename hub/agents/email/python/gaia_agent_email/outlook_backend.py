@@ -66,6 +66,7 @@ import httpx
 from gaia_agent_email.outlook_query import translate_query
 from gaia_agent_email.outlook_scopes import OUTLOOK_MAIL_SCOPES
 from gaia_agent_email.scopes import AGENT_NAMESPACED_ID
+from gaia_agent_email.timestamps import parse_timestamp_ms
 
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.handler import get_credential_sync
@@ -139,6 +140,21 @@ def _b64url(text: str) -> str:
     return base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii").rstrip("=")
 
 
+def _received_epoch_ms(msg: Dict[str, Any]) -> str:
+    """Graph's ISO-8601 ``receivedDateTime`` as Gmail's ``internalDate``: an
+    epoch-millis string, which is what every consumer reads it as (ages, thread
+    order, which message a reply targets). ``""`` when Graph sent no timestamp."""
+    received = msg.get("receivedDateTime")
+    if not received:
+        return ""
+    try:
+        return str(parse_timestamp_ms(received))
+    except ValueError as exc:
+        raise ValueError(
+            f"message {msg.get('id')!r} receivedDateTime {received!r} is not ISO-8601"
+        ) from exc
+
+
 def graph_message_to_gmail(
     msg: Dict[str, Any], *, include_body: bool = True
 ) -> Dict[str, Any]:
@@ -192,7 +208,7 @@ def graph_message_to_gmail(
         "threadId": msg.get("conversationId") or msg.get("id"),
         "labelIds": _derive_label_ids(msg),
         "snippet": msg.get("bodyPreview") or "",
-        "internalDate": msg.get("receivedDateTime") or "",
+        "internalDate": _received_epoch_ms(msg),
         "payload": payload,
     }
 
@@ -511,7 +527,7 @@ class LiveOutlookBackend:
             },
         )
         messages = [graph_message_to_gmail(m) for m in data.get("value", [])]
-        messages.sort(key=lambda m: m.get("internalDate") or "")
+        messages.sort(key=lambda m: int(m.get("internalDate") or 0))
         return {"id": thread_id, "messages": messages}
 
     def list_labels(self) -> List[Dict[str, Any]]:

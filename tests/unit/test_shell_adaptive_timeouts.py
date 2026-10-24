@@ -169,6 +169,8 @@ def unrestricted(monkeypatch):
     monkeypatch.setattr(
         ShellToolsMixin, "_validate_command", staticmethod(lambda *a, **k: None)
     )
+    # So is the system-install guard, which depends on this machine's `pip`.
+    monkeypatch.setattr(ShellToolsMixin, "_system_install_block", lambda *a, **k: None)
 
 
 # ---------------------------------------------------------------------------

@@ -216,11 +216,16 @@ cut, so don't auto-approve that call. What the agent adds to its own prompt —
 the folder a shell call runs in, a risk note — comes in `prompt_context`, never
 in `args`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Serving the turn from the Agent UI? Send `surface: "agent_ui"`** (contract ≥
+2.20), and the agent points recurring requests at the **Scheduled tasks** page
+instead of saying it cannot schedule. Older binaries reject it with `422`.
+
 **Calling it headless?** From contract 2.20 a failed model request names the
 host it went through, and its advice points at the model server the GAIA host
 uses (`LEMONADE_BASE_URL`) rather than at the TUI's settings. A front-end with
 its own settings screen sends `surface` (`"tui"`, `"agent_ui"` or `"cli"`) to
-get its own wording. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+get its own wording; a headless caller omits it. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message

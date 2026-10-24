@@ -237,13 +237,15 @@ class QueryRequest(_Strict):
         ),
     )
 
-    surface: Literal["service", "tui", "agent_ui", "cli"] = Field(
-        default="service",
+    surface: Optional[Literal["agent_ui", "tui", "cli"]] = Field(
+        default=None,
         description=(
-            "The front-end the caller is (contract >= 2.20), so an error tells "
-            "the user where to fix it. 'service', the default, is a headless "
-            "caller: provider advice points at the model server this GAIA host "
-            "uses instead of a settings screen the caller doesn't have."
+            "The front-end this turn comes from (contract >= 2.20). 'agent_ui' "
+            "tells the agent that features like Scheduled tasks are in the "
+            "caller's sidebar, and each front-end gets model-provider errors "
+            "worded for its own settings. Fixed when a session is built; omit "
+            "it for a headless caller, whose provider advice then points at "
+            "the model server this GAIA host uses."
         ),
     )
 
@@ -523,6 +525,11 @@ def _sse(event: Dict[str, Any]) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+def _wording_surface(request: QueryRequest) -> str:
+    """The front-end *request*'s errors are worded for; a headless caller is ``service``."""
+    return request.surface or "service"
+
+
 def _worded(event: Dict[str, Any], surface: str) -> Dict[str, Any]:
     """*event* with the agent's TUI provider advice reworded for *surface*."""
     return {
@@ -565,6 +572,10 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
     Surfacing that message beats inventing a generic error.
     """
     if isinstance(result, dict):
+        if result.get("status") == "cancelled":
+            # Stopped mid-generation: the loop returns no text by design, and
+            # the stdio transport ends the same turn with an empty final.
+            return {"type": "final", "answer": ""}
         for key in ("answer", "response", "result", "output"):
             value = result.get(key)
             if isinstance(value, str) and value.strip():
@@ -1185,6 +1196,8 @@ async def query(request: QueryRequest):
             kwargs["model_id"] = request.model
         if request.allowed_paths is not None:
             kwargs["allowed_paths"] = request.allowed_paths
+        if request.surface is not None:
+            kwargs["surface"] = request.surface
         if request.session_id:
             # Cross-turn document retention: ChatAgent persists its indexed-doc
             # set per UI session, so dropping this makes the agent forget a
@@ -1233,7 +1246,7 @@ async def query(request: QueryRequest):
                             f"could not switch session {request.session_id} to "
                             f"{target!r}: {exc}. The session is still "
                             f"running {session.model_id or 'its previous model'}.",
-                            request.surface,
+                            _wording_surface(request),
                         ),
                     ) from exc
                 logger.info(
@@ -1279,6 +1292,9 @@ async def query(request: QueryRequest):
             )
             one_shot_agent = agent
         agent.console = handler
+        # Streamed model calls are what put ``token`` events on this wire and let
+        # Stop cut a call short. Set per turn so a retained agent can't drift.
+        agent.streaming = True
         # A confirmation can only be carried when somebody is there to answer it
         # AND there is a session to hold the grant. ``can_answer_questions`` is
         # the caller's own declaration that a human is watching (spec >= 2.6); a
@@ -1419,7 +1435,7 @@ async def query(request: QueryRequest):
     can_confirm = handler.answers_confirmations
 
     def _emit(event: Dict[str, Any]) -> str:
-        return _sse(_worded(event, request.surface))
+        return _sse(_worded(event, _wording_surface(request)))
 
     async def _stream():
         translator = CanonicalTranslator(request.run_id, agent_id=AGENT_ID)
@@ -1445,6 +1461,10 @@ async def query(request: QueryRequest):
 
                 for canonical in translator.translate(event):
                     ctype = canonical.get("type")
+                    if ctype == "token" and run.cancel_event.is_set():
+                        # A stopped answer's tail, e.g. a half-written JSON
+                        # reply flushed at teardown, is not answer text.
+                        continue
                     if ctype in TERMINAL_TYPES:
                         for warning in await _finish_changes(run):
                             yield _emit(warning)

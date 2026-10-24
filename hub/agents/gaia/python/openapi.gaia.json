@@ -267,16 +267,21 @@
             "title": "Session Id"
           },
           "surface": {
-            "default": "service",
-            "description": "The front-end the caller is (contract >= 2.20), so an error tells the user where to fix it. 'service', the default, is a headless caller: provider advice points at the model server this GAIA host uses instead of a settings screen the caller doesn't have.",
-            "enum": [
-              "service",
-              "tui",
-              "agent_ui",
-              "cli"
+            "anyOf": [
+              {
+                "enum": [
+                  "agent_ui",
+                  "tui",
+                  "cli"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Surface",
-            "type": "string"
+            "description": "The front-end this turn comes from (contract >= 2.20). 'agent_ui' tells the agent that features like Scheduled tasks are in the caller's sidebar, and each front-end gets model-provider errors worded for its own settings. Fixed when a session is built; omit it for a headless caller, whose provider advice then points at the model server this GAIA host uses.",
+            "title": "Surface"
           }
         },
         "required": [
