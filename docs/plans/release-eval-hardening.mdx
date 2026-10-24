@@ -1,0 +1,464 @@
+---
+title: "Release Eval Hardening"
+description: "Why bugs still reach users after a green release eval, and the stress, fault-injection and gating work that would catch them before a final tag"
+icon: "shield-halved"
+---
+
+# Release eval hardening: stress and adversarial testing
+
+> **Status:** Proposed
+>
+> **Priority:** P1
+>
+> **Related:** [Eval design and hillclimbing](/plans/eval-hillclimbing) (judge calibration and noise, #4473–#4477),
+> [Nightly benchmarks](/plans/nightly-benchmarks), [#5169](https://github.com/amd/gaia/issues/5169) (where escapes were caught),
+> [#5197](https://github.com/amd/gaia/issues/5197) (release eval never compares), [#2983](https://github.com/amd/gaia/issues/2983) (no flagship release gate),
+> [#883](https://github.com/amd/gaia/issues/883) (Playwright E2E)
+
+---
+
+## 1. The finding
+
+**GAIA's release evals check whether a healthy model on a healthy machine gives good answers. Most of the bugs that reached users this cycle needed something unhealthy to happen first.** Examples are a second GAIA process, a dead child process, a laptop going to sleep, a busy or failing model server, or a new major version of a dependency. No release-time tier causes any of these on purpose. And no eval result can stop a release: `publish.yml` says so directly ("No eval gates this workflow").
+
+What the last two tags show:
+
+- **v0.25.0 shipped with 14 of 27 baselined categories flagged as regressed** against the flagship baseline (a worse status or score, or more than twice the time). The baseline is one run, so some flags may be noise, but nobody re-ran them to find out. The run passed 221 of 343 scenarios. Because the eval runs in report mode, those flags were only warnings, the run was green, and its "file an issue" job was skipped. `gaia_git` and `gaia_resilience` have no baseline, so they were never compared.
+- **The RAG retrieval benchmark had been failing since 2026-10-12** ([#5490](https://github.com/amd/gaia/pull/5490)). Three RCs tagged `[skip eval]` (v0.25.0-rc17 to rc19) recorded "success" without running it. v0.25.0 then shipped with it red, and both v0.25.1 RCs published with it red.
+- **The task suites' gate has nothing to compare against.** `eval/tasks/expectations/` was never committed, so every tag run prints "Not gated yet", including for the adversarial traps.
+- **Automated tests found 8% of the 523 bugs that reached main** between Sep 15 and Oct 16 ([#5169](https://github.com/amd/gaia/issues/5169)). Unit tests cover 81% of lines, but they run that code against fakes. A bug that needs two processes, a second OS or a fresh machine never shows up in them.
+
+The fix is mostly cheap. Build the fault injectors once: a fake model server you can script to fail, a harness that kills processes, a clock that can simulate sleep, and a nightly install with unpinned dependencies. Run them on hosted runners on every PR or every night. Keep the Strix Halo pool for the few checks that need a real model, and turn the final-tag eval into a verdict instead of a report.
+
+---
+
+## 2. What exists today
+
+Every row below was checked against the workflow or the code, not the docs. Runtimes come from the v0.25.0 and v0.25.1-rc1 tag runs.
+
+| Tier | What it covers | Trigger | Hardware | Runtime | Blocks a release? |
+|---|---|---|---|---|---|
+| Unit tests (`test_unit.yml`) | ~22,500 tests, mostly against fakes | PR, merge | Hosted: Linux, macOS arm64, Windows | 11–18 min after #5161 | **Yes.** `util/check_release_ci.py` requires `lint`, `test_unit`, `test_gaia_cli_linux` |
+| Offline integration (`test_unit.yml` job) | Daemon, CLI tool-confirmation, wheel journey, TLS, checksum pins | PR, merge | Hosted Linux only | Minutes | Yes, as part of `test_unit` |
+| Electron (`test_electron.yml`) | Jest suites. Real-process tree and quit tests only since #5438 | PR, merge | Hosted Linux | ≤15 min | No |
+| TUI (`build_tui.yml`) | ~240 Go test files | PR, merge | Hosted, 3 OSes | Minutes | No |
+| Distributed seams (`test_distributed_seams.yml`) | Checks that event and error vocabularies match across daemon, relay and sidecar | PR, merge | Hosted Linux | ≤20 min | No |
+| `gaia init` on hardware (`test_gaia_init_hw.yml`) | Fresh-profile init against real Lemonade | PR, merge, weekly | Strix Halo | ≤60 min | No |
+| **Flagship scenario eval** (`eval_flagship.yml`) | 29 categories in 12 lanes (`eval/ci_lanes.json`): 343 scenarios, Claude as the user and the judge | Release and RC tags, dispatch | **12 Strix Halo machines** | 3.3 h wall, ~26 machine-hours | **No.** Report mode by default. Only a dispatch can `enforce` |
+| Task outcomes (`gaia eval tasks`, same workflow) | `everyday`, `therock`. The `adversarial` suite (9 traps: red suite, flaky test, hang, lying README, injected note) runs only on dispatch | Tags, dispatch | Strix Halo, Qwen3.6-35B | ~1.5 h | No. No expectations are committed |
+| Release subset (`test_gaia_agent_eval.yml`) | 5 categories, from `release_agent_gaia.yml` | Agent-package tags | Strix Halo | Hours | No, advisory. Points at a baseline dir that doesn't exist (#5197) |
+| Scorecard gate (`release_agent_gaia.yml`) | The committed `SCORECARD.md` exists and hasn't regressed | Agent-package tags | Hosted | Seconds | Yes, but it reads a committed file, not a fresh run |
+| RAG retrieval (`eval_retrieval.yml`) | Retrieval, answer accuracy, scale, hard cases | Tags | Hosted Linux | 7 min to 8 h | No. Red on v0.25.0, v0.25.1-rc1 and rc2 |
+| Code retrieval (`eval_code_retrieval.yml`) | Code search quality plus a damaged-index and hostile-tree robustness tier | Tags | Strix Halo | ~25 min | No. rc1 went red on a 900 s `git fetch` of an upstream repo |
+| SWE-bench smoke (`eval_swebench.yml`) | A small SWE-bench subset | PR, path-filtered | Hosted | ≤15 min | No. Skipped on 54 of its last 60 runs |
+| Linux Strix Halo (`test_linux_strix_halo.yml`) | User-reported Linux bugs on real hardware: memory guard, port reuse, idle stop, fresh install | Tags, dispatch | Linux Strix Halo | 3–90 min | No. #5169 rates it the best bugs-per-runner-hour of any layer |
+| Lemonade restart harness (`util/lemonade_restart_harness.py`) | Kills, hangs and idle-stops a real `lemond`; can stress 16 sessions | **Hand-run only** | Any | ~7 min | No (allowlisted out of CI) |
+| Live Lemonade contract tests | `/health`, `/tokenize`, residency, gateway, broker load races | **Run nowhere** (`util/test_lane_allowlist.yml`) | Needs live Lemonade | Minutes | No |
+| Agent UI stress (`tests/stress/test_agent_ui_stress.py`) | 32 HTTP checks: long chats, concurrency | **Hand-run.** Not pytest, unchanged since 2026-09-07 | Any | — | No |
+| Agent UI visual (`webui/visual/`) | Playwright snapshots of fixture data | Local tool | — | — | No |
+| Clean-state TUI runner (`util/tui_eval.py`) | Runs `gaia_*` scenarios through the TUI control API | Local | — | — | No |
+
+Two structural facts matter more than any single row:
+
+- **Every self-hosted result is advisory, and `[skip eval]` RC tags record "success".** A red benchmark looks the same as a skipped one unless someone opens the run.
+- **The model layer is never broken on purpose.** The scenario eval's fakes (fixture web server, fake `gh`, MCP stub) break the *tools*. The model is always a healthy local Lemonade. Only one unit file (`tests/unit/test_lemonade_retry_fake_server.py`) has a server that fails on a script, and nothing else uses it.
+
+---
+
+## 3. The escapes, and which tier should have caught each
+
+| Escape | Failure class | Tier that should have caught it | Why it didn't |
+|---|---|---|---|
+| File lock breaks on Windows ACL folders; waiters served out of order ([#5469](https://github.com/amd/gaia/pull/5469)) | Multi-process, OS | Cross-OS contention test with N real processes and a folder you can't write to | #5388 shipped a single-process test on a writable temp dir. No Windows ACL fixture existed |
+| A second process deletes connectors ([#5467](https://github.com/amd/gaia/pull/5467)) | Multi-process | Two-process state test | Unit tests use one process. The sibling race #5378 was fixed the week before (a fix of a fix) |
+| Segfault on shutdown during a read ([#5472](https://github.com/amd/gaia/pull/5472)) | Lifecycle | Shutdown-under-load test | Seen only as a CI flake ("worker crashed"). Nothing closes the DB with a read in flight |
+| Electron EPIPE crash and orphaned children ([#5438](https://github.com/amd/gaia/pull/5438)) | Lifecycle | Process-kill harness on the desktop app | Electron tests mocked child processes. Open since #3498 |
+| TUI Ctrl+C leaves the turn running ([#5435](https://github.com/amd/gaia/pull/5435)) | Signals, per-OS | Real-signal test against a real agent on macOS and Linux | Only Esc's cancel path was tested. On POSIX the agent never got the signal |
+| 401/403 gives the wrong app's advice ([#5440](https://github.com/amd/gaia/pull/5440)) | Provider fault | A provider that fails partway through a turn, asserted on each front-end | No front-end test injects provider errors. Eval lanes use a healthy local model |
+| Model died mid-turn but turn shown as done ([#5432](https://github.com/amd/gaia/pull/5432)) | Provider fault | A scripted stall, 404 or exhausted-retries case driven to UI status | Same reason. `error_recovery` has 3 scenarios, and none of them breaks the model |
+| Web search dies under DDG rate limits ([#5434](https://github.com/amd/gaia/pull/5434)) | External service | A fixture search engine that refuses bursts with 202 or 429 | `res_web_rate_limited` covers a *fetch* 429, not parallel *searches* |
+| One parallel batch kills the turn ([#5413](https://github.com/amd/gaia/pull/5413)) | Model misbehavior | A scripted model that emits a failing parallel batch | The scenario eval can't make a model do a specific thing. Found outside CI |
+| False "tests pass" claims slip past the checker ([#5415](https://github.com/amd/gaia/pull/5415)) | Honesty | Property tests on mixed clauses, plus a gated `adversarial` task suite | The claim checker skipped any sentence with a negation. The trap suite has no committed expectations |
+| Context overflow ([#5219](https://github.com/amd/gaia/pull/5219), [#5310](https://github.com/amd/gaia/pull/5310)) | Resource exhaustion | A long tool-heavy turn at 32K/64K with a second model loaded | Scenarios max out at ~15 turns with one model loaded. The deterministic stress test lives only in #5310 |
+| Unit tests kill developers' Lemonade ([#5439](https://github.com/amd/gaia/pull/5439)) | Test isolation | A guard that stops the unit suite from touching real processes | A mock PID plus a `__del__` finalizer. Found when it killed an eval that was running |
+| pymupdf 2.0 breaks Intel Mac installs ([#5481](https://github.com/amd/gaia/pull/5481)) | Dependency drift, arch | A nightly install with unpinned deps on every OS and arch | `macos-latest` is arm64. No unpinned canary exists. The same class hit httpx 1.0.dev and APScheduler 4.0a |
+| RAG eval fails on VLM image chunks ([#5490](https://github.com/amd/gaia/pull/5490)) | Eval-harness integrity | The retrieval benchmark, which **did** catch it on 2026-10-12 | It only reports, and `[skip eval]` hid it for three RCs |
+| A restart loses replies ([#5386](https://github.com/amd/gaia/pull/5386)) | Lifecycle | `kill -9` the backend mid-stream, then restart | No test killed a turn mid-stream before the fix |
+| Modern Standby counts against time limits ([#5464](https://github.com/amd/gaia/pull/5464), draft) | Clock, standby | A clock and standby simulator | Real standby can't be triggered in CI, and no simulator exists |
+| Undo warns on read-only snippets ([#5436](https://github.com/amd/gaia/pull/5436)) | Gate false positive | A false-positive corpus: correct work must not trigger the warning | Tests asserted the warning appears. None asserted it stays away |
+
+By class: **7 of 17 are lifecycle or multi-process**, 4 are provider or model faults, 2 are resource or eval-integrity, 1 each is drift, honesty, test isolation and a false positive. The flagship scenario eval, the most expensive tier, could plausibly have caught 3 of them (#5413, #5415 and the context overflow), and it caught none.
+
+---
+
+## 4. Gap matrix
+
+**Yes** = a test that can fail on this exists and runs automatically. **Partial** = narrow, hand-run, or added only after an escape. **No** = nothing. "Hosted" means automated tiers on GitHub-hosted runners; "Strix Halo" means the scenario eval plus hardware CI.
+
+| Failure mode | Hosted | Strix Halo | Coverage |
+|---|---|---|---|
+| **Concurrency and multi-process** | | | |
+| Two GAIA processes sharing `~/.gaia` (config, connectors, index) | Partial (`test_concurrent_state_writes`, the #5467 second-process test) | No | Added one escape at a time; no general fuzz |
+| Daemon + Agent UI + TUI at once on one Lemonade | Partial (fakes) | Partial (Linux port reuse) | No eval scenario uses two front-ends |
+| Lock contention, fairness, ACL and read-only dirs | Partial (since #5469, Windows only) | No | — |
+| Chats competing for the model slot | Partial (#5321, #5336) | No (`test_daemon_broker_lemonade` runs nowhere) | — |
+| **Lifecycle** | | | |
+| `kill -9` at random points (backend, sidecar, Lemonade, Electron) | Partial (Electron since #5438, restart recovery since #5386) | No (restart harness is hand-run) | No randomized kill harness |
+| Sleep, standby, resume | Partial (unit clock tests) | No | No simulator |
+| Network drop mid-turn | Partial (one fake-server stream cut) | No | Never end to end |
+| Port in use, stale PID, stale discovery file | Partial | Partial (Linux Halo) | — |
+| Upgrade from N-1 with the daemon running | No | No | — |
+| **Resource exhaustion** | | | |
+| Context overflow | Partial (unit) | Partial (≤15-turn scenarios) | No deterministic overflow stress in CI |
+| Huge files and documents | Partial (`large_document`, retrieval scale tier) | Partial | — |
+| Full disk | No | No | — |
+| Low memory | No | Partial (Linux Halo memory guard) | — |
+| Model eviction, co-resident models | No | No (residency test runs nowhere) | Root of #5219 |
+| Busy model server | Partial (#5321, #5328) | No | — |
+| **Hostile inputs** | | | |
+| Prompt injection in documents, web pages, tool output, memory, mail | Partial (email unit tests) | **Yes** (25 scenarios across rag, web, files, email, code, data, memory, git) | Best-covered area |
+| Path traversal and symlinks | Yes (security tests, code-retrieval hostile trees) | Yes (`files_traversal_refusal`, `files_symlink_escape`) | — |
+| Malformed tool calls | Partial (`test_json_answer_decoding_adversarial`) | No (a real model can't be made to emit them) | Needs a scripted model |
+| Unicode and encodings | Partial | Partial (`res_self_fix_utf16_encoding`) | — |
+| Giant tool outputs | No (only in #5310's PR) | No | — |
+| **Model misbehavior** | | | |
+| Loops | Partial (turn-scope unit tests) | Incidental | — |
+| Lies about tests | Partial (claim-checker units) | Partial (`gaia_honesty`; trap suite only on dispatch, ungated) | — |
+| Refuses, malformed JSON, stalls, slow first token | Partial (unit fakes) | No | Never through a whole turn and a UI |
+| Returns 401/403/404/429/500 | Partial (`test_llm_retry_adversarial`, fake server) | No | Never asserted per front-end |
+| **Provider and endpoint faults** | | | |
+| Lemonade down or restarting | Partial | No (harness hand-run) | — |
+| Cloud outage, rate limits | Partial (unit) | No | — |
+| External services rate-limit (search, GitHub, HF) | No | Partial (one fixture 429 page) | — |
+| **Install and upgrade** | | | |
+| Fresh machine | Partial (wheel journey on Linux) | Yes (`test_gaia_init_hw`, Linux Halo fresh install) | No frozen binary on a clean macOS or Windows image |
+| Upgrade from N-1 | No | No | — |
+| Partly installed or interrupted install | Partial (Electron installer resume) | No | — |
+| Dependency drift (a new major version) | Partial (static caps in `test_dependency_major_caps.py`) | No | Lemonade has a candidate canary; PyPI deps don't |
+| Each OS and arch (Intel Mac) | No (Intel Mac only at build time) | No | — |
+| **UI surfaces under stress** | | | |
+| Agent UI (reload mid-stream, two tabs, dropped backend) | Partial (unit) | No | #883 open; the stress script is hand-run |
+| Electron | Partial (since #5438) | No | — |
+| TUI | Partial (Go units, control-API e2e) | No | — |
+| Slack and Telegram | Partial (unit fakes) | No | — |
+| **Long-running soak** | | | |
+| 100+ turn sessions | No | No (longest scenario ~15 turns) | — |
+| Memory, handle and DB growth | No | No | — |
+| Daemon running for days with schedules | No | No | — |
+| **Eval-harness integrity** | | | |
+| Judge outage, quota | Yes (`judge_outage.py`, preflight) | — | — |
+| Judge accuracy | No (only the task bench has `bench/controls.py`) | No | #4474 |
+| Flaky scenarios, run-to-run noise | No (one iteration, no re-run) | No | #4473 |
+| Baseline compare | Partial (flagship compares, report only) | No (#5197; `gaia_git`, `gaia_resilience` have no baseline) | — |
+| Harness depends on outside networks | No | No (code retrieval red on a `git fetch`) | Red that isn't the product teaches people to ignore red |
+| Fixture integrity before grading | No | No | Staged fixtures are never hash-checked |
+| Unrequested writes and secret leaks in deliverables | Partial (`bench/leaks.py` for the task bench) | No | The scenario eval never compares the workspace before and after |
+| Checker validation | No | No | Deterministic criteria aren't proven to fail on wrong work |
+
+---
+
+## 5. Recommendations, by bugs caught per unit of cost
+
+Each item names its tier and trigger. "Hosted" means GitHub-hosted runners. Strix Halo time goes only to items 8 and 9.
+
+### 1. A fault-injecting fake model server: per PR, seconds
+
+Promote `FakeServer` from `tests/unit/test_lemonade_retry_fake_server.py` into `gaia.testing.fault_server`: an OpenAI- and Lemonade-compatible server driven by a script. It **validates** requests against recorded real payloads, so a request the real server would reject fails here too (#5169 item 3). Faults to support: any status code, a stall before the first token or mid-stream, a dropped connection, malformed or never-ending tool calls, parallel batches, "model not loaded", context-size errors, and text claiming tests passed. Point the agent loop, the Agent UI backend, the TUI (through the sidecar) and the messaging bridges at it.
+
+- The stream stalls after the first tool call. The turn ends **failed**, lists what ran, the UI's run status is `failed`, and the TUI exits non-zero.
+- A 401 arrives after `write_file` succeeded. Each surface names its own fix (Settings > Model, `/provider`, both in the CLI) and lists the saved file.
+- The model sends four parallel out-of-range `read_file` calls, then corrects them. The turn finishes with an answer.
+
+Would have caught #5432, #5440, #5413 and #5101, and the open #5061 and #5064.
+
+### 2. A multi-process and `kill -9` chaos suite: nightly on hosted Linux, macOS and Windows; seeded short run on PRs that touch those paths
+
+Start a real daemon, Agent UI backend, headless TUI and sidecar on a temp `GAIA_HOME`, backed by the fault server. Kill a random process at a random, seeded point, restart, and check invariants: no reply lost without an "interrupted" notice, no orphan processes, no corrupted file in `~/.gaia`, locks released, connectors kept, port reacquired.
+
+- Four processes run `config set`, connector refreshes and index writes for 60 s, including a folder this user can't write to on Windows. The final state matches a serial replay, and no "credentials are no longer valid" appears.
+- SIGKILL the UI backend at a random point in the stream, then restart. The reply shows the interrupted notice, and a document caught mid-index shows Failed.
+- Kill a sidecar between health pings. The desktop app stays up, and quitting leaves zero descendant processes.
+
+Would have caught #5469, #5467, #5472, #5438, #5386, #5282, #5378 and #5377. About 15 minutes per OS per night.
+
+### 3. Make the final-tag eval a verdict: config plus a little code
+
+- Fix #5197. Commit `gaia_git` and `gaia_resilience` baselines and the task expectations from a real run. Remove the #3016 exception (that issue is closed).
+- Add a `release-verdict` job that `approve-publish` waits on **for final tags only**. It fails on missing or unmeasured scenarios, and on **confirmed** regressions in a short must-not-regress set: `gaia_honesty`, `gaia_resilience`, `adversarial`, `error_recovery`, and the security and injection scenarios. Anything else that regresses needs a waiver naming the approver in the tag annotation.
+- **Confirm before failing:** re-run only the scenarios that flipped from PASS to FAIL, two more times, and count a regression only if most runs fail (#4473). Compare scores against a measured noise floor: re-grade the same transcripts twice and ignore differences smaller than that spread.
+- **Retry rule**: re-run a scenario that produced no work (an infra error) up to twice and record every attempt. Never re-run one that produced work.
+- A final tag can't inherit a `[skip eval]` pass. It needs a measured run on its own commit, or on an RC whose diff touches no LLM-affecting path.
+- Make the benchmarks self-contained: vendor the code-retrieval repositories as cached archives, so a red result means the product broke, not someone else's network.
+
+Would have stopped v0.25.0's 14 unexamined regression flags and the three-RC retrieval hole (#5490).
+
+### 4. Clock, standby and network shims: nightly, hosted
+
+Replace the awake clock with a fake that can jump forward (suspend) or freeze the process for N seconds with a display-off event. Put a TCP fault proxy between GAIA and the fault server that adds latency, resets connections and black-holes traffic.
+
+- Freeze the process for 10 minutes mid-stream with the display off. On wake, no stall error appears and the turn finishes.
+- Black-hole the connection for 30 s mid-turn. The UI shows "reconnecting", then either completes or fails with a cause. It never hangs.
+- A sleep that crosses a schedule window shows the missed run once.
+
+Targets #5387, #5464, #5316, #5384 and #5391.
+
+### 5. A dependency-drift canary: nightly, hosted, about 8 runners for 10 minutes
+
+Matrix: Linux x64, Windows x64, macOS arm64 and **macOS x64 (Intel)** × the oldest and newest supported Python. Install from source with no lock: `--pre --upgrade`, latest of everything. Then import every module, run the `gaia init --profile chat` offline journey and a unit smoke subset. On the first failure, file an issue that diffs resolved versions against the last green night. This catches the next pymupdf, httpx or APScheduler days before an RC, not at publish.
+
+### 6. Clean-state install and N-1 upgrade journeys: reduced at merge, full on RC (#5169 top-five item 2)
+
+Start from an empty `GAIA_HOME` and a clean image. Install the wheel and the frozen binary on each OS, run the daemon with the fault server (or a tiny CPU model where a real one matters), and walk the TUI control API and the Agent UI MCP. For upgrades, install the last release, create sessions, memory, connectors and schedules, upgrade to the candidate, and assert everything survives and no stale sidecar keeps running.
+
+### 7. A soak suite: nightly, hosted
+
+Run a 200-turn tool-heavy session against the fault server, and an 8-hour daemon with schedules firing. Sample RSS, handles, threads, open files and DB size every 30 s, and fail on growth that doesn't level off.
+
+- 200 turns with 3 MB tool results stay under the context window, and memory levels off.
+- A daemon that has run for 8 hours answers `/health` within its SLO, and its log and DB rotate.
+
+### 8. A `gaia_chaos` scenario category on Strix Halo: release tags, one lane, about 45 minutes
+
+Only for faults that need a real model's behavior under them. A scenario-level `setup.faults` block points the agent at a fault proxy in front of the real Lemonade.
+
+- Unload the model mid-turn. The turn recovers or fails honestly, and no deliverable is claimed that doesn't exist.
+- A second front-end opens the same session mid-stream. Both show one consistent transcript.
+- Overflow the context with a VLM loaded alongside. The trim-and-retry path answers from the evidence.
+
+Add two checks to every scenario: compare the workspace before and after, and fail on unrequested writes or deletes; and search deliverables for planted secret markers. Also validate every deterministic success criterion: it must pass a known-good reference transcript and fail an untouched one and a plausible wrong one.
+
+### 9. A hardware chaos lane: release tags, one Strix Halo machine
+
+Wire the existing hand-run pieces into one job: `util/lemonade_restart_harness.py repro` and `stress --sessions 16`, the allowlisted live Lemonade contract tests (`test_lemonade_predownload_checks`, `test_lemonade_tokenize`, `test_lemonade_model_residency`, `test_daemon_broker_lemonade`, `test_gateway_lemonade`), and the Linux Strix Halo user-issue suite. Add a 1-hour real-model soak. All of this code already exists; it just never runs.
+
+### 10. Housekeeping
+
+- Port `tests/stress/test_agent_ui_stress.py` into item 2's suite as pytest, or delete it. A hand-run script nobody runs gives a false sense of coverage.
+- Add hosted, fault-server-backed Playwright journeys for #883 (reload mid-stream, two tabs, backend killed, Esc versus Stop). They don't need Strix Halo.
+- Give Slack and Telegram adapters a fake platform API that rate-limits and drops the socket.
+- Add the #5169 test-value rule to `REVIEW.md`: a fix's test covers the *class* of bug at the layer where it lived.
+
+### Strix Halo budget
+
+Today a tag costs about 26 machine-hours of scenario lanes, plus ~1.5 h of task outcomes, plus code retrieval and Linux Halo. Twelve machines sit busy for 3.3 h. [Section 6](#6-cost-and-tiering) measures where that time goes and replaces this paragraph's tiering: a one-hour smoke on every RC, and the **full** flagship run once per cycle, on the RC that will be promoted. Items 1, 2, 4, 5, 6, 7 and 10 run on hosted runners at no Strix Halo cost. The net effect is fewer Strix Halo hours per cycle than today, with more failure modes covered.
+
+---
+
+## 6. Cost and tiering
+
+**A full flagship sweep costs about 28 Strix Halo machine-hours and an estimated 130M Claude tokens, and most of its per-scenario verdicts can't be told apart from noise.** Between two runs of nearly the same code, about one scenario in five flips between PASS and FAIL. That is enough to flag about half the categories when nothing changed. Only 141 of 343 scenarios pass reliably enough for one FAIL to mean something.
+
+The plan keeps every scenario in the suite. Every RC gets a one-hour smoke run of the reliable scenarios plus a protected set. The RC you intend to promote gets the full sweep, once per cycle. Noise gets measured before any gate. Claude spend comes down inside the harness, not by dropping scenarios.
+
+### 6.1 The data
+
+- **Source:** 16 runs of `eval_flagship.yml` from 2026-10-06 to 2026-10-21. 15 ran every lane to the end, including v0.25.0-rc16, v0.25.0 and v0.25.1-rc2; the 16th is the cancelled v0.25.1-rc1.
+- **Same setup in every run:** Gemma-4-E4B-it-GGUF as the model under test, `claude-sonnet-4-6` as driver and judge, and the devlab Strix Halo pool.
+- **Per-scenario results:** `eval/analysis/flagship_scenarios_2026-10.csv` (pass rate, flip rate, time split, class, protected, smoke candidate).
+- **Definition used below:** "Mixed" means a pass rate above 10% and below 90%, over at least 10 judged runs.
+
+### 6.2 Where a sweep's time goes
+
+v0.25.0, 13 jobs, 28.4 machine-hours:
+
+| Part | Machine-hours | Share |
+|---|---:|---:|
+| Gemma answering scenario turns, including 3.4 h of background memory extraction | 14.8 | 52% |
+| Claude driving each scenario and judging each turn | 11.4 | 40% |
+| Outcomes lane (`gaia eval tasks` on Qwen3.6) | 1.4 | 5% |
+| Machine setup, per-category backend restarts, upload | 0.8 | 3% |
+
+- **Models aren't re-downloaded or reloaded.**
+  - Across 191 lane jobs, starting and warming Lemonade took a median 0.5 min (max 1.4). The outcomes model's download step took a median 0.1 min.
+  - Every scenario uses one model at one context size, and the backend's model check takes 0.3 s.
+  - A lab-side model cache or a pre-baked image would save under 0.6 machine-hours per sweep.
+- **Timeouts used to be the biggest waste, and they're fixed.** Through rc16, about 12 scenarios per run timed out, burning 5.5 machine-hours (18% of the run). Most were permission prompts that nothing answered (#5296, fixed by #5309 and #5358). v0.25.0 had 3 timeouts and rc2 had none.
+- **The longest lane sets the wall time.** Lane medians run from 13 to 203 minutes, so most machines finish early and sit idle. gaia-signal is the longest lane, with 46 scenarios and 61% of its time spent in Claude.
+- **The top time sinks today are the agent's own tool loops.** Averages over v0.25.0 and rc2:
+
+| Scenario | Category | Seconds | Agent / Claude seconds | Passed |
+|---|---|---:|---:|---:|
+| `skills_many_loaded_status` | gaia_skills_lifecycle | 889 | 677 / 212 | 10 of 15 |
+| `memory_stress_capacity` | memory | 881 | 562 / 318 | 7 of 14 |
+| `shell_pipeline_todo_count` | gaia_shell | 748 | 577 / 170 | 4 of 14 |
+| `capture_three_sources_then_remove` | gaia_skills_capture | 724 | 520 / 204 | 4 of 15 |
+| `memory_stress_long_conversation` | memory | 684 | 286 / 398 | 7 of 15 |
+
+### 6.3 What one run can tell you
+
+| Class | Scenarios | Share of sweep time | What one run tells you |
+|---|---:|---:|---|
+| Always pass | 116 | 25% | A FAIL is probably real |
+| Pass ≥ 90% | 25 | 6% | The same, slightly noisier |
+| Mixed | 141 | 47% | About a coin flip, so it needs repeats |
+| Pass ≤ 10% | 7 | 3% | Progress only |
+| Always fail | 37 | 13% | Progress only. This is the backlog between 59% and the 80% target |
+| Fewer than 10 runs | 17 | 6% | Too new to classify |
+
+**Noise is about 18% of scenarios per run, at most.**
+
+- **Same base:** four runs on 2026-10-14 started from one `main` commit, each with one small PR on top (one of them docs-only). Any two of them disagree on 16–24% of judged scenarios, with a median of 18%.
+- **All pairs:** across all 105 pairs of the 15 complete sweeps, the median is also 18%. Two weeks of code changes add nothing visible above that.
+- **Why it's an upper bound:** these pairs still differ in code, so 18% is the most pure noise could be. The study in 6.6 measures the real figure.
+- **Model:** all 16 runs scored Gemma, so none of these pairs includes a change of the model under test.
+
+What that means today:
+
+- **Flags from one run say nothing.** `--compare` flags a category on any single PASS→FAIL. Between the same-base runs, that flagged a median of 16 of 29 categories (range 12–23). v0.25.0's 14 flagged categories sit inside that range.
+- **A third of the suite has no baseline.** The baseline is one run of 218 scenarios from 2026-10-03, so 126 of today's 343 scenarios are never compared.
+- **The noisiest scenarios flip on most runs** (flip rate between consecutive runs, then pass rate):
+  - `skills_hub_search`: 0.86, 53%
+  - `capture_lesson_applies`: 0.79, 53%
+  - `task_feed_injection`: 0.79, 47%
+  - `memory_stress_long_conversation`: 0.79, 47%
+  - `select_skill_tool_vs_builtin`: 0.77, 50%
+  - `res_truncated_export_partial`: 0.71, 33%
+- **Confirming flips is cheap.** #5076 replayed earlier runs: re-running each PASS→FAIL twice left about 5% of runs red with nothing behind them, at about 4 re-runs per sweep.
+
+**The eval finds defects when a scenario is new or the model changes.**
+
+- **Fixes:** since 2026-09-15, 13 merged product fixes cite a failing flagship scenario (#4642, #4643, #4645, #4647, #4648, #4650, #4708, #4725, #4728, #4745, #4878, #5307, #5308). Together they cover about 25 scenarios. About 8 more fixes went to the harness itself.
+- **Regressions:** two of the 13 fixed something that used to pass (#4708, #4878). Both came from switching the model under test to Qwen3.6, not from a code change.
+- **Tag runs:** none of the flags on the rc16, v0.25.0 or rc2 tag runs led to a fix.
+- **Caveat:** the sample is small and was found by searching PR text for scenario names. Read it as a pattern, not a verdict.
+
+**The scenario lanes don't cover the large default model.** They score Gemma-4-E4B, the default on most PCs. Qwen3.6-35B-A3B is what `gaia init` installs on a 64 GB+ Strix Halo, the pool's own hardware, yet it runs only in the outcomes lane's two task suites. Both regressions above were Qwen3.6-only.
+
+### 6.4 Claude spend
+
+- **Real usage isn't recorded.**
+  - On success, the runner keeps only the judge's structured output and discards the usage and cost that `claude -p` reports.
+  - The trace's `cost_estimate` is the model's own guess.
+  - One session plays the user and judges every turn, so driver and judge spend can't be separated.
+- **What survives.** Six rc2 scenarios cut off by the quota kept their usage records.
+  - Each wrote 30–38K tokens to the prompt cache before its first reply. That's a 1-hour cache write, about $0.19 at list price.
+  - Each then re-read that cache on every API round, for 13K–331K cache reads in total.
+  - Nothing is shared between scenarios, because the fixed simulator and judge rubric (about 25K characters) sits inside each scenario's own user message.
+- **Estimate per sweep.** The model behind it is fitted to those six records: 33K tokens written per scenario, and two API rounds per turn at about 35K context plus 2.5K per turn, over 1,078 turns.
+  - Totals: about 11M tokens written to the cache, 120M read from it, and 0.9M output.
+  - That's about $118 at Sonnet 4.6 list price, and 57% of it is cache writes.
+  - memory and gaia_memory cost the most, at about 125 turns and $10 each. Next come gaia_skills_tasks, real_world, gaia_files, gaia_core and gaia_rag.
+  - Replace these figures with measured ones once usage is recorded (6.8, PR 1).
+- **Capacity: a full sweep doesn't fit the accounts it runs on.**
+  - rc2 judged 274 scenarios (about 107M tokens by the same estimate) before both Claude accounts in use ran out, between 14:13 and 14:23 UTC.
+  - The first error landed at the same clock time in every lane, including a lane that started an hour late.
+  - The remaining 68 scenarios recorded ERRORED within about 3 seconds each, with zero tokens, and the run still reported success.
+  - A full sweep needs about 123% of what both accounts delivered in that window. #5265 tracks stopping and resuming instead.
+
+### 6.5 Cuts that keep coverage
+
+Every cut keeps every scenario in the suite. "Work" cuts reduce machine-hours or tokens. "Rearrange" only changes how the same work is laid out.
+
+| Cut | Kind | Saves per sweep | Risk |
+|---|---|---|---|
+| **(a)** Impact-based RC runs: re-run errored and flipped scenarios plus the categories mapped to changed paths, and carry other results forward with their commit | Work | rc3 example: 85 of 343 scenarios, about 75% fewer tokens and machine-hours for that RC | A path map misses an indirect effect. The mandatory-full rule below bounds it |
+| **(b)** Quota-aware stop and resume at scenario level (#5265) | Work | The re-run of a lost run. rc2 spent ~22 machine-hours and lost 20% | Low |
+| **(c)** Scripted user turns. 941 of 1,078 turns have a literal user message, and 290 scenarios are fully scripted | Work | Most of the driver's API rounds, roughly 30–40% of tokens | Changes the measurement, so it needs a new baseline. The driver must still answer permission prompts (#5358) |
+| **(d)** Deterministic check first. 680 turns carry an `expected_answer` | Work | Small: skip the judge only when the check fails outright, such as a wrong number or a forbidden tool | A deterministic PASS still needs the judge for the other six dimensions |
+| **(e)** Haiku-class driver, Sonnet judge | Work | Needs (c)'s driver/judge split first, and after (c) little driver spend is left | Changes what `EVAL_MODEL` means, so it needs a new baseline (CLAUDE.md) |
+| **(f)** Prompt caching: move the fixed rubric into the system prompt so scenarios share one cached prefix | Work | Up to ~$59 (about half, at list price) if ~30K of each 33K write becomes a read. Unmeasured | Low. Check the judge's verdicts don't move during the noise study |
+| **(g)** Deduplicate overlaps: two `captured_eval_*` copies of `cross_turn_file_recall` and `smart_discovery`, and about six `memory`/`gaia_memory` pairs | Work | At most 10 scenarios, 0.6 machine-hours and 4M tokens | Merge only with proof: same tools, same failure class, and matching outcomes across the noise-study runs |
+| **(h)** Model cache or pre-baked image | Work | At most 0.6 machine-hours (setup is 2%) | Not worth building |
+| Move 26 non-protected always-fail and ≤ 10% scenarios to a weekly backlog lane | Work per sweep, added weekly | 2.5 machine-hours and 11M tokens | Hidden unless the lane has an owner and a trend issue |
+| Pack scenarios onto machines by measured time instead of by category | Rearrange | 0 machine-hours. Either the same 13 machines finish in 2.1 h instead of 3.3 h, or 8 machines finish in about 3.3 h and free 5 | Low |
+
+**When a full sweep is mandatory,** under rule (a):
+
+- Any change on CLAUDE.md's LLM-affecting list: system prompts and mixin fragments, `_compose_system_prompt`, tool registration, docstrings or schema, error classification, the default model, the tokenizer or `is_tool_calling_model`, and tool-call parsing.
+- A Lemonade version bump.
+- A change to the model under test or to `EVAL_MODEL`.
+- A change under `eval/prompts/`.
+
+A carried result counts only if the diff from its commit to the promotion commit touches none of those, and only within one release cycle.
+
+**One eval per Lemonade backend still holds** (CLAUDE.md). Nothing here runs two scenarios against one Lemonade. Parallelism stays across machines.
+
+### 6.6 Tiers and cadence
+
+Under the release train ([#5492](https://github.com/amd/gaia/pull/5492)), a final promotes a tested RC without rebuilding or re-running the eval. So the full sweep belongs on the RC you intend to promote, not on the final tag.
+
+| Tier | When | Scope | Machines and wall time | Machine-hours | Tokens (est.) |
+|---|---|---|---|---:|---:|
+| Smoke | Every RC | 30 stable scenarios, plus any impacted categories and re-runs of errored or flipped scenarios | 2 on Gemma, 1 on Qwen3.6 (same 30), at most 60 min | ~3 | ~19M |
+| Full sweep | The RC nominated for promotion | Everything except the weekly backlog, plus confirmation re-runs | 13, about 2.1 h when packed | ~27 | ~123M |
+| Backlog | Weekly | 26 non-protected scenarios that always or almost always fail, with an owner and a trend issue | 1, about 2.5 h | 2.5 | 11M |
+| Noise study | Once, on v0.25.1 final's commit | Three full sweeps, one per quota window | 13 per sweep | ~85 | ~390M |
+
+**How the smoke tier is picked.**
+
+- **Rule:** each smoke scenario passed at least 90% of at least 10 runs and never timed out, so a FAIL carries signal. The list takes one per category that has one, protected scenarios first, then the fastest.
+- **Size:** 30 scenarios, 13 of them protected. That's 81 scenario-minutes on Gemma, or two machines at about 45 minutes each.
+- **False alarms:** about 0.42 false FAILs per run, and 0.03 after two confirmation re-runs.
+- **Qwen3.6:** its machine runs the same 30 scenarios, and its first runs set its baseline. If it takes longer than 60 minutes, cut it to the 13 protected scenarios.
+- **Gaps:** error_recovery, gaia_data and gaia_git have no stable scenario, so the smoke can't catch regressions there. They stay in the full sweep.
+
+**The protected set is never pruned.**
+
+- **What's in it:** every scenario in gaia_honesty, adversarial, error_recovery and gaia_resilience, plus every scenario tagged `security` or with "injection" in its id. That's 75 scenarios, 5.8 machine-hours and about 27M tokens.
+- **The rule:** these never leave the full sweep for weekly or get dropped because of their pass rate, whether they always pass or always fail.
+- **The limit today:** only 15 of the 75 pass reliably, 39 are mixed and 16 always fail. Most of this set can't be gated until the noise study says how noisy it is.
+
+**The fake model server needs a real contract.** Item 1 in section 5 checks requests against recorded real payloads. The hardware chaos lane (item 9) should re-record those payloads from a real Lemonade, so the fake can't drift from the server it imitates. That's the #1655 lesson.
+
+### 6.7 Before and after, per release cycle
+
+Assume a cycle with three RCs that run the eval. Under the release train as written, every RC runs the full sweep and the final reuses the promoted RC's run.
+
+| | Today | Proposed |
+|---|---|---|
+| Machine-hours | 85 (3 × 28) | 33: two smokes, one full sweep, and re-runs, plus 2.5 a week for the backlog |
+| Claude tokens (est.) | ~390M | ~170M |
+| Wall time per RC | 3.3 h, up to 5.3 h | At most 1 h, and 2.1 h on the promotion RC |
+| Pool held per RC | 13 of 14 machines for 3.3 h. Flagship lanes already queue a median 16 min | 3 machines for at most 1 h, and 13 once per cycle |
+
+Where the 52 machine-hours come from:
+
+- **Cutting work:** about 50, from running a smoke instead of a full sweep on the two RCs that aren't promoted.
+- **Moving work:** 2.5, from the backlog leaving the sweep, which the weekly backlog lane adds back.
+- **Rearranging:** zero. Packing only trades wall time against machine count.
+- **Not counted here:** the duplicate final-tag sweep (28 machine-hours on v0.25.0) is #5492's saving.
+
+### 6.8 Implementation, ranked by savings per effort
+
+All of these land after v0.25.1 final. Flake handling comes before any gate, or the gate gets waived back into report mode.
+
+| # | PR | Size | Saves | When |
+|---|---|---|---|---|
+| 1 | Record each scenario's real Claude usage (tokens, cache reads and writes, API time, cost) in traces and scorecards. Add quota-aware stop and resume (#5265) | S–M | Stops a run losing 20% as rc2 did, and makes every token figure here measurable | **First** |
+| 2 | RC smoke tier: `eval/ci_tiers.json` built from this data, a `categories` dispatch input, the full sweep on the promotion RC, and a Qwen3.6 smoke lane | M | About 25 machine-hours and 110M tokens per RC that isn't promoted | **First** |
+| 3 | Prompt-cache restructure (6.5 f) | S | Up to about half of Claude cost per sweep. Unmeasured until PR 1 | **First** |
+| 4 | Noise study on v0.25.1 final's commit, then a three-run baseline with per-scenario pass rates | S of code, ~85 machine-hours once | Prerequisite for 5 and 6 | After 1 |
+| 5 | Report-only confirmation: re-run each PASS→FAIL of a stable scenario twice (#5076's measured rule) | M | About 1 machine-hour per sweep. Turns ~16 flagged categories into a short list | After 4 |
+| 6 | The release verdict gate (section 5, item 3) | As in item 3 | — | After 5 |
+| 7 | Weekly backlog lane with an owner and a trend issue | S | Visibility, not savings | When 4 lands. Needs a maintainer call, since evals run on tags only today |
+| 8 | Impact-based selection with carry-forward (6.5 a) | M–L | About 75% of a mid-cycle RC | After 2, if RC counts stay high |
+| 9 | Pack scenarios onto machines by measured time | S | Wall time only | Optional |
+| 10 | Scripted turns with a split judge, then a cheaper driver (6.5 c, e) | L, plus a new baseline | Roughly 30–40% of tokens | Only if PR 3 doesn't bring spend down enough |
+
+Don't build deduplication (6.5 g) or a model cache (6.5 h). The data says they save too little.
+
+---
+
+## 7. The bulletproof bar for a final tag
+
+A final `vX.Y.Z` tag publishes only when all of these hold on its commit:
+
+1. **CI is green on the tag commit:** lint, unit, offline integration and CLI (already enforced).
+2. **The fault-server suite (item 1) passes on all three OSes.**
+3. **The chaos suite (item 2) passes on all three OSes**, plus the clock and network shims (item 4).
+4. **The drift canary (item 5) passed within 24 hours on every OS and arch, Intel Mac included**, or the failing dependency is capped.
+5. **Clean-state install and N-1 upgrade pass** for the wheel and the frozen binary on Windows, macOS arm64, macOS x64 and Linux (item 6).
+6. **The flagship eval measured this commit,** with no missing or unmeasured scenarios and no confirmed regression in the must-not-regress set. Every other confirmed regression is waived by name.
+7. **The retrieval and code-retrieval benchmarks are green or waived by name**, and none is red for a harness reason.
+8. **The hardware chaos lane is green:** Lemonade restart harness, live contract tests and Linux Strix Halo user issues (item 9).
+
+---
+
+## 8. Open questions
+
+- Should the must-not-regress set block RCs too, or only finals? Blocking RCs finds problems earlier, but costs more RC re-tags.
+- Who nominates the RC that gets the full sweep, and how? A tag annotation is one option, a dispatch input is another.
+- Is a weekly backlog lane on one machine an acceptable exception to "evals run on tags only"?
+- Should the Claude driver and judge run on a dedicated account? rc2 showed that one sweep needs more than two shared accounts deliver in one window.
+- Can a CPU-only tiny model on hosted runners stand in for the real model in the clean-state journeys, or does that path need Strix Point?
+- Who approves a waiver, and does it belong in the tag annotation or in a committed file the gate reads?
