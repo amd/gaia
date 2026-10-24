@@ -659,6 +659,11 @@ class TestMemoryDegradedStateNotice:
         """A genuinely unreachable Lemonade produces a DIFFERENT message than
         the model-not-pulled case — the remedies aren't interchangeable."""
         monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
+        # GAIA's own Lemonade: a user-set URL (CI sets LEMONADE_BASE_URL)
+        # gets the "model server at <host>" wording instead.
+        monkeypatch.setattr(
+            "gaia.agents.base.memory.configured_lemonade_url", lambda: None
+        )
         connection_refused = RuntimeError(
             "Embedding failed: Error generating embeddings: "
             "Connection refused (localhost:13305)"

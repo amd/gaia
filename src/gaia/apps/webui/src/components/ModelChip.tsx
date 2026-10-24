@@ -8,7 +8,7 @@ import './ModelPicker.css';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import {
-    useModelStore, useInferencePlace, selectChipModel, displayModelName, UNKNOWN_PLACE_TITLE,
+    useModelStore, useInferencePlace, selectChipModel, displayModelName, distinctModelLabels, UNKNOWN_PLACE_TITLE,
 } from '../stores/modelStore';
 import { STATE_LABELS, isDownloading, modelState, placementText } from './modelMeta';
 import { InfoBubble } from './InfoBubble';
@@ -304,6 +304,7 @@ export function ModelChip() {
     const Icon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
     const name = chipModel ? displayModelName(chipModel) : 'Model';
     const label = `${name}${place ? ` · ${place.label}` : ''}`;
+    const rowLabels = Object.fromEntries((groups ?? []).map((g) => [g.provider.id, distinctModelLabels(g.models)]));
     const notDownloaded = active?.downloaded === false && chipModel === active.model;
     const title = autoSwitchError
         ? autoSwitchError
@@ -383,7 +384,7 @@ export function ModelChip() {
                         {models.map((m) => {
                             const current = (queued ?? active?.model) === m.id;
                             const needsDownload = !provider.remote && modelState(m) === 'not_downloaded';
-                            const modelName = m.display_name ?? displayModelName(m.id);
+                            const modelName = rowLabels[provider.id][m.id];
                             const details = modelDetails(m, provider.remote);
                             const infoId = `${listId}-info-${provider.id}-${m.id}`;
                             return (

@@ -236,7 +236,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const [run, setRun] = useState<SetupRunStatus | null>(null);
     const [startError, setStartError] = useState<string | null>(null);
     const [key, setKey] = useState('');
-    const [keyState, setKeyState] = useState<{ busy: boolean; error: string | null; done: boolean }>({ busy: false, error: null, done: false });
+    const [keyState, setKeyState] = useState<{ busy: boolean; error: string | null; done: boolean; waiting?: string | null }>({ busy: false, error: null, done: false });
     const [showLog, setShowLog] = useState(false);
     const [plan, setPlan] = useState<SetupPlan | null>(null);
     const [planError, setPlanError] = useState<string | null>(null);
@@ -245,6 +245,9 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     // GAIA uses a Lemonade the user runs, so the Connect step changes nothing there.
     const [usersServer, setUsersServer] = useState(false);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    // A connect waiting on an OS prompt stops asking once setup is gone.
+    const mounted = useRef(true);
+    useEffect(() => () => { mounted.current = false; }, []);
     const { network: gateway, recheck: recheckGateway } = useGatewayNetwork();
     const unreachable = (id: ProviderId) => id === 'amd' && gateway?.reachable === false;
 
@@ -326,7 +329,12 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const connect = useCallback(async () => {
         setKeyState({ busy: true, error: null, done: false });
         try {
-            await api.connectProvider(choice, { api_key: (!usersServer && key) || undefined });
+            await api.connectProviderWaitingForOs(
+                choice,
+                { api_key: (!usersServer && key) || undefined },
+                (waiting) => setKeyState({ busy: true, error: null, done: false, waiting }),
+                () => !mounted.current,
+            );
             const { models } = await api.listProviderModels(choice);
             const pick = models.find((m) => m.rank === 1) ?? models[0];
             if (!pick) throw new Error('Connected, but the provider listed no chat models.');
@@ -537,6 +545,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                             {keyState.busy && <Loader2 size={13} className="spin" />} Connect
                                         </button>
                                     </div>
+                                    {keyState.busy && keyState.waiting && <p className="setup-hint" role="status">{keyState.waiting}</p>}
                                     {keyState.error && <p className="setup-error" role="alert">{keyState.error}</p>}
                                 </form>
                             )}

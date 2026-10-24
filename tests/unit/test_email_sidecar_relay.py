@@ -82,9 +82,6 @@ class _FakeHandler:
     def signal_done(self):
         self.done_calls += 1
 
-    def set_relay_question(self, request_id):
-        self.relay_question = request_id
-
     def step_away_from_model(self):
         return False
 

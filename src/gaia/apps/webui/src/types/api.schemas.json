@@ -352,6 +352,16 @@
         ],
         "title": "Latencyms"
       },
+      "mcpOutput": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/McpOutputResponse"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "mcpServer": {
         "anyOf": [
           {
@@ -362,6 +372,28 @@
           }
         ],
         "title": "Mcpserver"
+      },
+      "mcpServerLabel": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mcpserverlabel"
+      },
+      "mcpTool": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mcptool"
       },
       "narration": {
         "anyOf": [
@@ -2392,6 +2424,23 @@
     "title": "LoadedModelInfo",
     "type": "object"
   },
+  "McpOutputResponse": {
+    "description": "The text an MCP tool returned, capped for the tool row.",
+    "properties": {
+      "text": {
+        "default": "",
+        "title": "Text",
+        "type": "string"
+      },
+      "truncated": {
+        "default": false,
+        "title": "Truncated",
+        "type": "boolean"
+      }
+    },
+    "title": "McpOutputResponse",
+    "type": "object"
+  },
   "MemorySettingsBody": {
     "description": "Typed request body for PUT /api/memory/settings.",
     "properties": {
@@ -3201,6 +3250,10 @@
         ],
         "title": "Created At"
       },
+      "description": {
+        "title": "Description",
+        "type": "string"
+      },
       "error_count": {
         "default": 0,
         "title": "Error Count",
@@ -3303,7 +3356,8 @@
       "name",
       "interval_seconds",
       "prompt",
-      "status"
+      "status",
+      "description"
     ],
     "title": "ScheduleResponse",
     "type": "object"

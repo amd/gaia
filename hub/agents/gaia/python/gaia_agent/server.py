@@ -63,6 +63,7 @@ from starlette.responses import StreamingResponse
 from gaia.agents.base import file_snapshots
 from gaia.agents.base.readiness import start_advice, version_meets_min
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
+from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 from gaia.version import LEMONADE_MIN_VERSION
@@ -241,8 +242,10 @@ class QueryRequest(_Strict):
         description=(
             "The front-end this turn comes from (contract >= 2.20). 'agent_ui' "
             "tells the agent that features like Scheduled tasks are in the "
-            "caller's sidebar. Fixed when a session is built; omit it when "
-            "unknown."
+            "caller's sidebar, and each front-end gets model-provider errors "
+            "worded for its own settings. Fixed when a session is built; omit "
+            "it for a headless caller, whose provider advice then points at "
+            "the model server this GAIA host uses."
         ),
     )
 
@@ -522,6 +525,19 @@ def _sse(event: Dict[str, Any]) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+def _wording_surface(request: QueryRequest) -> str:
+    """The front-end *request*'s errors are worded for; a headless caller is ``service``."""
+    return request.surface or "service"
+
+
+def _worded(event: Dict[str, Any], surface: str) -> Dict[str, Any]:
+    """*event* with the agent's TUI provider advice reworded for *surface*."""
+    return {
+        key: surface_wording(value, surface) if isinstance(value, str) else value
+        for key, value in event.items()
+    }
+
+
 def _terminal_error_detail(exc: BaseException) -> str:
     """Actionable copy for a run-killing exception.
 
@@ -556,6 +572,10 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
     Surfacing that message beats inventing a generic error.
     """
     if isinstance(result, dict):
+        if result.get("status") == "cancelled":
+            # Stopped mid-generation: the loop returns no text by design, and
+            # the stdio transport ends the same turn with an empty final.
+            return {"type": "final", "answer": ""}
         for key in ("answer", "response", "result", "output"):
             value = result.get(key)
             if isinstance(value, str) and value.strip():
@@ -1222,10 +1242,11 @@ async def query(request: QueryRequest):
                     # session.
                     raise HTTPException(
                         status_code=409,
-                        detail=(
+                        detail=surface_wording(
                             f"could not switch session {request.session_id} to "
                             f"{target!r}: {exc}. The session is still "
-                            f"running {session.model_id or 'its previous model'}."
+                            f"running {session.model_id or 'its previous model'}.",
+                            _wording_surface(request),
                         ),
                     ) from exc
                 logger.info(
@@ -1271,6 +1292,9 @@ async def query(request: QueryRequest):
             )
             one_shot_agent = agent
         agent.console = handler
+        # Streamed model calls are what put ``token`` events on this wire and let
+        # Stop cut a call short. Set per turn so a retained agent can't drift.
+        agent.streaming = True
         # A confirmation can only be carried when somebody is there to answer it
         # AND there is a session to hold the grant. ``can_answer_questions`` is
         # the caller's own declaration that a human is watching (spec >= 2.6); a
@@ -1410,6 +1434,9 @@ async def query(request: QueryRequest):
 
     can_confirm = handler.answers_confirmations
 
+    def _emit(event: Dict[str, Any]) -> str:
+        return _sse(_worded(event, _wording_surface(request)))
+
     async def _stream():
         translator = CanonicalTranslator(request.run_id, agent_id=AGENT_ID)
         terminated = False
@@ -1434,10 +1461,14 @@ async def query(request: QueryRequest):
 
                 for canonical in translator.translate(event):
                     ctype = canonical.get("type")
+                    if ctype == "token" and run.cancel_event.is_set():
+                        # A stopped answer's tail, e.g. a half-written JSON
+                        # reply flushed at teardown, is not answer text.
+                        continue
                     if ctype in TERMINAL_TYPES:
                         for warning in await _finish_changes(run):
-                            yield _sse(warning)
-                    yield _sse(canonical)
+                            yield _emit(warning)
+                    yield _emit(canonical)
                     last_write = time.monotonic()
                     if ctype == "needs_input":
                         # Answerable, so the run stays alive: keep draining while
@@ -1455,8 +1486,8 @@ async def query(request: QueryRequest):
                         # far better than parking a run on a prompt no one will
                         # ever see.
                         for warning in await _finish_changes(run):
-                            yield _sse(warning)
-                        yield _sse(_confirmation_refusal(canonical.get("action", "")))
+                            yield _emit(warning)
+                        yield _emit(_confirmation_refusal(canonical.get("action", "")))
                         handler.cancelled.set()
                         run.cancel_event.set()
                         terminated = True
@@ -1470,12 +1501,12 @@ async def query(request: QueryRequest):
             for canonical in translator.flush():
                 if canonical.get("type") in TERMINAL_TYPES:
                     for warning in await _finish_changes(run):
-                        yield _sse(warning)
-                yield _sse(canonical)
+                        yield _emit(warning)
+                yield _emit(canonical)
                 if canonical.get("type") in TERMINAL_TYPES:
                     terminated = True
             if not terminated:
-                yield _sse(_terminal_from_run_result(run.result))
+                yield _emit(_terminal_from_run_result(run.result))
         finally:
             # A client that disconnected mid-run should not leave the loop running.
             handler.cancelled.set()

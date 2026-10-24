@@ -328,7 +328,7 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		// it ran after the client, so a machine with no gaia-agent got
 		// ForAgent's bare "no runnable binary" instead of the gate's three-part
 		// answer, which names where it looked and how to get the program.
-		cfg := preflight.ConfigFor(agent.ID, agent.Name)
+		cfg := oneShotConfig(agent.ID, agent.Name, model)
 		var rep preflight.Report
 		if agent.Transport == catalog.TransportDaemon {
 			t := preflight.NewDaemonTransport(daemon.New(daemon.Options{Logf: logf}))
@@ -453,6 +453,17 @@ func launchFullAccess(agent catalog.Agent, fullAccess, saved bool) (bool, string
 		return false, "", err
 	}
 	return fullAccess, "", nil
+}
+
+// oneShotConfig is the readiness check for a --query turn. It carries the model
+// the turn runs on, so a cloud model is checked rather than the local default.
+func oneShotConfig(agentID, name, model string) preflight.Config {
+	cfg := preflight.ConfigFor(agentID, name)
+	// Only the flagship takes a per-turn model; email ignores one.
+	if agentID == catalog.FlagshipID {
+		cfg.Model = model
+	}
+	return cfg
 }
 
 // oneShotModel is the model a --query run uses: an explicit --model, else the

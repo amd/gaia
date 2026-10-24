@@ -6,6 +6,33 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### For integrators: contract 2.20
+
+- **A failed model request says which endpoint failed, worded for your
+  front-end** (contract **2.20**, #5295). A headless caller of `/query` whose
+  hosted model returned HTTP 502 was told the "cloud request through Lemonade
+  failed" and to check "the TUI provider settings", though no TUI was
+  involved. The error now names the provider and the `host:port` the request
+  went through. A local model on a base URL you set is reported as "the model
+  server at `host:port`" instead of "Lemonade on this machine", since GAIA
+  can't tell what serves it. The advice follows the `surface` field: a caller
+  that omits it is pointed at the model server the GAIA host uses; `"tui"`,
+  `"agent_ui"` and `"cli"` keep their own settings screens. Older binaries
+  refuse the field with `422`, so probe `/version` before sending it.
+  Version skew: a front-end older than this release never sends `surface`, so
+  against this agent it gets the headless advice (the model server's
+  `LEMONADE_BASE_URL`) instead of its own settings screen. GAIA ships the TUI,
+  the Agent UI and this agent together, so this only shows when one of them is
+  updated without the others, or when the TUI's `/version` probe times out and
+  it can't confirm the agent takes the field.
+- **Answers stream over `/query`.** The HTTP sidecar ran its agent with
+  streaming off, so a relayed turn (the Agent UI, and the TUI's later sessions)
+  showed "Waiting on the model" until the whole answer landed at once, Stop could
+  not cut a model call short, and a stopped turn kept no text. Every `/query`
+  turn now streams its model calls and sends the answer as `token` events before
+  `final`, the same as the stdio transport. A run cancelled mid-answer stops
+  within a token and ends with an empty `final`, as stdio does; text not yet
+  sent when the cancel lands is dropped.
 ### Fixed
 
 - **Full access in the Agent UI asks before a gated shell command instead of
@@ -49,6 +76,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chat saves nothing) from a saved one, and the Agent UI listed it as saved.
   `data` now also carries `status` when the tool returned one. Additive, so
   the contract version is unchanged.
+
+- **An MCP tool call says which connector it used and what came back.** A Git
+  connector call reached a client as a bare `mcp_git_git_log`, and its result
+  as "Tool 'git_log' returned data". `tool_call` gains optional `mcp_server`,
+  `mcp_server_label` ("Git") and `mcp_tool` ("git_log"), and the result's
+  `data` carries the tool's text in `mcp_output` (`{ text, truncated }`, capped
+  at 16,000 characters). Clients that ignore the fields see the same events.
 
 ### For integrators: contract 2.19
 

@@ -227,6 +227,8 @@ type queryRequest struct {
 	// absence -- a minted id is never "", so plain omitempty is enough. Sent
 	// only once negotiation proves the peer is >= 2.12 (#2829).
 	SessionID string `json:"session_id,omitempty"`
+	// Sent only to a peer proven >= 2.20 (negotiate.go); empty omits it.
+	Surface string `json:"surface,omitempty"`
 }
 
 // Send starts one turn. The returned channel carries the canonical event types
@@ -288,6 +290,11 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		}
 	}
 
+	var surface string
+	if peer.supportsSurface {
+		surface = "tui"
+	}
+
 	payload, err := json.Marshal(queryRequest{
 		Query:              query,
 		RunID:              runID,
@@ -296,6 +303,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		MaxSteps:           s.opts.MaxSteps,
 		CanAnswerQuestions: canAnswer,
 		SessionID:          sessionID,
+		Surface:            surface,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not encode the '%s' query request: %w", s.agentID, err)

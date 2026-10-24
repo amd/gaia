@@ -9,6 +9,7 @@ import { useFocusTrap } from '../hooks/useFocusTrap';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
+import { examplePath } from '../utils/platform';
 import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
 import type { Document, IndexFolderResponse } from '../types';
 import './DocumentLibrary.css';
@@ -647,7 +648,7 @@ export function DocumentLibrary() {
                             className="path-input"
                             value={folderPath}
                             onChange={(e) => setFolderPath(e.target.value)}
-                            placeholder="Or enter a file or folder path: C:\docs\manual.pdf"
+                            placeholder={`Or enter a file or folder path: ${examplePath()}`}
                             aria-label="File path to index"
                         />
                         <button type="submit" className="btn-secondary" disabled={!folderPath.trim() || isUploading}>
