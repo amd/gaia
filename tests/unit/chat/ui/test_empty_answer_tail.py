@@ -192,3 +192,15 @@ async def test_a_tool_run_that_then_errors_still_says_no_answer_came(runtime):
 
     [done] = _of(events, "done")
     assert done["content"] == helpers._NO_ANSWER_AFTER_TOOLS_MSG
+
+
+async def test_thinking_then_an_error_is_not_called_a_tool_run(runtime):
+    thinking = {"type": "thinking", "content": "Let me check the files."}
+    sid, events = await _run(runtime, [thinking, _AGENT_DOWN])
+
+    [done] = _of(events, "done")
+    assert done["content"] == ""
+    assert all(
+        helpers._NO_ANSWER_AFTER_TOOLS_MSG not in (e.get("content") or "")
+        for e in events
+    )

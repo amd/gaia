@@ -2567,7 +2567,7 @@ def _empty_answer_outcome(
         the steps so the card survives a reload.
       * steps but no card → ``(<no-answer copy>, "failed", True)`` — the agent
         ran tools and ended without answering; say so and keep the steps.
-        *has_steps* counts tool steps only, never error steps.
+        *has_steps* counts tool steps only, never thinking, plan or error steps.
       * no tool ran but the turn reported an error → ``("", "failed", True)``
         — the error step already says what went wrong (e.g. "GAIA couldn't
         start its agent"); keep it and add no second, contradicting line.
@@ -4575,14 +4575,18 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 backend_problem = await _empty_answer_backend_problem(
                     result_holder.get("model") or model_id
                 )
-            # An error step is the turn's own report, not a tool that ran.
-            tool_steps = [s for s in captured_steps if s.get("type") != "error"]
+            # Thinking, plans and errors are not tools that ran.
+            tool_steps = [
+                s for s in captured_steps if s.get("type") in ("tool", "policy_alert")
+            ]
             content, sse_type, keep_steps = _empty_answer_outcome(
                 turn_cancelled,
                 bool(tool_steps),
                 any(step.get("render") for step in captured_steps),
                 backend_problem,
-                turn_reported_error=len(tool_steps) < len(captured_steps),
+                turn_reported_error=any(
+                    s.get("type") == "error" for s in captured_steps
+                ),
             )
             steps_to_persist = (
                 captured_steps if (keep_steps and captured_steps) else None
