@@ -205,6 +205,8 @@ AgentLoop
 - Ticks run in their own "Background goals" chat (`kind = "scheduled"`, listed with
   the other background runs), created on first use — never in a chat the user is in,
   because a tick holds its chat's lock and a long one would refuse the user's messages (#5711)
+- A tick therefore sees none of a chat's attached documents or working folder; goals carry no
+  chat of origin, and before #5711 a tick ran in whichever chat was most recent, not the goal's
 - A turn in a private chat never triggers a tick — **always, unconditionally**
 - No tick runs without approved pending goals (avoids pointless LLM calls)
 
