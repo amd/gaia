@@ -2316,10 +2316,24 @@ def _dispatch_sidecar_query(
 
     # First-turn-per-session readiness check (#2101 lesson): a 503 from
     # /v1/<agent>/init is contract ("not ready yet"), not a transport failure.
+    import requests
+
     try:
         status_code, init_body = proxy.init()
     except SidecarError as exc:
         sse_handler._emit({"type": "agent_error", "content": str(exc)})
+        return
+    except requests.exceptions.ConnectionError as exc:
+        # The agent stopped answering (crashed or shutting down): not the model server.
+        logger.warning(
+            "chat: %s agent at %s refused the connection: %s",
+            agent_type,
+            proxy.base_url,
+            exc,
+        )
+        sse_handler._emit(
+            {"type": "agent_error", "content": profile.start_failed_text()}
+        )
         return
     if (
         status_code != 200
