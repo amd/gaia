@@ -2581,6 +2581,42 @@ Skills are discovered from three roots, highest precedence first:
     - **Code needs consent.** A skill that ships code is refused without `--allow-experimental`, because that code runs in your agent's own process. If the audit returns REVIEW, the skill lands with its code inert until you run `gaia skill promote <name>`.
   </Tab>
 
+  <Tab title="add">
+    ```bash
+    gaia skill add <link> [OPTIONS]
+    ```
+
+    Adds one skill or a whole skills library from a link. Accepted links:
+
+    - a GitHub repository — `https://github.com/<owner>/<repo>` or the `<owner>/<repo>` shorthand — which adds every `SKILL.md` folder in it
+    - a GitHub folder or file — `.../tree/<branch>/<folder>` or `.../blob/<branch>/<folder>/SKILL.md`
+    - a skills.sh page — `https://skills.sh/<owner>/<repo>/<skill>` adds that one skill
+    - any https link to a `.zip`
+    - `pstack` — shorthand for the pstack library
+
+    Adding the same link again updates the skills you added from it to the latest version.
+
+    | Option | Description |
+    |--------|-------------|
+    | `--list` | Show the skills behind the link and their audit results; add nothing |
+    | `--skill NAME` | Add only this skill (repeatable). Default: every skill behind the link |
+    | `--allow-code` | Also add skills that ship code (`tools.py` or `scripts/`) |
+    | `--force` | Replace a same-named skill that came from somewhere else |
+    | `--yes` | Skip the confirmation prompt |
+    | `--json` | Machine-readable output |
+
+    ```bash
+    gaia skill add michael-denyer/pstack-claude --list
+    gaia skill add https://github.com/michael-denyer/pstack-claude --skill deslop --skill babysit
+    ```
+
+    <Warning>
+    A skill from a link is written by someone else, and its instructions steer what GAIA does with your files, shell and accounts. Only add skills from people you trust, and read what they do first.
+    </Warning>
+
+    Each skill goes through the same gate as [`import`](#import): it lands `experimental`, an audit BLOCK is refused, and a skill that ships code is skipped unless you pass `--allow-code`. One refused skill never stops the rest; each refusal is listed with its reason. Private repositories can't be read; clone one and use `gaia skill import <folder>`.
+  </Tab>
+
   <Tab title="export">
     ```bash
     gaia skill export <name> [--output FILE.zip]

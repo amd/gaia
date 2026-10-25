@@ -17,6 +17,7 @@ function skill(name: string, description: string, version: string | null = null)
 
 beforeEach(() => {
     vi.clearAllMocks();
+    mockedApi.listFeaturedSkillLibraries.mockResolvedValue({ libraries: [] });
     mockedApi.listSkills.mockResolvedValue({
         skills: [skill('gh-cli', 'Work with GitHub from the terminal', '1.2.0'), skill('pdf-forms', 'Fill PDF forms')],
         invalid: {},

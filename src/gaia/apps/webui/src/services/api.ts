@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, FeaturedLibrary, LinkPreview, LinkAddResult, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import type { SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
@@ -447,6 +447,18 @@ export async function allowSpendingThisMonth(): Promise<SpendingReport> {
 
 export async function listSkills(): Promise<{ skills: SkillInfo[]; invalid: Record<string, string> }> {
     return apiFetch('GET', '/skills');
+}
+
+export async function listFeaturedSkillLibraries(): Promise<{ libraries: FeaturedLibrary[] }> {
+    return apiFetch('GET', '/skills/featured');
+}
+
+export async function previewSkillLink(url: string): Promise<LinkPreview> {
+    return apiFetch('POST', '/skills/link/preview', { url });
+}
+
+export async function addSkillsFromLink(url: string, names: string[], allowCode: boolean, pin: string): Promise<LinkAddResult> {
+    return apiFetch('POST', '/skills/link/add', { url, names, allow_code: allowCode, pin });
 }
 
 // -- Connections (issue #915): see connectorsApi.ts ----------------------------

@@ -568,6 +568,15 @@ The switch reply is one line naming the model, where it runs, and, for a cloud
 model, that messages and anything read from files or memory are sent there.
 Cloud IDs (`fireworks.*`, `amd.*`) route through Lemonade without local model
 loading. Model-state status events identify the provider and remote inference.
+
+`/skills` is answered by the stdio loop too, never by the model. Bare `/skills`
+lists the installed skills. `/skills add <link>` reads a GitHub repository or
+folder, an `owner/repo` shorthand, a skills.sh page, or an https `.zip`, and
+replies with every `SKILL.md` it holds, each skill's audit result, and a security
+warning; it adds nothing. `/skills add <link> confirm` adds them to
+`~/.gaia/skills` at the `experimental` tier and recomposes the system prompt so
+the session can use them. Skills that ship code are refused unless the line
+carries `--allow-code`. Each command ends in exactly one `final` or `error` event.
 The TUI's `/provider` panel configures credentials directly with local Lemonade;
 keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model

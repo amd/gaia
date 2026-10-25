@@ -494,3 +494,148 @@
         padding: 18px 16px 28px;
     }
 }
+
+/* Add skills from a link */
+.skill-link-form,
+.skill-link-head,
+.skill-link-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.skill-link-head {
+    justify-content: space-between;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.skill-link-actions {
+    justify-content: flex-end;
+}
+
+.skill-link-preview,
+.skill-link-result {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 10px;
+    font-size: 13px;
+}
+
+.skill-link-warning {
+    display: block;
+    padding: 9px 11px;
+    border: 1px solid var(--border-light);
+    border-left: 3px solid var(--color-warning, #d97706);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 12.5px;
+    line-height: 1.45;
+}
+
+.skill-link-warning svg {
+    flex: none;
+    color: var(--color-warning, #d97706);
+}
+
+.skill-link-list {
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+.skill-link-pick,
+.skill-link-code {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    width: 100%;
+    cursor: pointer;
+}
+
+.skill-link-pick input,
+.skill-link-code input {
+    margin-top: 3px;
+    flex: none;
+}
+
+.skill-link-code {
+    font-size: 12.5px;
+    color: var(--text-secondary);
+}
+
+.skill-link-note {
+    font-style: italic;
+}
+
+.skill-link-findings summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.skill-link-findings ul {
+    margin: 4px 0 0 16px;
+    font-size: 12px;
+}
+
+.skill-link-featured {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.skill-link-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.skill-link-top .settings-label {
+    margin-right: auto;
+}
+
+.skill-link-warning summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    list-style: none;
+}
+
+.skill-link-warning summary::-webkit-details-marker {
+    display: none;
+}
+
+.skill-link-warning p {
+    margin-top: 6px;
+    color: var(--text-secondary);
+}
+
+.skill-link-desc {
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.skill-link-tag {
+    margin-left: 6px;
+    padding: 0 6px;
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+
+.skill-link-tag.is-bad {
+    border-color: var(--color-warning, #d97706);
+    color: var(--color-warning, #d97706);
+}
+
+.skill-link-actions .skill-link-code {
+    width: auto;
+    margin-right: auto;
+}

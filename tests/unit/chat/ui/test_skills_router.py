@@ -243,3 +243,69 @@ def test_real_discovery_hides_the_engineering_skill(client, mock_home, monkeypat
     names = {s["name"] for s in resp.json()["skills"]}
     assert names, "the flagship's bundled skills were not discovered"
     assert "gaia-harness-engineering" not in names
+
+
+# --- Adding skills from a pasted link ----------------------------------------
+
+
+def test_preview_returns_the_skills_and_warning(client, monkeypatch):
+    from gaia.skills import link
+
+    preview = link.LinkPreview(
+        link="acme/skills",
+        source="acme/skills",
+        skills=[link.LinkSkill(name="deslop", description="d", path="skills/deslop")],
+    )
+    monkeypatch.setattr(link, "preview_link", lambda url: preview)
+
+    body = client.post("/api/skills/link/preview", json={"url": "acme/skills"}).json()
+
+    assert body["skills"][0]["name"] == "deslop"
+    assert body["warning"] == link.SECURITY_WARNING
+
+
+def test_a_bad_link_is_a_400_naming_why(client, monkeypatch):
+    from gaia.skills import link
+
+    def refuse(url):
+        raise link.SkillLinkError("only https links are accepted")
+
+    monkeypatch.setattr(link, "preview_link", refuse)
+    r = client.post("/api/skills/link/preview", json={"url": "http://x"})
+    assert r.status_code == 400
+    assert "https" in r.json()["detail"]
+
+
+def test_add_passes_the_chosen_names_and_code_opt_in(client, monkeypatch):
+    from gaia.skills import link
+
+    seen = {}
+
+    def fake_add(url, names, *, allow_code, force, pin):
+        seen.update(url=url, names=names, allow_code=allow_code, force=force, pin=pin)
+        return link.LinkAddResult(added=[{"name": "deslop"}], failed={"x": "why"})
+
+    monkeypatch.setattr(link, "add_from_link", fake_add)
+    body = client.post(
+        "/api/skills/link/add",
+        json={
+            "url": "acme/skills",
+            "names": ["deslop"],
+            "allow_code": True,
+            "pin": "commit:" + "a" * 40,
+        },
+    ).json()
+
+    assert seen == {
+        "url": "acme/skills",
+        "names": ["deslop"],
+        "allow_code": True,
+        "force": False,
+        "pin": "commit:" + "a" * 40,
+    }
+    assert body == {"added": [{"name": "deslop"}], "failed": {"x": "why"}}
+
+
+def test_featured_libraries_include_pstack(client):
+    body = client.get("/api/skills/featured").json()
+    assert [lib["id"] for lib in body["libraries"]] == ["pstack"]

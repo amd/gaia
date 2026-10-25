@@ -1,10 +1,11 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import type { SkillInfo } from '../../types';
+import { AddSkillsFromLink } from './AddSkillsFromLink';
 
 /** The skills GAIA can load, with a way to start a chat that uses one. */
 export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => void }) {
@@ -13,13 +14,16 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
     const [error, setError] = useState<string | null>(null);
     const [query, setQuery] = useState('');
 
+    const [reloads, setReloads] = useState(0);
+    const reload = useCallback(() => setReloads((n) => n + 1), []);
+
     useEffect(() => {
         let cancelled = false;
         api.listSkills()
-            .then((r) => { if (!cancelled) { setSkills(r.skills); setInvalid(r.invalid); } })
+            .then((r) => { if (!cancelled) { setSkills(r.skills); setInvalid(r.invalid); setError(null); } })
             .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); });
         return () => { cancelled = true; };
-    }, []);
+    }, [reloads]);
 
     const q = query.trim().toLowerCase();
     const shown = (skills ?? []).filter((s) => !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
@@ -27,10 +31,8 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
     return (
         <div className="settings-pane">
             <h2 className="settings-pane-title">Skills</h2>
-            <p className="settings-pane-lede">
-                Skills teach GAIA a job — a workflow, a CLI, a document type. GAIA loads one when a request
-                needs it, and keeps the lessons it learns while using it. Add your own under <code>~/.gaia/skills</code>.
-            </p>
+            <p className="settings-pane-lede">Skills teach GAIA a job. It loads one when a request needs it.</p>
+            <AddSkillsFromLink onAdded={reload} />
             {error && <p className="settings-error" role="alert">{error}</p>}
             {!skills && !error && <p className="settings-hint"><Loader2 size={13} className="spin" /> Loading…</p>}
             {skills && skills.length > 6 && (

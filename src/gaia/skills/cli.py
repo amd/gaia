@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """
 CLI for ``gaia skill
-{list|info|create|import|export|migrate|audit|search|install|remove|lock|publish|keygen|trust}``.
+{list|info|create|import|add|export|migrate|audit|search|install|remove|lock|publish|keygen|trust}``.
 
 Three groups of verbs, all real:
 
@@ -163,6 +163,39 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         help=f"Required to import a skill that ships code ({SKILL_TOOLS_FILENAME} "
         "or scripts/); that code runs in your agent's process",
     )
+
+    p_add = sub.add_parser(
+        "add",
+        help="Add one skill or a whole skills library from a link (GitHub repo or "
+        "folder, owner/repo, skills.sh, or an https .zip)",
+    )
+    p_add.add_argument("link", help="The link to the skill or skills library")
+    p_add.add_argument(
+        "--skill",
+        action="append",
+        dest="skills",
+        default=None,
+        help="Add only this skill (repeatable). Default: every skill behind the link",
+    )
+    p_add.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_only",
+        help="Show the skills behind the link and their audit results; add nothing",
+    )
+    p_add.add_argument(
+        "--allow-code",
+        action="store_true",
+        help=f"Also add skills that ship code ({SKILL_TOOLS_FILENAME} or scripts/); "
+        "that code runs on this PC",
+    )
+    p_add.add_argument(
+        "--force", action="store_true", help="Replace skills already installed"
+    )
+    p_add.add_argument(
+        "--yes", action="store_true", help="Skip the confirmation prompt"
+    )
+    p_add.add_argument("--json", action="store_true", dest="as_json")
 
     p_export = sub.add_parser("export", help="Export a skill to a .zip bundle")
     p_export.add_argument("name", help="Skill name to export")
@@ -463,6 +496,7 @@ def handle(args: argparse.Namespace) -> int:
         "deltas": _handle_deltas,
         "create": _handle_create,
         "import": _handle_import,
+        "add": _handle_add,
         "export": _handle_export,
         "migrate": _handle_migrate,
         # Pre-publish security gate (#2468)
@@ -745,6 +779,57 @@ def _handle_import(args: argparse.Namespace) -> int:
         )
     print(f"   Inspect it with: gaia skill info {result.name}")
     return EXIT_OK
+
+
+def _handle_add(args: argparse.Namespace) -> int:
+    from gaia.skills.link import SECURITY_WARNING, add_from_link, preview_link
+
+    preview = preview_link(args.link, manager=_manager())
+    if args.as_json and args.list_only:
+        print(json.dumps(preview.to_dict(), indent=2))
+        return EXIT_OK
+    if not args.as_json:
+        print(f"Skills at {preview.source}:")
+        for s in preview.skills:
+            mark = "✗" if s.error else ("⚙" if s.has_code else "•")
+            note = s.error or ("ships code" if s.has_code else "")
+            if s.installed and not s.error:
+                state = "will update" if s.update else "installed from elsewhere"
+                note = (note + ", " if note else "") + state
+            print(f"  {mark} {s.name}" + (f"  ({note})" if note else ""))
+        print(f"\n⚠️  {SECURITY_WARNING}")
+    if args.list_only:
+        return EXIT_OK
+
+    if not args.yes:
+        if not sys.stdin.isatty():
+            sys.stderr.write(
+                "❌ Refusing to add skills without confirmation. Re-run with --yes "
+                "once you have reviewed them.\n"
+            )
+            return EXIT_USAGE
+        count = len(args.skills) if args.skills else "these"
+        answer = input(f"Add {count} skill(s)? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("Nothing was added.")
+            return EXIT_OK
+
+    result = add_from_link(
+        args.link,
+        args.skills,
+        allow_code=args.allow_code,
+        force=args.force,
+        pin=preview.pin,
+        manager=_manager(),
+    )
+    if args.as_json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        for added in result.added:
+            print(f"✅ Added '{added['name']}'")
+        for name, why in result.failed.items():
+            print(f"❌ {name}: {why}")
+    return EXIT_OK if result.added or not result.failed else EXIT_INVALID
 
 
 def _handle_export(args: argparse.Namespace) -> int:

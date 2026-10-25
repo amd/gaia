@@ -70,6 +70,12 @@ describe('Sidebar', () => {
         expect(onNewChat).toHaveBeenCalledOnce();
     });
 
+    it('Skills opens the skills settings, beside Memory and Scheduled tasks', () => {
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: /Skills/ }));
+        expect(useChatStore.getState().settingsSection).toBe('skills');
+    });
+
     it('opens a chat', () => {
         render(<Sidebar onNewChat={vi.fn()} />);
         fireEvent.click(screen.getByRole('button', { name: 'Plan the trip' }));

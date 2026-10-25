@@ -1761,6 +1761,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
+	if isSkillsCommand(query) {
+		return m.submitSkillsCommand(query)
+	}
 	if isModelCommand(query) {
 		if !m.supportsModelCommand() {
 			// Same shape as setFullAccess's capability check (fullaccess.go): refuse

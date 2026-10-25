@@ -44,6 +44,39 @@ more than `experimental` allows — `coding` and `github-triage` want
 `shell:execute:<binary>` — is refused at import, and a skill that ships
 `tools.py` needs `--allow-experimental`.
 
+## Add skills from a link
+
+Most skill libraries live on GitHub as folders holding a `SKILL.md`. Paste a link and
+GAIA reads every skill in it. For [pstack](https://github.com/michael-denyer/pstack-claude),
+a popular MIT-licensed set of engineering workflows, the Skills panel has a one-click
+**Get pstack** button, and `pstack` works anywhere a link does.
+
+- **Agent UI** — click **Skills** in the sidebar, paste the link (or click **Get
+  pstack**), then pick the skills you want and click **Add**.
+- **Terminal UI** — `/skills add <link>` lists what the link holds; `/skills add
+  <link> confirm` adds it.
+- **CLI** — `gaia skill add <link>` (see the [CLI reference](/reference/cli)).
+
+A link can be a repository (`https://github.com/owner/repo` or just `owner/repo`), a
+folder in one (`.../tree/main/skills`), a skills.sh page, or an https `.zip`.
+
+<Warning>
+Skills from a link are written by someone else. A skill's instructions steer what GAIA
+does with your files, shell and accounts, and a skill that ships code (`tools.py` or
+`scripts/`) runs that code on your PC. GAIA audits each skill and refuses anything the
+audit blocks, but an audit is not a guarantee. Only add skills from people you trust,
+and read what they do first.
+</Warning>
+
+Every added skill lands at the `experimental` tier. Skills that ship code are left out
+unless you tick **Include skills with code** (or pass `--allow-code`). Added skills go
+to `~/.gaia/skills` with the library's licence and notice files beside each one, and
+GAIA can use them from your next chat.
+
+A link always fetches the library's latest version. To update, add the same link
+again: skills you added from it are replaced in place. A skill of the same name from
+anywhere else is never overwritten.
+
 ## Use one
 
 <Warning>

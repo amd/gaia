@@ -457,6 +457,20 @@ def is_model_command(query: str) -> bool:
     )
 
 
+#: Prefix that dispatches a stdin line to ``run_skills_command``.
+SKILLS_COMMAND_PREFIX = "/skills"
+#: Last word of ``/skills add <link> confirm`` — the user saw the warning.
+SKILLS_CONFIRM_WORD = "confirm"
+
+
+def is_skills_command(query: str) -> bool:
+    """Whether *query* is ``/skills`` or ``/skills <args>``, not a real question."""
+    stripped = query.strip()
+    return stripped == SKILLS_COMMAND_PREFIX or stripped.startswith(
+        SKILLS_COMMAND_PREFIX + " "
+    )
+
+
 def _model_display_name(model_id: str, is_claude: bool) -> str:
     """Friendly header name for *model_id* — falls back to the raw id."""
     if is_claude:
@@ -940,6 +954,105 @@ def _format_model_list(agent: Any) -> str:
     return "\n".join(lines)
 
 
+def _skills_usage() -> str:
+    return (
+        "`/skills` lists installed skills. `/skills add <link>` shows what a skill "
+        "or skills library holds — a GitHub repo or folder, `owner/repo`, a "
+        "skills.sh page, or an https .zip — then `/skills add <link> confirm` adds "
+        "it. Add `--allow-code` to also add skills that ship scripts."
+    )
+
+
+def run_skills_command(agent: Any, query: str, out) -> None:
+    """Handle ``/skills`` — list, preview, or add skills from a link.
+
+    Guarantees exactly one terminal event, same contract as ``run_turn``.
+    """
+    from gaia.skills.errors import SkillError
+    from gaia.skills.link import SECURITY_WARNING, add_from_link, preview_link
+
+    args = query.strip()[len(SKILLS_COMMAND_PREFIX) :].split()
+    if not args:
+        skills = sorted(agent.skill_manager.reload())
+        listing = ", ".join(f"`{n}`" for n in skills) or "none"
+        _write(
+            {
+                "type": "final",
+                "answer": f"**Installed skills ({len(skills)}):** {listing}\n\n"
+                + _skills_usage(),
+            },
+            out,
+        )
+        return
+    if args[0] != "add" or len(args) < 2:
+        _write({"type": "error", "detail": _skills_usage()}, out)
+        return
+
+    allow_code = "--allow-code" in args
+    rest = [a for a in args[1:] if a != "--allow-code"]
+    confirmed = bool(rest) and rest[-1] == SKILLS_CONFIRM_WORD
+    if confirmed:
+        rest = rest[:-1]
+    if len(rest) != 1:
+        _write({"type": "error", "detail": _skills_usage()}, out)
+        return
+    link = rest[0]
+
+    _write({"type": "status", "status": "working", "message": f"Reading {link}…"}, out)
+    try:
+        if not confirmed:
+            preview = preview_link(link, manager=agent.skill_manager)
+            # The confirm turn installs exactly this version, or nothing.
+            agent._skill_link_pins = getattr(agent, "_skill_link_pins", {})
+            agent._skill_link_pins[link] = preview.pin
+            lines = [f"**Skills at {preview.source}** ({len(preview.skills)}):"]
+            for s in preview.skills:
+                if s.error:
+                    lines.append(f"- ✗ `{s.name}` — {s.error}")
+                    continue
+                notes = []
+                if s.has_code:
+                    notes.append("ships code" + ("" if allow_code else ", skipped"))
+                if s.installed:
+                    notes.append(
+                        "will update" if s.update else "installed from elsewhere"
+                    )
+                if s.verdict == "REVIEW":
+                    notes.append("audit: review")
+                suffix = f" ({', '.join(notes)})" if notes else ""
+                lines.append(f"- `{s.name}`{suffix} — {s.description}")
+            flag = " --allow-code" if allow_code else ""
+            lines.append(f"\n⚠️ {SECURITY_WARNING}")
+            lines.append(
+                f"\nTo add them, send `/skills add {link}{flag} {SKILLS_CONFIRM_WORD}`."
+            )
+            _write({"type": "final", "answer": "\n".join(lines)}, out)
+            return
+
+        result = add_from_link(
+            link,
+            allow_code=allow_code,
+            pin=getattr(agent, "_skill_link_pins", {}).get(link),
+            manager=agent.skill_manager,
+        )
+    except SkillError as exc:
+        logger.warning("/skills add %s failed: %s", link, exc)
+        _write({"type": "error", "detail": str(exc)}, out)
+        return
+
+    agent.skill_manager.reload()
+    # The skill catalog sits in the cached prompt head; recompose so this
+    # session can see what was just added.
+    agent.rebuild_system_prompt()
+    lines = [f"Added {len(result.added)} skill(s) from {link}."]
+    if result.added:
+        lines.append(", ".join(f"`{a['name']}`" for a in result.added))
+    if result.failed:
+        lines.append(f"\nNot added ({len(result.failed)}):")
+        lines.extend(f"- `{name}` — {why}" for name, why in result.failed.items())
+    _write({"type": "final", "answer": "\n".join(lines)}, out)
+
+
 def run_model_command(agent: Any, query: str, out) -> None:
     """Handle ``/model`` and ``/model <id>`` — never reaches ``agent.process_query``.
 
@@ -1109,7 +1222,11 @@ def _with_note(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """*messages* ending with :data:`INTERRUPTED_NOTE`, in the last reply when
     there is one, so roles still alternate."""
     last = messages[-1] if messages else None
-    if last and last.get("role") == "assistant" and isinstance(last.get("content"), str):
+    if (
+        last
+        and last.get("role") == "assistant"
+        and isinstance(last.get("content"), str)
+    ):
         text = last["content"].strip()
         noted = f"{text}\n\n{INTERRUPTED_NOTE}" if text else INTERRUPTED_NOTE
         return [*messages[:-1], {**last, "content": noted}]
@@ -1646,6 +1763,9 @@ def dispatch_query(
         return
     if is_model_command(query):
         run_model_command(agent, query, out)
+        return
+    if is_skills_command(query):
+        run_skills_command(agent, query, out)
         return
     run_turn(agent, query, out, dev=dev, state=state)
 

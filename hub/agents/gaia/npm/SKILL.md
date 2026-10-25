@@ -737,6 +737,11 @@ when available. Cloud chat sends conversation history to the selected provider;
 embeddings remain on Lemonade. The status event names the actual provider and
 marks remote inference. This is a TUI/stdio capability, not an HTTP query command.
 
+`/skills add <link>` previews the skills behind a GitHub, skills.sh or `.zip` link
+with a security warning, and `/skills add <link> confirm` adds them (`--allow-code`
+to include skills that ship scripts). Like `/model`, it is a stdio command, not an
+HTTP query.
+
 ## Developer engineering mode
 
 Available only when GAIA was started with `--developer-mode` (or

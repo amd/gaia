@@ -6,6 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Add skills from a pasted link (`/skills`).** On the stdio transport,
+  `/skills add <link>` lists the skills in a GitHub repository or folder, a
+  skills.sh page or an https `.zip`, with each one's audit result and a security
+  warning; `/skills add <link> confirm` adds them at the `experimental` tier.
+  Skills that ship code need `--allow-code`. Bare `/skills` lists what is
+  installed.
+
 ### For integrators: contract 2.20
 
 - **A failed model request says which endpoint failed, worded for your

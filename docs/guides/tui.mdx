@@ -531,6 +531,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/setup` | Re-run first-time setup (`gaia init`) for the flagship agent |
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
 | `/model` | Switch the flagship agent's live model. Bare `/model` lists what you can switch to |
+| `/skills` | List installed skills. `/skills add <link>` shows what a GitHub repo, skills.sh page or `.zip` holds, with a security warning; `/skills add <link> confirm` adds it (`--allow-code` to include skills that ship scripts) |
 | `/provider` | Choose where chat runs — Local, Fireworks AI, or the AMD LLM Gateway — and set its key. See [AI providers](/guides/ai-providers) |
 | `/gateway` | Connect the AMD LLM Gateway and pick which of its models GAIA uses. See [LLM gateway](/guides/llm-gateway) |
 | `/slack` | Connect this agent to Slack, or show the connection's status. See [Slack](/guides/slack) |
@@ -545,7 +546,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
-their own — `/model`, `/setup`, and `/provider` are flagship-only, and `/memory`
+their own — `/model`, `/skills`, `/setup`, and `/provider` are flagship-only, and `/memory`
 needs a peer new enough to serve it (see the [memory guide](/guides/memory#terminal-ui-memory)).
 `/agents` is always available.
 
