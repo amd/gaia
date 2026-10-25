@@ -827,5 +827,18 @@ class TestBaselineRefResolution:
         repo, card = _repo_with_scorecard(tmp_path)
         monkeypatch.chdir(repo)
 
-        with pytest.raises(ValueError, match="not a valid git object"):
+        with pytest.raises(ValueError, match="does not resolve to a commit"):
             _parse_baseline_ref(card, "no-such-tag")
+    def test_a_blob_hash_is_not_a_baseline_ref(self, tmp_path, monkeypatch):
+        repo, card = _repo_with_scorecard(tmp_path)
+        monkeypatch.chdir(repo)
+        blob = subprocess.run(
+            ["git", "hash-object", "-w", "SCORECARD.md"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+        with pytest.raises(ValueError, match="does not resolve to a commit"):
+            _parse_baseline_ref(card, blob)
