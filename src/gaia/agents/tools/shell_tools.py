@@ -1485,6 +1485,61 @@ def _script_words(body: str, dialect: str) -> list:
     return words
 
 
+def _gh_remote_positions(argv: list) -> set:
+    """Indexes of *argv* that ``gh`` reads as GitHub ids, never as local paths.
+
+    The ``-R``/``--repo`` value (``amd/gaia``) and the ``gh api`` endpoint
+    (``repos/amd/gaia``). Every other ``gh`` operand is still scanned:
+    ``--body-file`` and ``gist create`` do read local files.
+    """
+    if os.path.basename(argv[0]).lower().removesuffix(".exe") != "gh":
+        return set()
+    remote = set()
+    seen_api = False
+    value_next = False
+    for index, token in enumerate(argv[1:], start=1):
+        if value_next:
+            value_next = False
+            continue
+        if token in ("-R", "--repo"):
+            remote.add(index + 1)
+            value_next = True
+        elif token.startswith(("--repo=", "-R=")):
+            remote.add(index)
+        elif token == "api" and index == 1:
+            seen_api = True
+        elif seen_api and token in _GH_API_VALUE_FLAGS:
+            value_next = True
+        elif seen_api and not token.startswith("-"):
+            remote.add(index)
+            seen_api = False
+    return remote
+
+
+#: ``gh api`` flags whose next word is their value, not the endpoint.
+_GH_API_VALUE_FLAGS = frozenset(
+    {
+        "-X",
+        "--method",
+        "-H",
+        "--header",
+        "-f",
+        "--raw-field",
+        "-F",
+        "--field",
+        "-q",
+        "--jq",
+        "-t",
+        "--template",
+        "-p",
+        "--preview",
+        "--hostname",
+        "--cache",
+        "--input",
+    }
+)
+
+
 def _path_operands(argv: list) -> list:
     """``(label, operand)`` for every operand of *argv* the path check reads.
 
@@ -1498,7 +1553,10 @@ def _path_operands(argv: list) -> list:
     for start, token in enumerate(argv[:-1] if wrapped else argv[:1]):
         if _interpreter_name(token) == "env":
             operands.extend(_env_wrapper_assignments(argv[start:]))
+    remote = _gh_remote_positions(argv)
     for index, token in enumerate(argv[1:], start=1):
+        if index in remote:
+            continue
         dialect = positions.get(index)
         if dialect is None or dialect.endswith(_MAYBE):
             operands.append(("Argument", token))
