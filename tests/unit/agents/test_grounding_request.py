@@ -10,9 +10,18 @@ was answered from the cwd in the system prompt.
 
 from __future__ import annotations
 
+import json
+from unittest.mock import MagicMock, patch
+
 import pytest
 
+from gaia.agents.base.agent import Agent
 from gaia.agents.base.grounding import REQUEST, request_findings, ungrounded
+from gaia.agents.base.tools import tool
+from gaia.agents.base.verification import (
+    VERIFICATION_NOTE_OPENER,
+    strip_verification_scope,
+)
 
 SHELL_RAN = [{"tool": "run_shell_command", "ran": True}]
 SHELL_DENIED = [{"tool": "run_shell_command", "ran": False}]
@@ -28,6 +37,7 @@ SHELL_DENIED = [{"tool": "run_shell_command", "ran": False}]
         ("Use your shell tool to run pwd and tell me the directory.", "C:/Users/me"),
         ("Run the tests and tell me if they pass", "All 12 passed."),
         ("Please run git status", "Working tree clean."),
+        ("Run `npm test` and report the result", "All 30 passed."),
         ("Using the terminal, list the files here", "a.txt b.txt"),
     ],
 )
@@ -49,6 +59,31 @@ def test_an_answer_to_a_run_request_with_nothing_run_is_flagged(query, answer):
         # Saying it didn't run is honest.
         ("Use your shell tool to run rm -rf /", "I can't run that command.", []),
         ("Run the tests", "I didn't run them: you declined the prompt.", SHELL_DENIED),
+        # Not commands: the right tool answered, or none was needed (PR review).
+        (
+            "Run a web search for AMD news today",
+            "AMD announced…",
+            [{"tool": "search_web", "ran": True}],
+        ),
+        (
+            "Run a query on my sales table for the total",
+            "$52.47",
+            [{"tool": "query_data", "ran": True}],
+        ),
+        (
+            "Execute the plan we discussed",
+            "Done, files written.",
+            [{"tool": "write_file", "ran": True}],
+        ),
+        ("Run me through how RAG works", "RAG retrieves…", []),
+        # Honest refusals in other words.
+        ("Use your shell tool to run pwd", "I haven't run it: no shell here.", []),
+        (
+            "Use your shell tool to run pwd",
+            "I don't have a shell tool in this chat.",
+            [],
+        ),
+        ("Use your shell tool to run pwd", "I'm not able to execute commands.", []),
         # A pasted document's "Run ..." line is not the user's request.
         (
             "Summarize this README:\nRun npm install, then npm start.",
@@ -75,15 +110,6 @@ def test_the_gate_reaches_the_loops_check():
 # Through the real loop, with a scripted model
 # ---------------------------------------------------------------------------
 
-import json  # noqa: E402
-from unittest.mock import MagicMock, patch  # noqa: E402
-
-from gaia.agents.base.agent import Agent  # noqa: E402
-from gaia.agents.base.tools import tool  # noqa: E402
-from gaia.agents.base.verification import (  # noqa: E402
-    VERIFICATION_NOTE_OPENER,
-    strip_verification_scope,
-)
 
 TIME_QUERY = (
     "Use your shell tool to run echo %TIME% and tell me exactly what it printed."

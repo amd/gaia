@@ -810,17 +810,29 @@ def action_findings(answer: str, records: Sequence[Dict[str, Any]]) -> List[Find
     return findings
 
 
-#: "use your shell tool", or a message that opens with "run"/"execute". Only the
-#: opening: a "Run npm install" line inside a pasted README is not a request.
-_RUN_REQUEST = re.compile(
+#: "use your shell tool": only a shell execution answers it.
+_SHELL_REQUEST = re.compile(
     r"\b(?:use|using|with)\s+(?:your|the)\s+"
-    r"(?:shell|terminal|command[- ]line|bash|powershell|cmd)\b"
-    r"|\A\s*(?:please\s+)?(?:run|execute)\s+\S",
+    r"(?:shell|terminal|command[- ]line|bash|powershell|cmd)\b",
+    re.IGNORECASE,
+)
+#: A message that opens with "run"/"execute" and a command: quoted, a known
+#: program, or "the command/script/tests/build". Not "run a web search" or "run
+#: me through it", and only the opening: a pasted README's "Run npm install" is
+#: not a request.
+_COMMAND_REQUEST = re.compile(
+    r"\A\s*(?:please\s+)?(?:run|execute)\s+"
+    r"(?:[`\"']"
+    r"|(?:git|gh|npm|npx|pip|python|py|pytest|node|go|cargo|make|cmake|docker|"
+    r"ls|dir|pwd|cd|echo|cat|type|whoami|hostname|ipconfig|ping|uv|ruff|"
+    r"black|mypy|tsc|yarn|pnpm|dotnet|java|mvn|gradle)\b"
+    r"|the\s+(?:command|script|tests?|test\s+suite|build|linter|lint)\b)",
     re.IGNORECASE,
 )
 _SAYS_NOT_RUN = re.compile(
-    r"\b(?:didn't|did not|couldn't|could not|can't|cannot|won't|unable to)\s+"
-    r"(?:run|execute)\b",
+    r"\b(?:didn't|did not|couldn't|could not|can't|cannot|won't|unable to|"
+    r"haven't|have not|(?:am\s+)?not\s+able\s+to)\s+(?:run|execute)\b"
+    r"|\bdon't have (?:a|any) (?:shell|terminal)\b",
     re.IGNORECASE,
 )
 
@@ -832,10 +844,18 @@ def request_findings(
 
     An answer then reads as that command's output while the model made it up
     from context: the cwd in its prompt, an earlier turn's result, the clock.
+    A shell request needs a shell run; a command named another way is answered
+    by any tool that ran, since the agent may have the right one for it.
     """
-    if not _RUN_REQUEST.search(query) or _SAYS_NOT_RUN.search(answer):
+    if _SAYS_NOT_RUN.search(answer):
         return []
-    if any(_executed(r) for r in records):
+    if _SHELL_REQUEST.search(query):
+        if any(_executed(r) for r in records):
+            return []
+    elif _COMMAND_REQUEST.search(query):
+        if any(_ran(r) for r in records):
+            return []
+    else:
         return []
     return [
         Finding(
