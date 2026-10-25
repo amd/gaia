@@ -2264,3 +2264,28 @@ class TestTheLemonadeCheckDidNotRun:
 
         assert uc._remove_lemonade(printer=captured) is True
         assert "not installed" in captured.text
+
+    def test_a_failed_check_turns_the_run_into_completed_with_errors(
+        self, fake_home, monkeypatch
+    ):
+        from gaia.installer import lemonade_installer
+
+        _seed_gaia_tree(fake_home)
+        monkeypatch.setattr(
+            lemonade_installer.LemonadeInstaller,
+            "check_installation",
+            lambda self: lemonade_installer.LemonadeInfo(
+                installed=False,
+                error="registry read failed",
+                check_failed=True,
+            ),
+        )
+        captured = _Capture()
+
+        exit_code = uc.run(
+            _ns(purge=True, purge_lemonade=True, yes=True), printer=captured
+        )
+
+        assert exit_code == uc.EXIT_FS_ERROR, captured.text
+        assert "completed with errors" in captured.text
+        assert "gaia uninstall: done." not in captured.text
