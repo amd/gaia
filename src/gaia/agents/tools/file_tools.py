@@ -488,9 +488,10 @@ class FileSearchToolsMixin:
                 # An extension the caller wrote into the pattern is a named file, not a
                 # fuzzy ask, so it outranks the DEFAULT allowlist above: "ci.log" and
                 # "*.log" both mean .log, whatever the list holds. Two things do not
-                # count as naming one -- a regex built out of the tail ("employ.*book"
-                # is a pattern, not a .book file), and an explicit `file_types`, which
-                # stays authoritative over the pattern.
+                # count as naming one -- a pattern built as a regex, whose tail only
+                # looks like an extension ("(ci|build).xyz" is a pattern, not a request
+                # for a .xyz file), and an explicit `file_types`, which stays
+                # authoritative over the pattern.
                 if not file_types:
                     _named_extension = re.search(
                         r"\.([A-Za-z][A-Za-z0-9]{0,9})$", file_pattern.strip()

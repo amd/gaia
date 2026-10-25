@@ -913,6 +913,9 @@ class TestANamedExtensionOutranksTheDefaultAllowlist:
         (root / "pyproject.toml").write_text("[project]\n")
         (root / "deploy.yml").write_text("jobs:\n")
         (root / "notes.md").write_text("# notes\n")
+        # An extension nothing else in this module uses: a pattern that names it has
+        # to be the only way it can be found.
+        (root / "ci.xyz").write_text("payload\n")
         return root, search_file
 
     def test_an_extension_in_the_pattern_finds_the_file(self, agent_project):
@@ -936,6 +939,26 @@ class TestANamedExtensionOutranksTheDefaultAllowlist:
         result = search_file("pyproject.toml")
 
         assert "pyproject.toml" in [Path(f).name for f in result["files"]]
+
+    def test_a_plain_name_still_gets_its_extension(self, agent_project):
+        """``ci.xyz`` is a named file, and .xyz is on no allowlist."""
+        _, search_file = agent_project
+
+        result = search_file("ci.xyz")
+
+        assert "ci.xyz" in [Path(f).name for f in result["files"]]
+
+    def test_a_regex_tail_is_not_read_as_an_extension(self, agent_project):
+        """``(ci|build).xyz`` is a pattern, so it does not add .xyz to the set.
+
+        Without the guard the tail would widen the allowlist and ``ci.xyz`` would
+        match; with it, the extension stays unknown and nothing is returned.
+        """
+        _, search_file = agent_project
+
+        result = search_file("(ci|build).xyz")
+
+        assert result["count"] == 0, result
 
     def test_an_explicit_file_types_still_wins_over_the_pattern(self, agent_project):
         """``file_types`` is the caller's own restriction; the pattern does not undo it."""
