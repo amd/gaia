@@ -11,6 +11,8 @@ Three checks, each comparing the answer's prose with the turn's tool record:
   message. A tool's own arguments are not evidence for what it returned.
 * **action** — the answer says it searched, read, ran, tested, verified or
   documented something, and no tool of that kind ran.
+* **request** — the user asked outright for a command to be run, and nothing
+  ran: the answer cannot be that command's output.
 
 Figures in the files the turn wrote are checked by
 :mod:`gaia.agents.base.deliverables`.
@@ -45,6 +47,7 @@ from gaia.agents.base.verification import is_check_execution, observed_text
 LOOK = "look"
 CONTENT = "content"
 ACTION = "action"
+REQUEST = "request"
 
 #: How much of one tool result is kept for the checks.
 OBSERVED_MAX_CHARS = 400_000
@@ -807,8 +810,45 @@ def action_findings(answer: str, records: Sequence[Dict[str, Any]]) -> List[Find
     return findings
 
 
+#: "use your shell tool", or a message that opens with "run"/"execute". Only the
+#: opening: a "Run npm install" line inside a pasted README is not a request.
+_RUN_REQUEST = re.compile(
+    r"\b(?:use|using|with)\s+(?:your|the)\s+"
+    r"(?:shell|terminal|command[- ]line|bash|powershell|cmd)\b"
+    r"|\A\s*(?:please\s+)?(?:run|execute)\s+\S",
+    re.IGNORECASE,
+)
+_SAYS_NOT_RUN = re.compile(
+    r"\b(?:didn't|did not|couldn't|could not|can't|cannot|won't|unable to)\s+"
+    r"(?:run|execute)\b",
+    re.IGNORECASE,
+)
+
+
+def request_findings(
+    answer: str, query: str, records: Sequence[Dict[str, Any]]
+) -> List[Finding]:
+    """The user asked for a command to be run and nothing ran (#5735).
+
+    An answer then reads as that command's output while the model made it up
+    from context: the cwd in its prompt, an earlier turn's result, the clock.
+    """
+    if not _RUN_REQUEST.search(query) or _SAYS_NOT_RUN.search(answer):
+        return []
+    if any(_executed(r) for r in records):
+        return []
+    return [
+        Finding(
+            REQUEST,
+            "You were asked to run a command and ran nothing this turn, so your "
+            "answer cannot be its output. Run it now, or say that you didn't.",
+            "I was asked to run a command and ran nothing",
+        )
+    ]
+
+
 # ---------------------------------------------------------------------------
-# All three, and what the loop says
+# All of them, and what the loop says
 # ---------------------------------------------------------------------------
 
 
@@ -831,7 +871,11 @@ def ungrounded(
         findings = [f for f in findings if f.note == _ABSENT_NOTE]
     else:
         findings += content_findings(answer, records, history + "\n" + query)
-    return findings + action_findings(answer, records)
+    return (
+        findings
+        + action_findings(answer, records)
+        + request_findings(answer, query, records)
+    )
 
 
 def grounding_correction(findings: Sequence[Finding]) -> str:
