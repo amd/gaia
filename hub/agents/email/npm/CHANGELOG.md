@@ -6,6 +6,11 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **SKILL.md examples include authorization headers.** The stateful-agent
+  and autonomy code examples in SKILL.md now send the session token required
+  by the sidecar, and the gotchas note lists `/v1/email/health` and
+  `/v1/email/version` as exempt.
+
 - **A long conversation no longer overflows a small model window.** The
   agent used the history you pushed as-is, so on a 32K window (an NPU model)
   it plus the agent's own prompt could exceed the window and fail the turn.
