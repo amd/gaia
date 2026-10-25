@@ -316,6 +316,11 @@ EMAIL_PROFILE = RelayProfile(
         "The email agent is out of date and can't answer chat messages. Update "
         "GAIA and the email agent to the latest version, then try again."
     ),
+    memory_upgrade_message=(
+        "The email agent does not support private chats or chats with memory "
+        "turned off yet. Your message was not sent to the email agent. Use "
+        "the GAIA agent for this chat instead."
+    ),
     tool_labels=MappingProxyType(_EMAIL_TOOL_LABELS),
     mutating_tools=_EMAIL_MUTATING_TOOLS,
     change_noun="mailbox change",

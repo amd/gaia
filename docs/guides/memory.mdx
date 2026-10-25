@@ -67,6 +67,8 @@ curl http://localhost:4200/api/memory/settings
 # → {"memory_enabled": false, ...}
 ```
 
+The email agent is not available in private chats or while memory is turned off. The chat HTTP API stops these requests before sending them to the email agent, which does not yet support these settings. Use the GAIA agent to continue with memory disabled.
+
 While memory is off, none of the behaviors on this page (cross-session recall, automatic extraction, the Memory page) are active -- sessions run in "incognito" mode, nothing is written to `~/.gaia/memory.db`, and the agent says memory is turned off when asked to remember something.
 
 <Note>
