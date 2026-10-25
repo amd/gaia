@@ -627,6 +627,12 @@ async def query(request: QueryRequest) -> StreamingResponse:
             {"role": item.role, "content": item.content} for item in request.context
         ]
         agent.console = handler
+        # Stream the model's answer through that handler. #5567 did this for the
+        # flagship (`hub/agents/gaia/python/gaia_agent/server.py`); the email agent
+        # kept the config default (off), so a relayed turn showed "Waiting on the
+        # model" until the whole reply landed, Stop could not cut a model call
+        # short, and a stopped turn kept no text (#5728).
+        agent.streaming = True
         # Read by ``question.ask``: a caller that cannot answer must be
         # refused at the point of asking, not parked until it times out.
         agent.can_answer_questions = bool(request.can_answer_questions)
