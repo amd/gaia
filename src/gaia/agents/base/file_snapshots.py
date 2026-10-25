@@ -834,6 +834,15 @@ def _spans(turns: List[_Turn], include_unchanged: bool = False) -> List[_Span]:
     return [s for s in spans.values() if s.change != "unchanged"]
 
 
+def _newline_lines(text: str) -> list:
+    """*text* split after each ``\\n`` only, keeping the ends, as git splits it.
+
+    ``str.splitlines`` also breaks on form feeds and Unicode line separators,
+    which would put a false "No newline" marker inside the diff.
+    """
+    return re.findall(r"[^\n]*\n|[^\n]+$", text)
+
+
 def _unified_diff(before: str, after: str, fromfile: str, tofile: str) -> str:
     """A unified diff that marks a last line with no newline, as git does.
 
@@ -841,8 +850,8 @@ def _unified_diff(before: str, after: str, fromfile: str, tofile: str) -> str:
     """
     lines = []
     for line in difflib.unified_diff(
-        before.splitlines(keepends=True),
-        after.splitlines(keepends=True),
+        _newline_lines(before),
+        _newline_lines(after),
         fromfile=fromfile,
         tofile=tofile,
     ):

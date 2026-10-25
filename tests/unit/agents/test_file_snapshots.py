@@ -803,3 +803,14 @@ def test_files_ending_in_a_newline_get_no_marker():
     from gaia.agents.base.file_snapshots import _unified_diff
 
     assert "No newline" not in _unified_diff("a\n", "b\n", "a/x", "b/x")
+
+
+@pytest.mark.parametrize("separator", ["\f", "\u2028", "\x0b"])
+def test_a_form_feed_or_unicode_separator_is_not_a_line_end(separator):
+    """Only a real final line without a newline gets the marker (#5749 review)."""
+    from gaia.agents.base.file_snapshots import _unified_diff
+
+    before = f"page one{separator}page two\n"
+    diff = _unified_diff(before, before.replace("two", "2"), "a/x", "b/x")
+
+    assert "No newline" not in diff
