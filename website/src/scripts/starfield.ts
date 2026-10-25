@@ -30,7 +30,7 @@ export interface MotionEventDetail {
 }
 
 export const CRUISE = 0.2; // speed at rest
-export const WARP = 8; // the speed a visit starts at
+export const WARP = 4.5; // the speed a visit starts at
 export const ARRIVE_S = 1.8; // seconds to brake from WARP to CRUISE
 
 /** Speed `t` seconds into the warp exit. Cubic ease-out: most of the braking happens early. */
@@ -340,7 +340,7 @@ export function mountStarField(canvas: HTMLCanvasElement, opts: StarFieldOptions
   const draw = (dt: number, now: number) => {
     if (moving()) {
       elapsed = Math.min(ARRIVE_S, elapsed + dt);
-      boost *= Math.exp(-dt * 2.2);
+      boost *= Math.exp(-dt * 1.4); // eases back to cruise over about a second
       vx += (tx - vx) * Math.min(1, dt * 0.7);
       vy += (ty - vy) * Math.min(1, dt * 0.7);
     }
@@ -524,7 +524,7 @@ export function mountStarField(canvas: HTMLCanvasElement, opts: StarFieldOptions
   let stillRedraw = 0;
   const onScroll = () => {
     if (moving()) {
-      boost = Math.min(1.8, boost + Math.abs(scrollY - lastScroll) * 0.004);
+      boost = Math.min(2.6, boost + Math.abs(scrollY - lastScroll) * 0.006);
     } else if (!stillRedraw) {
       stillRedraw = requestAnimationFrame(() => {
         stillRedraw = 0;
