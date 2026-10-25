@@ -163,6 +163,8 @@ def test_main_forwards_flags_and_exits_with_runs_code(monkeypatch):
             "json",
             "--max-steps",
             "3",
+            "--attempts",
+            "2",
             "--dangerously-skip-permissions",
             "--base-url",
             "http://h:1/api/v1",
@@ -175,6 +177,7 @@ def test_main_forwards_flags_and_exits_with_runs_code(monkeypatch):
         output_format="json",
         verbose=False,
         max_steps=3,
+        attempts=2,
         skip_permissions=True,
         full_access=False,
         base_url="http://h:1/api/v1",
@@ -187,6 +190,7 @@ def test_main_defaults_output_format_to_text(monkeypatch):
     assert _run_main(monkeypatch, ["-p", "hi"]) == 1
     assert run.call_args.kwargs["output_format"] == "text"
     assert run.call_args.kwargs["skip_permissions"] is False
+    assert run.call_args.kwargs["attempts"] == 1
 
 
 @pytest.mark.parametrize(
@@ -196,6 +200,7 @@ def test_main_defaults_output_format_to_text(monkeypatch):
         ["--output-format", "json"],
         ["--verbose"],
         ["--max-steps", "3"],
+        ["--attempts", "2"],
         ["--dangerously-skip-permissions"],
         ["--full-access"],
         ["--model", "m", "chat"],
@@ -847,3 +852,135 @@ def test_an_unexpected_failure_does_not_log_its_traceback_at_info(
     with caplog.at_level(logging.INFO):
         assert print_mode.run("q", model="m") == 1
     assert not [r for r in caplog.records if r.exc_info]
+
+
+@pytest.mark.parametrize("value", ["0", "5", "two"])
+def test_attempts_out_of_range_is_a_usage_error(monkeypatch, value):
+    run = MagicMock(return_value=0)
+    monkeypatch.setattr(print_mode, "run", run)
+    assert _run_main(monkeypatch, ["-p", "hi", "--attempts", value]) == 2
+    run.assert_not_called()
+
+
+def _attempt_doubles(monkeypatch, tmp_path, final_raises=None):
+    """Stub the server, the attempts and the final turn; record what they got."""
+    from gaia import attempts
+
+    seen = {}
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(print_mode, "_start_server", lambda m, b: None)
+
+    def fake_attempts(text, count, flags):
+        seen.update(text=text, count=count, flags=flags)
+        records = [
+            {
+                "is_error": False,
+                "status": "success",
+                "num_steps": 2,
+                "num_tool_calls": 3,
+                "input_tokens": 100,
+                "cached_tokens": 10,
+                "output_tokens": 5,
+                "duration_s": 1.0,
+                "result": "draft",
+            },
+            {"is_error": True, "status": "error", "error": "boom"},
+        ]
+        return text + " +MERGE", records, scratch
+
+    def fake_turn(text, **kw):
+        seen.update(final=text, extra_paths=kw.get("extra_paths"))
+        if final_raises:
+            raise final_raises
+        return {
+            "type": "result",
+            "is_error": False,
+            "status": "success",
+            "result": "merged",
+            "num_steps": 4,
+            "num_tool_calls": 1,
+            "input_tokens": 1000,
+            "cached_tokens": 0,
+            "output_tokens": 50,
+        }
+
+    monkeypatch.setattr(attempts, "run_attempts", fake_attempts)
+    monkeypatch.setattr(print_mode, "_run_turn", fake_turn)
+    return seen, scratch
+
+
+def test_attempts_pass_flags_merge_in_place_and_sum_usage(
+    monkeypatch, tmp_path, capsys
+):
+    seen, scratch = _attempt_doubles(monkeypatch, tmp_path)
+    code = print_mode.run(
+        "Review it",
+        model="m1",
+        output_format="json",
+        attempts=2,
+        max_steps=7,
+        full_access=True,
+        base_url="http://h:1/api/v1",
+    )
+    assert code == 0
+    # Full access implies skipping permissions; attempts get the same model and server.
+    assert seen["flags"] == [
+        "--model",
+        "m1",
+        "--max-steps",
+        "7",
+        "--full-access",
+        "--base-url",
+        "http://h:1/api/v1",
+    ]
+    assert seen["count"] == 2 and seen["final"] == "Review it +MERGE"
+    # The final turn may read the drafts, and they are gone afterwards.
+    assert seen["extra_paths"] == [str(scratch)] and not scratch.exists()
+    out = capsys.readouterr().out.strip().splitlines()[-1]
+    record = json.loads(out)
+    assert record["result"] == "merged"
+    assert record["input_tokens"] == 1100 and record["num_steps"] == 6
+    assert record["cached_tokens"] == 10 and record["output_tokens"] == 55
+    assert [a["is_error"] for a in record["attempts"]] == [False, True]
+    assert "result" not in record["attempts"][0]  # drafts' text isn't repeated
+
+
+def test_attempts_skip_permissions_only_when_asked(monkeypatch, tmp_path):
+    seen, _ = _attempt_doubles(monkeypatch, tmp_path)
+    print_mode.run("t", attempts=2)
+    assert seen["flags"] == []
+    (tmp_path / "scratch").mkdir()
+    print_mode.run("t", attempts=2, skip_permissions=True)
+    assert seen["flags"] == ["--dangerously-skip-permissions"]
+
+
+def test_drafts_are_removed_even_when_the_final_turn_fails(
+    monkeypatch, tmp_path, capsys
+):
+    _, scratch = _attempt_doubles(
+        monkeypatch, tmp_path, final_raises=RuntimeError("down")
+    )
+    assert print_mode.run("t", output_format="json", attempts=2) == 1
+    assert not scratch.exists()
+    out = capsys.readouterr().out.strip().splitlines()[-1]
+    assert "RuntimeError: down" in json.loads(out)["error"]
+
+
+def test_one_attempt_never_copies_the_folder(monkeypatch):
+    from gaia import attempts
+
+    monkeypatch.setattr(
+        attempts, "run_attempts", MagicMock(side_effect=AssertionError("copied"))
+    )
+    monkeypatch.setattr(
+        print_mode,
+        "_run_turn",
+        lambda text, **kw: {
+            "type": "result",
+            "is_error": False,
+            "status": "success",
+            "result": "ok",
+        },
+    )
+    assert print_mode.run("t", attempts=1) == 0

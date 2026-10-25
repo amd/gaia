@@ -111,6 +111,7 @@ echo "List the Python files here" | gaia -p --output-format json
 | `--output-format text\|json` | `text` (default) prints the answer alone; `json` prints one JSON object (below) |
 | `--verbose` | With `--output-format json`: add the turn's full `conversation` (every model message and tool call) |
 | `--max-steps <n>` | Cap on agent steps for this run, at least 1. Default: the agent's own limit ([Agent step limit](#agent-step-limit)) |
+| `--attempts <n>` | Run `n` (up to 4) independent attempts, then one turn that checks and combines them ([below](#independent-attempts)). Default: 1 |
 | `--dangerously-skip-permissions` | Run confirmation-gated tools (shell commands, file writes) without asking |
 | `--full-access` | Full access, as the TUI's `/full-access`: lifts the shell guardrails, so test runners, build tools and other commands outside the no-prompt list run, and grants paths outside the current folder without asking. Implies `--dangerously-skip-permissions` |
 | `--base-url <url>` | Use a remote Lemonade server instead of the local one |
@@ -143,6 +144,7 @@ subcommand instead.
 | `duration_s` | Wall-clock seconds for the turn, excluding server start-up |
 | `error_count` | Errors the agent recorded during the turn |
 | `error` | Only when `is_error`: why the turn failed |
+| `attempts` | Only with `--attempts` above 1: each attempt's `is_error`, `status`, `duration_s`, steps, tool calls and tokens. The top-level counts include them |
 | `conversation` | Only with `--verbose`: the turn's messages and tool calls |
 
 **Exit codes.** `0` when the turn succeeded; `1` when it did not (any status other
@@ -154,6 +156,39 @@ goes to stderr; in json mode stdout still carries one object, with `is_error: tr
 and an `error` field, so a script never has to parse a traceback. A failure
 before the turn starts (no prompt, server down) prints only `type`, `is_error`,
 `status` and `error`.
+
+#### Independent attempts
+
+`--attempts 2` makes the answer more thorough at about three times the tokens.
+Each attempt is its own `gaia -p` in a private workspace, and the final turn
+then works in your real folder with every attempt's answer and edits to hand:
+it keeps what it can confirm in the code, checks where the attempts disagree,
+and delivers one result within the task's own length and format rules. It pays
+off most on reviews, audits and questions, where a second independent look
+catches what the first missed.
+
+- **In a git repository** each workspace is a clone that borrows the
+  repository's history and copies its branches, tags, remotes and upstreams, so
+  `git diff main...HEAD` works as it does for you. It holds your current files,
+  uncommitted work included, and leaves out ignored files (build output,
+  `node_modules`). Its branches, stash and config are its own: nothing an
+  attempt commits, stashes or deletes reaches your repository, and no
+  repository hooks run. Submodule folders are empty, Git LFS files stay as
+  pointers, and untracked files over 2 GB in total are refused.
+- **Any other folder** is copied once per attempt, leaving out `node_modules`,
+  virtual environments, build output and linked folders. The home folder, a
+  drive root, and folders over 50,000 files or 2 GB are refused: make the
+  folder a git repository instead.
+- **What is isolated is the folder.** Attempts are told to act only inside it,
+  but with `--full-access` an attempt can still reach paths outside it, and
+  each one reads and writes your GAIA memory like any `gaia -p` run.
+- An attempt that fails is left out; if every attempt fails, the run fails.
+  The attempts run in parallel; on a local model server that handles one
+  request at a time they queue instead.
+
+```bash
+gaia -p "Review the change on this branch against main" --attempts 2 --full-access
+```
 
 **Permissions and file access.** With nobody at the terminal to approve them,
 confirmation-gated tools are **denied** unless you pass
