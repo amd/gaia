@@ -158,7 +158,7 @@ def test_init_stops_the_agent_an_update_replaced(monkeypatch):
 
     cmd._restart_replaced_agent("gaia", _result(updated=True), object())
 
-    assert any("next chat uses 0.3.1" in line for line in cmd.printed)
+    assert any("next chat uses v0.3.1" in line for line in cmd.printed)
 
 
 def test_init_fails_the_setup_when_the_old_agent_keeps_running(monkeypatch):

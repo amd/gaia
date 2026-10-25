@@ -2834,7 +2834,7 @@ class InitCommand:
             raise hub_installer.InstallError(str(exc)) from exc
         if stopped:
             self._print_success(
-                f"Stopped the running '{agent_id}' agent; your next chat uses {result.version}"
+                f"Stopped the running '{agent_id}' agent; your next chat uses v{result.version}"
             )
 
     def _print_completion(self) -> bool:

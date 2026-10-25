@@ -1117,6 +1117,9 @@ def _remove_replaced_binaries(target: Path) -> None:
         except PermissionError:
             # Still the image of a process started before that install.
             logger.info("Keeping %s: a running process still uses it", old)
+        except OSError as exc:
+            # A leftover is harmless; the next install tries again.
+            logger.warning("Could not delete the old copy %s: %s", old, exc)
 
 
 def _filename_matches_platform(filename: str, platform_key: str) -> bool:

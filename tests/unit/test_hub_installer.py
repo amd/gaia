@@ -2159,3 +2159,23 @@ def test_a_failed_restore_names_where_the_old_binary_is(tmp_path, monkeypatch):
     [aside] = list(tmp_path.glob(".replaced-*"))
     assert str(aside) in str(exc.value)
     assert "rename it to gaia-agent.exe" in str(exc.value)
+
+
+def test_a_leftover_that_cannot_be_deleted_does_not_stop_the_install(
+    tmp_path, monkeypatch
+):
+    """Any OSError on a stale leftover is logged, never raised (#5747 review)."""
+    target = tmp_path / "gaia-agent.exe"
+    (tmp_path / f".replaced-abc12345-{target.name}").write_bytes(b"old")
+    real_unlink = Path.unlink
+
+    def broken(self, *args, **kwargs):
+        if self.name.startswith(".replaced-"):
+            raise OSError("device busy")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", broken)
+
+    installer._install_binary_artifact(b"new", target.name, tmp_path)
+
+    assert target.read_bytes() == b"new"
