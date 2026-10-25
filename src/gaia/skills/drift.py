@@ -192,10 +192,7 @@ def _read_metadata(directory: Path) -> tuple[Optional[Skill], str]:
 
 def _version_drift(entry: LockEntry, skill: Skill, directory: Path) -> Optional[Drift]:
     actual = skill.version or ""
-    # A manifest that declares no version has nothing to compare: the lock keeps
-    # the version that was installed, and its format requires one, so reporting
-    # drift here would recommend a `--relock` that cannot clear it (#5774). The
-    # edit is still visible as content drift.
+    # An unversioned manifest has nothing to compare; the edit surfaces as content drift.
     if not entry.version or not actual or actual == entry.version:
         return None
     fatal = _attested(entry)
@@ -203,11 +200,11 @@ def _version_drift(entry: LockEntry, skill: Skill, directory: Path) -> Optional[
         skill=entry.name,
         kind=DRIFT_VERSION,
         expected=entry.version,
-        actual=actual or "(unversioned)",
+        actual=actual,
         fatal=fatal,
         summary=(
             f"{LOCK_FILENAME} records version {entry.version}, but the installed "
-            f"{SKILL_FILENAME} declares {actual or '(unversioned)'}."
+            f"{SKILL_FILENAME} declares {actual}."
         ),
         remediation=_remediation(entry, fatal),
         path=str(directory),
