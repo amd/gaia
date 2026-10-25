@@ -423,11 +423,13 @@ The `--timeout` flag sets the base timeout per scenario in seconds. The runner a
 
 ```
 effective_timeout = max(base_timeout,
-                        120s startup overhead
+                        240s startup overhead
                         + num_docs x 90s per document
                         + num_turns x 200s per turn)
                    capped at 7200s (2 hours)
 ```
+
+The startup term is not an estimate: MCP init plus prompt ingestion reserves 4 minutes before the first turn, more on Windows (`_STARTUP_OVERHEAD_S` in `src/gaia/eval/runner.py`). Because `--timeout` is only the floor of that `max()`, a short value is raised to the reservation — with one turn and no documents, `--timeout 300` still runs with 440s.
 
 **CI recommendations:**
 
