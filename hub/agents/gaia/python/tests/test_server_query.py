@@ -383,7 +383,9 @@ def test_a_query_streams_its_answer_as_tokens(built, session_id):
 def test_a_retained_session_streams_even_if_its_agent_was_turned_off(built):
     """The flag is set per turn, not trusted from construction."""
     client, agents = built
-    assert client.post("/v1/gaia/query", json=_body(session_id="s-2")).status_code == 200
+    assert (
+        client.post("/v1/gaia/query", json=_body(session_id="s-2")).status_code == 200
+    )
     agents[0].streaming = False
 
     r = client.post("/v1/gaia/query", json=_body(session_id="s-2"))
@@ -740,9 +742,11 @@ def test_a_turn_sent_after_stop_waits_for_the_stopped_one(parked_session):
     second.join(timeout=10)
 
     assert results["second"].status_code == 200, results["second"].text
-    assert _terminals(results["second"]) == [
-        {"type": "final", "answer": "answered: hello"}
-    ], _events(results["second"])
+    [final] = _terminals(results["second"])
+    assert final.pop("context")["turns_in_view"] == 1
+    assert final == {"type": "final", "answer": "answered: hello"}, _events(
+        results["second"]
+    )
 
 
 def test_a_turn_sent_while_one_is_live_is_still_refused(parked_session):

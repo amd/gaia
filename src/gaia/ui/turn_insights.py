@@ -246,6 +246,20 @@ def context_state(agent: Any) -> Optional[Dict[str, Any]]:
     return out
 
 
+def panel_context(agent: Any, turns: list, model_id: Optional[str]) -> Dict[str, Any]:
+    """Everything the Context panel and the composer's meter show, in one payload.
+
+    Shared by the Agent UI's in-process path and the sidecar, which measures
+    its own agent and sends the result on ``/query``'s ``final`` event.
+    """
+    usage = measure_context(agent, turns, model_id)
+    usage["categories"] = context_categories(usage)
+    usage["tool_loading"] = tools_by_load(agent)
+    usage["model"] = model_id
+    usage["context_state"] = context_state(agent)
+    return usage
+
+
 # ── Turn timing ────────────────────────────────────────────────────────────
 
 
