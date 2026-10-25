@@ -8,6 +8,20 @@ import (
 // maxRawEcho caps how much of a bad payload is echoed back into a visible event.
 const maxRawEcho = 400
 
+// DaemonRelaySource marks the error frame the daemon writes when an agent's
+// stream ends with no terminal event (the agent crashed mid-turn).
+const DaemonRelaySource = "daemon_relay"
+
+// AgentStoppedDetail is what the user sees for that frame. Sending again
+// restarts the agent, so that is the remedy, as the Agent UI says too.
+const AgentStoppedDetail = "GAIA stopped unexpectedly while answering. Anything it had " +
+	"already written is kept above. Send your message again."
+
+// AgentStoppedBeforeAnswerDetail is the same for an agent that died before
+// this turn reached it (the daemon's "sidecar did not answer" 502).
+const AgentStoppedBeforeAnswerDetail = "GAIA stopped unexpectedly before it could answer. " +
+	"Send your message again."
+
 // ParseCanonicalEvent parses one canonical `/query` SSE data payload.
 //
 // It never returns an error, by design: the contract's receiving-end rules
@@ -48,7 +62,13 @@ func ParseCanonicalEvent(data []byte) interface{} {
 	case CanonicalTypeFinal:
 		return decodeCanonical[CanonicalFinalEvent](data, probe.Type)
 	case CanonicalTypeError:
-		return decodeCanonical[CanonicalErrorEvent](data, probe.Type)
+		decoded := decodeCanonical[CanonicalErrorEvent](data, probe.Type)
+		if e, ok := decoded.(CanonicalErrorEvent); ok && e.Source == DaemonRelaySource {
+			// The daemon's frame is worded for API callers; the daemon log keeps it.
+			e.Detail = AgentStoppedDetail
+			return e
+		}
+		return decoded
 	default:
 		// §7: a newer agent's new event type must be visible, not dropped.
 		return CanonicalUnsupportedEvent{

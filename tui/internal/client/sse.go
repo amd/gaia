@@ -364,6 +364,15 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 				"the '%s' agent is still finishing the previous turn on this session (%s). "+
 					"Wait a moment and try again",
 				s.agentID, detail)
+		case http.StatusBadGateway:
+			if strings.Contains(detail, "did not answer") && !strings.Contains(detail, "Timeout") {
+				// The agent died between turns; the next send respawns it.
+				// A timeout means it is alive but slow, and keeps the relay's reason.
+				return nil, errors.New(event.AgentStoppedBeforeAnswerDetail)
+			}
+			return nil, fmt.Errorf(
+				"the daemon relay refused the '%s' query (%s). Check `gaia daemon status`",
+				s.agentID, detail)
 		default:
 			return nil, fmt.Errorf(
 				"the daemon relay refused the '%s' query (%s). Check `gaia daemon status`",
