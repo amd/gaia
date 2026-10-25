@@ -43,6 +43,7 @@ import sysconfig
 import tempfile
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -1036,12 +1037,13 @@ def _install_binary_artifact(
     """
     install_dir.mkdir(parents=True, exist_ok=True)
     target = install_dir / generic_name
+    _remove_replaced_binaries(target)
     tmp_fd, tmp_name = tempfile.mkstemp(dir=str(install_dir), prefix=".gaia-hub-tmp-")
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(tmp_fd, "wb") as f:
             f.write(artifact_bytes)
-        os.replace(str(tmp_path), str(target))
+        _replace_binary(tmp_path, target)
     except PermissionError as exc:
         tmp_path.unlink(missing_ok=True)
         raise InstallError(
@@ -1055,6 +1057,43 @@ def _install_binary_artifact(
         mode = target.stat().st_mode
         target.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return target
+
+
+#: Prefix of a binary moved aside because a running process held it.
+_REPLACED_PREFIX = ".replaced-"
+
+
+def _replace_binary(new: Path, target: Path) -> None:
+    """Move *new* over *target*, even while *target* is running on Windows.
+
+    Windows refuses to overwrite a running executable but lets it be renamed,
+    so the old one moves aside (the running process keeps its image) and the
+    next install deletes it.
+    """
+    try:
+        os.replace(str(new), str(target))
+        return
+    except PermissionError:
+        if os.name != "nt" or not target.exists():
+            raise
+    aside = target.with_name(f"{_REPLACED_PREFIX}{uuid.uuid4().hex[:8]}-{target.name}")
+    os.replace(str(target), str(aside))
+    try:
+        os.replace(str(new), str(target))
+    except OSError:
+        os.replace(str(aside), str(target))
+        raise
+    logger.info("Replaced running %s; the old copy is %s", target, aside.name)
+
+
+def _remove_replaced_binaries(target: Path) -> None:
+    """Delete binaries earlier installs moved aside, except ones still running."""
+    for old in target.parent.glob(f"{_REPLACED_PREFIX}*-{target.name}"):
+        try:
+            old.unlink()
+        except PermissionError:
+            # Still the image of a process started before that install.
+            logger.info("Keeping %s: a running process still uses it", old)
 
 
 def _filename_matches_platform(filename: str, platform_key: str) -> bool:

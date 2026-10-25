@@ -8758,7 +8758,20 @@ def handle_agent_install(args):
     from gaia.daemon.sidecars.spec import builtin_specs
 
     if result.id in builtin_specs():
-        print(f"   Start it with: gaia daemon start-agent {result.id}")
+        from gaia.daemon.client import stop_running_agent
+        from gaia.daemon.errors import DaemonError
+
+        try:
+            restarted = result.updated and stop_running_agent(result.id)
+        except DaemonError as exc:
+            print(f"❌ {exc}", file=sys.stderr)
+            sys.exit(1)
+        if restarted:
+            print(
+                f"   Stopped the running '{result.id}' agent; your next chat uses v{result.version}."
+            )
+        else:
+            print(f"   Start it with: gaia daemon start-agent {result.id}")
 
 
 def handle_agent_export(args):

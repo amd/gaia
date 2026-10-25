@@ -1207,6 +1207,76 @@ def test_install_binary_locked_file_raises_actionable_error(tmp_path, monkeypatc
     assert "running" in message or "close" in message
 
 
+@pytest.fixture
+def running_exe(tmp_path):
+    """A real executable, running, so Windows holds its file open (#5723)."""
+    import shutil
+    import subprocess
+
+    target = tmp_path / "gaia-agent.exe"
+    shutil.copy(Path(os.environ["SystemRoot"]) / "System32" / "PING.EXE", target)
+    proc = subprocess.Popen(
+        [str(target), "-n", "60", "127.0.0.1"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        yield target, proc
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows locks a running executable")
+def test_a_running_binary_is_replaced_not_refused(running_exe):
+    target, proc = running_exe
+    with pytest.raises(PermissionError):  # the precondition: Windows holds it
+        target.write_bytes(b"overwrite")
+
+    installer._install_binary_artifact(b"new agent", target.name, target.parent)
+
+    assert target.read_bytes() == b"new agent"
+    assert proc.poll() is None, "the running copy keeps its image"
+    [aside] = list(target.parent.glob(f".replaced-*-{target.name}"))
+    assert aside.stat().st_size > len(b"new agent")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows locks a running executable")
+def test_the_next_install_removes_the_copy_set_aside(running_exe):
+    target, proc = running_exe
+    installer._install_binary_artifact(b"v2", target.name, target.parent)
+    proc.kill()
+    proc.wait()
+
+    installer._install_binary_artifact(b"v3", target.name, target.parent)
+
+    assert target.read_bytes() == b"v3"
+    assert list(target.parent.glob(f".replaced-*-{target.name}")) == []
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the move-aside path is Windows-only")
+def test_a_failed_swap_puts_the_old_binary_back(tmp_path, monkeypatch):
+    target = tmp_path / "gaia-agent.exe"
+    target.write_bytes(b"old")
+    new = tmp_path / "incoming"
+    new.write_bytes(b"new")
+    real = os.replace
+    calls = []
+
+    def flaky(src, dst):
+        calls.append((Path(src).name, Path(dst).name))
+        if len(calls) in (1, 3):  # the direct swap, then the swap after moving aside
+            raise PermissionError("in use")
+        real(src, dst)
+
+    monkeypatch.setattr(installer.os, "replace", flaky)
+    with pytest.raises(PermissionError):
+        installer._replace_binary(new, target)
+
+    assert target.read_bytes() == b"old"
+    assert list(tmp_path.glob(".replaced-*")) == []
+
+
 def test_rollback_binary_kind_raises_clean_error(tmp_path):
     manifest = _binary_manifest()
     install(
