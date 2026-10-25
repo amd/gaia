@@ -91,6 +91,10 @@ API_VERSION = "2.21"
 #: How long ``final`` waits for the turn's context measurement before going without.
 _CONTEXT_WAIT_SECONDS = 15.0
 
+#: Budget for counting with the model's own tokenizer before the estimate stands in,
+#: so a busy model server never holds up the answer.
+_EXACT_COUNT_SECONDS = 2.0
+
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
 _HEARTBEAT_SECONDS = 10.0
@@ -640,8 +644,34 @@ def _measure_turn_context(
         {"role": "user", "content": query},
         {"role": "assistant", "content": answer},
     ]
+    turns = pushed_turns(messages)
+    model_id = getattr(agent, "model_id", None)
+    box: Dict[str, Any] = {}
+
+    def _exact() -> None:
+        try:
+            box["usage"] = panel_context(agent, turns, model_id)
+        except Exception as exc:  # re-raised below, on the run's thread
+            box["error"] = exc
+
+    counter = threading.Thread(target=_exact, name="context-count", daemon=True)
+    counter.start()
+    counter.join(_EXACT_COUNT_SECONDS)
+    if "error" in box:
+        raise box["error"]
+    if "usage" in box:
+        return box["usage"]
+    logger.info(
+        "Tokenizer count took over %ss; sending the estimate", _EXACT_COUNT_SECONDS
+    )
     return panel_context(
-        agent, pushed_turns(messages), getattr(agent, "model_id", None)
+        agent,
+        turns,
+        model_id,
+        estimate_reason=(
+            f"The model server didn't count tokens within {_EXACT_COUNT_SECONDS:g}s, "
+            "so these are estimates."
+        ),
     )
 
 

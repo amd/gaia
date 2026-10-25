@@ -123,12 +123,18 @@ class ModelTokenCounter:
         self._client.close()
 
 
-def measure_context(agent: Any, turns: list, model_id: Optional[str]) -> Dict[str, Any]:
+def measure_context(
+    agent: Any,
+    turns: list,
+    model_id: Optional[str],
+    estimate_reason: Optional[str] = None,
+) -> Dict[str, Any]:
     """``context_usage`` measured with the model's tokenizer where it can be.
 
     ``tokenizer.exact`` is False, with the reason, whenever the counts are the
-    shared estimate instead — a cloud model, another model loaded, or a
-    Lemonade that does not answer ``/tokenize``.
+    shared estimate instead — a cloud model, another model loaded, a Lemonade
+    that does not answer ``/tokenize``, or *estimate_reason* when the caller
+    has no time to ask it.
     """
     from gaia.agents.base.history import context_usage
 
@@ -136,6 +142,9 @@ def measure_context(agent: Any, turns: list, model_id: Optional[str]) -> Dict[st
         usage = context_usage(agent, turns)
         usage["tokenizer"] = {"exact": False, "reason": reason}
         return usage
+
+    if estimate_reason is not None:
+        return estimate(estimate_reason)
 
     if where_model_runs(model_id) not in ("local", None):
         usage = estimate("The cloud model's tokenizer is not available here.")
@@ -246,13 +255,18 @@ def context_state(agent: Any) -> Optional[Dict[str, Any]]:
     return out
 
 
-def panel_context(agent: Any, turns: list, model_id: Optional[str]) -> Dict[str, Any]:
+def panel_context(
+    agent: Any,
+    turns: list,
+    model_id: Optional[str],
+    estimate_reason: Optional[str] = None,
+) -> Dict[str, Any]:
     """Everything the Context panel and the composer's meter show, in one payload.
 
     Shared by the Agent UI's in-process path and the sidecar, which measures
     its own agent and sends the result on ``/query``'s ``final`` event.
     """
-    usage = measure_context(agent, turns, model_id)
+    usage = measure_context(agent, turns, model_id, estimate_reason)
     usage["categories"] = context_categories(usage)
     usage["tool_loading"] = tools_by_load(agent)
     usage["model"] = model_id

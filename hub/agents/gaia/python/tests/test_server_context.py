@@ -142,3 +142,32 @@ def test_a_failed_measurement_says_why_and_keeps_the_answer(built, monkeypatch):
     assert final["answer"] == "Paris."
     assert "context" not in final
     assert "tokenizer exploded" in final["context_error"]
+
+
+def test_a_slow_tokenizer_never_holds_up_the_answer(built, monkeypatch):
+    """A busy model server: the estimate stands in, labelled, within the budget."""
+    import threading
+    import time
+
+    client, _ = built
+    release = threading.Event()
+
+    def slow_exact(agent, turns, model_id, estimate_reason=None):
+        if estimate_reason is None:
+            release.wait(10)  # the tokenizer is stuck behind another generation
+            return {"used": 1, "tokenizer": {"exact": True}}
+        return {"used": 2, "tokenizer": {"exact": False, "reason": estimate_reason}}
+
+    monkeypatch.setattr(turn_insights, "panel_context", slow_exact)
+    monkeypatch.setattr(server_mod, "_EXACT_COUNT_SECONDS", 0.2)
+    started = time.monotonic()
+    try:
+        final = _final(client)
+    finally:
+        release.set()
+
+    assert time.monotonic() - started < 3
+    assert final["answer"] == "Paris."
+    assert final["context"]["used"] == 2
+    assert final["context"]["tokenizer"]["exact"] is False
+    assert "estimates" in final["context"]["tokenizer"]["reason"]
