@@ -9585,7 +9585,7 @@ def handle_mcp_command(args):
         print(
             "❌ No MCP action specified. Use 'gaia mcp --help' to see available actions."
         )
-        return
+        sys.exit(1)
 
     if args.mcp_action == "engineering":
         from gaia.mcp.servers.engineering_mcp import main as engineering_main
@@ -9619,6 +9619,7 @@ def handle_mcp_command(args):
     else:
         log.error(f"Unknown MCP action: {args.mcp_action}")
         print(f"❌ Unknown MCP action: {args.mcp_action}")
+        sys.exit(1)
 
 
 def handle_lemonade_command(args):
@@ -9892,7 +9893,7 @@ def handle_mcp_start(args):
             print("")
             print("To fix this, install the MCP dependencies:")
             print('  uv pip install -e ".[mcp]"')
-            return
+            sys.exit(1)
 
         # Import and start the HTTP-native MCP bridge
         from gaia.mcp.mcp_bridge import start_server as start_mcp_http
@@ -9905,7 +9906,7 @@ def handle_mcp_start(args):
                 base_url=getattr(args, "base_url", None),
             )
             if not success:
-                return
+                sys.exit(1)
             print("")  # Add blank line before MCP output
 
         # Handle background mode
@@ -9925,7 +9926,7 @@ def handle_mcp_start(args):
                 print(f"❌ MCP bridge is already running on {args.host}:{args.port}")
                 print(f"📄 Check log file: {log_file_path}")
                 print("📋 Use 'gaia mcp status' to verify or 'gaia mcp stop' to stop")
-                return
+                sys.exit(1)
 
             # Start background process - use gaia.cli module to ensure it works everywhere
             # This avoids PATH issues on Linux where 'gaia' command might not be available
@@ -10065,6 +10066,7 @@ def handle_mcp_start(args):
     except Exception as e:
         log.error(f"Error starting MCP bridge: {e}")
         print(f"❌ Error starting MCP bridge: {e}")
+        sys.exit(1)
 
 
 def handle_mcp_stop(_args):
@@ -10080,16 +10082,17 @@ def handle_mcp_stop(_args):
         if not os.path.exists(pid_file_path):
             print("❌ No MCP bridge PID file found")
             print("📋 Use 'gaia mcp status' to check if server is running")
-            return
+            sys.exit(1)
 
         try:
             with open(pid_file_path, "r", encoding="utf-8") as f:
                 pid = int(f.read().strip())
         except (ValueError, IOError) as e:
             print(f"❌ Error reading PID file: {e}")
-            return
+            sys.exit(1)
 
         # Stop the process
+        failed = False
         try:
             if sys.platform.startswith("win"):
                 # Windows - check if process exists first
@@ -10116,8 +10119,10 @@ def handle_mcp_stop(_args):
 
         except subprocess.CalledProcessError:
             print(f"❌ Failed to stop process {pid}")
+            failed = True
         except Exception as e:
             print(f"❌ Error stopping process {pid}: {e}")
+            failed = True
 
         # Clean up PID file
         try:
@@ -10126,9 +10131,13 @@ def handle_mcp_stop(_args):
         except OSError as e:
             log.debug(f"Could not remove PID file: {e}")
 
+        if failed:
+            sys.exit(1)
+
     except Exception as e:
         log.error(f"Error stopping MCP bridge: {e}")
         print(f"❌ Error stopping MCP bridge: {e}")
+        sys.exit(1)
 
 
 def handle_mcp_status(args):
@@ -10238,10 +10247,12 @@ def handle_mcp_status(args):
         else:
             print(f"❌ MCP server is not accessible at {args.host}:{args.port}")
             print("   Make sure the server is running with: gaia mcp start")
+            sys.exit(1)
 
     except Exception as e:
         log.error(f"Error checking MCP status: {e}")
         print(f"❌ Error checking MCP status: {e}")
+        sys.exit(1)
 
 
 def handle_mcp_test(args):
@@ -10268,7 +10279,7 @@ def handle_mcp_test(args):
         except (urllib.error.URLError, ConnectionError, TimeoutError):
             print(f"❌ Cannot connect to MCP server at {args.host}:{args.port}")
             print("   Make sure the server is running with: gaia mcp start")
-            return
+            sys.exit(1)
 
         # Test the actual tool call via HTTP POST
         try:
@@ -10314,8 +10325,10 @@ def handle_mcp_test(args):
                         print("⚠️  No response content received")
                 elif "error" in result:
                     print(f"❌ Query failed: {result['error']}")
+                    sys.exit(1)
                 else:
                     print("❌ Unexpected response format")
+                    sys.exit(1)
 
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
@@ -10324,20 +10337,27 @@ def handle_mcp_test(args):
                     "   The bridge was started with --auth-token. Pass the same "
                     f"token via --auth-token, or set {MCP_AUTH_TOKEN_ENV}."
                 )
+                sys.exit(1)
             else:
                 print(f"❌ HTTP Error: {e.code} {e.reason}")
+                sys.exit(1)
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
+            sys.exit(1)
         except (ConnectionError, TimeoutError) as e:
             print(f"❌ Connection dropped by the MCP server: {e}")
+            sys.exit(1)
         except json.JSONDecodeError as e:
             print(f"❌ Invalid JSON response: {e}")
+            sys.exit(1)
         except Exception as e:
             print(f"❌ Test failed: {e}")
+        sys.exit(1)
 
     except Exception as e:
         log.error(f"Error running MCP test: {e}")
         print(f"❌ Error running MCP test: {e}")
+        sys.exit(1)
 
 
 def handle_mcp_agent(args):
@@ -10366,7 +10386,7 @@ def handle_mcp_agent(args):
         except (urllib.error.URLError, ConnectionError, TimeoutError):
             print(f"❌ Cannot connect to MCP server at {args.host}:{args.port}")
             print("   Make sure the server is running with: gaia mcp start")
-            return
+            sys.exit(1)
 
         # Test agent call via HTTP POST
         try:
@@ -10446,8 +10466,10 @@ def handle_mcp_agent(args):
                         print("⚠️  No response content received")
                 elif "error" in agent_data:
                     print(f"❌ Agent execution failed: {agent_data['error']}")
+                    sys.exit(1)
                 else:
                     print("❌ Unexpected response format")
+                    sys.exit(1)
 
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
@@ -10456,20 +10478,26 @@ def handle_mcp_agent(args):
                     "   The bridge was started with --auth-token. Pass the same "
                     f"token via --auth-token, or set {MCP_AUTH_TOKEN_ENV}."
                 )
+                sys.exit(1)
             else:
                 print(f"❌ HTTP Error: {e.code} {e.reason}")
+                sys.exit(1)
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
+            sys.exit(1)
         except (ConnectionError, TimeoutError) as e:
             print(f"❌ Connection dropped by the MCP server: {e}")
+            sys.exit(1)
         except json.JSONDecodeError as e:
             print(f"❌ Invalid JSON response: {e}")
+            sys.exit(1)
         except Exception as e:
             print(f"❌ Agent test failed: {e}")
 
     except Exception as e:
         log.error(f"Error running MCP agent test: {e}")
         print(f"❌ Error running MCP agent test: {e}")
+        sys.exit(1)
 
 
 def handle_mcp_serve(args):
@@ -10528,9 +10556,11 @@ def handle_mcp_serve(args):
         print("❌ Error: Could not load Agent UI MCP server")
         print(f"   {e}")
         print("   Make sure the Agent UI backend is running: gaia chat --ui")
+        sys.exit(1)
     except Exception as e:
         log.error(f"Error starting Agent UI MCP server: {e}")
         print(f"❌ Error starting Agent UI MCP server: {e}")
+        sys.exit(1)
 
 
 def handle_mcp_tui(args):
@@ -10574,9 +10604,11 @@ def handle_mcp_tui(args):
         print("❌ Error: Could not load the TUI control MCP server")
         print(f"   {e}")
         print('   Install the MCP extras: uv pip install -e ".[mcp]"')
+        sys.exit(1)
     except Exception as e:
         log.error(f"Error starting TUI control MCP server: {e}")
         print(f"❌ Error starting TUI control MCP server: {e}")
+        sys.exit(1)
 
 
 def handle_mcp_list(args):
@@ -10630,7 +10662,7 @@ def handle_mcp_tools(args):
             print("\nAvailable servers:")
             for server in manager.list_servers():
                 print(f"  - {server}")
-            return
+            sys.exit(1)
 
         tools = client.list_tools()
 
@@ -10646,6 +10678,7 @@ def handle_mcp_tools(args):
 
     except Exception as e:
         print(f"❌ Error listing tools: {e}")
+        sys.exit(1)
 
 
 def handle_mcp_test_client(args):
@@ -10666,7 +10699,7 @@ def handle_mcp_test_client(args):
 
         if not client:
             print(f"❌ MCP server '{args.name}' not found")
-            return
+            sys.exit(1)
 
         # Test connection
         print("✅ Connection: OK")
@@ -10691,6 +10724,7 @@ def handle_mcp_test_client(args):
 
     except Exception as e:
         print(f"❌ Test failed: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
