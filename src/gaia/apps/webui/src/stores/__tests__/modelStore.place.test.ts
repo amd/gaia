@@ -40,7 +40,19 @@ describe('inferencePlace', () => {
         expect(place).toEqual({ remote: true, label: 'Fireworks AI', description: FIREWORKS_SENTENCE });
     });
 
-    it('treats a cloud pick as cloud before the session list catches up', () => {
+    it('a cloud pick shows as cloud once the chat names it', () => {
+        // This window's own pick refetches the chat list with it, so the chat names the pick.
+        const place = inferencePlace(CLOUD_ACTIVE, {
+            inference_remote: true,
+            inference_provider_name: 'Fireworks AI',
+            effective_model: 'fireworks.deepseek-v4p1-flash',
+        });
+        expect(place?.remote).toBe(true);
+        expect(place?.label).toBe('Fireworks AI');
+    });
+
+    it('a backend that does not name the model still counts a cloud pick at once', () => {
+        // Older backends send no effective_model, so the pick can't be stale and wins.
         const place = inferencePlace(CLOUD_ACTIVE, { inference_remote: false });
         expect(place?.remote).toBe(true);
         expect(place?.label).toBe('Fireworks AI');
