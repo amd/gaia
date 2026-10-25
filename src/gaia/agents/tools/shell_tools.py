@@ -1504,7 +1504,8 @@ def _gh_remote_positions(argv: list) -> set:
         if token in ("-R", "--repo"):
             remote.add(index + 1)
             value_next = True
-        elif token.startswith(("--repo=", "-R=")):
+        elif token.startswith(("--repo=", "-R")) and token not in ("-R",):
+            # --repo=x, -R=x and pflag's attached -Rx.
             remote.add(index)
         elif token == "api" and index == 1:
             seen_api = True

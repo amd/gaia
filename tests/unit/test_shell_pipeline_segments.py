@@ -225,6 +225,7 @@ def test_a_pipe_out_of_a_granted_cli_is_not_pre_authorized(dialect, command):
         "gh issue list --repo amd/gaia --state open",
         "gh pr view 1 -R amd/gaia",
         "gh --repo=amd/gaia issue list",
+        "gh issue list -Ramd/gaia",
         'gh api repos/amd/gaia --jq ".open_issues_count"',
         "gh api -X GET repos/amd/gaia/issues",
     ],
@@ -265,4 +266,19 @@ def test_gh_flags_that_read_local_files_are_still_checked(command, path, tmp_pat
 
     refusal = host._path_traversal_refusal(steps[0], str(work), frozenset(), outside)
 
-    assert refusal is not None or any(path in str(p) for p in outside)
+    assert refusal is None
+    assert [Path(p).name for p in outside] == [path]
+
+
+def test_a_gh_api_endpoint_after_other_flags_is_still_checked(tmp_path):
+    """Only `gh api <endpoint>` skips the check; `gh -R x api ../foo` does not."""
+    work = tmp_path / "work"
+    work.mkdir()
+    host = _Shell()
+    host.path_validator = _PathValidator(work)
+    _error, steps = host._validate_shell_command("gh -R x/y api ../foo")
+    outside: list = []
+
+    host._path_traversal_refusal(steps[0], str(work), frozenset(), outside)
+
+    assert [Path(p).name for p in outside] == ["foo"]
