@@ -23,7 +23,7 @@ _BOMS = (
 
 # Bytes CP1252 maps to control characters text never holds; NUL marks binary.
 _CONTROL_BYTES = frozenset(range(32)) - {9, 10, 12, 13}
-_SNIFF_BYTES = 1 << 20
+_SNIFF_BYTES = 1 << 16
 
 MATCH_EXCERPT_CHARS = 200
 _ELLIPSIS = "..."
