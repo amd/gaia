@@ -307,6 +307,9 @@ type CanonicalErrorEvent struct {
 	Detail string `json:"detail"`
 	Status int    `json:"status,omitempty"`
 	Source string `json:"source,omitempty"`
+	// RawDetail is the wire detail when Detail was reworded for the user, kept
+	// for the log so the cause is not lost.
+	RawDetail string `json:"-"`
 }
 
 // CanonicalUnsupportedEvent — a top-level `type` outside the frozen seven, from a

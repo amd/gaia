@@ -65,6 +65,7 @@ func ParseCanonicalEvent(data []byte) interface{} {
 		decoded := decodeCanonical[CanonicalErrorEvent](data, probe.Type)
 		if e, ok := decoded.(CanonicalErrorEvent); ok && e.Source == DaemonRelaySource {
 			// The daemon's frame is worded for API callers; the daemon log keeps it.
+			e.RawDetail = e.Detail
 			e.Detail = AgentStoppedDetail
 			return e
 		}

@@ -243,6 +243,9 @@ func TestDaemonRelayCrashFrameReadsPlainly(t *testing.T) {
 	if got.Detail != AgentStoppedDetail {
 		t.Fatalf("detail = %q, want the plain message", got.Detail)
 	}
+	if !strings.Contains(got.RawDetail, "/daemon/v1/agents/gaia/ensure") {
+		t.Fatalf("raw detail = %q, want the daemon text kept for the log", got.RawDetail)
+	}
 	if got.Source != DaemonRelaySource {
 		t.Fatalf("source = %q, want it kept", got.Source)
 	}
