@@ -367,8 +367,10 @@ shortens long code, so show `args` when the user should read all of it; a
 policy client matches its rules on `args` and should not auto-approve a call
 with `args_truncated`. The agent never adds a key to `args`. What it adds to
 its own prompt is in `prompt_context`: `working_directory` (where a shell call
-runs, when the model's arguments don't say it) and `risk_note` (why the
-agent's checks don't cover the call, which is then approved once). A prompt
+runs, when the model's arguments don't say it), `risk_note` (why the
+agent's checks don't cover the call, which is then approved once) and
+`file_path` (the absolute path a write lands at, when the model gave a relative
+one). A prompt
 the agent raises on its own, such as `allow_path_access`, has the path it asks
 about in `args`.
 

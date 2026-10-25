@@ -213,7 +213,8 @@ and restore them as soon as the stream ends. Omit it and nothing is copied. See
 event's `args` are exactly the arguments the model sent for the gated call,
 each value capped at 64,000 characters; `args_truncated: true` means one was
 cut, so don't auto-approve that call. What the agent adds to its own prompt —
-the folder a shell call runs in, a risk note — comes in `prompt_context`, never
+the folder a shell call runs in, a risk note, the full path of a relative
+write — comes in `prompt_context`, never
 in `args`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Serving the turn from the Agent UI? Send `surface: "agent_ui"`** (contract ≥
