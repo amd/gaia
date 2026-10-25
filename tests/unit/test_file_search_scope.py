@@ -896,3 +896,58 @@ class TestCommonFoldersAreMatchedByPathNotPrefix:
         result = search_file("quarterly_report")
 
         assert [Path(f).name for f in result["files"]] == ["quarterly_report.txt"]
+
+
+class TestANamedExtensionOutranksTheDefaultAllowlist:
+    """#3941: asking for ``ci.log`` reported the directory as empty.
+
+    The caller named the file, so an extension written into the pattern has to
+    beat the default allowlist. The allowlist itself also has to cover what agent
+    work reads -- logs and configs, not only documents and source files.
+    """
+
+    @pytest.fixture
+    def agent_project(self, search_file, project):
+        root, _ = project
+        (root / "ci.log").write_text("step 1\n")
+        (root / "pyproject.toml").write_text("[project]\n")
+        (root / "deploy.yml").write_text("jobs:\n")
+        (root / "notes.md").write_text("# notes\n")
+        return root, search_file
+
+    def test_an_extension_in_the_pattern_finds_the_file(self, agent_project):
+        _, search_file = agent_project
+
+        result = search_file("ci.log")
+
+        assert result["status"] == "success", result
+        assert "ci.log" in [Path(f).name for f in result["files"]]
+
+    def test_a_glob_extension_finds_the_file(self, agent_project):
+        _, search_file = agent_project
+
+        result = search_file("*.yml")
+
+        assert "deploy.yml" in [Path(f).name for f in result["files"]]
+
+    def test_the_default_allowlist_covers_configs(self, agent_project):
+        _, search_file = agent_project
+
+        result = search_file("pyproject.toml")
+
+        assert "pyproject.toml" in [Path(f).name for f in result["files"]]
+
+    def test_an_explicit_file_types_still_wins_over_the_pattern(self, agent_project):
+        """``file_types`` is the caller's own restriction; the pattern does not undo it."""
+        _, search_file = agent_project
+
+        result = search_file("ci.log", file_types="go")
+
+        assert result["count"] == 0, result
+
+    def test_the_extensions_the_allowlist_already_had_still_match(self, agent_project):
+        _, search_file = agent_project
+
+        result = search_file("*.md")
+
+        assert "notes.md" in [Path(f).name for f in result["files"]]
