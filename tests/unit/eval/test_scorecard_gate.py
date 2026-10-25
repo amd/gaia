@@ -3,8 +3,10 @@
 """TDD tests for gaia.eval.scorecard_gate — new single-file SCORECARD.md interface."""
 
 import datetime
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from gaia.eval.release_scorecard import (
@@ -13,7 +15,7 @@ from gaia.eval.release_scorecard import (
     parse_scorecard,
     render_scorecard,
 )
-from gaia.eval.scorecard_gate import env_ctx_size, main
+from gaia.eval.scorecard_gate import _parse_baseline_ref, env_ctx_size, main
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -778,3 +780,52 @@ class TestExpectedVersionGuard:
         # --expected-version are unaffected by a version mismatch.
         cand = _write_card(tmp_path, "0.5.0", accuracy=0.8)
         assert main(["--scorecard", str(cand)]) == 0
+
+# ---------------------------------------------------------------------------
+# --baseline-ref resolution: an invalid ref is not "first adoption"
+# ---------------------------------------------------------------------------
+
+
+def _git(repo, *args):
+    subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+    )
+
+
+def _repo_with_scorecard(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    card = repo / "SCORECARD.md"
+    card.write_text("# scorecard\n", encoding="utf-8")
+    _git(repo, "add", "SCORECARD.md")
+    _git(repo, "commit", "-m", "scorecard")
+    _git(repo, "tag", "-a", "base", "-m", "base")
+    return repo, card
+
+
+class TestBaselineRefResolution:
+    def test_a_valid_ref_returns_the_file(self, tmp_path, monkeypatch):
+        repo, card = _repo_with_scorecard(tmp_path)
+        monkeypatch.chdir(repo)
+
+        assert _parse_baseline_ref(card, "base").strip() == "# scorecard"
+
+    def test_a_missing_file_at_a_valid_ref_is_first_adoption(self, tmp_path, monkeypatch):
+        repo, _card = _repo_with_scorecard(tmp_path)
+        newer = repo / "NEW.md"
+        newer.write_text("new\n", encoding="utf-8")
+        _git(repo, "add", "NEW.md")
+        _git(repo, "commit", "-m", "new")
+        monkeypatch.chdir(repo)
+
+        assert _parse_baseline_ref(newer, "base") is None
+
+    def test_an_invalid_ref_is_an_error_not_first_adoption(self, tmp_path, monkeypatch):
+        repo, card = _repo_with_scorecard(tmp_path)
+        monkeypatch.chdir(repo)
+
+        with pytest.raises(ValueError, match="not a valid git object"):
+            _parse_baseline_ref(card, "no-such-tag")
