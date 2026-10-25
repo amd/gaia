@@ -10352,7 +10352,7 @@ def handle_mcp_test(args):
             sys.exit(1)
         except Exception as e:
             print(f"❌ Test failed: {e}")
-        sys.exit(1)
+            sys.exit(1)
 
     except Exception as e:
         log.error(f"Error running MCP test: {e}")
@@ -10493,6 +10493,7 @@ def handle_mcp_agent(args):
             sys.exit(1)
         except Exception as e:
             print(f"❌ Agent test failed: {e}")
+            sys.exit(1)
 
     except Exception as e:
         log.error(f"Error running MCP agent test: {e}")
