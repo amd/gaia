@@ -3367,8 +3367,15 @@ class ReadToolsMixin:
                     # long-lived agent whose mailbox connected after __init__.
                     try:
                         agent._refresh_mail_backends()
-                    except (ConfigurationError, ConnectorsError):
-                        pass
+                    except (ConfigurationError, ConnectorsError) as exc:
+                        # A refresh that failed is the real answer: "no mailbox
+                        # connected" hides why, and the backends a failed
+                        # resolve left cached are not the mailbox the agent can
+                        # currently reach. The sibling triage paths surface the
+                        # same error instead of scanning them.
+                        st["ok"] = False
+                        st["error"] = str(exc)
+                        return _envelope_err(str(exc))
                     if not agent._backends:
                         st["ok"] = False
                         st["error"] = NO_MAILBOX_CONNECTED_MESSAGE
