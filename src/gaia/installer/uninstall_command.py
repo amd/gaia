@@ -1389,8 +1389,9 @@ def _resolve_lemonade_python() -> Optional[str]:
 def _remove_lemonade(printer: Callable[[str], None] = print) -> bool:
     """Best-effort Lemonade Server removal.
 
-    Never fails the command — returns True even if Lemonade could not be
-    removed, so the rest of the uninstall flow proceeds.
+    Never fails the command — the rest of the uninstall flow proceeds either
+    way. Returns False only when the installation check itself raised, because
+    then "not installed" would be a guess and the tier must not claim success.
     """
     _print("  [lemonade] attempting to uninstall Lemonade Server...", printer=printer)
 
@@ -1401,6 +1402,17 @@ def _remove_lemonade(printer: Callable[[str], None] = print) -> bool:
 
         installer = LemonadeInstaller()
         info = installer.check_installation()
+        if info.check_failed:
+            _print(
+                f"  [lemonade] installation check failed: {info.error}",
+                printer=printer,
+            )
+            _print(
+                "  [lemonade] skipped removal — uninstall Lemonade Server by hand "
+                "if it is present",
+                printer=printer,
+            )
+            return False
         if not info.installed:
             _print(
                 "  [lemonade] not installed — nothing to do",

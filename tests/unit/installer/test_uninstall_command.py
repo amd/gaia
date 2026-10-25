@@ -2224,3 +2224,43 @@ class TestCredentialStore:
         assert _REAL_CLEAR_CREDENTIALS(printer=captured) is False
         assert "keychain locked" in captured.text
         assert "[removed]" not in captured.text
+
+
+class TestTheLemonadeCheckDidNotRun:
+    """A crashed probe is not evidence that Lemonade is absent (#5772)."""
+
+    def test_a_failed_check_is_reported_instead_of_nothing_to_do(self, monkeypatch):
+        from gaia.installer import lemonade_installer
+
+        monkeypatch.setattr(
+            lemonade_installer.LemonadeInstaller,
+            "check_installation",
+            lambda self: lemonade_installer.LemonadeInfo(
+                installed=False,
+                error="registry read failed",
+                check_failed=True,
+            ),
+        )
+        captured = _Capture()
+
+        assert uc._remove_lemonade(printer=captured) is False
+
+        assert "installation check failed: registry read failed" in captured.text
+        assert "nothing to do" not in captured.text
+        assert "uninstalled" not in captured.text
+
+    def test_an_absent_lemonade_is_still_nothing_to_do(self, monkeypatch):
+        from gaia.installer import lemonade_installer
+
+        monkeypatch.setattr(
+            lemonade_installer.LemonadeInstaller,
+            "check_installation",
+            lambda self: lemonade_installer.LemonadeInfo(
+                installed=False,
+                error="Lemonade Server not found",
+            ),
+        )
+        captured = _Capture()
+
+        assert uc._remove_lemonade(printer=captured) is True
+        assert "not installed" in captured.text
