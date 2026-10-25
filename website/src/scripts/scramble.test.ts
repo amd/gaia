@@ -7,7 +7,7 @@ import { brotliDecompressSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 
 import { WRITING_SYSTEMS } from '../data/scramble-scripts';
-import { eraAt, hash, pickGlyph } from './scramble';
+import { SCRAMBLE, eraAt, hash, pickGlyph } from './scramble';
 import { ARRIVE_S, CRUISE, WARP, warpSpeed, warpTravelled } from './starfield';
 
 describe('the writing systems', () => {
@@ -116,7 +116,7 @@ describe('hash', () => {
 describe('eraAt', () => {
   it('moves from the oldest system to the newest, never back, and stops at the newest', () => {
     const n = WRITING_SYSTEMS.length;
-    const dEnd = warpTravelled(ARRIVE_S * 0.86);
+    const dEnd = warpTravelled(ARRIVE_S * SCRAMBLE.settleAt);
     let prev = -1;
     for (let t = 0; t <= ARRIVE_S; t += 0.01) {
       const e = eraAt(warpTravelled(t), dEnd, n);

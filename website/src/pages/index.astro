@@ -197,6 +197,19 @@ const ARCHITECTURE = [
 >
   <!-- The scramble's glyphs need this font from its first frame. -->
   <link slot="head" rel="preload" href="/fonts/gaia-scripts.woff2" as="font" type="font/woff2" crossorigin />
+  <!-- Pre-paint: the text below the title waits for it to resolve (TITLE_PENDING in
+       scramble.ts), unless the background is still. If the scramble never ends,
+       say so and show the page anyway, so a failure cannot hide the downloads. -->
+  <script slot="head" is:inline>
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches && document.documentElement.dataset.motion !== 'paused') {
+      document.documentElement.classList.add('g-title-pending');
+      setTimeout(() => {
+        if (!document.documentElement.classList.contains('g-title-pending')) return;
+        console.error('[hero] the headline scramble did not finish within 4 s; showing the page without it.');
+        document.documentElement.classList.remove('g-title-pending');
+      }, 4000);
+    }
+  </script>
   <Header />
   <main id="main-content">
     <!-- 1. Hero — what GAIA is, then the one install. -->
@@ -208,21 +221,21 @@ const ARCHITECTURE = [
       </ul>
 
       <!-- Typed capitals keep "PCs" from becoming "PCS"; the label is what a screen reader hears. -->
-      <h1 class="g-h-hero animate-g-rise mt-7 normal-case" style="animation-delay:0.15s" aria-label="The agent factory for AI PCs">
+      <h1 class="g-h-hero mt-7 normal-case" aria-label="The agent factory for AI PCs">
         <span aria-hidden="true" data-decode class="g-hero-lead block text-balance">THE AGENT FACTORY FOR</span>
         <span aria-hidden="true" data-decode class="g-hero-red block whitespace-nowrap text-g-brand">AI PCs</span>
       </h1>
 
-      <p class="g-lede animate-g-rise mt-7 max-w-[600px] text-center" style="animation-delay:0.3s">
+      <p class="g-lede g-after-title mt-7 max-w-[600px] text-center">
         GAIA uses coding-agent skills, evals and an auto-fix loop to build and improve
         agent harnesses. The GAIA agent is the one it built to show what that can do.
         Install it below, or <a href="#build" class="prose-link whitespace-nowrap">build your own&nbsp;<span aria-hidden="true">↓</span></a>
       </p>
 
-      <Downloads class="animate-g-rise mt-10 [animation-delay:0.45s]" />
+      <Downloads class="g-after-title mt-10 [--g-after:90ms]" />
 
       <!-- The next release, for testers: one line under the stable download. -->
-      {releaseCandidate && <ReleaseCandidate candidate={releaseCandidate} class="animate-g-rise mt-6 [animation-delay:0.6s]" />}
+      {releaseCandidate && <ReleaseCandidate candidate={releaseCandidate} class="g-after-title mt-6 [--g-after:180ms]" />}
 
       <!-- What the install does to the machine, said before anyone downloads. -->
       <ul class="g-reveal mx-auto mt-14 grid w-full max-w-[720px] gap-x-8 gap-y-5 border-t border-g-border pt-8 text-left sm:grid-cols-3">

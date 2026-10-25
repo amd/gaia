@@ -253,6 +253,16 @@
     .g-hero-red { animation: none; }
   }
 
+  /* The text below the hero title rises in once the title has resolved (scramble.ts). */
+  .g-after-title {
+    transition: opacity 0.45s cubic-bezier(0.2, 0.7, 0.2, 1), transform 0.45s cubic-bezier(0.2, 0.7, 0.2, 1);
+    transition-delay: var(--g-after, 0ms);
+  }
+  .g-title-pending .g-after-title {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+
   /* The headline scramble (scramble.ts): a glyph sits over each letter, which keeps its place. */
   .g-scr-word {
     white-space: nowrap;

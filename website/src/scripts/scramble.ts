@@ -19,16 +19,22 @@ import { ARRIVE_S, CRUISE, WARP, starFieldMounted, warpElapsed, warpSpeed, warpT
 /** Timing and jitter of the scramble. */
 export const SCRAMBLE = {
   /** How long a glyph shows at full warp; it lengthens as the stars slow. */
-  glyphMs: 72,
+  glyphMs: 45,
   /** The text settles at this share of the braking. */
-  settleAt: 0.86,
+  settleAt: 0.65,
   /** Share of the settle time over which letters first appear. */
-  span: 0.4,
+  span: 0.35,
   /** Jitter in each glyph's offset, rotation and scale at warp; it calms with the stars. */
   chaos: 0.18,
   /** How far, in writing systems, a letter may stray from the line's place in history. */
   spread: 0.8,
 } as const;
+
+/**
+ * On <html> while the title resolves; the text below it waits (global.css).
+ * Set before first paint by an inline script in index.astro, which repeats the name.
+ */
+export const TITLE_PENDING = 'g-title-pending';
 
 /** A deterministic 0..1 hash of two integers, so a letter's choices are stable within a tick. */
 export function hash(a: number, b: number): number {
@@ -107,7 +113,10 @@ export function mountScramble(lines: HTMLElement[]): () => void {
   }
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   // The field is still (reduced motion, or paused from the footer): the text is simply there.
-  if (reduce || warpElapsed() >= ARRIVE_S) return () => {};
+  if (reduce || warpElapsed() >= ARRIVE_S) {
+    document.documentElement.classList.remove(TITLE_PENDING);
+    return () => {};
+  }
 
   // Start the font now: an unfetched face would leave the first glyphs blank.
   const chars = WRITING_SYSTEMS.flatMap((w) => w.glyphs.map((g) => g.char ?? '')).join('');
@@ -155,13 +164,8 @@ export function mountScramble(lines: HTMLElement[]): () => void {
     l.overlay = null;
     l.slot.classList.remove('is-waiting', 'is-scrambling');
     if (animate) {
-      l.slot.animate(
-        [
-          { opacity: 0.35, filter: 'blur(3px)', transform: 'translateY(-0.05em)' },
-          { opacity: 1, filter: 'none', transform: 'none' },
-        ],
-        { duration: 320, easing: 'ease-out' },
-      );
+      // A quick pop and flash; the end state is the letter's own, glow included.
+      l.slot.animate([{ transform: 'scale(1.14)', textShadow: '0 0 0.25em currentColor' }], { duration: 180, easing: 'ease-out' });
     }
   };
 
@@ -187,13 +191,7 @@ export function mountScramble(lines: HTMLElement[]): () => void {
         l.overlay = document.createElement('span');
         l.overlay.className = 'g-scr-glyph';
         l.slot.appendChild(l.overlay);
-        l.overlay.animate(
-          [
-            { transform: 'scale(4)', opacity: 0, filter: 'blur(6px)' },
-            { transform: 'none', opacity: 1, filter: 'none' },
-          ],
-          { duration: 260, easing: 'cubic-bezier(.2,.8,.2,1)' },
-        );
+        l.overlay.animate([{ transform: 'scale(1.8)', opacity: 0 }], { duration: 110, easing: 'cubic-bezier(.2,.8,.2,1)' });
       }
       live.push(l);
     }
@@ -221,11 +219,13 @@ export function mountScramble(lines: HTMLElement[]): () => void {
     }
 
     if (letters.some((l) => !l.settled)) raf = requestAnimationFrame(frame);
+    else document.documentElement.classList.remove(TITLE_PENDING);
   };
 
   const stop = () => {
     cancelAnimationFrame(raf);
     for (const l of letters) if (!l.settled) settle(l, false);
+    document.documentElement.classList.remove(TITLE_PENDING);
   };
   // Paused from the footer mid-scramble: the warp clock stops, so finish now.
   const onMotion = () => stop();

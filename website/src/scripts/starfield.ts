@@ -31,7 +31,7 @@ export interface MotionEventDetail {
 
 export const CRUISE = 0.2; // speed at rest
 export const WARP = 8; // the speed a visit starts at
-export const ARRIVE_S = 3.3; // seconds to brake from WARP to CRUISE
+export const ARRIVE_S = 1.8; // seconds to brake from WARP to CRUISE
 
 /** Speed `t` seconds into the warp exit. Cubic ease-out: most of the braking happens early. */
 export const warpSpeed = (t: number): number => CRUISE + (WARP - CRUISE) * (1 - Math.min(t, ARRIVE_S) / ARRIVE_S) ** 3;

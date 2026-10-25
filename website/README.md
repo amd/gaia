@@ -110,7 +110,8 @@ trusting a copy — the headlines only:
   atlas in `public/space/` (credits in `public/space/CREDITS.md`). It holds a still
   frame under `prefers-reduced-motion` or when a visitor pauses it from the footer.
 - **Headline**: `src/scripts/scramble.ts` resolves it out of the writing systems in
-  `src/data/scramble-scripts.ts`, on the starfield's warp clock. Their characters
+  `src/data/scramble-scripts.ts`, on the starfield's warp clock, in about 1.2 s; the
+  text below it waits for it (`.g-after-title`). Their characters
   come from `public/fonts/gaia-scripts.woff2`, a Noto subset (SIL OFL 1.1). Adding a
   character means regenerating that subset, or it renders as a missing-glyph box.
 
