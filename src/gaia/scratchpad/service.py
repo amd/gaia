@@ -157,8 +157,23 @@ class ScratchpadService(DatabaseMixin):
         # unchecked `columns` string is a direct SQL-injection vector.
         safe_columns = self._validate_columns(columns)
 
+        # An existing table keeps its columns; refuse a different request
+        # instead of reporting a schema that was never applied.
+        if self.table_exists(full_name):
+            if self._table_info(full_name) != self._declared_info(safe_columns):
+                actual = ", ".join(
+                    f"{c['name']} {c['type']}".strip()
+                    for c in self.query(f"PRAGMA table_info({full_name})")
+                )
+                raise ValueError(
+                    f"Table '{safe_name}' already exists with different columns "
+                    f"({actual}). Use the existing columns, or drop_table "
+                    "first to change the schema."
+                )
+            return f"Table '{safe_name}' already exists with columns: {columns}"
+
         # Create table using execute() (outside any transaction)
-        self.execute(f"CREATE TABLE IF NOT EXISTS {full_name} ({safe_columns})")
+        self.execute(f"CREATE TABLE {full_name} ({safe_columns})")
 
         log.info(f"Scratchpad table created: {safe_name}")
         return f"Table '{safe_name}' created with columns: {columns}"
@@ -215,10 +230,7 @@ class ScratchpadService(DatabaseMixin):
 
         # Enforce the global scratchpad size cap. Without this, an agent
         # could fill 100 tables * 1 M rows * ~200 bytes = 20 GB by staying
-        # under each individual cap. get_size_bytes() is an estimate (200
-        # bytes/row average) — acceptable given the ~30% slack in the cap
-        # and that a real enforcement via PRAGMA page_count is too
-        # SQLite-version-specific to rely on here.
+        # under each individual cap. get_size_bytes() measures the real file.
         current_size = self.get_size_bytes()
         if current_size >= self.MAX_TOTAL_SIZE_BYTES:
             raise ValueError(
@@ -362,8 +374,7 @@ class ScratchpadService(DatabaseMixin):
             count += 1
 
         # Reclaim disk space — without VACUUM, SQLite keeps the freed
-        # pages on disk and get_size_bytes (row-count estimate) may
-        # report 0 while the file is still large.
+        # pages in the file.
         if count > 0:
             try:
                 self._db.execute("VACUUM")
@@ -374,17 +385,43 @@ class ScratchpadService(DatabaseMixin):
         return f"Dropped {count} scratchpad table(s)."
 
     def get_size_bytes(self) -> int:
-        """Get total size of all scratchpad data in bytes (approximate).
+        """Get the size of the scratchpad database in bytes.
 
-        Uses a rough estimate of 200 bytes per row across all
-        scratchpad tables.
+        The scratchpad has its own database file, so this counts only
+        scratchpad data. Pages freed by drop_table are not counted.
 
         Returns:
-            Estimated size in bytes.
+            (page_count - freelist_count) * page_size.
         """
         # Not guarded: returning 0 on error would silently disable the size cap.
-        total_rows = sum(t["rows"] for t in self.list_tables())
-        return total_rows * 200
+        pages = self._pragma("page_count") - self._pragma("freelist_count")
+        return pages * self._pragma("page_size")
+
+    def _pragma(self, name: str) -> int:
+        """Read a single-integer PRAGMA from the scratchpad database."""
+        return self.query(f"PRAGMA {name}", one=True)[name]
+
+    def _table_info(self, full_name: str) -> List[tuple]:
+        """Return (name, type, notnull, default, pk) for each column."""
+        return [
+            (c["name"], c["type"], c["notnull"], c["dflt_value"], c["pk"])
+            for c in self.query(f"PRAGMA table_info({full_name})")
+        ]
+
+    @staticmethod
+    def _declared_info(safe_columns: str) -> List[tuple]:
+        """Return what _table_info would show if these columns were applied."""
+        scratch = sqlite3.connect(":memory:")
+        try:
+            scratch.execute(f"CREATE TABLE t ({safe_columns})")
+            return [
+                (name, col_type, notnull, default, pk)
+                for _, name, col_type, notnull, default, pk in scratch.execute(
+                    "PRAGMA table_info(t)"
+                )
+            ]
+        finally:
+            scratch.close()
 
     def _sanitize_name(self, name: str) -> str:
         """Sanitize table/column names to prevent SQL injection.
