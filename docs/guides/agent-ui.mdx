@@ -502,15 +502,17 @@ When the same question comes back after you allowed it once, the prompt says
 so and highlights **Always allow**. It never answers for you, and a different
 tool or a riskier call gets no hint.
 
-Pick **Full access** from the shield to let a chat run everything without
-asking (you confirm once). **Settings → Permissions** lists every chat with full
-access or "always allow" answers and lets you revoke them. Grants end when GAIA
-restarts.
+Pick **Full access** from the shield to stop most of these questions in a chat
+(you confirm once). It does not open the shell: a gated `run_shell_command` — a
+delete, `git add` — still asks, and runs only when you allow it.
+**Settings → Permissions** lists every chat with full access or "always allow"
+answers and lets you revoke them. Grants end when GAIA restarts.
 
 A Hub-installed GAIA, which runs as its own process, follows the chat's mode
 too, from agent contract 2.14. It stops asking, but its shell guardrails stay
-on. If the mode can't be passed on when a turn starts, that turn stops with an
-error, so it never runs with full access you turned off.
+on, so those commands still reach you as a confirmation. If the mode can't be
+passed on when a turn starts, that turn stops with an error, so it never runs
+with full access you turned off.
 
 ## The session panel
 
