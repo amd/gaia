@@ -1370,6 +1370,7 @@ async def query(request: QueryRequest):
             run.result = agent.process_query(request.query)
 
     def _run_agent() -> None:
+        process_error: Optional[Exception] = None
         try:
             if request.changes_turn_id is None:
                 _process()
@@ -1379,12 +1380,28 @@ async def query(request: QueryRequest):
                     request.session_id, request.changes_turn_id
                 ) as recorder:
                     run.recorder = recorder
-                    _process()
+                    try:
+                        _process()
+                    except Exception as exc:
+                        process_error = exc
+                        raise
         except file_snapshots.SnapshotError as exc:
-            logger.error("Undo history for run_id=%s: %s", run.run_id, exc)
+            logger.exception("Undo history for run_id=%s: %s", run.run_id, exc)
             handler._emit(
                 {"type": "status", "message": f"Undo may not work for this turn: {exc}"}
             )
+            if process_error is not None:
+                logger.error(
+                    "%s /query run failed for run_id=%s",
+                    AGENT_ID,
+                    run.run_id,
+                    exc_info=(
+                        type(process_error),
+                        process_error,
+                        process_error.__traceback__,
+                    ),
+                )
+                handler.print_error(_terminal_error_detail(process_error))
         except Exception as exc:  # surface loudly as a terminal error event
             logger.exception("%s /query run failed for run_id=%s", AGENT_ID, run.run_id)
             handler.print_error(_terminal_error_detail(exc))
