@@ -429,13 +429,13 @@ effective_timeout = max(base_timeout,
                    capped at 7200s (2 hours)
 ```
 
-The startup term is not an estimate: MCP init plus prompt ingestion reserves 4 minutes before the first turn, more on Windows (`_STARTUP_OVERHEAD_S` in `src/gaia/eval/runner.py`). Because `--timeout` is only the floor of that `max()`, a short value is raised to the reservation — with one turn and no documents, `--timeout 300` still runs with 440s.
+The startup term is a fixed reservation, not a measurement: the runner sets aside 4 minutes for MCP init plus prompt ingestion before the first turn, on every OS (Windows startup is the slow case it is sized for; see `_STARTUP_OVERHEAD_S` in `src/gaia/eval/runner.py`). Because `--timeout` is only the floor of that `max()`, a short value is raised to the reservation — with one turn and no documents, `--timeout 300` still runs with 440s.
 
 **CI recommendations:**
 
 | Context | Timeout | Reasoning |
 |---------|---------|-----------|
-| Quick PR check | `300` (5min) | Most single-turn RAG scenarios finish in 1-2 minutes |
+| Quick PR check | `300` (5min) | A floor only: the startup reservation raises it to at least 440s per scenario. Most single-turn RAG scenarios finish in 1-2 minutes |
 | Standard CI run | `900` (default) | Covers multi-turn and multi-document scenarios |
 | Full benchmark | `1200` | Extra buffer for large-document and vision scenarios |
 
