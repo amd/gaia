@@ -4928,12 +4928,16 @@ E) Edgar Allan Poe
 Let me know your answer!
 """
 
-            if args.test_type == "tts-preprocessing":
-                tts.test_preprocessing(test_text)
-            elif args.test_type == "tts-streaming":
-                tts.test_streaming_playback(test_text)
-            elif args.test_type == "tts-audio-file":
-                tts.test_generate_audio_file(test_text, args.output_audio_file)
+            try:
+                if args.test_type == "tts-preprocessing":
+                    tts.test_preprocessing(test_text)
+                elif args.test_type == "tts-streaming":
+                    tts.test_streaming_playback(test_text)
+                elif args.test_type == "tts-audio-file":
+                    tts.test_generate_audio_file(test_text, args.output_audio_file)
+            except Exception as e:
+                print(f"❌ Error: {args.test_type} test failed: {e}")
+                sys.exit(1)
 
         elif args.test_type == "asr-microphone":
             try:
