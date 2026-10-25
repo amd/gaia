@@ -30,6 +30,14 @@ class FakeDB:
     def get_setting(self, key, default=None):
         return self._settings.get(key, default)
 
+    def set_setting(self, key, value):
+        self._settings[key] = value
+
+    def create_session(self, title=None, kind=None):
+        session = {"id": f"s{len(self._sessions) + 1}", "title": title, "kind": kind}
+        self._sessions.append(session)
+        return session
+
     def list_sessions(self, limit=20):
         return self._sessions
 
@@ -144,13 +152,12 @@ class TestHourlyBudgetOnlySpentOnRealTicks:
                 assert directive.directive == "idle"
         assert loop._calls_this_hour == 0
 
-    async def test_idle_tick_with_no_session_does_not_spend_budget(self, tmp_path):
-        """The other early-return this fix covers: no active session at all."""
-        loop = self._make_loop(FakeDB({"agent_mode": "goal_driven"}, sessions=[]))
-        for _ in range(5):
-            directive = await self._run(loop, tmp_path)
-            assert directive.directive == "idle"
-        assert loop._calls_this_hour == 0
+    async def test_idle_tick_with_no_goals_creates_no_background_chat(self, tmp_path):
+        db = FakeDB({"agent_mode": "goal_driven"}, sessions=[])
+        loop = self._make_loop(db)
+        with patch.object(AgentLoop, "_get_actionable_goals", return_value=[]):
+            await self._run(loop, tmp_path)
+        assert db._sessions == []
 
     async def test_idle_tick_with_no_goals_never_hits_rate_limit(self, tmp_path):
         """Regression: previously this would exhaust the budget purely on

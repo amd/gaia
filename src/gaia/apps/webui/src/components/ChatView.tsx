@@ -10,7 +10,7 @@ import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessT
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { refreshActiveRuns } from '../services/activeRuns';
-import { claimView, dispatchNext, idleByPoll, isBusyError, markActivity, type QueuedSend, type SendOutcome } from '../services/queueDispatch';
+import { claimView, dispatchNext, idleByPoll, isBusyError, markActivity, requeueRefused, type QueuedSend, type SendOutcome } from '../services/queueDispatch';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
 import { describeStreamError, isStreamInterrupted, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
@@ -231,6 +231,8 @@ interface SendOptions {
     onQueuedOutcome?: (outcome: SendOutcome) => void;
     /** Re-attach attempt number for a stream that went silent. */
     reconnect?: number;
+    /** Opens the chat, so it goes ahead of anything queued. */
+    opening?: boolean;
 }
 
 export function ChatView({ sessionId }: ChatViewProps) {
@@ -447,6 +449,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Send a prompt queued before this view mounted (a new chat's first
     // message, or "Ask GAIA" from the file browser).
     const mountedRef = useRef(true);
+    // Left pendingPrompt, not yet sent.
+    const openingRef = useRef(false);
     useEffect(() => {
         mountedRef.current = true;
         return () => { mountedRef.current = false; };
@@ -456,10 +460,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // Wait for the history load, or it would replace the message just sent.
         if (!pending || loading) return;
         useChatStore.getState().setPendingPrompt(null);
+        openingRef.current = true;
         // A timer, not rAF: rAF never fires while the window is hidden, and
         // clearing the prompt re-runs this effect, so no cleanup may cancel it.
         setTimeout(() => {
-            if (mountedRef.current) sendMessageRef.current(pending);
+            openingRef.current = false;
+            if (mountedRef.current) sendMessageRef.current(pending, { opening: true });
         }, 0);
     }, [pendingPrompt, isLoadingMessages]);
 
@@ -632,7 +638,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             return;
         }
         // Waiting messages go first, so a new one joins the end of the line.
-        const waiting = (useChatStore.getState().messageQueues[sessionId] ?? NO_QUEUE).length > 0;
+        const waiting = !options?.opening && (useChatStore.getState().messageQueues[sessionId] ?? NO_QUEUE).length > 0;
         if (reattach) {
             // Don't double-attach if a stream is already live in this view.
             if (isStreaming && !reconnect) return;
@@ -1262,7 +1268,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onError: (err) => {
                 const interrupted = isStreamInterrupted(err);
                 // A queued message the server never took goes back in line, or shows as failed with a retry.
-                if (!queuedSettled) {
+                // So does a direct send a busy chat refused.
+                const requeued = queuedSettled && !reattach && !interrupted && !!optimisticUser
+                    && requeueRefused(sessionId, messageText, err);
+                if (!queuedSettled || requeued) {
                     if (interrupted) {
                         accepted();
                     } else {
@@ -1518,11 +1527,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
             }
             return;
         }
-        if (queue.length === 0 || queueHold || isLoadingMessages || retiredAgent || systemStatus?.init_state === 'initializing') return;
+        // The opening message goes first.
+        if (queue.length === 0 || queueHold || isLoadingMessages || pendingPrompt || openingRef.current || retiredAgent || systemStatus?.init_state === 'initializing') return;
         // Only once this chat's turn is over: seen ending here, or reported idle by a poll since.
         if (isStale() || (!observedEndRef.current && !idleHere)) return;
         void dispatchNext(sessionId, sendQueued, () => mountedRef.current && !isStale() && !useChatStore.getState().isStreaming && !comparingRef.current);
-    }, [busy, queue, queueHold, idleHere, isLoadingMessages, retiredAgent, systemStatus?.init_state, sessionId, sendQueued, isStale]);
+    }, [busy, queue, queueHold, idleHere, isLoadingMessages, pendingPrompt, retiredAgent, systemStatus?.init_state, sessionId, sendQueued, isStale]);
 
     // The meter shows what the next message will carry, so re-measure after each reply.
     const wasBusyRef = useRef(false);
@@ -1930,6 +1940,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         onRemove={(id) => setQueue((q) => messageQueue.remove(q, id))}
                         onRetry={(id) => setQueue((q) => messageQueue.promote(q, id, 'failed', 'queued'))}
                         onSteer={isStreaming && !stopping ? handleSteer : undefined}
+                        replying={isStreaming}
+                        busyRetry={!!queueHold}
                     />
                     <Composer
                         value={input}
