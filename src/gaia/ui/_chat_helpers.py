@@ -1831,6 +1831,13 @@ def record_relayed_context(
             _relayed_contexts[session_id] = {"reason": reason}
 
 
+def relayed_context_reason(profile, api_version, handler) -> Optional[str]:
+    """Why a relayed turn has no measurement: an old agent, or its own error."""
+    if not context_supported(profile, api_version):
+        return profile.context_upgrade_message
+    return getattr(handler, "relay_context_error", None)
+
+
 def forget_relayed_context(session_id: str) -> None:
     with _relayed_contexts_lock:
         _relayed_contexts.pop(session_id, None)
@@ -2445,11 +2452,7 @@ def _dispatch_sidecar_query(
         record_relayed_context(
             session_id,
             getattr(sse_handler, "relay_context", None),
-            (
-                getattr(sse_handler, "relay_context_error", None)
-                if context_supported(profile, handle.api_version)
-                else profile.context_upgrade_message
-            ),
+            relayed_context_reason(profile, handle.api_version, sse_handler),
         )
 
 

@@ -64,7 +64,7 @@ def measured(monkeypatch):
     """Record what the panel measurement was asked to count."""
     calls = []
 
-    def fake(agent, turns, model_id):
+    def fake(agent, turns, model_id, deadline=None):
         calls.append({"turns": turns, "model_id": model_id})
         return {"window": 65536, "used": 1234, "model": model_id}
 
@@ -132,7 +132,7 @@ def test_a_stopped_turn_sends_no_measurement(built, measured):
 def test_a_failed_measurement_says_why_and_keeps_the_answer(built, monkeypatch):
     client, _ = built
 
-    def broken(agent, turns, model_id):
+    def broken(agent, turns, model_id, deadline=None):
         raise RuntimeError("tokenizer exploded")
 
     monkeypatch.setattr(turn_insights, "panel_context", broken)
@@ -152,7 +152,7 @@ def test_a_slow_tokenizer_never_holds_up_the_answer(built, monkeypatch):
     client, _ = built
     release = threading.Event()
 
-    def slow_exact(agent, turns, model_id, estimate_reason=None):
+    def slow_exact(agent, turns, model_id, estimate_reason=None, deadline=None):
         if estimate_reason is None:
             release.wait(10)  # the tokenizer is stuck behind another generation
             return {"used": 1, "tokenizer": {"exact": True}}

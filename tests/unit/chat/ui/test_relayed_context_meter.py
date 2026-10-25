@@ -165,3 +165,51 @@ def test_the_sidecar_payload_has_every_field_the_panel_reads(monkeypatch):
     assert usage["turns_in_view"] == 1
     assert sum(c["tokens"] for c in usage["categories"]) == usage["used"]
     assert usage["tokenizer"]["exact"] is False
+
+
+@pytest.mark.parametrize(
+    "api_version, error, expected",
+    [
+        ("2.20", None, GAIA_PROFILE.context_upgrade_message),
+        ("2.20", "tokenizer exploded", GAIA_PROFILE.context_upgrade_message),
+        ("2.21", None, None),
+        ("2.21", "tokenizer exploded", "tokenizer exploded"),
+    ],
+)
+def test_the_dispatch_names_an_old_agent_or_the_agents_own_error(
+    api_version, error, expected
+):
+    """The gate _dispatch_sidecar_query records with (#5746 review)."""
+    h = SSEOutputHandler()
+    h.relay_context_error = error
+
+    assert helpers.relayed_context_reason(GAIA_PROFILE, api_version, h) == expected
+
+
+def test_the_tokenizer_count_stops_at_its_deadline(monkeypatch):
+    """An abandoned exact count sends nothing more to a busy server."""
+    import time
+
+    sent = []
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def post(self, url, json=None, timeout=None):
+            sent.append(timeout)
+            raise AssertionError("no request may go out after the deadline")
+
+        def close(self):
+            pass
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    counter = turn_insights.ModelTokenCounter(
+        "http://x", {}, deadline=time.monotonic() - 1
+    )
+
+    with pytest.raises(TimeoutError):
+        counter("some text")
+    assert sent == []

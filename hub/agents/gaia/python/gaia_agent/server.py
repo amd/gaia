@@ -648,9 +648,11 @@ def _measure_turn_context(
     model_id = getattr(agent, "model_id", None)
     box: Dict[str, Any] = {}
 
+    deadline = time.monotonic() + _EXACT_COUNT_SECONDS
+
     def _exact() -> None:
         try:
-            box["usage"] = panel_context(agent, turns, model_id)
+            box["usage"] = panel_context(agent, turns, model_id, deadline=deadline)
         except Exception as exc:  # re-raised below, on the run's thread
             box["error"] = exc
 

@@ -1568,3 +1568,14 @@ def test_an_unknown_surface_is_refused(built):
     client, _ = built
     r = client.post("/v1/gaia/query", json=_body(surface="webui"))
     assert r.status_code == 422, r.text
+
+
+@pytest.fixture(autouse=True)
+def _no_model_server(monkeypatch):
+    """The turn-end context count reads no live Lemonade in these tests."""
+    from gaia.ui import turn_insights
+
+    def offline(base_url, headers):
+        raise ConnectionError("no model server in unit tests")
+
+    monkeypatch.setattr(turn_insights, "_loaded_chat_model", offline)
