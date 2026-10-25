@@ -41,13 +41,59 @@ def run(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess:
     )
 
 
+PACK_FIELDS = ("name", "version", "integrity")
+
+
+def parse_pack_output(stdout: str) -> tuple[str, str, str]:
+    """(name, version, integrity) from `npm pack --dry-run --json` output.
+
+    npm 11 prints a one-element list; npm 12 prints an object keyed by package
+    name. Anything else raises ValueError.
+    """
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"output is not JSON ({e})") from e
+    if isinstance(data, list):
+        entries = data
+    elif isinstance(data, dict):
+        if "error" in data:
+            raise ValueError("npm reported an error")
+        entries = list(data.values())
+    else:
+        raise ValueError(f"expected a list or object, got {type(data).__name__}")
+    if len(entries) != 1:
+        raise ValueError(f"expected exactly one package, got {len(entries)}")
+    info = entries[0]
+    if not isinstance(info, dict):
+        raise ValueError(f"package entry is {type(info).__name__}, not an object")
+    missing = [f for f in PACK_FIELDS if not (isinstance(info.get(f), str) and info[f])]
+    if missing:
+        raise ValueError(f"package entry lacks {', '.join(missing)}")
+    return info["name"], info["version"], info["integrity"]
+
+
+def npm_version(cwd: Path) -> str:
+    res = run(["--version"], cwd)
+    if res.returncode != 0:
+        return f"unknown (npm --version exited {res.returncode})"
+    return res.stdout.strip()
+
+
 def local_integrity(cwd: Path) -> tuple[str, str, str]:
     """(name, version, integrity) of the tarball `npm publish` would upload."""
     res = run(["pack", "--dry-run", "--json", "--ignore-scripts"], cwd)
     if res.returncode != 0:
         raise RuntimeError(f"npm pack --dry-run failed:\n{res.stderr}")
-    info = json.loads(res.stdout)[0]
-    return info["name"], info["version"], info["integrity"]
+    try:
+        return parse_pack_output(res.stdout)
+    except ValueError as e:
+        raise RuntimeError(
+            f"Could not read `npm pack --dry-run --json` output from npm "
+            f"{npm_version(cwd)}: {e}. npm printed: {res.stdout[:300]!r}. "
+            "Update parse_pack_output in util/npm_publish_once.py for this npm "
+            "output format, or pin npm in the release workflow."
+        ) from e
 
 
 def registry_integrity(
