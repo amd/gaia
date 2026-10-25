@@ -2135,3 +2135,27 @@ def test_a_failed_rollback_keeps_the_reason_the_install_failed(tmp_path, monkeyp
     assert "another install" in message
     assert "Could not remove the failed install" in message
     assert "could not get the package cache" in str(excinfo.value.__cause__)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the move-aside path is Windows-only")
+def test_a_failed_restore_names_where_the_old_binary_is(tmp_path, monkeypatch):
+    target = tmp_path / "gaia-agent.exe"
+    target.write_bytes(b"old")
+    new = tmp_path / "incoming"
+    new.write_bytes(b"new")
+    real = os.replace
+    calls = []
+
+    def flaky(src, dst):
+        calls.append(1)
+        if len(calls) != 2:  # only the move aside succeeds
+            raise PermissionError("in use")
+        real(src, dst)
+
+    monkeypatch.setattr(installer.os, "replace", flaky)
+    with pytest.raises(InstallError) as exc:
+        installer._replace_binary(new, target)
+
+    [aside] = list(tmp_path.glob(".replaced-*"))
+    assert str(aside) in str(exc.value)
+    assert "rename it to gaia-agent.exe" in str(exc.value)

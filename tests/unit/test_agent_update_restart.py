@@ -102,6 +102,7 @@ def _args():
 
 def test_cli_update_stops_the_running_agent(monkeypatch, capsys):
     monkeypatch.setattr(installer, "install", lambda *a, **k: _result(updated=True))
+    monkeypatch.setattr(installer, "binary_changed", lambda agent_id, before: True)
     monkeypatch.setattr(client, "stop_running_agent", lambda agent_id: True)
 
     cli.handle_agent_install(_args())
@@ -111,11 +112,13 @@ def test_cli_update_stops_the_running_agent(monkeypatch, capsys):
     assert "start-agent" not in out
 
 
-def test_cli_first_install_never_touches_the_daemon(monkeypatch, capsys):
-    monkeypatch.setattr(installer, "install", lambda *a, **k: _result(updated=False))
+def test_cli_same_bytes_never_touch_the_daemon(monkeypatch, capsys):
+    """A first install or a same-version reinstall: nothing running to replace."""
+    monkeypatch.setattr(installer, "install", lambda *a, **k: _result(updated=True))
+    monkeypatch.setattr(installer, "binary_changed", lambda agent_id, before: False)
 
     def must_not_run(agent_id):
-        raise AssertionError("a first install has no old agent to stop")
+        raise AssertionError("the running agent already has these bytes")
 
     monkeypatch.setattr(client, "stop_running_agent", must_not_run)
 
@@ -126,6 +129,7 @@ def test_cli_first_install_never_touches_the_daemon(monkeypatch, capsys):
 
 def test_cli_exits_loudly_when_the_old_agent_keeps_running(monkeypatch, capsys):
     monkeypatch.setattr(installer, "install", lambda *a, **k: _result(updated=True))
+    monkeypatch.setattr(installer, "binary_changed", lambda agent_id, before: True)
 
     def refuse(agent_id):
         raise DaemonError("the daemon could not stop the 'gaia' agent")
@@ -149,9 +153,10 @@ def _init():
 
 def test_init_stops_the_agent_an_update_replaced(monkeypatch):
     monkeypatch.setattr(client, "stop_running_agent", lambda agent_id: True)
+    monkeypatch.setattr(installer, "binary_changed", lambda agent_id, before: True)
     cmd = _init()
 
-    cmd._restart_replaced_agent("gaia", _result(updated=True))
+    cmd._restart_replaced_agent("gaia", _result(updated=True), object())
 
     assert any("next chat uses 0.3.1" in line for line in cmd.printed)
 
@@ -161,6 +166,36 @@ def test_init_fails_the_setup_when_the_old_agent_keeps_running(monkeypatch):
         raise DaemonError("the daemon could not stop the 'gaia' agent")
 
     monkeypatch.setattr(client, "stop_running_agent", refuse)
+    monkeypatch.setattr(installer, "binary_changed", lambda agent_id, before: True)
 
     with pytest.raises(installer.InstallError, match="could not stop"):
-        _init()._restart_replaced_agent("gaia", _result(updated=True))
+        _init()._restart_replaced_agent("gaia", _result(updated=True), object())
+
+
+def _sentinel(root, sha):
+    import json
+
+    d = root / "gaia"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / installer.SENTINEL_NAME).write_text(
+        json.dumps(
+            {
+                "id": "gaia",
+                "version": "0.3.1",
+                "language": "python",
+                "installed_at": "now",
+                "artifact_sha256": sha,
+                "artifact_kind": "binary",
+                "executable": "gaia-agent.exe",
+            }
+        )
+    )
+    return installer.read_sentinel("gaia", root)
+
+
+def test_binary_changed_compares_the_bytes_not_the_install(tmp_path):
+    before = _sentinel(tmp_path, "aaa")
+    assert installer.binary_changed("gaia", before, tmp_path) is False  # reinstall
+    _sentinel(tmp_path, "bbb")
+    assert installer.binary_changed("gaia", before, tmp_path) is True
+    assert installer.binary_changed("gaia", None, tmp_path) is False  # first install

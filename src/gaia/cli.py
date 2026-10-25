@@ -8732,6 +8732,7 @@ def handle_agent_install(args):
 
     label = agent_id + (f"@{version}" if version else "")
     print(f"Installing '{label}' from the Agent Hub...")
+    before = installer.read_sentinel(agent_id)
     try:
         result = installer.install(agent_id, version=version, trusted=trusted)
     except installer.TrustRequiredError as exc:
@@ -8762,7 +8763,9 @@ def handle_agent_install(args):
         from gaia.daemon.errors import DaemonError
 
         try:
-            restarted = result.updated and stop_running_agent(result.id)
+            restarted = installer.binary_changed(result.id, before) and (
+                stop_running_agent(result.id)
+            )
         except DaemonError as exc:
             print(f"❌ {exc}", file=sys.stderr)
             sys.exit(1)

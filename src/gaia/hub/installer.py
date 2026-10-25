@@ -303,6 +303,22 @@ def read_sentinel(
     )
 
 
+def binary_changed(
+    agent_id: str,
+    before: Optional[InstalledAgent],
+    install_root: Optional[Path] = None,
+) -> bool:
+    """True when an install replaced *before* with different bytes.
+
+    A same-version reinstall writes the same artifact, so a running copy of it
+    has nothing to restart for.
+    """
+    if before is None:
+        return False
+    after = read_sentinel(agent_id, install_root)
+    return after is not None and after.artifact_sha256 != before.artifact_sha256
+
+
 def list_installed(install_root: Optional[Path] = None) -> Dict[str, InstalledAgent]:
     """Map ``agent_id -> InstalledAgent`` for every hub-installed agent."""
     root = install_root or default_install_root()
@@ -1080,8 +1096,15 @@ def _replace_binary(new: Path, target: Path) -> None:
     os.replace(str(target), str(aside))
     try:
         os.replace(str(new), str(target))
-    except OSError:
-        os.replace(str(aside), str(target))
+    except OSError as swap_error:
+        try:
+            os.replace(str(aside), str(target))
+        except OSError as restore_error:
+            raise InstallError(
+                f"Could not install the new {target.name} ({swap_error}) or put "
+                f"the previous one back ({restore_error}). The previous one is "
+                f"{aside}: rename it to {target.name}, or run the install again."
+            ) from swap_error
         raise
     logger.info("Replaced running %s; the old copy is %s", target, aside.name)
 
