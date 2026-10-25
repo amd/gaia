@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Read-only shell commands no longer ask for approval.** `git log`, `git
+  diff`, `ls`, `grep`, `dir` and the like — alone, chained or piped — run
+  unasked when they stay inside the allowed folders, the same as reading a
+  file. A code-review skill used to raise a dozen-plus prompts per task.
+  Writes, code, network, and paths outside the project still ask. `git
+  merge-base`, `blame`, `shortlog`, `cat-file` and `grep` join git's read-only
+  list.
+
 - **An old failure in memory no longer stops a request you make now.** A note
   like "this page returned 503, don't waste tool calls on it" was obeyed as a
   standing ban, so the agent refused a URL you handed it. Memories now reach

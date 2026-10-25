@@ -366,7 +366,8 @@ surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
 Twelve of the agent's 95 tools mutate the machine and need explicit approval
 before they run. Nine sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
-**`write_file`**, **`edit_file`**, **`run_shell_command`**,
+**`write_file`**, **`edit_file`**, **`run_shell_command`** (except a read-only
+line inside the allowed folders, which runs unasked),
 **`wait_for_condition`**, which re-runs a shell command until it succeeds,
 **`execute_python_file`**, **`run_python`**, **`notify_desktop`**, which spawns
 a PowerShell child on Windows to draw the notification, and **`install_cli`** /

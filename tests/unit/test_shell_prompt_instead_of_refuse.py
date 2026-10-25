@@ -434,7 +434,6 @@ def test_a_full_access_chat_runs_a_safe_command_unasked(repo):
 
     assert _prompts(events) == []
     assert result["status"] == "success", result
-    assert any("didn't ask first" in str(e.get("message")) for e in events)
 
 
 def test_an_unwatched_full_access_run_still_refuses_unasked(repo):
@@ -922,7 +921,7 @@ def test_a_skill_grant_still_runs_its_reads_without_a_prompt(repo):
     assert _prompts(events) == []
 
 
-def test_the_same_read_without_the_grant_asks_first(repo):
+def test_the_same_read_without_the_grant_runs_unasked(repo):
     handler = SSEOutputHandler()
     agent = _agent(handler)
 
@@ -930,7 +929,7 @@ def test_the_same_read_without_the_grant_asks_first(repo):
         agent, handler, _shell("git grep needle", repo), on_prompt=_answer(handler)
     )
 
-    assert len(_prompts(events)) == 1
+    assert _prompts(events) == []
     assert result["status"] == "success", result
 
 
