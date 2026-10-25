@@ -1686,12 +1686,16 @@ def _tokenize(command: str, bypass_gates: bool = False) -> list:
     than being eaten as a space. Inside quotes it is still ordinary data, so
     ``echo "a<newline>b"`` remains one operand.
     """
-    if not bypass_gates:
-        return shlex.split(command)
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=_BYPASS_PUNCTUATION)
+    if bypass_gates:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=_BYPASS_PUNCTUATION)
+        lexer.whitespace = " \t\r"
+    else:
+        lexer = shlex.shlex(command, posix=True)
     lexer.whitespace_split = True
     lexer.commenters = ""  # same as shlex.split: '#' is data, not a comment
-    lexer.whitespace = " \t\r"
+    if _pipe_dialect() == "cmd":
+        # cmd.exe reads '\' as a separator; POSIX escaping hid C:\x from the path check.
+        lexer.escape = ""
     return list(lexer)
 
 
