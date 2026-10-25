@@ -781,3 +781,25 @@ class TestRecordedElsewhere:
         (turn,) = fs.list_turns(SID, root=root)
         assert turn["finished_at"] is not None
         assert turn["files"][0]["change"] == "created"
+
+
+def test_a_last_line_without_a_newline_is_marked_not_merged():
+    """#5736: '-old' and '+new' must not run together on one diff line."""
+    from gaia.agents.base.file_snapshots import _count_lines, _unified_diff
+
+    diff = _unified_diff("undo test v1", "undo test v2\nsecond line", "a/x", "b/x")
+
+    assert diff.splitlines()[3:] == [
+        "-undo test v1",
+        r"\ No newline at end of file",
+        "+undo test v2",
+        "+second line",
+        r"\ No newline at end of file",
+    ]
+    assert _count_lines(diff) == (2, 1)
+
+
+def test_files_ending_in_a_newline_get_no_marker():
+    from gaia.agents.base.file_snapshots import _unified_diff
+
+    assert "No newline" not in _unified_diff("a\n", "b\n", "a/x", "b/x")
