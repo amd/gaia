@@ -45,6 +45,7 @@ export function ModelSettings() {
     const [models, setModels] = useState<ProviderModel[] | null>(null);
     const [modelsError, setModelsError] = useState<string | null>(null);
     const [query, setQuery] = useState('');
+    const [showAllFireworksModels, setShowAllFireworksModels] = useState(false);
     const [key, setKey] = useState('');
     const [amd, setAmd] = useState({ base_url: '', auth_header_name: '', auth_header_prefix: '' });
     const [busy, setBusy] = useState<string | null>(null);
@@ -101,6 +102,7 @@ export function ModelSettings() {
         setKey('');
         setNotice(null);
         setQuery('');
+        setShowAllFireworksModels(false);
     }, [chosen]);
     useEffect(() => {
         if (connected) void loadModels(chosen);
@@ -196,6 +198,13 @@ export function ModelSettings() {
         );
     }, [models, query]);
     const runnable = filtered.filter((m) => m.available !== false);
+    const fireworksCollapsed = chosen === 'fireworks' && !showAllFireworksModels && !query.trim();
+    const visibleRunnable = fireworksCollapsed
+        ? runnable.filter((m) => m.rank !== null)
+        : runnable;
+    const hiddenFireworksModels = fireworksCollapsed
+        ? runnable.filter((m) => m.rank === null)
+        : [];
     const unavailable = filtered.filter((m) => m.available === false);
     const labels = distinctModelLabels(models ?? []);
     const activeLocal = active && !active.remote && active.model ? active.model : null;
@@ -378,7 +387,25 @@ export function ModelSettings() {
                             {modelsError && <p className="settings-error" role="alert">{modelsError}</p>}
                             {!models && !modelsError && <p className="settings-hint"><Loader2 size={13} className="spin" /> Loading…</p>}
                             {models && filtered.length === 0 && <p className="settings-hint">No models match.</p>}
-                            <ul className="model-list">{runnable.map(renderRow)}</ul>
+                            <ul className="model-list">{visibleRunnable.map(renderRow)}</ul>
+                            {fireworksCollapsed && hiddenFireworksModels.length > 0 && (
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => setShowAllFireworksModels(true)}
+                                >
+                                    Show all models
+                                </button>
+                            )}
+                            {chosen === 'fireworks' && showAllFireworksModels && !query.trim() && (
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => setShowAllFireworksModels(false)}
+                                >
+                                    Show recommended models
+                                </button>
+                            )}
                             {unavailable.length > 0 && (
                                 <details className="model-unavailable">
                                     <summary>Not available on this PC ({unavailable.length})</summary>
