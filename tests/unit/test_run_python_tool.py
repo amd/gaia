@@ -198,6 +198,23 @@ def test_a_disallowed_project_the_user_chose_is_refused(
     assert not (project / "ran.txt").exists()
 
 
+def test_a_chosen_root_the_map_drops_is_named_in_the_refusal(
+    make_run_python, project, tmp_path, monkeypatch
+):
+    allowed = tmp_path / "docs"
+    allowed.mkdir()
+    monkeypatch.chdir(allowed)
+    monkeypatch.setenv(PROJECT_ROOT_ENV, str(project))
+    agent, run_python = make_run_python(allowed)
+    monkeypatch.setattr(agent, "_project_map_root", lambda: None, raising=False)
+
+    result = run_python(code="open('ran.txt', 'w').write('x')")
+
+    assert result["status"] == "error"
+    assert str(project) in result["error"]
+    assert not (allowed / "ran.txt").exists()
+
+
 def test_a_disallowed_repo_around_the_cwd_runs_in_the_scratch_dir(
     make_run_python, project, tmp_path, monkeypatch
 ):

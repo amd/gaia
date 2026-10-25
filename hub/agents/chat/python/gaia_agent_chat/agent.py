@@ -2090,6 +2090,15 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 chosen_root = getattr(
                     self.config, "project_root", None
                 ) or os.environ.get(PROJECT_ROOT_ENV)
+                if chosen_root and not project:
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: the project root {chosen_root} "
+                        "is outside the agent's allowed paths, so a snippet "
+                        "cannot run from it. Add it to the allowed paths, or "
+                        f"unset {PROJECT_ROOT_ENV}.",
+                        "has_errors": True,
+                    }
                 if run_dir is None or (
                     not chosen_root
                     and scratch is not None
