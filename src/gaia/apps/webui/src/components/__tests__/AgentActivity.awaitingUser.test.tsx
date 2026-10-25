@@ -26,3 +26,21 @@ describe('AgentActivity live status', () => {
         expect(live()).toBe('Waiting for you');
     });
 });
+
+const row = () => document.querySelector('.flow-tool-label')?.textContent;
+const rowTimer = () => document.querySelector('.flow-tool-latency')?.textContent;
+
+describe('AgentActivity tool row', () => {
+    it('times a running tool on its own row', () => {
+        render(<AgentActivity steps={[runningShell]} isActive />);
+        expect(row()).toBe('Running command');
+        expect(rowTimer()).toMatch(/^\d+s$/);
+    });
+
+    it('says it is waiting, with no timer, on the row an approval holds', () => {
+        render(<AgentActivity steps={[runningShell]} isActive awaitingUser />);
+        expect(row()).toBe('Waiting for you');
+        expect(rowTimer()).toBeUndefined();
+        expect(document.querySelector('.flow-tool .flow-tool-spinner')).toBeNull();
+    });
+});
