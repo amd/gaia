@@ -517,8 +517,13 @@ class TestGaiaDispatch:
         assert handler.events[0]["type"] == "status"
         assert "token rejected" in handler.events[0]["message"]
 
+    @pytest.mark.parametrize(
+        "failure",
+        ["ConnectionError", "ReadTimeout"],
+        ids=["refused", "hung"],
+    )
     def test_an_agent_that_stopped_answering_is_not_blamed_on_the_model(
-        self, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch, failure
     ):
         """rc11: a refused connection to the agent read "Couldn't reach the
         local LLM" to a user on Fireworks."""
@@ -530,7 +535,7 @@ class TestGaiaDispatch:
         handle._proxy.base_url = "http://127.0.0.1:57532"
 
         def _refused():
-            raise requests.exceptions.ConnectionError("Connection refused")
+            raise getattr(requests.exceptions, failure)("no answer")
 
         handle._proxy.init = _refused
         _, calls = self._patch(monkeypatch, handle)

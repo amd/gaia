@@ -2323,10 +2323,10 @@ def _dispatch_sidecar_query(
     except SidecarError as exc:
         sse_handler._emit({"type": "agent_error", "content": str(exc)})
         return
-    except requests.exceptions.ConnectionError as exc:
-        # The agent stopped answering (crashed or shutting down): not the model server.
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+        # The agent stopped answering (crashed, hung or shutting down): not the model server.
         logger.warning(
-            "chat: %s agent at %s refused the connection: %s",
+            "chat: %s agent at %s did not answer its readiness check: %s",
             agent_type,
             proxy.base_url,
             exc,
