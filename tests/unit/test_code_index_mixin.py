@@ -480,6 +480,83 @@ class TestLazyIndex:
         assert "home directory" in out["error"]
 
 
+class _SlowSDK(_FakeSDK):
+    """A first build that outlasts the search's wait."""
+
+    def __init__(self, fail=False):
+        super().__init__(indexed=False)
+        import threading
+
+        self.release = threading.Event()
+        self.fail = fail
+        self.progress = {"embedded": 50, "to_embed": 200}
+
+    def index_repository(self):
+        self.index_calls += 1
+        self.release.wait(5)
+        if self.fail:
+            raise RuntimeError("embedder unreachable")
+        return super().index_repository()
+
+
+class TestBackgroundBuild:
+    """A build longer than one call keeps going and reports progress."""
+
+    @pytest.fixture(autouse=True)
+    def _short_wait(self, monkeypatch):
+        monkeypatch.setattr(
+            "gaia.agents.tools.code_index_tools._FIRST_BUILD_WAIT_SECONDS", 0.05
+        )
+
+    def _harness(self, tmp_path, sdk):
+        harness = make_harness(tmp_path)
+        harness._get_code_index_sdk = lambda: sdk
+        return harness
+
+    def _search(self):
+        with patch("gaia.agents.tools.code_index_tools._CODE_INDEX_AVAILABLE", True):
+            fn = _TOOL_REGISTRY["search_code_index"]["function"]
+            return json.loads(fn(query="where are models loaded"))
+
+    def test_a_slow_build_answers_at_once_with_its_progress(self, tmp_path):
+        sdk = _SlowSDK()
+        self._harness(tmp_path, sdk)
+        out = self._search()
+        assert out["index_building"] is True
+        assert "50 of 200 code chunks" in out["error"]
+        assert "search_file_content" in out["error"]
+        sdk.release.set()
+
+    def test_searching_again_while_it_builds_starts_no_second_build(self, tmp_path):
+        sdk = _SlowSDK()
+        self._harness(tmp_path, sdk)
+        self._search()
+        assert self._search()["index_building"] is True
+        sdk.release.set()
+        assert sdk.index_calls == 1
+
+    def test_the_finished_build_answers_the_next_search(self, tmp_path):
+        harness_sdk = _SlowSDK()
+        harness = self._harness(tmp_path, harness_sdk)
+        self._search()
+        harness_sdk.release.set()
+        harness._code_index_job["thread"].join(5)
+        out = self._search()
+        assert out == []
+
+    def test_a_failed_build_is_reported_then_retried(self, tmp_path):
+        sdk = _SlowSDK(fail=True)
+        harness = self._harness(tmp_path, sdk)
+        self._search()
+        sdk.release.set()
+        harness._code_index_job["thread"].join(5)
+        out = self._search()
+        assert "embedder unreachable" in out["error"]
+        assert "index_codebase" in out["error"]
+        self._search()
+        assert sdk.index_calls == 2
+
+
 class TestBuildWindow:
     def test_a_first_search_gets_the_build_window_index_codebase_gets(self, tmp_path):
         """search_code_index builds the index on first use; capped at the default

@@ -20,6 +20,7 @@ requiring cooperative ``__init__`` chaining.
 
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
@@ -37,6 +38,10 @@ try:
     _CODE_INDEX_AVAILABLE = True
 except ImportError:
     _CODE_INDEX_AVAILABLE = False
+
+
+#: How long a first search waits for the build before answering without it.
+_FIRST_BUILD_WAIT_SECONDS = 60
 
 
 def _missing_deps_msg() -> str:
@@ -168,6 +173,72 @@ class CodeIndexToolsMixin:
             self._code_index_sdk = CodeIndexSDK(config)
         return self._code_index_sdk
 
+    def _code_index_build(self, sdk: Any) -> tuple:
+        """``(refusal, result)`` for a search that found no index.
+
+        A first build of a large repository outlasts any one tool call, and a
+        build cut off at the tool timeout saves nothing, so it runs on its own
+        thread. A small one finishes within the wait and ``result`` is its
+        ``IndexResult``; otherwise ``refusal`` says how far it has got.
+        """
+        build = getattr(self, "_code_index_job", None)
+        if build is None or build["sdk"] is not sdk:
+            build = {"sdk": sdk, "error": None, "result": None}
+
+            def _run() -> None:
+                try:
+                    build["result"] = sdk.index_repository()
+                except Exception as e:  # noqa: BLE001 — reported on the next search
+                    logger.error("Background code index build failed: %s", e)
+                    build["error"] = str(e)
+
+            build["thread"] = threading.Thread(
+                target=_run, name="gaia-code-index-build", daemon=True
+            )
+            self._code_index_job = build
+            build["thread"].start()
+            # Only the call that starts the build waits; later ones report.
+            build["thread"].join(timeout=_FIRST_BUILD_WAIT_SECONDS)
+        if build["thread"].is_alive():
+            progress = getattr(sdk, "progress", None) or {}
+            total = progress.get("to_embed", 0)
+            where = (
+                f"{progress.get('embedded', 0)} of {total} code chunks embedded"
+                if total
+                else "reading the repository"
+            )
+            return (
+                json.dumps(
+                    {
+                        "error": (
+                            f"The code index for {self._repo_path} is still "
+                            f"being built ({where}); a large repository takes "
+                            "several minutes. Search with search_file_content "
+                            "or search_file meanwhile, and try "
+                            "search_code_index again later."
+                        ),
+                        "index_building": True,
+                    }
+                ),
+                None,
+            )
+        # Finished: the next search with no index starts a fresh build.
+        self._code_index_job = None
+        if build["error"] is not None:
+            return (
+                json.dumps(
+                    {
+                        "error": (
+                            f"Building the code index for {self._repo_path} "
+                            f"failed: {build['error']}. Call index_codebase to "
+                            "retry and see the full error."
+                        )
+                    }
+                ),
+                None,
+            )
+        return None, build["result"]
+
     def register_code_index_tools(self) -> None:
         """Register code-index tools with the agent's tool registry."""
 
@@ -268,8 +339,10 @@ class CodeIndexToolsMixin:
             """Semantic search over the codebase.
 
             Embeds the query and returns the most relevant code chunks from
-            the FAISS index. The first search builds the index if there is
-            none, which is slow on a large repository.
+            the FAISS index. With no index yet, the first search builds one;
+            on a large repository the build continues in the background and
+            the search returns an error saying so — use search_file_content
+            until a later search succeeds.
 
             Args:
                 query: Natural language or code snippet to search for.
@@ -300,8 +373,9 @@ class CodeIndexToolsMixin:
                     # tool first.
                     if _is_home_directory(self._repo_path):
                         return _HOME_DIRECTORY_REFUSAL
-                    # Built on first use rather than at task start.
-                    built = sdk.index_repository()
+                    refusal, built = self._code_index_build(sdk)
+                    if refusal is not None:
+                        return refusal
                 results = sdk.search(query, scope=scope, top_k=top_k)
                 output = []
                 for r in results:

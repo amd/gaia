@@ -63,9 +63,12 @@ The [`coding` skill](https://github.com/amd/gaia/blob/main/hub/skills/coding/SKI
 | `clear_code_index` | Remove the cached index |
 
 You don't have to call `index_codebase` first: the first `search_code_index`
-in a repository with no index builds it, then searches. That first search is
-slow on a large repository; a task that never searches never pays for the
-embedding pass. Set `GAIA_PROJECT_MAP_AUTO_INDEX=1` to build it in the
+in a repository with no index starts building it in the background. A small
+repository finishes within that search's first minute and is searched at once.
+A large one keeps building — GAIA's own repository can take 20 minutes — and
+each search until then answers with how far it has got, so the agent uses text
+search meanwhile instead of waiting. A task that never searches never pays for
+the embedding pass. Set `GAIA_PROJECT_MAP_AUTO_INDEX=1` to build it in the
 background at task start instead.
 
 ### Example interaction
