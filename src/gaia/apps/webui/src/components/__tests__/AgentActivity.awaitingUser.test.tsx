@@ -42,5 +42,7 @@ describe('AgentActivity tool row', () => {
         expect(row()).toBe('Waiting for you');
         expect(rowTimer()).toBeUndefined();
         expect(document.querySelector('.flow-tool .flow-tool-spinner')).toBeNull();
+        // Which call is held stays one hover away, narration or not.
+        expect(document.querySelector('.flow-tool-header')?.getAttribute('title')).toBe('Running command');
     });
 });

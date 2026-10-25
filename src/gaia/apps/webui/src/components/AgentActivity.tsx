@@ -719,7 +719,11 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }:
                 className="flow-tool-header"
                 onClick={onToggle}
                 aria-expanded={isExpanded}
-                title={step.narration && step.narration !== line ? step.narration : undefined}
+                title={
+                    waiting
+                        ? toolRowText(step)
+                        : step.narration && step.narration !== line ? step.narration : undefined
+                }
             >
                 <div className="flow-tool-left">
                     {waiting ? (
