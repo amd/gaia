@@ -55,6 +55,25 @@ describe('inferencePlace', () => {
         expect(inferencePlace(null, location)).toBeNull();
     });
 
+    it("follows the chat's own location when another window switched models (#5743)", () => {
+        // This window still caches the old cloud pick; the chat already resolves to local Qwen.
+        const place = inferencePlace(CLOUD_ACTIVE, {
+            inference_remote: false,
+            inference_provider_name: 'Lemonade on this machine',
+            effective_model: 'Qwen3.6-35B-A3B-GGUF',
+        });
+        expect(place?.remote).toBe(false);
+        expect(place?.label).toBe('Local');
+    });
+
+    it('claims nothing when the pick is stale and the chat cannot say where it runs', () => {
+        const place = inferencePlace(CLOUD_ACTIVE, {
+            inference_remote: null,
+            effective_model: 'Qwen3.6-35B-A3B-GGUF',
+        });
+        expect(place).toBeNull();
+    });
+
     it('before the first chat, uses the backend answer for a new chat (#5253)', () => {
         const place = inferencePlace({ ...LOCAL_ACTIVE, inference_remote: false }, undefined);
         expect(place).toEqual({ remote: false, label: 'Local', description: null });
