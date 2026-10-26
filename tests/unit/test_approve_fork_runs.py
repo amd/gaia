@@ -12,9 +12,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPTS = (
-    Path(__file__).resolve().parents[2] / ".claude/skills/contributor-triage/scripts"
-)
+SCRIPTS = Path(__file__).resolve().parents[2] / "util"
 sys.path.insert(0, str(SCRIPTS))
 spec = importlib.util.spec_from_file_location(
     "approve_fork_runs", SCRIPTS / "approve_fork_runs.py"
@@ -91,6 +89,15 @@ def test_deleted_author_is_treated_as_third_party(monkeypatch):
         "tools/run.ps1",
         "Dockerfile.test",
         ".npmrc",
+        "hub/agents/gaia/python/pyproject.toml",
+        "docs/Dockerfile",
+        ".devcontainer/Dockerfile",
+        "src/gaia/installer/lemonade_installer.py",
+        "src/gaia/apps/webui/.npmrc",
+        "tools/deep/er/site.pth",
+        "hub/agents/email/npm/package.json",
+        "src/gaia/utils/util/helper.py",
+        "pkg/uv.lock",
     ],
 )
 def test_sensitive_paths_are_flagged(path):
@@ -104,6 +111,9 @@ def test_sensitive_paths_are_flagged(path):
         "tests/unit/test_cli.py",
         "docs/guide.mdx",
         "src/gaia/apps/webui/src/App.tsx",
+        "src/gaia/utilities/helper.py",
+        "docs/installers-overview.mdx",
+        "src/gaia/scripting/x.py",
     ],
 )
 def test_ordinary_paths_are_not_flagged(path):

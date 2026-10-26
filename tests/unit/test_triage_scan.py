@@ -11,10 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-SCRIPT = (
-    Path(__file__).resolve().parents[2]
-    / ".claude/skills/contributor-triage/scripts/triage_scan.py"
-)
+SCRIPT = Path(__file__).resolve().parents[2] / "util/triage_scan.py"
 spec = importlib.util.spec_from_file_location("triage_scan", SCRIPT)
 ts = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ts)

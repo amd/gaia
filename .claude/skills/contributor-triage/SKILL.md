@@ -32,16 +32,17 @@ The bar is strict by default and the **user** sets any waiver ("bug-only PRs, fo
 if comments are addressed"). A model never relaxes it on its own.
 
 Authority: merge when the user has asked to complete PRs into `main`. Pushing a fix onto a
-PR branch is part of completing it. RC tags may be pushed after the checkpoint below; a
-final release tag always needs the user's yes. Never force-push, never `gh pr merge --admin`
+PR branch is part of completing it. RC and final tags follow [`gaia-release`](../gaia-release/SKILL.md),
+which confirms before pushing any tag: ask unless the user has already pre-authorized RC tags,
+and a final tag always needs their explicit yes. Never force-push, never `gh pr merge --admin`
 (an admin merge skips the queue's re-test and has turned `main` red), and never close a
 contributor's PR without a stated reason and thanks.
 
 ## Step 1 — build the worklist
 
 ```bash
-python .claude/skills/contributor-triage/scripts/triage_scan.py          # table
-python .claude/skills/contributor-triage/scripts/triage_scan.py --json   # for agents
+python util/triage_scan.py          # table
+python util/triage_scan.py --json   # for agents
 ```
 
 Read-only, ~1 minute. Third-party PRs first (bug fixes, then the rest), then maintainer PRs,
@@ -74,8 +75,8 @@ time — and approve right after reviewing, not later**:
 2. Approve, pinned to the commit you read:
 
    ```bash
-   python .claude/skills/contributor-triage/scripts/approve_fork_runs.py --reviewed 5732@6d02e4f
-   python .claude/skills/contributor-triage/scripts/approve_fork_runs.py --reviewed 5732@6d02e4f --apply
+   python util/approve_fork_runs.py --reviewed 5732@6d02e4f
+   python util/approve_fork_runs.py --reviewed 5732@6d02e4f --apply
    ```
 
    The first command is a dry run. The tool refuses if the head moved since you read it,
@@ -132,7 +133,8 @@ minutes per PR are too slow.
    says to gate on evals, hold instead.
 8. **Independent verifier.** A second agent that never touched the PR reviews the diff, every
    comment, the tests and conflicts, reports only, and does not push, comment or merge. Fix
-   its notes, then have it re-check that change. The fixer never merges its own PR.
+   its notes, then have it re-check that change. Neither the fixer nor the verifier merges:
+   the orchestrating session does, after the verifier says enqueue.
 9. **Merge.** `gh pr merge <N> --squash`. "The merge strategy for main is set by the merge
    queue" means the PR *was queued*, not refused; a follow-up plain `gh pr merge <N>` answers
    "already queued". Then confirm the outcome (`state`, `mergedAt`, or GraphQL
@@ -193,8 +195,7 @@ RC failed to publish, or (3) the shortlist is empty: this one is the final's can
    Tagging while main's CI still runs is the mistake that burned an RC before.
 3. **Dry-run the release train** on it: `gh workflow run release_train_dryrun.yml --ref main -f
    rc_tag=vX.Y.Z-rcN`, and fix forward on `main` until it passes.
-4. **Tag the RC** per [`gaia-release`](../gaia-release/SKILL.md) (RC tags need no user
-   approval once the steps above pass). Watch the publish run to the end; an RC isn't done
+4. **Tag the RC** per [`gaia-release`](../gaia-release/SKILL.md) (ask first unless RC tags are pre-authorized). Watch the publish run to the end; an RC isn't done
    until its release, installers and website entry exist.
 5. **Report what is in it**: PRs since the previous RC, outside contributors first, so the user
    can test their fixes and the notes can credit them.

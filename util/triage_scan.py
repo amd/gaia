@@ -7,9 +7,9 @@ Read-only. Prints a worklist with the blockers each PR still has; it decides
 nothing. A "ready" row only means the cheap signals are clean -- the human or
 subagent still reads the diff and every comment before merging.
 
-    python .claude/skills/contributor-triage/scripts/triage_scan.py
-    python .claude/skills/contributor-triage/scripts/triage_scan.py --json
-    python .claude/skills/contributor-triage/scripts/triage_scan.py --team some-login
+    python util/triage_scan.py
+    python util/triage_scan.py --json
+    python util/triage_scan.py --team some-login
 """
 
 import argparse

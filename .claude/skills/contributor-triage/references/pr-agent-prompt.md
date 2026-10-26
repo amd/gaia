@@ -3,13 +3,14 @@
 Save a filled-in copy outside the repo (for example `~/.cache/triage/template.md`) and hand
 each subagent the one-line instruction "Read `~/.cache/triage/template.md` first and follow it
 exactly, for PRs #A #B #C". Batch PRs that touch the same files so one agent sees the overlap;
-give a PR with conflicts or an eval gate its own agent.
+give a PR with conflicts its own agent. Fixer agents never merge: the orchestrating session
+merges after a separate verifier says enqueue.
 
 Fill in the `<…>` fields from the scanner output and the user's current scope.
 
 ```text
-You are triaging open amd/gaia PRs. Handle each PR below in turn. Goal per PR: merged, or held
-with ONE concrete, current blocking reason. Scope today: <bug fixes only | everything>.
+You are triaging open amd/gaia PRs. Handle each PR below in turn. Goal per PR: READY (verified, safe
+for the verifier to approve) or HOLD with ONE concrete, current blocking reason. You do NOT merge. Scope today: <bug fixes only | everything>.
 
 Environment
 - gh may not be on PATH (Windows: set GH to its full path). Repo: amd/gaia.
@@ -38,13 +39,13 @@ Per PR
    unrelated platform assertion = "never ran".
 6. Run the affected tests and `python util/lint.py` on touched files. The fix needs a test
    that fails without it. A flake fix must remove the race, not widen a timeout.
-7. HOLD (comment the precise gap) when: LLM-affecting diff without posted eval results; the
-   fix is incomplete; it is a security-sensitive permission/confirmation change (human
+7. LLM-affecting diff (prompt, tool docstring/schema, retry/grounding, error classification):
+   do not hold on evals (they run on RC tags); list the categories to re-run in your report.
+   HOLD (comment the precise gap) when: the fix is incomplete; it is a security-sensitive permission/confirmation change (human
    sign-off); it is >5k lines (get it green, do not merge); scope excludes it (leave without
    comment).
-8. Do not merge your own fix. Report back; a separate verifier agent approves and merges.
-   Merge with `gh pr merge N --squash`, or `--auto --squash` if the queue requires it, then
-   re-check state/mergedAt.
+8. Do not merge, and do not enqueue. Report READY with the head SHA; the orchestrating session
+   merges after the independent verifier says enqueue.
 9. Make "Closes #N" match reality; confirm the linked issue closed.
 
 Style
@@ -53,7 +54,7 @@ Style
   <details><summary>🔍 Technical details</summary> block. Be warm and specific with outside
   contributors: thank them for the concrete thing they found.
 
-Final report (short): one line per PR — merged / auto-merge queued / held: <reason> — plus any
+Final report (short): one line per PR — READY @<sha7> / HOLD: <reason> / DUPLICATE of #N — plus any
 main-wide bug found.
 ```
 

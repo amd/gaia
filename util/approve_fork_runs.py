@@ -27,9 +27,11 @@ import triage_scan as ts
 
 # Paths where a change runs with the runner's privileges or alters what CI trusts.
 RISKY_PATHS = re.compile(
-    r"^(\.github/|\.claude/|util/|scripts/|installer/|setup\.py$|pyproject\.toml$|"
-    r"setup\.cfg$|tox\.ini$|Makefile$|Dockerfile|requirements[^/]*\.txt$|"
-    r"\.npmrc$|\.pth$|.*conftest\.py$|.*package(-lock)?\.json$|.*\.(sh|ps1|bat|cmd)$)"
+    r"(^|/)(\.github|\.claude|\.devcontainer|\.husky|util|scripts|installer)/"
+    r"|(^|/)(setup\.py|pyproject\.toml|setup\.cfg|tox\.ini|Makefile|conftest\.py"
+    r"|\.npmrc|\.nvmrc|package(-lock)?\.json|npm-shrinkwrap\.json|Pipfile|[^/]*\.pth"
+    r"|uv\.lock|poetry\.lock|yarn\.lock|pnpm-lock\.yaml)$"
+    r"|(^|/)Dockerfile[^/]*$|(^|/)requirements[^/]*\.txt$|\.(sh|ps1|bat|cmd)$"
 )
 
 
@@ -53,7 +55,7 @@ def parse_reviewed(items):
 
 
 def risky_files(files):
-    return sorted(f for f in files if RISKY_PATHS.match(f))
+    return sorted(f for f in files if RISKY_PATHS.search(f))
 
 
 def plan_for(gh, repo, number, sha_prefix, stalled, team):
