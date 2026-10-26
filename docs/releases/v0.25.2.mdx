@@ -34,7 +34,7 @@ A selection of the user-visible fixes; the full list is in the changelog below.
 - **Failures are no longer hidden** — `gaia mcp` commands exit 1 on failure, TTS self-tests exit non-zero when synthesis fails, agent package loading errors surface, connector token-parse errors are kept, and undo-history save failures no longer mask the query error. (PRs [#5777](https://github.com/amd/gaia/pull/5777), [#5788](https://github.com/amd/gaia/pull/5788), [#5745](https://github.com/amd/gaia/pull/5745), [#5795](https://github.com/amd/gaia/pull/5795), [#5734](https://github.com/amd/gaia/pull/5734))
 - **Settings list recommended Fireworks models first.** (PR [#5781](https://github.com/amd/gaia/pull/5781))
 - **Eval fixes** — an invalid `--baseline-ref` is an error, and contracted negations ("doesn't") are recognized in claims. (PRs [#5784](https://github.com/amd/gaia/pull/5784), [#5808](https://github.com/amd/gaia/pull/5808))
-- **Docs** — Full access still asks before a gated shell command, script shell commands time out after 10 minutes, `max_steps` defaults to 50, the eval startup reservation is 240 s, and email install examples drop `--trust`. (PRs [#5769](https://github.com/amd/gaia/pull/5769), [#5758](https://github.com/amd/gaia/pull/5758), [#5759](https://github.com/amd/gaia/pull/5759), [#5763](https://github.com/amd/gaia/pull/5763), [#5780](https://github.com/amd/gaia/pull/5780))
+- **Docs** — Full access still asks before a gated shell command, script shell commands time out after 10 minutes, `max_steps` defaults to 50, the eval startup reservation is 240 s, email install examples drop `--trust`, and the stateful email agent examples show their auth headers. (PRs [#5769](https://github.com/amd/gaia/pull/5769), [#5758](https://github.com/amd/gaia/pull/5758), [#5759](https://github.com/amd/gaia/pull/5759), [#5763](https://github.com/amd/gaia/pull/5763), [#5780](https://github.com/amd/gaia/pull/5780), [#5760](https://github.com/amd/gaia/pull/5760))
 
 ## Contributors
 
@@ -44,7 +44,7 @@ Thanks to the community members who contributed to this release:
 - [@maheshrijal](https://github.com/maheshrijal) — stable-release preference for skills, `gaia mcp` exit codes and agent package loading errors (PRs [#5755](https://github.com/amd/gaia/pull/5755), [#5777](https://github.com/amd/gaia/pull/5777), [#5745](https://github.com/amd/gaia/pull/5745))
 - [@jipeng6036-del](https://github.com/jipeng6036-del) — recovering from non-object tool arguments, dense-table indexing and undo-history error handling (PRs [#5732](https://github.com/amd/gaia/pull/5732), [#5742](https://github.com/amd/gaia/pull/5742), [#5734](https://github.com/amd/gaia/pull/5734))
 - [@TejasS1233](https://github.com/TejasS1233) — VLM blocks kept whole in section chunking and date-only `time_to` in memory search (PRs [#5817](https://github.com/amd/gaia/pull/5817), [#5818](https://github.com/amd/gaia/pull/5818))
-- [@amandeavor](https://github.com/amandeavor) — documenting the `max_steps` default and the script shell timeout (PRs [#5759](https://github.com/amd/gaia/pull/5759), [#5758](https://github.com/amd/gaia/pull/5758))
+- [@amandeavor](https://github.com/amandeavor) — documenting the `max_steps` default, the script shell timeout and auth headers in the email agent examples (PRs [#5759](https://github.com/amd/gaia/pull/5759), [#5758](https://github.com/amd/gaia/pull/5758), [#5760](https://github.com/amd/gaia/pull/5760))
 - [@xueyilan137-maker](https://github.com/xueyilan137-maker) — excluding cloud models from the local context ceiling and keeping connector token parse errors (PRs [#5813](https://github.com/amd/gaia/pull/5813), [#5795](https://github.com/amd/gaia/pull/5795))
 - [@huong8373tt-beep](https://github.com/huong8373tt-beep) — contracted negation in eval claims and a steadier hub pip test (PRs [#5808](https://github.com/amd/gaia/pull/5808), [#5814](https://github.com/amd/gaia/pull/5814))
 - [@erSpell](https://github.com/erSpell) — CP1252 and UTF-16 text files in document search (PR [#5761](https://github.com/amd/gaia/pull/5761))
@@ -58,8 +58,10 @@ Thanks to the community members who contributed to this release:
 
 ## Full Changelog
 
-**55 commits** since v0.25.1:
+**57 commits** since v0.25.1:
 
+- `e2a195c7b` — feat(skills): contributor-triage skill for PR and issue triage (#5816)
+- `ca6e51b6a` — docs(email): add auth headers to stateful agent examples in SKILL.md (#5760)
 - `e44fd39c0` — fix(memory): include final day for date-only time_to (#5818)
 - `e7ddce1de` — fix(ui): a relayed write prompt names where the file lands (#5783)
 - `13945c69e` — fix(skills): tell the model to combine skills, add pairs_with companions (#5422)
