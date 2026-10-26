@@ -255,7 +255,6 @@ function Internet({ sessionId }: { sessionId: string }) {
         return (
             <Row label="Internet">
                 <span className="sp-state-text">{env.internet ? 'On' : 'Off'}</span>
-                <span className="sp-meta">Set by the agent; can't be changed from this chat.</span>
             </Row>
         );
     }
