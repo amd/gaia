@@ -395,6 +395,32 @@
     font-weight: 600;
 }
 
+/* Phone: one ⋯ per row, sized to a 44px touch target. */
+.sb-row-more {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-md);
+    color: var(--text-muted);
+}
+
+.sb-row-more[aria-expanded="true"] {
+    color: var(--text-primary);
+}
+
+.sb-row-menu .popover-item {
+    align-items: center;
+    min-height: 44px;
+    gap: 10px;
+}
+
+.sb-row-menu .sb-row-menu-delete {
+    color: var(--danger);
+}
+
 .sb-empty,
 .sb-error {
     padding: 8px;
@@ -461,11 +487,5 @@
 
     .sb.is-open {
         transform: translateX(0);
-    }
-
-    .sb-row-rename,
-    .sb-row-pin,
-    .sb-row-delete {
-        opacity: 1;
     }
 }

@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Bell, Brain, Clock, EyeOff, FileText, PanelLeftClose, PanelLeftOpen,
+    Bell, Brain, Clock, EyeOff, FileText, MoreHorizontal, PanelLeftClose, PanelLeftOpen,
     Pencil, Pin, PinOff, Search, Settings, Smartphone, SquarePen, Trash2, X,
 } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
@@ -20,6 +20,8 @@ import { formatShortcut } from '../utils/platform';
 import { cleanupAbandonedDraft } from '../utils/sessionCleanup';
 import { MAX_SESSION_TITLE_CHARS } from '../utils/constants';
 import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
+import { useMediaQuery } from '../hooks/useMediaQuery';
+import { Popover } from './Popover';
 import gaiaRobot from '../assets/gaia-robot.png';
 import { useSidebarWidth } from './SidebarResizer';
 import type { Session } from '../types';
@@ -50,9 +52,11 @@ function readShowAutomated(): boolean {
     }
 }
 
-function SessionRow({ session, active, status, queuePlace, unsent, failed, onSelect, onDelete, onPin, onRename }: {
+function SessionRow({ session, active, phone, status, queuePlace, unsent, failed, onSelect, onDelete, onPin, onRename }: {
     session: Session;
     active: boolean;
+    /** Phone width: the row's actions sit behind one ⋯ menu instead of three icons. */
+    phone: boolean;
     status: RowStatus | null;
     /** 1-based place in line for the GPU while queued; 0 otherwise. */
     queuePlace: number;
@@ -65,6 +69,9 @@ function SessionRow({ session, active, status, queuePlace, unsent, failed, onSel
     onRename: (id: string, title: string) => void;
 }) {
     const [confirm, setConfirm] = useState(false);
+    const [menuOpen, setMenuOpen] = useState(false);
+    const moreRef = useRef<HTMLButtonElement>(null);
+    const closeMenu = useCallback(() => { setMenuOpen(false); setConfirm(false); }, []);
     const [draft, setDraft] = useState<string | null>(null);
     const editing = draft !== null;
     const settled = useRef(false);
@@ -125,42 +132,80 @@ function SessionRow({ session, active, status, queuePlace, unsent, failed, onSel
                     {note && <span className={`sb-row-queue${failed > 0 ? ' is-failed' : ''}`}>{note}</span>}
                 </button>
             )}
-            {!editing && (
-                <button
-                    type="button"
-                    className="sb-row-rename"
-                    onClick={startEdit}
-                    aria-label={`Rename ${session.title}`}
-                    title="Rename"
-                >
-                    <Pencil size={13} />
-                </button>
+            {phone ? (!editing && (
+                <>
+                    <button
+                        ref={moreRef}
+                        type="button"
+                        className="sb-row-more"
+                        onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
+                        aria-haspopup="dialog"
+                        aria-expanded={menuOpen}
+                        aria-label={`More actions for ${session.title}`}
+                    >
+                        <MoreHorizontal size={18} aria-hidden="true" />
+                    </button>
+                    <Popover open={menuOpen} onClose={closeMenu} anchor={moreRef} label="Chat actions" placement="below" align="end">
+                        <div className="sb-row-menu">
+                            <button type="button" className="popover-item" onClick={() => { closeMenu(); startEdit(); }}>
+                                <Pencil size={15} aria-hidden="true" />
+                                Rename
+                            </button>
+                            <button type="button" className="popover-item" onClick={() => { closeMenu(); onPin(session.id, !session.pinned); }}>
+                                {session.pinned ? <PinOff size={15} aria-hidden="true" /> : <Pin size={15} aria-hidden="true" />}
+                                {session.pinned ? 'Unpin' : 'Pin'}
+                            </button>
+                            <button
+                                type="button"
+                                className="popover-item sb-row-menu-delete"
+                                onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}
+                            >
+                                <Trash2 size={15} aria-hidden="true" />
+                                {confirm ? `${unsent > 0 ? `Delete ${unsent} unsent?` : 'Delete?'} Tap again` : 'Delete'}
+                            </button>
+                        </div>
+                    </Popover>
+                </>
+            )) : (
+                <>
+                    {!editing && (
+                        <button
+                            type="button"
+                            className="sb-row-rename"
+                            onClick={startEdit}
+                            aria-label={`Rename ${session.title}`}
+                            title="Rename"
+                        >
+                            <Pencil size={13} />
+                        </button>
+                    )}
+                    <button
+                        type="button"
+                        className={`sb-row-pin${session.pinned ? ' is-pinned' : ''}`}
+                        onClick={() => onPin(session.id, !session.pinned)}
+                        aria-label={session.pinned ? `Unpin ${session.title}` : `Pin ${session.title}`}
+                        aria-pressed={!!session.pinned}
+                        title={session.pinned ? 'Unpin' : 'Pin to top'}
+                    >
+                        {session.pinned ? <PinOff size={13} /> : <Pin size={13} />}
+                    </button>
+                    <button
+                        type="button"
+                        className={`sb-row-delete${confirm ? ' is-confirm' : ''}`}
+                        onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}
+                        aria-label={confirm
+                            ? `Confirm delete ${session.title}${unsent > 0 ? ` and its ${unsentWords}` : ''}`
+                            : `Delete ${session.title}`}
+                        title={confirm
+                            ? (unsent > 0 ? `Click again to delete this chat and its ${unsentWords}` : 'Click again to delete')
+                            : 'Delete'}
+                    >
+                        {confirm
+                            ? <span className="sb-row-delete-label">{unsent > 0 ? `Delete ${unsent} unsent?` : 'Delete?'}</span>
+                            : <Trash2 size={13} />}
+                    </button>
+                </>
             )}
-            <button
-                type="button"
-                className={`sb-row-pin${session.pinned ? ' is-pinned' : ''}`}
-                onClick={() => onPin(session.id, !session.pinned)}
-                aria-label={session.pinned ? `Unpin ${session.title}` : `Pin ${session.title}`}
-                aria-pressed={!!session.pinned}
-                title={session.pinned ? 'Unpin' : 'Pin to top'}
-            >
-                {session.pinned ? <PinOff size={13} /> : <Pin size={13} />}
-            </button>
-            <button
-                type="button"
-                className={`sb-row-delete${confirm ? ' is-confirm' : ''}`}
-                onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}
-                aria-label={confirm
-                    ? `Confirm delete ${session.title}${unsent > 0 ? ` and its ${unsentWords}` : ''}`
-                    : `Delete ${session.title}`}
-                title={confirm
-                    ? (unsent > 0 ? `Click again to delete this chat and its ${unsentWords}` : 'Click again to delete')
-                    : 'Delete'}
-            >
-                {confirm
-                    ? <span className="sb-row-delete-label">{unsent > 0 ? `Delete ${unsent} unsent?` : 'Delete?'}</span>
-                    : <Trash2 size={13} />}
-            </button>
         </li>
     );
 }
@@ -197,6 +242,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const [deleteError, setDeleteError] = useState<string | null>(null);
     const [rowError, setRowError] = useState<string | null>(null);
     const [showAutomated, setShowAutomated] = useState(readShowAutomated);
+    const phone = useMediaQuery('(max-width: 768px)');
     const searchRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
@@ -405,6 +451,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                                         key={s.id}
                                         session={s}
                                         active={s.id === currentSessionId}
+                                        phone={phone}
                                         status={sessionRowStatus(s, live)}
                                         queuePlace={queuedSessionIds.indexOf(s.id) + 1}
                                         unsent={messageQueues[s.id]?.length ?? 0}
