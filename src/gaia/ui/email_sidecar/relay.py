@@ -431,6 +431,7 @@ def relay_query(
     answers_confirmations: bool = False,
     documents: Optional[List[str]] = None,
     allowed_paths: Optional[List[str]] = None,
+    working_directory: Optional[str] = None,
     memory: Optional[str] = None,
     changes_turn_id: Optional[str] = None,
     surface: Optional[str] = None,
@@ -444,6 +445,9 @@ def relay_query(
     *allowed_paths* — the chat's file scope, for a sidecar the caller has
     established takes it (``profiles.scope_supported``); ``None`` leaves the
     sidecar on its own default.
+
+    *working_directory* — the chat workspace for relative file paths; sent only
+    when the sidecar contract advertises support.
 
     *memory* — the chat's memory mode (``on`` / ``private`` / ``off``), for a
     sidecar the caller has established takes it (``profiles.memory_supported``).
@@ -520,6 +524,8 @@ def relay_query(
         body["documents"] = list(documents)
     if allowed_paths is not None:
         body["allowed_paths"] = list(allowed_paths)
+    if working_directory is not None:
+        body["working_directory"] = working_directory
     if memory is not None:
         body["memory"] = memory
     if changes_turn_id is not None:

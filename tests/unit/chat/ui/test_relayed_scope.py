@@ -26,6 +26,7 @@ from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
     scope_supported,
+    working_directory_supported,
 )
 from gaia.ui.models import ChatRequest
 from gaia.ui.sse_handler import SSEOutputHandler
@@ -137,6 +138,24 @@ def test_only_a_flagship_at_2_18_takes_the_scope(version, expected):
     assert scope_supported(GAIA_PROFILE, version) is expected
 
 
+@pytest.mark.parametrize(
+    "version, expected", [("2.22", True), ("3.0", True), ("2.21", False), (None, False)]
+)
+def test_only_a_flagship_at_2_22_takes_the_working_directory(version, expected):
+    assert working_directory_supported(GAIA_PROFILE, version) is expected
+    assert working_directory_supported(EMAIL_PROFILE, "9.9") is False
+
+
+def test_the_relay_sends_the_workspace_only_to_a_supporting_flagship(monkeypatch):
+    workspace = "/tmp/workspace"
+
+    new = _dispatch(monkeypatch, "2.22", [workspace])
+    old = _dispatch(monkeypatch, "2.21", [workspace])
+
+    assert new["working_directory"] == workspace
+    assert "working_directory" not in old
+
+
 def test_email_never_takes_the_scope():
     assert scope_supported(EMAIL_PROFILE, "9.9") is False
 
@@ -172,6 +191,7 @@ def _dispatch(monkeypatch, version, allowed):
         None,
         "gaia",
         allowed_paths=allowed,
+        working_directory=allowed[0],
     )
     [body] = proxy.bodies
     return body

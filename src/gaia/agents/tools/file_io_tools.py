@@ -102,12 +102,50 @@ def _python_syntax_error(path: Path, content: str) -> Optional[str]:
     return None
 
 
-def _resolve_target(file_path: str, project_dir: Optional[str] = None) -> Path:
-    """Where write_file / edit_file act: ``file_path``, under ``project_dir``."""
+def _resolve_target(
+    file_path: str,
+    project_dir: Optional[str] = None,
+    default_dir: Optional[str] = None,
+) -> Path:
+    """Resolve a file path using an explicit or session workspace base.
+
+    ``project_dir`` is the caller's explicit override.  When it is omitted,
+    ``default_dir`` is the workspace supplied by the host; only hosts that do
+    not expose one fall back to the process working directory.  A sidecar's
+    process cwd is its package directory, not the chat's workspace.
+    """
     path = Path(file_path).expanduser()
-    if project_dir and not path.is_absolute():
-        path = Path(project_dir).resolve() / path
+    if not path.is_absolute():
+        base = project_dir or default_dir
+        if base:
+            path = Path(base).resolve() / path
     return path.resolve()
+
+
+def _workspace_default(host: Any) -> Optional[str]:
+    """The session workspace a host supplied for relative file paths.
+
+    An allowlist says where a tool *may* go; it is not an ordering or a default
+    directory.  In particular, a sidecar's allowed paths may contain exact
+    documents, its scratch directory, and the managed documents directory.
+    Selecting the first one would make a relative write unpredictable.  Only
+    an explicit session workspace changes the historical process-cwd fallback.
+    """
+    config = getattr(host, "config", None)
+    workspace = getattr(config, "working_directory", None) or getattr(
+        host, "working_directory", None
+    )
+    if not workspace:
+        return None
+    return str(Path(workspace).expanduser().resolve())
+
+
+def _project_target_for(host: Any, args: Dict[str, Any]) -> Path:
+    return _resolve_target(
+        args["file_path"],
+        args.get("project_dir"),
+        _workspace_default(host),
+    )
 
 
 def _project_target(args: Dict[str, Any]) -> Path:
@@ -436,6 +474,9 @@ class FileIOToolsMixin:
     def register_file_io_tools(self) -> None:
         """Register all file I/O tools."""
 
+        def target_of(args: Dict[str, Any]) -> Path:
+            return _project_target_for(self, args)
+
         @tool
         def read_file(
             file_path: str,
@@ -465,7 +506,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with file content and type-specific metadata
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(target_of({"file_path": file_path}))
             path_validator = _require_path_validator(self)
             try:
                 # Scope *and* secrets: being in an allowed directory never made
@@ -1187,7 +1228,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _project_target, "overwriting"))
+        @tool(preflight=read_first_preflight(self, target_of, "overwriting"))
         def write_file(
             file_path: str,
             content: str,
@@ -1211,7 +1252,7 @@ class FileIOToolsMixin:
                 Status, the resolved path, size, and any backup made.
             """
             try:
-                path = _resolve_target(file_path, project_dir)
+                path = _resolve_target(file_path, project_dir, _workspace_default(self))
                 content_size = len(content.encode("utf-8"))
 
                 # Security: validate write access.
@@ -1310,7 +1351,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _project_target))
+        @tool(preflight=read_first_preflight(self, target_of))
         def edit_file(
             file_path: str,
             old_content: str,
@@ -1333,7 +1374,7 @@ class FileIOToolsMixin:
                 project_dir: Project root for resolving a relative file_path.
             """
             try:
-                path = _resolve_target(file_path, project_dir)
+                path = _resolve_target(file_path, project_dir, _workspace_default(self))
 
                 # Security: validate write access.
                 # Report missing setup instead of writing without a check.

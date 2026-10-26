@@ -153,6 +153,9 @@ class RelayProfile:
     #: so the agent works in the same scope the Agent UI shows. ``None`` means
     #: it never does, and keeps its own default scope.
     min_scope_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes the chat workspace used for
+    #: resolving relative file paths.
+    min_working_directory_api_version: Optional[Tuple[int, int]] = None
     #: Shown in the Skills settings when the installed agent is below
     #: :attr:`min_skills_api_version`.
     skills_upgrade_message: str = ""
@@ -528,6 +531,8 @@ GAIA_PROFILE = RelayProfile(
     min_skills_api_version=(2, 17),
     # 2.18 added /query's allowed_paths field.
     min_scope_api_version=(2, 18),
+    # 2.22 adds the explicit workspace for relative file paths.
+    min_working_directory_api_version=(2, 22),
     skills_upgrade_message=(
         "The installed GAIA agent is too old to list its skills here. Update "
         "GAIA to the latest version, then reopen this page. Its skills still "
@@ -646,6 +651,14 @@ def scope_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     return floor is not None and _meets(api_version, floor)
 
 
+def working_directory_supported(
+    profile: RelayProfile, api_version: Optional[str]
+) -> bool:
+    """True when the sidecar accepts the chat workspace on ``/query``."""
+    floor = profile.min_working_directory_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def memory_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when *api_version* takes ``/query``'s ``memory`` field.
 
@@ -698,6 +711,7 @@ __all__ = [
     "documents_supported",
     "skills_supported",
     "scope_supported",
+    "working_directory_supported",
     "memory_supported",
     "changes_supported",
 ]

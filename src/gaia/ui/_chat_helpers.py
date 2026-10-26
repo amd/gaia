@@ -66,6 +66,7 @@ from gaia.ui.email_sidecar.profiles import (
     profile_for,
     scope_supported,
     surface_supported,
+    working_directory_supported,
 )
 from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.turn_changes import TurnRecording
@@ -1582,6 +1583,14 @@ def _unsafe_directory_grant_reason(directory: Path) -> str:
     return ""
 
 
+def _session_working_directory() -> str:
+    """The folder shown for a new chat and used for bare relative paths."""
+    cwd = Path.cwd().resolve()
+    if _unsafe_directory_grant_reason(cwd):
+        return str(_managed_documents_dir())
+    return str(cwd)
+
+
 def _compute_allowed_paths(rag_file_paths: list) -> list:
     """Derive a session's filesystem scope from its attached documents.
 
@@ -1727,6 +1736,7 @@ def _session_agent_kwargs(
     library_paths: list,
     allowed: list,
     session_id: str,
+    working_directory: Optional[str] = None,
     dynamic_tools: bool = False,
     memory_incognito: bool = False,
 ) -> dict:
@@ -1755,6 +1765,7 @@ def _session_agent_kwargs(
         "rag_documents": rag_file_paths,
         "library_documents": library_paths,
         "allowed_paths": allowed,
+        "working_directory": working_directory or _session_working_directory(),
         "ui_session_id": session_id,
         "dynamic_tools": dynamic_tools,
         "memory_incognito": memory_incognito,
@@ -2234,6 +2245,7 @@ def _dispatch_sidecar_query(
     session_id: str | None = None,
     documents: list | None = None,
     allowed_paths: list | None = None,
+    working_directory: str | None = None,
     memory: str = "on",
     recording: TurnRecording | None = None,
     max_steps: int | None = None,
@@ -2328,6 +2340,12 @@ def _dispatch_sidecar_query(
             # sending a scope that refuses every file without saying why.
             sse_handler._emit({"type": "agent_error", "content": str(exc)})
             return
+
+    relayed_working_directory = None
+    if working_directory is not None and working_directory_supported(
+        profile, handle.api_version
+    ):
+        relayed_working_directory = working_directory
 
     relayed_memory = None
     if profile.min_memory_api_version is not None:
@@ -2450,6 +2468,7 @@ def _dispatch_sidecar_query(
         answers_confirmations=confirmations_supported(profile, handle.api_version),
         documents=relayed_documents,
         allowed_paths=relayed_scope,
+        working_directory=relayed_working_directory,
         memory=relayed_memory,
         changes_turn_id=(
             recording.relay()
@@ -3344,6 +3363,7 @@ async def _get_chat_response(
         # Reuse what a running warm-up is caching rather than read it twice.
         wait_for_warm_up()
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
+        working_directory = _session_working_directory()
 
         if cached_agent is not None:
             from gaia.agents.base.console import SilentConsole
@@ -3354,6 +3374,8 @@ async def _get_chat_response(
             with writing_tool_registry():
                 agent._register_tools()
             _extend_cached_scope(agent, allowed)
+            if hasattr(agent, "config"):
+                agent.config.working_directory = working_directory
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                 new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
                 for fpath in new_paths:
@@ -3439,6 +3461,7 @@ async def _get_chat_response(
                             library_paths=library_paths,
                             allowed=allowed,
                             session_id=session_id,
+                            working_directory=_session_working_directory(),
                             dynamic_tools=dynamic_tools,
                             memory_incognito=_memory_off(session, db),
                         ),
@@ -3785,10 +3808,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if sse_handler.cancelled.is_set():
                     return
                 cached_agent = _get_cached_agent(session_id, model_id, agent_type)
+                working_directory = _session_working_directory()
 
                 if cached_agent is not None:
                     # -- Cache hit --
                     agent = cached_agent
+                    if hasattr(agent, "config"):
+                        agent.config.working_directory = working_directory
                     agent.console = sse_handler
                     # A non-streaming turn may have built this agent.
                     agent.streaming = True
@@ -3855,6 +3881,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         library_paths=library_paths,
                         allowed=allowed,
                         session_id=session_id,
+                        working_directory=_session_working_directory(),
                         dynamic_tools=dynamic_tools,
                         memory_incognito=_memory_off(session, db),
                     )
@@ -3964,6 +3991,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         session_id=session_id,
                         documents=_relayed_documents(rag_file_paths, attached),
                         allowed_paths=allowed,
+                        working_directory=_session_working_directory(),
                         memory=_memory_mode(session, db),
                         recording=recording,
                     )
@@ -4026,6 +4054,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                     library_paths=library_paths,
                                     allowed=allowed,
                                     session_id=session_id,
+                                    working_directory=_session_working_directory(),
                                     dynamic_tools=dynamic_tools,
                                     memory_incognito=_memory_off(session, db),
                                 ),
