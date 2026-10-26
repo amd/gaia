@@ -99,6 +99,25 @@ def test_undo_all_reports_the_open_dialog(client, created, dialog):
     assert target.exists()
 
 
+def test_undo_all_ignores_a_turn_already_undone(client, home, dialog):
+    session_id = client.post("/api/sessions", json={}).json()["id"]
+    docs_file = home / "Documents" / "old.txt"
+    with fs.recording_turn(session_id) as rec:
+        fs.before_change(docs_file, "write_file")
+        docs_file.write_text("x\n")
+    assert _undo(client, session_id, rec.turn_id).status_code == 200
+    elsewhere = home / "notes.txt"
+    with fs.recording_turn(session_id):
+        fs.before_change(elsewhere, "write_file")
+        elsewhere.write_text("y\n")
+    dialog["refused"].add("Documents")
+
+    resp = client.post(f"/api/sessions/{session_id}/changes/undo", json={})
+
+    assert resp.status_code == 200, resp.text
+    assert not elsewhere.exists()
+
+
 def test_undo_says_where_to_allow_a_denied_folder(client, created, dialog):
     session_id, turn_id, target = created
     dialog["refused"].add("Documents")

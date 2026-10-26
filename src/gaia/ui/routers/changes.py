@@ -184,7 +184,8 @@ async def undo_session_changes(
 ):
     """Put every file the chat changed back as it was; all or nothing."""
     _require_session(db, session_id)
-    await asyncio.to_thread(_refuse_if_macos_blocks, await _list_turns(session_id))
+    live = [t for t in await _list_turns(session_id) if not t.get("restored_at")]
+    await asyncio.to_thread(_refuse_if_macos_blocks, live)
     lock = http_request.app.state.session_locks.setdefault(session_id, asyncio.Lock())
     if lock.locked():
         raise HTTPException(
