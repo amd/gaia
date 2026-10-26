@@ -1557,9 +1557,8 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
         # MORE contained, not less, by taking the configured pager (a program)
         # out of the run entirely.
         bare_flags=frozenset({"--version", "--help", "-h", "-P", "--no-pager"}),
-        # The read-only floor this binary had before it had a policy — see
-        # BinaryPolicy.ungranted. Unchanged from the shell tool's old
-        # SAFE_GIT_COMMANDS, so an agent with no skill loaded behaves as before.
+        # The read-only floor: what runs with no skill loaded — see
+        # BinaryPolicy.ungranted.
         ungranted=frozenset(
             {
                 "status",
@@ -1572,6 +1571,11 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                 "ls-tree",
                 "describe",
                 "rev-parse",
+                "merge-base",
+                "blame",
+                "shortlog",
+                "cat-file",
+                "grep",
                 "help",
             }
         ),

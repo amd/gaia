@@ -105,13 +105,12 @@ CANCEL_POLL_SECONDS = 0.5
 # The no-prompt list: what a blanket pre-approval may run — not the set of
 # commands that exist.
 #
-# ``run_shell_command`` is confirmation-gated, so interactively every call is
-# shown to the user. A command that is not on this list is not refused; it is
-# shown the same way and runs if approved (``TIER_CONFIRM``). Membership buys
-# one thing: running under ``GAIA_AUTO_APPROVE_TOOLS`` or
-# ``auto_approve_gated_tools``, which refuse everything else. An allowlist used
-# as a refusal list makes the agent unable to do ordinary work its user is
-# sitting right there to approve.
+# A line made only of these commands, reaching only allowed folders, runs with
+# no prompt — interactively and under ``GAIA_AUTO_APPROVE_TOOLS`` or
+# ``auto_approve_gated_tools``. A command that is not on this list is not
+# refused; it is shown to the user and runs if approved (``TIER_CONFIRM``). An
+# allowlist used as a refusal list makes the agent unable to do ordinary work
+# its user is sitting right there to approve.
 #
 # So the bar for adding an entry is "safe to run unattended, every time, with
 # arguments nobody reviewed", which in practice still means read-only.
@@ -3132,8 +3131,11 @@ class ShellToolsMixin:
         """True when an active ``shell:execute:<binary>`` grant covers this call.
 
         Read by ``Agent._call_is_pre_authorized`` to skip the per-call
-        confirmation modal. The grant *is* the consent: the user declared one
-        named binary, restricted to a read-only table, in a skill they chose to
+        confirmation modal. A line the read-only checks pass whole needs no
+        grant: it reads no more than ``read_file``, which never asks.
+
+        Otherwise the grant *is* the consent: the user declared one named
+        binary, restricted to a read-only table, in a skill they chose to
         load. Re-asking on every call is not a second safeguard — a triage runs
         five to ten ``gh`` reads, so it is five to ten modals attended and a
         100% failure rate unattended.
@@ -3167,10 +3169,6 @@ class ShellToolsMixin:
             # two predicates to disagree about whether the call was consented to.
             return True
 
-        granted = skill_granted_binaries(self)
-        if not granted:
-            return False
-
         command = (tool_args or {}).get("command")
         if not isinstance(command, str):
             return False
@@ -3188,7 +3186,24 @@ class ShellToolsMixin:
             validate_invocation,
         )
 
-        for segment in map(policy_argv, (s for step in steps for s in step.segments)):
+        granted = skill_granted_binaries(self)
+        segments = [policy_argv(s) for step in steps for s in step.segments]
+
+        # A line the read-only checks pass whole — every command on the
+        # no-prompt list, every path inside the allowed folders — reads no
+        # more than read_file does unasked. A skill grant widens what those
+        # checks pass, so a line using a granted binary is judged below.
+        if not any(
+            _is_granted_binary(word, granted)
+            for segment in segments
+            for word in segment
+        ):
+            verdict, _ = self._line_verdict(
+                command, (tool_args or {}).get("working_directory")
+            )
+            return verdict is None
+
+        for segment in segments:
             binary = normalize_binary(segment[0])
             if binary not in granted:
                 return False

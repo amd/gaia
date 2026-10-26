@@ -862,11 +862,11 @@ def test_anything_outside_the_grant_still_asks(command):
     assert _needs_modal(_Gated("gh"), command) is True
 
 
-def test_an_agent_with_no_grant_is_unchanged():
-    """The gate must behave byte-identically for every existing agent."""
+def test_an_agent_with_no_grant_asks_for_everything_but_plain_reads():
     host = _Gated()  # no binaries granted
     assert _needs_modal(host, "gh issue list") is True
-    assert _needs_modal(host, "ls -la") is True
+    assert _needs_modal(host, "git commit -m x") is True
+    assert _needs_modal(host, "ls -la") is False
     assert host._tool_requires_confirmation("run_shell_command") is True
     assert host._tool_requires_confirmation("write_file") is True
     assert host._tool_requires_confirmation("search_web") is False
@@ -1075,7 +1075,7 @@ def test_a_call_outside_the_policy_is_asked_with_its_risk_note():
 def test_a_permitted_ungranted_call_still_reaches_the_prompt():
     """The reordering must not swallow the modal for calls that can run."""
     agent = _ExecutingAgent()
-    agent._execute_tool("run_shell_command", {"command": "pwd"})
+    agent._execute_tool("run_shell_command", {"command": "git commit -m x"})
     assert [name for name, _ in agent.console.asked] == ["run_shell_command"]
 
 
@@ -1992,7 +1992,7 @@ def test_the_old_whitelist_holes_are_closed(command, why_now):
     assert error is not None, f"still open: {why_now}"
 
 
-@pytest.mark.parametrize("command", ["git commit -m x", "git add .", "git blame f.py"])
+@pytest.mark.parametrize("command", ["git commit -m x", "git add ."])
 def test_a_write_without_the_grant_asks_the_user(command):
     error = ShellToolsMixin._validate_command("git", shlex.split(command), command)
     assert error is not None

@@ -26,8 +26,8 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 - Output truncation for large results
 
 **Security Model:**
-- `run_shell_command` is confirmation-gated, so interactively every call is shown to the user
-- Read-only list (`ALLOWED_COMMANDS`): what a blanket pre-approval (`GAIA_AUTO_APPROVE_TOOLS`, `auto_approve_gated_tools`) may run
+- `run_shell_command` is confirmation-gated, except for a line made only of read-only commands (`ALLOWED_COMMANDS`, plus git's read-only subcommands) that reaches only allowed folders: that runs with no prompt, the same as `read_file`
+- Read-only list (`ALLOWED_COMMANDS`): also what a blanket pre-approval (`GAIA_AUTO_APPROVE_TOOLS`, `auto_approve_gated_tools`) may run
 - Anything else is `TIER_CONFIRM`: it runs once the user approves it (`git commit`, `npm test`, `rm notes.txt`), and is refused under a blanket pre-approval unless the console's `full_access` is on
 - `TIER_CONFIRM_ONCE` for what GAIA's own checks don't cover (`git push`, `git -c`, `python -c`, uninspectable PowerShell, shell operators, a path outside the allowed folders): the prompt shows the exact line and its full folder with a risk note, offers no "always", and an approval runs that line once through the shell. It is refused under a blanket pre-approval, and `wait_for_condition` never polls one
 - `TIER_REFUSE` for text a prompt can't show honestly (encoded PowerShell, invisible or line-break characters, broken quoting), for anything that deletes or discards work on a line GAIA can't fully check (`git push --force`, `git reset --hard`, also inside `$(…)` or behind a `-c`), and for folders no approval may open
