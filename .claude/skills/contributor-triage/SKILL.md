@@ -135,7 +135,10 @@ minutes per PR are too slow.
    comment, the tests and conflicts, reports only, and does not push, comment or merge. Fix
    its notes, then have it re-check that change. Neither the fixer nor the verifier merges:
    the orchestrating session does, after the verifier says enqueue.
-9. **Merge.** `gh pr merge <N> --squash`. "The merge strategy for main is set by the merge
+9. **Merge.** Re-check the head SHA, `mergeable` and CI immediately before. After `main` moves
+   `mergeable` reads `UNKNOWN` for a minute; fetching the PR over REST (`gh api
+   repos/amd/gaia/pulls/<N>`) makes GitHub compute it, then re-check; never merge on UNKNOWN.
+   `gh pr merge <N> --squash`. "The merge strategy for main is set by the merge
    queue" means the PR *was queued*, not refused; a follow-up plain `gh pr merge <N>` answers
    "already queued". Then confirm the outcome (`state`, `mergedAt`, or GraphQL
    `mergeQueueEntry`): a queued merge can still fail and leave the PR open.
