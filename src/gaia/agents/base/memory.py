@@ -581,6 +581,23 @@ _MEMORY_TOOLS = frozenset(
 #: Guards the one-time creation of each instance's extraction bookkeeping.
 _EXTRACTION_STATE_LOCK = threading.Lock()
 
+
+class _UserTurns:
+    """User turns running in this process, across every agent.
+
+    Each chat session has its own agent, and all of them share the one local
+    model, so a turn in any session must hold back every session's extraction —
+    not only its own, or a new chat waits behind the previous chat's.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.in_flight = 0
+        self.last_end = float("-inf")
+
+
+_USER_TURNS = _UserTurns()
+
 #: Guards each instance's per-session write-failure counts.
 _WRITE_FAILURE_LOCK = threading.Lock()
 
@@ -641,6 +658,12 @@ _EXTRACTION_AGENTS: "weakref.WeakValueDictionary[int, Any]" = (
 )
 
 
+def _extraction_agents() -> List[Any]:
+    """The live agents that have started an extraction worker."""
+    with _EXTRACTION_STATE_LOCK:
+        return list(_EXTRACTION_AGENTS.values())
+
+
 @atexit.register
 def _drain_extraction_at_exit() -> None:
     """Flush jobs still held for the idle window before the interpreter exits.
@@ -648,10 +671,8 @@ def _drain_extraction_at_exit() -> None:
     The worker is a daemon thread, so a long-lived host (Agent UI, sidecar) that
     shuts down without draining would otherwise drop them without a word.
     """
-    with _EXTRACTION_STATE_LOCK:
-        agents = list(_EXTRACTION_AGENTS.values())
     deadline = time.monotonic() + EXTRACTION_EXIT_WAIT_S
-    for agent in agents:
+    for agent in _extraction_agents():
         drain_memory_extraction(agent, max(0.0, deadline - time.monotonic()))
 
 
@@ -4323,8 +4344,6 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._extraction_thread: Optional[threading.Thread] = None
             self._extraction_queue: Deque[_ExtractionJob] = deque()
             self._extraction_wake = threading.Condition(self._extraction_lock)
-            self._turns_in_flight = 0
-            self._last_turn_end = float("-inf")
             self._extraction_flush = False
             self._extraction_running = False
             self._extraction_cancel = threading.Event()
@@ -4339,25 +4358,30 @@ class MemoryMixin(ProceduralMemoryMixin):
             return self._extraction_cancel
 
     def _note_user_turn_started(self) -> None:
-        """Hold back queued extraction, and stop a running one, while a user turn runs.
+        """Hold back queued extraction, and stop a running one, in every agent.
 
         The local backend serves one request at a time, so a running
-        extraction would make the user's first model call wait behind it. A
-        flush is left alone: its caller is exiting and wants the memories saved.
+        extraction would make the user's first model call wait behind it,
+        whichever chat it belongs to. A flush is left alone: its caller is
+        exiting and wants the memories saved.
         """
         self._ensure_extraction_state()
-        with self._extraction_lock:
-            self._turns_in_flight += 1
-            if self._extraction_running and not self._extraction_flush:
-                self._extraction_cancel.set()
+        with _USER_TURNS.lock:
+            _USER_TURNS.in_flight += 1
+        for agent in _extraction_agents():
+            with agent._extraction_lock:
+                if agent._extraction_running and not agent._extraction_flush:
+                    agent._extraction_cancel.set()
 
     def _note_user_turn_finished(self) -> None:
-        """Start the idle clock that queued extraction waits out."""
+        """Start the idle clock that every agent's queued extraction waits out."""
         self._ensure_extraction_state()
-        with self._extraction_lock:
-            self._turns_in_flight = max(0, self._turns_in_flight - 1)
-            self._last_turn_end = time.monotonic()
-            self._extraction_wake.notify_all()
+        with _USER_TURNS.lock:
+            _USER_TURNS.in_flight = max(0, _USER_TURNS.in_flight - 1)
+            _USER_TURNS.last_end = time.monotonic()
+        for agent in _extraction_agents():
+            with agent._extraction_lock:
+                agent._extraction_wake.notify_all()
 
     def _wait_for_extraction_turn(self) -> None:
         """Block (lock held) until no user turn ran for ``EXTRACTION_IDLE_S``.
@@ -4371,10 +4395,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             not self._extraction_flush
             and len(self._extraction_queue) < EXTRACTION_QUEUE_MAX
         ):
-            if self._turns_in_flight > 0:
+            with _USER_TURNS.lock:
+                in_flight, last_end = _USER_TURNS.in_flight, _USER_TURNS.last_end
+            if in_flight > 0:
                 remaining = None
             else:
-                remaining = EXTRACTION_IDLE_S - (time.monotonic() - self._last_turn_end)
+                remaining = EXTRACTION_IDLE_S - (time.monotonic() - last_end)
                 if remaining <= 0:
                     break
             if not deferred:

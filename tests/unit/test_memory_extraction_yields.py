@@ -175,6 +175,52 @@ def test_a_new_turn_stops_a_running_extraction_then_it_reruns(store):
     assert _stored(store) == [FACT]
 
 
+def test_a_turn_in_another_chat_stops_and_holds_a_running_extraction(tmp_path):
+    """Every chat has its own agent but all share the one local model, so a
+    new chat's first call waited behind the previous chat's extraction."""
+    calls: List[Dict] = []
+    first_call_running = threading.Event()
+    first_call_ended = threading.Event()
+
+    def send_messages(messages, cancel=None, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            first_call_running.set()
+            try:
+                for _ in range(600):
+                    if cancel.is_set():
+                        raise LLMCallCancelled("cancelled mid-reply")
+                    time.sleep(0.05)
+            finally:
+                first_call_ended.set()
+        return MagicMock(text=json.dumps(OPS), finish_reason="stop")
+
+    chat = MagicMock()
+    chat.send_messages.side_effect = send_messages
+    previous_chat = _Host(MemoryStore(db_path=tmp_path / "previous.db"), chat)
+    new_chat = _Host(MemoryStore(db_path=tmp_path / "new.db"), MagicMock())
+    try:
+        previous_chat._after_process_query(
+            "Please remember that my favourite colour is teal", "Noted."
+        )
+        assert first_call_running.wait(5), "extraction never started"
+
+        started = time.monotonic()
+        new_chat._note_user_turn_started()
+        assert first_call_ended.wait(2), "the other chat's extraction kept the model"
+        assert time.monotonic() - started < 1.0
+        time.sleep(0.3)
+        assert len(calls) == 1, "the extraction reran during the new chat's turn"
+
+        new_chat._note_user_turn_finished()
+        assert previous_chat.wait_for_memory_extraction(timeout=5)
+        assert len(calls) == 2
+        assert _stored(previous_chat._memory_store) == [FACT]
+    finally:
+        previous_chat._memory_store.close()
+        new_chat._memory_store.close()
+
+
 def test_a_flush_is_not_cancelled_by_a_new_turn(store):
     """A caller about to exit asked for the memories on disk; let it finish."""
     gate = threading.Event()
