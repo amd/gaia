@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `get_system_info` reports free disk space (`disk_free_gb`) and available
+  memory (`memory_available_gb`), and computes disk use from free space. On a
+  Mac it reported only the share macOS's system volume uses, so a nearly full
+  disk read as 5% used. Its description now says it answers free-space
+  questions, so the model stops trying `df`, which the shell refuses.
 - `/quit` and `/reset` no longer discard the conversation when the session
   cannot be saved; chat stays open so storage can be fixed and `/save` retried.
   Ctrl-C still exits without saving. Document tools warn when an indexed
