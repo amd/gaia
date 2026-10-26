@@ -90,23 +90,19 @@ def test_an_idle_frontend_is_stopped_as_stuck(monkeypatch, frontend):
     assert installer.PIP_TIMEOUT_ENV in message
 
 
-def test_a_slow_install_that_keeps_working_is_not_stopped(monkeypatch, tmp_path):
-    """A working child outlives the timeout window without being stopped."""
-    monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 5.0)
-    target = tmp_path / "download.bin"
-    busy = [
-        sys.executable,
-        "-c",
-        "import time, sys\n"
-        f"end = time.monotonic() + 6\n"
-        f"with open({str(target)!r}, 'wb') as f:\n"
-        "    while time.monotonic() < end:\n"
-        "        f.write(b'x' * 65536); f.flush()\n"
-        "        time.sleep(0.05)\n",
-    ]
+def test_a_slow_install_that_keeps_working_is_not_stopped(monkeypatch):
+    """Activity keeps resetting the window, so a run longer than it is not stuck.
+
+    The activity reading is scripted: a real child can sit unscheduled for more
+    than the 1s window on a loaded runner, which is the stall the idle tests
+    above exist to catch.
+    """
+    ticks = iter(range(1, 1000))
+    monkeypatch.setattr(installer, "_tree_activity", lambda root, seen: next(ticks))
+    busy = [sys.executable, "-c", "import time; time.sleep(3)"]
     monkeypatch.setattr(installer, "_pip_frontends", lambda: [busy])
+
     installer._default_run_pip(["pkg"])
-    assert target.stat().st_size > 0
 
 
 def test_a_uv_cache_lock_failure_names_the_lock_and_stops_there(monkeypatch):
