@@ -62,7 +62,7 @@ from gaia.agents.base.context_eviction import (
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import before_change, note_untracked
 from gaia.agents.base.memory import MemoryMixin
-from gaia.agents.base.project_map import resolve_project_root
+from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 
 # dynamic_tools_env_override is re-exported so callers importing it from
 # gaia_agent_chat.agent keep working; its canonical home is the core tool_loader
@@ -2086,11 +2086,25 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 moved_from = None
                 if run_dir is not None and not run_dir.is_dir():
                     moved_from, run_dir = run_dir, None
+                # A root guessed from the process cwd is the daemon's launch folder.
+                chosen_root = getattr(
+                    self.config, "project_root", None
+                ) or os.environ.get(PROJECT_ROOT_ENV)
+                if chosen_root and not project:
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: the project root {chosen_root} "
+                        "is outside the agent's allowed paths, so a snippet "
+                        "cannot run from it. Add it to the allowed paths, or "
+                        f"unset {PROJECT_ROOT_ENV}.",
+                        "has_errors": True,
+                    }
                 if run_dir is None or (
-                    not project
+                    not chosen_root
                     and scratch is not None
                     and not self.path_validator.is_path_allowed(str(run_dir))
                 ):
+                    project = None
                     if scratch is None:
                         return {
                             "status": "error",

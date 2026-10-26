@@ -22,6 +22,7 @@ from .._chat_helpers import (
     _SIDECAR_AGENT_TYPES,
     _agent_type_unknown,
     evict_session_agent,
+    forget_relayed_context,
     get_agent_registry,
     resolve_device_model,
     resolve_session_model,
@@ -399,6 +400,7 @@ async def delete_session(
             raise HTTPException(status_code=404, detail="Session not found")
         session_locks.pop(session_id, None)
         evict_session_agent(session_id)
+        forget_relayed_context(session_id)
         session_permissions.forget_session(session_id)
         followups.forget(session_id)
         answer_retry.forget(session_id)
