@@ -572,8 +572,6 @@ function App() {
 
     const main = showMemoryDashboard ? (
         <Suspense fallback={<Loading />}><MemoryDashboard /></Suspense>
-    ) : showSchedules ? (
-        <Suspense fallback={<Loading />}><ScheduleManager /></Suspense>
     ) : currentSessionId ? (
         <ChatView key={currentSessionId} sessionId={currentSessionId} />
     ) : (
@@ -624,6 +622,7 @@ function App() {
                 {main}
             </div>
 
+            {showSchedules && <Suspense fallback={null}><ScheduleManager /></Suspense>}
             {showDocLibrary && <Suspense fallback={null}><DocumentLibrary /></Suspense>}
             {showFileBrowser && <Suspense fallback={null}><FileBrowser /></Suspense>}
             {showNotificationPanel && (
