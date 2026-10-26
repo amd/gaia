@@ -76,6 +76,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     else:
         use_os_trust_store()
+    try:
+        from gaia.env import apply_login_path
+    except ImportError:  # amd-gaia older than the login-PATH repair; the pin allows it
+        print(
+            "WARNING: this amd-gaia cannot read your login PATH, so tools "
+            "installed outside the system directories (Homebrew's on macOS) "
+            "may not be reachable from the agent's shell. "
+            "Fix: pip install --upgrade amd-gaia",
+            file=sys.stderr,
+            flush=True,
+        )
+    else:
+        apply_login_path()
     args = list(sys.argv[1:] if argv is None else argv)
 
     if selects_http(args):

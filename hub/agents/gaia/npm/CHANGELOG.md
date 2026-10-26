@@ -37,6 +37,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exceed the window and fail the turn. The agent now keeps the newest whole
   turns that fit beside its prompt and streams a `status` event when older
   ones drop out of view.
+
+- **Homebrew tools are visible to the agent on a Mac.** An app opened from Finder
+  or the Dock starts with only the system folders on its search path, so the
+  agent could not run `gh`, `node` or anything else Homebrew installed, and its
+  prompt said they were "not installed". The agent now starts with the `PATH`
+  your login shell builds, and a tool it still cannot find is reported as not
+  reachable from its shell rather than missing from your machine. If your shell
+  startup is slow or fails, the agent logs a warning and keeps the old path.
 ### For integrators: contract 2.20
 
 - **A failed model request says which endpoint failed, worded for your

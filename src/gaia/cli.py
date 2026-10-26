@@ -18,7 +18,7 @@ from gaia.agents.install_hints import (
     pip_install_hint,
 )
 from gaia.config import gaia_agents_dir
-from gaia.env import load_env
+from gaia.env import apply_login_path, load_env
 from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
@@ -4592,6 +4592,7 @@ def _handle_schedule(args):
 
 def main():
     use_os_trust_store()
+    apply_login_path()
     parser = build_parser()
     log = get_logger(__name__)
 
