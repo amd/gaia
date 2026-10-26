@@ -64,43 +64,54 @@ def test_the_record_round_trips_through_instance_json(tmp_path, monkeypatch):
 
 
 class _Process:
-    def __init__(self, cmdline):
+    def __init__(self, cmdline, started):
         self._cmdline = cmdline
+        self._started = started
 
     def cmdline(self):
         return self._cmdline
+
+    def create_time(self):
+        return self._started
 
 
 @pytest.fixture
 def launched_with(monkeypatch):
     import psutil
 
-    def use(cmdline):
-        monkeypatch.setattr(psutil, "Process", lambda pid: _Process(cmdline))
+    def use(cmdline, started):
+        monkeypatch.setattr(psutil, "Process", lambda pid: _Process(cmdline, started))
 
     return use
 
 
-def test_an_older_daemon_from_this_python_is_judged_by_its_install_time(launched_with):
-    launched_with([sys.executable, "-m", "gaia.daemon"])
+def _installed_at():
     installed = os.stat(version.__file__)
-    started_after = max(installed.st_mtime, installed.st_ctime) + 60
-    started_before = max(installed.st_mtime, installed.st_ctime) - 60
+    return max(installed.st_mtime, installed.st_ctime)
 
-    assert (
-        runs_replaced_install(
-            DaemonInstance(pid=1, port=1, token="t", started_at=started_after)
-        )
-        is None
-    )
-    why = runs_replaced_install(
-        DaemonInstance(pid=1, port=1, token="t", started_at=started_before)
-    )
+
+def test_an_older_daemon_from_this_python_is_judged_by_its_install_time(launched_with):
+    legacy = DaemonInstance(pid=1, port=1, token="t")
+
+    launched_with([sys.executable, "-m", "gaia.daemon"], started=_installed_at() + 60)
+    assert runs_replaced_install(legacy) is None
+
+    launched_with([sys.executable, "-m", "gaia.daemon"], started=_installed_at() - 60)
+    why = runs_replaced_install(legacy)
     assert why and "installed after it started" in why
 
 
+def test_the_process_start_time_wins_over_the_recorded_one(launched_with):
+    # A daemon started after the install but recording an older start is current.
+    launched_with([sys.executable, "-m", "gaia.daemon"], started=_installed_at() + 60)
+    assert (
+        runs_replaced_install(DaemonInstance(pid=1, port=1, token="t", started_at=0.0))
+        is None
+    )
+
+
 def test_an_older_daemon_from_another_python_is_left_alone(launched_with):
-    launched_with(["/opt/other-venv/bin/python", "-m", "gaia.daemon"])
+    launched_with(["/opt/other-venv/bin/python", "-m", "gaia.daemon"], started=0.0)
     assert runs_replaced_install(DaemonInstance(pid=1, port=1, token="t")) is None
 
 

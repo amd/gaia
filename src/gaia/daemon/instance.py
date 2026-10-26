@@ -143,17 +143,24 @@ def runs_replaced_install(inst: DaemonInstance) -> Optional[str]:
     import psutil
 
     try:
-        launched_with = psutil.Process(inst.pid).cmdline()[:1]
+        process = psutil.Process(inst.pid)
+        launched_with = process.cmdline()[:1]
+        # The OS's start time, not instance.json's: a record can say anything.
+        started = process.create_time()
     except (psutil.Error, OSError):
         return None
-    if [os.path.abspath(p) for p in launched_with] != [os.path.abspath(sys.executable)]:
+
+    def same(path: str) -> str:
+        return os.path.normcase(os.path.abspath(path))
+
+    if [same(p) for p in launched_with] != [same(sys.executable)]:
         return None
     from gaia import version
 
     # uv links files in from its cache, keeping the cache's mtime; ctime moves.
     stat = Path(version.__file__).stat()
     installed_at = max(stat.st_mtime, stat.st_ctime)
-    if installed_at > inst.started_at:
+    if installed_at > started:
         return f"GAIA {version.__version__} was installed after it started"
     return None
 
