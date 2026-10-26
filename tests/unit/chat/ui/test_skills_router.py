@@ -52,7 +52,7 @@ def test_lists_with_the_agents_roots_and_excludes_engineering(client, monkeypatc
 
         def reload(self):
             return {
-                "zeta": _skill("zeta", root="/bundled/a/zeta", tools=("t1",)),
+                "zeta": _skill("zeta", root="claude-import", tools=("t1",)),
                 "alpha": _skill(
                     "alpha", description="A", version="1.0", tier="verified"
                 ),
@@ -76,6 +76,7 @@ def test_lists_with_the_agents_roots_and_excludes_engineering(client, monkeypatc
             "tools": [],
             "path": "",
             "always_on": False,
+            "source": None,
         },
         {
             "name": "zeta",
@@ -83,8 +84,9 @@ def test_lists_with_the_agents_roots_and_excludes_engineering(client, monkeypatc
             "version": None,
             "tier": "experimental",
             "tools": ["t1"],
-            "path": "/bundled/a/zeta",
+            "path": "claude-import",
             "always_on": False,
+            "source": "claude-import",
         },
     ]
 
