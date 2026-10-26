@@ -73,3 +73,26 @@ def test_csv_detects_utf16_bom(rag, tmp_path, bom, encoding):
 
     assert "location: North dock" in extracted
     assert "doors: 14" in extracted
+
+
+@pytest.mark.parametrize(
+    ("bom", "encoding"),
+    [
+        pytest.param(codecs.BOM_UTF32_LE, "utf-32-le", id="little-endian"),
+        pytest.param(codecs.BOM_UTF32_BE, "utf-32-be", id="big-endian"),
+    ],
+)
+def test_text_file_detects_utf32_bom(rag, tmp_path, bom, encoding):
+    document = tmp_path / "utf32.txt"
+    expected = "Dock inventory passphrase: violet-otter-92."
+    document.write_bytes(bom + expected.encode(encoding))
+
+    assert rag._extract_text_from_text_file(str(document)) == expected
+
+
+def test_truncated_utf16_raises_with_tried_encodings(rag, tmp_path):
+    document = tmp_path / "broken.txt"
+    document.write_bytes(codecs.BOM_UTF16_LE + b"a")
+
+    with pytest.raises(ValueError, match="Tried encodings: .*utf-8,.*cp1252"):
+        rag._extract_text_from_text_file(str(document))

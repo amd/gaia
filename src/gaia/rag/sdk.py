@@ -64,10 +64,15 @@ from gaia.utils.file_lock import (
 
 _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
     (codecs.BOM_UTF16_LE, "utf-16"),
     (codecs.BOM_UTF16_BE, "utf-16"),
 )
 _TEXT_FALLBACK_ENCODINGS = ("utf-8", "cp1252", "latin-1")
+_TEXT_TRIED_ENCODINGS = ", ".join(
+    dict.fromkeys([e for _, e in _TEXT_BOM_ENCODINGS] + list(_TEXT_FALLBACK_ENCODINGS))
+)
 
 
 def _decode_text_bytes(data: bytes) -> str:
@@ -82,6 +87,7 @@ def _decode_text_bytes(data: bytes) -> str:
         except UnicodeDecodeError:
             continue
 
+    # latin-1 never fails; only a corrupt BOM-tagged file raises (above).
     raise UnicodeDecodeError("text", data, 0, len(data), "unsupported encoding")
 
 
@@ -1989,7 +1995,6 @@ These positions indicate where to split the text."""
     def _extract_text_from_text_file(self, file_path: str) -> str:
         """Extract text from text-based file (txt, md, etc.)."""
         try:
-            encodings = ["utf-8-sig", "utf-16", "cp1252", "latin-1"]
             with self._safe_open(file_path, "rb") as f:
                 data = f.read()
 
@@ -1998,7 +2003,7 @@ These positions indicate where to split the text."""
             except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode file: {file_path}\n"
-                    f"Tried encodings: {', '.join(encodings)}\n"
+                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Convert the file to UTF-8 encoding\n"
                     "  2. Check if the file is corrupted\n"
@@ -2022,7 +2027,6 @@ These positions indicate where to split the text."""
             import csv
 
             text_parts = []
-            encodings = ["utf-8-sig", "utf-16", "cp1252", "latin-1"]
 
             from io import StringIO
 
@@ -2034,7 +2038,7 @@ These positions indicate where to split the text."""
             except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode CSV file: {csv_path}\n"
-                    f"Tried encodings: {', '.join(encodings)}\n"
+                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
                     "  2. Check if the file is a valid CSV (not corrupted)\n"
