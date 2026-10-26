@@ -425,10 +425,11 @@ function App() {
                 `The chat was created, but its permission mode could not be set, so your message was not sent: ${
                     err instanceof Error ? err.message : err}`,
             );
-            return;
+            return false;
         }
         store.resetDraftPermissionMode();
         setPendingPrompt(text);
+        return true;
     }, [addSession, setCurrentSession, setMessages, setPendingPrompt, loadAgents, loadDefaultPermissionMode]);
 
     const newChat = useCallback(() => {

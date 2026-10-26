@@ -6,6 +6,24 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **An old failure in memory no longer stops a request you make now.** A note
+  like "this page returned 503, don't waste tool calls on it" was obeyed as a
+  standing ban, so the agent refused a URL you handed it. Memories now reach
+  the model as dated notes your request outranks, and a passing failure is
+  marked as one. A 429 or 502-504 "try later" failure is no longer saved as
+  an error memory at all.
+- **Text from a file is not saved as your details.** The agent could save a
+  line from a document it read, or call it something you had saved. It now
+  saves text from a file, page or tool result only when you ask it to keep
+  something, and an empty memory search says that file text is not saved.
+
+- **Pushed history that doesn't fit the model's window no longer overflows
+  it.** `/query` used the `context` you pushed as-is, but you size it without
+  seeing the agent's prompt and tools. On a 32K window the two together could
+  exceed the window and fail the turn. The agent now keeps the newest whole
+  turns that fit beside its prompt and streams a `status` event when older
+  ones drop out of view.
+
 ### For integrators: contract 2.21
 
 - **The agent remembers its own tool calls across turns** (contract **2.21**,

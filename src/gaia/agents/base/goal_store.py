@@ -95,6 +95,14 @@ Risk = Literal["low", "medium", "high", "critical"]
 # ---------------------------------------------------------------------------
 
 
+def _humanize_action(action: str) -> str:
+    """``index_workspace`` -> ``Index workspace``; prose actions pass through."""
+    if " " in action or "_" not in action:
+        return action
+    words = action.replace("_", " ").strip()
+    return words[:1].upper() + words[1:]
+
+
 @dataclass
 class Proposal:
     """A proactive proposal submitted by on_first_run or on_heartbeat."""
@@ -565,7 +573,7 @@ class GoalStore:
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     goal_id,
-                    f"Proposal: {proposal.action}",
+                    f"Proposal: {_humanize_action(proposal.action)}",
                     description,
                     status,
                     source_label,

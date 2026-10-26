@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Saving a Word, PowerPoint or Excel document in a watched folder now updates
+  its index. Office owner files (`~$...`) and temporary save files are ignored;
+  a document saved by renaming a temporary file over it is reindexed (#5478).
 - A turn whose local model failed on a base URL the user set
   (`LEMONADE_BASE_URL` or an external Lemonade) now names that server — "The
   model server at 192.168.1.20:8080" — instead of "Lemonade on this machine",
@@ -30,8 +33,7 @@
   telling the user to close the program and save the file again. This covers
   the extensions the watcher watches: `.pdf`, `.txt`, `.md`, `.markdown`,
   `.rst`, `.log`, `.csv`, `.json`, `.xml`, `.yaml`, `.yml`, `.py`, `.js`,
-  `.ts`, `.java`, `.cpp`, `.c`, `.html` and `.css`. Word, PowerPoint and Excel
-  files are not watched (#5478).
+  `.ts`, `.java`, `.cpp`, `.c`, `.html` and `.css`.
 - Indexing a locked document directly, in any format, now reports it as locked
   (`error_type: "file_locked"`). A Word or PowerPoint file used to be reported
   as corrupted, with advice to re-download it, and an Excel file could fail

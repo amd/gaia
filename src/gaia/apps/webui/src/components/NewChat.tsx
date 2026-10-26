@@ -13,6 +13,7 @@ import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import { displayModelName, useModelNames, useModelStore } from '../stores/modelStore';
+import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { STARTING_REASON } from '../utils/constants';
 import { log } from '../utils/logger';
@@ -21,8 +22,11 @@ import type { StartCard, StartScreen } from '../types';
 import './NewChat.css';
 
 interface NewChatProps {
-    /** Creates the chat and sends the first message; rejects with the reason it could not. */
-    onSend: (text: string) => Promise<void>;
+    /**
+     * Creates the chat and sends the first message; rejects with the reason it could not.
+     * Resolves false when the chat was made but the message was not sent (it says why itself).
+     */
+    onSend: (text: string) => Promise<boolean | void>;
     /** Text to start the message box with, e.g. a task picked at the end of setup. */
     initialText?: string;
     /** Changes each time New chat is chosen, so the box takes focus even when already shown. */
@@ -192,18 +196,39 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         return setVisibleInterval(() => loadStart(true), START_RETRY_MS);
     }, [startError, loadStart]);
 
-    // Set before any re-render, so keypresses landing in the same tick are dropped too.
+    // Set before any re-render, so keypresses landing in the same tick are held too.
     const sendingRef = useRef(false);
-    const send = useCallback(async (message: string) => {
-        if (!message || sendingRef.current) return;
+    // Sent while the chat was still being created: they wait in its queue, never dropped.
+    const heldRef = useRef<string[]>([]);
+    const send = useCallback(async (message: string, draft = '') => {
+        if (!message) return;
+        if (sendingRef.current) {
+            // As typed: the attachments still belong to the first message.
+            heldRef.current.push(draft || message);
+            setText('');
+            return;
+        }
         sendingRef.current = true;
         setSending(true);
         setError(null);
+        // Cleared now, so anything typed while the chat is created is a new message.
+        setText('');
         try {
-            await onSend(message);
-            setText('');
+            const sent = await onSend(message);
             attachments.clear();
+            const held = heldRef.current.splice(0);
+            const sessionId = useChatStore.getState().currentSessionId;
+            if (held.length > 0 && sessionId) {
+                // The chat is open now; if its first message never went out, the rest wait for Send again.
+                const add = (items: messageQueue.QueuedMessage[], text: string) => sent === false
+                    ? [...items, { ...messageQueue.item(text, 'failed'), error: 'The first message was not sent.' }]
+                    : messageQueue.enqueue(items, text, 'queued');
+                useChatStore.getState().updateQueue(sessionId, (q) => held.reduce(add, q));
+            }
         } catch (err) {
+            // Nothing was sent, so every message goes back in the box.
+            const held = heldRef.current.splice(0);
+            setText([draft || message, ...held].join('\n\n'));
             setError(err instanceof Error ? err.message : String(err));
         } finally {
             sendingRef.current = false;
@@ -211,7 +236,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         }
     }, [attachments, onSend]);
 
-    const submit = useCallback(() => send(attachments.compose(text.trim())), [attachments, send, text]);
+    const submit = useCallback(() => send(attachments.compose(text.trim()), text.trim()), [attachments, send, text]);
 
     useEffect(() => {
         if (focusRequest) inputRef.current?.focus();
@@ -240,7 +265,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                     onChange={setText}
                     onSubmit={submit}
                     attachments={attachments}
-                    disabledReason={starting ? STARTING_REASON : sending ? 'Starting the chat…' : null}
+                    disabledReason={starting ? STARTING_REASON : null}
                     autoFocus
                     inputRef={inputRef}
                     leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /></>}

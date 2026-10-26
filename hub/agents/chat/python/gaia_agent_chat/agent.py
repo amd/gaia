@@ -3031,6 +3031,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 on_modified=self.reindex_file,
                 on_deleted=self._handle_file_deletion,
                 on_moved=self._handle_file_move,
+                filter_func=self._should_watch_file,
             )
             observer = Observer()
             observer.schedule(event_handler, directory, recursive=True)
@@ -3040,6 +3041,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             logger.info(f"Started watching: {directory}")
         except Exception as e:
             logger.error(f"Failed to watch {directory}: {e}")
+
+    @staticmethod
+    def _should_watch_file(file_path: str) -> bool:
+        """Watch supported documents, excluding Office owner files."""
+        if file_path.lower().endswith((".docx", ".pptx", ".xlsx")):
+            return not Path(file_path).name.startswith("~$")
+        return file_path.lower().endswith(tuple(FileChangeHandler.DEFAULT_EXTENSIONS))
 
     def _handle_file_deletion(self, file_path: str) -> None:
         """Handle file deletion by removing it from the index."""
@@ -3065,7 +3073,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     def _handle_file_move(self, src_path: str, dest_path: str) -> None:
         """Handle file move by removing old path and indexing new path."""
         self._handle_file_deletion(src_path)
-        self.reindex_file(dest_path)
+        if self._should_watch_file(dest_path):
+            self.reindex_file(dest_path)
 
     def reindex_file(self, file_path: str) -> None:
         """Reindex a file that was modified or created.
