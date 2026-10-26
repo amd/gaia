@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 BOT_LOGINS = {"dependabot", "github-actions", "claude", "copilot"}
@@ -35,7 +36,7 @@ BUGFIX_TITLE = re.compile(
 _PR_QUERY = """
 query($owner:String!,$name:String!,$cursor:String){
   repository(owner:$owner,name:$name){
-    pullRequests(states:OPEN,first:50,after:$cursor){
+    pullRequests(states:OPEN,first:20,after:$cursor){
       pageInfo{hasNextPage endCursor}
       nodes{
         number title url isDraft additions deletions mergeable reviewDecision
@@ -147,6 +148,40 @@ def awaiting_approval(gh, repo):
         sha, run_id = line.split()
         runs.setdefault(sha, []).append(int(run_id))
     return runs
+
+
+def resolve_unknown_mergeability(gh, repo, pr_nodes, attempts=4, wait=3):
+    """GitHub computes `mergeable` lazily after main moves; a REST fetch triggers it.
+
+    Mutates PRs still reading UNKNOWN to MERGEABLE/CONFLICTING once computed;
+    anything still unknown stays UNKNOWN and is reported as a blocker.
+    """
+    pending = [p for p in pr_nodes if p["mergeable"] == "UNKNOWN"]
+    for attempt in range(attempts):
+        still = []
+        for pr in pending:
+            done = subprocess.run(
+                [gh, "api", f"repos/{repo}/pulls/{pr['number']}", "--jq", ".mergeable"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            if done.returncode != 0:
+                sys.exit(
+                    f"Could not read mergeability of #{pr['number']}: {done.stderr.strip()}"
+                )
+            state = done.stdout.strip()
+            if state == "true":
+                pr["mergeable"] = "MERGEABLE"
+            elif state == "false":
+                pr["mergeable"] = "CONFLICTING"
+            else:
+                still.append(pr)
+        pending = still
+        if not pending:
+            return
+        if attempt < attempts - 1:
+            time.sleep(wait)
 
 
 def is_bot(login):
@@ -465,9 +500,10 @@ def main():
     now = datetime.now(timezone.utc)
 
     stalled = awaiting_approval(gh, args.repo)
+    pr_nodes = fetch_all(gh, _PR_QUERY, "pullRequests", args.repo)
+    resolve_unknown_mergeability(gh, args.repo, pr_nodes)
     prs = [
-        assess_pr(p, team, stalled.get(p["headRefOid"], ()), required)
-        for p in fetch_all(gh, _PR_QUERY, "pullRequests", args.repo)
+        assess_pr(p, team, stalled.get(p["headRefOid"], ()), required) for p in pr_nodes
     ]
     prs.sort(key=pr_rank)
     issues = [

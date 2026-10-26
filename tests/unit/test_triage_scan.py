@@ -368,3 +368,44 @@ def test_unresolved_review_thread_blocks_but_outdated_or_resolved_do_not():
 def test_deleted_account_is_third_party():
     assert ts.is_third_party(None, TEAM)
     assert ts.assess_pr(make_pr(author=None), TEAM)["third_party"]
+
+
+def test_unknown_mergeability_is_resolved_via_rest(monkeypatch):
+    answers = iter(["null", "true"])
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return SimpleNamespace(returncode=0, stdout=next(answers), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(ts.time, "sleep", lambda s: None)
+    nodes = [make_pr(mergeable="UNKNOWN"), make_pr(number=2, mergeable="CONFLICTING")]
+    ts.resolve_unknown_mergeability("gh", "amd/gaia", nodes)
+    assert nodes[0]["mergeable"] == "MERGEABLE"
+    assert nodes[1]["mergeable"] == "CONFLICTING"
+    assert len(calls) == 2
+
+
+def test_mergeability_that_never_resolves_stays_unknown(monkeypatch):
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, **kw: SimpleNamespace(returncode=0, stdout="null", stderr=""),
+    )
+    monkeypatch.setattr(ts.time, "sleep", lambda s: None)
+    nodes = [make_pr(mergeable="UNKNOWN")]
+    ts.resolve_unknown_mergeability("gh", "amd/gaia", nodes, attempts=2)
+    assert nodes[0]["mergeable"] == "UNKNOWN"
+    assert not ts.assess_pr(nodes[0], TEAM)["ready"]
+
+
+def test_a_conflict_found_by_rest_blocks(monkeypatch):
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, **kw: SimpleNamespace(returncode=0, stdout="false", stderr=""),
+    )
+    nodes = [make_pr(mergeable="UNKNOWN")]
+    ts.resolve_unknown_mergeability("gh", "amd/gaia", nodes)
+    assert "conflict" in ts.assess_pr(nodes[0], TEAM)["blockers"]
