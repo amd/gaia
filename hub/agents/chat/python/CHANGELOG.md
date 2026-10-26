@@ -7,6 +7,10 @@
   Mac it reported only the share macOS's system volume uses, so a nearly full
   disk read as 5% used. Its description now says it answers free-space
   questions, so the model stops trying `df`, which the shell refuses.
+- `/quit` and `/reset` no longer discard the conversation when the session
+  cannot be saved; chat stays open so storage can be fixed and `/save` retried.
+  Ctrl-C still exits without saving. Document tools warn when an indexed
+  document's session attachment could not be saved (#3288).
 - Saving a Word, PowerPoint or Excel document in a watched folder now updates
   its index. Office owner files (`~$...`) and temporary save files are ignored;
   a document saved by renaming a temporary file over it is reindexed (#5478).

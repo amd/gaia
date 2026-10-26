@@ -6,6 +6,11 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **SKILL.md examples include authorization headers.** The stateful-agent
+  and autonomy code examples in SKILL.md now send the session token required
+  by the sidecar, and the gotchas note lists `/v1/email/health` and
+  `/v1/email/version` as exempt.
+
 - **Answers stream as they are written.** `/v1/email/query` now emits `token`
   events while the model writes, so a relayed turn shows text live instead of
   "Waiting on the model", cancelling the run cuts the model call short, and a
