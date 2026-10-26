@@ -9,6 +9,9 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **One very long turn no longer vanishes from the conversation.** A pushed
+  turn bigger than the whole history budget was dropped, answer included. It is
+  now kept with its longest messages cut and a note saying how much.
 - **Pushed history that doesn't fit the model's window no longer overflows
   it.** `/v1/email/query` used the `context` the host pushed as-is, but the
   host sizes it without seeing this agent's prompt and tools. On a 32K window

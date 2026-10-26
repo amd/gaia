@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from gaia.agents.base import history
 from gaia.agents.base.history import (
     CutReporter,
     TurnMessages,
@@ -113,22 +114,91 @@ def test_no_budget_left_reports_every_hidden_turn():
     assert [(c.turns, c.tokens) for c in cuts] == [(3, 30)]
 
 
-def test_oversized_turn_is_not_split_or_silently_truncated():
-    turns = [_turn(0), [{"role": "user", "content": "x" * 10000}], _turn(2)]
-    with patch("gaia.agents.base.history.logger") as logger:
-        assert select_history(turns, 100) == _turn(2)
-    logger.warning.assert_called_once()
+def _bulky_tool_turn(answer):
+    turn = _tool_turn(9)
+    turn[0]["content"] = "summarize the report"
+    turn[2]["content"] = "revenue table " * 2000
+    turn[3]["content"] = answer
+    return turn
 
 
-def test_newest_oversized_turn_keeps_the_earlier_turns(caplog):
-    turns = [_turn(i) for i in range(5)] + [[{"role": "user", "content": "x" * 10000}]]
+def test_newest_oversized_turn_keeps_its_question_and_answer(caplog):
+    turns = [_turn(0), _turn(1), _bulky_tool_turn("revenue grew 12%")]
 
-    def costs(text):
-        return 1000 if "xxxx" in text else 10
+    replayed = select_history(turns, 1000)
 
-    with patch("gaia.agents.base.history.count_tokens", side_effect=costs):
-        assert select_history(turns, 100) == sum(turns[:5], [])
-    assert "1 turn(s) larger than the whole history budget" in caplog.text
+    assert replayed[-4]["content"] == "summarize the report"
+    assert replayed[-1] == {"role": "assistant", "content": "revenue grew 12%"}
+    call, result = replayed[-3], replayed[-2]
+    assert result["tool_call_id"] == call["tool_calls"][0]["id"] == "call-9"
+    assert result["content"].startswith("[Left out of the conversation history")
+    assert "read_fact" in result["content"]
+    assert len(result["content"]) < 400
+    # The small turns before it still fit beside the shortened one.
+    assert replayed[:4] == _turn(0) + _turn(1)
+    assert "shortened 1 turn(s)" in caplog.text
+
+
+def test_oversized_turn_in_the_middle_keeps_the_turns_before_it():
+    turns = [_turn(0), _turn(1), _bulky_tool_turn("revenue grew 12%"), _turn(3)]
+
+    replayed = select_history(turns, 1000)
+
+    assert replayed[:4] == _turn(0) + _turn(1)
+    assert replayed[-2:] == _turn(3)
+    assert {"role": "assistant", "content": "revenue grew 12%"} in replayed
+
+
+def test_oversized_text_turn_is_cut_with_a_marker_not_dropped():
+    # Pushed /query context carries no tool messages, only text.
+    question = "here is the log: " + "line " * 5000
+    turns = [_turn(0), [{"role": "user", "content": question}, *_turn(1)[1:]]]
+
+    replayed = select_history(turns, 1000)
+
+    assert history.turn_cost(replayed[2:]) <= 500
+    assert replayed[2]["content"].startswith("here is the log: ")
+    assert "characters to fit the model's context window" in replayed[2]["content"]
+    assert replayed[-1] == {"role": "assistant", "content": "answer-1"}
+    assert replayed[:2] == _turn(0)
+    # The stored turn is untouched; only the replayed copy is cut.
+    assert turns[1][0]["content"] == question
+
+
+def test_text_tool_results_are_stubbed_too():
+    turn = history.text_tool_history([_bulky_tool_turn("revenue grew 12%")])[0]
+
+    replayed = select_history([turn], 1000)
+
+    result = replayed[2]["content"]
+    assert result.startswith("[Recorded tool result: read_fact] [Left out of")
+    assert replayed[-1]["content"] == "revenue grew 12%"
+
+
+def test_a_refusal_in_an_oversized_turn_is_not_stubbed():
+    turn = _bulky_tool_turn("I did not run it.")
+    refusal = json.dumps(
+        {"status": "denied", "message": "User refused: " + "reason " * 100}
+    )
+    turn[2]["content"] = refusal
+    turn[0]["content"] = "run it " * 3000
+
+    replayed = select_history([turn], 1000)
+
+    assert replayed[2]["content"] == refusal
+    assert replayed[-1]["content"] == "I did not run it."
+
+
+def test_a_turn_that_cannot_be_shortened_enough_is_dropped_alone(caplog):
+    # Call arguments are replayed as sent, so only a tool result can shrink.
+    huge = _tool_turn(1)
+    huge[1]["tool_calls"][0]["function"]["arguments"] = json.dumps(
+        {"text": "x" * 20000}
+    )
+    turns = [_turn(0), huge, _turn(2)]
+
+    assert select_history(turns, 1000) == _turn(0) + _turn(2)
+    assert "dropped 1 that still did not fit" in caplog.text
 
 
 def test_eviction_never_separates_a_tool_call_from_its_result():

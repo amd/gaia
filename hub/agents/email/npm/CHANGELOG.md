@@ -6,6 +6,10 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **One very long turn no longer vanishes from the conversation.** A turn
+  bigger than the whole history budget was dropped from what the model saw
+  next, answer included. It is now kept with its longest messages cut and a
+  note saying how much.
 - **A long conversation no longer overflows a small model window.** The
   agent used the history you pushed as-is, so on a 32K window (an NPU model)
   it plus the agent's own prompt could exceed the window and fail the turn.
