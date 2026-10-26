@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
-import { readSavedDraft, writeSavedDraft } from '../utils/savedDraft';
+import { chatDraftKey, readSavedDraft, writeSavedDraft } from '../utils/savedDraft';
 
 /**
  * A text box's contents, kept in localStorage per `key`, so a message being
@@ -26,4 +26,9 @@ export function useSavedDraft(key: string | null, initial = ''): [string, Dispat
     }, [key, value]);
 
     return [value, setValue];
+}
+
+/** A chat's composer draft; a private chat's stays in memory only. */
+export function useChatDraft(sessionId: string, isPrivate: boolean | undefined) {
+    return useSavedDraft(isPrivate ? null : chatDraftKey(sessionId));
 }
