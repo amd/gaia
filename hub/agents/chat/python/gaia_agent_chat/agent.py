@@ -1499,12 +1499,14 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             return cached
         gaia_docs = os.path.normcase(str((gaia_home() / "documents").resolve()))
         labelled = []
+        has_gaia_docs = False
         allowed = getattr(self, "allowed_paths", None) or []
         for path in dict.fromkeys(Path(p).resolve() for p in allowed):
             if not path.is_dir():
                 continue
             if os.path.normcase(str(path)) == gaia_docs:
                 labelled.insert(0, f"{path} (GAIA's documents folder)")
+                has_gaia_docs = True
             else:
                 labelled.append(str(path))
         line = ""
@@ -1514,7 +1516,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 '"my documents", "your folder", or a file named without a path, '
                 "look here first."
             )
-            if labelled[0].endswith("(GAIA's documents folder)"):
+            if has_gaia_docs:
                 line += (
                     " To save a new file to the user's Documents folder, use "
                     f"{Path.home() / 'Documents'}: GAIA's documents folder is "
