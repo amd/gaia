@@ -6,11 +6,6 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- **Shell commands running scripts get 10 minutes instead of 30 seconds** (#5347).
-  Interpreted scripts (such as Python, Node, Ruby, and Bash scripts) are now
-  classified under the `script` timeout class (600 seconds) rather than the default
-  30-second ceiling.
-
 - **An old failure in memory no longer stops a request you make now.** A note
   like "this page returned 503, don't waste tool calls on it" was obeyed as a
   standing ban, so the agent refused a URL you handed it. Memories now reach
