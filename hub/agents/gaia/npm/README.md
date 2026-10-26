@@ -207,7 +207,10 @@ fields with `422`, so probe `/version` first. See
 connector tools and commands that contact another host; `false` allows them.
 Omit it and the agent keeps its own setting. Binaries older than 2.22 reject
 the field with `422`, so probe `/version` first and do not answer an
-internet-off turn on an older one. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+internet-off turn on an older one. If the user flips the switch while a turn is
+running, `POST /v1/gaia/sessions/{session_id}/internet` with
+`{"internet_off": true}` so the next tool call follows it rather than the next
+turn. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Showing what a turn changed, with undo? Send `changes_turn_id`** (contract ≥
 2.19) along with `session_id`: the agent copies each file before it writes it,

@@ -15,7 +15,8 @@ so the two agents cannot drift into private dialects of the same contract.
 Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
 ``/query/{run_id}/cancel``, ``/query/{run_id}/respond``,
 ``/query/{run_id}/followup``, ``/query/{run_id}/tool_decision`` (contract >=
-2.14) and ``/sessions/{session_id}/bypass``. ``needs_input`` is answered over
+2.14), ``/sessions/{session_id}/bypass`` and ``/sessions/{session_id}/internet``
+(contract >= 2.22). ``needs_input`` is answered over
 ``/respond`` on the run's existing stream; ``needs_confirmation`` is answered
 the same way over ``/tool_decision`` — but only when there is a session to
 hold the grant AND the caller declared it can answer (``can_confirm`` in
@@ -86,7 +87,7 @@ AGENT_ID = "gaia"
 #: 2.19 added ``/query``'s ``changes_turn_id`` field.
 #: 2.20 added ``/query``'s ``surface`` field.
 #: 2.21 added ``context`` to ``/query``'s ``final`` event.
-#: 2.22 added ``/query``'s ``internet_off`` field.
+#: 2.22 added ``/query``'s ``internet_off`` field and ``/sessions/{id}/internet``.
 API_VERSION = "2.22"
 
 #: How long ``final`` waits for the turn's context measurement before going without.
@@ -424,6 +425,17 @@ class BypassRequest(_Strict):
 class BypassResponse(_Strict):
     session_id: str
     enabled: bool
+
+
+class InternetRequest(_Strict):
+    """Body of ``POST /v1/gaia/sessions/{session_id}/internet``."""
+
+    internet_off: bool
+
+
+class InternetResponse(_Strict):
+    session_id: str
+    internet_off: bool
 
 
 class _QueryRun:
@@ -1840,6 +1852,30 @@ async def set_bypass(session_id: str, body: BypassRequest):
         )
     session.permissions.set_full_access(body.enabled)
     return BypassResponse(session_id=session_id, enabled=body.enabled)
+
+
+@router.post("/sessions/{session_id}/internet", response_model=InternetResponse)
+async def set_internet(session_id: str, body: InternetRequest):
+    """Turn a session's internet on or off from its agent's next tool call.
+
+    ``/query``'s ``internet_off`` covers the turns that start after a change;
+    this reaches a turn already running, so a switch flipped mid-turn stops the
+    next web search rather than the one after the turn ends. An unknown session
+    is a 404, as for bypass.
+    """
+    _require_valid_session_id(session_id)
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No session {session_id!r} exists. Send a query on that "
+                "session first; the internet switch applies to a conversation, "
+                "not to the server."
+            ),
+        )
+    session.agent.internet_off = body.internet_off
+    return InternetResponse(session_id=session_id, internet_off=body.internet_off)
 
 
 def _log_caller_auth_state(auth_config: Any) -> None:

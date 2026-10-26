@@ -101,13 +101,14 @@ _EXPECTED_REST_OP_NAMES = {
     "query/{run_id}/followup",
     "query/{run_id}/tool_decision",
     "sessions/{session_id}/bypass",
+    "sessions/{session_id}/internet",
     "memory",
     "skills",
 }
-_EXPECTED_REST_FUNCTIONAL_COUNT = 8
+_EXPECTED_REST_FUNCTIONAL_COUNT = 9
 # + the init readiness probe and the three liveness/version probes
 # (/health, /version, /v1/gaia/version).
-_EXPECTED_REST_IN_CONTRACT_COUNT = 12
+_EXPECTED_REST_IN_CONTRACT_COUNT = 13
 
 _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 

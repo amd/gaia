@@ -48,6 +48,40 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "InternetRequest": {
+        "additionalProperties": false,
+        "description": "Body of ``POST /v1/gaia/sessions/{session_id}/internet``.",
+        "properties": {
+          "internet_off": {
+            "title": "Internet Off",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "internet_off"
+        ],
+        "title": "InternetRequest",
+        "type": "object"
+      },
+      "InternetResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "internet_off": {
+            "title": "Internet Off",
+            "type": "boolean"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "internet_off"
+        ],
+        "title": "InternetResponse",
+        "type": "object"
+      },
       "QueryCancelResponse": {
         "additionalProperties": false,
         "properties": {
@@ -887,6 +921,65 @@
           {}
         ],
         "summary": "Set Bypass",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/sessions/{session_id}/internet": {
+      "post": {
+        "description": "Turn a session's internet on or off from its agent's next tool call.\n\n``/query``'s ``internet_off`` covers the turns that start after a change;\nthis reaches a turn already running, so a switch flipped mid-turn stops the\nnext web search rather than the one after the turn ends. An unknown session\nis a 404, as for bypass.",
+        "operationId": "set_internet_v1_gaia_sessions__session_id__internet_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InternetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Set Internet",
         "tags": [
           "gaia-query"
         ]

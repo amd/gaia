@@ -1,15 +1,16 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""``/query``'s ``internet_off`` field (contract 2.22).
+"""``/query``'s ``internet_off`` field and ``/sessions/{id}/internet`` (2.22).
 
 A chat with the Internet switch off, relayed from the Agent UI, used to reach the
 flagship with no word of it, so the agent went on searching the web. These drive
 the real app and put a web tool call through the agent's own guard at the moment
-the turn runs.
+the turn runs, including a switch flipped while the turn is running.
 """
 
 from __future__ import annotations
 
+import threading
 import uuid
 
 import pytest
@@ -38,7 +39,14 @@ class _WebAgent:
         self._tools_registry = {}
         self.refusals: list = []
 
+        self.started = threading.Event()
+        #: When set by a test, the turn parks here before its web search.
+        self.gate = None
+
     def process_query(self, query, max_steps=None):
+        self.started.set()
+        if self.gate is not None:
+            self.gate.wait(timeout=10)
         refusal = Agent._policy_refusal(self, "search_web", {"query": "weather"})
         self.refusals.append(refusal and refusal["error_type"])
         return {"answer": "ok"}
@@ -115,3 +123,56 @@ def test_a_retained_session_follows_the_switch_each_turn(built):
 def test_a_non_boolean_is_refused(built):
     client, _ = built
     assert _query(client, internet_off="sometimes").status_code == 422
+
+
+def _switch(client, session_id, internet_off):
+    return client.post(
+        f"/v1/gaia/sessions/{session_id}/internet",
+        json={"internet_off": internet_off},
+    )
+
+
+@pytest.mark.parametrize("turn_starts_off", [False, True])
+def test_a_switch_flipped_mid_turn_reaches_the_next_web_call(built, turn_starts_off):
+    client, agents = built
+    assert _query(client, session_id="chat-1").status_code == 200
+    agent = agents[0]
+    agent.started.clear()
+    agent.gate = threading.Event()
+    result = {}
+
+    def run():
+        result["response"] = _query(
+            client, session_id="chat-1", internet_off=turn_starts_off
+        )
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    try:
+        assert agent.started.wait(timeout=10), "the turn never started"
+        flipped = _switch(client, "chat-1", not turn_starts_off)
+        assert flipped.status_code == 200, flipped.text
+        assert flipped.json() == {
+            "session_id": "chat-1",
+            "internet_off": not turn_starts_off,
+        }
+    finally:
+        agent.gate.set()
+        worker.join(timeout=10)
+
+    assert result["response"].status_code == 200
+    assert agent.refusals[-1] == ("internet_off" if not turn_starts_off else None)
+
+
+def test_switching_an_unknown_session_is_a_404_not_a_new_session(built):
+    client, agents = built
+    response = _switch(client, "never-seen", True)
+    assert response.status_code == 404
+    assert "Send a query on that session first" in response.json()["detail"]
+    assert agents == [], "no agent may be built by an internet switch"
+
+
+def test_the_switch_takes_only_a_boolean(built):
+    client, _ = built
+    assert _query(client, session_id="chat-1").status_code == 200
+    assert _switch(client, "chat-1", "sometimes").status_code == 422

@@ -272,6 +272,7 @@ the header.
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
 | `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
 | `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
+| `POST` | `/v1/gaia/sessions/{session_id}/internet` | Turn one session's internet on or off from its next tool call, including in a turn already running (≥ 2.22) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
 #### `/query` request body
@@ -332,6 +333,12 @@ session keeps the last value, so send it every turn; omit it to leave the
 agent as it is. Pre-2.22 binaries `422` the field, so a caller whose chat has
 the internet off should check `/version` and refuse the turn on an older
 binary rather than answer it online.
+
+`internet_off` is read when a turn starts. To change it for a turn already
+running, `POST /v1/gaia/sessions/{session_id}/internet` with
+`{ "internet_off": true }` (or `false`): the session's next tool call follows
+it, and so do later turns until a `/query` sends another value. An unknown
+session is a **404** rather than a new one.
 
 `changes_turn_id` (contract ≥ 2.19) asks the agent to record the turn's file
 changes for undo. Before a tool writes, edits, creates or deletes a file, the
@@ -431,7 +438,8 @@ agent instead of a throwaway built fresh per call — indexed documents and
 `load_skill` state only survive between turns when the same `session_id`
 threads them together. A `session_id` must be 1–128 characters from
 `A-Z a-z 0-9 . _ -`, not only dots (a UUID works); any other value is a **400**
-naming the allowed characters, on `/query` and on `/sessions/{session_id}/bypass`.
+naming the allowed characters, on `/query`, `/sessions/{session_id}/bypass` and
+`/sessions/{session_id}/internet`.
 Omitting it is a valid, explicit one-shot: nothing persists past that single
 turn, and the agent is not told otherwise.
 
