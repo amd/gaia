@@ -157,7 +157,7 @@
     align-items: center;
     gap: 8px;
     min-height: 34px;
-    margin: 2px 0 4px;
+    margin: 0 0 4px;
     padding: 0 8px;
     border: 1px solid var(--border-light);
     border-radius: var(--radius-md);
