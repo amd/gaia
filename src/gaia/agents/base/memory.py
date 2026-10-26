@@ -136,6 +136,25 @@ def _system_context_is_enabled() -> bool:
     return bool(_load_memory_settings().get("system_context_enabled", False))
 
 
+def _normalize_time_to(time_to: str) -> str:
+    """Expand a bare ``YYYY-MM-DD`` upper bound to the end of that day.
+
+    Timestamps are stored as full ISO strings, so a lexical ``<=`` against a
+    date-only bound drops everything recorded later on the final day.  A
+    date-only lower bound is already correct and is intentionally untouched.
+    """
+    if not isinstance(time_to, str):
+        return time_to
+    value = time_to.strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return time_to
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return time_to
+    return f"{value}T23:59:59.999999"
+
+
 #: Auto-refresh system context after this many days (hardware/software changes over time).
 _SYSTEM_CONTEXT_REFRESH_DAYS: int = 7
 
@@ -4791,6 +4810,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             """
             if (gone := _store_gone()) is not None:
                 return gone
+            time_to = _normalize_time_to(time_to)
             _recall_t0 = time.perf_counter()
             withheld = 0
             unfiltered = not any(
@@ -5129,6 +5149,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Search past conversations. Use query for keywords, days for time range, time_from/time_to for ISO 8601 boundaries, or combinations."""
             if (gone := _store_gone()) is not None:
                 return gone
+            time_to = _normalize_time_to(time_to)
             # Smaller models often emit numeric args as JSON strings ("7", "10");
             # coerce before any comparison so clamping below doesn't raise TypeError.
             for _name, _value in (("days", days), ("limit", limit)):

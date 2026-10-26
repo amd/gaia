@@ -65,6 +65,59 @@ def _make_client_mock(status):
     return client
 
 
+@pytest.mark.parametrize("cloud_marker", [{"recipe": "cloud"}, {"labels": ["cloud"]}])
+def test_context_ceiling_selection_ignores_cloud_model(cloud_marker):
+    status = _status(
+        loaded_models=[
+            {"id": "cloud-model", "type": "llm", **cloud_marker},
+            {"id": "local-gguf", "type": "llm"},
+        ]
+    )
+    client = _make_client_mock(status)
+    client.get_model_max_context_window.return_value = 32768
+
+    assert LemonadeManager._find_loaded_llm_id(status) == "local-gguf"
+    assert LemonadeManager._honest_context_size(client, status, 65536) == 32768
+    client.get_model_max_context_window.assert_called_once_with(
+        "local-gguf", status=status
+    )
+    assert LemonadeManager._context_ceiling_model == "local-gguf"
+
+
+@pytest.mark.parametrize("cloud_marker", [{"recipe": "cloud"}, {"labels": ["cloud"]}])
+def test_context_ceiling_selection_with_only_cloud_models(cloud_marker):
+    status = _status(
+        loaded_models=[{"id": "cloud-model", "type": "llm", **cloud_marker}]
+    )
+    client = _make_client_mock(status)
+
+    assert LemonadeManager._find_loaded_llm_id(status) is None
+    assert LemonadeManager._honest_context_size(client, status, 65536) == 65536
+    client.get_model_max_context_window.assert_not_called()
+
+
+def test_context_ceiling_selection_accepts_null_labels():
+    status = _status(loaded_models=[{"id": "legacy-local", "labels": None}])
+
+    assert LemonadeManager._find_loaded_llm_id(status) == "legacy-local"
+
+
+@pytest.mark.parametrize("model_type", ["embedding", "image", "transcription"])
+def test_context_ceiling_selection_excludes_non_llm_models(model_type):
+    status = _status(
+        loaded_models=[
+            {"id": "non-llm", "type": model_type},
+            {"model_name": "local-gguf", "type": "llm"},
+        ]
+    )
+
+    assert LemonadeManager._find_loaded_llm_id(status) == "local-gguf"
+
+
+def test_context_ceiling_selection_with_no_loaded_models():
+    assert LemonadeManager._find_loaded_llm_id(_status()) is None
+
+
 # ---------------------------------------------------------------------------
 # Case 1 — idle server: preload must fire with ctx_size + auto_download=True
 # ---------------------------------------------------------------------------

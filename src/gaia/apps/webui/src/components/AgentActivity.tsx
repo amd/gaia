@@ -496,6 +496,7 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
                                         step={step}
                                         isExpanded={expandedTools.has(step.id)}
                                         now={now}
+                                        awaitingUser={isActive && awaitingUser}
                                         onToggle={() => toggleTool(step.id)}
                                     />
                                 );
@@ -695,15 +696,21 @@ interface FlowToolCardProps {
     onToggle: () => void;
     /** Wall-clock ms, for a running call's timer. */
     now: number;
+    /** The turn is waiting on the user (an approval or a question). */
+    awaitingUser?: boolean;
 }
 
-function FlowToolCard({ step, isExpanded, onToggle, now }: FlowToolCardProps) {
+function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }: FlowToolCardProps) {
     const Icon = getToolMeta(step.tool, step).icon;
-    const line = toolRowText(step);
+    // A call held for the user's answer hasn't started, so it neither runs nor times.
+    const waiting = !!step.active && awaitingUser;
+    const line = waiting ? WAITING_ON_USER_LABEL : toolRowText(step);
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
     const failure = step.success === false && step.result ? step.result : '';
-    const timing = step.active
+    const timing = waiting
+        ? ''
+        : step.active
         ? formatElapsed((now - step.timestamp) / 1000)
         : step.latencyMs != null ? formatToolLatency(step.latencyMs) : '';
 
@@ -713,10 +720,16 @@ function FlowToolCard({ step, isExpanded, onToggle, now }: FlowToolCardProps) {
                 className="flow-tool-header"
                 onClick={onToggle}
                 aria-expanded={isExpanded}
-                title={step.narration && step.narration !== line ? step.narration : undefined}
+                title={
+                    waiting
+                        ? toolRowText(step)
+                        : step.narration && step.narration !== line ? step.narration : undefined
+                }
             >
                 <div className="flow-tool-left">
-                    {step.active ? (
+                    {waiting ? (
+                        <Icon size={13} className="flow-tool-icon" />
+                    ) : step.active ? (
                         <Loader2 size={13} className="flow-tool-spinner" />
                     ) : step.success === false ? (
                         <AlertCircle size={13} style={{ color: 'var(--danger)' }} />
