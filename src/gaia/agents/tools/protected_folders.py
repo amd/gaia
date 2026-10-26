@@ -55,6 +55,23 @@ def is_macos_guarded(path: Any) -> bool:
     return any(target == (home / rel).resolve() for rel in MACOS_PROTECTED_HOME_FOLDERS)
 
 
+def macos_guarded_folder(path: Any) -> Optional[Path]:
+    """The guarded folder holding *path* on macOS, or None.
+
+    Lexical: resolving a path inside a guarded folder stats it, which can block
+    on the very dialog this exists to avoid.
+    """
+    if sys.platform != "darwin":
+        return None
+    home = Path.home()
+    target = Path(os.path.abspath(os.path.expanduser(str(path))))
+    for rel in MACOS_PROTECTED_HOME_FOLDERS:
+        folder = home / rel
+        if _covers(folder, target):
+            return folder
+    return None
+
+
 class _Probe(threading.Thread):
     """Reads a guarded folder's first entry; blocks while macOS's dialog is up."""
 
