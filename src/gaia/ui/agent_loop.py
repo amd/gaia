@@ -384,9 +384,10 @@ class AgentLoop:
 
         store = GoalStore()
         for goal in goals:
-            store.update_goal_status(
-                goal.id, "failed", progress_notes=f"The background run failed: {error}"
-            )
+            note = f"The background run failed: {error}"
+            if goal.progress_notes:
+                note = f"{goal.progress_notes}\n{note}"
+            store.update_goal_status(goal.id, "failed", progress_notes=note)
 
     def _get_actionable_goals(self) -> List[Any]:
         """Return approved, queued goals from GoalStore."""

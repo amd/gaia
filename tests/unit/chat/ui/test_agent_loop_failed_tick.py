@@ -92,3 +92,21 @@ def test_a_failed_tick_does_not_rerun_on_the_next_message(loop, monkeypatch):
     failed = GoalStore().get_goal(goal.id)
     assert failed.status == "failed"
     assert "model server went away" in failed.progress_notes
+
+
+def test_a_failure_keeps_the_progress_an_earlier_run_recorded(loop, monkeypatch):
+    goal = _queued_goal()
+    GoalStore().update_goal_status(
+        goal.id, "queued", progress_notes="Read 3 of 5 files."
+    )
+    monkeypatch.setattr(
+        helpers,
+        "_agent_registry",
+        SimpleNamespace(get=lambda _id: SimpleNamespace(is_sidecar=True)),
+    )
+
+    _run_followup(loop)
+
+    notes = GoalStore().get_goal(goal.id).progress_notes
+    assert notes.startswith("Read 3 of 5 files.\n")
+    assert agent_loop_mod.SIDECAR_TICKS_UNSUPPORTED in notes
