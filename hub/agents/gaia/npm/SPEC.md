@@ -384,11 +384,14 @@ daemon-transport counterpart of the stdio `MEMORY_DUMP_QUERY` sentinel; both
 paths call the same `build_memory_dump()` and return the identical shape.
 
 `GET /v1/gaia/skills` (contract ≥ 2.17) lists the skills the agent can load:
-`{ "skills": [{ "name", "description", "version", "tier", "tools", "path" }],
-"invalid": { "<folder>": "<why it failed to parse>" } }`. It reads the same
-roots the agent does — its bundled skills, `~/.gaia/skills`, Claude Code skill
-folders — so a host without the Python package (the bundled skills live inside
-the binary) can still show them. A skill root that cannot be read is a `500`
+`{ "skills": [{ "name", "description", "version", "tier", "tools", "path",
+"source" }], "invalid": { "<folder>": "<why it failed to parse>" } }`. It reads
+the same roots the agent does — its bundled skills, `~/.gaia/skills`, Claude
+Code skill folders — so a host without the Python package (the bundled skills
+live inside the binary) can still show them. `source` names the root a skill
+came from: `agent-bundled`, `user` or `claude-import`, or `null` for any other
+root. An agent that predates `source` omits the field; a host must treat a list
+where any skill lacks it as ungrouped and show it flat, not drop the skill. A skill root that cannot be read is a `500`
 naming it.
 
 `/query` streams the answer as `token` events before its terminal `final`. A
