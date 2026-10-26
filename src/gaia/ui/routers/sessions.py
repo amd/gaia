@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
@@ -42,6 +42,7 @@ from ..models import (
     SessionListResponse,
     SessionPinRequest,
     SessionResponse,
+    SessionSearchResponse,
     UpdateSessionRequest,
 )
 from ..run_manager import run_manager
@@ -217,6 +218,15 @@ async def list_sessions(
         sessions=await _session_responses(db, sessions),
         total=total,
     )
+
+
+@router.get("/api/sessions/search", response_model=SessionSearchResponse)
+async def search_sessions(
+    q: str = Query(..., min_length=1, max_length=200),
+    db: ChatDatabase = Depends(get_db),
+):
+    """Ids of chats whose messages contain *q*."""
+    return SessionSearchResponse(session_ids=db.search_session_ids(q))
 
 
 @router.post("/api/sessions", response_model=SessionResponse)

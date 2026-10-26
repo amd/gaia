@@ -94,6 +94,7 @@ export interface ApiSchemas {
   SessionListResponse: SessionListResponse;
   SessionPinRequest: SessionPinRequest;
   SessionResponse: SessionResponse;
+  SessionSearchResponse: SessionSearchResponse;
   SettingsResponse: SettingsResponse;
   SettingsUpdateRequest: SettingsUpdateRequest;
   SetupRunRequest: SetupRunRequest;
@@ -1039,6 +1040,12 @@ export interface SessionResponse {
  */
 export interface SessionPinRequest {
   pinned: boolean;
+}
+/**
+ * Chats with a message containing the query, most recently updated first.
+ */
+export interface SessionSearchResponse {
+  session_ids: string[];
 }
 /**
  * Current user settings.

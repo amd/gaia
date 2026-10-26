@@ -33,6 +33,7 @@ beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date(2026, 8, 29, 12));
     mockedApi.deleteSession.mockResolvedValue(undefined);
+    mockedApi.searchSessionMessages.mockResolvedValue([]);
     useModelStore.setState({
         active: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma', remote: false, is_default: true },
     });
@@ -61,6 +62,29 @@ describe('Sidebar', () => {
         fireEvent.change(screen.getByRole('searchbox', { name: /Search chats/ }), { target: { value: 'trip' } });
         expect(screen.getByText('Plan the trip')).toBeInTheDocument();
         expect(screen.queryByText('Fix the build')).not.toBeInTheDocument();
+    });
+
+    it('lists chats whose message text matches, after the title matches', async () => {
+        mockedApi.searchSessionMessages.mockResolvedValue(['c', 'b']);
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.change(screen.getByRole('searchbox', { name: /Search chats/ }), { target: { value: 'trip' } });
+        const list = screen.getByRole('navigation', { name: 'Recent chats' });
+        await waitFor(() => expect(within(list).getByText('Tax questions')).toBeInTheDocument());
+        expect(mockedApi.searchSessionMessages).toHaveBeenCalledWith('trip');
+        const headings = within(list).getAllByRole('heading').map((h) => h.textContent);
+        expect(headings).toEqual(['Yesterday', 'In messages']);
+        const inMessages = within(list).getByText('In messages').closest('section')!;
+        expect(within(inMessages).getByText('Tax questions')).toBeInTheDocument();
+        expect(within(inMessages).queryByText('Plan the trip')).not.toBeInTheDocument();
+        expect(within(list).queryByText('Fix the build')).not.toBeInTheDocument();
+    });
+
+    it('says so when message search fails, keeping title matches', async () => {
+        mockedApi.searchSessionMessages.mockRejectedValue(new Error('boom'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.change(screen.getByRole('searchbox', { name: /Search chats/ }), { target: { value: 'trip' } });
+        expect(await screen.findByRole('alert')).toHaveTextContent('Could not search message text: boom');
+        expect(screen.getByText('Plan the trip')).toBeInTheDocument();
     });
 
     it('New chat calls onNewChat', () => {

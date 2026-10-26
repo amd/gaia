@@ -460,6 +460,12 @@ class SessionListResponse(BaseModel):
     total: int
 
 
+class SessionSearchResponse(BaseModel):
+    """Chats with a message containing the query, most recently updated first."""
+
+    session_ids: List[str]
+
+
 # ── Messages ────────────────────────────────────────────────────────────────
 
 

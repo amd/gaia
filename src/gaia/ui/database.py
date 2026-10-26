@@ -548,6 +548,29 @@ class ChatDatabase:
 
             return sessions
 
+    def search_session_ids(self, query: str, limit: int = 200) -> List[str]:
+        """Ids of chats with a user or assistant message containing *query*.
+
+        Case-insensitive substring match, most recently updated chat first.
+        Private chats are included: the flag keeps a chat out of agent
+        memory, and this search only reads the local list.
+        """
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        with self._lock:
+            rows = self._conn.execute(
+                r"""SELECT s.id FROM sessions s
+                   WHERE EXISTS (
+                       SELECT 1 FROM messages m
+                       WHERE m.session_id = s.id
+                         AND m.role IN ('user', 'assistant')
+                         AND m.content LIKE ? ESCAPE '\'
+                   )
+                   ORDER BY s.updated_at DESC
+                   LIMIT ?""",
+                (f"%{escaped}%", limit),
+            ).fetchall()
+        return [r["id"] for r in rows]
+
     def set_session_pinned(self, session_id: str, pinned: bool) -> bool:
         """Pin or unpin a chat. Leaves ``updated_at`` alone so it keeps its place."""
         with self._transaction():

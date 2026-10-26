@@ -474,6 +474,12 @@ export async function listSessions(): Promise<{ sessions: Session[]; total: numb
     return { sessions: [...byId.values()], total };
 }
 
+/** Ids of chats with a message containing `query`, newest first. */
+export async function searchSessionMessages(query: string): Promise<string[]> {
+    const res: { session_ids: string[] } = await apiFetch('GET', `/sessions/search?q=${encodeURIComponent(query)}`);
+    return res.session_ids;
+}
+
 export async function createSession(data: Partial<Session> = {}): Promise<Session> {
     return apiFetch('POST', '/sessions', data);
 }

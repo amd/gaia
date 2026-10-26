@@ -3615,6 +3615,23 @@
     "title": "SessionResponse",
     "type": "object"
   },
+  "SessionSearchResponse": {
+    "description": "Chats with a message containing the query, most recently updated first.",
+    "properties": {
+      "session_ids": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Session Ids",
+        "type": "array"
+      }
+    },
+    "required": [
+      "session_ids"
+    ],
+    "title": "SessionSearchResponse",
+    "type": "object"
+  },
   "SettingsResponse": {
     "description": "Current user settings.",
     "properties": {

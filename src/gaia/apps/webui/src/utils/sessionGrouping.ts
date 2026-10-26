@@ -67,7 +67,7 @@ export function isAutomated(s: Session): boolean {
 }
 
 export interface ListGroup {
-    label: 'Needs you' | 'Pinned' | RecencyGroup['label'];
+    label: 'Needs you' | 'Pinned' | 'In messages' | RecencyGroup['label'];
     sessions: Session[];
 }
 

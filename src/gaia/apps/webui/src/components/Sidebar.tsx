@@ -13,7 +13,7 @@ import { useNotificationStore, selectUnreadCount, selectPromptingSessionIds } fr
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import {
-    groupSessionsForList, hiddenAutomatedCount, sessionRowStatus, type LiveRuns, type RowStatus,
+    groupSessionsForList, hiddenAutomatedCount, isAutomated, sessionRowStatus, type LiveRuns, type RowStatus,
 } from '../utils/sessionGrouping';
 import { ordinal } from '../utils/chatAlerts';
 import { formatShortcut } from '../utils/platform';
@@ -38,6 +38,7 @@ const STATUS_LABEL: Record<RowStatus, string> = {
     failed: 'Failed',
 };
 
+const MESSAGE_SEARCH_DEBOUNCE_MS = 250;
 const SHOW_AUTOMATED_KEY = 'gaia-show-automated-runs';
 
 function readShowAutomated(): boolean {
@@ -151,6 +152,8 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const setShowNotifications = useNotificationStore((s) => s.setShowPanel);
 
     const [query, setQuery] = useState('');
+    const [messageHits, setMessageHits] = useState<{ q: string; ids: string[] }>({ q: '', ids: [] });
+    const [searchError, setSearchError] = useState<string | null>(null);
     const [deleteError, setDeleteError] = useState<string | null>(null);
     const [rowError, setRowError] = useState<string | null>(null);
     const [showAutomated, setShowAutomated] = useState(readShowAutomated);
@@ -172,12 +175,38 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         prompting,
     }), [runningSessionIds, queuedSessionIds, awaitingBySession, prompting]);
 
+    const trimmedQuery = query.trim();
+    useEffect(() => {
+        setSearchError(null);
+        if (!trimmedQuery) return;
+        let stale = false;
+        const timer = setTimeout(() => {
+            api.searchSessionMessages(trimmedQuery).then(
+                (ids) => { if (!stale) setMessageHits({ q: trimmedQuery, ids }); },
+                (err) => {
+                    if (stale) return;
+                    log.chat.error('Message search failed', err);
+                    setSearchError(`Could not search message text: ${err instanceof Error ? err.message : err}`);
+                },
+            );
+        }, MESSAGE_SEARCH_DEBOUNCE_MS);
+        return () => { stale = true; clearTimeout(timer); };
+    }, [trimmedQuery]);
+
+    const searching = !!trimmedQuery && messageHits.q !== trimmedQuery && !searchError;
     const hiddenCount = hiddenAutomatedCount(sessions);
     const groups = useMemo(() => {
-        const q = query.trim().toLowerCase();
-        const list = q ? sessions.filter((s) => s.title.toLowerCase().includes(q)) : sessions;
-        return groupSessionsForList(list, live, { showAutomated });
-    }, [sessions, query, live, showAutomated]);
+        const q = trimmedQuery.toLowerCase();
+        if (!q) return groupSessionsForList(sessions, live, { showAutomated });
+        const titleMatches = sessions.filter((s) => s.title.toLowerCase().includes(q));
+        const result = groupSessionsForList(titleMatches, live, { showAutomated });
+        const titleIds = new Set(titleMatches.map((s) => s.id));
+        const hitIds = new Set(messageHits.q === trimmedQuery ? messageHits.ids : []);
+        const inMessages = sessions.filter((s) =>
+            hitIds.has(s.id) && !titleIds.has(s.id) && (showAutomated || !isAutomated(s)));
+        if (inMessages.length) result.push({ label: 'In messages', sessions: inMessages });
+        return result;
+    }, [sessions, trimmedQuery, messageHits, live, showAutomated]);
 
     const toggleAutomated = useCallback(() => {
         setShowAutomated((on) => {
@@ -335,8 +364,9 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
             {!isCollapsed && (
                 <nav className="sb-list" aria-label="Recent chats">
                     {groups.length === 0 && (
-                        <p className="sb-empty">{query ? 'No chats match.' : 'No chats yet.'}</p>
+                        <p className="sb-empty">{!query ? 'No chats yet.' : searching ? 'Searching messages...' : 'No chats match.'}</p>
                     )}
+                    {searchError && <p className="sb-empty" role="alert">{searchError}</p>}
                     {groups.map((g) => (
                         <section key={g.label} className={`sb-group${g.label === 'Needs you' ? ' is-needs-you' : ''}`}>
                             <h2 className="sb-group-label">{g.label}</h2>
