@@ -37,6 +37,9 @@ MACOS_PROTECTED_HOME_FOLDERS = (
     "Pictures/Photos Library.photoslibrary",
 )
 
+#: Other apps' sandboxed data: skipped like the rest, but not worth offering to search.
+_OTHER_APPS_DATA = ("Library/Containers", "Library/Group Containers")
+
 #: How long the guarded folders' first reads may take, together, before a read
 #: still running counts as held by the macOS permission dialog. A granted folder
 #: answers in milliseconds.
@@ -186,11 +189,19 @@ class ProtectedFolders:
             return ""
         home = Path.home()
         order = [home / rel for rel in MACOS_PROTECTED_HOME_FOLDERS]
-        names = ", ".join(
-            f"~/{f.relative_to(home).as_posix()}"
-            for f in sorted(self.skipped, key=order.index)
-        )
-        return (
-            f"Skipped {names}: macOS asks for permission before GAIA can read "
-            "them; ask the user to name the folder to search it."
-        )
+        skipped = sorted(self.skipped, key=order.index)
+        apps = [
+            f for f in skipped if f.relative_to(home).as_posix() in _OTHER_APPS_DATA
+        ]
+        user = [f for f in skipped if f not in apps]
+        lines = []
+        if user:
+            names = ", ".join(f"~/{f.relative_to(home).as_posix()}" for f in user)
+            lines.append(
+                f"Skipped {names}: macOS asks for permission before GAIA can read "
+                "them; ask the user to name the folder to search it."
+            )
+        if apps:
+            names = ", ".join(f"~/{f.relative_to(home).as_posix()}" for f in apps)
+            lines.append(f"Skipped other apps' private data ({names}).")
+        return " ".join(lines)
