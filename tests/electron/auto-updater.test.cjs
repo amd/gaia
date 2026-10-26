@@ -576,6 +576,62 @@ describe("setAutoUpdate / downloadUpdate / restart", () => {
   });
 });
 
+describe("release candidates (setAutoUpdatePrereleases)", () => {
+  const rc = { tag: "v0.27.0-rc1", version: "0.27.0-rc1", prerelease: true, platform: process.platform };
+  const final = { tag: "v0.26.0", version: "0.26.0", platform: process.platform };
+
+  test("off by default, and RCs stay out of the version list", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    stubFetch([makeRelease(rc), makeRelease(final)]);
+
+    expect(mod.getState().autoUpdatePrereleases).toBe(false);
+    expect(mockAutoUpdaterInstance.allowPrerelease).toBe(false);
+    const tags = (await mod.listReleases()).map((r) => r.tag);
+    expect(tags).toEqual(["v0.26.0"]);
+  });
+
+  test("refused while auto-update is off, without writing", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    await expect(
+      electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update-prereleases", true)
+    ).rejects.toThrow(/Turn on auto-update first/);
+    expect(fs.existsSync(pinFilePath())).toBe(false);
+  });
+
+  test("with auto-update on, turning it on saves it and lets RCs through", async () => {
+    writeUpdateConfig({ autoUpdate: true });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    stubFetch([makeRelease(rc), makeRelease(final)]);
+
+    const state = await electronMock.ipcMain.simulateInvoke(
+      "gaia:update:set-auto-update-prereleases",
+      true
+    );
+
+    expect(state.autoUpdatePrereleases).toBe(true);
+    expect(mockAutoUpdaterInstance.allowPrerelease).toBe(true);
+    expect(readUpdateConfig()).toEqual({ autoUpdate: true, autoUpdatePrereleases: true });
+    const tags = (await mod.listReleases()).map((r) => r.tag);
+    expect(tags).toEqual(["v0.27.0-rc1", "v0.26.0"]);
+  });
+
+  test("turning auto-update off stops RCs but keeps the saved choice", async () => {
+    writeUpdateConfig({ autoUpdate: true, autoUpdatePrereleases: true });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    expect(mockAutoUpdaterInstance.allowPrerelease).toBe(true);
+
+    await electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update", false);
+
+    expect(mockAutoUpdaterInstance.allowPrerelease).toBe(false);
+    expect(readUpdateConfig().autoUpdatePrereleases).toBe(true);
+  });
+});
+
 // ── Tests: clearPin ────────────────────────────────────────────────────────────
 
 describe("clearPin()", () => {

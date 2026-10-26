@@ -28,6 +28,7 @@ const bridge = {
     installVersion: vi.fn(async () => state),
     resumeUpdates: vi.fn(async () => { push({ pinnedVersion: null }); return state; }),
     setAutoUpdate: vi.fn(async (enabled: boolean) => { push({ autoUpdate: enabled }); return state; }),
+    setAutoUpdatePrereleases: vi.fn(async (enabled: boolean) => { push({ autoUpdatePrereleases: enabled }); return state; }),
     downloadUpdate: vi.fn(async () => { push({ status: 'downloading', progress: 0 }); return state; }),
     restart: vi.fn(async () => state),
 };
@@ -40,6 +41,7 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
+const rcSwitch = () => screen.getByRole('switch', { name: /include release candidates/i });
 const autoSwitch = () => screen.getByRole('switch', { name: /install updates automatically/i });
 
 describe('UpdatesSection', () => {
@@ -60,6 +62,26 @@ describe('UpdatesSection', () => {
         await userEvent.click(autoSwitch());
         expect(bridge.setAutoUpdate).toHaveBeenCalledWith(true);
         await waitFor(() => expect(autoSwitch()).toBeChecked());
+    });
+
+    it('release candidates are off and unavailable until auto-update is on', async () => {
+        render(<UpdatesSection />);
+        await screen.findByText(/available once auto-update is on/i);
+        expect(rcSwitch()).not.toBeChecked();
+        expect(rcSwitch()).toBeDisabled();
+
+        await userEvent.click(autoSwitch());
+        await waitFor(() => expect(rcSwitch()).toBeEnabled());
+        await userEvent.click(rcSwitch());
+        expect(bridge.setAutoUpdatePrereleases).toHaveBeenCalledWith(true);
+        await waitFor(() => expect(rcSwitch()).toBeChecked());
+    });
+
+    it('shows release candidates off while auto-update is off, even if saved on', async () => {
+        state = { ...state, autoUpdate: false, autoUpdatePrereleases: true };
+        render(<UpdatesSection />);
+        await screen.findByText(/available once auto-update is on/i);
+        expect(rcSwitch()).not.toBeChecked();
     });
 
     it('offers an available update and downloads it on request', async () => {

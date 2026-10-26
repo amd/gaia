@@ -43,7 +43,7 @@ func Check(ctx context.Context) (Status, error) {
 		return st, err
 	}
 	st.Releases = rs
-	if latest, ok := Latest(rs, Current); ok {
+	if latest, ok := Latest(rs, Current, cfg.IncludeRCs()); ok {
 		st.Latest = latest
 		st.Available = Newer(latest.Tag, Current)
 	}
@@ -66,6 +66,9 @@ func (s Status) Summary() string {
 	}
 	if s.Config.AutoUpdate {
 		b.WriteString(" Auto-update is on: a newer release installs when you quit.")
+		if s.Config.Prereleases {
+			b.WriteString(" Release candidates are included.")
+		}
 	} else {
 		b.WriteString(" Auto-update is off.")
 	}

@@ -109,6 +109,9 @@ const state = {
   currentVersion: null,
   pinnedVersion: null,
   autoUpdate: false,
+  // Let auto-update take release candidates too; off by default, and only
+  // honoured while autoUpdate is on.
+  autoUpdatePrereleases: false,
   // update-config.json could not be read; kept apart from `error` so a later
   // check's status never hides it.
   configError: null,
@@ -176,17 +179,31 @@ function _loadPin() {
  * file is reported (Settings shows it), and auto-update stays off until fixed.
  */
 function _loadAutoUpdate() {
-  if (!fs.existsSync(UPDATE_CONFIG_PATH)) return { autoUpdate: false, error: null };
+  if (!fs.existsSync(UPDATE_CONFIG_PATH)) {
+    return { autoUpdate: false, autoUpdatePrereleases: false, error: null };
+  }
   try {
     const cfg = JSON.parse(fs.readFileSync(UPDATE_CONFIG_PATH, "utf8"));
-    return { autoUpdate: Boolean(cfg && cfg.autoUpdate === true), error: null };
+    return {
+      autoUpdate: Boolean(cfg && cfg.autoUpdate === true),
+      autoUpdatePrereleases: Boolean(cfg && cfg.autoUpdatePrereleases === true),
+      error: null,
+    };
   } catch (err) {
     const error =
       `${UPDATE_CONFIG_PATH} cannot be read (${(err && err.message) || err}), so auto-update is off — ` +
       "fix the file by hand or delete it.";
     log("error", error);
-    return { autoUpdate: false, error };
+    return { autoUpdate: false, autoUpdatePrereleases: false, error };
   }
+}
+
+/** Release candidates count only while auto-update is on (or forced by env). */
+function _prereleasesAllowed() {
+  return (
+    process.env.GAIA_UPDATE_PRERELEASE === "1" ||
+    (state.autoUpdate && state.autoUpdatePrereleases)
+  );
 }
 
 function _savePin(pinnedVersion) {
@@ -338,7 +355,7 @@ function _releaseHasPlatformAsset(release) {
  * @returns {Promise<Array<ReleaseInfo> | { error: string }>}
  */
 async function listReleases() {
-  const allowPrerelease = process.env.GAIA_UPDATE_PRERELEASE === "1";
+  const allowPrerelease = _prereleasesAllowed();
   const pinnedVersion = _loadPin();
 
   // Get the running version — use the cached electronApi if available, else
@@ -574,12 +591,38 @@ async function setAutoUpdate(enabled) {
   setState({ autoUpdate: enabled });
   if (autoUpdaterRef) {
     autoUpdaterRef.autoDownload = enabled && !state.pinnedVersion;
+    autoUpdaterRef.allowPrerelease = _prereleasesAllowed();
   }
   log("info", `Auto-update ${enabled ? "enabled" : "disabled"}`);
   // Turning it on with an update already offered means "install it".
   if (enabled && !state.pinnedVersion && state.status === STATES.AVAILABLE) {
     await downloadUpdate();
   }
+}
+
+/**
+ * Persist whether auto-update also takes release candidates. Turning it on is
+ * refused while auto-update is off, so the setting can't sit there unseen.
+ */
+async function setAutoUpdatePrereleases(enabled) {
+  if (typeof enabled !== "boolean") {
+    throw new TypeError(`setAutoUpdatePrereleases expects true or false, got ${typeof enabled}`);
+  }
+  if (enabled && !state.autoUpdate) {
+    throw new Error("Turn on auto-update first — release candidates are an option of auto-update.");
+  }
+  try {
+    _writeConfig({ autoUpdatePrereleases: enabled });
+  } catch (err) {
+    throw new Error(
+      `Couldn't save the release-candidate setting to ${UPDATE_CONFIG_PATH}: ${(err && err.message) || err}`
+    );
+  }
+  setState({ autoUpdatePrereleases: enabled });
+  if (autoUpdaterRef) {
+    autoUpdaterRef.allowPrerelease = _prereleasesAllowed();
+  }
+  log("info", `Release-candidate updates ${enabled ? "enabled" : "disabled"}`);
 }
 
 /** "Update now": download the update a check found; the restart dialog follows. */
@@ -809,6 +852,10 @@ function registerIpcHandlers() {
     await setAutoUpdate(enabled);
     return getState();
   });
+  ipcMain.handle("gaia:update:set-auto-update-prereleases", async (_event, enabled) => {
+    await setAutoUpdatePrereleases(enabled);
+    return getState();
+  });
   ipcMain.handle("gaia:update:download", async () => {
     await downloadUpdate();
     return getState();
@@ -831,6 +878,7 @@ function unregisterIpcHandlers() {
     "gaia:update:install-version",
     "gaia:update:resume",
     "gaia:update:set-auto-update",
+    "gaia:update:set-auto-update-prereleases",
     "gaia:update:download",
     "gaia:update:restart",
   ];
@@ -892,6 +940,7 @@ function init(mainWindow, options = {}) {
   }
   const loaded = _loadAutoUpdate();
   state.autoUpdate = loaded.autoUpdate;
+  state.autoUpdatePrereleases = loaded.autoUpdatePrereleases;
   state.configError = loaded.error;
 
   // Lazy-load Electron and electron-updater. Any failure here is logged
@@ -940,8 +989,7 @@ function init(mainWindow, options = {}) {
     autoUpdaterRef.autoInstallOnAppQuit = true;
     autoUpdaterRef.disableWebInstaller = true;
     autoUpdaterRef.allowDowngrade = false;
-    autoUpdaterRef.allowPrerelease =
-      process.env.GAIA_UPDATE_PRERELEASE === "1";
+    autoUpdaterRef.allowPrerelease = _prereleasesAllowed();
 
     autoUpdaterRef.logger = {
       info: (m) => log("info", String(m)),
@@ -1027,6 +1075,7 @@ module.exports = {
   installVersion,
   clearPin,
   setAutoUpdate,
+  setAutoUpdatePrereleases,
   downloadUpdate,
   restartToInstall,
   STATES,

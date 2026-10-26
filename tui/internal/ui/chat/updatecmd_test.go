@@ -89,6 +89,26 @@ func TestUpdateAutoOnSavesTheSharedSetting(t *testing.T) {
 	}
 }
 
+func TestUpdateRCNeedsAutoUpdate(t *testing.T) {
+	m := updateModel(t)
+	_, cmd := m.submit("/update rc on")
+	next, _ := m.Update(cmd())
+	msgs := next.(ChatModel).messages
+	if last := msgs[len(msgs)-1]; last.Role != RoleError || !strings.Contains(last.Content, "auto-update first") {
+		t.Errorf("last message = %+v; want an error naming auto-update", last)
+	}
+	_, cmd = m.submit("/update auto on")
+	m.Update(cmd())
+	_, cmd = m.submit("/update rc on")
+	next, _ = m.Update(cmd())
+	if got := lastStatus(t, next.(ChatModel)); !strings.Contains(got, "includes release candidates") {
+		t.Errorf("status = %q", got)
+	}
+	if cfg, _ := update.ReadConfig(); !cfg.IncludeRCs() {
+		t.Fatalf("config = %+v; want RCs included", cfg)
+	}
+}
+
 func TestLaunchCheckOffersTheUpdateWhenAutoUpdateIsOff(t *testing.T) {
 	m := updateModel(t)
 	next, cmd := m.handleUpdateChecked(updateCheckedMsg{status: available(false, ""), launch: true})

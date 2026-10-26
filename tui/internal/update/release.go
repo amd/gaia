@@ -219,11 +219,12 @@ func sortNewestFirst(rs []Release) {
 }
 
 // Latest is the newest release this install should be offered: finals only,
-// unless current is itself a release candidate (an RC tester keeps getting RCs).
-func Latest(rs []Release, current string) (Release, bool) {
+// unless includeRCs is set or current is itself a release candidate (an RC
+// tester keeps getting RCs).
+func Latest(rs []Release, current string, includeRCs bool) (Release, bool) {
 	c, _ := parseVersion(current)
 	for _, r := range rs {
-		if r.Prerelease && c.rc == 0 {
+		if r.Prerelease && c.rc == 0 && !includeRCs {
 			continue
 		}
 		return r, true

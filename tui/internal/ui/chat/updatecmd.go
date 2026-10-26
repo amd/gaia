@@ -23,7 +23,7 @@ const updateCommandPrefix = "/update"
 
 const updateUsage = "Usage: /update (check) · /update now (install the newest) · " +
 	"/update v0.25.0 (install that exact version and pin it) · /update list · " +
-	"/update auto on|off · /update unpin · /update cancel"
+	"/update auto on|off · /update rc on|off (release candidates, needs auto) · /update unpin · /update cancel"
 
 // updateCheckTimeout bounds a check: GitHub not answering must not leave
 // "Checking…" up forever.
@@ -122,6 +122,12 @@ func (m ChatModel) runUpdateCommand(arg string) (tea.Model, tea.Cmd) {
 				update.Cancel()
 				return update.SetAutoUpdate(false)
 			})
+	case arg == "rc on":
+		return m, saveUpdateSettingCmd("Auto-update now includes release candidates (vX.Y.Z-rcN). "+
+			"/update rc off goes back to final releases only.", func() error { return update.SetPrereleases(true) })
+	case arg == "rc off":
+		return m, saveUpdateSettingCmd("Auto-update takes final releases only.",
+			func() error { return update.SetPrereleases(false) })
 	case arg == "unpin":
 		return m, saveUpdateSettingCmd("Unpinned: GAIA offers new releases again.", func() error { return update.SetPin("") })
 	case arg == "cancel":

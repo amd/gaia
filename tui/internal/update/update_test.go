@@ -64,10 +64,10 @@ func TestValidTagMatchesTheInstallScripts(t *testing.T) {
 
 func TestLatestSkipsCandidatesUnlessRunningOne(t *testing.T) {
 	rs := []Release{{Tag: "v0.26.0-rc1", Prerelease: true}, {Tag: "v0.25.0"}}
-	if r, _ := Latest(rs, "0.25.0"); r.Tag != "v0.25.0" {
+	if r, _ := Latest(rs, "0.25.0", false); r.Tag != "v0.25.0" {
 		t.Errorf("a final install was offered %s", r.Tag)
 	}
-	if r, _ := Latest(rs, "0.25.1-rc.1"); r.Tag != "v0.26.0-rc1" {
+	if r, _ := Latest(rs, "0.25.1-rc.1", false); r.Tag != "v0.26.0-rc1" {
 		t.Errorf("an RC tester was offered %s", r.Tag)
 	}
 }
@@ -354,5 +354,33 @@ func TestMoveSelfAsideRestoresAMissingBinary(t *testing.T) {
 	restore()
 	if b, _ := os.ReadFile(exe); string(b) != "new" {
 		t.Fatal("restore overwrote the freshly installed binary")
+	}
+}
+
+func TestReleaseCandidatesNeedAutoUpdate(t *testing.T) {
+	withHome(t)
+	rs := []Release{{Tag: "v0.26.0-rc1", Prerelease: true}, {Tag: "v0.25.0"}}
+	if err := SetPrereleases(true); err == nil {
+		t.Fatal("RCs were turned on while auto-update was off")
+	}
+	if err := SetAutoUpdate(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPrereleases(true); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := ReadConfig()
+	if r, _ := Latest(rs, "0.25.0", cfg.IncludeRCs()); r.Tag != "v0.26.0-rc1" {
+		t.Errorf("with RCs on, offered %s", r.Tag)
+	}
+	if err := SetAutoUpdate(false); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = ReadConfig()
+	if !cfg.Prereleases || cfg.IncludeRCs() {
+		t.Errorf("auto-update off: %+v; want the RC choice kept but not applied", cfg)
+	}
+	if r, _ := Latest(rs, "0.25.0", cfg.IncludeRCs()); r.Tag != "v0.25.0" {
+		t.Errorf("with auto-update off, offered %s", r.Tag)
 	}
 }

@@ -227,6 +227,9 @@ asks you to **Restart now** or **Later**. **Settings → General → Updates** h
 
 - **Install updates automatically** — off by default. On, releases download in the
   background and you're asked only to restart.
+- **Include release candidates** — off by default, and available only while
+  auto-update is on. On, auto-update also takes test builds (`vX.Y.Z-rcN`) before
+  their final release.
 - **Check for updates**, and **Update to vX** when one is waiting.
 - **Install a specific version…** — any published release, newer or older. GAIA then
   stays on that version (pinned) until you click **Unpin**.
@@ -240,6 +243,7 @@ asks you to **Restart now** or **Later**. **Settings → General → Updates** h
 | `/update v0.25.0` | Install that exact release and pin to it |
 | `/update list` | List recent releases |
 | `/update auto on` / `off` | Install new releases automatically when you quit (off by default) |
+| `/update rc on` / `off` | Let auto-update take release candidates too (off by default; needs auto-update on) |
 | `/update unpin` | Offer new releases again after a pinned install |
 | `/update cancel` | Don't install the release queued for quit |
 
@@ -252,8 +256,9 @@ Terminal UI; use the one-line installer with `GAIA_RELEASE_TAG` set instead. The
 Windows setup finishes in its own window, so an exact version installed through it
 isn't pinned; keep auto-update off to stay on it.
 
-Both apps keep the auto-update choice in `~/.gaia/update-config.json`, so turning
-it on in one turns it on in the other. Pins stay separate. Release checks call
+Both apps keep the auto-update and release-candidate choices in
+`~/.gaia/update-config.json`, so turning one on in either app turns it on in the
+other. Turning auto-update off stops release candidates too. Pins stay separate. Release checks call
 GitHub's API, which allows 60 anonymous requests an hour per network; set
 `GH_TOKEN` to lift that in the Terminal UI.
 

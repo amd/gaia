@@ -8,6 +8,7 @@ import { log } from '../../utils/logger';
 import { VersionPicker } from '../VersionPicker';
 
 const AUTO_LABEL = 'Install updates automatically';
+const RC_LABEL = 'Include release candidates';
 
 /** One line saying where updates stand. */
 export function describeUpdateStatus(s: UpdateState): string {
@@ -91,6 +92,33 @@ export function UpdatesSection() {
             <p className="settings-hint" id="updates-auto-hint">
                 Off by default while GAIA is changing quickly — you choose when to update.
                 The Terminal UI follows the same setting.
+            </p>
+
+            <label className="setting-row">
+                <span>{RC_LABEL}</span>
+                <span className="toggle-switch">
+                    <input
+                        type="checkbox"
+                        role="switch"
+                        checked={update.autoUpdate && Boolean(update.autoUpdatePrereleases)}
+                        aria-describedby="updates-rc-hint"
+                        aria-label={RC_LABEL}
+                        aria-busy={busy}
+                        disabled={disabled || !update.autoUpdate}
+                        onChange={() => {
+                            if (!busy) {
+                                void run('Saving the release-candidate setting', (b) =>
+                                    b.setAutoUpdatePrereleases(!update.autoUpdatePrereleases));
+                            }
+                        }}
+                    />
+                    <span className="toggle-track" />
+                </span>
+            </label>
+            <p className="settings-hint" id="updates-rc-hint">
+                {update.autoUpdate
+                    ? 'Also install test builds (vX.Y.Z-rcN) before they become a final release. Off by default.'
+                    : 'Available once auto-update is on.'}
             </p>
 
             {update.pinnedVersion && (
