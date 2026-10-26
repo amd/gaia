@@ -98,6 +98,20 @@ def test_deleted_author_is_treated_as_third_party(monkeypatch):
         "hub/agents/example/npm/package.json",
         "src/gaia/utils/util/helper.py",
         "pkg/uv.lock",
+        "pkg/sitecustomize.py",
+        "tests/usercustomize.py",
+        ".githooks/pre-push",
+        ".pre-commit-config.yaml",
+        "tools/action.yml",
+        "GNUmakefile",
+        "build/rules.mk",
+        "noxfile.py",
+        "pytest.ini",
+        "go.mod",
+        ".gitmodules",
+        "web/postinstall.js",
+        ".GitHub/workflows/ci.yml",
+        "docs/makefile",
     ],
 )
 def test_sensitive_paths_are_flagged(path):
@@ -277,3 +291,25 @@ def test_a_moved_head_does_not_abort_the_rest_of_the_batch(monkeypatch, capsys):
     assert exc.value.code == 1
     assert "REFUSE #6" in out and "APPROVED #5" in out
     assert len(posts.calls) == 1 and "11" in posts.calls[0][-1]
+
+
+def test_a_file_renamed_out_of_a_sensitive_path_is_still_reported(monkeypatch):
+    def api(gh, path, *extra):
+        if path.endswith("/files?per_page=100"):
+            return json.dumps(
+                [
+                    [
+                        {
+                            "filename": "docs/x.md",
+                            "previous_filename": ".github/workflows/ci.yml",
+                        }
+                    ]
+                ]
+            )
+        return json.dumps(
+            {"state": "open", "head": {"sha": SHA}, "user": {"login": "o"}}
+        )
+
+    monkeypatch.setattr(afr, "api", api)
+    plan = afr.plan_for("gh", "amd/gaia", 5, SHA[:7], {SHA: [1]}, TEAM)
+    assert ".github/workflows/ci.yml" in plan["risky"]

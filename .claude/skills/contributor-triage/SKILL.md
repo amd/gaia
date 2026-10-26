@@ -82,7 +82,9 @@ time — and approve right after reviewing, not later**:
    ```
 
    The first command is a dry run. The tool refuses if the head moved since you read it,
-   refuses sensitive paths unless you pass `--include-risky N` after reading them, skips
+   refuses sensitive paths (a filename heuristic: it cannot see a payload hidden in an ordinary
+   source or test file, so your read of the diff is the real control) unless you pass
+   `--include-risky N` after reading them, skips
    maintainers' PRs, and fails loudly on any run it could not approve. A network blip leaves
    some runs unapproved; re-running the same command approves only what is still stalled.
 3. A contributor push creates new stalled runs for the new SHA. Re-read the new commits,

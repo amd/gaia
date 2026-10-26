@@ -26,12 +26,17 @@ import sys
 import triage_scan as ts
 
 # Paths where a change runs with the runner's privileges or alters what CI trusts.
+# A filename heuristic only: it cannot see a payload hidden in an ordinary source or
+# test file (those execute at import and collection too). Reading the diff is the control.
 RISKY_PATHS = re.compile(
-    r"(^|/)(\.github|\.claude|\.devcontainer|\.husky|util|scripts|installer)/"
-    r"|(^|/)(setup\.py|pyproject\.toml|setup\.cfg|tox\.ini|Makefile|conftest\.py"
-    r"|\.npmrc|\.nvmrc|package(-lock)?\.json|npm-shrinkwrap\.json|Pipfile|[^/]*\.pth"
-    r"|uv\.lock|poetry\.lock|yarn\.lock|pnpm-lock\.yaml)$"
-    r"|(^|/)Dockerfile[^/]*$|(^|/)requirements[^/]*\.txt$|\.(sh|ps1|bat|cmd)$"
+    r"(^|/)(\.github|\.claude|\.devcontainer|\.husky|\.githooks|util|scripts|installer)/"
+    r"|(^|/)(setup\.py|pyproject\.toml|setup\.cfg|tox\.ini|noxfile\.py|pytest\.ini"
+    r"|conftest\.py|sitecustomize\.py|usercustomize\.py|\.pre-commit-config\.ya?ml"
+    r"|action\.ya?ml|makefile|gnumakefile|justfile|[^/]*\.mk|go\.mod|go\.sum|\.gitmodules"
+    r"|\.npmrc|\.nvmrc|package(-lock)?\.json|npm-shrinkwrap\.json|pipfile|[^/]*\.pth"
+    r"|uv\.lock|poetry\.lock|yarn\.lock|pnpm-lock\.yaml|postinstall\.[cm]?js)$"
+    r"|(^|/)dockerfile[^/]*$|(^|/)requirements[^/]*\.txt$|\.(sh|ps1|bat|cmd)$",
+    re.IGNORECASE,
 )
 
 
@@ -82,7 +87,12 @@ def plan_for(gh, repo, number, sha_prefix, stalled, team):
             "--slurp",
         )
     )
-    names = [f["filename"] for page in files for f in page]
+    names = []
+    for page in files:
+        for f in page:
+            names.append(f["filename"])
+            if f.get("previous_filename"):
+                names.append(f["previous_filename"])
     return {
         "number": number,
         "sha": head,

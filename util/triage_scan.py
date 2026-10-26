@@ -52,9 +52,9 @@ query($owner:String!,$name:String!,$cursor:String){
           ... on CheckRun{name conclusion status startedAt}
           ... on StatusContext{context state}
         }}}}}}
-        comments(last:30){nodes{author{login} createdAt body}}
-        reviews(last:30){nodes{author{login} submittedAt}}
-        reviewThreads(first:100){nodes{isResolved isOutdated}}
+        comments(last:30){totalCount nodes{author{login} createdAt body}}
+        reviews(last:30){totalCount nodes{author{login} submittedAt}}
+        reviewThreads(first:100){totalCount nodes{isResolved isOutdated}}
       }
     }
   }
@@ -359,9 +359,15 @@ def assess_pr(pr, team, stalled=(), required=REQUIRED_CHECKS):
         blockers.append(f"CI pending ({pending})")
     verdict = bot_verdict(pr)
     notes = []
+    if pr["comments"].get("totalCount", 0) > len(pr["comments"]["nodes"]):
+        blockers.append("comment list truncated: read the thread in the UI")
+    if pr["reviews"].get("totalCount", 0) > len(pr["reviews"]["nodes"]):
+        blockers.append("review list truncated: read the reviews in the UI")
+    if pr["reviewThreads"].get("totalCount", 0) > len(pr["reviewThreads"]["nodes"]):
+        blockers.append("review threads truncated: read them in the UI")
     if verdict is None:
         notes.append("no review-bot verdict")
-    elif "approve" not in verdict[0]:
+    elif not verdict[0].startswith("approve"):
         stale = (
             "" if verdict[1] else " (predates the head: verify each finding is fixed)"
         )

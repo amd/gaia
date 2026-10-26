@@ -34,7 +34,7 @@ def make_pr(**over):
         "headRefName": "fix/x",
         "headRefOid": "abc123",
         "headRepository": {"nameWithOwner": "outsider/gaia"},
-        "reviewThreads": {"nodes": []},
+        "reviewThreads": {"totalCount": 0, "nodes": []},
         "isDraft": False,
         "additions": 10,
         "deletions": 5,
@@ -72,8 +72,8 @@ def make_pr(**over):
                 }
             ]
         },
-        "comments": {"nodes": [BOT_APPROVE]},
-        "reviews": {"nodes": []},
+        "comments": {"totalCount": 1, "nodes": [BOT_APPROVE]},
+        "reviews": {"totalCount": 0, "nodes": []},
     }
     pr.update(over)
     return pr
@@ -457,3 +457,26 @@ def test_a_newer_failure_is_not_hidden_by_an_older_pass():
         },
     ]
     assert any("CI red: Lint" in b for b in ts.assess_pr(pr, TEAM)["blockers"])
+
+
+def test_a_truncated_comment_list_blocks_instead_of_hiding_the_verdict():
+    pr = make_pr()
+    pr["comments"]["totalCount"] = 45
+    assert any(
+        "comment list truncated" in b for b in ts.assess_pr(pr, TEAM)["blockers"]
+    )
+
+
+def test_truncated_reviews_and_threads_block():
+    pr = make_pr()
+    pr["reviews"]["totalCount"] = 40
+    pr["reviewThreads"]["totalCount"] = 101
+    blockers = ts.assess_pr(pr, TEAM)["blockers"]
+    assert any("review list truncated" in b for b in blockers)
+    assert any("review threads truncated" in b for b in blockers)
+
+
+def test_not_approved_is_not_an_approval():
+    c = {**BOT_APPROVE, "body": "**Verdict: Not approved**"}
+    row = ts.assess_pr(make_pr(comments={"totalCount": 1, "nodes": [c]}), TEAM)
+    assert not row["ready"]
