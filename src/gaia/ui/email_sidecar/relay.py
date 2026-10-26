@@ -330,6 +330,9 @@ def _dispatch_one(
         usage = event.get("usage")
         if isinstance(usage, dict):
             out.update({k: usage[k] for k in _ANSWER_USAGE_KEYS if k in usage})
+        if isinstance(event.get("model_messages"), list):
+            # Saved with the reply so later turns replay its tool calls.
+            handler.relayed_model_messages = event["model_messages"]
         handler._emit(out)
         return True
 
@@ -424,6 +427,7 @@ def relay_query(
     memory: Optional[str] = None,
     changes_turn_id: Optional[str] = None,
     surface: Optional[str] = None,
+    turns: Optional[List[List[Dict[str, Any]]]] = None,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
 
@@ -440,6 +444,10 @@ def relay_query(
 
     *surface* — the front-end this turn comes from, for a sidecar the caller
     has established takes it (``profiles.surface_supported``).
+
+    *turns* — the session's earlier turns as the model recorded them, for a
+    sidecar the caller has established takes them (``profiles.turns_supported``);
+    they replace *context*.
 
     *documents* — absolute paths of the chat's attached files, for a sidecar
     the caller has established takes them (``profiles.documents_supported``).
@@ -516,6 +524,9 @@ def relay_query(
         body["changes_turn_id"] = changes_turn_id
     if surface is not None:
         body["surface"] = surface
+    if turns is not None:
+        body["turns"] = turns
+        body["context"] = []
 
     syncs_mode = full_access is not None and bool(session_id)
     enable_after_start = False

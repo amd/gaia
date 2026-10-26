@@ -168,6 +168,10 @@ class RelayProfile:
     #: Contract version from which ``/query`` takes ``surface``, the front-end
     #: the turn comes from. ``None`` means the relay never sends it.
     min_surface_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes ``turns`` (earlier turns
+    #: with their tool calls) and a ``final`` carries ``model_messages``.
+    #: ``None`` means the relay sends text ``context`` only.
+    min_turns_api_version: Optional[Tuple[int, int]] = None
     #: Shown when the agent itself fails to start (it crashed or never got
     #: healthy). Shown through :meth:`start_failed_text`, which adds the log folder.
     start_failed_message: str = ""
@@ -538,6 +542,8 @@ GAIA_PROFILE = RelayProfile(
     min_changes_api_version=(2, 19),
     # 2.20 added /query's surface field.
     min_surface_api_version=(2, 20),
+    # 2.21 added /query's turns field and final.model_messages.
+    min_turns_api_version=(2, 21),
 )
 
 
@@ -649,6 +655,15 @@ def surface_supported(profile: RelayProfile, api_version: Optional[str]) -> bool
     Same evidence rule as :func:`api_version_supported`: no version, no claim.
     """
     floor = profile.min_surface_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def turns_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``turns`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_turns_api_version
     return floor is not None and _meets(api_version, floor)
 
 

@@ -227,6 +227,12 @@ its own settings screen sends `surface` (`"tui"`, `"agent_ui"` or `"cli"`) to
 get its own wording; a headless caller omits it. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Keeping a multi-turn conversation? Send `turns`, not `context`** (contract ≥
+2.21). Store each `final.model_messages` with its reply and send them back,
+oldest first, so the agent sees the tool calls it made and what they returned.
+Text-only `context` loses them, and the agent can't explain its own last turn.
+Older binaries reject `turns` with `422`.
+
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
 that names what failed and what to do about it.

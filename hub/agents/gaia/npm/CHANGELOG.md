@@ -6,6 +6,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### For integrators: contract 2.21
+
+- **The agent remembers its own tool calls across turns** (contract **2.21**,
+  #5701). A caller that pushed history as `context` could send only text, so
+  on the next turn the agent saw its earlier answers but not the commands it
+  ran or their errors, and "why did that fail?" got "I have no record of the
+  tool calls". Every `final` now carries `model_messages`, the turn as the
+  model saw it, tool calls and results included. Send those back in the new
+  `turns` field, oldest first, and the agent replays them, keeping the newest
+  whole turns that fit its context window. `turns` replaces `context` when
+  sent. Pre-2.21 binaries refuse the field with `422`, so probe `/version`
+  first.
+
 ### For integrators: contract 2.20
 
 - **A failed model request says which endpoint failed, worded for your

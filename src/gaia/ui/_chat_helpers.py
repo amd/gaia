@@ -65,6 +65,7 @@ from gaia.ui.email_sidecar.profiles import (
     profile_for,
     scope_supported,
     surface_supported,
+    turns_supported,
 )
 from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.turn_changes import TurnRecording
@@ -2084,6 +2085,7 @@ def _dispatch_sidecar_query(
     memory: str = "on",
     recording: TurnRecording | None = None,
     max_steps: int | None = None,
+    turns: list | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
 
@@ -2243,8 +2245,15 @@ def _dispatch_sidecar_query(
     if sse_handler.cancelled.is_set():
         return
 
+    # A sidecar that takes recorded turns sees earlier tool calls, and cuts
+    # them to its own window; an older one gets the text pairs.
+    relayed_turns = (
+        turns
+        if turns is not None and turns_supported(profile, handle.api_version)
+        else None
+    )
     context = _query_context_from_history(history_pairs)
-    if len(history_pairs) == _RELAY_CONTEXT_PAIRS + 1:
+    if relayed_turns is None and len(history_pairs) == _RELAY_CONTEXT_PAIRS + 1:
         from gaia.agents.base.turn_metrics import count_tokens
 
         # The window slides from here on; say so once, when it first does.
@@ -2295,6 +2304,7 @@ def _dispatch_sidecar_query(
             "agent_ui" if surface_supported(profile, handle.api_version) else None
         ),
         max_steps=max_steps,
+        turns=relayed_turns,
     )
 
 
@@ -3501,14 +3511,18 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
         # A relayed sidecar only sees the transcript it is sent; in-process
         # agents restore traces below.
-        history_pairs = (
-            _build_history_pairs(model_context_messages(db, request.session_id))
+        relay_messages = (
+            model_context_messages(db, request.session_id)
             if _should_relay_to_sidecar(
                 request.agent_type or session.get("agent_type") or "chat",
                 _agent_registry,
             )
             else []
         )
+        from gaia.agents.base.history import transcript_turns
+
+        history_pairs = _build_history_pairs(relay_messages)
+        relay_turns = transcript_turns(relay_messages)
 
         # Resolve document IDs to file paths.
         # Session-specific docs get auto-indexed; library docs are available
@@ -3786,6 +3800,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         allowed_paths=allowed,
                         memory=_memory_mode(session, db),
                         recording=recording,
+                        turns=relay_turns,
+                    )
+                    result_holder["model_messages"] = getattr(
+                        sse_handler, "relayed_model_messages", None
                     )
                     return
 

@@ -84,7 +84,8 @@ AGENT_ID = "gaia"
 #: 2.18 added ``/query``'s ``allowed_paths`` and ``memory`` fields.
 #: 2.19 added ``/query``'s ``changes_turn_id`` field.
 #: 2.20 added ``/query``'s ``surface`` field.
-API_VERSION = "2.20"
+#: 2.21 added ``/query``'s ``turns`` field and ``final.model_messages``.
+API_VERSION = "2.21"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -248,6 +249,28 @@ class QueryRequest(_Strict):
             "the model server this GAIA host uses."
         ),
     )
+
+    turns: Optional[List[List[Dict[str, Any]]]] = Field(
+        default=None,
+        description=(
+            "Earlier turns as the model saw them, oldest first (contract >= "
+            "2.21): each is that turn's `final.model_messages`, tool calls and "
+            "results included, or a user/assistant text pair for a turn that "
+            "recorded none. Replaces `context` when sent; the agent keeps the "
+            "newest whole turns that fit its context window."
+        ),
+    )
+
+    @field_validator("turns")
+    @classmethod
+    def _turn_roles_known(
+        cls, v: Optional[List[List[Dict[str, Any]]]]
+    ) -> Optional[List[List[Dict[str, Any]]]]:
+        for turn in v or []:
+            for message in turn:
+                if message.get("role") not in {"user", "assistant", "system", "tool"}:
+                    raise ValueError(f"unknown role {message.get('role')!r} in turns")
+        return v
 
     @model_validator(mode="after")
     def _changes_need_a_session(self) -> "QueryRequest":
@@ -1082,6 +1105,57 @@ def _release_abandoned_turn(checked_out: Optional[Tuple[Any, bool]]) -> None:
         checked_out[0].run_lock.release()
 
 
+#: How long a ``final`` waits for the loop to return its turn record. The
+#: answer is already streamed; only the record for later turns waits on it.
+_TURN_RECORD_WAIT_SECONDS = 15.0
+
+
+def _history_from_turns(
+    agent: Any, turns: List[List[Dict[str, Any]]], query: str, handler: Any
+) -> List[Dict[str, Any]]:
+    """The newest whole *turns* that fit *agent*'s window, as its model reads them."""
+    from gaia.agents.base.history import (
+        history_budget,
+        select_history,
+        text_tool_history,
+    )
+
+    uses_native = getattr(agent, "_uses_native_tool_calls", None)
+    if callable(uses_native) and not uses_native():
+        turns = text_tool_history(turns)
+    return select_history(
+        turns,
+        history_budget(agent, query),
+        lambda cut: handler._emit({"type": "status", "message": cut.notice}),
+    )
+
+
+async def _with_turn_record(
+    event: Dict[str, Any], run: _QueryRun, thread: threading.Thread
+) -> Dict[str, Any]:
+    """*event* with the turn's ``model_messages`` when it is a ``final``.
+
+    The answer streams before the loop returns, so this waits for the record.
+    """
+    if event.get("type") != "final":
+        return event
+    await asyncio.to_thread(thread.join, _TURN_RECORD_WAIT_SECONDS)
+    if thread.is_alive():
+        logger.warning(
+            "run_id=%s: the loop had not returned %.0fs after its answer; this "
+            "turn is sent without its tool record, so later turns see only its text",
+            run.run_id,
+            _TURN_RECORD_WAIT_SECONDS,
+        )
+        return event
+    messages = (
+        run.result.get("model_messages") if isinstance(run.result, dict) else None
+    )
+    if messages is None:
+        return event
+    return {**event, "model_messages": messages}
+
+
 async def _finish_changes(run: _QueryRun) -> List[Dict[str, Any]]:
     """Complete the run's undo recording ahead of its terminal event.
 
@@ -1112,7 +1186,7 @@ _QUERY_SSE_RESPONSES = {
             "action, summary, confirm_id?, always_scope?, risk?, tool_label?, "
             "args?, args_truncated?, prompt_context?} | needs_input {run_id, "
             "request_id, question, options, allow_free_text, sensitive, "
-            "respond_url, timeout_seconds?} | final {answer, usage?, failed?} | "
+            "respond_url, timeout_seconds?} | final {answer, usage?, failed?, model_messages?} | "
             "error {detail, status}. A needs_confirmation's `args` are exactly "
             "the arguments the model sent for the gated call, each value capped "
             "at 64,000 characters (`args_truncated: true` when one was cut); "
@@ -1309,10 +1383,16 @@ async def query(request: QueryRequest):
             handler.answers_questions = False
 
         # Pushed context, never pulled (spec §2.4).
-        if request.context and hasattr(agent, "conversation_history"):
+        pushed = bool(request.turns) or bool(request.context)
+        if request.turns and hasattr(agent, "conversation_history"):
+            agent.conversation_history = _history_from_turns(
+                agent, request.turns, request.query, handler
+            )
+        elif request.context and hasattr(agent, "conversation_history"):
             agent.conversation_history = [
                 {"role": c.role, "content": c.content} for c in request.context
             ]
+        if pushed and hasattr(agent, "conversation_history"):
             # The caller chose this text, not the user — so it must not count as
             # the user speaking when the agent decides what it is allowed to
             # learn permanently (Agent.turn_content_provenance).
@@ -1468,6 +1548,7 @@ async def query(request: QueryRequest):
                     if ctype in TERMINAL_TYPES:
                         for warning in await _finish_changes(run):
                             yield _emit(warning)
+                        canonical = await _with_turn_record(canonical, run, thread)
                     yield _emit(canonical)
                     last_write = time.monotonic()
                     if ctype == "needs_input":
@@ -1502,11 +1583,16 @@ async def query(request: QueryRequest):
                 if canonical.get("type") in TERMINAL_TYPES:
                     for warning in await _finish_changes(run):
                         yield _emit(warning)
+                    canonical = await _with_turn_record(canonical, run, thread)
                 yield _emit(canonical)
                 if canonical.get("type") in TERMINAL_TYPES:
                     terminated = True
             if not terminated:
-                yield _emit(_terminal_from_run_result(run.result))
+                yield _emit(
+                    await _with_turn_record(
+                        _terminal_from_run_result(run.result), run, thread
+                    )
+                )
         finally:
             # A client that disconnected mid-run should not leave the loop running.
             handler.cancelled.set()
