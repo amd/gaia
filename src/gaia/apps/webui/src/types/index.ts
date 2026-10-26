@@ -472,7 +472,7 @@ export interface Document {
     sessions_using: number;
     indexing_status?: 'pending' | 'indexing' | 'complete' | 'failed' | 'cancelled' | 'missing';
     last_error?: string | null;
-    /** Set when retrying can't help until the file is fixed: corrupted, encrypted, empty (no text) or empty_file (0 bytes). */
+    /** Set when retrying can't help until the file is fixed: corrupted, encrypted, empty (no text), empty_file (nothing to index) or unsupported_workbook (.xls or password-protected). */
     error_kind?: string | null;
 }
 
@@ -1297,6 +1297,8 @@ export interface SessionPermissions {
 export interface SkillInfo {
     name: string;
     description: string;
+    /** Omitted by older Hub sidecars; false means a selectable task skill. */
+    always_on?: boolean;
     version: string | null;
     tier: string | null;
     tools: string[];

@@ -9,18 +9,19 @@
 // Section anchors are absolute so they resolve from any path, including a
 // redirect landing.
 import { getStableRelease } from '../data/github';
-import { installTargets, primaryDownloads } from '../data/primary-downloads';
+import { installTargets } from '../data/install-targets';
 
 const NAV = [
   { label: 'Build', href: '/#build' },
   { label: 'Docs', href: 'https://amd-gaia.ai/docs', external: true },
 ];
 
-// Install starts this machine's primary download -- the same file as the top of
-// the install section. The href stays /#install until the script places the
-// machine on one platform, so no JS, an unknown OS and a Mac of unknown
-// architecture all land on the section instead.
-const INSTALL_TARGETS = JSON.stringify(installTargets(primaryDownloads(await getStableRelease())));
+// Install starts this machine's download: the combined setup on Windows x64,
+// the desktop app on Apple Silicon and Linux x64. The href stays /#install
+// until the script places the machine on one of those, so no JS, an unknown
+// OS, a Mac of unknown architecture and every other platform land on the
+// section instead.
+const INSTALL_TARGETS = JSON.stringify(installTargets(await getStableRelease()));
 ---
 
 <header

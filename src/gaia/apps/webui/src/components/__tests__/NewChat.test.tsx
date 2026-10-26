@@ -122,6 +122,64 @@ describe('NewChat while GAIA is starting', () => {
     });
 });
 
+describe('NewChat while the chat is being created (#5712)', () => {
+    beforeEach(() => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus, messageQueues: {}, currentSessionId: null });
+    });
+
+    function sendTwo(onSend: (text: string) => Promise<boolean | void>) {
+        render(<NewChat onSend={onSend} />);
+        const box = screen.getByLabelText('Message');
+        fireEvent.change(box, { target: { value: 'first' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        // Cleared at once, so what is typed next is its own message.
+        expect(box).toHaveValue('');
+        expect(box).toBeEnabled();
+        fireEvent.change(box, { target: { value: 'second' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        return box;
+    }
+
+    it('queues a message sent before the chat exists instead of dropping it', async () => {
+        let created!: () => void;
+        const onSend = vi.fn(() => new Promise<void>((resolve) => { created = () => {
+            useChatStore.setState({ currentSessionId: 'chat-1' });
+            resolve();
+        }; }));
+        sendTwo(onSend);
+
+        expect(onSend).toHaveBeenCalledTimes(1);
+        await act(async () => created());
+
+        expect(useChatStore.getState().messageQueues['chat-1']?.map((m) => [m.text, m.state])).toEqual([['second', 'queued']]);
+    });
+
+    it('never sends held messages on their own when the first one was not sent', async () => {
+        let created!: () => void;
+        const onSend = vi.fn(() => new Promise<boolean>((resolve) => { created = () => {
+            useChatStore.setState({ currentSessionId: 'chat-1' });
+            resolve(false);
+        }; }));
+        sendTwo(onSend);
+
+        await act(async () => created());
+
+        expect(useChatStore.getState().messageQueues['chat-1']?.map((m) => [m.text, m.state, m.error]))
+            .toEqual([['second', 'failed', 'The first message was not sent.']]);
+    });
+
+    it('puts every message back in the box when the chat could not be created', async () => {
+        let fail!: () => void;
+        const onSend = vi.fn(() => new Promise<void>((_, reject) => { fail = () => reject(new Error('no backend')); }));
+        const box = sendTwo(onSend);
+
+        await act(async () => fail());
+
+        expect(box).toHaveValue('first\n\nsecond');
+        expect(screen.getByText('no backend')).toBeInTheDocument();
+    });
+});
+
 describe('NewChat while the first prompt is being primed', () => {
     it('shows the wait without holding the message box', async () => {
         useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });

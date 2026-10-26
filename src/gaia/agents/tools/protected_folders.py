@@ -22,17 +22,23 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from gaia.agents.tools.search_scope import is_broad_root, search_roots
 
 #: Relative to home. iCloud Drive is guarded the same way, ~/Music and the TV
-#: app's ~/Movies/TV behind the "Media & Apple Music" prompt, and the Photos
-#: library behind "Photos".
+#: app's ~/Movies/TV behind the "Media & Apple Music" prompt, the Photos
+#: library behind "Photos", and other apps' sandboxed data behind "access data
+#: from other apps".
 MACOS_PROTECTED_HOME_FOLDERS = (
     "Desktop",
     "Documents",
     "Downloads",
+    "Library/Containers",
+    "Library/Group Containers",
     "Library/Mobile Documents",
     "Movies/TV",
     "Music",
     "Pictures/Photos Library.photoslibrary",
 )
+
+#: Other apps' sandboxed data: skipped like the rest, but not worth offering to search.
+_OTHER_APPS_DATA = ("Library/Containers", "Library/Group Containers")
 
 #: How long the guarded folders' first reads may take, together, before a read
 #: still running counts as held by the macOS permission dialog. A granted folder
@@ -53,6 +59,23 @@ def is_macos_guarded(path: Any) -> bool:
     home = Path.home()
     target = Path(path).expanduser().resolve()
     return any(target == (home / rel).resolve() for rel in MACOS_PROTECTED_HOME_FOLDERS)
+
+
+def macos_guarded_folder(path: Any) -> Optional[Path]:
+    """The guarded folder holding *path* on macOS, or None.
+
+    Lexical: resolving a path inside a guarded folder stats it, which can block
+    on the very dialog this exists to avoid.
+    """
+    if sys.platform != "darwin":
+        return None
+    home = Path.home()
+    target = Path(os.path.abspath(os.path.expanduser(str(path))))
+    for rel in MACOS_PROTECTED_HOME_FOLDERS:
+        folder = home / rel
+        if _covers(folder, target):
+            return folder
+    return None
 
 
 class _Probe(threading.Thread):
@@ -183,11 +206,19 @@ class ProtectedFolders:
             return ""
         home = Path.home()
         order = [home / rel for rel in MACOS_PROTECTED_HOME_FOLDERS]
-        names = ", ".join(
-            f"~/{f.relative_to(home).as_posix()}"
-            for f in sorted(self.skipped, key=order.index)
-        )
-        return (
-            f"Skipped {names}: macOS asks for permission before GAIA can read "
-            "them; ask the user to name the folder to search it."
-        )
+        skipped = sorted(self.skipped, key=order.index)
+        apps = [
+            f for f in skipped if f.relative_to(home).as_posix() in _OTHER_APPS_DATA
+        ]
+        user = [f for f in skipped if f not in apps]
+        lines = []
+        if user:
+            names = ", ".join(f"~/{f.relative_to(home).as_posix()}" for f in user)
+            lines.append(
+                f"Skipped {names}: macOS asks for permission before GAIA can read "
+                "them; ask the user to name the folder to search it."
+            )
+        if apps:
+            names = ", ".join(f"~/{f.relative_to(home).as_posix()}" for f in apps)
+            lines.append(f"Skipped other apps' private data ({names}).")
+        return " ".join(lines)

@@ -7,6 +7,7 @@ quality gates. The LLM is never required: ``--live`` is exercised with a fake
 agent so the suite runs without Lemonade.
 """
 
+import sys
 from argparse import Namespace
 
 import pytest
@@ -330,6 +331,70 @@ def test_live_detects_empty_response(scaffolded_python, monkeypatch):
     )
     with pytest.raises(cli_agent.AgentWorkflowError, match="empty response"):
         cli_agent.cmd_test(_test_args(scaffolded_python, lint=False, live=True))
+
+
+@pytest.fixture
+def starters_package(tmp_path, monkeypatch):
+    module_name = "gaia_test_starters"
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+    pkg = tmp_path / module_name
+    pkg.mkdir()
+    yield pkg, module_name
+    sys.modules.pop(module_name, None)
+
+
+@pytest.mark.parametrize(
+    "source, error_type, detail",
+    [
+        ("raise ImportError('broken package')\n", ImportError, "broken package"),
+        (
+            "def build_registration():\n    raise RuntimeError('broken registration')\n",
+            RuntimeError,
+            "broken registration",
+        ),
+    ],
+    ids=["import-error", "registration-error"],
+)
+def test_starters_from_init_surfaces_failures(
+    starters_package, source, error_type, detail
+):
+    pkg, module_name = starters_package
+    (pkg / "__init__.py").write_text(source, encoding="utf-8")
+
+    with pytest.raises(cli_agent.AgentWorkflowError, match=detail) as excinfo:
+        cli_agent._starters_from_init(pkg.parent, module_name)
+
+    assert module_name in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, error_type)
+
+
+def test_starters_from_init_without_registration(starters_package):
+    pkg, module_name = starters_package
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+
+    assert cli_agent._starters_from_init(pkg.parent, module_name) == []
+
+
+def test_live_import_failure_exits_cleanly(scaffolded_python, monkeypatch, capsys):
+    manifest_path = scaffolded_python / "gaia-agent.yaml"
+    data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    data["conversation_starters"] = []
+    manifest_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    module_name = data["python"]["entry_module"]
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+    monkeypatch.syspath_prepend(str(scaffolded_python))
+    (scaffolded_python / module_name / "__init__.py").write_text(
+        "raise ImportError('broken package')\n", encoding="utf-8"
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli_agent.handle(_test_args(scaffolded_python, lint=False, live=True))
+
+    assert excinfo.value.code == 1
+    err = capsys.readouterr().err
+    assert f"could not load {module_name}: broken package" in err
+    assert "no conversation_starters declared" not in err
 
 
 # ---------------------------------------------------------------------------
