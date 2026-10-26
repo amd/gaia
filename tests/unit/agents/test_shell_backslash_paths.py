@@ -46,3 +46,22 @@ def test_a_backslash_path_outside_the_scope_is_refused(tmp_path):
     assert result["status"] == "error"
     assert "Access denied" in result["error"]
     assert "fonts" not in str(result)
+
+
+@pytest.mark.parametrize("dialect, refused", [("cmd", True), ("posix", False)])
+def test_cmd_reads_a_path_without_its_carets(monkeypatch, tmp_path, dialect, refused):
+    from gaia.security import PathValidator
+
+    monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: dialect)
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+    mixin = shell_tools.ShellToolsMixin()
+    mixin.path_validator = PathValidator(allowed_paths=[str(cwd)])
+    arg = "^.^./secret.txt"
+    refusal = mixin._path_candidate_refusal("argument", arg, arg, str(cwd))
+    assert (refusal is not None) is refused
+
+
+def test_the_one_time_scan_reads_a_backslash_path_whole(monkeypatch):
+    monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
+    assert shell_tools._tokenize(r"del C:\a\b") == ["del", r"C:\a\b"]

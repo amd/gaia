@@ -370,7 +370,7 @@ def _one_time_hard_reason(command: str) -> str:
         if not piece:
             continue
         try:
-            argv = shlex.split(piece)
+            argv = _tokenize(piece)
         except ValueError:
             argv = piece.split()
         if _destroys(argv):
@@ -3645,6 +3645,13 @@ class ShellToolsMixin:
         if os.name == "nt" and candidate_path.startswith("/"):
             if "/" not in candidate_path[1:]:
                 return None
+        # cmd.exe drops an unquoted '^' that shlex keeps; check its reading too.
+        if _pipe_dialect() == "cmd" and "^" in candidate_path:
+            refusal = self._path_candidate_refusal(
+                label, arg, re.sub(r"\^(.?)", r"\1", candidate_path), cwd, outside
+            )
+            if refusal:
+                return refusal
         # A shell or script may expand '~' and '$HOME'; check both readings.
         expanded = os.path.expandvars(os.path.expanduser(candidate_path))
         looks_like_path = (
