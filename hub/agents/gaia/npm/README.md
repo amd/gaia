@@ -39,7 +39,7 @@ however you arrive at the terminal UI, it behaves identically.
 - **Node.js 18+** (for the built-in `fetch`).
 - **[Lemonade Server](https://amd-gaia.ai/docs/reference/dev)** running locally —
   it hosts the model the agent thinks with. GAIA tells you if it isn't up.
-- The `gaia` Python CLI **0.25.1 or newer** on `PATH` for the daemon the terminal
+- The `gaia` Python CLI **0.25.2 or newer** on `PATH` for the daemon the terminal
   UI starts. An earlier core cannot run this agent, so the UI comes up with
   nothing behind it. Install it with
   `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
@@ -213,7 +213,8 @@ and restore them as soon as the stream ends. Omit it and nothing is copied. See
 event's `args` are exactly the arguments the model sent for the gated call,
 each value capped at 64,000 characters; `args_truncated: true` means one was
 cut, so don't auto-approve that call. What the agent adds to its own prompt —
-the folder a shell call runs in, a risk note — comes in `prompt_context`, never
+the folder a shell call runs in, a risk note, the full path of a relative
+write — comes in `prompt_context`, never
 in `args`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Serving the turn from the Agent UI? Send `surface: "agent_ui"`** (contract ≥

@@ -195,7 +195,13 @@ def interactive_mode(agent: ChatAgent):
                     # Auto-save before quitting
                     if agent.current_session:
                         print("\n💾 Saving current session...")
-                        agent.save_current_session()
+                        if not agent.save_current_session():
+                            print(
+                                "❌ Failed to save session. Conversation kept; "
+                                "retry /save or /quit. To exit without saving, "
+                                "press Ctrl-C; unsaved changes will be lost."
+                            )
+                            continue
                     print("Goodbye!")
                     break
 
@@ -327,7 +333,13 @@ def interactive_mode(agent: ChatAgent):
                     print("\n🔄 Resetting conversation...")
                     # Save current session first
                     if agent.current_session:
-                        agent.save_current_session()
+                        if not agent.save_current_session():
+                            print(
+                                "❌ Failed to save session. Conversation kept; "
+                                "retry /save or /reset. To exit without saving, "
+                                "press Ctrl-C; unsaved changes will be lost."
+                            )
+                            continue
                     # Create new session
                     agent.current_session = agent.session_manager.create_session()
                     # Reset per-session tool activation (bundle state)

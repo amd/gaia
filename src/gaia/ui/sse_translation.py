@@ -560,6 +560,10 @@ class CanonicalTranslator:
             prompt_context["working_directory"] = str(folder)
         if args.get(RISK_NOTE_ARG):
             prompt_context["risk_note"] = str(args[RISK_NOTE_ARG])
+        # Where a relative write really lands; the model's own spelling stays in args.
+        shown_path = args.get("file_path")
+        if isinstance(shown_path, str) and shown_path != call_args.get("file_path"):
+            prompt_context["file_path"] = shown_path
         if prompt_context:
             canonical["prompt_context"] = prompt_context
         return [canonical]
