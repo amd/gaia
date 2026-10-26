@@ -217,3 +217,68 @@ def test_a_pipe_out_of_a_granted_cli_is_not_pre_authorized(dialect, command):
     host._granted_binaries = _Grants("gh")
 
     assert not host.skill_grant_covers_call("run_shell_command", {"command": command})
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh issue list --repo amd/gaia --state open",
+        "gh pr view 1 -R amd/gaia",
+        "gh --repo=amd/gaia issue list",
+        "gh issue list -Ramd/gaia",
+        'gh api repos/amd/gaia --jq ".open_issues_count"',
+        "gh api -X GET repos/amd/gaia/issues",
+    ],
+)
+def test_gh_repo_names_and_api_routes_are_not_paths(command, tmp_path):
+    """#5737: 'amd/gaia' joined onto the cwd read as a folder outside the project."""
+    work = tmp_path / "work"
+    work.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    host = _Shell()
+    host.path_validator = _PathValidator(work)
+    _error, steps = host._validate_shell_command(command)
+    outside: list = []
+
+    refusal = host._path_traversal_refusal(
+        steps[0], str(elsewhere), frozenset(), outside
+    )
+
+    assert refusal is None, refusal
+    assert outside == []
+
+
+@pytest.mark.parametrize(
+    "command, path",
+    [
+        ("gh issue create --title x --body-file ../secret.txt", "secret.txt"),
+        ("gh api --input ../body.json repos/amd/gaia", "body.json"),
+    ],
+)
+def test_gh_flags_that_read_local_files_are_still_checked(command, path, tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    host = _Shell()
+    host.path_validator = _PathValidator(work)
+    _error, steps = host._validate_shell_command(command)
+    outside: list = []
+
+    refusal = host._path_traversal_refusal(steps[0], str(work), frozenset(), outside)
+
+    assert refusal is None
+    assert [Path(p).name for p in outside] == [path]
+
+
+def test_a_gh_api_endpoint_after_other_flags_is_still_checked(tmp_path):
+    """Only `gh api <endpoint>` skips the check; `gh -R x api ../foo` does not."""
+    work = tmp_path / "work"
+    work.mkdir()
+    host = _Shell()
+    host.path_validator = _PathValidator(work)
+    _error, steps = host._validate_shell_command("gh -R x/y api ../foo")
+    outside: list = []
+
+    host._path_traversal_refusal(steps[0], str(work), frozenset(), outside)
+
+    assert [Path(p).name for p in outside] == ["foo"]
