@@ -129,7 +129,7 @@ describe('Can read and write', () => {
         expect(await screen.findByText(/runs as its own process/)).toBeInTheDocument();
         // Not a boundary: say so rather than listing folders as if they were the limit.
         expect(screen.getByText('Files GAIA can reach')).toBeInTheDocument();
-        expect(screen.getByText(/rest of your user folder/)).toBeInTheDocument();
+        expect(screen.getByText(/never the whole user folder at once/)).toBeInTheDocument();
         expect(screen.queryByText('Can read and write')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Add folder/ })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
@@ -141,7 +141,7 @@ describe('Can read and write', () => {
         useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'email' }] });
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         expect(await screen.findByText(/applies its own limits/)).toBeInTheDocument();
-        expect(screen.queryByText(/rest of your user folder/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/inside your user folder/)).not.toBeInTheDocument();
     });
 
     it('offers no Remove for an attached document; it leaves through the document bar', async () => {

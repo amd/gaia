@@ -195,7 +195,7 @@ function Folders({ sessionId }: { sessionId: string }) {
             {env && !env.enforced && (
                 <span className="sp-meta">
                     {flagship
-                        ? 'These folders are where GAIA starts, not a limit: it can also reach the rest of your user folder. In Ask mode it asks before it changes anything.'
+                        ? 'These folders are where GAIA starts, not a limit: it can also open folders inside your user folder, one at a time, but never the whole user folder at once. In Ask mode it asks before it opens a new folder or changes anything.'
                         : "These folders are where this chat's agent starts; it applies its own limits."}
                 </span>
             )}

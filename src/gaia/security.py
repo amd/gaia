@@ -421,6 +421,17 @@ _NO_WORKAROUND = (
     " Do not copy, move or convert it to another location to get around this."
 )
 
+# Folders a denial of the whole home folder offers instead, when they exist.
+_USER_FOLDER_NAMES = (
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Movies",
+    "Music",
+    "Pictures",
+    "Videos",
+)
+
 
 def _system_temp_roots() -> Set[str]:
     """Shared temp directories, which stay out of every agent's scope."""
@@ -1121,6 +1132,33 @@ class PathValidator:
                 )
         return ""
 
+    def _folders_inside_home_hint(self, path: Path) -> str:
+        """Folders to ask for instead when *path* holds the whole home folder.
+
+        Args:
+            path: A symlink-resolved path refused as too broad.
+
+        Returns:
+            A sentence naming the user folders an approval could grant, or ""
+            when *path* does not hold the home folder or nobody can approve.
+        """
+        home = Path.home().resolve()
+        if not _path_is_within(home, path):
+            return ""
+        if self._access_prompt is None and not self._can_prompt():
+            return ""
+        askable = [
+            f"'{home / name}'"
+            for name in _USER_FOLDER_NAMES
+            if (home / name).is_dir() and not self._unaskable_reason(home / name)
+        ]
+        if not askable:
+            return ""
+        return (
+            " A folder inside the home folder can still be approved: use the "
+            f"specific folder you need instead, such as {', '.join(askable)}."
+        )
+
     def access_denied_message(self, path: str) -> str:
         """The error for an out-of-scope *path*, with a remedy this host offers.
 
@@ -1143,7 +1181,10 @@ class PathValidator:
         real_path = Path(_real_path(path))
         unaskable = self._unaskable_reason(real_path)
         if unaskable:
-            remedy = f" No approval can grant it: {unaskable.rstrip('.')}."
+            remedy = (
+                f" No approval can grant it: {unaskable.rstrip('.')}."
+                f"{self._folders_inside_home_hint(real_path)}"
+            )
         elif self._access_prompt is not None or self._can_prompt():
             remedy = (
                 " To use it, ask again and approve access when prompted, or "
