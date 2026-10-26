@@ -55,6 +55,21 @@ def _print_path_script(shell: str) -> str:
     return f'printf "%s" "{_PATH_BEGIN}${{PATH}}{_PATH_END}"'
 
 
+def _shell_env() -> dict:
+    """The startup environment without GAIA's own credentials.
+
+    Rc files are the user's code and may log or echo what they inherit.
+    """
+    import gaia  # pylint: disable=import-outside-toplevel
+    from gaia.env import is_internal_secret  # pylint: disable=import-outside-toplevel
+
+    return {
+        name: value
+        for name, value in gaia.pre_dotenv_environ().items()
+        if not is_internal_secret(name)
+    }
+
+
 def read_login_path(
     shell: Optional[str] = None, timeout: float = LOGIN_PATH_TIMEOUT_S
 ) -> str:
@@ -68,8 +83,6 @@ def read_login_path(
     banner an rc file prints cannot corrupt it. POSIX-style shells and fish are
     supported; anything else ends in a :class:`LoginPathError` that names it.
     """
-    import gaia  # pylint: disable=import-outside-toplevel
-
     shell = shell or _account_login_shell()
     try:
         done = (
@@ -82,7 +95,7 @@ def read_login_path(
                 errors="replace",
                 timeout=timeout,
                 check=False,
-                env=gaia.pre_dotenv_environ(),
+                env=_shell_env(),
             )
         )
     except subprocess.TimeoutExpired as exc:

@@ -118,6 +118,29 @@ class TestReadLoginPath:
         read_login_path(shell="/bin/zsh")
         assert seen["env"] == {"HOME": "/Users/real"}
 
+    def test_gaia_credentials_are_not_handed_to_the_users_rc_files(self, monkeypatch):
+        import gaia
+
+        monkeypatch.setattr(
+            gaia,
+            "_PRE_DOTENV_ENVIRON",
+            {
+                "HOME": "/Users/real",
+                "GAIA_MODEL_BROKER_TOKEN": "secret",
+                "GAIA_EMAIL_SIDECAR_TOKEN": "secret",
+                "GAIA_HOST_CUSTODY_SECRET": "secret",
+            },
+        )
+        seen = {}
+
+        def spy(cmd, **kw):
+            seen.update(kw)
+            return completed(f"{BEGIN}/a{END}")
+
+        monkeypatch.setattr(subprocess, "run", spy)
+        read_login_path(shell="/bin/zsh")
+        assert seen["env"] == {"HOME": "/Users/real"}
+
     def test_fish_gets_a_script_it_can_parse(self, monkeypatch):
         seen = {}
 
