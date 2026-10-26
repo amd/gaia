@@ -78,4 +78,63 @@ describe('PermissionsSettings', () => {
         render(<PermissionsSettings />);
         expect(await screen.findByText(/No chat has full access/)).toBeInTheDocument();
     });
+
+    describe('default for new chats', () => {
+        const TOGGLE = 'Start new chats in full access';
+
+        beforeEach(() => {
+            mockedApi.setDefaultPermissionMode.mockResolvedValue({ default_mode: 'full_access' });
+        });
+
+        it('shows the saved default', async () => {
+            mockedApi.listAllPermissions.mockResolvedValue({ default_mode: 'full_access', sessions: [] });
+            render(<PermissionsSettings />);
+            await waitFor(() => expect(screen.getByRole('checkbox', { name: TOGGLE })).toBeChecked());
+        });
+
+        it('saves nothing until the risk is acknowledged', async () => {
+            render(<PermissionsSettings />);
+            const toggle = await screen.findByRole('checkbox', { name: TOGGLE });
+            await waitFor(() => expect(toggle).toBeEnabled());
+            fireEvent.click(toggle);
+            expect(await screen.findByRole('alert')).toHaveTextContent(/without asking you first/);
+            expect(toggle).not.toBeChecked();
+            expect(mockedApi.setDefaultPermissionMode).not.toHaveBeenCalled();
+
+            fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+            expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+            expect(mockedApi.setDefaultPermissionMode).not.toHaveBeenCalled();
+        });
+
+        it('turns it on after the explicit confirm, then reloads', async () => {
+            render(<PermissionsSettings />);
+            const toggle = await screen.findByRole('checkbox', { name: TOGGLE });
+            await waitFor(() => expect(toggle).toBeEnabled());
+            fireEvent.click(toggle);
+            fireEvent.click(screen.getByRole('button', { name: 'Turn on full access for new chats' }));
+            await waitFor(() => expect(mockedApi.setDefaultPermissionMode).toHaveBeenCalledExactlyOnceWith('full_access'));
+            await waitFor(() => expect(mockedApi.listAllPermissions).toHaveBeenCalledTimes(2));
+        });
+
+        it('turns it off with one click', async () => {
+            mockedApi.listAllPermissions.mockResolvedValue({ default_mode: 'full_access', sessions: [] });
+            mockedApi.setDefaultPermissionMode.mockResolvedValue({ default_mode: 'ask' });
+            render(<PermissionsSettings />);
+            const toggle = await screen.findByRole('checkbox', { name: TOGGLE });
+            await waitFor(() => expect(toggle).toBeChecked());
+            fireEvent.click(toggle);
+            await waitFor(() => expect(mockedApi.setDefaultPermissionMode).toHaveBeenCalledExactlyOnceWith('ask'));
+        });
+
+        it('shows why saving failed and stays off', async () => {
+            mockedApi.setDefaultPermissionMode.mockRejectedValue(new Error('config is read-only'));
+            render(<PermissionsSettings />);
+            const toggle = await screen.findByRole('checkbox', { name: TOGGLE });
+            await waitFor(() => expect(toggle).toBeEnabled());
+            fireEvent.click(toggle);
+            fireEvent.click(screen.getByRole('button', { name: 'Turn on full access for new chats' }));
+            expect(await screen.findByText('config is read-only')).toBeInTheDocument();
+            expect(toggle).not.toBeChecked();
+        });
+    });
 });

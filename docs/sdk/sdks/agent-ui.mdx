@@ -1550,6 +1550,16 @@ Used to reach the UI from a phone.
     set in `~/.gaia/config.json`, otherwise `ask`.
   </Accordion>
 
+  <Accordion title="PUT /api/chat/permissions">
+    Set the mode new chats start in. Writes `full_access` (true or false) to
+    `~/.gaia/config.json`, the key the TUI's `/full-access always` writes, and
+    keeps every other key. Chats already open keep their mode.
+
+    **Request:** `{"mode": "full_access"}` or `{"mode": "ask"}` — any other
+    value is a **422**. **Response:** `{"default_mode"}`. A config file that
+    can't be written is a **500** naming the cause.
+  </Accordion>
+
   <Accordion title="GET /api/chat/permissions/{session_id}">
     One chat's permission mode (`ask` or `full_access`) and its grants. A chat
     created in this backend run starts in `ask` unless `full_access` is set in

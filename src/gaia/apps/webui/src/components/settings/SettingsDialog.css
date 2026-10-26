@@ -159,6 +159,23 @@
     overflow-wrap: anywhere;
 }
 
+.settings-warning {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+    background: var(--danger-dim);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-md);
+}
+
+.settings-warning p {
+    margin: 0;
+}
+
 .settings-row {
     display: flex;
     flex-wrap: wrap;

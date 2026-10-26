@@ -460,6 +460,33 @@ async def list_permissions():
     }
 
 
+@router.put("/api/chat/permissions")
+async def set_default_permission_mode(body: PermissionModeRequest):
+    """Set the mode new chats start in: ``full_access`` in ``~/.gaia/config.json``.
+
+    The same key the TUI's ``/full-access always`` writes. Chats already open
+    keep the mode they have.
+    """
+    if body.mode not in session_permissions.MODES:
+        raise HTTPException(
+            status_code=422, detail=f"Unknown permission mode {body.mode!r}."
+        )
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    try:
+        await asyncio.to_thread(
+            GaiaConfig.save_key,
+            "full_access",
+            body.mode == session_permissions.MODE_FULL_ACCESS,
+        )
+    except (GaiaConfigError, OSError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Couldn't save the default permission mode: {exc}",
+        ) from exc
+    return {"default_mode": session_permissions.default_mode()}
+
+
 @router.get("/api/chat/permissions/{session_id}")
 async def get_permissions(session_id: str, db: ChatDatabase = Depends(get_db)):
     """This chat's permission mode and its "always allow" grants."""
