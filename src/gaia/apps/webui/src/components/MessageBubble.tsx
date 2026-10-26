@@ -592,7 +592,6 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             isActive={agentStepsActive ?? false}
                             variant={agentStepsActive ? 'inline' : 'summary'}
                             agentStepCount={agentStepCount ?? message.stats?.steps ?? undefined}
-                            awaitingUser={awaitingUser}
                         />
                     )}
                     {isError && (

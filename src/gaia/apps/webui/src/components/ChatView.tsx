@@ -4,7 +4,7 @@
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
 import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, EyeOff } from 'lucide-react';
 import { MessageBubble, isErrorContent } from './MessageBubble';
-import { toolActiveLabel } from './AgentActivity';
+import { toolRowText } from './AgentActivity';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -123,6 +123,12 @@ const historyNotices = new Map<number, string>();
 /** One quiet line saying older turns left the model's view. */
 function HistoryNotice({ text }: { text: string }) {
     return <div className="history-notice" role="note">{text}</div>;
+}
+
+/** The backend's periodic "Model is processing... (Ns)" tick; the live line beside GAIA's name already times that wait. */
+function isProgressTick(event: StreamEvent): boolean {
+    return event.type === 'status' && event.status === 'working' && !event.phase
+        && (event.message ?? '').startsWith('Model is processing');
 }
 
 /** Map an SSE agent event to an AgentStep for the UI. */
@@ -1072,6 +1078,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         ...(detail ? { detail } : {}),
                         ...(event.narration ? { narration: event.narration } : {}),
                     });
+                    const store = useChatStore.getState();
+                    const tool = [...store.agentSteps].reverse().find((s) => s.type === 'tool');
+                    if (event.narration && tool?.active && store.livePhase === 'tool') {
+                        store.setLiveStatus(toolRowText(tool), 'tool');
+                    }
                     return;
                 }
 
@@ -1109,6 +1120,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.phase && msg) useChatStore.getState().setLiveStatus(msg, event.phase);
                     // The client's own wait notice is not a step of the turn.
                     if (event.phase === 'waiting') return;
+                    if (isProgressTick(event)) return;
                     // Skip "Executing <tool>" messages - redundant with tool_start
                     if (msg.toLowerCase().startsWith('executing ')) return;
                     if (status === 'working' || status === 'warning' || status === 'info') {
@@ -1152,7 +1164,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.type === 'tool_start') {
                         toolOccurredRef.current = true;
                         // The model's phase ended with the call; say a tool runs, not the model.
-                        useChatStore.getState().setLiveStatus(toolActiveLabel(event.tool, step), 'tool');
+                        useChatStore.getState().setLiveStatus(toolRowText(step), 'tool');
                     }
                 }
             },
