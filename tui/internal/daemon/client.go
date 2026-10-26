@@ -218,6 +218,9 @@ func (c *Client) probe(ctx context.Context, inst *Instance) (StaleKind, error) {
 func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 	inst, err := c.Attach(ctx)
 	if err == nil {
+		if why := ReplacedInstall(inst); why != "" {
+			return c.restartOutdated(ctx, inst, why)
+		}
 		return inst, nil
 	}
 	// A contract skew is the user's to resolve — starting a second daemon cannot
@@ -232,6 +235,39 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 		return inst, err
 	}
 	return c.spawnAndWait(ctx)
+}
+
+// restartOutdated replaces a daemon an update left on the previous release.
+// The GAIA CLI's start stops it and starts the installed one under the start
+// lock; the TUI only waits for that and attaches to the result.
+func (c *Client) restartOutdated(ctx context.Context, inst *Instance, why string) (*Instance, error) {
+	c.opts.Logf("daemon: %s is out of date (%s); restarting it", inst, why)
+	runCtx, cancel := context.WithTimeout(ctx, c.opts.StartTimeout)
+	defer cancel()
+	cmd, err := c.opts.StartCommand(runCtx)
+	if err != nil {
+		return nil, err
+	}
+	if cmd == nil {
+		return nil, &StartError{Reason: "the configured daemon start command returned no command to run"}
+	}
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Run(); err != nil {
+		return nil, &StartError{Reason: fmt.Sprintf(
+			"the running daemon (pid %d) is out of date (%s), and `%s` could not replace it (%v): %s. "+
+				"Run `gaia daemon restart`",
+			inst.PID, why, strings.Join(cmd.Args, " "), err, strings.TrimSpace(out.String()))}
+	}
+	fresh, err := c.Attach(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if again := ReplacedInstall(fresh); again != "" {
+		return nil, &StartError{Reason: fmt.Sprintf(
+			"the daemon is still out of date after a restart (%s). Run `gaia daemon restart`", again)}
+	}
+	return fresh, nil
 }
 
 // checkUnderLock re-checks the registry under the start lock. It returns the
