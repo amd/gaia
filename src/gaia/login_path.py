@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 LOGIN_PATH_TIMEOUT_S = 5.0
 _PATH_BEGIN = "__GAIA_LOGIN_PATH_BEGIN__"
 _PATH_END = "__GAIA_LOGIN_PATH_END__"
+APPLIED_MARKER = "GAIA_LOGIN_PATH_APPLIED"
 
 _login_path_applied = False
 
@@ -85,18 +86,19 @@ def read_login_path(
     """
     shell = shell or _account_login_shell()
     try:
-        done = (
-            subprocess.run(  # nosec B603 - the account's own login shell, fixed script
-                [shell, "-ilc", _print_path_script(shell)],
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
-                check=False,
-                env=_shell_env(),
-            )
+        done = subprocess.run(  # nosec B603 - the account's own login shell, fixed script
+            [shell, "-ilc", _print_path_script(shell)],
+            stdin=subprocess.DEVNULL,
+            # Own session: an interactive shell with no controlling terminal
+            # cannot take the user's terminal over, and a timeout reaches it.
+            start_new_session=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+            env=_shell_env(),
         )
     except subprocess.TimeoutExpired as exc:
         raise LoginPathError(
@@ -141,12 +143,23 @@ def apply_login_path() -> bool:
     the login ``PATH`` was applied. When it cannot be read the process keeps the
     ``PATH`` it has and a warning says why (stderr, never stdout, which is the
     event wire for stdio transports).
+
+    Skipped, returning False, when ``PATH`` is already the user's: a process
+    started from a shell has ``SHLVL`` (a Finder, Dock or launchd launch never
+    does), and a child of a process that applied it carries the marker. Both are
+    read from the pre-``.env`` environment so a project file cannot set them.
+    Merging over a shell's ``PATH`` would put ``path_helper``'s order ahead of an
+    activated virtualenv, and every command would pay for a login shell.
     """
     global _login_path_applied
     if sys.platform != "darwin":
         return False
     if _login_path_applied:
         return True
+    import gaia  # pylint: disable=import-outside-toplevel
+
+    if gaia.pre_dotenv_env("SHLVL") or gaia.pre_dotenv_env(APPLIED_MARKER):
+        return False
     try:
         login = read_login_path()
     except LoginPathError as exc:
@@ -159,6 +172,7 @@ def apply_login_path() -> bool:
         )
         return False
     os.environ["PATH"] = merge_paths(login, os.environ.get("PATH", ""))
+    os.environ[APPLIED_MARKER] = "1"
     _login_path_applied = True
     logger.debug("Applied login PATH: %s", os.environ["PATH"])
     return True

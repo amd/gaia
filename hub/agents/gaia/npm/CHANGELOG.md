@@ -42,7 +42,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or the Dock starts with only the system folders on its search path, so the
   agent could not run `gh`, `node` or anything else Homebrew installed, and its
   prompt said they were "not installed". The agent now starts with the `PATH`
-  your login shell builds, and a tool it still cannot find is reported as not
+  your login shell builds (only when opened that way: started from a terminal it
+  keeps the terminal's own `PATH`, so an activated virtualenv still wins), and a
+  tool it still cannot find is reported as not
   reachable from its shell rather than missing from your machine. If your shell
   startup is slow or fails, the agent logs a warning and keeps the old path.
 

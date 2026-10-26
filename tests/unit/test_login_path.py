@@ -37,7 +37,17 @@ def completed(stdout="", returncode=0):
 
 @pytest.fixture(autouse=True)
 def fresh_state(monkeypatch):
+    """Not started from a shell, and nothing applied yet, whatever runs the tests."""
+    import gaia
+
     monkeypatch.setattr(lp, "_login_path_applied", False)
+    monkeypatch.delenv(lp.APPLIED_MARKER, raising=False)
+    quiet = {
+        k: v
+        for k, v in gaia.pre_dotenv_environ().items()
+        if k not in ("SHLVL", lp.APPLIED_MARKER)
+    }
+    monkeypatch.setattr(gaia, "_PRE_DOTENV_ENVIRON", quiet)
 
 
 class TestReadLoginPath:
@@ -95,6 +105,7 @@ class TestReadLoginPath:
         read_login_path(shell="/bin/zsh")
         assert seen["cmd"][:2] == ["/bin/zsh", "-ilc"]
         assert seen["stdin"] == subprocess.DEVNULL
+        assert seen["start_new_session"] is True, "must not be able to grab the tty"
         assert seen["timeout"] == lp.LOGIN_PATH_TIMEOUT_S
 
     def test_a_dotenv_cannot_choose_the_startup_files_the_shell_reads(
@@ -245,6 +256,52 @@ class TestApplyLoginPath:
         assert apply_login_path() is True
         assert calls == [1]
 
+    def test_a_process_started_from_a_shell_keeps_its_path(self, monkeypatch):
+        """A Terminal launch already has the user's PATH, with an activated
+        venv first; merging a login shell's order over it would demote the venv."""
+        import gaia
+
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setattr(gaia, "_PRE_DOTENV_ENVIRON", {"SHLVL": "1"})
+        venv_path = paths("/proj/.venv/bin", "/usr/bin")
+        monkeypatch.setenv("PATH", venv_path)
+        monkeypatch.setattr(
+            lp,
+            "read_login_path",
+            lambda: pytest.fail("must not start a login shell from a shell"),
+        )
+        assert apply_login_path() is False
+        assert os.environ["PATH"] == venv_path
+
+    def test_a_child_of_a_process_that_already_applied_it_skips_the_shell(
+        self, monkeypatch
+    ):
+        import gaia
+
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setattr(gaia, "_PRE_DOTENV_ENVIRON", {lp.APPLIED_MARKER: "1"})
+        monkeypatch.setattr(
+            lp, "read_login_path", lambda: pytest.fail("the parent already did it")
+        )
+        assert apply_login_path() is False
+
+    def test_applying_marks_the_environment_for_children(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setenv("PATH", paths("/usr/bin", "/bin"))
+        monkeypatch.setattr(lp, "read_login_path", lambda: "/opt/homebrew/bin")
+        apply_login_path()
+        assert os.environ[lp.APPLIED_MARKER] == "1"
+        assert child_env()[lp.APPLIED_MARKER] == "1"
+
+    def test_a_dotenv_cannot_switch_the_repair_off_or_on(self, monkeypatch):
+        """SHLVL is read from the pre-.env snapshot: a project file that sets it
+        must not change whether GAIA starts a shell."""
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setenv("SHLVL", "1")  # as if .env set it; snapshot has none
+        monkeypatch.setenv("PATH", paths("/usr/bin", "/bin"))
+        monkeypatch.setattr(lp, "read_login_path", lambda: "/opt/homebrew/bin")
+        assert apply_login_path() is True
+
     def test_children_get_the_repaired_path(self, monkeypatch):
         monkeypatch.setattr(sys, "platform", "darwin")
         monkeypatch.setenv("PATH", paths("/usr/bin", "/bin"))
@@ -310,6 +367,28 @@ def test_cli_main_repairs_the_path_after_parsing_arguments(monkeypatch):
     with pytest.raises(SystemExit):
         cli.main()
     assert order == ["tls", "parse"], "--version and -h exit before the shell runs"
+
+
+def test_cli_main_reaches_the_repair_for_a_real_command(monkeypatch):
+    import gaia.cli as cli
+
+    class Reached(Exception):
+        pass
+
+    def reached():
+        raise Reached
+
+    monkeypatch.setattr(cli, "use_os_trust_store", lambda: None)
+    monkeypatch.setattr(cli, "apply_login_path", reached)
+    monkeypatch.setattr(cli, "get_logger", lambda name: None)
+
+    class Parser:
+        def parse_args(self):
+            return types.SimpleNamespace(action="chat")
+
+    monkeypatch.setattr(cli, "build_parser", lambda: Parser())
+    with pytest.raises(Reached):
+        cli.main()
 
 
 def test_mcp_bridge_and_daemon_entry_points_repair_the_path():
