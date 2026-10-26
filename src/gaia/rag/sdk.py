@@ -97,6 +97,18 @@ class EmptyPDFError(PDFExtractionError):
     status = "empty"
 
 
+class SpreadsheetReadError(ValueError):
+    """An Excel workbook that can't be read; ``status`` is its error kind."""
+
+    def __init__(self, message: str, status: str):
+        super().__init__(message)
+        self.status = status
+
+
+# Legacy .xls and password-protected .xlsx are both OLE2 compound files.
+_OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
 def _missing_package_hint(*packages: str) -> str:
     from gaia.agents.install_hints import (  # pylint: disable=import-outside-toplevel
         missing_package_hint,
@@ -2104,34 +2116,106 @@ These positions indicate where to split the text."""
             raise
 
     def _extract_text_from_xlsx(self, xlsx_path: str) -> str:
-        """Extract text from Excel (.xlsx / .xls) files using openpyxl."""
-        try:
-            import openpyxl
+        """Extract text from an Excel .xlsx workbook using openpyxl.
 
-            wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+        Raises:
+            SpreadsheetReadError: The file is not a readable .xlsx workbook
+                (``corrupted``), is a legacy .xls or password-protected one
+                (``unsupported_workbook``), or has no cell values (``empty_file``).
+            ImportError: openpyxl is not installed.
+        """
+        try:
+            import openpyxl  # pylint: disable=import-outside-toplevel
+        except ImportError as e:
+            raise ImportError(
+                "openpyxl is required to read Excel files. "
+                + _missing_package_hint("openpyxl")
+            ) from e
+        from openpyxl.utils.exceptions import (  # pylint: disable=import-outside-toplevel
+            InvalidFileException,
+        )
+
+        name = Path(xlsx_path).name
+        legacy = SpreadsheetReadError(
+            f"Could not read {name}: it is not in the .xlsx format (a legacy .xls "
+            "workbook, or one protected with a password). Open it in Excel, save "
+            "a copy as .xlsx without a password, then index that copy.",
+            "unsupported_workbook",
+        )
+        try:
+            with open(xlsx_path, "rb") as f:
+                magic = f.read(len(_OLE2_MAGIC))
+            if magic == _OLE2_MAGIC or Path(xlsx_path).suffix.lower() == ".xls":
+                raise legacy
+            try:
+                wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+            except InvalidFileException as e:
+                raise legacy from e
+            # KeyError: the zip lacks a part every workbook has (xl/workbook.xml).
+            except (zipfile.BadZipFile, KeyError) as e:
+                self.log.warning(f"openpyxl could not open {xlsx_path}: {e!r}")
+                raise SpreadsheetReadError(
+                    f"Could not read {name}: it is not a valid .xlsx workbook. "
+                    "Open it in Excel and save it again as .xlsx, or re-download "
+                    "it, then index the new copy.",
+                    "corrupted",
+                ) from e
             parts = []
+            has_values = False
+
+            def _numeric(cell: str) -> bool:
+                return cell.strip().replace(".", "").replace("-", "").isdigit()
 
             for sheet in wb.worksheets:
                 parts.append(f"Sheet: {sheet.title}")
 
                 # Collect rows, skipping entirely blank rows
                 rows = []
-                for row in sheet.iter_rows(values_only=True):
+                row_numbers = []
+                for number, row in enumerate(sheet.iter_rows(values_only=True), 1):
                     cells = [str(c) if c is not None else "" for c in row]
                     if any(c.strip() for c in cells):
                         rows.append(cells)
+                        row_numbers.append(number)
+                merged_starts = {
+                    (r.min_row, r.min_col)
+                    for r in sheet.merged_cells.ranges
+                    if r.max_col > r.min_col
+                }
 
                 if not rows:
                     continue
+                has_values = True
+
+                # Single-cell rows above the header are titles when merged
+                # across the table, or when a row of labels then numbers follows.
+                first_wide = next(
+                    (
+                        i
+                        for i, r in enumerate(rows)
+                        if sum(1 for c in r if c.strip()) > 1
+                    ),
+                    0,
+                )
+                merged_titles = all(
+                    (row_numbers[i], next(j for j, c in enumerate(r) if c.strip()) + 1)
+                    in merged_starts
+                    for i, r in enumerate(rows[:first_wide])
+                )
+                labels_then_numbers = (
+                    first_wide + 1 < len(rows)
+                    and not any(_numeric(c) for c in rows[first_wide])
+                    and any(_numeric(c) for c in rows[first_wide + 1])
+                )
+                if first_wide and (merged_titles or labels_then_numbers):
+                    for row in rows[:first_wide]:
+                        parts.append(" ".join(c for c in row if c.strip()))
+                    rows = rows[first_wide:]
 
                 # Use first non-empty row as header if it looks like one
                 # (contains at least one non-numeric string cell)
                 header = rows[0]
-                has_header = any(
-                    c.strip()
-                    and not c.strip().replace(".", "").replace("-", "").isdigit()
-                    for c in header
-                )
+                has_header = any(c.strip() and not _numeric(c) for c in header)
 
                 if has_header and len(rows) > 1:
                     parts.append(
@@ -2140,7 +2224,9 @@ These positions indicate where to split the text."""
                     for row in rows[1:]:
                         row_parts = []
                         for i, cell in enumerate(row):
-                            col_name = header[i] if i < len(header) else f"Col{i+1}"
+                            col_name = (
+                                header[i].strip() if i < len(header) else ""
+                            ) or f"Col{i+1}"
                             if cell.strip():
                                 row_parts.append(f"{col_name}: {cell}")
                         if row_parts:
@@ -2149,6 +2235,12 @@ These positions indicate where to split the text."""
                     for row in rows:
                         parts.append(" | ".join(c for c in row if c.strip()))
 
+            if not has_values:
+                raise SpreadsheetReadError(
+                    f"{name} has no cell values to index. Add data to the "
+                    "workbook, save it, then index it again.",
+                    "empty_file",
+                )
             text = "\n".join(parts)
 
             if self.config.show_stats:
@@ -3062,7 +3154,9 @@ These positions indicate where to split the text."""
                 "total_chunks": int,
                 "error": str (if failed),
                 "error_type": str (some failures: "file_locked",
-                    "cache_busy" or "embedding_unavailable")
+                    "cache_busy" or "embedding_unavailable"),
+                "xlsx_status": str (an unreadable workbook: "corrupted",
+                    "unsupported_workbook" or "empty_file")
             }
 
         Raises:
@@ -3535,6 +3629,13 @@ These positions indicate where to split the text."""
             self.log.error(f"PDF extraction failed for {file_path}: {e.status}")
             stats["error"] = str(e)
             stats["pdf_status"] = e.status
+            return stats
+        except SpreadsheetReadError as e:
+            if self.config.show_stats:
+                print(f"❌ Failed to index {Path(file_path).name}: {e}")
+            self.log.error(f"Excel extraction failed for {file_path}: {e.status}")
+            stats["error"] = str(e)
+            stats["xlsx_status"] = e.status
             return stats
         except (IndexingStopped, LeaseWaitCancelled):
             raise
