@@ -66,6 +66,9 @@ def test_cards_that_need_a_subject_say_so():
 
 
 def test_working_folder_is_the_project_directory(tmp_path, monkeypatch):
+    from gaia.ui import session_environment
+
+    monkeypatch.setattr(session_environment, "relayed", lambda _session: False)
     project = tmp_path / "proj"
     project.mkdir()
     monkeypatch.chdir(project)
@@ -74,7 +77,16 @@ def test_working_folder_is_the_project_directory(tmp_path, monkeypatch):
         "path": str(project.resolve()),
         "name": "proj",
         "gaia_folder": False,
+        "choosable": True,
     }
+
+
+def test_working_folder_is_not_choosable_for_a_relayed_flagship(tmp_path, monkeypatch):
+    from gaia.ui import session_environment
+
+    monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
+    monkeypatch.chdir(tmp_path)
+    assert ss.working_folder()["choosable"] is False
 
 
 def test_working_folder_falls_back_to_gaias_folder_when_cwd_is_home(

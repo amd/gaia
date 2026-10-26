@@ -6,6 +6,7 @@ Changes persist, show up in the listing, and reach the chat's live agent at
 once, so the next step is checked against them without a restart.
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -223,3 +224,32 @@ def test_an_invalid_allowed_paths_setting_is_named_not_an_empty_list(
 
     assert res.status_code == 500
     assert "GAIA_ALLOWED_PATHS" in res.json()["detail"]
+
+
+def _chat_count(client):
+    return client.get("/api/sessions").json()["total"]
+
+
+def test_a_new_chat_can_start_with_a_folder(client, folder):
+    created = client.post("/api/sessions", json={"folders": [str(folder)]})
+    assert created.status_code == 200, created.text
+    body = client.get(f"/api/sessions/{created.json()['id']}/environment").json()
+    entry = next(f for f in body["folders"] if f["path"] == str(folder.resolve()))
+    assert entry["source"] == "added"
+
+
+@pytest.mark.parametrize("bad", ["home", "missing"])
+def test_a_refused_folder_leaves_no_chat_behind(client, tmp_path, bad):
+    path = str(Path.home()) if bad == "home" else str(tmp_path / "nope")
+    refused = client.post("/api/sessions", json={"folders": [path]})
+    assert refused.status_code == 400
+    assert "GAIA can't be given" in refused.text or "is not a folder" in refused.text
+    assert _chat_count(client) == 0
+
+
+def test_a_relayed_agent_cannot_start_with_a_folder(client, folder, monkeypatch):
+    monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
+    refused = client.post("/api/sessions", json={"folders": [str(folder)]})
+    assert refused.status_code == 400
+    assert "runs as its own process" in refused.text
+    assert _chat_count(client) == 0

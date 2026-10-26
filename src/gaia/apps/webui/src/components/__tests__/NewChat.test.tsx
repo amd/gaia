@@ -16,7 +16,7 @@ const START: StartScreen = {
         { skill: 'document-brief', title: 'Ask about your documents', note: '2 indexed documents', prompt: 'Using my indexed documents, give me the key points.', needs_input: false },
         { skill: 'research-report', title: 'Research a topic', note: 'A cited report from the web', prompt: 'Research and write a short cited report on: ', needs_input: true },
     ],
-    working_folder: { path: '/home/u/my-project', name: 'my-project', gaia_folder: false },
+    working_folder: { path: '/home/u/my-project', name: 'my-project', gaia_folder: false, choosable: true },
 };
 
 beforeEach(() => {
@@ -272,11 +272,43 @@ describe('NewChat empty state', () => {
 
     it("says when GAIA works in its own folder", async () => {
         vi.mocked(api.getStartScreen).mockResolvedValue({
-            ...START, working_folder: { path: '/home/u/.gaia/documents', name: 'documents', gaia_folder: true },
+            ...START, working_folder: { path: '/home/u/.gaia/documents', name: 'documents', gaia_folder: true, choosable: true },
         });
         render(<NewChat onSend={vi.fn()} />);
         const chip = (await screen.findByText('documents')).parentElement!;
         expect(chip.getAttribute('title')).toMatch(/its own folder/);
+    });
+
+    it('picks a folder for the chat from the folder chip, and drops it again', async () => {
+        useChatStore.setState({ draftFolder: null });
+        vi.mocked(api.browseFiles).mockResolvedValueOnce({
+            current_path: '/home/u',
+            parent_path: null,
+            entries: [{ name: 'site', path: '/home/u/site', type: 'folder', size: 0, extension: null, modified: null }],
+            quick_links: [],
+        }).mockResolvedValueOnce({ current_path: '/home/u/site', parent_path: '/home/u', entries: [], quick_links: [] });
+        render(<NewChat onSend={vi.fn()} />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Folder for this chat: my-project' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'site' }));
+        await screen.findByText('No folders inside.');
+        fireEvent.click(screen.getByRole('button', { name: 'Use this folder' }));
+
+        expect(useChatStore.getState().draftFolder).toBe('/home/u/site');
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Folder for this chat: site' })).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: "Don't give this chat site" }));
+        expect(useChatStore.getState().draftFolder).toBeNull();
+        expect(screen.getByRole('button', { name: 'Folder for this chat: my-project' })).toBeInTheDocument();
+    });
+
+    it("shows the folder as plain text when this chat's agent can't be given another", async () => {
+        vi.mocked(api.getStartScreen).mockResolvedValue({ ...START, working_folder: { ...START.working_folder, choosable: false } });
+        render(<NewChat onSend={vi.fn()} />);
+
+        expect(await screen.findByText('my-project')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Folder for this chat/ })).not.toBeInTheDocument();
     });
 
     it('starts with text handed over from setup', () => {

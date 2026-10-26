@@ -18,6 +18,7 @@ from gaia.config import GaiaConfigError
 
 from .. import answer_retry, followups
 from .. import permissions as session_permissions
+from .. import session_environment
 from .._chat_helpers import (
     _SIDECAR_AGENT_TYPES,
     _agent_type_unknown,
@@ -229,6 +230,10 @@ async def create_session(
     request.agent_type = flagship_only(http_request, request.agent_type)
     _reject_unknown_agent_type(request.agent_type)
     try:
+        session_environment.check_new_chat_folders(request.agent_type, request.folders)
+    except session_environment.EnvironmentChangeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    try:
         # Read before the chat exists, so a bad config leaves no chat behind.
         start_mode = session_permissions.default_mode()
         session = db.create_session(
@@ -242,6 +247,8 @@ async def create_session(
             mail_provider=request.mail_provider,
         )
         session_permissions.seed_new_session(session["id"], start_mode)
+        for folder in request.folders:
+            session_environment.add_folder(db, session["id"], folder)
         return await _session_response(db, session)
     except Exception as e:
         logger.error("Failed to create session: %s", e, exc_info=True)

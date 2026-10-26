@@ -73,7 +73,7 @@ beforeEach(() => {
     // ChatView's mount effects chain off these; auto-mocked they return undefined.
     mocked.listDocuments.mockResolvedValue({ documents: [] } as never);
     mocked.getMessageCount.mockResolvedValue({ count: 0 } as never);
-    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false } });
+    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
 
     useModelStore.setState({ active: null, error: null, restoreNotice: null });
     useChatStore.setState({
