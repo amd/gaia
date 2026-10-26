@@ -16,6 +16,7 @@ patches take effect.
 import asyncio
 import concurrent.futures
 import copy
+import functools
 import importlib.util
 import json
 import logging
@@ -26,7 +27,7 @@ import threading
 import time as _time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, ContextManager, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -78,7 +79,7 @@ from . import permissions as session_permissions
 from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
-from .session_environment import apply_environment
+from .session_environment import apply_environment, held_internet_off
 from .session_environment import load as load_session_environment
 from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
@@ -2238,6 +2239,7 @@ def _dispatch_sidecar_query(
     allowed_paths: list | None = None,
     memory: str = "on",
     internet_off: bool = False,
+    hold_internet_off: Callable[[], ContextManager[bool]] | None = None,
     recording: TurnRecording | None = None,
     max_steps: int | None = None,
 ) -> None:
@@ -2257,7 +2259,8 @@ def _dispatch_sidecar_query(
 
     *internet_off* is the chat's Internet switch. Likewise, an internet-off turn
     is stopped rather than sent to a sidecar that could go online because it is
-    too old to be told not to.
+    too old to be told not to. *hold_internet_off* re-reads it once the turn has
+    started (``relay_query``), so a switch flipped meanwhile still reaches it.
 
     *recording* is the turn's undo recording. A sidecar that takes it records
     its own file changes under a turn of this chat, which is where Changes,
@@ -2475,6 +2478,9 @@ def _dispatch_sidecar_query(
         allowed_paths=relayed_scope,
         memory=relayed_memory,
         internet_off=relayed_internet_off,
+        hold_internet_off=(
+            hold_internet_off if relayed_internet_off is not None else None
+        ),
         changes_turn_id=(
             recording.relay()
             if recording is not None
@@ -3992,6 +3998,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         internet_off=load_session_environment(db, session_id)[
                             "internet_off"
                         ],
+                        hold_internet_off=functools.partial(
+                            held_internet_off, db, session_id
+                        ),
                         recording=recording,
                     )
                     return

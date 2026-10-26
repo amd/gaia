@@ -12,6 +12,7 @@ that a switch flipped mid-turn reaches the turn already running.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import threading
 import time
@@ -200,6 +201,8 @@ def test_a_streamed_chat_relays_the_switch_the_panel_saved(
     asyncio.run(_drive())
 
     assert relayed["internet_off"] is off
+    with relayed["hold_internet_off"]() as held:
+        assert held is off
 
 
 # ── The session panel ──────────────────────────────────────────────────────
@@ -373,7 +376,7 @@ def test_a_running_turn_that_cannot_be_told_offline_is_stopped(
         session_environment.set_internet(relayed_db, session["id"], False)
 
     assert "off from the next message" in str(failure.value)
-    assert "turn was stopped" in str(failure.value)
+    assert "the Agent UI ended its turn" in str(failure.value)
     assert handler.cancelled.is_set()
     assert session_environment.load(relayed_db, session["id"])["internet_off"] is True
 
@@ -395,15 +398,29 @@ def test_a_running_turn_that_cannot_be_told_online_stays_offline(
     assert session_environment.load(relayed_db, session["id"])["internet_off"] is False
 
 
-def test_the_relay_names_its_session_only_while_a_turn_that_took_the_switch_runs():
+def test_the_relay_names_its_session_only_while_a_turn_that_took_the_switch_runs(
+    relayed_db,
+):
+    session = relayed_db.create_session(agent_type="gaia")
+    hold = functools.partial(
+        session_environment.held_internet_off, relayed_db, session["id"]
+    )
     seen = {}
 
     class _Watching(_Proxy):
         def query_stream(self, body, read_timeout, on_response):
-            seen["during"] = self.handler.active_relay_internet_session
+            seen["at_post"] = self.handler.active_relay_internet_session
+            return self._events()
+
+        def _events(self):
+            seen["running"] = self.handler.active_relay_internet_session
             yield {"type": "final", "answer": "ok"}
 
-    for internet_off, expected in ((True, "chat-1"), (None, None)):
+    for internet_off, held, expected in (
+        (False, hold, session["id"]),
+        (None, hold, None),
+        (False, None, None),
+    ):
         proxy = _Watching()
         proxy.handler = SSEOutputHandler()
         relay.relay_query(
@@ -412,11 +429,160 @@ def test_the_relay_names_its_session_only_while_a_turn_that_took_the_switch_runs
             query="q",
             context=[],
             profile=GAIA_PROFILE,
-            session_id="chat-1",
+            session_id=session["id"],
             internet_off=internet_off,
+            hold_internet_off=held,
         )
-        assert seen["during"] == expected
+        # Not before the sidecar has applied the body: a switch sent then is lost.
+        assert seen["at_post"] is None
+        assert seen["running"] == expected
         assert proxy.handler.active_relay_internet_session is None
+
+
+class _Sidecar(_Proxy):
+    """Applies the body before /query answers, as the flagship does."""
+
+    def __init__(self, fail=None):
+        super().__init__()
+        self.calls: list = []
+        self.internet_off = None
+        self._fail = fail
+
+    def query_stream(self, body, read_timeout, on_response):
+        self.calls.append("query")
+        self.internet_off = body.get("internet_off")
+        return iter([{"type": "final", "answer": "ok"}])
+
+    def set_internet(self, session_id, internet_off):
+        self.calls.append(("internet", session_id, internet_off))
+        if self._fail is not None:
+            raise SidecarError(self._fail)
+        self.internet_off = internet_off
+
+
+def _start_turn(db, session_id, sidecar, sent_internet_off):
+    """Runs a relayed turn that read *sent_internet_off* when it was dispatched."""
+    handler = SSEOutputHandler()
+    relay.relay_query(
+        handler,
+        sidecar,
+        query="weather today",
+        context=[],
+        profile=GAIA_PROFILE,
+        session_id=session_id,
+        internet_off=sent_internet_off,
+        hold_internet_off=functools.partial(
+            session_environment.held_internet_off, db, session_id
+        ),
+    )
+    return _events(handler)
+
+
+@pytest.mark.parametrize("on", [False, True])
+def test_a_switch_flipped_while_the_turn_started_reaches_it(relayed_db, on):
+    session = relayed_db.create_session(agent_type="gaia")
+    session_environment.set_internet(relayed_db, session["id"], not on)
+    sidecar = _Sidecar()
+    # Dispatch read the old value; the user flipped it before the turn was running.
+    session_environment.set_internet(relayed_db, session["id"], on)
+
+    events = _start_turn(relayed_db, session["id"], sidecar, sent_internet_off=on)
+
+    assert sidecar.calls == ["query", ("internet", session["id"], not on)]
+    assert sidecar.internet_off is (not on)
+    assert not [e for e in events if e["type"] == "agent_error"]
+
+
+def test_a_turn_that_started_on_the_saved_switch_is_not_told_again(relayed_db):
+    session = relayed_db.create_session(agent_type="gaia")
+    sidecar = _Sidecar()
+
+    _start_turn(relayed_db, session["id"], sidecar, sent_internet_off=False)
+
+    assert sidecar.calls == ["query"]
+
+
+def test_a_turn_that_cannot_be_told_it_went_offline_while_starting_is_ended(
+    relayed_db,
+):
+    session = relayed_db.create_session(agent_type="gaia")
+    session_environment.set_internet(relayed_db, session["id"], False)
+    sidecar = _Sidecar(fail="gone")
+
+    events = _start_turn(relayed_db, session["id"], sidecar, sent_internet_off=False)
+
+    assert not [e for e in events if e["type"] == "answer"]
+    [error] = [e for e in events if e["type"] == "agent_error"]
+    assert "turned off as this message started" in error["content"]
+    assert "the Agent UI ended this turn" in error["content"]
+
+
+def test_a_turn_that_cannot_be_told_it_went_online_while_starting_stays_offline(
+    relayed_db,
+):
+    session = relayed_db.create_session(agent_type="gaia")
+    session_environment.set_internet(relayed_db, session["id"], False)
+    sidecar = _Sidecar(fail="gone")
+    session_environment.set_internet(relayed_db, session["id"], True)
+
+    events = _start_turn(relayed_db, session["id"], sidecar, sent_internet_off=True)
+
+    assert not [e for e in events if e["type"] == "agent_error"]
+    [warning] = [e for e in events if e.get("status") == "warning"]
+    assert "stays offline" in warning["message"]
+
+
+def test_two_quick_opposite_flips_leave_the_running_turn_on_the_saved_one(
+    relayed_db, running_relays
+):
+    session = relayed_db.create_session(agent_type="gaia")
+    http = _running_relay(session["id"])
+    second: list = []
+    real_save = relayed_db.set_session_environment
+
+    def save_then_let_the_second_flip_race(sid, **kw):
+        real_save(sid, **kw)
+        if not second:
+            second.append(
+                threading.Thread(
+                    target=session_environment.set_internet,
+                    args=(relayed_db, sid, False),
+                )
+            )
+            second[0].start()
+            # Long enough for an unguarded second flip to save and send first.
+            second[0].join(timeout=0.5)
+
+    relayed_db.set_session_environment = save_then_let_the_second_flip_race
+    session_environment.set_internet(relayed_db, session["id"], True)
+    second[0].join(timeout=5)
+
+    saved = session_environment.load(relayed_db, session["id"])["internet_off"]
+    assert saved is True
+    assert http.posts[-1][1] == {"internet_off": saved}
+
+
+def test_a_switch_that_fails_after_the_turn_ended_stops_nothing(
+    relayed_db, running_relays, caplog
+):
+    session = relayed_db.create_session(agent_type="gaia")
+    _running_relay(session["id"])
+    handler = helpers._active_sse_handlers[session["id"]]
+
+    class _EndsTheTurnThenFails(_Http):
+        def post(self, url, json=None, timeout=None):
+            handler.active_relay_internet_session = None
+            helpers._active_sse_handlers.pop(session["id"], None)
+            raise requests.ConnectionError("refused")
+
+    handler.active_relay_proxy._session = _EndsTheTurnThenFails()
+
+    with caplog.at_level("INFO"):
+        session_environment.set_internet(relayed_db, session["id"], False)
+
+    assert not handler.cancelled.is_set()
+    assert "ended before it could be told" in caplog.text
+    assert session_environment.load(relayed_db, session["id"])["internet_off"] is True
 
 
 class _ParkedWebAgent:
@@ -522,6 +688,9 @@ def test_switching_off_mid_turn_stops_the_flagships_next_web_search(
             profile=GAIA_PROFILE,
             session_id=session["id"],
             internet_off=False,
+            hold_internet_off=functools.partial(
+                session_environment.held_internet_off, relayed_db, session["id"]
+            ),
         ),
         daemon=True,
     )
@@ -534,6 +703,76 @@ def test_switching_off_mid_turn_stops_the_flagships_next_web_search(
 
         session_environment.set_internet(relayed_db, session["id"], False)
     finally:
+        gate.set()
+        turn.join(timeout=10)
+
+    assert agents[0].refusals == ["internet_off"]
+    errors = [e for e in _events(handler) if e["type"] == "agent_error"]
+    assert errors == []
+
+
+@pytest.mark.allow_network
+@pytest.mark.parametrize(
+    "flip_when",
+    [
+        "before_the_relay_starts",
+        "during_a_first_turn_setup",
+        "during_a_later_turn_setup",
+    ],
+)
+def test_switching_off_while_a_turn_starts_stops_the_flagships_web_search(
+    relayed_db, running_relays, live_flagship, monkeypatch, flip_when
+):
+    from gaia_agent import server as server_mod
+    from gaia_agent import session_registry as sr
+
+    proxy, gate, agents = live_flagship
+    session = relayed_db.create_session(agent_type="gaia")
+    if flip_when == "during_a_later_turn_setup":
+        sr.registry.get_or_create(session["id"])
+    in_setup = threading.Event()
+    leave_setup = threading.Event()
+    real_checkout = server_mod._checkout_turn
+
+    def parked_checkout(*args, **kwargs):
+        in_setup.set()
+        leave_setup.wait(timeout=10)
+        return real_checkout(*args, **kwargs)
+
+    monkeypatch.setattr(server_mod, "_checkout_turn", parked_checkout)
+    handler = SSEOutputHandler()
+    helpers._active_sse_handlers[session["id"]] = handler
+    turn = threading.Thread(
+        target=relay.relay_query,
+        kwargs=dict(
+            handler=handler,
+            proxy=proxy,
+            query="weather today",
+            context=[],
+            profile=GAIA_PROFILE,
+            session_id=session["id"],
+            internet_off=False,
+            hold_internet_off=functools.partial(
+                session_environment.held_internet_off, relayed_db, session["id"]
+            ),
+        ),
+        daemon=True,
+    )
+    try:
+        if flip_when == "before_the_relay_starts":
+            session_environment.set_internet(relayed_db, session["id"], False)
+            turn.start()
+        else:
+            turn.start()
+            assert in_setup.wait(timeout=10), "the sidecar never began the turn"
+            session_environment.set_internet(relayed_db, session["id"], False)
+        leave_setup.set()
+        deadline = time.monotonic() + 10
+        while not (agents and agents[0].started.is_set()):
+            assert time.monotonic() < deadline, "the relayed turn never started"
+            time.sleep(0.02)
+    finally:
+        leave_setup.set()
         gate.set()
         turn.join(timeout=10)
 

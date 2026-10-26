@@ -12,8 +12,10 @@ running is told of an Internet change over its sidecar session.
 from __future__ import annotations
 
 import os
+import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from gaia.logger import get_logger
 from gaia.security import AllowedPathsEnvError, env_allowed_paths
@@ -269,29 +271,52 @@ def remove_folder(db: ChatDatabase, session_id: str, path: str) -> None:
     logger.info("Chat %s may no longer use %s", session_id, target)
 
 
+_switch_locks: Dict[str, threading.Lock] = {}
+_switch_locks_guard = threading.Lock()
+
+
+def _switch_lock(session_id: str) -> threading.Lock:
+    with _switch_locks_guard:
+        return _switch_locks.setdefault(session_id, threading.Lock())
+
+
+@contextmanager
+def held_internet_off(db: ChatDatabase, session_id: str) -> Iterator[bool]:
+    """The chat's saved ``internet_off``, with no switch landing until the block exits.
+
+    A relayed turn reads it once its sidecar has applied the turn's body, so a
+    switch flipped while the turn was starting is not lost.
+    """
+    with _switch_lock(session_id):
+        yield bool(load(db, session_id)["internet_off"])
+
+
 def set_internet(db: ChatDatabase, session_id: str, on: bool) -> None:
     """Turn the chat's internet on or off; enforced from the agent's next step."""
     _require_internet_enforceable(db, session_id)
-    env = load(db, session_id)
-    db.set_session_environment(
-        session_id,
-        folders=env["folders"],
-        withheld=env["withheld"],
-        internet_off=not on,
-    )
-    agent = _live_agent(session_id)
-    if agent is not None:
-        agent.internet_off = not on
-    logger.info("Chat %s internet %s", session_id, "on" if on else "off")
-    _tell_running_relay(session_id, internet_off=not on)
+    # Saving and telling the running turn as one step keeps two quick flips in order.
+    with _switch_lock(session_id):
+        env = load(db, session_id)
+        db.set_session_environment(
+            session_id,
+            folders=env["folders"],
+            withheld=env["withheld"],
+            internet_off=not on,
+        )
+        agent = _live_agent(session_id)
+        if agent is not None:
+            agent.internet_off = not on
+        logger.info("Chat %s internet %s", session_id, "on" if on else "off")
+        _tell_running_relay(session_id, internet_off=not on)
 
 
 def _tell_running_relay(session_id: str, internet_off: bool) -> None:
     """Carry the switch to a relayed turn of this chat that is running now.
 
     With no turn running there is nothing to tell: the next turn sends the saved
-    value. A turn that can't be told it is offline is stopped, as a full-access
-    run is when Ask can't reach it.
+    value, and a turn still starting reads it through :func:`held_internet_off`.
+    A turn that can't be told it is offline is ended, as a full-access run is
+    when Ask can't reach it.
 
     Raises:
         RelayedSwitchError: When the running turn's sidecar couldn't be told.
@@ -307,13 +332,24 @@ def _tell_running_relay(session_id: str, internet_off: bool) -> None:
     try:
         proxy.set_internet(sidecar_session, internet_off)
     except SidecarError as exc:
+        if not (
+            _active_sse_handlers.get(session_id) is handler
+            and handler.active_relay_internet_session == sidecar_session
+        ):
+            logger.info(
+                "Chat %s: the relayed turn ended before it could be told the "
+                "internet switch (%s); the next turn carries it",
+                session_id,
+                exc,
+            )
+            return
         if internet_off:
             handler.cancelled.set()
             handler.close_active_relay_response()
             raise RelayedSwitchError(
                 f"Internet is off from the next message, but the running agent "
-                f"couldn't be told ({exc}), so its turn was stopped. Send the "
-                "message again."
+                f"couldn't be told ({exc}), so the Agent UI ended its turn. Send "
+                "the message again."
             ) from exc
         raise RelayedSwitchError(
             f"Internet is on from the next message, but the running agent "

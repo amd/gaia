@@ -210,7 +210,9 @@ the field with `422`, so probe `/version` first and do not answer an
 internet-off turn on an older one. If the user flips the switch while a turn is
 running, `POST /v1/gaia/sessions/{session_id}/internet` with
 `{"internet_off": true}` so the next tool call follows it rather than the next
-turn. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+turn. Post it only once `/query` has answered: before then the turn's own
+`internet_off` replaces it, so re-read the switch at that point and post it if
+it changed. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Showing what a turn changed, with undo? Send `changes_turn_id`** (contract ≥
 2.19) along with `session_id`: the agent copies each file before it writes it,

@@ -19,7 +19,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reaches a turn already running. Without it, a user who turned the internet
   off mid-turn watched the agent keep searching until the turn ended. Body
   `{"internet_off": bool}`; the session's next tool call follows it. An
-  unknown session is a `404`, as for `/bypass`.
+  unknown session is a `404`, as for `/bypass`. Post it only once `/query`
+  has answered: until then the turn's own `internet_off` replaces it.
 
 ### For integrators: contract 2.21
 

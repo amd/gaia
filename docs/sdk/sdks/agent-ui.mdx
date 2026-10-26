@@ -1469,10 +1469,12 @@ agent at once, so they take effect on its next step.
     internet is off for this chat.
 
     For a relayed GAIA chat with a turn running, the change is also sent to
-    that turn's agent, which follows it from its next tool call. If it can't
-    be delivered, the endpoint answers **502**: the setting is saved and
-    applies from the next message, and switching off also stops the running
-    turn.
+    that turn's agent, which follows it from its next tool call. A change
+    made while the turn is still starting is sent as soon as the agent has
+    taken the turn. If it can't be delivered, the endpoint answers **502**:
+    the setting is saved and applies from the next message, and switching
+    off also ends the turn in the Agent UI. A turn that ended before it
+    could be told needs nothing, so that change answers **200**.
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/outputs">

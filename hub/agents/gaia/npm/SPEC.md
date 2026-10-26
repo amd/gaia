@@ -340,6 +340,12 @@ running, `POST /v1/gaia/sessions/{session_id}/internet` with
 it, and so do later turns until a `/query` sends another value. An unknown
 session is a **404** rather than a new one.
 
+Send it only once `/query` has answered. The response starts after the turn's
+own `internet_off` is applied, so a switch posted earlier is replaced by the
+body's value, and on a session's first turn it is a **404** because the
+session does not exist yet. A caller whose user can flip the switch while a
+turn starts re-reads it when `/query` answers and posts it if it changed.
+
 `changes_turn_id` (contract ≥ 2.19) asks the agent to record the turn's file
 changes for undo. Before a tool writes, edits, creates or deletes a file, the
 agent saves a copy of it under `<GAIA home>/snapshots/<session_id>/<changes_turn_id>/`,

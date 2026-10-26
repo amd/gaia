@@ -209,7 +209,7 @@ describe('Internet', () => {
     });
 
     it("shows the saved switch and why when the running turn couldn't be told", async () => {
-        const detail = "Internet is off from the next message, but the running agent couldn't be told (gone), so its turn was stopped. Send the message again.";
+        const detail = "Internet is off from the next message, but the running agent couldn't be told (gone), so the Agent UI ended its turn. Send the message again.";
         mocked.setInternet.mockRejectedValue(Object.assign(new Error(detail), { detail, httpStatus: 502 }));
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         const toggle = await screen.findByRole('switch', { name: 'Internet for this chat' });

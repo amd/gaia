@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, ContextManager, Dict, List, Optional
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.logger import get_logger
@@ -395,12 +395,47 @@ def _full_access_error(
     }
 
 
-class _FullAccessNotSet(SidecarError):
-    """The chat's mode could not be set once ``/query`` created the session."""
+class _SettingNotSet(SidecarError):
+    """A chat setting could not be put on the session ``/query`` created."""
 
     def __init__(self, event: Dict[str, Any]):
         super().__init__(event["content"])
         self.event = event
+
+
+def _send_internet_switch(
+    handler: SSEOutputHandler,
+    proxy: Any,
+    profile: RelayProfile,
+    session_id: str,
+    internet_off: bool,
+) -> None:
+    """Tell a turn that just started of a switch flipped while it was starting.
+
+    Raises:
+        _SettingNotSet: When it should be offline and couldn't be told.
+    """
+    try:
+        proxy.set_internet(session_id, internet_off)
+    except SidecarError as exc:
+        if internet_off:
+            raise _SettingNotSet(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        f"Internet was turned off as this message started, but "
+                        f"the {profile.display_name} agent couldn't be told "
+                        f"({exc}), so the Agent UI ended this turn. Send the "
+                        "message again."
+                    ),
+                    "fatal": True,
+                }
+            ) from exc
+        handler.print_warning(
+            f"Internet was turned on as this message started, but the "
+            f"{profile.display_name} agent couldn't be told ({exc}), so this "
+            "turn stays offline. It is on from the next message."
+        )
 
 
 def _best_effort_cancel(proxy: Any, rid: str) -> None:
@@ -433,6 +468,7 @@ def relay_query(
     allowed_paths: Optional[List[str]] = None,
     memory: Optional[str] = None,
     internet_off: Optional[bool] = None,
+    hold_internet_off: Optional[Callable[[], ContextManager[bool]]] = None,
     changes_turn_id: Optional[str] = None,
     surface: Optional[str] = None,
 ) -> None:
@@ -451,6 +487,12 @@ def relay_query(
 
     *internet_off* — whether the chat has the internet switched off, for a
     sidecar the caller has established takes it (``profiles.internet_supported``).
+
+    *hold_internet_off* — enters a block holding the chat's switch still and
+    yields its saved value. Read once the sidecar has applied the turn's body, so
+    a switch flipped while the turn was starting reaches it; from then on a
+    switch reaches it through ``active_relay_internet_session``. ``None`` leaves
+    a running turn on *internet_off*.
 
     *surface* — the front-end this turn comes from, for a sidecar the caller
     has established takes it (``profiles.surface_supported``).
@@ -555,9 +597,10 @@ def relay_query(
     handler.active_relay_run_id = rid
     # Lets a mid-run switch of the chat's mode reach this sidecar session too.
     handler.active_relay_mode_session = session_id if syncs_mode else None
-    # And a mid-run Internet switch, when the sidecar took it and has a session.
-    handler.active_relay_internet_session = (
-        session_id if internet_off is not None and "session_id" in body else None
+    syncs_internet = (
+        internet_off is not None
+        and "session_id" in body
+        and hold_internet_off is not None
     )
 
     def _register_response(resp: Any) -> None:
@@ -592,7 +635,16 @@ def relay_query(
             try:
                 proxy.set_bypass(session_id, True)
             except SidecarError as exc:
-                raise _FullAccessNotSet(_full_access_error(profile, True, exc)) from exc
+                raise _SettingNotSet(_full_access_error(profile, True, exc)) from exc
+        if syncs_internet:
+            # The sidecar answers only after applying the body, so a switch
+            # read from here on can no longer be overwritten by it.
+            with hold_internet_off() as internet_off_now:
+                if internet_off_now != internet_off:
+                    _send_internet_switch(
+                        handler, proxy, profile, session_id, internet_off_now
+                    )
+                handler.active_relay_internet_session = session_id
         for event in events:
             if handler.cancelled.is_set():
                 break
@@ -618,7 +670,7 @@ def relay_query(
                     asked = True
                 # The sidecar run stays parked; only this chat's slot is freed.
                 stepped_away = handler.step_away_from_model()
-    except _FullAccessNotSet as exc:
+    except _SettingNotSet as exc:
         crashed = True
         crash_message = exc.event["content"]
         resp = handler.active_relay_response
