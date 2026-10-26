@@ -1512,8 +1512,15 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             line = (
                 f"\nYour folders this session: {', '.join(labelled)}. For "
                 '"my documents", "your folder", or a file named without a path, '
-                "look here first.\n"
+                "look here first."
             )
+            if labelled[0].endswith("(GAIA's documents folder)"):
+                line += (
+                    " To save a new file to the user's Documents folder, use "
+                    f"{Path.home() / 'Documents'}: GAIA's documents folder is "
+                    "GAIA's own."
+                )
+            line += "\n"
         self._folders_line = line
         return line
 
