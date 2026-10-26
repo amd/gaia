@@ -1272,7 +1272,8 @@ _QUERY_SSE_RESPONSES = {
             "the arguments the model sent for the gated call, each value capped "
             "at 64,000 characters (`args_truncated: true` when one was cut); "
             "what the agent adds to its prompt is in `prompt_context` "
-            "{working_directory?, risk_note?}, never in `args`. The stream ends "
+            "{working_directory?, risk_note?, file_path?}, never in `args`. The "
+            "stream ends "
             "with exactly one `final` or `error`. `:`-prefixed heartbeat "
             "comments carry no payload."
         ),

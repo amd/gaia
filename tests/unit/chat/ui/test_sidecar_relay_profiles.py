@@ -517,6 +517,40 @@ class TestGaiaDispatch:
         assert handler.events[0]["type"] == "status"
         assert "token rejected" in handler.events[0]["message"]
 
+    @pytest.mark.parametrize(
+        "failure",
+        ["ConnectionError", "ReadTimeout"],
+        ids=["refused", "hung"],
+    )
+    def test_an_agent_that_stopped_answering_is_not_blamed_on_the_model(
+        self, tmp_path, monkeypatch, failure
+    ):
+        """rc11: a refused connection to the agent read "Couldn't reach the
+        local LLM" to a user on Fireworks."""
+        import requests
+
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        self._record_replays(monkeypatch, [])
+        handle = _FakeHandle()
+        handle._proxy.base_url = "http://127.0.0.1:57532"
+
+        def _refused():
+            raise getattr(requests.exceptions, failure)("no answer")
+
+        handle._proxy.init = _refused
+        _, calls = self._patch(monkeypatch, handle)
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(
+            handler, request, [], "fireworks.deepseek-v4p1-flash", "gaia"
+        )
+
+        [error] = [e["content"] for e in handler.events if e["type"] == "agent_error"]
+        assert error == GAIA_PROFILE.start_failed_text()
+        assert "LLM" not in error
+        assert calls == []
+
 
 # ── A relayed tool step reports what the tool actually did ───────────────────
 

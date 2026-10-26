@@ -271,7 +271,7 @@ the header.
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
 | `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
-| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Run gated tools without asking, for one session (≥ 2.14) |
+| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
 #### `/query` request body
@@ -377,8 +377,10 @@ shortens long code, so show `args` when the user should read all of it; a
 policy client matches its rules on `args` and should not auto-approve a call
 with `args_truncated`. The agent never adds a key to `args`. What it adds to
 its own prompt is in `prompt_context`: `working_directory` (where a shell call
-runs, when the model's arguments don't say it) and `risk_note` (why the
-agent's checks don't cover the call, which is then approved once). A prompt
+runs, when the model's arguments don't say it), `risk_note` (why the
+agent's checks don't cover the call, which is then approved once) and
+`file_path` (the absolute path a write lands at, when the model gave a relative
+one). A prompt
 the agent raises on its own, such as `allow_path_access`, has the path it asks
 about in `args`.
 

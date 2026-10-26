@@ -1241,8 +1241,9 @@ Deleting a chat deletes its copies.
 
     **Response:** `DocumentResponse`. A failed index still returns 200, with
     `indexing_status: "failed"`, the reason in `last_error`, and `error_kind`
-    set to `corrupted`, `encrypted` or `empty` when retrying can't help until
-    the file is fixed.
+    set to `corrupted`, `encrypted`, `empty` (no text), `empty_file` (nothing
+    to index) or `unsupported_workbook` (a legacy `.xls` or password-protected
+    workbook) when retrying can't help until the file is fixed.
 
     **Errors:** 400 with `detail.status: "is_folder"` when the path is a folder
     (index it with `index-folder`); 400 for a file type GAIA doesn't index; 404
@@ -1588,7 +1589,10 @@ Used to reach the UI from a phone.
 <AccordionGroup>
   <Accordion title="POST /api/documents/upload">
     Multipart drag-and-drop upload. Stores the file in the library and
-    enqueues it for indexing.
+    enqueues it for indexing. A file that can't be read is a **422** whose
+    `detail.status` is one of the `error_kind` values listed under
+    `upload-path` and whose
+    `detail.message` says what to do.
   </Accordion>
 
   <Accordion title="GET /api/documents/monitor/status">

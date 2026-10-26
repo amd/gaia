@@ -2249,7 +2249,7 @@ class FileSearchToolsMixin:
                     file_content = None
                     used_encoding = None
                     bom_codec = text_encoding(fp)
-                    # latin-1 accepts any bytes, so a BOM-marked file decodes by its BOM.
+                    # latin-1 accepts any bytes, so a BOM-marked or CP1252 file decodes by its codec.
                     for encoding in (
                         (bom_codec,)
                         if bom_codec != "utf-8"

@@ -87,10 +87,14 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
 });
 
 // ── Window frame ─────────────────────────────────────────────────────────
-// The app draws its own top row; this says how the native controls sit in it.
+// Says whether the app draws its own top row and where the native controls sit in it.
 contextBridge.exposeInMainWorld("gaiaWindow", {
-  /** "mac": traffic lights at the top left; "overlay": controls at the top right. */
-  titleBar: process.platform === "darwin" ? "mac" : "overlay",
+  /**
+   * "mac": traffic lights at the top left; "overlay": controls at the top right;
+   * "native": the system frame. Must match titleBarKind in services/window-frame.cjs
+   * (a sandboxed preload can't require it).
+   */
+  titleBar: { darwin: "mac", win32: "overlay" }[process.platform] || "native",
   /** Match the native window controls to the app: { color, symbolColor } as #rrggbb. */
   setColors: (colors) => ipcRenderer.invoke("window:set-titlebar-colors", colors),
 });

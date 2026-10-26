@@ -284,6 +284,65 @@ def test_the_relay_puts_gaias_context_back_on_the_ui_prompt():
     }
 
 
+def test_a_resolved_write_path_is_context_not_an_argument():
+    """rc11: a relayed "Allow writing file?" still named a bare shop2.txt."""
+    event = _permission(
+        "write_file",
+        {"file_path": "/Users/you/shop2.txt", "content": "milk"},
+        call_args={"file_path": "shop2.txt", "content": "milk"},
+    )
+    assert event["args"] == {"file_path": "shop2.txt", "content": "milk"}
+    assert event["prompt_context"] == {"file_path": "/Users/you/shop2.txt"}
+
+    same = _permission(
+        "write_file",
+        {"file_path": "/Users/you/a.txt", "content": "x"},
+        call_args={"file_path": "/Users/you/a.txt", "content": "x"},
+    )
+    assert "prompt_context" not in same
+
+
+def test_the_relay_shows_the_ui_prompt_where_a_write_lands():
+    handler = SSEOutputHandler()
+    handler.set_relay_confirmation = lambda _cid: None
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "needs_confirmation",
+            "action": "write_file",
+            "summary": "shop2.txt",
+            "confirm_id": "c-2",
+            "args": {"file_path": "shop2.txt", "content": "milk"},
+            "prompt_context": {"file_path": "/Users/you/shop2.txt"},
+        },
+        GAIA_PROFILE,
+        answers_confirmations=True,
+    )
+    (prompt,) = _drain(handler)
+    assert prompt["args"] == {"file_path": "/Users/you/shop2.txt", "content": "milk"}
+
+
+def test_a_relative_write_reaches_the_ui_prompt_as_its_full_path():
+    """End to end: the agent's prompt, the sidecar wire, then the UI relay."""
+    agent_side = SSEOutputHandler()
+    agent_side.note_call_args("write_file", {"file_path": "shop2.txt", "content": "m"})
+    agent_side.confirm_tool_execution(
+        "write_file",
+        {"file_path": "/Users/you/shop2.txt", "content": "m"},
+        timeout=0.01,
+    )
+    [prompt] = [e for e in _drain(agent_side) if e["type"] == "permission_request"]
+    [wire] = CanonicalTranslator("r1", agent_id="gaia").translate(prompt)
+    wire["confirm_id"] = "c-3"
+
+    ui_side = SSEOutputHandler()
+    ui_side.set_relay_confirmation = lambda _cid: None
+    relay._dispatch_one(ui_side, wire, GAIA_PROFILE, answers_confirmations=True)
+    (shown,) = _drain(ui_side)
+    assert wire["args"]["file_path"] == "shop2.txt"
+    assert shown["args"]["file_path"] == "/Users/you/shop2.txt"
+
+
 # ── memory mode ────────────────────────────────────────────────────────────
 
 

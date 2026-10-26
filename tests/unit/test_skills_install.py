@@ -470,6 +470,29 @@ def test_install_refuses_a_pin_no_published_version_satisfies(marketplace, tmp_p
     assert not (marketplace.skills_root / "web-research").exists()
 
 
+@pytest.mark.parametrize(
+    "reference,expected",
+    [
+        ("web-research", "1.0.0"),
+        ("web-research@^1.0", "1.0.0"),
+        ("web-research@>=1.1.0-rc.1", "1.1.0-rc.1"),
+    ],
+)
+def test_install_respects_prerelease_opt_in(marketplace, tmp_path, reference, expected):
+    key = marketplace.keygen()
+    marketplace.trust(key)
+    for version in ("1.0.0", "1.1.0-rc.1"):
+        marketplace.publish(_write_source(tmp_path / version, version=version))
+
+    result = marketplace.install(reference)
+
+    assert result.version == expected
+    assert marketplace.manager.reload()["web-research"].version == expected
+    assert (
+        SkillLock.load(marketplace.skills_root).get("web-research").version == expected
+    )
+
+
 def test_install_refuses_to_clobber_an_existing_install_without_force(
     marketplace, tmp_path
 ):

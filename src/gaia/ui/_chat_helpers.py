@@ -2355,10 +2355,24 @@ def _dispatch_sidecar_query(
 
     # First-turn-per-session readiness check (#2101 lesson): a 503 from
     # /v1/<agent>/init is contract ("not ready yet"), not a transport failure.
+    import requests
+
     try:
         status_code, init_body = proxy.init()
     except SidecarError as exc:
         sse_handler._emit({"type": "agent_error", "content": str(exc)})
+        return
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+        # The agent stopped answering (crashed, hung or shutting down): not the model server.
+        logger.warning(
+            "chat: %s agent at %s did not answer its readiness check: %s",
+            agent_type,
+            proxy.base_url,
+            exc,
+        )
+        sse_handler._emit(
+            {"type": "agent_error", "content": profile.start_failed_text()}
+        )
         return
     if (
         status_code != 200
@@ -5126,8 +5140,10 @@ def _settled_quietly(future) -> None:
 
 
 # Failures retrying can't fix until the file itself changes: RAG's pdf_status
-# values, plus "empty_file" for a 0-byte file of any type.
-PERMANENT_INDEX_FAILURES = frozenset({"corrupted", "encrypted", "empty", "empty_file"})
+# and xlsx_status values, plus "empty_file" for a file with nothing to index.
+PERMANENT_INDEX_FAILURES = frozenset(
+    {"corrupted", "encrypted", "empty", "empty_file", "unsupported_workbook"}
+)
 
 
 class UnreadableDocumentError(RuntimeError):
@@ -5213,7 +5229,9 @@ async def _index_document(filepath: Path, display_name: Optional[str] = None) ->
         if error:
             message = f"RAG indexing failed for {name}: {error}"
             kind = (
-                "empty_file" if result.get("empty_file") else result.get("pdf_status")
+                "empty_file"
+                if result.get("empty_file")
+                else result.get("pdf_status") or result.get("xlsx_status")
             )
             if kind in PERMANENT_INDEX_FAILURES:
                 raise UnreadableDocumentError(message, kind)
