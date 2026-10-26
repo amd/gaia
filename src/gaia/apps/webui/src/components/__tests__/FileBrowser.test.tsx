@@ -222,3 +222,49 @@ describe('FileBrowser Index Selected', () => {
         expect(useChatStore.getState().sessions[0].document_ids).toEqual([]);
     });
 });
+
+describe('FileBrowser hidden entries', () => {
+    const HOME: BrowseResponse = {
+        current_path: '/home/user',
+        parent_path: '/home',
+        entries: [
+            { name: '.config', path: '/home/user/.config', type: 'folder', size: 0, extension: '', modified: '' },
+            { name: '.env', path: '/home/user/.env', type: 'file', size: 10, extension: '', modified: '' },
+            { name: 'Documents', path: '/home/user/Documents', type: 'folder', size: 0, extension: '', modified: '' },
+        ],
+        quick_links: [],
+    };
+
+    it('hides dot entries until Show hidden is turned on', async () => {
+        mockedApi.browseFiles.mockResolvedValue(HOME);
+        render(<FileBrowser />);
+        await screen.findByText('Documents');
+        expect(screen.queryByText('.config')).toBeNull();
+        expect(screen.queryByText('.env')).toBeNull();
+
+        fireEvent.click(screen.getByRole('checkbox', { name: 'Show hidden' }));
+
+        expect(screen.getByText('.config')).toBeTruthy();
+        expect(screen.getByText('.env')).toBeTruthy();
+    });
+
+    it('drops a hidden selection when Show hidden is turned off', async () => {
+        mockedApi.browseFiles.mockResolvedValue(HOME);
+        render(<FileBrowser />);
+        await screen.findByText('Documents');
+        const toggle = screen.getByRole('checkbox', { name: 'Show hidden' });
+        fireEvent.click(toggle);
+        fireEvent.click(screen.getByRole('checkbox', { name: 'Select .env' }));
+        expect(screen.getByRole('button', { name: /Index Selected/i })).toBeEnabled();
+
+        fireEvent.click(toggle);
+
+        expect(screen.getByRole('button', { name: /Index Selected/i })).toBeDisabled();
+    });
+
+    it('explains a folder that holds only hidden items', async () => {
+        mockedApi.browseFiles.mockResolvedValue({ ...HOME, entries: HOME.entries.slice(0, 2) });
+        render(<FileBrowser />);
+        expect(await screen.findByText(/Only hidden items here/)).toBeTruthy();
+    });
+});

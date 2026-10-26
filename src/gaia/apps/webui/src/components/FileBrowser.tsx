@@ -188,6 +188,7 @@ export function FileBrowser() {
     const [quickLinks, setQuickLinks] = useState<QuickLink[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [showHidden, setShowHidden] = useState(false);
 
     // Search state
     const [searchQuery, setSearchQuery] = useState('');
@@ -437,7 +438,15 @@ export function FileBrowser() {
             extension: r.extension || '',
             modified: r.modified || '',
         }))
-        : entries;
+        : showHidden ? entries : entries.filter(e => !e.name.startsWith('.'));
+    const hiddenCount = entries.length - entries.filter(e => !e.name.startsWith('.')).length;
+
+    const toggleShowHidden = useCallback((checked: boolean) => {
+        setShowHidden(checked);
+        if (!checked) {
+            setSelectedFiles(prev => new Set([...prev].filter(p => !(p.split(/[\\/]/).pop() ?? '').startsWith('.'))));
+        }
+    }, []);
 
     return (
         <div ref={dialogRef} className="modal-overlay" onClick={() => setShowFileBrowser(false)} role="dialog" aria-modal="true" aria-label="File browser">
@@ -510,6 +519,7 @@ export function FileBrowser() {
 
                     {/* Breadcrumb */}
                     {!searchResults && (
+                        <div className="fb-pathbar">
                         <div className="fb-breadcrumb">
                             <button className="fb-crumb" onClick={() => loadDirectory('/')}>
                                 <HardDrive size={12} />
@@ -531,6 +541,15 @@ export function FileBrowser() {
                                     <ArrowUp size={14} />
                                 </button>
                             )}
+                        </div>
+                        <label className="fb-hidden-toggle">
+                            <input
+                                type="checkbox"
+                                checked={showHidden}
+                                onChange={(e) => toggleShowHidden(e.target.checked)}
+                            />
+                            Show hidden
+                        </label>
                         </div>
                     )}
 
@@ -569,7 +588,11 @@ export function FileBrowser() {
 
                             {!loading && displayItems.length === 0 && (
                                 <div className="fb-empty">
-                                    {searchResults ? 'No files found' : 'This folder is empty'}
+                                    {searchResults
+                                        ? 'No files found'
+                                        : hiddenCount > 0
+                                            ? 'Only hidden items here. Turn on Show hidden to see them.'
+                                            : 'This folder is empty'}
                                 </div>
                             )}
 
