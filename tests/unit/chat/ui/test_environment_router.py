@@ -188,17 +188,19 @@ def test_unknown_session_is_404(client):
 
 
 def test_a_relayed_agent_is_reported_unenforced_and_changes_are_refused(
-    client, session_id, folder, monkeypatch
+    client, folder, monkeypatch
 ):
-    # A Hub binary or the email sidecar runs as its own process.
+    # The email sidecar runs as its own process and keeps its own network rules.
     monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
+    session_id = client.post("/api/sessions", json={"agent_type": "email"}).json()["id"]
     body = client.get(f"/api/sessions/{session_id}/environment").json()
     assert body["enforced"] is False
+    assert body["internet_enforced"] is False
     off = client.put(
         f"/api/sessions/{session_id}/environment/internet", json={"on": False}
     )
     assert off.status_code == 409
-    assert "its own process" in off.json()["detail"]
+    assert "its own network rules" in off.json()["detail"]
     removed = client.post(
         f"/api/sessions/{session_id}/environment/folders/remove",
         json={"path": str(folder)},
@@ -211,6 +213,24 @@ def test_a_relayed_agent_is_reported_unenforced_and_changes_are_refused(
     assert (
         client.get(f"/api/sessions/{session_id}/environment").json()["internet"] is True
     )
+
+
+def test_a_relayed_flagship_chat_is_held_to_its_internet_switch_only(
+    client, session_id, folder, monkeypatch
+):
+    monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
+    body = client.get(f"/api/sessions/{session_id}/environment").json()
+    assert body["enforced"] is False
+    assert body["internet_enforced"] is True
+    off = client.put(
+        f"/api/sessions/{session_id}/environment/internet", json={"on": False}
+    )
+    assert off.status_code == 200
+    assert off.json()["internet"] is False
+    added = client.post(
+        f"/api/sessions/{session_id}/environment/folders", json={"path": str(folder)}
+    )
+    assert added.status_code == 400
 
 
 def test_an_invalid_allowed_paths_setting_is_named_not_an_empty_list(

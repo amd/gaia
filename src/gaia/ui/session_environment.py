@@ -18,6 +18,7 @@ from gaia.logger import get_logger
 from gaia.security import AllowedPathsEnvError, env_allowed_paths
 
 from .database import ChatDatabase
+from .email_sidecar.profiles import profile_for
 
 logger = get_logger(__name__)
 
@@ -84,6 +85,26 @@ def _require_enforceable(db: ChatDatabase, session_id: str) -> None:
         raise EnvironmentChangeError(
             "This chat's agent runs as its own process, so GAIA can't hold it to "
             "these settings. Start a chat with the GAIA agent to use them."
+        )
+
+
+def internet_enforceable(session: Dict[str, Any]) -> bool:
+    """Whether GAIA can hold the chat's agent to its Internet switch.
+
+    True in process, and for a relayed agent whose contract carries the switch.
+    """
+    if not relayed(session):
+        return True
+    profile = profile_for(session.get("agent_type") or "chat")
+    return profile is not None and profile.min_internet_api_version is not None
+
+
+def _require_internet_enforceable(db: ChatDatabase, session_id: str) -> None:
+    session = db.get_session(session_id)
+    if session is not None and not internet_enforceable(session):
+        raise EnvironmentChangeError(
+            "This chat's agent keeps its own network rules, so GAIA can't switch "
+            "its internet on or off here."
         )
 
 
@@ -175,6 +196,7 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
         "removed": list(env["withheld"]),
         "internet": not env["internet_off"],
         "enforced": not relayed(session) and (validator is not None or agent is None),
+        "internet_enforced": internet_enforceable(session),
     }
 
 
@@ -244,7 +266,7 @@ def remove_folder(db: ChatDatabase, session_id: str, path: str) -> None:
 
 def set_internet(db: ChatDatabase, session_id: str, on: bool) -> None:
     """Turn the chat's internet on or off; enforced from the agent's next step."""
-    _require_enforceable(db, session_id)
+    _require_internet_enforceable(db, session_id)
     env = load(db, session_id)
     db.set_session_environment(
         session_id,

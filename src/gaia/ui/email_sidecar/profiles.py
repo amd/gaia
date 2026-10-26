@@ -162,6 +162,12 @@ class RelayProfile:
     #: Shown instead of running a private or memory-off turn when the installed
     #: agent is below :attr:`min_memory_api_version` — it would save to memory.
     memory_upgrade_message: str = ""
+    #: Contract version from which ``/query`` takes ``internet_off``. ``None``
+    #: means the relay never sends it: the agent keeps its own network rules.
+    min_internet_api_version: Optional[Tuple[int, int]] = None
+    #: Shown instead of running an internet-off turn when the installed agent is
+    #: below :attr:`min_internet_api_version` — it could go online.
+    internet_upgrade_message: str = ""
     #: Contract version from which ``/query`` takes ``changes_turn_id`` and
     #: records the run's file changes for undo. ``None`` means never sent.
     min_changes_api_version: Optional[Tuple[int, int]] = None
@@ -542,6 +548,13 @@ GAIA_PROFILE = RelayProfile(
     ),
     # 2.19 added /query's changes_turn_id field.
     min_changes_api_version=(2, 19),
+    # 2.22 added /query's internet_off field.
+    min_internet_api_version=(2, 22),
+    internet_upgrade_message=(
+        "Internet is off for this chat, but the installed GAIA agent can't be "
+        "told so and could go online. Update GAIA to the latest version, then "
+        "try again, or turn the internet back on for this chat."
+    ),
     # 2.20 added /query's surface field.
     min_surface_api_version=(2, 20),
     # 2.21 added /query's final.context.
@@ -655,6 +668,15 @@ def memory_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     return floor is not None and _meets(api_version, floor)
 
 
+def internet_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``internet_off`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_internet_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def changes_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when *api_version* takes ``/query``'s ``changes_turn_id`` field.
 
@@ -699,5 +721,6 @@ __all__ = [
     "skills_supported",
     "scope_supported",
     "memory_supported",
+    "internet_supported",
     "changes_supported",
 ]

@@ -432,6 +432,7 @@ def relay_query(
     documents: Optional[List[str]] = None,
     allowed_paths: Optional[List[str]] = None,
     memory: Optional[str] = None,
+    internet_off: Optional[bool] = None,
     changes_turn_id: Optional[str] = None,
     surface: Optional[str] = None,
 ) -> None:
@@ -447,6 +448,9 @@ def relay_query(
 
     *memory* — the chat's memory mode (``on`` / ``private`` / ``off``), for a
     sidecar the caller has established takes it (``profiles.memory_supported``).
+
+    *internet_off* — whether the chat has the internet switched off, for a
+    sidecar the caller has established takes it (``profiles.internet_supported``).
 
     *surface* — the front-end this turn comes from, for a sidecar the caller
     has established takes it (``profiles.surface_supported``).
@@ -522,6 +526,8 @@ def relay_query(
         body["allowed_paths"] = list(allowed_paths)
     if memory is not None:
         body["memory"] = memory
+    if internet_off is not None:
+        body["internet_off"] = internet_off
     if changes_turn_id is not None:
         body["changes_turn_id"] = changes_turn_id
     if surface is not None:

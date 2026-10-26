@@ -62,6 +62,7 @@ from gaia.ui.email_sidecar.profiles import (
     confirmations_supported,
     context_supported,
     documents_supported,
+    internet_supported,
     memory_supported,
     profile_for,
     scope_supported,
@@ -78,6 +79,7 @@ from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
 from .session_environment import apply_environment
+from .session_environment import load as load_session_environment
 from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
 from .utils import attached_upload_paths, managed_documents_dir
@@ -2235,6 +2237,7 @@ def _dispatch_sidecar_query(
     documents: list | None = None,
     allowed_paths: list | None = None,
     memory: str = "on",
+    internet_off: bool = False,
     recording: TurnRecording | None = None,
     max_steps: int | None = None,
 ) -> None:
@@ -2251,6 +2254,10 @@ def _dispatch_sidecar_query(
     *memory* is the chat's memory mode (:func:`_memory_mode`). Likewise, a
     private or memory-off turn is stopped rather than sent to a sidecar that
     keeps memory but is too old to be told not to save.
+
+    *internet_off* is the chat's Internet switch. Likewise, an internet-off turn
+    is stopped rather than sent to a sidecar that could go online because it is
+    too old to be told not to.
 
     *recording* is the turn's undo recording. A sidecar that takes it records
     its own file changes under a turn of this chat, which is where Changes,
@@ -2343,6 +2350,22 @@ def _dispatch_sidecar_query(
             )
             sse_handler._emit(
                 {"type": "agent_error", "content": profile.memory_upgrade_message}
+            )
+            return
+
+    relayed_internet_off = None
+    if profile.min_internet_api_version is not None:
+        if internet_supported(profile, handle.api_version):
+            relayed_internet_off = internet_off
+        elif internet_off:
+            logger.warning(
+                "%s agent at contract %s can't take internet_off (needs %s)",
+                agent_type,
+                handle.api_version,
+                profile.min_internet_api_version,
+            )
+            sse_handler._emit(
+                {"type": "agent_error", "content": profile.internet_upgrade_message}
             )
             return
 
@@ -2451,6 +2474,7 @@ def _dispatch_sidecar_query(
         documents=relayed_documents,
         allowed_paths=relayed_scope,
         memory=relayed_memory,
+        internet_off=relayed_internet_off,
         changes_turn_id=(
             recording.relay()
             if recording is not None
@@ -3965,6 +3989,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         documents=_relayed_documents(rag_file_paths, attached),
                         allowed_paths=allowed,
                         memory=_memory_mode(session, db),
+                        internet_off=load_session_environment(db, session_id)[
+                            "internet_off"
+                        ],
                         recording=recording,
                     )
                     return
