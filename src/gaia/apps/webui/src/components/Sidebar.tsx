@@ -360,7 +360,8 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const rename = useCallback(async (id: string, draft: string) => {
         const title = draft.trim().slice(0, MAX_SESSION_TITLE_CHARS).trim();
         const previous = useChatStore.getState().sessions.find((x) => x.id === id)?.title;
-        if (!title || title === previous) return;
+        // Untouched draft: never cut an old over-long title the user didn't edit.
+        if (!title || draft === previous || title === previous) return;
         setRowError(null);
         updateSessionInList(id, { title });
         try {

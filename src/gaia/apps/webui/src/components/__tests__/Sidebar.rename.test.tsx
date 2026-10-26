@@ -8,6 +8,7 @@ import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
 import type { Session } from '../../types';
+import { MAX_SESSION_TITLE_CHARS } from '../../utils/constants';
 
 vi.mock('../../services/api');
 
@@ -80,6 +81,33 @@ describe('Sidebar rename', () => {
         fireEvent.change(input, { target: { value: '   ' } });
         fireEvent.keyDown(input, { key: 'Enter' });
         expect(mockedApi.updateSession).not.toHaveBeenCalled();
+    });
+
+    it('saves nothing when an over-long or padded title is left untouched', () => {
+        const long = 'L'.repeat(250);
+        useChatStore.setState({ sessions: [chat('a', long), chat('b', ' padded ')] });
+        render(<Sidebar onNewChat={vi.fn()} />);
+
+        fireEvent.click(screen.getByRole('button', { name: `Rename ${long}` }));
+        fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Rename padded' }));
+        fireEvent.blur(screen.getByRole('textbox'));
+
+        expect(mockedApi.updateSession).not.toHaveBeenCalled();
+        expect(titles()).toEqual([long, ' padded ']);
+    });
+
+    it('trims and caps an edited over-long title', async () => {
+        useChatStore.setState({ sessions: [chat('a', 'L'.repeat(250))] });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: /^Rename L+$/ }));
+        const input = screen.getByRole('textbox');
+        fireEvent.change(input, { target: { value: `  ${'M'.repeat(250)}` } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        await waitFor(() => expect(mockedApi.updateSession).toHaveBeenCalledExactlyOnceWith(
+            'a', { title: 'M'.repeat(MAX_SESSION_TITLE_CHARS), title_is_custom: true },
+        ));
     });
 
     it('puts the old title back and says so when the save fails', async () => {
