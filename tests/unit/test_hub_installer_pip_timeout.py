@@ -91,13 +91,14 @@ def test_an_idle_frontend_is_stopped_as_stuck(monkeypatch, frontend):
 
 
 def test_a_slow_install_that_keeps_working_is_not_stopped(monkeypatch, tmp_path):
-    """Three times the window, busy the whole time: a slow download, not a hang."""
+    """A working child outlives the timeout window without being stopped."""
+    monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 5.0)
     target = tmp_path / "download.bin"
     busy = [
         sys.executable,
         "-c",
         "import time, sys\n"
-        f"end = time.monotonic() + 3\n"
+        f"end = time.monotonic() + 6\n"
         f"with open({str(target)!r}, 'wb') as f:\n"
         "    while time.monotonic() < end:\n"
         "        f.write(b'x' * 65536); f.flush()\n"
