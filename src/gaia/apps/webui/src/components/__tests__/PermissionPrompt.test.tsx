@@ -28,6 +28,86 @@ afterEach(() => {
 });
 
 describe('PermissionPrompt', () => {
+    it('shows short code whole, with no expand control', () => {
+        useNotificationStore.getState().addNotification(request({
+            tool: 'run_python', toolArgs: { code: 'print(1)\nprint(2)' },
+            summary: 'print(1)\nprint(2)',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByTestId('perm-code').textContent).toBe('print(1)\nprint(2)');
+        expect(screen.queryByRole('button', { name: /Show all/ })).not.toBeInTheDocument();
+    });
+
+    it('collapses long code and shows every line on "Show all"', () => {
+        const code = Array.from({ length: 30 }, (_, i) => `line_${i + 1} = ${i + 1}`).join('\n');
+        useNotificationStore.getState().addNotification(request({
+            tool: 'run_python', toolArgs: { code },
+            // What a relayed agent's summary looks like: the middle elided.
+            summary: 'line_1 = 1\n…[18 more lines]…\nline_30 = 30',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        const block = screen.getByTestId('perm-code');
+        expect(block.textContent).toContain('line_12 = 12');
+        expect(block.textContent).not.toContain('line_13 = 13');
+        // The code block replaces the shortened summary rather than repeating it.
+        expect(screen.getByRole('alertdialog')).not.toHaveTextContent('more lines');
+        fireEvent.click(screen.getByRole('button', { name: 'Show all 30 lines' }));
+        expect(screen.getByTestId('perm-code').textContent).toBe(code);
+        expect(screen.getByRole('button', { name: 'Show less' })).toHaveAttribute('aria-expanded', 'true');
+    });
+
+    it('splits a relayed command summary with no args into the command and its risk note', () => {
+        useNotificationStore.getState().addNotification(request({
+            toolArgs: undefined,
+            summary: 'powershell -Command "Get-ChildItem"\nCan run any code, with your permissions.',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(document.querySelector('.perm-card-exact')?.textContent).toBe('powershell -Command "Get-ChildItem"');
+        expect(screen.getByRole('note')).toHaveTextContent('Can run any code, with your permissions.');
+    });
+
+    it("keeps a relayed command's folder, extras and note apart, as the server sends them", () => {
+        useNotificationStore.getState().addNotification(request({
+            toolArgs: undefined,
+            summary: 'Get-ChildItem\nin C:\\Users\\me\n(timeout=30)\nCan run any code, with your permissions.',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(document.querySelector('.perm-card-exact')?.textContent).toBe('Get-ChildItem');
+        expect(screen.getByRole('note').textContent).toBe('Can run any code, with your permissions.');
+        expect(screen.getByText('C:\\Users\\me').tagName).toBe('CODE');
+        expect(screen.getByText('(timeout=30)')).toBeInTheDocument();
+    });
+
+    it('keeps a multi-line relayed command whole in the code block', () => {
+        useNotificationStore.getState().addNotification(request({
+            toolArgs: undefined,
+            summary: "cat <<'EOF' > notes.txt\nin the morning\nEOF\nin /home/me\nCan run any code, with your permissions.",
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(document.querySelector('.perm-card-exact')?.textContent).toBe("cat <<'EOF' > notes.txt\nin the morning\nEOF");
+        expect(screen.getByText('/home/me').tagName).toBe('CODE');
+    });
+
+    it('reads a relayed command with no risk note: the folder is last', () => {
+        useNotificationStore.getState().addNotification(request({
+            toolArgs: undefined,
+            summary: 'git status\nin /repo',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(document.querySelector('.perm-card-exact')?.textContent).toBe('git status');
+        expect(screen.getByText('/repo').tagName).toBe('CODE');
+        expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    });
+
+    it('keeps a no-args summary for other tools as plain text', () => {
+        useNotificationStore.getState().addNotification(request({
+            tool: 'send_email', toolArgs: undefined, summary: 'Send to a@b.c\nSubject: hi',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(document.querySelector('.perm-card-exact')).toBeNull();
+        expect(document.querySelector('.perm-card-detail')?.textContent).toBe('Send to a@b.c\nSubject: hi');
+    });
+
     it('renders nothing when this chat has no pending request', () => {
         useNotificationStore.getState().addNotification(request({ sessionId: 'other-chat' }));
         const { container } = render(<PermissionPrompt sessionId="chat-1" />);
@@ -41,6 +121,21 @@ describe('PermissionPrompt', () => {
         expect(screen.getByRole('button', { name: 'Allow once' })).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Always allow git status in this chat' })).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Deny' })).toBeInTheDocument();
+    });
+
+    it('words the question and the always option without tool names', () => {
+        useNotificationStore.getState().addNotification(request({
+            tool: 'write_file',
+            toolLabel: 'writing file',
+            toolArgs: { file_path: '/home/u/prompt-test.txt', content: 'hi' },
+            alwaysScope: 'write_file on prompt-test.txt',
+            alwaysLabel: 'writing prompt-test.txt',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        const dialog = screen.getByRole('alertdialog');
+        expect(screen.getByRole('heading')).toHaveTextContent('Allow writing file?');
+        expect(screen.getByRole('button', { name: 'Always allow writing prompt-test.txt in this chat' })).toBeInTheDocument();
+        expect(dialog).not.toHaveTextContent('write_file on');
     });
 
     it("shows a relayed agent's summary when the call came without args", () => {

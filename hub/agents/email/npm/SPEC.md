@@ -92,7 +92,10 @@ the sidecar's HTTP surface. Methods:
 sidecar); `emailHealth`/`emailVersion` hit the **`/v1/email`-scoped** mirrors (for
 when the router is mounted on a product app). Every non-2xx response throws
 `HttpError` (carrying `status`, `url`, `bodyText`) — never a silent empty/null
-result.
+result. A `502` whose detail says the connection "is being saved by another GAIA
+operation" is transient, not a broken mailbox: retry shortly and don't prompt the
+user to reconnect. The `/v1/email/agent/*` routes answer the same case with `503`
+and a `Retry-After` header instead.
 
 | Endpoint | Client method | Auth | What it needs |
 |----------|---------------|------|---------------|
@@ -152,12 +155,14 @@ tools into a multi-step workflow, and the **seven canonical Server-Sent Event ty
 
 The **host mints `run_id`**, so the run is cancellable from the instant the request is
 sent (`POST /v1/email/query/{run_id}/cancel`, which stops tool execution between steps).
-Context is **pushed** in the body — the sidecar stays stateless. The response is
+Context is **pushed** in the body — the sidecar stays stateless. Context that doesn't fit
+beside the agent's prompt in the model's window keeps only its newest whole turns, and a
+`status` event says older messages are out of the model's view. The response is
 `text/event-stream`; each `data:` line is one canonical event discriminated on `type`:
 
 | `type` | Payload | Meaning |
 |---|---|---|
-| `status` | `{ message }` | progress narration (also folds `step`/`thinking`/`plan`) |
+| `status` | `{ message, phase?, queue? }` | progress narration (also folds `step`/`thinking`/`plan`). `phase: "model_queue"` means the turn is waiting for the model behind another request: it repeats every ~2 s with `queue` (`event` queued/granted, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`) |
 | `token` | `{ delta }` | an incremental chunk of assistant text |
 | `tool_call` | `{ tool, args }` | the agent is invoking a tool |
 | `tool_result` | `{ tool, render?, data }` | a tool returned; `render` names a typed card |

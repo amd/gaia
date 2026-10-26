@@ -45,6 +45,8 @@ on:
       - 'tests/unit/test_run_python_adversarial.py'
       - 'tests/unit/test_run_python_frozen.py'
       - 'tests/unit/test_run_python_frozen_adversarial.py'
+      - 'tests/unit/test_run_python_untracked.py'
+      - 'tests/unit/test_scratch_dir_lifecycle.py'
       - 'tests/unit/test_tool_loader_disambiguation.py'
       - 'tests/unit/test_chat_tool_requests.py'
       - 'tests/unit/test_agent_required_connectors.py'
@@ -57,10 +59,37 @@ on:
       - 'tests/unit/test_inference_location.py'
       - 'tests/unit/test_skill_tools_same_turn.py'
       - 'tests/unit/test_tool_admission_order.py'
+      - 'tests/unit/chat/test_session_prompt_context.py'
       - 'src/gaia/eval/retrieval/**'
       - 'tests/unit/rag/test_retrieval_bench_harness.py'
       - 'setup.py'
       - '.github/workflows/test_chat_agent.yml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      - 'pyproject.toml'
+      - 'util/check_module_skips.py'
+      - 'util/check_test_lane_coverage.py'
+      - 'util/test_lane_allowlist.yml'
+      # Packages and helpers the chat-agent tests import directly.
+      - 'src/gaia/__init__.py'
+      - 'src/gaia/agents/**'
+      - 'src/gaia/api/**'
+      - 'src/gaia/connectors/**'
+      - 'src/gaia/eval/**'
+      - 'src/gaia/hub/**'
+      - 'src/gaia/skills/**'
+      - 'src/gaia/utils/**'
+      - 'src/gaia/cli.py'
+      - 'src/gaia/config.py'
+      - 'src/gaia/security.py'
+      - 'src/gaia/version.py'
+      - 'hub/skills/inbox-triage/SKILL.md'
+      - 'tests/unit/__init__.py'
+      - 'tests/unit/agents/__init__.py'
+      - 'tests/unit/conftest.py'
+      - 'tests/unit/skills_helpers.py'
+      - 'tests/unit/test_indexed_docs_per_turn.py'
+      - 'tests/unit/test_profilespec_characterization.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -99,6 +128,8 @@ on:
       - 'tests/unit/test_run_python_adversarial.py'
       - 'tests/unit/test_run_python_frozen.py'
       - 'tests/unit/test_run_python_frozen_adversarial.py'
+      - 'tests/unit/test_run_python_untracked.py'
+      - 'tests/unit/test_scratch_dir_lifecycle.py'
       - 'tests/unit/test_tool_loader_disambiguation.py'
       - 'tests/unit/test_chat_tool_requests.py'
       - 'tests/unit/test_agent_required_connectors.py'
@@ -111,10 +142,37 @@ on:
       - 'tests/unit/test_inference_location.py'
       - 'tests/unit/test_skill_tools_same_turn.py'
       - 'tests/unit/test_tool_admission_order.py'
+      - 'tests/unit/chat/test_session_prompt_context.py'
       - 'src/gaia/eval/retrieval/**'
       - 'tests/unit/rag/test_retrieval_bench_harness.py'
       - 'setup.py'
       - '.github/workflows/test_chat_agent.yml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      - 'pyproject.toml'
+      - 'util/check_module_skips.py'
+      - 'util/check_test_lane_coverage.py'
+      - 'util/test_lane_allowlist.yml'
+      # Packages and helpers the chat-agent tests import directly.
+      - 'src/gaia/__init__.py'
+      - 'src/gaia/agents/**'
+      - 'src/gaia/api/**'
+      - 'src/gaia/connectors/**'
+      - 'src/gaia/eval/**'
+      - 'src/gaia/hub/**'
+      - 'src/gaia/skills/**'
+      - 'src/gaia/utils/**'
+      - 'src/gaia/cli.py'
+      - 'src/gaia/config.py'
+      - 'src/gaia/security.py'
+      - 'src/gaia/version.py'
+      - 'hub/skills/inbox-triage/SKILL.md'
+      - 'tests/unit/__init__.py'
+      - 'tests/unit/agents/__init__.py'
+      - 'tests/unit/conftest.py'
+      - 'tests/unit/skills_helpers.py'
+      - 'tests/unit/test_indexed_docs_per_turn.py'
+      - 'tests/unit/test_profilespec_characterization.py'
   merge_group:
   workflow_dispatch:
 
@@ -134,9 +192,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -206,6 +261,8 @@ jobs:
             tests/unit/test_run_python_adversarial.py \
             tests/unit/test_run_python_frozen.py \
             tests/unit/test_run_python_frozen_adversarial.py \
+            tests/unit/test_run_python_untracked.py \
+            tests/unit/test_scratch_dir_lifecycle.py \
             tests/unit/test_tool_loader_disambiguation.py \
             tests/unit/test_chat_tool_requests.py \
             tests/unit/test_agent_required_connectors.py \
@@ -218,6 +275,7 @@ jobs:
             tests/unit/test_inference_location.py \
             tests/unit/test_skill_tools_same_turn.py \
             tests/unit/test_tool_admission_order.py \
+            tests/unit/chat/test_session_prompt_context.py \
             tests/unit/rag/test_retrieval_bench_harness.py \
             -v --tb=short
 

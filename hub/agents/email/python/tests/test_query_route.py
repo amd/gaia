@@ -59,6 +59,7 @@ class _HappyFakeAgent:
     def __init__(self):
         self.conversation_history = []
         self.console = None
+        self.streaming = False  # GaiaAgentConfig's default; the route turns it on
         self._cancel_event = None
         self.seen_query = None
         self.seen_history = None
@@ -297,6 +298,23 @@ def test_query_streams_canonical_sequence(app_client, monkeypatch):
     assert events[-1] == {"type": "final", "answer": "Triaged 5 emails."} or (
         events[-1]["type"] == "final" and events[-1]["answer"] == "Triaged 5 emails."
     )
+
+
+def test_query_turns_streaming_on_for_the_agent(app_client, monkeypatch):
+    """#5728: the email agent's /query streams like the flagship's does.
+
+    The config default is off and the route never turned it on, so a relayed turn
+    showed "Waiting on the model" until the whole answer landed, and a stopped
+    turn kept no text.
+    """
+    fake = _HappyFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+
+    resp = app_client.post("/v1/email/query", json=_req())
+
+    assert resp.status_code == 200
+    _parse_sse(resp.text)  # drain
+    assert fake.streaming is True
 
 
 def test_query_pushes_context_as_history(app_client, monkeypatch):
@@ -923,3 +941,134 @@ def test_session_construction_failure_is_502(app_client, monkeypatch):
     monkeypatch.setattr(agent_routes, "build_session_agent", _boom, raising=True)
     resp = app_client.post("/v1/email/query", json=_req(session_id="s1"))
     assert resp.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# A turn waiting for the model is shown as waiting and can be cancelled
+# ---------------------------------------------------------------------------
+
+_QUEUED = {
+    "event": "queued",
+    "scope": "daemon",
+    "position": 1,
+    "queue_length": 2,
+    "holder": "gaia",
+    "holder_model": "M-GGUF",
+    "held_for_s": 3.0,
+    "waited_s": 2.0,
+    "model": "M-GGUF",
+}
+
+
+class _QueuedFakeAgent(_HappyFakeAgent):
+    def process_query(self, query, max_steps=None):
+        from gaia.daemon import broker_client
+
+        self.priority = broker_client.current_priority()
+        broker_client.notify_wait(_QUEUED)
+        return super().process_query(query, max_steps)
+
+
+def test_a_queued_email_turn_streams_its_place_in_line(app_client, monkeypatch):
+    fake = _QueuedFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+
+    resp = app_client.post("/v1/email/query", json=_req())
+
+    assert resp.status_code == 200, resp.text
+    queue = [e for e in _parse_sse(resp.text) if e.get("phase") == "model_queue"]
+    assert queue and queue[0]["queue"]["position"] == 1
+    assert "'gaia' is using it" in queue[0]["message"]
+    assert fake.priority == "interactive"
+
+
+class _WaitingFakeAgent(_HappyFakeAgent):
+    def __init__(self):
+        super().__init__()
+        self.waiting = threading.Event()
+        self.cancelled = None
+
+    def process_query(self, query, max_steps=None):
+        from gaia.daemon import broker_client
+
+        self.waiting.set()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                broker_client.check_cancelled("the model slot")
+            except broker_client.LeaseWaitCancelled:
+                self.cancelled = True
+                return {"answer": "stopped"}
+            time.sleep(0.02)
+        self.cancelled = False
+        return {"answer": "never stopped"}
+
+
+def test_cancel_ends_an_email_turn_waiting_for_the_model(monkeypatch):
+    fake = _WaitingFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    streamer = TestClient(export_openapi.build_app())
+    canceller = TestClient(export_openapi.build_app())
+    run_id = str(uuid.uuid4())
+
+    t = threading.Thread(
+        target=lambda: streamer.post(
+            "/v1/email/query", json={"query": "x", "run_id": run_id, "context": []}
+        ),
+        daemon=True,
+    )
+    t.start()
+    assert fake.waiting.wait(timeout=10)
+    assert canceller.post(f"/v1/email/query/{run_id}/cancel").status_code == 200
+    t.join(timeout=10)
+
+    assert fake.cancelled is True
+
+
+# ---------------------------------------------------------------------------
+# Pushed history is re-fit to this agent's own prompt and window
+# ---------------------------------------------------------------------------
+
+
+class _PromptHeavyFakeAgent(_HappyFakeAgent):
+    """A large prompt on a 32K window: what the host could not budget for."""
+
+    def __init__(self):
+        super().__init__()
+        self.model_id = "Qwen3.6-35B-A3B-GGUF"
+        self.system_prompt = "word " * 10_000
+        self._openai_tools = []
+
+
+def _pushed_context(turns, words):
+    messages = []
+    for n in range(turns):
+        messages.append({"role": "user", "content": f"q{n} " + "data " * words})
+        messages.append({"role": "assistant", "content": f"a{n}"})
+    return messages
+
+
+def test_pushed_history_too_big_beside_the_prompt_is_refit(app_client, monkeypatch):
+    from gaia.agents.base import history
+
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.resolve_ctx_size", lambda **_kw: 32768
+    )
+    fake = _PromptHeavyFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    query = "next?"
+    own = history.history_budget(fake, query)
+    # Sized from the budget: the token estimator differs between machines.
+    words = 1_000 * own // (4 * history.turn_cost(_pushed_context(1, 1_000)))
+    turn = history.turn_cost(_pushed_context(1, words))
+    context = _pushed_context(own // turn + 1, words)
+
+    resp = app_client.post("/v1/email/query", json=_req(query=query, context=context))
+
+    assert resp.status_code == 200
+    seen = fake.seen_history
+    assert 0 < len(seen) < len(context)
+    assert seen == context[-len(seen) :]
+    assert seen[0]["role"] == "user"
+    warnings = [e for e in _parse_sse(resp.text) if "out of the model's view" in str(e)]
+    assert len(warnings) == 1

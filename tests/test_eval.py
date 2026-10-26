@@ -200,20 +200,21 @@ class TestAgentEvalAudit:
         assert audit_tool_results_in_history(f2) is False
 
     def test_audit_reads_real_chat_helpers_values(self):
-        """Integration canary: audit must read the real constants from _chat_helpers.py.
+        """Integration canary: the relay keeps no fixed history caps.
 
-        This test breaks intentionally if someone renames or changes _RELAY_CONTEXT_PAIRS
-        or _MAX_CHARS, alerting that eval recommendations need updating.
+        Relayed history is sized to the model's context window, like the
+        in-process path, so the audit finds no pair or per-message cap. This
+        breaks if one comes back, so the eval recommendations get revisited.
         """
         from gaia.eval.audit import audit_chat_helpers
 
         constants = audit_chat_helpers()
         assert (
-            constants.get("_RELAY_CONTEXT_PAIRS") == 5
-        ), "_RELAY_CONTEXT_PAIRS changed in _chat_helpers.py — update eval recommendations"
+            "_RELAY_CONTEXT_PAIRS" not in constants
+        ), "_chat_helpers.py caps relayed history again — update eval recommendations"
         assert (
-            constants.get("_MAX_CHARS") == 2000
-        ), "_MAX_CHARS changed in _chat_helpers.py — update eval recommendations"
+            "_MAX_CHARS" not in constants
+        ), "_chat_helpers.py cuts messages again — update eval recommendations"
 
 
 class TestAgentEvalRunner:
@@ -1128,6 +1129,19 @@ class TestBuildScenarioPrompt:
         )
         assert "test_doc" in prompt
 
+    def test_prompt_answers_permission_prompts_narrowly(self):
+        from gaia.eval.runner import build_scenario_prompt
+
+        prompt = build_scenario_prompt(
+            self._make_scenario(), {}, "http://localhost:4200"
+        )
+        flat = " ".join(prompt.split())
+        assert "start_message(" in flat
+        assert "answer_prompt(" in flat
+        assert 'Never answer "always"' in flat
+        assert 'always "deny", even if the turn objective says otherwise' in flat
+        assert "send_message(" not in flat
+
 
 class TestRunScenarioSubprocess:
     """Tests for run_scenario_subprocess JSON parsing via mocked subprocess."""
@@ -1149,7 +1163,7 @@ class TestRunScenarioSubprocess:
         mock_proc.stdout = stdout
         mock_proc.stderr = stderr
         mock_proc.returncode = returncode
-        mocker.patch("subprocess.run", return_value=mock_proc)
+        mocker.patch("gaia.eval.runner._run_driver", return_value=mock_proc)
 
         with tempfile.TemporaryDirectory() as tmp:
             return run_scenario_subprocess(
@@ -2802,7 +2816,7 @@ class TestRunner:
         from gaia.eval.runner import run_scenario_subprocess
 
         mocker.patch(
-            "subprocess.run",
+            "gaia.eval.runner._run_driver",
             side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=30),
         )
 
@@ -2917,7 +2931,7 @@ class TestRunner:
         mock_proc.stdout = json.dumps(budget_error)
         mock_proc.stderr = ""
         mock_proc.returncode = 0
-        mocker.patch("subprocess.run", return_value=mock_proc)
+        mocker.patch("gaia.eval.runner._run_driver", return_value=mock_proc)
 
         scenario_data = {
             "id": "budget_test",
@@ -3031,7 +3045,7 @@ class TestScorecardPublicAPI:
         mock_proc.stdout = json.dumps(payload)
         mock_proc.stderr = ""
         mock_proc.returncode = 0
-        mocker.patch("subprocess.run", return_value=mock_proc)
+        mocker.patch("gaia.eval.runner._run_driver", return_value=mock_proc)
 
         scenario_data = {
             "id": "multi_turn",

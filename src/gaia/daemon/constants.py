@@ -60,6 +60,9 @@ BROKER_TOKEN_ENV_VAR = "GAIA_MODEL_BROKER_TOKEN"
 BROKER_TOKEN_FILE_ENV_VAR = "GAIA_MODEL_BROKER_TOKEN_FILE"
 # Optional per-caller default lease priority ("interactive"|"background").
 BROKER_PRIORITY_ENV_VAR = "GAIA_MODEL_LEASE_PRIORITY"
+# Optional cap, in seconds, on how long a model-slot request waits in the queue.
+# Unset: it waits for as long as the request ahead of it is alive.
+LEASE_WAIT_LIMIT_ENV_VAR = "GAIA_MODEL_LEASE_WAIT_S"
 
 # Supervision handshake (V2-15, #2156). The daemon sets this in a sidecar's
 # environment at spawn so the sidecar knows the daemon owns the clock and gates

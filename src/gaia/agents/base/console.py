@@ -15,6 +15,7 @@ from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.tool_grants import PATH_TOOLS, grant_scope, path_argument
 from gaia.agents.base.tools import get_tool_display_name
+from gaia.llm.surface_hints import surface_wording
 
 logger = logging.getLogger(__name__)
 
@@ -350,6 +351,31 @@ class OutputHandler(ABC):
     edit_roots: Tuple[str, ...] = ()
     """Folders "accept edits" may write into — the session's workspace."""
 
+    grants_paths: bool = False
+    """The user turned on Full access: grant an out-of-scope path without asking.
+
+    Set by ``PermissionState`` with Full access, independent of whether the
+    shell guardrails are lifted. Honoured only with :attr:`answers_confirmations`,
+    so an unattended run that pre-approves tools still never widens the scope.
+    Paths no answer may grant (home, drive roots, secrets) stay refused.
+    """
+
+    answers_confirmations: bool = False
+    """A person can answer a confirmation on this run even while tools are pre-approved.
+
+    Set by a transport whose caller declared someone is watching (the relayed
+    Agent UI). Without :attr:`full_access`, pre-approval never widens the file
+    scope; this lets an out-of-scope path be asked about instead of refused.
+    """
+
+    asks_past_preapproval: bool = False
+    """``confirm_tool_execution`` asks about a call marked ``NEEDS_PERSON_ARG``
+    even while tools are pre-approved, and denies it when nobody can answer.
+
+    A tool marks a call only on a console that declares this, so a console
+    that would pre-approve the marked call never sees one.
+    """
+
     _last_denial: Optional[Denial] = None
     """The most recent denial (#2210).
 
@@ -488,6 +514,10 @@ class OutputHandler(ABC):
         wall clock, which includes tool time and agent overhead.
         """
         ...
+
+    def mark_turn_failed(self) -> None:
+        """The next :meth:`print_final_answer` ends a turn a model failure cut
+        short, so a console can report the turn as failed. Optional — no-op."""
 
     def print_turn_metrics(  # pylint: disable=unused-argument
         self, record: Dict[str, Any]
@@ -1098,6 +1128,9 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                     continue
             return "<non-serializable>"
 
+        if title == "Arguments" and not data:
+            return  # a call with no arguments has nothing to show
+
         if self.rich_available:
             # Check if this is a command execution result
             if "command" in data and "stdout" in data:
@@ -1483,6 +1516,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
         # Handle None error messages
         if error_message is None:
             error_message = "Unknown error occurred (received None)"
+        error_message = surface_wording(str(error_message), "cli")
 
         if self.rich_available:
             self.console.print(
@@ -1778,6 +1812,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
             ttft_seconds: Not used here (CLI stats table is out of scope for #2899)
             tok_per_s: Not used here (CLI stats table is out of scope for #2899)
         """
+        answer = surface_wording(answer, "cli")
         if self.rich_available:
             self.console.print()  # Add newline before
             self.console.print(

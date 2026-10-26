@@ -147,7 +147,7 @@ ps aux | grep "gaia eval" | grep -v grep | wc -l    # must print 0
 
 A regression means fix the prompt and re-run in this same session. If the drop is
 intentional, flag it explicitly for the user — never silently — and replace that category's
-baseline from the next nightly on the Strix Halo pool, never from a local `--save-baseline` run.
+baseline from the next RC's run on the Strix Halo pool, never from a local `--save-baseline` run.
 
 ### 3e. Loop Control
 

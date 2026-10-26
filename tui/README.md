@@ -43,7 +43,7 @@ and a dark GAIA colour scheme). Its Start menu and desktop shortcuts open that
 profile when Windows Terminal is installed. Without Windows Terminal they run
 `gaia-tui` in the default console. Uninstalling removes the profile and the fonts
 it added. See the
-[Terminal Hub guide](https://amd-gaia.ai/docs/guides/terminal-hub#installing) for
+[Terminal UI guide](https://amd-gaia.ai/docs/guides/tui#installing) for
 exactly what it writes.
 
 ### Or download the binary directly
@@ -122,7 +122,7 @@ CLI's job, not the terminal UI's:
 
 ```bash
 gaia hub list                 # what the Agent Hub offers, and what you have
-gaia hub install email --trust
+gaia hub install email
 gaia hub uninstall email
 ```
 

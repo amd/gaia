@@ -75,6 +75,7 @@ def test_lists_with_the_agents_roots_and_excludes_engineering(client, monkeypatc
             "tier": "verified",
             "tools": [],
             "path": "",
+            "always_on": False,
         },
         {
             "name": "zeta",
@@ -83,8 +84,40 @@ def test_lists_with_the_agents_roots_and_excludes_engineering(client, monkeypatc
             "tier": "experimental",
             "tools": ["t1"],
             "path": "/bundled/a/zeta",
+            "always_on": False,
         },
     ]
+
+
+def test_a_manifest_marks_always_on_skills_without_changing_discovery(
+    client, monkeypatch, tmp_path
+):
+    """The manifest, not the skill name or description, determines the badge."""
+    manifest = tmp_path / "gaia-agent.yaml"
+    manifest.write_text("skills:\n  - gaia-voice\n", encoding="utf-8")
+    _fake_agent_module(monkeypatch, [str(tmp_path)])
+    from gaia_agent.agent import GaiaAgent
+
+    GaiaAgent.SKILL_MANIFEST = str(manifest)
+
+    class FakeManager:
+        discovery_errors = {}
+
+        def __init__(self, **_kwargs):
+            pass
+
+        def reload(self):
+            return {
+                "gaia-voice": _skill("gaia-voice"),
+                "normal-skill": _skill("normal-skill"),
+            }
+
+    monkeypatch.setattr(gaia.skills, "SkillManager", FakeManager)
+    resp = client.get("/api/skills")
+    assert resp.status_code == 200, resp.text
+    by_name = {s["name"]: s for s in resp.json()["skills"]}
+    assert by_name["gaia-voice"]["always_on"] is True
+    assert by_name["normal-skill"]["always_on"] is False
 
 
 class _FakeHandle:
@@ -156,7 +189,8 @@ def test_an_agent_too_old_to_list_skills_says_to_update_it(client, monkeypatch):
 
     assert resp.status_code == 503
     detail = resp.json()["detail"]
-    assert "2.17" in detail and "Update the GAIA agent" in detail
+    assert "Update GAIA" in detail
+    assert "2.17" not in detail and "contract" not in detail
     assert "gaia init" not in detail
 
 

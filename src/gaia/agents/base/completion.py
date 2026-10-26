@@ -173,7 +173,15 @@ _ADMITS_UNSAVED = re.compile(
     r"refused|permission)\b",
     re.I,
 )
-_DESTINATION = re.compile(r"\b(?:to|into|in|at|as)\s+", re.I)
+_DESTINATION = re.compile(r"\b(?:to|into|in|at|as)\s+|\s*(?:→|->|=>)\s*", re.I)
+# A path named as where content comes from: "the items from minutes.txt".
+_SOURCE = re.compile(r"\b(?:from|of|using|based on)\s+", re.I)
+# A target named without a path: "in minutes.txt as a markdown file".
+_UNNAMED_TARGET = re.compile(
+    r"^(?:(?:a|an|the|new|separate|another|markdown|text|csv|json)\s+)*"
+    r"(?:file|document|doc|spreadsheet|folder|directory)\b",
+    re.I,
+)
 # Words allowed between a destination preposition and its path.
 _LEAD = re.compile(
     r"^\s*(?:(?:a|an|the|this|that|your|my|new|file|folder|directory|called|named)"
@@ -286,12 +294,52 @@ def destination_paths(text: str, prepositions: re.Pattern = _DESTINATION) -> lis
         if prepositions is not _DESTINATION:
             return []
         return list(dict.fromkeys(_scan_paths(clause, immediate=False)))
-    # The last preposition that names a path: "to clean logs/app.log" names none.
-    for destination in reversed(destinations):
-        paths = _scan_paths(clause[destination.end() :], immediate=True)
-        if paths:
-            return list(dict.fromkeys(paths))
-    return []
+    # Every named output counts: "the tracker as a.xlsx and the email as b.md".
+    hits = [
+        (destination.group().strip().lower(), paths, index)
+        for index, destination in enumerate(destinations)
+        if (paths := _scan_paths(clause[destination.end() :], immediate=True))
+    ]
+    # "the notes in notes.txt as out.md": a place that runs straight into
+    # another target is where the content is read from.
+    kept = [
+        paths
+        for preposition, paths, index in hits
+        if preposition not in {"in", "at"}
+        or not _leads_into_target(clause, destinations, index)
+    ]
+    return list(dict.fromkeys(path for paths in kept for path in paths))
+
+
+def _leads_into_target(clause: str, destinations: list, index: int) -> bool:
+    """Whether only paths sit between *index*'s preposition and another target."""
+    if index + 1 >= len(destinations):
+        return False
+    following = destinations[index + 1]
+    after = clause[following.end() :]
+    if not (_scan_paths(after, immediate=True) or _UNNAMED_TARGET.match(after)):
+        return False  # "in notes.txt in the morning" names no other target
+    between = clause[destinations[index].end() : following.start()]
+    between = between[_LEAD.match(between).end() :]
+    return all(
+        _path_token(match) is not None
+        or match.group().lower().strip(",") in {"and", "or", "file", ""}
+        for match in _TARGET.finditer(between)
+    )
+
+
+def _source_paths(text: str) -> set[str]:
+    """Paths *text* names only as where content comes from ("from minutes.txt").
+
+    A path also named a second time is kept: "the fixed notes.txt to notes.txt".
+    """
+    named = [path for match in _TARGET.finditer(text) if (path := _path_token(match))]
+    return {
+        path
+        for match in _SOURCE.finditer(text)
+        for path in _scan_paths(text[match.end() :], immediate=True)
+        if named.count(path) == 1
+    }
 
 
 def _instructions(query: str):
@@ -335,10 +383,24 @@ def save_obligations(query: str) -> tuple[list[str], bool]:
         file_object = verb in _STORAGE_VERBS | {"write"} and _FILE_OBJECT.search(
             _RELATIVE_CLAUSE.split(tail)[0]
         )
+        sources = _source_paths(tail)
+        found = [path for path in found if path not in sources]
         if found or file_object:
             requested = True
             paths.extend(found)
     return list(dict.fromkeys(paths)), requested
+
+
+def named_outputs(query: str) -> list[str]:
+    """Every file the request asks to produce, including "write out/log.csv".
+
+    Wider than save_obligations, which also demands a readback of each path.
+    """
+    paths = list(save_obligations(query)[0])
+    for verb, tail in _instructions(query):
+        if verb == "write":
+            paths.extend(_scan_paths(tail, True, True))
+    return list(dict.fromkeys(paths))
 
 
 def save_instructed(query: str) -> bool:
@@ -423,6 +485,8 @@ class CompletionEvidence:
         # (ledger sequence, what the run named) for runs that printed something.
         self.summaries: list[tuple[int, str]] = []
         self._exec_started = 0
+        # key -> the path as the write tool reported it, for showing the user.
+        self.written_as: dict[str, str] = {}
 
     def key(self, path: str, root: str | None = None) -> str:
         return _normalize_key(
@@ -565,6 +629,7 @@ class CompletionEvidence:
                 continue
             key = self.key(path, args.get("project_dir"))
             self.removed.discard(key)
+            self.written_as[key] = path
             self.files[key] = FileEvidence(
                 key,
                 self.sequence if successful else 0,
@@ -771,12 +836,15 @@ class CompletionEvidence:
         answer: str,
         claims_file_write: Callable[[str], bool],
         soft: list[str] | None = None,
+        readback: bool = True,
     ) -> list[str]:
         """Missing work that makes the turn incomplete.
 
         With no save asked for, nothing written and no "I/we saved", a save
         claim may be information ("downloads are saved to ~/Downloads"); its
         gap goes to *soft*, worth one correction but never an incomplete turn.
+        ``readback=False`` drops the read-it-back check, for a turn the model
+        call ended before the model could read anything back.
         """
         required = {self.key(path) for path in self.requested}
         # "Save it as notes.md in my Documents folder" names the file, not its
@@ -914,7 +982,7 @@ class CompletionEvidence:
                 "The requested output file has no recorded successful write; an earlier side-effect file does not fulfill that save."
             )
         pathless_save = not required and (self.save_requested or claim_without_path)
-        for item in self.files.values():
+        for item in self.files.values() if readback else ():
             # Requested or claimed outputs need readback; an ordinary edit does not.
             data_output = (
                 pathless_save
@@ -1024,8 +1092,26 @@ class CompletionEvidence:
         return gaps
 
 
+def caveated_answer(answer: str | None, gaps: list[str]) -> str:
+    """Keep the model's answer and name what could not be confirmed after it."""
+    if not answer or not answer.strip():
+        return incomplete_answer(gaps)
+    if all(gap.endswith((_REFUSED, _UNCONFIRMED)) for gap in gaps):
+        return f"{answer.rstrip()}\n\n" + "\n".join(gaps)
+    return f"{answer.rstrip()}\n\nI couldn't confirm all of this:\n\n" + "\n".join(
+        f"- {gap[:1].upper()}{gap[1:]}" for gap in gaps
+    )
+
+
+def saved_before_error(paths: list[str]) -> str:
+    """Name the files a turn saved before a failed model call ended it."""
+    if len(paths) == 1:
+        return f"Saved before the error: `{paths[0]}`."
+    return "Saved before the error:\n\n" + "\n".join(f"- `{p}`" for p in paths)
+
+
 def incomplete_answer(gaps: list[str]) -> str:
-    """Framework-owned result; never repeat the unsupported candidate answer."""
+    """Framework-owned result for a turn that produced no answer to keep."""
     if gaps and all(gap.endswith((_REFUSED, _UNCONFIRMED)) for gap in gaps):
         # Nothing is left to finish: the user's side turned the write down.
         return "\n".join(gaps)

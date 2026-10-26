@@ -14,19 +14,11 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
 
 tkml_version = "5.0.4"
 
-# Standalone AMD production agent wheels (issues #1102, #1179). Each ships as
-# a separate 'gaia-agent-<id>' PyPI package depending on this framework
-# wheel. Deliberately NOT an extras_require entry: this list is read
-# statically by util/list_agent_packages.py (single source of truth for
-# .github/workflows/publish_agents.yml's build/publish matrix and
-# tests/unit/test_agent_pypi_publish.py) without ever being handed to pip's
-# resolver. An extras_require entry naming these packages made 'pip install
-# "amd-gaia[agents]"' unsatisfiable while the wheels are unpublished
-# (publish_agents.yml's publish job is paused), which made the resolver
-# silently downgrade amd-gaia itself to the newest release that didn't
-# declare the extra (#2240) -- see setup.py history / PR fixing #2240 for
-# the incident. Do not move this back into extras_require until the wheels
-# are live on PyPI.
+# Standalone AMD agent wheels ('gaia-agent-<id>'), read statically by
+# util/list_agent_packages.py for build_agent_package.yml and
+# util/publish_agents_to_hub.py. Deliberately NOT an extras_require entry: the
+# wheels are not on PyPI, and an 'amd-gaia[agents]' extra naming them made pip
+# silently downgrade amd-gaia to the newest release without the extra (#2240).
 AGENT_WHEEL_PACKAGES = [
     "gaia-agent-email",
     "gaia-agent-chat",
@@ -66,6 +58,7 @@ setup(
         "gaia.engineering",
         "gaia.eval.bench",
         "gaia.eval.retrieval",
+        "gaia.eval.memory",
         "gaia.eval.code_retrieval",
         "gaia.installer",
         "gaia.hub",
@@ -101,6 +94,7 @@ setup(
         "gaia.skills.audit",
     ],
     package_data={
+        "gaia.eval.memory": ["scenarios/*.yaml"],
         "gaia.eval": [
             "webapp/*.json",
             "webapp/*.js",
@@ -170,7 +164,10 @@ setup(
         # not an extra: a skill's security tier rests on its signature, and a
         # build that cannot verify one would have to either refuse every signed
         # skill or skip the check — neither is acceptable for a base install.
-        "cryptography>=42.0.0",
+        # Intel Macs stay <49: 49+ has no x86_64 macOS wheel and its sdist needs
+        # Rust. Elsewhere it is uncapped, so they keep 49/50's security fixes.
+        "cryptography>=42.0.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+        "cryptography>=42.0.0,<49; sys_platform == 'darwin' and platform_machine == 'x86_64'",
         # gaia.daemon locks the sidecar launch-secret file down with an
         # owner-only NTFS DACL (#2250) — chmod 0600 is inert on Windows. Core,
         # not an extra: without win32security the daemon cannot spawn ANY
@@ -220,7 +217,7 @@ setup(
             # Version specifiers match the standalone "rag" extra.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
-            "pymupdf>=1.24.0",
+            "pymupdf>=1.24.0,<2",
             "pypdf",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
@@ -317,7 +314,9 @@ setup(
             # RAG embeds via Lemonade, not sentence-transformers — do NOT add it.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
-            "pymupdf>=1.24.0",
+            # 2.x ships no macOS x86_64 wheel and its sdist doesn't build. No
+            # platform marker: `gaia init` refuses to evaluate one (install_hints).
+            "pymupdf>=1.24.0,<2",
             "pypdf",
             # Reading AND writing the common office formats. The read half is
             # what RAG needs; the write half is what the document skills need,

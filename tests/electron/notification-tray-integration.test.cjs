@@ -53,7 +53,7 @@ describe("NotificationService + real TrayManager", () => {
     setPlatform("win32");
     electronMock.ipcMain._handlers.clear();
     const win = createMockWindow();
-    tray = new TrayManager(win);
+    tray = new TrayManager(win, { reopenWindow: () => win });
     tray.create();
     apm = new EventEmitter();
     apm._sendJsonRpcRaw = jest.fn();
@@ -72,7 +72,7 @@ describe("NotificationService + real TrayManager", () => {
   test("an agent crash-limit event updates the tray tooltip instead of throwing", () => {
     expect(() => apm.emit("agent-crash-limit", "crashy", 6)).not.toThrow();
     expect(tray.notificationCount).toBe(1);
-    expect(tray.tray._toolTip).toBe("GAIA — 1 unread notification");
+    expect(tray.tray._toolTip).toBe("GAIA — starting · 1 unread notification");
   });
 
   test("a crash loop accumulates the count, and markAllRead clears it", () => {
@@ -80,11 +80,11 @@ describe("NotificationService + real TrayManager", () => {
     apm.emit("status-change", { agentId: "a", status: "stopped", detail: "exit 1" });
     apm.emit("agent-crash-limit", "a", 6);
     expect(tray.notificationCount).toBe(3);
-    expect(tray.tray._toolTip).toBe("GAIA — 3 unread notifications");
+    expect(tray.tray._toolTip).toBe("GAIA — starting · 3 unread notifications");
 
     service.markAllRead();
     expect(tray.notificationCount).toBe(0);
-    expect(tray.tray._toolTip).toBe("GAIA");
+    expect(tray.tray._toolTip).toBe("GAIA — starting");
   });
 });
 

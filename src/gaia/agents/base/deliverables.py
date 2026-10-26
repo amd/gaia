@@ -15,8 +15,9 @@ Evidence is what tools *returned*, never what the call sent: a search that
 echoes its query, a script's own literals, and reading back the file this
 turn wrote prove nothing about where a figure came from.
 
-A finding asks the model to verify or mark the figures; nothing here edits
-the file.
+A finding only reaches the answer's "not confirmed" note. The model is never
+asked to change the file, so a false positive cannot damage a correct
+deliverable, and nothing here edits it.
 """
 
 from __future__ import annotations
@@ -824,6 +825,17 @@ def _holds(corpus: _Corpus, value: _Value) -> bool:
     return any(_rounds_to(n, value) for n in corpus.numbers)
 
 
+#: An amount this large matches a spec's number only by design, not chance.
+_BARE_AMOUNT_MIN = 1e6
+
+
+def _bare_amount_holds(corpus: _Corpus, value: _Value) -> bool:
+    """A source states *value* as a bare number: "293,500,000,000" for "$293.5B"."""
+    return abs(value.number) >= _BARE_AMOUNT_MIN and any(
+        _rounds_to(n, value) for n in corpus.numbers
+    )
+
+
 def _unsupported(
     blocks: Sequence[Block],
     general: _Corpus,
@@ -845,6 +857,7 @@ def _unsupported(
         c.marked
         or _holds(money if c.kind == "money" else general, c.value)
         or (c.alt is not None and _holds(money, c.alt))
+        or (c.kind == "money" and _bare_amount_holds(general, c.value))
         for c in claims
     ]
     plain_known = list(
@@ -942,11 +955,7 @@ def file_findings(
         findings.append(
             Finding(
                 FILE,
-                f"`{name}` has figures no tool result this turn supports: {listed}. "
-                "Show their source with a tool (reading the file back doesn't "
-                "count) and fix the file, or mark them in it as estimates. Keep "
-                "your answer about the work: name any figure still unverified in "
-                "one short line at the end, and don't explain this check.",
+                f"`{name}` has figures no tool result this turn supports: {listed}.",
                 f"`{name}` has figures I found no source for this turn: {listed}",
             )
         )

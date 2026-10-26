@@ -31,7 +31,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import Agent, TurnCancel
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
@@ -698,6 +698,17 @@ def test_cancel_event_path_carries_the_statement(agent):
     assert _scope_line(result["result"]) == SENTINEL
 
 
+def test_a_limit_that_stopped_the_turn_says_why(agent):
+    event = TurnCancel()
+    event.cancel("This turn ran for 75 minutes without progress, so GAIA stopped it.")
+    agent._cancel_event = event
+    _stub_chat(agent, _answer("never reached"))
+    result = _with_sentinel(agent, "do something", max_steps=5)
+    assert result["result"].startswith("This turn ran for 75 minutes without progress")
+    assert "stopped before it finished" not in result["result"]
+    assert _scope_line(result["result"]) == SENTINEL
+
+
 def test_llm_connection_error_path_carries_the_statement(agent):
     _stub_chat(agent, ConnectionError("connection refused"))
     result = _with_sentinel(agent, "hello", max_steps=3)
@@ -720,7 +731,8 @@ def test_generic_llm_error_path_carries_the_statement(agent):
     _stub_chat(agent, RuntimeError("kaboom"))
     with patch.object(_DummyAgent, "_is_loaded_ctx_too_small", return_value=False):
         result = _with_sentinel(agent, "hello", max_steps=3)
-    assert "unexpected problem" in result["result"]
+    assert "The model call failed at step 1" in result["result"]
+    assert "Kaboom." in result["result"]
     assert _scope_line(result["result"]) == SENTINEL
 
 
@@ -830,6 +842,7 @@ def _sse_answer(raw: str) -> str:
     handler._step_count = 0
     handler._tool_count = 0
     handler._turn_metrics = None
+    handler._turn_failed = False
     handler.print_final_answer(raw)
     return captured[0]["content"]
 
@@ -1604,6 +1617,9 @@ def test_real_python_test_runner_output_is_recognized(tmp_path, runner):
         "    def test_arithmetic(self): self.assertEqual(2 + 2, 4)\n",
         encoding="utf-8",
     )
+    # Pin pytest's rootdir here; otherwise it can land on the shared temp
+    # dir and list sibling dirs other parallel tests are deleting.
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     command = [sys.executable, "-m", runner]
     command.extend(
         [str(test_file), "-q"]

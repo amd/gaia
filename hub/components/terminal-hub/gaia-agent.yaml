@@ -1,14 +1,15 @@
-# The Go/Bubble Tea terminal hub — `gaia tui`. Published to the Agent Hub R2
-# catalog as a component (not an agent): it hosts agents rather than being one,
-# so it has no tools, no models, and no agent loop.
+# GAIA Terminal UI — `gaia-tui`, the Go/Bubble Tea terminal app. Published to
+# the Agent Hub R2 catalog as a component (not an agent): it hosts agents rather
+# than being one, so it has no tools, no models, and no agent loop.
 #
 # Version tracks the core GAIA release: the binary is stamped at build time from
 # the release tag (build_tui.yml passes -X …cli.version), and this file is the
 # single source the publish workflow reads. Both are asserted equal in CI.
+# The id keeps its legacy name: published R2 paths are immutable.
 id: terminal-hub
-name: GAIA Terminal Hub
-version: 0.25.0
-description: "Browse, install, and chat with GAIA agents from the terminal"
+name: GAIA Terminal UI
+version: 0.25.1
+description: "Chat with the GAIA agent from your terminal"
 author: AMD
 license: MIT
 

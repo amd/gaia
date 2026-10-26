@@ -36,15 +36,19 @@ from typing import (
     Literal,
     MutableMapping,
     Optional,
+    Sequence,
     Tuple,
     Union,
 )
 
-from gaia.agents.base.call_risk import RISK_NOTE_ARG
+from gaia.agents.base import turn_metrics
+from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, RISK_NOTE_ARG, SHELL_TOOLS
 from gaia.agents.base.completion import (
     CompletionEvidence,
+    caveated_answer,
     incomplete_answer,
     mentioned_paths,
+    saved_before_error,
 )
 from gaia.agents.base.console import (
     AgentConsole,
@@ -62,7 +66,10 @@ from gaia.agents.base.context_eviction import (
     evict_keep_from_env,
     evict_min_batch_from_env,
     evict_threshold_from_env,
+    overflow_numbers,
+    request_tokens,
     resolve_context_eviction,
+    shrink_for_overflow,
 )
 from gaia.agents.base.deliverables import (
     DELIVERABLE_SUFFIXES,
@@ -105,6 +112,8 @@ from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
     SCRATCH_ARG,
+    command_reaches_folder,
+    is_inside_folder,
 )
 from gaia.agents.base.tool_markup import (
     MalformedToolMarkup,
@@ -143,7 +152,9 @@ from gaia.agents.base.verification import (
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.llm.lemonade_client import (
+    RECONNECTING_MESSAGE,
     budget_for_ctx,
     is_context_overflow_error,
     resolve_default_chat_model,
@@ -161,6 +172,7 @@ from gaia.llm.retry import (
     model_retry_notices,
     retry_state_of,
 )
+from gaia.utils import awake_clock
 from gaia.utils.json_string import extract_json_string_field
 from gaia.utils.power import stay_awake
 from gaia.utils.terminal import stdin_is_interactive
@@ -225,6 +237,22 @@ LOCAL_MAX_OUTPUT_TOKENS = 8192
 # A cloud reasoning model spends output tokens on thinking too; its window is
 # the provider's, not local hardware's.
 CLOUD_MAX_OUTPUT_TOKENS = 32768
+# Share of a local window one reply may take: 8K of 32K, 16K of 64K.
+LOCAL_OUTPUT_CTX_FRACTION = 4
+
+
+def local_max_output_tokens(ctx_size: int) -> int:
+    """Output cap for a local model loaded with a *ctx_size*-token window.
+
+    A quarter of the window, never above the cloud cap, so a big script fits in
+    one reply when the window has room. Never below the 32K-window cap either,
+    except that a window under 16K gives half of itself, so the reply cannot
+    take the whole window and leave nothing for the prompt and history.
+    """
+    floor = min(LOCAL_MAX_OUTPUT_TOKENS, ctx_size // 2)
+    return max(
+        floor, min(CLOUD_MAX_OUTPUT_TOKENS, ctx_size // LOCAL_OUTPUT_CTX_FRACTION)
+    )
 
 
 def _skill_prompt_body(agent, skill) -> str:
@@ -512,17 +540,39 @@ def _trace_includes_schema_text() -> bool:
 class ToolCallTruncated(ValueError):
     """A native tool call ran past the output-token cap mid-arguments."""
 
-    def __init__(self, model_id: str, cap: int):
+    def __init__(self, model_id: str, cap: int, tools: Sequence[str] = ()):
         self.cap = cap
+        self.tools = tuple(tools)
         super().__init__(
             f"Tool call truncated mid-arguments (finish_reason=length). Model "
             f"{model_id} ran out of output tokens before finishing the call "
-            f"({cap} max) — pass a larger max_output_tokens to the agent."
+            f"({cap} max). Write long content in smaller parts across several "
+            "calls, or pass a larger max_output_tokens to the agent."
         )
 
 
+class TurnCancel(threading.Event):
+    """A turn's cancel signal that can say why the turn was stopped.
+
+    ``message`` is the answer the turn ends with when it stops at a step
+    boundary. ``None`` means a plain stop (the user's Stop, a disconnect).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.message: Optional[str] = None
+
+    def cancel(self, message: str) -> None:
+        """Stop the turn and end it with *message*."""
+        self.message = message
+        self.set()
+
+
 class _UserWaitClock:
-    """Time a tool body spends blocked on the user, which its timeout excludes."""
+    """Time a tool body spends blocked on the user, which its timeout excludes.
+
+    Read on the same awake clock as the tool's timeout.
+    """
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -531,15 +581,15 @@ class _UserWaitClock:
 
     def begin(self) -> None:
         with self._lock:
-            self._open.append(time.monotonic())
+            self._open.append(awake_clock.monotonic())
 
     def end(self) -> None:
         with self._lock:
-            self._done += time.monotonic() - self._open.pop()
+            self._done += awake_clock.monotonic() - self._open.pop()
 
     def waited(self) -> float:
         """Seconds waited so far, including a question still on screen."""
-        now = time.monotonic()
+        now = awake_clock.monotonic()
         with self._lock:
             return self._done + sum(now - started for started in self._open)
 
@@ -777,10 +827,28 @@ _REPEATED_CALL_ANSWER_PROMPT = (
     "results above show: what you completed, what you could not confirm, and "
     "what the user should do next."
 )
+_FAILED_CALL_ANSWER_PROMPT = (
+    "`{tool}` failed {count} times in a row, so stop calling tools and answer "
+    "now from what the results above show: what you completed, what that "
+    "failure kept you from doing, and what the user should do next. The "
+    "failure itself is reported after your answer; don't repeat it."
+)
+
+# Added when the closing reply called a tool anyway and is asked again, tools gone.
+_NO_TOOLS_RETRY_NOTE = (
+    "Tools are no longer available. Reply with your final answer as plain "
+    "text only, using what the results above already show."
+)
+
+
+class _NotAnAnswer(ValueError):
+    """The closing reply came back, but it was a tool call or nothing."""
+
 
 # Stands in for a call the loop stopped before it ran, so the transcript
 # accounts for every id the model asked for.
 _UNRUN_TOOL_CALL_NOTE = "Not run — the turn stopped before this call."
+_REPEAT_NOT_RUN_NOTE = "Not run — the same call was just repeated."
 
 #: Longest repeating cycle of calls the loop guard recognises (A, B, A, B, …).
 _MAX_LOOP_PERIOD = 3
@@ -1131,9 +1199,9 @@ _SINGLE_TOOL_DONE_SUFFIX = (
 )
 
 # Test-claim guard: an answer reporting a pass count the turn never produced.
-# One correction — a second disagreement is better than a loop, and the
-# verification footer states the truth either way.
-_MAX_TEST_CLAIM_CORRECTIONS = 1
+# A rewritten answer can make a new false claim, so it gets a second
+# correction; the same claim repeated is a disagreement, kept with a caveat.
+_MAX_TEST_CLAIM_CORRECTIONS = 2
 _THINK_BLOCK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 # Anchored: only a reply that *opens* with an unclosed block was cut off
 # mid-thought. A `<think>` mentioned mid-sentence is prose, and treating it as
@@ -1352,6 +1420,38 @@ def _with_answer_beside_tool_calls(answer: str, beside: Optional[str]) -> str:
     return f"{beside}\n\n{answer.strip()}" if answer.strip() else beside
 
 
+_GIVE_ANSWER_AGAIN = (
+    "Then give your complete answer again: it replaces the one above, which "
+    "the user will not see."
+)
+
+
+#: A reply that opens by retracting what came before: putting the earlier
+#: answer back would show the user the wrong version first.
+_RETRACTION = re.compile(
+    r"^\W*(?:actually|correction|sorry|apologies|my (?:mistake|apologies)|"
+    r"i was wrong|i misread|i misstated|i made a mistake|to correct|"
+    r"on (?:closer|second) (?:look|inspection|reading))\b",
+    re.IGNORECASE,
+)
+
+
+def _with_replaced_answer(reply: str, replaced: str) -> Optional[str]:
+    """*replaced* followed by *reply*, when *reply* is only an acknowledgement.
+
+    After a correction a model often answers the correction ("All 55 lines
+    match what was written") instead of the user, and that line would become
+    the whole answer. ``None`` when *reply* stands on its own, or when it
+    retracts the earlier answer ("Actually the file has three owners").
+    """
+    reply, replaced = reply.strip(), replaced.strip()
+    if not replaced or replaced in reply or len(reply) * 3 >= len(replaced):
+        return None
+    if _RETRACTION.search(reply):
+        return None
+    return f"{replaced}\n\n{reply}" if reply else replaced
+
+
 #: Any one of these lets the agent look at a file the request names.
 _LOOK_TOOLS = ("read_file", "browse_directory", "search_file", "find_files")
 
@@ -1509,6 +1609,13 @@ _PLACEHOLDER_MARKERS = frozenset(
 _PLACEHOLDER_LITERALS = frozenset(
     {"todo", "tbd", "...", "…", "placeholder", "fill in", "fill_in"}
 )
+# A note to fill the content in later, standing where the content belongs.
+_PLACEHOLDER_PHRASE = re.compile(
+    r"\[?(?:(?:todo|tbd|fixme)\s*[:\-]?\s*)?(?:(?:please\s+)?fill(?:\s+(?:this|me|it))?"
+    r"\s+in(?:\s+later)?|add\s+(?:the\s+)?content(?:\s+here)?|(?:your\s+|insert\s+)?"
+    r"content\s+(?:goes\s+)?here)\]?[.!]?",
+    re.I,
+)
 _CONTENT_ARG_NAMES = frozenset(
     {
         "content",
@@ -1551,11 +1658,127 @@ def _placeholder_value(name: str, value: str) -> bool:
         return True
     if _ANGLE_PLACEHOLDER.fullmatch(text) or _UNRESOLVED_PLAN_REF.match(text):
         return True
+    if name.lower() in _CONTENT_ARG_NAMES and _PLACEHOLDER_PHRASE.fullmatch(text):
+        return True
     if _PLACEHOLDER_TOKEN.fullmatch(text):
         return name.lower() in _CONTENT_ARG_NAMES or any(
             part in _PLACEHOLDER_MARKERS for part in text.split("_")
         )
     return False
+
+
+_EMPTY_WORD = re.compile(r"\b(?:empty|blank|touch)\b", re.I)
+_NAME_TOKEN = re.compile(r"`([^`\n]+)`|\"([^\"\n]+)\"|'([^'\n]+)'|([^\s`\"'<>(),;]+)")
+# Words that may sit between "empty" and the file it describes.
+_EMPTY_LEAD_WORDS = frozenset(
+    {"a", "an", "the", "new", "file", "files", "called", "named", "text", "and", "or"}
+)
+# "notes.txt (empty)", "notes.txt, empty", "leave notes.txt blank".
+_EMPTY_AFTER = re.compile(r"^\s*[(,:—-]?\s*$")
+# "Is notes.txt empty?", "don't leave it blank": the file is not to be empty.
+_EMPTY_NOT_ASKED = re.compile(
+    r"\b(?:not|don't|do not|never|no longer|if|whether|is|are|was)\b", re.I
+)
+# "Fill the empty notes.txt with the summary": the file is to get content.
+_FILLS_IT = re.compile(
+    r"\b(?:fill|populate|put|append|insert|update|replace|overwrite|paste)\b|"
+    r"\badd\b.*\bto\b",
+    re.I,
+)
+_WITH_CONTENT = re.compile(r"^\s*(?:file\s+)?with\s+(?!nothing\b|no\b)", re.I)
+_CLAUSE_BREAK = re.compile(r",|\b(?:and|then)\b", re.I)
+# "Create notes.txt. It should be empty."
+_IT_STAYS_EMPTY = re.compile(
+    r"^\s*(?:it|the file|that file)\s+(?:should|must|can|will|needs to)\s+"
+    r"(?:be|stay|remain)\s+(?:empty|blank)\b",
+    re.I,
+)
+# "Create a blank notes.txt, then write the summary to it": content comes later.
+_FILLED_LATER = re.compile(
+    r"\b(?:write|save|put|add|copy|append|paste|insert)\b[^.;\n]*?\b(?:to|into|in)\s+"
+    r"(?:it|that file|the file|this file)\b|"
+    r"\b(?:fill|populate|update)\s+(?:it|that file|the file|this file)\b",
+    re.I,
+)
+
+
+def _base_name(path: str) -> str:
+    return os.path.basename(path.replace("\\", "/").rstrip("/")).casefold()
+
+
+def _names_in(text: str) -> List[str]:
+    return [
+        _base_name(next(g for g in m.groups() if g is not None).strip(".:!?"))
+        for m in _NAME_TOKEN.finditer(text)
+    ]
+
+
+def _filled_later(request: str, name: str) -> bool:
+    """Whether *request* also asks for content to go into the file."""
+    named_target = re.compile(
+        r"\b(?:write|save|put|add|append|copy|paste)\b[^.;\n]*?\b(?:to|into|in)\s+"
+        r"(?:the\s+)?[`\"']?(?:[^\s`\"']*[/\\])?" + re.escape(name) + r"(?![\w.])",
+        re.I,
+    )
+    return bool(_FILLED_LATER.search(request) or named_target.search(request))
+
+
+def _requested_empty(file_path: Any, request: Optional[str]) -> bool:
+    """Whether *request* asks for *file_path* itself to be empty or blank."""
+    if not isinstance(file_path, str) or not request:
+        return False
+    name = _base_name(file_path)
+    if _filled_later(request, name):
+        return False
+    sentences = re.split(r"(?<=[.!?])\s+|\n|;", request)
+    for index, sentence in enumerate(sentences):
+        if _asks_empty(sentence, name):
+            return True
+        if index and _IT_STAYS_EMPTY.match(sentence):
+            named = [n for n in _names_in(sentences[index - 1]) if "." in n]
+            if named == [name]:
+                return True
+    return False
+
+
+def _asks_empty(sentence: str, name: str) -> bool:
+    """Whether *sentence* itself asks for the file *name* to be empty."""
+    empties = list(_EMPTY_WORD.finditer(sentence))
+    if not empties or sentence.rstrip().endswith("?"):
+        return False
+    for mention in _NAME_TOKEN.finditer(sentence):
+        token = next(g for g in mention.groups() if g is not None)
+        if _base_name(token.strip(".:!?")) != name:
+            continue
+        if _WITH_CONTENT.match(sentence[mention.end() :]):
+            continue
+        for word in empties:
+            first, last = sorted((word, mention), key=lambda m: m.start())
+            breaks = list(_CLAUSE_BREAK.finditer(sentence, 0, first.start()))
+            clause = sentence[breaks[-1].end() if breaks else 0 : last.end()]
+            if _EMPTY_NOT_ASKED.search(clause) or _FILLS_IT.search(clause):
+                continue
+            if word.end() <= mention.start():
+                if _only_names_between(sentence[word.end() : mention.start()]):
+                    return True
+            elif _EMPTY_AFTER.match(sentence[mention.end() : word.start()]):
+                return True
+    return False
+
+
+def _only_names_between(text: str) -> bool:
+    """True when *text* lists file names, not a second thing to write."""
+    seen_name = False
+    for match in _NAME_TOKEN.finditer(text):
+        word = match.group().casefold()
+        if "." in word.strip(".") or "/" in word or "\\" in word:
+            seen_name = True
+        elif word in {"and", "or", "called", "named"}:
+            continue
+        elif seen_name or word not in _EMPTY_LEAD_WORDS:
+            # "an empty a.txt and a b.md with ...": b.md is a new object.
+            return False
+    return True
 
 
 def _empty_by_design(file_path: Any) -> bool:
@@ -1564,19 +1787,23 @@ def _empty_by_design(file_path: Any) -> bool:
     return os.path.basename(file_path.replace("\\", "/")) in EMPTY_BY_DESIGN_FILES
 
 
-def _write_stand_in(tool_name: str, tool_args: Any) -> Optional[Tuple[str, Any]]:
+def _write_stand_in(
+    tool_name: str, tool_args: Any, request: Optional[str] = None
+) -> Optional[Tuple[str, Any]]:
     """``(arg, value)`` when a file write would put a stand-in on disk, else None.
 
     The whole content must be the stand-in: a document that merely contains
     "TODO" or "<placeholder>" is real content. Empty content is a stand-in
-    except for :data:`EMPTY_BY_DESIGN_FILES`.
+    unless the file is in :data:`EMPTY_BY_DESIGN_FILES` or *request* (the
+    user's message) asked for that file to be empty.
     """
     if not isinstance(tool_args, dict):
         return None
     if tool_name in _WHOLE_FILE_WRITE_TOOLS and "content" in tool_args:
         content = tool_args["content"]
         if content is None or (isinstance(content, str) and not content.strip()):
-            if _empty_by_design(tool_args.get("file_path")):
+            file_path = tool_args.get("file_path")
+            if _empty_by_design(file_path) or _requested_empty(file_path, request):
                 return None
             return "content", content
         if isinstance(content, str) and _placeholder_value("content", content):
@@ -1589,7 +1816,7 @@ def _write_stand_in(tool_name: str, tool_args: Any) -> Optional[Tuple[str, Any]]
 
 
 def _plan_step_placeholder(
-    tool_name: str, tool_args: Any, _path: str = ""
+    tool_name: str, tool_args: Any, _path: str = "", request: Optional[str] = None
 ) -> Optional[Tuple[str, Any]]:
     """Return ``(arg, value)`` for the first stand-in value in a plan step's args.
 
@@ -1600,7 +1827,7 @@ def _plan_step_placeholder(
     if not _path and isinstance(tool_args, dict):
         if tool_name in _WHOLE_FILE_WRITE_TOOLS and "content" not in tool_args:
             return "content", None
-        found = _write_stand_in(tool_name, tool_args)
+        found = _write_stand_in(tool_name, tool_args, request)
         if found is not None:
             return found
     if isinstance(tool_args, dict):
@@ -1687,6 +1914,90 @@ def parse_skill_manifest(path: Optional[Path]) -> "SkillSets":
     return parse_skill_sets(data, where=f" in {path}")
 
 
+def _with_resolved_target(prompt_args: Any, preflight: Any) -> Any:
+    """*prompt_args* with ``file_path`` as the absolute path the tool will write.
+
+    The tool's pre-flight carries ``target_of``, the same resolution the tool
+    body uses, so ``notes.txt`` is shown as the folder it actually lands in.
+    """
+    target_of = getattr(preflight, "target_of", None)
+    if (
+        not callable(target_of)
+        or not isinstance(prompt_args, dict)
+        or not isinstance(prompt_args.get("file_path"), str)
+    ):
+        return prompt_args
+    try:
+        # Relative to this process's cwd, as the tool body opens it at write time.
+        target = os.path.abspath(str(target_of(prompt_args)))
+    except (KeyError, TypeError, ValueError, OSError) as e:
+        # Malformed arguments: the tool body reports them; the prompt shows them as sent.
+        logger.debug("could not resolve the prompt's file_path: %s", e)
+        return prompt_args
+    if target == prompt_args["file_path"]:
+        return prompt_args
+    return {**prompt_args, "file_path": target}
+
+
+def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
+    """The scratch folder when this call runs code that may sit in it, else "".
+
+    A Python file there, or one handed a scratch path as an argument; a
+    shell line run there or naming a path there.
+    """
+    if not isinstance(prompt_args, dict):
+        return ""
+    reader = getattr(agent, "_read_validator", None)
+    scratch = getattr(reader() if callable(reader) else None, "scratch_dir", None)
+    if not scratch:
+        return ""
+    scratch = str(scratch)
+    if tool_name == "execute_python_file":
+        target = edit_target(prompt_args)
+        if is_inside_folder(target, scratch):
+            return scratch
+        args = prompt_args.get("args")
+        if isinstance(args, str) and args.strip():
+            bases = [os.getcwd()]
+            if target:
+                bases.append(os.path.dirname(os.path.abspath(target)))
+            project = getattr(agent, "_script_project_root", None)
+            root = project() if callable(project) else None
+            if root:
+                bases.append(str(root))
+            if command_reaches_folder(args, bases, scratch):
+                return scratch
+        return ""
+    if tool_name in SHELL_TOOLS:
+        command = prompt_args.get("command")
+        if not isinstance(command, str):
+            return ""
+        bases = [os.getcwd()]
+        session = getattr(agent, "_shell_session", None)
+        if session is not None and not getattr(session, "closed", True):
+            bases.append(str(session.cwd))
+        folder = prompt_args.get("working_directory")
+        if isinstance(folder, str) and folder:
+            # Resolved as the shell tool resolves it: against the process cwd.
+            bases = [os.path.join(os.getcwd(), folder)]
+        if command_reaches_folder(command, bases, scratch):
+            return scratch
+    return ""
+
+
+# A sentence break: ". " before a capital, not inside "e.g. " / "i.e. ".
+_SENTENCE_BREAK_RE = re.compile(r"(?<!e\.g)(?<!i\.e)\.\s+(?=[A-Z])")
+
+
+def _split_cause_and_advice(message: str) -> Tuple[str, Optional[str]]:
+    """Split a provider's error message into what happened and what to do."""
+    text = message.strip()
+    match = _SENTENCE_BREAK_RE.search(text)
+    if match is None:
+        return text, None
+    return text[: match.start()], text[match.end() :].strip() or None
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -1741,6 +2052,15 @@ class Agent(abc.ABC):
     # Per-turn performance record, live only for the duration of one turn and
     # only when GAIA_TURN_LOG is set. ``None`` is the off state everywhere.
     _turn_recorder: Optional[Any] = None
+    # The sealed recorder, kept until process_query returns so post-answer
+    # work (memory writes) is timed too.
+    _sealed_turn_recorder: Optional[Any] = None
+    # The thread's recorder before this turn's, restored when it ends, so a
+    # nested turn does not cut off the one around it.
+    _outer_turn_recorder: Optional[Any] = None
+    # (name, start, end) perf_counter spans a mixin timed before the turn
+    # opened — e.g. memory recall — folded into the next record.
+    _pre_turn_spans: Optional[List[Any]] = None
     # Per-step timing for the running turn (always on); ``None`` between turns.
     _step_timer: Optional[StepTimer] = None
 
@@ -1823,6 +2143,9 @@ class Agent(abc.ABC):
     # the model's next response as the final answer.  Designed for action-only
     # agents (e.g. the OEM MCP) that execute exactly one tool per user request.
     single_tool_per_turn: bool = False
+
+    # Set by a host (the Agent UI's session panel); checked on every tool call.
+    internet_off: bool = False
 
     # T-X2 (issue #915): declarative external-OAuth scope requirement.
     # Subclasses override this to declare which provider+scopes their tool
@@ -2079,6 +2402,8 @@ Do NOT wrap conversational replies in JSON.
             "request_retries": 0,
             "step_retries": 0,
             "unreachable": False,
+            # The turn ended because a model call failed (any cause).
+            "failed": False,
         }
         # Earlier turns' user and tool text, for the grounding checks.
         self._grounding_history = ""
@@ -2132,6 +2457,8 @@ Do NOT wrap conversational replies in JSON.
         self._followup_queue: Optional["queue.Queue[str]"] = None
         # Effects the user declined this turn; reset per turn (#4447).
         self._denied_effects = DeniedEffects()
+        # (turn, path) for each access prompt declined or left unanswered.
+        self._refused_paths: List[Tuple[int, Path]] = []
 
         # Resolve the same endpoint as TUI setup, including an isolated runtime.
         from gaia.llm.lemonade_client import resolve_lemonade_base_url
@@ -2145,6 +2472,7 @@ Do NOT wrap conversational replies in JSON.
         if not (use_claude or skip_lemonade):
             from gaia.llm.lemonade_client import (
                 LemonadeClient,
+                LemonadeUnresponsiveError,
                 cloud_model_provider,
                 resolve_ctx_size,
             )
@@ -2156,7 +2484,10 @@ Do NOT wrap conversational replies in JSON.
 
             if cloud_model_provider(model_id):
                 # The local manager preloads a chat model even on an idle server.
-                LemonadeClient(base_url=base_url, verbose=False).health_check()
+                try:
+                    LemonadeClient(base_url=base_url, verbose=False).health_check()
+                except LemonadeUnresponsiveError:
+                    LemonadeManager.report_busy(base_url, quiet=silent_mode)
             else:
                 # Unpinned, the manager checks the device profile's floor. This
                 # model's own (possibly memory-sized) window is applied when it
@@ -2282,6 +2613,8 @@ Do NOT wrap conversational replies in JSON.
         )
         # Set by the step head when a batch fires; the step's stats record takes it.
         self._pending_eviction: Optional[Dict[str, int]] = None
+        # What the last overflow shrink put away.
+        self._last_overflow_items: List[Dict[str, Any]] = []
 
         chat_config = AgentConfig(
             model=model_id or resolve_default_chat_model(),
@@ -2320,14 +2653,18 @@ Do NOT wrap conversational replies in JSON.
         switch mid-session takes effect."""
         if self.max_output_tokens is not None:
             return self.max_output_tokens
+        from gaia.agents.base.history import context_window
         from gaia.llm.lemonade_client import LemonadeClient
 
         backend = getattr(getattr(self.chat, "llm_client", None), "_backend", None)
-        if isinstance(backend, LemonadeClient) and backend.cloud_model_provider(
-            self.chat.effective_model
-        ):
+        if not isinstance(backend, LemonadeClient):
+            return LOCAL_MAX_OUTPUT_TOKENS
+        if backend.cloud_model_provider(self.chat.effective_model):
             return CLOUD_MAX_OUTPUT_TOKENS
-        return LOCAL_MAX_OUTPUT_TOKENS
+        # The same window history budgets against, re-read each call: the user
+        # may pick another size, or a client may pin it. Its sizing is cached
+        # per process in lemonade_client, so this does not re-probe Lemonade.
+        return local_max_output_tokens(context_window(self))
 
     def _get_mixin_prompts(self) -> list[str]:
         """
@@ -2472,6 +2809,8 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.agents.base.turn_metrics import TurnRecorder, turn_log_path
 
+        pre_spans = self._pre_turn_spans or []
+        self._pre_turn_spans = None
         if turn_log_path() is None:
             return None
         try:
@@ -2488,10 +2827,21 @@ Do NOT wrap conversational replies in JSON.
                 ),
                 skills_active=sorted(getattr(self, "loaded_skills", {}) or {}),
                 history_messages=len(getattr(self, "conversation_history", []) or []),
+                started=min((t0 for _, t0, _ in pre_spans), default=None),
+                prompt_fragments={
+                    origin: len(text)
+                    for text, origin in (self._mixin_prompt_origins or {}).items()
+                    # A subclass may filter a fragment out of the final prompt.
+                    if text in self.system_prompt
+                },
             )
+            for name, t0, t1 in pre_spans:
+                recorder.add_span(name, t0, t1, {})
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
             logger.warning("could not start turn record: %s", e)
             return None
+        self._outer_turn_recorder = turn_metrics.current()
+        turn_metrics.activate(recorder)
         chat = getattr(self, "chat", None)
         if chat is not None:
             chat.turn_recorder = recorder
@@ -2513,6 +2863,7 @@ Do NOT wrap conversational replies in JSON.
         self._turn_recorder = None
         if recorder is None:
             return None
+        self._sealed_turn_recorder = recorder
         try:
             record = recorder.finish(answer=answer or "", steps=steps_taken)
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
@@ -2522,6 +2873,31 @@ Do NOT wrap conversational replies in JSON.
 
         logger.info("[turn] %s", format_summary(record))
         return record
+
+    def _record_step_stats(
+        self,
+        response_stats: Optional[Dict[str, Any]],
+        step: int,
+        step_timer: StepTimer,
+        conversation: List[Dict[str, Any]],
+    ) -> None:
+        """Append this step's backend stats, timed by *step_timer*, to the trace."""
+        perf_stats = response_stats or self.chat.get_stats()
+        # A step whose backend reported no stats still took model time.
+        if not (perf_stats or step_timer.has_llm_calls()):
+            return
+        stats_record = {
+            "type": "stats",
+            "step": step,
+            "performance_stats": perf_stats or {},
+        }
+        step_timer.attach(stats_record)
+        if self._pending_eviction is not None:
+            stats_record.update(self._pending_eviction)
+            self._pending_eviction = None
+        if self._context_evictor is not None:
+            self._context_evictor.note_prompt_tokens(perf_stats)
+        conversation.append({"role": "system", "content": stats_record})
 
     def _attach_step_timer(self) -> StepTimer:
         """Start this turn's step timer and route the SDK's call timings to it."""
@@ -2554,6 +2930,16 @@ Do NOT wrap conversational replies in JSON.
             hook(record)
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
             logger.warning("console rejected turn metrics: %s", e)
+
+    def _announce_turn_failed(self) -> None:
+        """Tell the console the answer about to print ends a failed turn.
+
+        Optional hook, like ``print_turn_metrics``: a console that does not
+        define ``mark_turn_failed`` still prints the answer, just unmarked.
+        """
+        hook = getattr(self.console, "mark_turn_failed", None)
+        if hook is not None:
+            hook()
 
     def _uses_native_tool_calls(self) -> bool:
         """True when this agent's backend takes tools via ``tools=``.
@@ -2724,6 +3110,26 @@ Do NOT wrap conversational replies in JSON.
             in getattr(getattr(skills[name], "gaia", None), "tools_required", ())
         )
 
+    def _activate_extraction_skills(self, just_loaded=False):
+        """Apply a loaded extraction skill now, so load_skill reports its tools."""
+        ledger = getattr(self, "_extraction_ledger", None)
+        if ledger is None:
+            return
+        ledger.activate_skill(
+            self._extraction_skill_instructions(ledger.query, just_loaded)
+        )
+        self._offer_extraction_tools()
+
+    def _offer_extraction_tools(self):
+        ledger = getattr(self, "_extraction_ledger", None)
+        if (
+            ledger is not None
+            and ledger.offered
+            and "extract_document_items" not in self._tools_registry
+        ):
+            self._register_extraction_tool()
+            self._apply_tool_filter(self._active_tool_filter)
+
     def _read_validator(self):
         """The agent's file read boundary, or None when it has none."""
         validator = getattr(self, "path_validator", None)
@@ -2744,12 +3150,31 @@ Do NOT wrap conversational replies in JSON.
         if getattr(console, "full_access", False):
             logger.warning("Full access is on: granting %s without asking", path)
             return True
+        watched = getattr(console, "answers_confirmations", False) is True
+        if watched and getattr(console, "grants_paths", False) is True:
+            logger.warning(
+                "Full access is on for this chat: granting %s without asking", path
+            )
+            return True
         auto_approves = getattr(console, "auto_approve_confirmations_enabled", None)
-        if callable(auto_approves) and auto_approves():
+        if callable(auto_approves) and auto_approves() and not watched:
             logger.warning(
                 "Not granting %s: tools are pre-approved, nobody asked", path
             )
             return False
+        # One prompt per path per turn: a user who stepped away is not asked
+        # again, and made to wait out the timeout again, for what is inside it.
+        turn = self._turn_seq
+        refused = self._refused_paths
+        target = Path(path).resolve()
+        for seen_turn, denied in refused:
+            if seen_turn == turn and (target == denied or denied in target.parents):
+                logger.info(
+                    "Not asking again this turn about %s (%s was declined)",
+                    target,
+                    denied,
+                )
+                return False
         args = {"path": str(path)}
         # Lets the prompt say "file" or "folder" instead of a catch-all.
         if path.is_dir():
@@ -2761,10 +3186,13 @@ Do NOT wrap conversational replies in JSON.
         if clock is not None:
             clock.begin()
         try:
-            return (
+            granted = (
                 self.console.confirm_tool_execution(PATH_ACCESS_PROMPT_TOOL, args)
                 is True
             )
+            if not granted:
+                refused.append((turn, target))
+            return granted
         finally:
             if clock is not None:
                 clock.end()
@@ -2886,7 +3314,7 @@ Do NOT wrap conversational replies in JSON.
                 validator = self._read_validator()
                 return ledger.run(
                     file_path,
-                    lambda path: read_snapshot(path, validator),
+                    lambda path: read_snapshot(path, validator, prompt_user=True),
                     ask,
                     check,
                     fields,
@@ -3142,7 +3570,7 @@ Do NOT wrap conversational replies in JSON.
         (``system_prompt`` and ``_openai_tools``) read these live.
         """
         extraction = getattr(self, "_extraction_ledger", None)
-        if extraction is not None and extraction.enabled and new_filter is not None:
+        if extraction is not None and extraction.offered and new_filter is not None:
             new_filter = list(
                 dict.fromkeys(
                     [*new_filter, "extract_document_items", "save_extracted_items"]
@@ -4168,6 +4596,8 @@ Do NOT wrap conversational replies in JSON.
                     self.console.report_phase(
                         "downloading_model", f"Downloading {model}"
                     )
+                elif state == "reconnecting":
+                    self.console.report_phase("reconnecting", RECONNECTING_MESSAGE)
                 else:
                     self.console.report_phase(
                         "loading_model", f"Loading {model} into memory"
@@ -4199,7 +4629,8 @@ Do NOT wrap conversational replies in JSON.
             prompt = (
                 f"Your last tool call was cut off at the {reason.cap}-token output "
                 "limit before its arguments were finished, so nothing ran. Send "
-                "much shorter arguments."
+                "much shorter arguments: split the work into parts that each fit "
+                "well under the limit, and do them in several calls."
             )
             # write_file replaces the whole file, so a long file is built with edits.
             if "edit_file" in self._tools_registry:
@@ -4208,6 +4639,13 @@ Do NOT wrap conversational replies in JSON.
                     "old_content and new_content, never the whole file; to create "
                     "a long file, write_file a short first part, then add the rest "
                     "with edit_file in small pieces."
+                )
+            if "run_python" in reason.tools:
+                prompt += (
+                    " For run_python, do not send one big script: build the file "
+                    "in steps, one run_python call per part (e.g. one sheet or a "
+                    "few slides), each opening the file the previous call saved, "
+                    "adding its part and saving it again."
                 )
             return prompt
         if isinstance(reason, MalformedToolMarkup):
@@ -4883,6 +5321,10 @@ Do NOT wrap conversational replies in JSON.
                     prop["description"] = desc
                 if param_info.get("enum"):
                     prop["enum"] = list(param_info["enum"])
+                if prop["type"] == "array":
+                    # gpt-oss's chat template reads ``items`` on every array;
+                    # without it Lemonade answers every request with HTTP 500.
+                    prop["items"] = dict(param_info.get("items") or {})
                 properties[param_name] = prop
                 if param_info.get("required", True):
                     required.append(param_name)
@@ -4903,6 +5345,22 @@ Do NOT wrap conversational replies in JSON.
         return schemas
 
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
+        """Decode a reply and reject tool arguments that cannot be executed."""
+        parsed = self._decode_llm_response(response)
+        calls = parsed.get("tool_calls") or (
+            [{"name": parsed["tool"], "tool_args": parsed.get("tool_args", {})}]
+            if parsed.get("tool")
+            else []
+        )
+        for call in calls:
+            if not isinstance(call["tool_args"], dict):
+                raise ValueError(
+                    f"Malformed tool_call arguments for '{call['name']}': expected "
+                    f"a JSON object, got {type(call['tool_args']).__name__}."
+                )
+        return parsed
+
+    def _decode_llm_response(self, response: str) -> Dict[str, Any]:
         """
         Parse the LLM response to extract tool calls or conversational answers.
 
@@ -5012,7 +5470,15 @@ Do NOT wrap conversational replies in JSON.
                 # ``max_output_tokens`` (or, for one-off long tool calls,
                 # asking the model to pick a single value rather than
                 # concatenating).
-                raise ToolCallTruncated(self.model_id, self._max_output_tokens())
+                raise ToolCallTruncated(
+                    self.model_id,
+                    self._max_output_tokens(),
+                    [
+                        (tc.get("function") or {}).get("name", "")
+                        for tc in raw_tool_calls
+                        if isinstance(tc, dict)
+                    ],
+                )
             if not raw_tool_calls:
                 raise ValueError(
                     "Native tool_calls envelope contained an empty tool_calls list."
@@ -5322,7 +5788,9 @@ Do NOT wrap conversational replies in JSON.
         tool_args = self._resolve_plan_parameters(
             step.get("tool_args") or {}, step_results
         )
-        found = _plan_step_placeholder(tool_name, tool_args)
+        found = _plan_step_placeholder(
+            tool_name, tool_args, request=getattr(self, "_current_query", None)
+        )
         if found is None:
             return False
         arg, value = found
@@ -5592,13 +6060,21 @@ Do NOT wrap conversational replies in JSON.
         )
         worker.start()
         # Time spent on a question the body raised (e.g. path access) is the
-        # user's, not the tool's: abandoning there strands a live prompt.
-        started = time.monotonic()
-        while worker.is_alive():
-            remaining = started + timeout + user_wait.waited() - time.monotonic()
-            if remaining <= 0:
-                break
-            worker.join(min(remaining, 0.5))
+        # user's, not the tool's: abandoning there strands a live prompt. Time
+        # the PC sleeps is nobody's: the awake clock leaves it out.
+        try:
+            started = awake_clock.monotonic()
+            while worker.is_alive():
+                remaining = (
+                    started + timeout + user_wait.waited() - awake_clock.monotonic()
+                )
+                if remaining <= 0:
+                    break
+                worker.join(min(remaining, 0.5))
+        except BaseException:
+            # The clock (or a Ctrl+C) failed the call: the tool must not run on.
+            cancel.set()
+            raise
         if worker.is_alive():
             cancel.set()
             raise ToolExecutionTimeout(tool_name, timeout)
@@ -5666,6 +6142,14 @@ Do NOT wrap conversational replies in JSON.
         like :meth:`_call_is_pre_authorized` — a host that implements
         ``policy_refusal_for_call``.
         """
+        if self.internet_off:
+            from gaia.agents.base.offline import offline_refusal
+
+            refusal = offline_refusal(
+                tool_name, tool_args, self._tools_registry.get(tool_name)
+            )
+            if refusal is not None:
+                return refusal
         # Before the falsy-args guard: a tool whose arguments all default
         # (``update_gaia_md()``) still has a target, and must not be approved
         # only to be refused by its own body a moment later.
@@ -6100,7 +6584,9 @@ Do NOT wrap conversational replies in JSON.
                 return {**NOT_EXECUTED, "status": "error", "error": err}
 
         # A stand-in written to disk replaces the real file with that word.
-        stand_in = _write_stand_in(tool_name, tool_args)
+        stand_in = _write_stand_in(
+            tool_name, tool_args, getattr(self, "_current_query", None)
+        )
         if stand_in is not None:
             arg, value = stand_in
             logger.warning(
@@ -6108,9 +6594,10 @@ Do NOT wrap conversational replies in JSON.
             )
             empty = value is None or not str(value).strip()
             why = (
-                "is empty. Only files that are empty by design ("
+                "is empty. A file is written empty only when the user asked "
+                "for an empty or blank file, or it is empty by design ("
                 + ", ".join(sorted(EMPTY_BY_DESIGN_FILES))
-                + ") are written empty"
+                + ")"
                 if empty
                 else f"is a placeholder ({value!r}), not the real content"
             )
@@ -6129,7 +6616,7 @@ Do NOT wrap conversational replies in JSON.
         reserved = sorted(
             key
             for key in (tool_args if isinstance(tool_args, dict) else {})
-            if key in (RISK_NOTE_ARG, SCRATCH_ARG)
+            if key in (RISK_NOTE_ARG, SCRATCH_ARG, NEEDS_PERSON_ARG)
         )
         if reserved:
             return {
@@ -6177,24 +6664,27 @@ Do NOT wrap conversational replies in JSON.
         # call runs. Display only: the tool runs with tool_args.
         shows = getattr(self, "confirmation_args_for_call", None)
         prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
-        # A script in the agent's own scratch folder can be granted as such —
-        # narrower than "running Python files", and it covers the next one.
-        if tool_name == "execute_python_file" and isinstance(prompt_args, dict):
-            reader = getattr(self, "_read_validator", None)
-            scratch = getattr(
-                reader() if callable(reader) else None, "scratch_dir", None
-            )
-            target = edit_target(prompt_args)
-            if scratch and target and edit_is_inside(target, (str(scratch),)):
-                prompt_args = {**prompt_args, SCRATCH_ARG: str(scratch)}
+        prompt_args = _with_resolved_target(
+            prompt_args, (self._tools_registry.get(tool_name) or {}).get("preflight")
+        )
+        # Scratch writes never ask, so code run from there is asked about on
+        # every run — the marker keeps "always" (and any broader grant) off it.
+        scratch = _scratch_reached_by(self, tool_name, prompt_args)
+        if scratch:
+            prompt_args = {**prompt_args, SCRATCH_ARG: scratch}
         # A one-time call is approved on its own prompt, which carries its
-        # risk note — never through the reroute question above.
+        # risk note — never through the reroute question above. So is a call
+        # only a person may approve.
         one_time = isinstance(prompt_args, dict) and bool(
-            prompt_args.get(RISK_NOTE_ARG)
+            prompt_args.get(RISK_NOTE_ARG) or prompt_args.get(NEEDS_PERSON_ARG)
         )
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
         ):
+            # A policy client matches on what the model sent, not what the prompt adds.
+            noting = getattr(self.console, "note_call_args", None)
+            if callable(noting) and isinstance(tool_args, dict):
+                noting(tool_name, tool_args)
             # Blocking on a human is not tool cost. Timed separately so a turn
             # where approval took five minutes does not report the tool as
             # having taken five minutes.
@@ -6506,10 +6996,43 @@ Do NOT wrap conversational replies in JSON.
         """Ask for the final answer on the way out of the loop, no tool calls.
 
         Same model path and tools as the loop (streaming or not), plus
-        ``tool_choice="none"``. Returns the answer, or ``None`` when the user
-        pressed Stop. Raises when the call fails or the reply is not an answer;
-        the caller says why.
+        ``tool_choice="none"``. A model that ignores that and calls a tool, or
+        replies with nothing, is asked once more with no tools offered at all.
+        Returns the answer, or ``None`` when the user pressed Stop. Raises when
+        the call fails or neither reply is an answer; the caller says why.
         """
+        try:
+            return self._closing_answer_once(messages, conversation, instruction, step)
+        except _NotAnAnswer as first:
+            logger.info(
+                "Closing reply was not an answer (%s); retrying without tools", first
+            )
+            try:
+                return self._closing_answer_once(
+                    messages,
+                    conversation,
+                    f"{instruction}\n\n{_NO_TOOLS_RETRY_NOTE}",
+                    step,
+                    offer_tools=False,
+                )
+            except _NotAnAnswer:
+                raise first from None
+            except Exception as second:  # noqa: BLE001 - report the first reason
+                cancel_event = getattr(self, "_cancel_event", None)
+                if cancel_event is not None and cancel_event.is_set():
+                    raise
+                logger.warning("Closing retry without tools failed: %s", second)
+                raise first from None
+
+    def _closing_answer_once(
+        self,
+        messages: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+        instruction: str,
+        step: int,
+        offer_tools: bool = True,
+    ) -> Optional[str]:
+        """One closing request; see :meth:`_closing_answer`."""
         cancel_event = getattr(self, "_cancel_event", None)
         if cancel_event is not None and cancel_event.is_set():
             raise RuntimeError("the request was cancelled")
@@ -6522,8 +7045,10 @@ Do NOT wrap conversational replies in JSON.
             + [{"role": "user", "content": instruction}]
         )
         # Tool history needs the tools on some providers; the model may not call one.
-        tools = self._openai_tools
+        tools = self._openai_tools if offer_tools else None
         no_calls = {"tool_choice": "none"} if tools else {}
+        # The same effort as the loop: a change rewrites the prompt's start.
+        no_calls.update(self._reasoning_request_kwargs())
         stats = None
         if self.streaming:
             stream = self.chat.send_messages_stream(
@@ -6574,8 +7099,11 @@ Do NOT wrap conversational replies in JSON.
             r"<think>.*?</think>", "", response or "", flags=re.DOTALL
         ).strip()
         if not response:
-            raise ValueError("the model returned an empty reply")
-        parsed = self._parse_llm_response(response)
+            raise _NotAnAnswer("the model returned an empty reply")
+        try:
+            parsed = self._parse_llm_response(response)
+        except ValueError as exc:
+            raise _NotAnAnswer(str(exc)) from exc
         answer = parsed.get("answer")
         if not isinstance(answer, str):
             answer = ""
@@ -6583,12 +7111,12 @@ Do NOT wrap conversational replies in JSON.
         if not requested and parsed.get("tool"):
             requested = [parsed["tool"]]
         if requested or _unfinished_answer_kind(answer) == "tool_markup":
-            raise ValueError(
+            raise _NotAnAnswer(
                 f"the model asked to run {', '.join(requested) or 'another tool'} "
                 "instead of answering"
             )
         if not answer.strip():
-            raise ValueError("the model's reply had no answer in it")
+            raise _NotAnAnswer("the model's reply had no answer in it")
         conversation.append({"role": "assistant", "content": parsed})
         return answer
 
@@ -6798,23 +7326,11 @@ Do NOT wrap conversational replies in JSON.
         """
         extraction = getattr(self, "_extraction_ledger", None)
         if extraction is not None:
-            extraction.activate_skill(
-                self._extraction_skill_instructions(
-                    extraction.query,
-                    (
-                        (tool_args or {}).get("name")
-                        if tool_name == "load_skill"
-                        else False
-                    ),
-                )
+            self._activate_extraction_skills(
+                (tool_args or {}).get("name") if tool_name == "load_skill" else False
             )
             extraction.observe(tool_name, tool_args or {}, tool_result)
-            if (
-                extraction.enabled
-                and "extract_document_items" not in self._tools_registry
-            ):
-                self._register_extraction_tool()
-                self._apply_tool_filter(self._active_tool_filter)
+            self._offer_extraction_tools()
         truncated_result = tool_result
         # Its pages are bounded by the store; condensing one would archive it again.
         if (
@@ -7023,9 +7539,11 @@ Do NOT wrap conversational replies in JSON.
         )
 
     def _is_loaded_ctx_too_small(self) -> bool:
-        """Probe Lemonade's health endpoint to see whether the active LLM is
-        loaded with a context size smaller than the window GAIA loads that
-        model with (``resolve_ctx_size``).
+        """Probe Lemonade's health endpoint to see whether this agent's own
+        model is loaded with a context size below its target window.
+
+        The target is ``resolve_ctx_size`` clamped to the model's trained
+        ``max_context_window``; other loaded models are ignored.
 
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
@@ -7038,9 +7556,11 @@ Do NOT wrap conversational replies in JSON.
 
             from gaia.llm.lemonade_client import (
                 LemonadeClientError,
+                _model_ids_match,
                 cloud_model_provider,
                 lemonade_auth_headers,
                 resolve_ctx_size,
+                resolve_effective_ctx_size,
                 resolve_lemonade_api_key,
                 resolve_lemonade_base_url,
             )
@@ -7064,18 +7584,31 @@ Do NOT wrap conversational replies in JSON.
             if resp.status_code != 200:
                 return False
             data = resp.json()
+            # Same resolution as the chat config: no model_id runs the default.
+            own_model = getattr(self, "model_id", None) or resolve_default_chat_model()
             for m in data.get("all_models_loaded", []):
-                if m.get("type") in ("llm", "vlm"):
-                    ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                    # Each model against its own window: an NPU model is right
-                    # at 32K, a memory-sized GPU model may be far above 64K.
-                    expected_ctx = resolve_ctx_size(
-                        model=m.get("model_name"),
+                if m.get("type") not in ("llm", "vlm"):
+                    continue
+
+                # Judges only the agent's own model, other residents don't matter.
+                if not (
+                    _model_ids_match(m.get("model_name"), own_model)
+                    or _model_ids_match(m.get("id"), own_model)
+                ):
+                    continue
+
+                ctx = m.get("recipe_options", {}).get("ctx_size") or 0
+                # Clamp like the load path: a model at its max can't reload larger.
+                expected_ctx = resolve_effective_ctx_size(
+                    resolve_ctx_size(
+                        model=m.get("model_name") or own_model,
                         device=self.device,
                         base_url=base_url,
-                    )
-                    if 0 < ctx < expected_ctx:
-                        return True
+                    ),
+                    m.get("max_context_window"),
+                )
+                if 0 < ctx < expected_ctx:
+                    return True
             return False
         except (httpx.HTTPError, ValueError, LemonadeClientError) as e:
             logger.debug("Loaded-context probe failed: %s", e)
@@ -7305,6 +7838,7 @@ Do NOT wrap conversational replies in JSON.
             {"step": steps_taken, "error": str(exc), "type": "llm_unreachable"}
         )
         tally["unreachable"] = True
+        tally["failed"] = True
         return "unreachable", self._model_unreachable_answer(
             conversation, steps_taken, state, retries_used
         )
@@ -7323,90 +7857,219 @@ Do NOT wrap conversational replies in JSON.
         Never phrased as a result — the run is also marked failed — so it
         cannot be read as the task's answer.
         """
+        tries = f", then {step_retries} more after waiting" if step_retries else ""
+        return self._model_failure_answer(
+            conversation,
+            steps_taken,
+            stopped_responding=True,
+            cause=f"{describe_retry_state(state)}{tries}",
+            advice=None,
+        )
+
+    def _model_service_label(self) -> Optional[str]:
+        """Who serves the chat model ("Fireworks AI"), for failure messages.
+
+        ``None`` when this agent cannot tell; subclasses that know override it.
+        """
+        return None
+
+    def _model_call_failed_answer(
+        self,
+        exc: BaseException,
+        typed_msg: Optional[str],
+        steps_taken: int,
+        conversation: List[Dict[str, Any]],
+    ) -> str:
+        """The final answer when a model call failed for good mid-turn.
+
+        Built from the real failure: the provider's own message when it gave
+        one (split into what happened and what to do), else the raw error.
+        """
+        stalled = False
+        cur: Optional[BaseException] = exc
+        seen: set = set()
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            if isinstance(cur, StreamStalledError):
+                stalled = True
+                break
+            cur = cur.__cause__ or cur.__context__
+        if typed_msg:
+            cause, advice = _split_cause_and_advice(typed_msg)
+        else:
+            cause, advice = str(exc).strip()[:300] or type(exc).__name__, None
+        return self._model_failure_answer(
+            conversation,
+            steps_taken,
+            stopped_responding=stalled or retry_state_of(exc) is not None,
+            cause=cause,
+            advice=advice,
+        )
+
+    def _model_failure_answer(
+        self,
+        conversation: List[Dict[str, Any]],
+        steps_taken: int,
+        *,
+        stopped_responding: bool,
+        cause: str,
+        advice: Optional[str],
+    ) -> str:
+        """Say the turn is unfinished, why, what already ran, and what next."""
         from collections import Counter
 
+        what = "stopped responding" if stopped_responding else "call failed"
+        cause = cause.strip().rstrip(".")
+        cause = cause[:1].upper() + cause[1:]
+        # pylint: disable-next=assignment-from-none
+        label = self._model_service_label()
+        if label and label.lower() in cause.lower():
+            label = None  # the cause already names it
+        lines = [
+            f"The model {what} at step {steps_taken}, so this request is "
+            f"unfinished. {label + ': ' if label else ''}{cause}."
+        ]
         tools_used = Counter(
             msg["name"]
             for msg in conversation
             if msg.get("role") == "tool" and msg.get("name")
         )
-        tries = f", then {step_retries} more after waiting" if step_retries else ""
-        stopped = (
-            f"I stopped at step {steps_taken} because the model service stayed "
-            f"unavailable ({describe_retry_state(state)}{tries})"
-        )
-        if not tools_used:
-            return (
-                f"{stopped}, before any tool ran. "
-                "Send your request again once the service is back."
+        if tools_used:
+            calls = sum(tools_used.values())
+            done = ", ".join(
+                f"{tool} {count}x" for tool, count in tools_used.most_common(5)
             )
-        calls = sum(tools_used.values())
-        done = ", ".join(
-            f"{tool} {count}x" for tool, count in tools_used.most_common(5)
-        )
-        return (
-            f"{stopped}; the {calls} tool call{'s' if calls != 1 else ''} already "
-            f"made ({done}) and what they changed are kept. "
-            'Say "continue" once the service is back and I\'ll pick up from here.'
-        )
+            lines.append(
+                f"Done before it stopped: {calls} tool call"
+                f"{'s' if calls != 1 else ''} ({done}); what they changed is kept."
+            )
+        else:
+            lines.append("Nothing had run yet.")
+        if advice:
+            lines.append(advice)
+        elif not stopped_responding:
+            lines.append(
+                "Send the message again to retry. If it fails the same way, "
+                "pick another model or check its provider."
+            )
+        elif tools_used:
+            lines.append(
+                'Say "continue" once the service is back and I\'ll pick up from here.'
+            )
+        else:
+            lines.append("Send the message again once the service is back.")
+        return "\n\n".join(lines)
 
     def _shrink_messages_for_overflow(
-        self, messages: List[Dict[str, Any]]
+        self, messages: List[Dict[str, Any]], store=None
     ) -> List[Dict[str, Any]]:
-        """Aggressively shrink the messages array after a context-overflow.
+        """The sent list after the backend refused it as too long.
 
-        Strategy: keep the original user query, keep recent assistant tool_calls
-        and the LATEST tool result intact, but replace older tool-result
-        contents with a short stub. This preserves the structural shape of
-        the conversation (so the model can still reason about what tools have
-        been called) while dropping the bulk of the bytes.
-
-        Used by ``process_query``'s LLM-call retry loop when the model
-        reports ``exceed_context_size``. Returns a new list — the caller
-        must rebind ``messages``.
+        Every older tool result is put away (archived whole, re-readable via
+        ``read_tool_output``); a large result from the latest step keeps a
+        head preview and a handle to the rest, since it is often the one that
+        overflowed (#2780). Refusals, user and assistant turns stay; verbose
+        assistant text is clipped. Returns a new list — the caller must rebind
+        ``messages``.
         """
         if not messages:
             return messages
-        first = messages[0]  # user query
-        rest = messages[1:]
-        # Find indices of tool-result entries
-        tool_indices = [i for i, m in enumerate(rest) if m.get("role") == "tool"]
-        keep_intact = set(tool_indices[-1:]) if tool_indices else set()
-        shrunk_rest: List[Dict[str, Any]] = []
-        for i, m in enumerate(rest):
-            if m.get("role") == "tool" and i not in keep_intact:
-                # Replace bulky tool result with a stub — the model only
-                # needs to know SOMETHING was returned at this point.
-                shrunk_rest.append(
-                    {
-                        "role": "tool",
-                        "name": m.get("name", "unknown"),
-                        "tool_call_id": m.get("tool_call_id", "stub"),
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "[tool result omitted — context "
-                                    "overflow recovery; see latest result]"
-                                ),
-                            }
-                        ],
-                    }
-                )
-            elif (
+        from gaia.agents.base.artifacts import store_for
+
+        shrunk, self._last_overflow_items = shrink_for_overflow(
+            messages, store if store is not None else store_for(self)
+        )
+        clipped: List[Dict[str, Any]] = []
+        for m in shrunk:
+            if (
                 m.get("role") == "assistant"
                 and isinstance(m.get("content"), str)
                 and len(m.get("content", "")) > 800
             ):
-                # Truncate verbose assistant chain-of-thought, but keep the
-                # rest of the turn — dropping ``tool_calls`` here orphans the
-                # tool results that follow it.
-                shrunk = dict(m)
-                shrunk["content"] = m["content"][:800] + "... (truncated)"
-                shrunk_rest.append(shrunk)
+                # Keep ``tool_calls``: dropping them orphans the results after.
+                clipped.append({**m, "content": m["content"][:800] + "... (truncated)"})
             else:
-                shrunk_rest.append(m)
-        return self._with_overflow_note([first] + shrunk_rest)
+                clipped.append(m)
+        return self._with_overflow_note(clipped)
+
+    def _shrink_for_overflow_retry(
+        self, messages: List[Dict[str, Any]], error_text: str
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """``(shrunk messages, report)``; the report says whether a retry fits.
+
+        A retry is worth it only when the shrink freed more than the request
+        was over by, or, with no numbers in the error, a tenth of the prompt.
+        Retrying a request that cannot fit only repeats the refusal (#2780).
+        """
+        from gaia.agents.base.artifacts import ArtifactStore
+
+        system_prompt, tools = self.system_prompt, self._openai_tools
+        before = request_tokens(messages, system_prompt, tools)
+        # Sized in a throwaway store first: nothing is archived for a retry that won't run.
+        # Its stubs can run a few chars longer than the real store's; the 95% margin covers it.
+        trial = self._shrink_messages_for_overflow(messages, ArtifactStore())
+        after = request_tokens(trial, system_prompt, tools)
+        freed = max(0, before - after)
+        report: Dict[str, Any] = {
+            "freed_tokens_est": freed,
+            "evicted_results": len(self._last_overflow_items),
+        }
+        numbers = overflow_numbers(error_text)
+        if numbers is not None:
+            requested, available = numbers
+            # Freed is in our tokens; the backend counted in its own.
+            projected = (
+                requested - int(freed * requested / before) if before else requested
+            )
+            report.update(
+                requested_tokens=requested,
+                available_tokens=available,
+                projected_tokens=projected,
+                fits=projected <= int(available * 0.95),
+            )
+        else:
+            report["fits"] = before > 0 and freed >= before * 0.1
+        shrunk = (
+            self._shrink_messages_for_overflow(messages) if report["fits"] else trial
+        )
+        return shrunk, report
+
+    def _retry_after_overflow_shrink(
+        self, messages: List[Dict[str, Any]], error: BaseException, step: int
+    ) -> bool:
+        """Shrink *messages* in place for one retry; False when it still cannot fit."""
+        shrunk, report = self._shrink_for_overflow_retry(messages, str(error))
+        if not report["fits"]:
+            self.error_history.append(
+                {
+                    "step": step,
+                    "error": str(error),
+                    "type": "llm_context_overflow_unrecoverable",
+                    **report,
+                }
+            )
+            logger.warning(
+                "Context overflow: putting older results away frees ~%d tokens, "
+                "not enough for the request to fit (%s); not retrying",
+                report["freed_tokens_est"],
+                report,
+            )
+            return False
+        messages[:] = shrunk
+        self.error_history.append(
+            {
+                "step": step,
+                "error": str(error),
+                "type": "llm_context_overflow_trimmed",
+                **report,
+            }
+        )
+        logger.warning(
+            "Context overflow: put %d results away (~%d tokens freed); retrying once",
+            report["evicted_results"],
+            report["freed_tokens_est"],
+        )
+        return True
 
     def _with_overflow_note(
         self, messages: List[Dict[str, Any]]
@@ -7505,6 +8168,11 @@ Do NOT wrap conversational replies in JSON.
                     block["text"] += _SINGLE_TOOL_DONE_SUFFIX
                     break
         return msg
+
+    def _reasoning_request_kwargs(self) -> Dict[str, Any]:
+        """The reasoning effort the agent chose (ReasoningEffortToolsMixin), if any."""
+        chosen = getattr(self, "reasoning_effort_kwargs", None)
+        return chosen() if chosen is not None else {}
 
     def _history_for_request(self) -> List[Dict[str, Any]]:
         """``conversation_history``, with earlier requests' reasoning stripped.
@@ -7889,6 +8557,17 @@ Do NOT wrap conversational replies in JSON.
             return list(manager.list_servers())
         return list(manager.servers_for_agent(ns_id))
 
+    def _close_unrun_tool_card(self) -> None:
+        """End a displayed tool call the repeat guard refused to run.
+
+        Without a result the call shows as still running, and a front-end that
+        waits out a running tool would never see the turn go idle.
+        """
+        self.console.pretty_print_json(
+            {"status": "error", "error": _REPEAT_NOT_RUN_NOTE}, "Tool Result"
+        )
+        self.console.print_tool_complete()
+
     def _console_cancelled(self) -> bool:
         """Cooperative mid-generation cancel check for the Agent-UI path.
 
@@ -8003,21 +8682,31 @@ Do NOT wrap conversational replies in JSON.
             return None
         return verify_after_change_correction(changed)
 
+    def _request_text(self, query: Optional[str]) -> str:
+        """The user's own words this turn, without the memory context prepended.
+
+        A file a recalled memory names is not one the user asked to have read.
+        """
+        return getattr(self, "_original_user_input", None) or query or ""
+
     def _grounding_findings(
         self, answer: Optional[str], query: str, history: str
     ) -> list:
-        """Where *answer* outruns this turn's tool record (see ``grounding.py``)."""
+        """Where *answer* outruns this turn's tool record (see ``grounding.py``).
+
+        The answer only: files the turn wrote are never sent back for a
+        rewrite, since a false positive would damage a correct deliverable.
+        """
         if not answer or not answer.strip():
             return []
         roots = [os.getcwd(), self._verification_project_root()]
-        answer = strip_verification_scope(answer)
         return ungrounded(
-            answer,
-            query or "",
+            strip_verification_scope(answer),
+            self._request_text(query),
             getattr(self, "_turn_tool_executions", None) or [],
             history=history,
             locate=path_locator(roots),
-        ) + self._deliverable_findings(answer, query or "", history, roots)
+        )
 
     def _deliverable_findings(
         self, answer: str, query: str, history: str, roots: list
@@ -8071,12 +8760,17 @@ Do NOT wrap conversational replies in JSON.
         return cache[stamp]
 
     def _note_ungrounded(self, answer: Optional[str], query: str) -> None:
-        """Record what *answer* still outruns, for this turn's scope note."""
-        self._turn_ungrounded = unverified_reasons(
-            self._grounding_findings(
-                answer, query, getattr(self, "_grounding_history", "")
+        """Record what *answer* and the files it wrote still outrun, for the scope note."""
+        history = getattr(self, "_grounding_history", "")
+        findings = self._grounding_findings(answer, query, history)
+        if answer and answer.strip():
+            findings += self._deliverable_findings(
+                strip_verification_scope(answer),
+                self._request_text(query),
+                history,
+                [os.getcwd(), self._verification_project_root()],
             )
-        )
+        self._turn_ungrounded = unverified_reasons(findings)
 
     def _project_has_tests(self, root: Optional[str]) -> bool:
         """``project_has_tests``, walked once per root per turn."""
@@ -8149,8 +8843,14 @@ Do NOT wrap conversational replies in JSON.
             return body
         return f"{body.rstrip()}\n\n{statement}"
 
+    def _turn_outputs(self) -> set:
+        """Files this turn wrote by any tool, scripts included: never sources."""
+        return {
+            key for key, item in self._completion_evidence.files.items() if item.written
+        }
+
     def _gate_unsealed_answer(
-        self, answer: Optional[str], keep_answer: bool = False
+        self, answer: Optional[str], model_failed: bool = False
     ) -> Tuple[Optional[str], List[str]]:
         """Judge an answer that never passed the loop's own completion gate.
 
@@ -8158,23 +8858,25 @@ Do NOT wrap conversational replies in JSON.
         cap — lands here, so an unverified save or an unfinished extraction is
         reported as incomplete on those paths too. ``None`` stays ``None`` when
         nothing is unverified: the caller's max-steps fallback owns that text.
+        A non-empty *answer* always stays ahead of the report: it is often the
+        only place the turn's findings exist.
 
-        ``keep_answer`` keeps *answer* ahead of the report instead of replacing
-        it: the step-cap reply was asked for what was found and what is
-        missing, and is often the only place the turn's findings exist.
+        *model_failed*: a model call ended the turn, so the model never had the
+        chance to read its writes back. Files a write tool reported saved are
+        listed as saved instead of calling the whole turn unconfirmed.
         """
         self._check_extraction_sources()
-        gaps = self._completion_evidence.gaps(answer or "", _claims_file_write)
-        gaps.extend(self._extraction_ledger.gaps())
+        gaps = self._completion_evidence.gaps(
+            answer or "", _claims_file_write, readback=not model_failed
+        )
+        gaps.extend(self._extraction_ledger.gaps(self._turn_outputs()))
         unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
         if unsupported:
             gaps.append(unsupported[1] + ".")
         if gaps:
             report = incomplete_answer(gaps)
-            # Keep the error that ended the turn; add what stays unverified.
-            keep = bool(answer and answer.strip()) and (
-                keep_answer or bool(self._unrecovered_errors())
-            )
+            # The turn ended early, so it is unfinished; whatever it said stays.
+            keep = bool(answer and answer.strip())
             answer = f"{answer}\n\n{report}" if keep else report
         elif answer and answer.strip() and not self._unrecovered_errors():
             self._note_ungrounded(answer, getattr(self, "_current_query", ""))
@@ -8182,6 +8884,12 @@ Do NOT wrap conversational replies in JSON.
         inventory = self._extraction_ledger.render()
         if inventory and answer:
             answer += "\n\n" + inventory
+        evidence = self._completion_evidence
+        saved = evidence.written_files() if model_failed else []
+        if saved and answer:
+            answer += "\n\n" + saved_before_error(
+                [evidence.written_as.get(key, key) for key in saved]
+            )
         return answer, gaps
 
     #: What warm_up primes with. Short and fixed, so the priming call itself
@@ -8253,6 +8961,10 @@ Do NOT wrap conversational replies in JSON.
             Dict containing the final result and operation details
         """
         ns_id = self._namespaced_agent_id()
+        # A level the model chose for the last request must not carry into this one.
+        reset_effort = getattr(self, "reset_reasoning_effort", None)
+        if reset_effort is not None:
+            reset_effort()
         # Only a console with a Stop button can cancel a client backoff wait.
         console = getattr(self, "console", None)
         stoppable = getattr(console, "cancelled", None) is not None
@@ -8273,6 +8985,24 @@ Do NOT wrap conversational replies in JSON.
             # calls into this one. Idempotent when the turn already sealed.
             self._finish_turn_record("", 0)
             self._detach_step_timer()
+            self._flush_post_turn_record()
+            # Spans a mixin parked for a turn that never opened must not
+            # backdate the next one.
+            self._pre_turn_spans = None
+
+    def _flush_post_turn_record(self) -> None:
+        """Write the post-answer spans and stop routing waits to this turn."""
+        recorder = self._sealed_turn_recorder
+        self._sealed_turn_recorder = None
+        if recorder is not None and turn_metrics.current() is recorder:
+            turn_metrics.activate(self._outer_turn_recorder)
+        self._outer_turn_recorder = None
+        if recorder is None:
+            return
+        try:
+            recorder.write_post()
+        except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
+            logger.warning("could not write post-turn record: %s", e)
 
     #: How a mid-turn follow-up is framed for the model. It is the user
     #: speaking, so it goes in as a user message — but unlabelled, a user
@@ -8459,7 +9189,7 @@ Do NOT wrap conversational replies in JSON.
             self._extraction_skill_instructions(user_input)
         )
         had_extraction_tools = "extract_document_items" in self._tools_registry
-        if self._extraction_ledger.enabled:
+        if self._extraction_ledger.offered:
             self._register_extraction_tool()
         else:
             getattr(self, "_tool_overrides", {}).pop("extract_document_items", None)
@@ -8467,7 +9197,7 @@ Do NOT wrap conversational replies in JSON.
             if self._instance_tools is not None:
                 self._instance_tools.pop("extract_document_items", None)
                 self._instance_tools.pop("save_extracted_items", None)
-        if self._extraction_ledger.enabled or had_extraction_tools:
+        if self._extraction_ledger.offered or had_extraction_tools:
             self._apply_tool_filter(self._active_tool_filter)
 
         logger.debug(f"Processing query: {user_input}")
@@ -8526,9 +9256,12 @@ Do NOT wrap conversational replies in JSON.
         look_first_reprompted = False
         verify_after_change_reprompted = False
         test_claim_corrections = 0
+        corrected_test_claims: set = set()
         cut_off_continuations = 0
         stream_cut_offs = 0
         completion_corrections = 0
+        # The answer a completion correction asked to replace.
+        answer_before_completion_check: Optional[str] = None
         completion_gaps = []
         # Answer text the model sent alongside its latest tool calls.
         answer_beside_tool_calls: Optional[str] = None
@@ -8585,6 +9318,8 @@ Do NOT wrap conversational replies in JSON.
         loop_break_answer_unprinted = False
         # A refused cloud account ends the turn with nothing to verify.
         account_refused = False
+        # The model call failed, so the model never got to check its own work.
+        model_call_failed = False
         # Model-call retries this turn: client-level (inside one request) and
         # step-level (the agent waiting and asking again), plus whether the
         # model stayed unreachable. Reported on the result.
@@ -8592,6 +9327,8 @@ Do NOT wrap conversational replies in JSON.
             "request_retries": 0,
             "step_retries": 0,
             "unreachable": False,
+            # The turn ended because a model call failed (any cause).
+            "failed": False,
         }
         if self._context_evictor is not None:
             self._context_evictor.begin_turn()
@@ -8638,10 +9375,9 @@ Do NOT wrap conversational replies in JSON.
                     steps_taken,
                     steps_limit,
                 )
-                # Neutral wording: cancel now has several triggers (a user
-                # pressing Stop, an API client disconnecting, a stream timeout),
-                # and this text is persisted with the turn.
-                final_answer = (
+                # A limit that stopped the turn says so; a plain stop (Stop,
+                # a disconnect) gets the neutral wording.
+                final_answer = getattr(cancel_event, "message", None) or (
                     "The request was stopped before it finished. Try again, or "
                     "break it into smaller steps if it was taking too long."
                 )
@@ -8669,9 +9405,10 @@ Do NOT wrap conversational replies in JSON.
                 from gaia.agents.base.artifacts import store_for
 
                 # Only the sent list changes; ``conversation`` keeps every result.
-                self._pending_eviction = self._context_evictor.evict(
-                    messages, steps_taken, store_for(self)
-                )
+                with turn_metrics.span("context_evict"):
+                    self._pending_eviction = self._context_evictor.evict(
+                        messages, steps_taken, store_for(self)
+                    )
             if self._turn_recorder is not None and self.chat is not None:
                 self.chat.turn_step = steps_taken
 
@@ -8735,8 +9472,8 @@ Do NOT wrap conversational replies in JSON.
 
                     # Display the tool call in real-time
                     self.console.print_tool_usage(tool_name)
-                    if tool_args:
-                        self.console.pretty_print_json(tool_args, "Arguments")
+                    # Sent even when empty: it is what releases the call to the wire.
+                    self.console.pretty_print_json(tool_args, "Arguments")
 
                     # Start progress indicator for tool execution
                     self.console.start_progress(f"Executing {tool_name}")
@@ -9090,6 +9827,7 @@ Do NOT wrap conversational replies in JSON.
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
+                            **self._reasoning_request_kwargs(),
                         )
 
                         # Process the streaming response chunks as they arrive
@@ -9188,6 +9926,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                         logger.error(error_msg)
                         self.console.print_error(error_msg)
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -9195,11 +9934,16 @@ Do NOT wrap conversational replies in JSON.
                                 "type": "llm_connection_error",
                             }
                         )
+                        self._turn_model_retries["failed"] = True
                         final_answer = (
                             f"I'm having trouble reaching the language model right now. "
                             f"Please make sure Lemonade Server is running.\n\n"
                             f"*Technical details: {str(e)}*"
                         )
+                        break
+                    except LeaseWaitCancelled:
+                        # Stopped while queued for the model: not an LLM error.
+                        cancelled_by_console = True
                         break
                     except Exception as e:
                         logger.error(f"Unexpected error during streaming: {e}")
@@ -9233,21 +9977,11 @@ Do NOT wrap conversational replies in JSON.
                             )
                             raise
                         if is_ctx_overflow and not _retried_after_trim_stream:
-                            messages[:] = self._shrink_messages_for_overflow(messages)
-                            self.error_history.append(
-                                {
-                                    "step": steps_taken,
-                                    "error": str(e),
-                                    "type": "llm_context_overflow_trimmed",
-                                }
-                            )
-                            logger.warning(
-                                "Context overflow mid-loop (streaming) — "
-                                "shrunk messages to %d entries and retrying",
-                                len(messages),
-                            )
                             _retried_after_trim_stream = True
-                            continue
+                            if self._retry_after_overflow_shrink(
+                                messages, e, steps_taken
+                            ):
+                                continue
 
                         # A transient endpoint failure the client already
                         # retried: wait, then ask again with the conversation
@@ -9270,6 +10004,7 @@ Do NOT wrap conversational replies in JSON.
                             loop_break_answer_unprinted = True
                             break
 
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -9277,30 +10012,31 @@ Do NOT wrap conversational replies in JSON.
                                 "type": "llm_streaming_error",
                             }
                         )
+                        self._turn_model_retries["failed"] = True
                         if is_ctx_overflow:
                             # Name the actual constraint and a next step
                             # (#2763) -- "re-ask with just the essentials" told
                             # the user nothing about WHAT was too big or HOW to
                             # shrink it, so every retry looked identical.
                             final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
+                            loop_break_answer_unprinted = True
                         else:
                             # Streaming is the TUI's path; it must surface the
                             # same typed messages the non-streaming path does.
                             refusal = self._cloud_account_refusal(e)
                             if refusal is not None:
+                                # Already printed as the turn's error.
                                 self.console.print_error(refusal)
                                 account_refused = True
-                            typed_msg = refusal or self._extract_lemonade_user_message(
-                                e
-                            )
-                            if typed_msg is not None:
-                                final_answer = typed_msg
+                                final_answer = refusal
                             else:
-                                final_answer = (
-                                    f"Sorry, I ran into a problem while processing your request. "
-                                    f"This might be a temporary issue — try again in a moment.\n\n"
-                                    f"*Technical details: {str(e)}*"
+                                final_answer = self._model_call_failed_answer(
+                                    e,
+                                    self._extract_lemonade_user_message(e),
+                                    steps_taken,
+                                    conversation,
                                 )
+                                loop_break_answer_unprinted = True
                         break
                 if final_answer is not None or cancelled_by_console:
                     break
@@ -9346,6 +10082,7 @@ Do NOT wrap conversational replies in JSON.
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
+                            **self._reasoning_request_kwargs(),
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
@@ -9378,6 +10115,7 @@ Do NOT wrap conversational replies in JSON.
                         error_msg = f"LLM Server Connection Failed: {str(e)}"
                         logger.error(error_msg)
                         self.console.print_error(error_msg)
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -9385,11 +10123,17 @@ Do NOT wrap conversational replies in JSON.
                                 "type": "llm_connection_error",
                             }
                         )
+                        self._turn_model_retries["failed"] = True
                         final_answer = (
                             f"I'm having trouble reaching the language model right now. "
                             f"Please make sure Lemonade Server is running.\n\n"
                             f"*Technical details: {str(e)}*"
                         )
+                        break
+                    except LeaseWaitCancelled:
+                        # Stopped while queued for the model: not an LLM error.
+                        self.console.stop_progress()
+                        cancelled_by_console = True
                         break
                     except Exception as e:
                         self.console.stop_progress()
@@ -9433,25 +10177,11 @@ Do NOT wrap conversational replies in JSON.
                             )
                             raise
                         if is_ctx_overflow and not _retried_after_trim:
-                            # Aggressive shrink: keep all message slots so the
-                            # model still sees its tool-call history, but cap
-                            # any single tool-result content to 500 chars and
-                            # drop all-but-last-2 tool results entirely.
-                            messages[:] = self._shrink_messages_for_overflow(messages)
-                            self.error_history.append(
-                                {
-                                    "step": steps_taken,
-                                    "error": str(e),
-                                    "type": "llm_context_overflow_trimmed",
-                                }
-                            )
-                            logger.warning(
-                                "Context overflow mid-loop — shrunk messages "
-                                "to %d entries and retrying once",
-                                len(messages),
-                            )
                             _retried_after_trim = True
-                            continue  # retry with smaller payload
+                            if self._retry_after_overflow_shrink(
+                                messages, e, steps_taken
+                            ):
+                                continue  # retry with smaller payload
 
                         # A transient endpoint failure the client already
                         # retried: wait, then ask again with the conversation
@@ -9472,6 +10202,7 @@ Do NOT wrap conversational replies in JSON.
 
                         # Either context-overflow after trim, or unrelated.
                         # Give up gracefully.
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -9479,12 +10210,14 @@ Do NOT wrap conversational replies in JSON.
                                 "type": "llm_error",
                             }
                         )
+                        self._turn_model_retries["failed"] = True
                         if is_ctx_overflow:
                             # Name the actual constraint and a next step
                             # (#2763) -- "re-ask with just the essentials" told
                             # the user nothing about WHAT was too big or HOW to
                             # shrink it, so every retry looked identical.
                             final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
+                            loop_break_answer_unprinted = True
                         else:
                             # If we have a typed Lemonade error in the
                             # cause-chain (e.g. ``LemonadeUpstreamTimeoutError``
@@ -9495,20 +10228,18 @@ Do NOT wrap conversational replies in JSON.
                             # non-retryable failures.
                             refusal = self._cloud_account_refusal(e)
                             if refusal is not None:
+                                # Already printed as the turn's error.
                                 self.console.print_error(refusal)
                                 account_refused = True
-                            typed_msg = refusal or self._extract_lemonade_user_message(
-                                e
-                            )
-                            if typed_msg is not None:
-                                final_answer = typed_msg
+                                final_answer = refusal
                             else:
-                                final_answer = (
-                                    f"Sorry, I ran into an unexpected problem. "
-                                    f"This might be a temporary issue — try "
-                                    f"again in a moment.\n\n"
-                                    f"*Technical details: {str(e)}*"
+                                final_answer = self._model_call_failed_answer(
+                                    e,
+                                    self._extract_lemonade_user_message(e),
+                                    steps_taken,
+                                    conversation,
                                 )
+                                loop_break_answer_unprinted = True
                         break
                 if final_answer is not None or cancelled_by_console:
                     break
@@ -9567,7 +10298,8 @@ Do NOT wrap conversational replies in JSON.
             # 1000+ char arguments. Don't fail the whole turn: log the error,
             # nudge the model to retry with simpler args, and continue the loop.
             try:
-                parsed = self._parse_llm_response(response)
+                with turn_metrics.span("parse_response"):
+                    parsed = self._parse_llm_response(response)
                 # Budget is consecutive: a clean parse gives the retries back.
                 parse_failures = 0
                 markup_retries = 0
@@ -9730,6 +10462,7 @@ Do NOT wrap conversational replies in JSON.
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
+                        **self._reasoning_request_kwargs(),
                     )
 
                     for chunk_response in stream_gen:
@@ -9774,6 +10507,7 @@ Do NOT wrap conversational replies in JSON.
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
+                        **self._reasoning_request_kwargs(),
                     )
                     plan_response = chat_response.text
                     plan_reasoning = _response_reasoning(chat_response)
@@ -9979,6 +10713,8 @@ Do NOT wrap conversational replies in JSON.
                 fanout_repeat_break = False
                 post_tool_messages = []
 
+                # One response's calls are one attempt to the failure breaker.
+                self._turn_scope.begin_batch()
                 for fan_idx, tc in enumerate(tc_list):
                     tool_name = tc["name"]
                     tool_args = tc["tool_args"]
@@ -9993,8 +10729,8 @@ Do NOT wrap conversational replies in JSON.
 
                     # Display the tool call in real-time
                     self.console.print_tool_usage(tool_name)
-                    if tool_args:
-                        self.console.pretty_print_json(tool_args, "Arguments")
+                    # Sent even when empty: it is what releases the call to the wire.
+                    self.console.pretty_print_json(tool_args, "Arguments")
                     self.console.start_progress(f"Executing {tool_name}")
 
                     # Loop detection — same shape as legacy path so
@@ -10007,6 +10743,7 @@ Do NOT wrap conversational replies in JSON.
                     consecutive_count = _repeat_count(tool_call_history)
                     if consecutive_count >= self.max_consecutive_repeats:
                         self.console.stop_progress()
+                        self._close_unrun_tool_card()
                         # NATIVE path appends results to ``previous_outputs``
                         # (line 3387), not ``step_results``. Unwrap the
                         # ``result`` field so the helper sees actual tool
@@ -10176,6 +10913,7 @@ Do NOT wrap conversational replies in JSON.
                             # (#2515, the archive_message_batch repro).
                             self.console.print_error(last_error, recoverable=True)
                         any_error = True
+                self._turn_scope.end_batch()
 
                 # Anthropic and other spec-strict providers require all native
                 # tool results to immediately follow the assistant tool-call
@@ -10191,6 +10929,9 @@ Do NOT wrap conversational replies in JSON.
                     self.execution_state = self.STATE_ERROR_RECOVERY
                     self.console.print_state_info(
                         "ERROR RECOVERY: Handling tool execution failure"
+                    )
+                    self._record_step_stats(
+                        response_stats, steps_taken, step_timer, conversation
                     )
                     continue
 
@@ -10236,8 +10977,8 @@ Do NOT wrap conversational replies in JSON.
                 # Display the tool call in real-time
                 self.console.print_tool_usage(tool_name)
 
-                if tool_args:
-                    self.console.pretty_print_json(tool_args, "Arguments")
+                # Sent even when empty: it is what releases the call to the wire.
+                self.console.pretty_print_json(tool_args, "Arguments")
 
                 # Start progress indicator for tool execution
                 self.console.start_progress(f"Executing {tool_name}")
@@ -10260,6 +11001,7 @@ Do NOT wrap conversational replies in JSON.
                 if consecutive_count >= self.max_consecutive_repeats:
                     # Stop progress indicator
                     self.console.stop_progress()
+                    self._close_unrun_tool_card()
 
                     # Not ``step_results``: error recovery clears it before each retry.
                     recent_results = [o.get("result") for o in previous_outputs]
@@ -10443,27 +11185,19 @@ Do NOT wrap conversational replies in JSON.
                     self.console.print_state_info(
                         "ERROR RECOVERY: Handling tool execution failure"
                     )
+                    # The step still made its model call and ran its tool.
+                    self._record_step_stats(
+                        response_stats, steps_taken, step_timer, conversation
+                    )
 
                     # Break out of tool execution to trigger error recovery prompt
                     continue
 
             # Collect and store performance stats for token tracking
             # Do this BEFORE checking for final answer so stats are always collected
-            perf_stats = response_stats or self.chat.get_stats()
-            # A step whose backend reported no stats still took model time.
-            if perf_stats or step_timer.has_llm_calls():
-                stats_record = {
-                    "type": "stats",
-                    "step": steps_taken,
-                    "performance_stats": perf_stats or {},
-                }
-                step_timer.attach(stats_record)
-                if self._pending_eviction is not None:
-                    stats_record.update(self._pending_eviction)
-                    self._pending_eviction = None
-                if self._context_evictor is not None:
-                    self._context_evictor.note_prompt_tokens(perf_stats)
-                conversation.append({"role": "system", "content": stats_record})
+            self._record_step_stats(
+                response_stats, steps_taken, step_timer, conversation
+            )
 
             # Check for final answer (after collecting stats)
             if "answer" in parsed:
@@ -10654,9 +11388,11 @@ Do NOT wrap conversational replies in JSON.
                     continue
 
                 # An answer about named workspace files that never opened one.
+                # Plan steps run outside tool_call_log; the turn record has them.
                 if (
                     not look_first_reprompted
                     and not tool_call_log
+                    and not self._turn_tool_executions
                     and steps_taken < steps_limit - 1
                     and any(name in self._tools_registry for name in _LOOK_TOOLS)
                 ):
@@ -10708,7 +11444,7 @@ Do NOT wrap conversational replies in JSON.
                             "Call query_specific_file or query_documents NOW to retrieve the "
                             "actual content. Output a tool call JSON — not planning text."
                         )
-                    elif not tool_call_history:
+                    elif not tool_call_history and not self._turn_tool_executions:
                         correction = (
                             "You said you would look that up but called no tools. "
                             "Call the appropriate tool RIGHT NOW. "
@@ -10803,15 +11539,12 @@ Do NOT wrap conversational replies in JSON.
                 # The record cannot say what the answer claims, so the answer
                 # is read — but only against an outcome that exists.
                 _IMAGE_AVAILABILITY_CLAIM = [
-                    r"--sd\b",
-                    r"\bsd flag\b",
                     r"stable diffusion.*active",
                     r"stable diffusion.*when",
                     r"image generation.*flag",
                     r"generate images when",
                     r"can generate images",
                     r"i can.*create.*image",
-                    r"when.*--sd",
                 ]
                 _IMAGE_OUTCOME_REPORTED = [
                     r"not available",
@@ -10865,29 +11598,6 @@ Do NOT wrap conversational replies in JSON.
                         }
                     )
                     continue
-
-                # A failed generate_image is reported, not padded with what the
-                # model would have done; #1023: only when the latest call failed.
-                if image_outcome_recorded and capability_tool_last_succeeded is False:
-                    _SD_POST_FAILURE_VERBOSE = [
-                        r"would have done",
-                        r"what i would",
-                        r"prompt enhancement",
-                        r"i apologize for the confusion",
-                        r"let me explain what",
-                        r"enhance.*prompt",
-                        r"prompt.*technique",
-                        r"following.*research",
-                    ]
-                    _is_verbose_sd_failure = any(
-                        re.search(_p, answer_candidate, re.IGNORECASE)
-                        for _p in _SD_POST_FAILURE_VERBOSE
-                    )
-                    if _is_verbose_sd_failure:
-                        answer_candidate = (
-                            "Image generation is not available in this session — "
-                            "start GAIA with the `--sd` flag to enable it."
-                        )
 
                 # A request it never looked at, values no tool produced, or
                 # work it never did: one correction per gate, and only before
@@ -10954,6 +11664,7 @@ Do NOT wrap conversational replies in JSON.
                     can_correct_claim = (
                         steps_taken < steps_limit - 1
                         and test_claim_corrections < _MAX_TEST_CLAIM_CORRECTIONS
+                        and claim.lower() not in corrected_test_claims
                     )
                     if not can_correct_claim:
                         logger.warning(
@@ -10966,10 +11677,11 @@ Do NOT wrap conversational replies in JSON.
                             steps_taken,
                             steps_limit,
                         )
+                        # Kept, with the gap named after it below.
                         completion_gaps = [why + "."]
-                        answer_candidate = incomplete_answer(completion_gaps)
                     else:
                         test_claim_corrections += 1
+                        corrected_test_claims.add(claim.lower())
                         logger.debug(
                             "[WORKFLOW] Correcting unsupported test claim %r (%s)",
                             claim,
@@ -11006,15 +11718,31 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     continue
 
+                unfinalized_answer = _without_tool_markup(answer_candidate)
+                if answer_before_completion_check is not None:
+                    restored = _with_replaced_answer(
+                        unfinalized_answer, answer_before_completion_check
+                    )
+                    answer_before_completion_check = None
+                    # Only once the work done since backs what it said.
+                    restored_soft: List[str] = []
+                    if (
+                        restored is not None
+                        and not self._completion_evidence.gaps(
+                            restored, _claims_file_write, soft=restored_soft
+                        )
+                        and not restored_soft
+                    ):
+                        unfinalized_answer = restored
                 answer_candidate = self.finalize_answer(
-                    _without_tool_markup(answer_candidate), conversation
+                    unfinalized_answer, conversation
                 )
-                soft_gaps: List[str] = []
                 self._check_extraction_sources()
+                soft_gaps: List[str] = []
                 artifact_gaps = self._completion_evidence.gaps(
                     answer_candidate, _claims_file_write, soft=soft_gaps
                 )
-                extraction_gaps = self._extraction_ledger.gaps()
+                extraction_gaps = self._extraction_ledger.gaps(self._turn_outputs())
                 artifact_gaps.extend(extraction_gaps)
                 if artifact_gaps or soft_gaps:
                     if (
@@ -11034,6 +11762,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                     ):
                         completion_corrections += 1
+                        answer_before_completion_check = unfinalized_answer
                         correction = (
                             (
                                 "[check:completion] "
@@ -11048,7 +11777,8 @@ Do NOT wrap conversational replies in JSON.
                                 "continuation pages. Report only contents observed in "
                                 "tool results. An unrelated tool or file is not evidence. "
                                 "This check is internal: answer the user without "
-                                "mentioning it or the read's offset and pages."
+                                "mentioning it or the read's offset and pages. "
+                                + _GIVE_ANSWER_AGAIN
                             )
                             if artifact_gaps
                             else (
@@ -11056,7 +11786,8 @@ Do NOT wrap conversational replies in JSON.
                                 + " ".join(soft_gaps)
                                 + " If the file is needed, write it with `write_file` and read it back. "
                                 "If you were describing where something is usually saved, or a file "
-                                "from an earlier turn, say so without claiming you saved it now."
+                                "from an earlier turn, say so without claiming you saved it now. "
+                                + _GIVE_ANSWER_AGAIN
                             )
                         )
                         refused = set(self._completion_evidence.refused.values())
@@ -11101,7 +11832,10 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     completion_gaps.append(final_test_claim[1] + ".")
                 if completion_gaps:
-                    answer_candidate = incomplete_answer(completion_gaps)
+                    # Never discard the work: keep it and name what is unconfirmed.
+                    answer_candidate = caveated_answer(
+                        answer_candidate, completion_gaps
+                    )
                 else:
                     self._note_ungrounded(answer_candidate, user_input)
                 inventory = self._extraction_ledger.render()
@@ -11109,7 +11843,7 @@ Do NOT wrap conversational replies in JSON.
                     # Never ask another synthesis call to reproduce the set; it condenses.
                     answer_candidate += "\n\n" + inventory
                     if not completion_gaps:
-                        saved = sorted(self._extraction_ledger.destinations)
+                        saved = sorted(self._extraction_ledger.verified)
                         if saved:
                             answer_candidate += (
                                 "\n\nI saved the full list to "
@@ -11220,8 +11954,7 @@ Do NOT wrap conversational replies in JSON.
                     gated, completion_gaps = self._gate_unsealed_answer(
                         self.finalize_answer(
                             _without_tool_markup(cap_answer), conversation
-                        ),
-                        keep_answer=True,
+                        )
                     )
                     final_answer = self._with_verification_scope(gated)
                     verification_scope_applied = True
@@ -11276,9 +12009,16 @@ Do NOT wrap conversational replies in JSON.
         # only thing that prints, so without this the turn ends on the repeat
         # warning and the answer is never shown.
         if loop_break_answer_unprinted and final_answer is not None:
-            final_answer = self._with_verification_scope(
-                self.finalize_answer(_without_tool_markup(final_answer), conversation)
+            final_answer = self.finalize_answer(
+                _without_tool_markup(final_answer), conversation
             )
+            if self._turn_model_retries["failed"]:
+                # Name what the cut-off turn left undone (an unwritten file…).
+                final_answer, completion_gaps = self._gate_unsealed_answer(
+                    final_answer, model_failed=True
+                )
+                self._announce_turn_failed()
+            final_answer = self._with_verification_scope(final_answer)
             verification_scope_applied = True
             _break_input_tokens, break_output_tokens = _sum_conversation_tokens(
                 conversation, self._tool_reported_usage
@@ -11312,7 +12052,7 @@ Do NOT wrap conversational replies in JSON.
 
         if not verification_scope_applied and not account_refused:
             final_answer, completion_gaps = self._gate_unsealed_answer(
-                final_answer, keep_answer=max_steps_reached
+                final_answer, model_failed=model_call_failed
             )
 
         # Every exit other than the parsed-answer seam sets ``final_answer``
@@ -11379,6 +12119,8 @@ Do NOT wrap conversational replies in JSON.
                 "step_retries": self._turn_model_retries["step_retries"],
             },
             "model_unreachable": self._turn_model_retries["unreachable"],
+            # Any model-call failure ended the turn; front-ends report it failed.
+            "model_failed": self._turn_model_retries["failed"],
             "extraction_sources": sorted(self._extraction_ledger.results),
             "verification": self.verification_state(),
         }
@@ -11407,7 +12149,8 @@ Do NOT wrap conversational replies in JSON.
         # Post-query hook for mixins (e.g., MemoryMixin conversation storage)
         if hasattr(self, "_after_process_query"):
             try:
-                self._after_process_query(user_input, result.get("result", ""))
+                with turn_metrics.span("after_process_query"):
+                    self._after_process_query(user_input, result.get("result", ""))
             except Exception as e:
                 logger.warning(f"Post-query hook failed: {e}")
 
@@ -11574,29 +12317,27 @@ Do NOT wrap conversational replies in JSON.
     ) -> Tuple[Optional[str], int]:
         """Final answer when the loop guard stops the turn, and the step count.
 
-        Repeats that worked prove neither outcome, so the model gets one
-        closing call (tools withheld) to say what it did from the results it
-        already has; failed or refused repeats keep the summary, which names
-        the failure. ``executed_count`` counts the calls that ran, as the
-        summary does. Returns ``(None, steps)`` when the user pressed Stop.
+        The model always gets one closing call (tools withheld) to say what it
+        did from the results it already has, so earlier work survives the
+        stop. Failed or refused repeats add the failure summary after it.
+        ``executed_count`` counts the calls that ran, as the summary does.
+        Returns ``(None, steps)`` when the user pressed Stop.
         """
         summary = self._build_loop_break_summary(
             tool_name, executed_count, recent_results
         )
-        if self._repeats_carry_a_failure(recent_results):
-            return summary, steps_taken
+        failed = self._repeats_carry_a_failure(recent_results)
 
         steps_taken += 1
         if self._turn_recorder is not None and self.chat is not None:
             self.chat.turn_step = steps_taken
         self.execution_state = self.STATE_COMPLETION
+        prompt = _FAILED_CALL_ANSWER_PROMPT if failed else _REPEATED_CALL_ANSWER_PROMPT
         try:
             answer = self._closing_answer(
                 messages,
                 conversation,
-                _REPEATED_CALL_ANSWER_PROMPT.format(
-                    tool=tool_name, count=executed_count
-                ),
+                prompt.format(tool=tool_name, count=executed_count),
                 steps_taken,
             )
         except Exception as e:  # noqa: BLE001 - the reason goes in the answer
@@ -11608,6 +12349,8 @@ Do NOT wrap conversational replies in JSON.
             )
         # Raw, like the summary branches above — the caller finalizes once.
         # Subclass hooks append corrections, so a second pass duplicates them.
+        if failed and answer is not None:
+            answer = f"{answer.rstrip()}\n\n{summary}"
         return answer, steps_taken
 
     def _end_turn_on_scope(

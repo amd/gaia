@@ -6,14 +6,22 @@
    `components` layer and inline utilities still win over them.
 
    These primitives are the shared vocabulary every page composes from. They
-   live here, not as ad-hoc Tailwind chains per page, so the landing, hub and
-   agent-detail pages cannot drift from each other.
+   live here, not as ad-hoc Tailwind chains per page, so pages cannot drift
+   from each other.
 
    Type sizes use clamp() so the 1200px design collapses sanely on small
    screens: the design's stated value is always the upper bound. */
 
 @tailwind base;
 @tailwind components;
+
+/* The scramble's writing systems: a Noto subset (SIL OFL 1.1, public/fonts/OFL.txt).
+   Rebuild with tools/subset-scripts-font.py after changing a character. */
+@font-face {
+  font-family: 'GAIA Scripts';
+  src: url('/fonts/gaia-scripts.woff2') format('woff2');
+  font-display: block;
+}
 
 @layer components {
   /* ---------------------------------------------------------------- layout */
@@ -44,10 +52,6 @@
   .g-h-page {
     font-size: clamp(2.75rem, 1.5rem + 5vw, 84px);
     @apply font-display font-semibold uppercase leading-[0.95] tracking-[0.01em];
-  }
-  .g-h-agent {
-    font-size: clamp(2.25rem, 1.4rem + 3.6vw, 64px);
-    @apply font-display font-semibold uppercase leading-[0.98] tracking-[0.01em];
   }
   .g-h-section {
     font-size: clamp(2.25rem, 1.4rem + 3.4vw, 62px);
@@ -182,10 +186,6 @@
   .g-pill-active {
     @apply border-g-accent-fill bg-g-accent-fill text-g-on-accent hover:text-g-on-accent;
   }
-  /* Static descriptive pill (tags on the agent page). */
-  .g-pill-static {
-    @apply font-mono rounded-g-pill border border-g-border px-3 py-1 text-[12.5px] text-g-muted;
-  }
   /* Eyebrow pill with a solid accent dot. */
   .g-pill-eyebrow {
     @apply inline-flex items-center gap-2.5 rounded-g-pill border border-g-border bg-g-surface py-1.5 pl-3 pr-4;
@@ -225,14 +225,81 @@
     transform: none;
   }
 
-  /* A soft red glow for the one red phrase in the hero. */
-  .g-glow {
-    text-shadow: 0 0 14px rgb(var(--g-brand) / 0.35), 0 0 42px rgb(var(--g-brand) / 0.45);
+  /* The hero's red phrase: a size up from its line, with a slow glow. */
+  .g-hero-lead {
+    font-size: var(--g-hero-lead, 1em);
+  }
+  /* From sm up the lead line stays on one line: it is 8.34em wide in Antonio. */
+  @media (min-width: 640px) {
+    .g-hero-lead,
+    .g-hero-red {
+      --g-hero-lead: min(1em, calc((min(100vw, 1200px) - 3.5rem) / 8.5));
+    }
+    .g-hero-lead {
+      white-space: nowrap;
+    }
+  }
+  .g-hero-red {
+    font-size: calc(var(--g-hero-lead, 1em) * 1.28);
+    margin-top: 0.06em;
+    text-shadow: 0 0 0.2em rgb(var(--g-brand) / 0.32);
+    animation: g-ai-glow 4.5s ease-in-out infinite;
+  }
+  @keyframes g-ai-glow {
+    0%, 100% { text-shadow: 0 0 0.2em rgb(var(--g-brand) / 0.32); }
+    50% { text-shadow: 0 0 0.34em rgb(var(--g-brand) / 0.5), 0 0 0.8em rgb(var(--g-brand) / 0.16); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .g-hero-red { animation: none; }
+  }
+
+  /* The headline scramble (scramble.ts): a glyph sits over each letter, which keeps its place. */
+  .g-scr-word {
+    white-space: nowrap;
+  }
+  .g-scr {
+    position: relative;
+    display: inline-block;
+  }
+  .g-scr.is-waiting {
+    visibility: hidden;
+  }
+  .g-scr.is-scrambling {
+    color: transparent;
+    text-shadow: none;
+  }
+  .g-scr-glyph {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgb(var(--g-text));
+    pointer-events: none;
+  }
+  .g-hero-red .g-scr-glyph {
+    color: rgb(var(--g-brand));
+  }
+  .g-scr-inner {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .g-scr-char {
+    font-family: 'GAIA Scripts', Antonio, 'Arial Narrow', Arial, sans-serif;
+    font-weight: 400;
+    font-size: 0.58em;
+    line-height: 1;
+  }
+  .g-scr-glyph svg {
+    width: 0.55em;
+    height: 0.55em;
   }
 
   /* Paused from the footer: the starfield holds a still frame (starfield.ts)
      and nothing else loops either. */
-  html[data-motion='paused'] .animate-g-breathe {
+  html[data-motion='paused'] .animate-g-breathe,
+  html[data-motion='paused'] .g-hero-red {
     animation: none;
   }
 
@@ -259,9 +326,8 @@
     border-color: rgb(var(--g-code-text) / 0.14);
   }
 
-  /* Syntax and severity colours for hand-authored code panels (Terminal). Prism
-     handles rendered markdown separately in the agent detail page, off the same
-     tokens. Every role here is measured only against --g-code-bg. */
+  /* Syntax and severity colours for hand-authored code panels (Terminal).
+     Every role here is measured only against --g-code-bg. */
   .g-code-panel .tok-key { color: rgb(var(--g-code-accent)); }
   .g-code-panel .tok-str { color: rgb(var(--g-code-green)); }
   .g-code-panel .tok-fn { color: rgb(var(--g-code-amber)); }

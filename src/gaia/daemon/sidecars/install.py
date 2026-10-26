@@ -56,10 +56,8 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Ids queued for install but whose worker has not yet entered
-# ``installer.install`` (and therefore not yet claimed ``_install_slot``).
-# Closes the window where two POSTs both pass the busy check and the second
-# worker's InstallInProgressError would clobber the first one's progress.
+# Ids with an install or uninstall in flight on this daemon, from the request
+# until its worker finishes. A second POST for one of them is refused at once.
 _QUEUE_LOCK = threading.Lock()
 _QUEUED: set = set()
 
@@ -327,7 +325,7 @@ def _require_supervised(
             f"a sidecar"
         ),
         _KNOWN_HUB: (
-            f"'{agent_id}' is published on the Agent Hub but this GAIA build "
+            f"'{agent_id}' is published but this GAIA build "
             f"cannot run it as a sidecar"
         ),
         _KNOWN_AGENT: (
@@ -366,6 +364,24 @@ def _claim_slot(agent_id: str, action: str = "install") -> None:
 def _release_slot(agent_id: str) -> None:
     with _QUEUE_LOCK:
         _QUEUED.discard(agent_id)
+
+
+def _claim_cross_process_slot(agent_id: str, install_root: Optional[Path], action: str):
+    """The installer's slot for *agent_id*, held across every GAIA process.
+
+    Raises:
+        InstallBusyError: another process (the Agent UI, ``gaia hub``) holds it.
+        InstallFailedError: its lock file could not be created.
+    """
+    from gaia.utils.file_lock import FileLockError
+
+    installer_mod = _installer()
+    try:
+        return installer_mod.claim_install_slot(agent_id, install_root)
+    except installer_mod.InstallInProgressError as exc:
+        raise InstallBusyError(f"cannot {action} '{agent_id}': {exc}") from exc
+    except FileLockError as exc:
+        raise InstallFailedError(f"cannot {action} '{agent_id}': {exc}") from exc
 
 
 def assert_no_live_process_in(install_dir: Path, agent_id: str) -> None:
@@ -502,7 +518,9 @@ def start_install(
     Raises:
         UnknownAgentError: no sidecar spec — the daemon could not run it.
         AgentTrustRequiredError: non-verified agent without ``trusted=True``.
-        InstallBusyError: an install for this id is already running.
+        InstallBusyError: an install for this id is already running, here or
+            in another GAIA process.
+        InstallFailedError: the install slot's lock file could not be created.
         HubUnavailableError: the hub manifest could not be fetched.
         StopFailedError: a running sidecar survived the pre-install stop.
     """
@@ -521,10 +539,10 @@ def start_install(
         raise HubUnavailableError(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - boundary translation, re-raised
         raise HubUnavailableError(
-            f"could not read the Agent Hub manifest for '{agent_id}' from {url}: "
+            f"could not read the published manifest for '{agent_id}' from {url}: "
             f"{exc}. If that is a connection error, check your network or "
             "GAIA_HUB_URL; if it persists, the published manifest may be "
-            "malformed — report it against the hub."
+            "malformed — report it at https://github.com/amd/gaia/issues."
         ) from exc
 
     # Enforced here for a synchronous, distinct 403 (the client can then prompt
@@ -546,7 +564,11 @@ def start_install(
         raise HubUnavailableError(str(exc)) from exc
 
     _claim_slot(agent_id)
+    slot = None
     try:
+        # Before the sidecar stops: another GAIA process installing this id
+        # must refuse this request, not have the agent stopped under it.
+        slot = _claim_cross_process_slot(agent_id, install_root, "install")
         # Stop the sidecar up front so a survivor is a SYNCHRONOUS error the
         # caller sees on this request; the worker re-takes the hold for the
         # duration of the actual mutation.
@@ -566,12 +588,15 @@ def start_install(
                 base_url=base_url,
                 fetcher=fetcher,
                 install_root=install_root,
+                slot=slot,
             )
         )
     except BaseException:
         # Anything that stops the worker from ever running (including a failure
         # to spawn the thread) must release the slot, or install/uninstall of
         # this id would be wedged for the life of the daemon.
+        if slot is not None:
+            slot.release()
         _release_slot(agent_id)
         raise
     return {"agent_id": agent_id, "status": "queued", "version": version}
@@ -587,8 +612,12 @@ def _run_install(
     base_url: Optional[str],
     fetcher,
     install_root: Optional[Path],
+    slot,
 ) -> None:
-    """Install worker. The failure is recorded in progress AND logged loudly."""
+    """Install worker; owns *slot* and releases it however it ends.
+
+    The failure is recorded in progress AND logged loudly.
+    """
     installer_mod = _installer()
     try:
         # The hold spans the whole download+replace so no ensure can respawn
@@ -602,15 +631,15 @@ def _run_install(
                 base_url=base_url,
                 fetcher=fetcher,
                 install_root=install_root,
+                slot=slot,
             )
         logger.info(
             "install: %s %s installed at %s", agent_id, result.version, result.path
         )
     except Exception as exc:  # noqa: BLE001 - terminal state is the return channel
-        # installer.install() records status="failed" for its own errors, but
-        # not for InstallInProgressError (another process holds the slot).
-        # Force a terminal state either way so a poller can never hang on
-        # "queued" forever.
+        # installer.install() records status="failed" for its own errors; an
+        # error raised outside it (the sidecar hold) records nothing. Force a
+        # terminal state either way so a poller can never hang on "queued".
         state = installer_mod.get_install_status(agent_id)
         if state is None or state.get("status") not in ("failed", "completed"):
             installer_mod._set_progress(  # noqa: SLF001 - terminal state for the poller
@@ -623,7 +652,10 @@ def _run_install(
             )
         logger.error("install: %s failed: %s", agent_id, exc)
     finally:
-        _release_slot(agent_id)
+        try:
+            slot.release()
+        finally:
+            _release_slot(agent_id)
 
 
 def install_status(agent_id: str) -> Optional[Dict[str, Any]]:
@@ -667,8 +699,11 @@ def uninstall(
     # stops this removal from deleting a just-completed install).
     _claim_slot(agent_id, action="uninstall")
     try:
-        with sidecar_stopped(registry, agent_id, install_root):
-            installer_mod.uninstall(agent_id, install_root=install_root)
+        # Before the sidecar stops, so an install in another process refuses
+        # this request instead of having the agent stopped under it.
+        with _claim_cross_process_slot(agent_id, install_root, "uninstall") as slot:
+            with sidecar_stopped(registry, agent_id, install_root):
+                installer_mod.uninstall(agent_id, install_root=install_root, slot=slot)
     except installer_mod.NotInstalledError as exc:
         # The installer names what failed and where to look; the third part of
         # the fail-loudly contract — what to DO next — is added here.

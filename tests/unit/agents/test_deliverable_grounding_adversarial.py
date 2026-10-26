@@ -8,7 +8,7 @@ sourced figures, or not a figure at all (dates, IDs, phone numbers) must not
 be flagged. Then true positives the normalisation must not excuse, the size
 bounds, and the shape of the note, which must never take over the answer.
 
-kw-03 (rc12 knowledge-work run) is the canonical miss: the memo said
+The canonical miss is an investment memo: the memo said
 "$14.5M pre-money", the term sheet said "$14,500,000", and the check flagged
 "$14.5".
 """
@@ -87,7 +87,7 @@ def _flagged(findings) -> str:
         "$14,500k",
     ],
 )
-def test_kw03_the_pre_money_in_any_spelling_is_sourced(written):
+def test_memo_pre_money_in_any_spelling_is_sourced(written):
     memo = f"## Valuation\n\nPre-money of {written}, above the seed median.\n"
 
     assert _memo(memo) == [], written
@@ -170,7 +170,7 @@ def test_a_file_writing_both_ends_in_full_is_sourced_by_a_range():
     assert _memo("Range: $3,000,000 to $5,000,000.\n", records) == []
 
 
-def test_kw03_memo_as_written_raises_nothing():
+def test_memo_as_written_raises_nothing():
     memo = (
         "# Northwind Robotics Series Seed: Memo\n\n"
         "| Term | Term sheet | Market | Call |\n|---|---|---|---|\n"
@@ -192,7 +192,7 @@ def test_kw03_memo_as_written_raises_nothing():
 
 
 def test_a_source_read_in_an_earlier_turn_counts():
-    """kw-03 read the term sheet a turn earlier; history is evidence."""
+    """The memo's term sheet was read a turn earlier; history is evidence."""
     findings = _memo(
         "Pre-money: $14.5M.\n",
         records=[_fetch("u", "nothing numeric")],
@@ -341,11 +341,12 @@ def test_a_scaled_figure_in_the_answer_still_counts_as_naming_it():
 # ---------------------------------------------------------------------------
 
 
-def test_the_correction_asks_for_one_line_not_an_explanation():
+def test_a_finding_never_asks_for_the_file_to_be_changed():
     [finding] = _memo("Pre-money of $16M.\n")
 
-    assert "one short line" in finding.correction
-    assert "don't explain this check" in finding.correction
+    for text in (finding.correction, finding.note):
+        assert "$16M" in text
+        assert not any(w in text.lower() for w in ("fix", "mark them", "estimate"))
 
 
 def test_the_note_is_one_short_line_however_many_figures_are_flagged():

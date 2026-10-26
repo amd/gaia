@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent, _claims_file_write
+from gaia.agents.base.agent import Agent, _claims_file_write, _with_replaced_answer
 from gaia.agents.base.completion import (
     CompletionEvidence,
     incomplete_answer,
@@ -294,12 +294,12 @@ def test_real_loop_requires_correct_file_write_and_readback(agent, tmp_path):
 
 
 @pytest.mark.parametrize("max_steps", [1, 10])
-def test_persistent_lie_is_suppressed_and_status_incomplete(agent, max_steps):
+def test_persistent_lie_is_caveated_and_status_incomplete(agent, max_steps):
     claim = {"answer": "I saved the result to `summary.md`."}
     script(agent, claim, claim)
     result = agent.process_query("Save the result to `summary.md`", max_steps=max_steps)
     assert result["status"] == "incomplete"
-    assert claim["answer"] not in result["result"]
+    assert result["result"].startswith(claim["answer"])
     assert "No successful write" in result["result"]
     assert agent.console.print_final_answer.call_args.args[0] == result["result"]
 
@@ -575,7 +575,8 @@ def test_subclass_cannot_reintroduce_an_unsupported_test_claim(agent):
     script(agent, {"answer": "I did not run tests."})
     result = agent.process_query("Check the code", max_steps=1)
     assert result["status"] == "incomplete"
-    assert "All tests pass." not in result["result"]
+    assert result["result"].startswith("All tests pass.")
+    assert "No tests were run this turn." in result["result"]
     assert agent.console.print_final_answer.call_args.args[0] == result["result"]
 
 
@@ -1066,7 +1067,7 @@ def test_loop_still_rejects_a_false_save_after_a_denied_write(agent, tmp_path):
     )
     result = agent.process_query(_DOCUMENTS_REQUEST, max_steps=10)
     assert result["status"] == "incomplete"
-    assert lie["answer"] not in result["result"]
+    assert result["result"].startswith(lie["answer"])
     assert "was declined, so nothing was saved" in result["result"]
     correction = sent[2][-1]["content"]
     assert "[check:completion]" in correction
@@ -1157,3 +1158,110 @@ def test_a_folder_named_by_its_variable_is_backed_by_a_write_inside_it(
     read(ledger, script)
     variable = "%GAIA_TEST_TEMP%" if sys.platform == "win32" else "$GAIA_TEST_TEMP"
     assert gaps(ledger, f"I wrote a throwaway script in `{variable}`.") == []
+
+
+_SUMMARY = (
+    "I saved the summary to `summary.md`.\n\n"
+    "## Decisions\n- Ship the parser on Friday.\n- Drop the legacy exporter.\n\n"
+    "## Owners\n- Ana: release notes.\n- Raj: migration guide."
+)
+
+
+def test_completion_correction_asks_for_the_whole_answer_again(agent):
+    sent = script(
+        agent,
+        {"answer": _SUMMARY},
+        call("write_file", file_path="summary.md", content="alpha\n"),
+        call("read_file", file_path="summary.md"),
+        {"answer": _SUMMARY},
+    )
+    agent.process_query("Summarize the notes and save to `summary.md`", max_steps=10)
+    correction = sent[1][-1]["content"]
+    assert "[check:completion]" in correction
+    assert "complete answer again" in correction
+
+
+def test_an_acknowledgement_after_the_correction_keeps_the_summary(agent):
+    """The reply to the check is not the answer to the user."""
+    script(
+        agent,
+        {"answer": _SUMMARY},
+        call("write_file", file_path="summary.md", content="alpha\nbeta\n"),
+        call("read_file", file_path="summary.md"),
+        {"answer": "All 2 lines match what was written."},
+    )
+    result = agent.process_query(
+        "Summarize the notes and save to `summary.md`", max_steps=10
+    )
+    assert result["status"] == "success", result["result"]
+    assert result["result"].startswith(_SUMMARY)
+    assert "All 2 lines match what was written." in result["result"]
+    assert agent.console.print_final_answer.call_args.args[0] == result["result"]
+
+
+def test_a_full_rewrite_after_the_correction_replaces_the_answer(agent):
+    rewrite = (
+        "I saved the summary to `summary.md` and read it back.\n\n"
+        "## Decisions\n- Ship the parser on Friday.\n- Drop the legacy exporter.\n\n"
+        "## Owners\n- Ana: release notes.\n- Raj: migration guide and FAQ."
+    )
+    script(
+        agent,
+        {"answer": _SUMMARY},
+        call("write_file", file_path="summary.md", content="alpha\n"),
+        call("read_file", file_path="summary.md"),
+        {"answer": rewrite},
+    )
+    result = agent.process_query(
+        "Summarize the notes and save to `summary.md`", max_steps=10
+    )
+    assert result["result"].startswith(rewrite)
+    assert result["result"].count("## Decisions") == 1
+
+
+def test_a_short_honest_reply_does_not_bring_back_the_false_claim(agent):
+    """Nothing was written, so the earlier "I saved" is still unbacked."""
+    script(
+        agent,
+        {"answer": _SUMMARY},
+        {"answer": "I could not save the file."},
+    )
+    result = agent.process_query(
+        "Summarize the notes and save to `summary.md`", max_steps=10
+    )
+    assert "## Decisions" not in result["result"]
+    assert result["result"].startswith("I could not save the file.")
+
+
+def test_a_short_retraction_after_the_correction_does_not_bring_back_the_answer(
+    agent,
+):
+    """A reply that corrects the earlier answer must not follow its wrong version."""
+    retraction = "Actually, Raj owns the release notes, not Ana."
+    script(
+        agent,
+        {"answer": _SUMMARY},
+        call("write_file", file_path="summary.md", content="alpha\nbeta\n"),
+        call("read_file", file_path="summary.md"),
+        {"answer": retraction},
+    )
+    result = agent.process_query(
+        "Summarize the notes and save to `summary.md`", max_steps=10
+    )
+    assert "## Decisions" not in result["result"]
+    assert retraction in result["result"]
+
+
+@pytest.mark.parametrize(
+    "reply, restored",
+    [
+        ("All 2 lines match what was written.", True),
+        ("Actually the file has three owners, not two.", False),
+        ("Correction: the parser ships Monday.", False),
+        ("Sorry, I misread the notes.", False),
+        ("On closer look, Raj owns both.", False),
+        ("I was wrong about the owners.", False),
+    ],
+)
+def test_only_an_acknowledgement_restores_the_earlier_answer(reply, restored):
+    assert (_with_replaced_answer(reply, _SUMMARY) is not None) is restored

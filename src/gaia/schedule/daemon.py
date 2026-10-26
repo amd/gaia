@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import signal
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from apscheduler.events import (
     EVENT_JOB_MAX_INSTANCES,
     EVENT_JOB_MISSED,
+    EVENT_JOB_SUBMITTED,
     JobExecutionEvent,
     JobSubmissionEvent,
 )
@@ -26,6 +27,7 @@ from gaia.schedule import runner
 from gaia.schedule.lock import daemon_lock
 from gaia.schedule.store import (
     DEFAULT_STORE_PATH,
+    MissedRuns,
     Schedule,
     ScheduleStore,
     TomlScheduleStore,
@@ -82,11 +84,167 @@ def _log_skipped_run(event: JobExecutionEvent | JobSubmissionEvent) -> None:
     )
 
 
+#: Most due times counted for one missed stretch: an every-minute schedule
+#: off for 69 days. Past it the count stops, and the log says so.
+_MAX_MISSED_COUNTED = 100_000
+
+
+def _utc(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).isoformat()
+
+
+def _parse(schedule: Schedule, field: str) -> Optional[datetime]:
+    stamp = getattr(schedule, field)
+    if not stamp:
+        return None
+    try:
+        moment = datetime.fromisoformat(stamp)
+    except ValueError as e:
+        raise ValueError(
+            f"schedule {schedule.name!r} has an unreadable {field} {stamp!r} in "
+            "the schedule store; fix or delete that line in schedules.toml"
+        ) from e
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _latest_fire(trigger: CronTrigger, until: datetime, inclusive: bool):
+    """The last fire time before *until* (or at it, if *inclusive*)."""
+    for span in (
+        timedelta(minutes=2),
+        timedelta(hours=2),
+        timedelta(days=2),
+        timedelta(days=32),
+        timedelta(days=367),
+    ):
+        latest = None
+        fire = trigger.get_next_fire_time(None, until - span)
+        while fire is not None and (fire < until or (inclusive and fire == until)):
+            latest = fire
+            fire = trigger.get_next_fire_time(fire, fire)
+        if latest is not None:
+            return latest
+    return None
+
+
+def _missed_runs(
+    schedule: Schedule, until: datetime, *, including_until: bool
+) -> Tuple[List[datetime], bool]:
+    """Due times of *schedule* before *until* that nothing ran, and whether
+    the count stopped at the cap (it is then "at least" that many).
+
+    Counted from the run the daemon last expected (``next_run``), and never
+    from before the schedule was created, last ran, was last resumed, or
+    began counting misses. Past the cap the list ends with the latest due
+    time, so ``last_missed`` is still right.
+    """
+    trigger = CronTrigger.from_crontab(schedule.cron)
+    floor = max(
+        moment
+        for moment in (
+            _parse(schedule, "created_at"),
+            _parse(schedule, "last_run"),
+            _parse(schedule, "resumed_at"),
+            _parse(schedule, "missed_since"),
+        )
+        if moment is not None
+    )
+    expected = _parse(schedule, "next_run")
+    fire = (
+        trigger.get_next_fire_time(None, expected)
+        if expected is not None and expected > floor
+        else trigger.get_next_fire_time(floor, floor)
+    )
+    missed: List[datetime] = []
+    while fire is not None and len(missed) < _MAX_MISSED_COUNTED:
+        if fire > until or (fire == until and not including_until):
+            break
+        if fire > floor:
+            missed.append(fire)
+        fire = trigger.get_next_fire_time(fire, fire)
+    capped = len(missed) >= _MAX_MISSED_COUNTED
+    if capped:
+        log.warning(
+            "schedule %r: stopped counting missed runs at %d; more came due "
+            "before %s",
+            schedule.name,
+            _MAX_MISSED_COUNTED,
+            _utc(until),
+        )
+        latest = _latest_fire(trigger, until, including_until)
+        if latest is not None and latest > missed[-1]:
+            missed.append(latest)
+    return missed, capped
+
+
+def _account(
+    store: ScheduleStore,
+    name: str,
+    until: datetime,
+    *,
+    including_until: bool,
+) -> None:
+    """Record what *name* missed before *until*; expect its next run after it."""
+
+    def decide(schedule: Schedule) -> Optional[MissedRuns]:
+        if not schedule.enabled:
+            return None
+        trigger = CronTrigger.from_crontab(schedule.cron)
+        following = trigger.get_next_fire_time(until, until)
+        next_run = _utc(following) if following else None
+        if schedule.missed_since is None:
+            # Saved before misses were counted: start counting from now.
+            return MissedRuns([], next_run, since=_utc(until))
+        missed, capped = _missed_runs(schedule, until, including_until=including_until)
+        if missed:
+            log.warning(
+                "schedule %r missed %s%d run(s), the latest due at %s: the PC "
+                "was off or asleep, or the schedule daemon was not running",
+                name,
+                "at least " if capped else "",
+                len(missed),
+                _utc(missed[-1]),
+            )
+        return MissedRuns([_utc(due) for due in missed], next_run, at_least=capped)
+
+    store.account_missed(name, decide)
+
+
+def catch_up_missed_runs(store: ScheduleStore, now: datetime) -> None:
+    """At start: record the runs that came due while the daemon was not
+    running. They are not run late; `gaia schedule show` lists them."""
+    for name, schedule in store.load().items():
+        if schedule.enabled:
+            _account(store, name, now, including_until=True)
+
+
+def _account_for_submission(store: ScheduleStore, event: JobSubmissionEvent) -> None:
+    """Record the runs a long sleep skipped or folded into this submission.
+
+    APScheduler submits the latest due run and drops the ones before it
+    without an event. The latest one is dropped too when it is past the
+    misfire grace; the executor then sends EVENT_JOB_MISSED from another
+    thread, so it is decided here instead, once.
+    """
+    latest = max(event.scheduled_run_times)
+    too_late = (datetime.now(timezone.utc) - latest).total_seconds() > (
+        MISFIRE_GRACE_SECONDS
+    )
+    _account(store, event.job_id, latest, including_until=too_late)
+
+
 def build_scheduler(store: ScheduleStore) -> BackgroundScheduler:
-    """Create a scheduler with one cron job per enabled schedule."""
+    """Create a scheduler with one cron job per enabled schedule.
+
+    Runs that came due while the daemon was not running are recorded as
+    missed first, and the runs a sleep skips are recorded as they happen.
+    """
     scheduler = BackgroundScheduler(job_defaults=JOB_DEFAULTS)
     scheduler.add_listener(_log_skipped_run, EVENT_JOB_MISSED | EVENT_JOB_MAX_INSTANCES)
+    scheduler.add_listener(
+        lambda event: _account_for_submission(store, event), EVENT_JOB_SUBMITTED
+    )
     refresh_schedules(scheduler, store)
+    catch_up_missed_runs(store, datetime.now(timezone.utc))
     log.info("armed %d schedule(s)", len(scheduler.get_jobs()))
     return scheduler
 

@@ -47,7 +47,8 @@ beforeEach(() => {
     capturedCallbacks = null;
 
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
-    mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [] });
+    mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
+    mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({
         documents: [],
@@ -143,7 +144,7 @@ describe('ChatView live status', () => {
         expect(useChatStore.getState().liveStatus).toBeNull();
     });
 
-    it('drops the phase once a tool starts', async () => {
+    it('says a tool is running once it starts, not that the model is thinking', async () => {
         await driveSend();
         act(() => {
             capturedCallbacks!.onAgentEvent({
@@ -151,6 +152,70 @@ describe('ChatView live status', () => {
             } as unknown as StreamEvent);
             capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'write_file' } as unknown as StreamEvent);
         });
-        expect(useChatStore.getState().liveStatus).toBeNull();
+        expect(useChatStore.getState().liveStatus).toBe('Writing file');
+        await liveLine('Writing file');
+    });
+});
+
+describe('a tool called with no arguments', () => {
+    const lastToolStep = () => {
+        const tools = useChatStore.getState().agentSteps.filter((s) => s.type === 'tool');
+        return tools[tools.length - 1];
+    };
+
+    it('shows as running from its start, and empty arguments keep its label', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({
+                type: 'tool_start', tool: 'list_skills', detail: 'Listing your skills',
+            } as unknown as StreamEvent);
+            capturedCallbacks!.onAgentEvent({
+                type: 'tool_args', tool: 'list_skills', args: {}, detail: '',
+            } as unknown as StreamEvent);
+        });
+
+        const step = lastToolStep();
+        expect(step?.tool).toBe('list_skills');
+        expect(step?.active).toBe(true);
+        expect(step?.detail).toBe('Listing your skills');
+        expect(useChatStore.getState().livePhase).toBe('tool');
+    });
+
+    it('never shows "{}" as the detail when no label was sent either', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'list_skills' } as unknown as StreamEvent);
+            capturedCallbacks!.onAgentEvent({ type: 'tool_args', tool: 'list_skills', args: {} } as unknown as StreamEvent);
+        });
+
+        expect(lastToolStep()?.detail).not.toBe('{}');
+    });
+
+    it('still shows real arguments when no formatted detail came with them', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'read_file' } as unknown as StreamEvent);
+            capturedCallbacks!.onAgentEvent({
+                type: 'tool_args', tool: 'read_file', args: { file_path: 'a.txt' },
+            } as unknown as StreamEvent);
+        });
+
+        expect(lastToolStep()?.detail).toBe('{"file_path":"a.txt"}');
+    });
+});
+
+describe('opening a chat', () => {
+    it("keeps a message sent before the chat's history arrives", async () => {
+        let deliver!: (v: { messages: never[]; total: number }) => void;
+        mockedApi.getMessages.mockReturnValueOnce(new Promise((r) => { deliver = r; }) as never);
+        await driveSend();
+        const userBubbles = () => useChatStore.getState().messages.filter((m) => m.role === 'user').map((m) => m.content);
+        expect(userBubbles()).toEqual(['send the drafted email']);
+
+        // The history load started before the send lands late, without that message.
+        mockedApi.getMessages.mockReturnValue(new Promise(() => {}));
+        await act(async () => { deliver({ messages: [], total: 0 }); });
+
+        expect(userBubbles()).toEqual(['send the drafted email']);
     });
 });

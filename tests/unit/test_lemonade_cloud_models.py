@@ -193,7 +193,7 @@ def test_discovered_custom_cloud_avoids_local_load(client):
         (429, "Wait before retrying"),
         (402, "spending limit"),
         (412, "spending limit"),
-        (500, "Check the provider"),
+        (500, "provider connection and selected model"),
     ],
 )
 @responses.activate
@@ -433,7 +433,7 @@ def test_model_availability_does_not_hide_programming_errors(client, monkeypatch
         (429, "Wait before retrying"),
         (402, "spending limit"),
         (412, "spending limit"),
-        (500, "Check the provider"),
+        (500, "provider connection and selected model"),
     ],
 )
 def test_cloud_sse_backend_error_uses_status_without_reflecting_body(
@@ -460,6 +460,8 @@ def test_cloud_sse_backend_error_uses_status_without_reflecting_body(
             base_url=client.base_url, api_key="test-placeholder", http_client=transport
         ) as sdk:
             monkeypatch.setattr("gaia.llm.lemonade_client.OpenAI", lambda **kwargs: sdk)
+            # 429 and 500 are retried first; skip the backoff waits.
+            client._retry_sleep = lambda _seconds: None
             with pytest.raises(LemonadeClientError) as error:
                 list(client.chat_completions("fireworks.not-deployed", [], stream=True))
 
@@ -492,6 +494,8 @@ def test_cloud_sse_error_reads_status_from_the_flat_stream_frame(client, monkeyp
             base_url=client.base_url, api_key="test-placeholder", http_client=transport
         ) as sdk:
             monkeypatch.setattr("gaia.llm.lemonade_client.OpenAI", lambda **kwargs: sdk)
+            # 429 is retried first; skip the backoff waits.
+            client._retry_sleep = lambda _seconds: None
             with pytest.raises(LemonadeClientError) as error:
                 list(
                     client.chat_completions("amd.DeepSeek-V4.1-Flash", [], stream=True)

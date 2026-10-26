@@ -4,7 +4,7 @@
 """Tests for file watcher utilities including hash functions and parsing."""
 
 import tempfile
-import time
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
@@ -416,48 +416,32 @@ class TestFileChangeHandler:
         assert not handler._should_process("image.png")
         assert not handler._should_process("script.py")
 
-    def test_debouncing(self):
-        """Debouncing prevents duplicate processing."""
-        handler = FileChangeHandler(debounce_seconds=1.0)
+    @staticmethod
+    def _event(path, dest=None):
+        event = MagicMock()
+        event.is_directory = False
+        event.src_path = str(path)
+        event.dest_path = None if dest is None else str(dest)
+        return event
 
-        # First check should not be debounced
-        assert not handler._is_debounced("file.txt")
-
-        # Immediate second check should be debounced
-        assert handler._is_debounced("file.txt")
-
-        # Different file should not be debounced
-        assert not handler._is_debounced("other.txt")
-
-    def test_debounce_expiry(self):
-        """Debounce expires after timeout."""
-        handler = FileChangeHandler(debounce_seconds=0.1)
-
-        assert not handler._is_debounced("file.txt")
-        assert handler._is_debounced("file.txt")
-
-        # Wait for debounce to expire
-        time.sleep(0.15)
-
-        # Should not be debounced anymore
-        assert not handler._is_debounced("file.txt")
-
-    def test_on_created_calls_callback(self):
-        """on_created calls the callback with file path."""
-        callback = Mock()
+    def test_on_created_calls_callback(self, tmp_path):
+        """on_created calls the callback with file path, off the caller's thread."""
+        target = tmp_path / "file.txt"
+        target.write_text("done")
+        threads = []
+        callback = Mock(side_effect=lambda p: threads.append(threading.get_ident()))
         handler = FileChangeHandler(
             on_created=callback,
             extensions=[".txt"],
             debounce_seconds=0,
         )
 
-        event = MagicMock()
-        event.is_directory = False
-        event.src_path = "/path/to/file.txt"
+        handler.on_created(self._event(target))
 
-        handler.on_created(event)
-
-        callback.assert_called_once_with("/path/to/file.txt")
+        assert handler.wait_idle(5)
+        callback.assert_called_once_with(str(target))
+        assert threads != [threading.get_ident()]
+        handler.close()
 
     def test_on_created_ignores_directories(self):
         """on_created ignores directory events."""
@@ -470,6 +454,7 @@ class TestFileChangeHandler:
 
         handler.on_created(event)
 
+        assert handler.wait_idle(5)
         callback.assert_not_called()
 
     def test_on_created_ignores_unmatched_extensions(self):
@@ -480,16 +465,15 @@ class TestFileChangeHandler:
             extensions=[".pdf"],
         )
 
-        event = MagicMock()
-        event.is_directory = False
-        event.src_path = "/path/to/file.txt"
+        handler.on_created(self._event("/path/to/file.txt"))
 
-        handler.on_created(event)
-
+        assert handler.wait_idle(5)
         callback.assert_not_called()
 
-    def test_on_modified_calls_callback(self):
+    def test_on_modified_calls_callback(self, tmp_path):
         """on_modified calls the callback with file path."""
+        target = tmp_path / "file.txt"
+        target.write_text("done")
         callback = Mock()
         handler = FileChangeHandler(
             on_modified=callback,
@@ -497,13 +481,11 @@ class TestFileChangeHandler:
             debounce_seconds=0,
         )
 
-        event = MagicMock()
-        event.is_directory = False
-        event.src_path = "/path/to/file.txt"
+        handler.on_modified(self._event(target))
 
-        handler.on_modified(event)
-
-        callback.assert_called_once_with("/path/to/file.txt")
+        assert handler.wait_idle(5)
+        callback.assert_called_once_with(str(target))
+        handler.close()
 
     def test_on_deleted_calls_callback(self):
         """on_deleted calls the callback with file path."""
@@ -513,13 +495,11 @@ class TestFileChangeHandler:
             extensions=[".txt"],
         )
 
-        event = MagicMock()
-        event.is_directory = False
-        event.src_path = "/path/to/file.txt"
+        handler.on_deleted(self._event("/path/to/file.txt"))
 
-        handler.on_deleted(event)
-
+        assert handler.wait_idle(5)
         callback.assert_called_once_with("/path/to/file.txt")
+        handler.close()
 
     def test_on_moved_calls_callback(self):
         """on_moved calls the callback with src and dest paths."""
@@ -529,49 +509,45 @@ class TestFileChangeHandler:
             extensions=[".txt"],
         )
 
-        event = MagicMock()
-        event.is_directory = False
-        event.src_path = "/path/old.txt"
-        event.dest_path = "/path/new.txt"
+        handler.on_moved(self._event("/path/old.txt", "/path/new.txt"))
 
-        handler.on_moved(event)
-
+        assert handler.wait_idle(5)
         callback.assert_called_once_with("/path/old.txt", "/path/new.txt")
+        handler.close()
 
-    def test_telemetry_tracking(self):
+    def test_telemetry_tracking(self, tmp_path):
         """Telemetry tracks event counts."""
+        target = tmp_path / "file.txt"
+        target.write_text("done")
         handler = FileChangeHandler(
             on_created=Mock(),
             extensions=[".txt"],
             debounce_seconds=0,
         )
-
-        event = MagicMock()
-        event.is_directory = False
-        event.src_path = "/path/file.txt"
 
         assert handler.telemetry["files_created"] == 0
         assert handler.telemetry["total_events"] == 0
 
-        handler.on_created(event)
+        handler.on_created(self._event(target))
+        assert handler.wait_idle(5)
 
         assert handler.telemetry["files_created"] == 1
         assert handler.telemetry["total_events"] == 1
         assert handler.telemetry["last_event_time"] is not None
+        handler.close()
 
-    def test_reset_telemetry(self):
+    def test_reset_telemetry(self, tmp_path):
         """reset_telemetry clears all counters."""
+        target = tmp_path / "file.txt"
+        target.write_text("done")
         handler = FileChangeHandler(
             on_created=Mock(),
             extensions=[".txt"],
             debounce_seconds=0,
         )
 
-        event = MagicMock()
-        event.is_directory = False
-        event.src_path = "/path/file.txt"
-
-        handler.on_created(event)
+        handler.on_created(self._event(target))
+        assert handler.wait_idle(5)
         assert handler.telemetry["total_events"] == 1
 
         handler.reset_telemetry()
@@ -579,37 +555,32 @@ class TestFileChangeHandler:
         assert handler.telemetry["total_events"] == 0
         assert handler.telemetry["files_created"] == 0
         assert handler.telemetry["last_event_time"] is None
+        handler.close()
 
-    def test_callback_error_handling(self):
-        """Callback errors are caught and logged."""
+    def test_callback_error_handling(self, tmp_path, caplog):
+        """A failing callback is logged with its traceback; dispatch continues."""
+        target = tmp_path / "file.txt"
+        target.write_text("done")
+        later = Mock()
 
         def failing_callback(path):
             raise ValueError("Test error")
 
         handler = FileChangeHandler(
             on_created=failing_callback,
+            on_deleted=later,
             extensions=[".txt"],
             debounce_seconds=0,
         )
 
-        event = MagicMock()
-        event.is_directory = False
-        event.src_path = "/path/file.txt"
+        handler.on_created(self._event(target))
+        assert handler.wait_idle(5)
+        handler.on_deleted(self._event(target))
+        assert handler.wait_idle(5)
 
-        # Should not raise
-        handler.on_created(event)
-
-    def test_lru_cache_eviction(self):
-        """Debounce cache evicts old entries when full."""
-        handler = FileChangeHandler(debounce_seconds=0)
-        handler._max_cache_size = 10
-
-        # Fill cache beyond limit
-        for i in range(15):
-            handler._is_debounced(f"file{i}.txt")
-
-        # Cache should be trimmed
-        assert len(handler._last_processed) <= 10
+        assert "Test error" in caplog.text
+        later.assert_called_once_with(str(target))
+        handler.close()
 
 
 class TestFileWatcher:
@@ -717,3 +688,39 @@ class TestDefaultExtensions:
         # Check for config files
         assert ".yaml" in defaults
         assert ".yml" in defaults
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize(
+    "doc, start, end",
+    [
+        ("docs/spec/chat-agent.mdx", "default extensions:", "are not watched"),
+        ("docs/sdk/utils/file-watcher.mdx", "## Default Extensions", "\n## "),
+    ],
+    ids=["chat-agent-spec", "file-watcher-guide"],
+)
+def test_docs_list_exactly_the_extensions_the_watcher_watches(doc, start, end):
+    """The docs name each watched extension; they must not drift from the code."""
+    import re
+
+    from gaia.utils.file_watcher import FileChangeHandler
+
+    text = (REPO_ROOT / doc).read_text(encoding="utf-8")
+    begin = text.find(start)
+    assert begin >= 0, f"{doc} no longer contains {start!r}; update this test's anchor"
+    stop = text.find(end, begin + len(start))
+    assert stop >= 0, f"{doc} has no {end!r} after {start!r}; update this test's anchor"
+    listed = set(re.findall(r"`(\.[a-z0-9]+)`", text[begin:stop]))
+    assert listed == set(FileChangeHandler.DEFAULT_EXTENSIONS), (
+        f"{doc} lists {sorted(listed)}, but the watcher watches "
+        f"{sorted(FileChangeHandler.DEFAULT_EXTENSIONS)}"
+    )
+
+
+def test_a_moved_docs_anchor_fails_with_a_message_not_a_value_error():
+    with pytest.raises(AssertionError, match="update this test's anchor"):
+        test_docs_list_exactly_the_extensions_the_watcher_watches(
+            "docs/spec/chat-agent.mdx", "no such lead-in:", "are not watched"
+        )

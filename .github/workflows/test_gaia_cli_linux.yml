@@ -10,9 +10,41 @@ name: GAIA CLI Tests (Linux)
 on:
   push:
     branches: [ main ]
+    paths:
+      - '.github/workflows/test_gaia_cli_linux.yml'
+      - '.github/actions/setup-venv/**'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      # Drives `gaia --help`, `gaia chat/prompt/llm/eval/kill` end to end, so
+      # any Python under src/gaia can change it.
+      - 'src/gaia/**'
+      # Frontend-only trees: no Python test here imports them.
+      - '!src/gaia/apps/webui/**'
+      - '!src/gaia/apps/*/webui/**'
+      - '!src/gaia/electron/**'
+      - 'tests/test_rag.py'
+      - 'tests/test_lemonade_client.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/test_gaia_cli_linux.yml'
+      - '.github/actions/setup-venv/**'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      # Drives `gaia --help`, `gaia chat/prompt/llm/eval/kill` end to end, so
+      # any Python under src/gaia can change it.
+      - 'src/gaia/**'
+      # Frontend-only trees: no Python test here imports them.
+      - '!src/gaia/apps/webui/**'
+      - '!src/gaia/apps/*/webui/**'
+      - '!src/gaia/electron/**'
+      - 'tests/test_rag.py'
+      - 'tests/test_lemonade_client.py'
   merge_group:
   workflow_dispatch:
 
@@ -27,16 +59,14 @@ permissions:
 jobs:
   test-gaia-cli-linux:
     name: Test GAIA CLI on Linux (Full Integration)
-    runs-on: ubuntu-latest
+    # Pinned: the Lemonade PPA has no 26.04 build, so apt there installs Ubuntu's stale lemonade-server.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
-
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
 
       - name: Install system dependencies
         run: |

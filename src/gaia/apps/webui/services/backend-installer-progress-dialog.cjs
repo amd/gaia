@@ -29,6 +29,7 @@ const path = require("path");
 const { BrowserWindow, dialog, ipcMain, shell, clipboard } = require("electron");
 
 const installer = require("./backend-installer.cjs");
+const { appIconPath } = require("./app-icon.cjs");
 
 // IPC channels. Keep these in sync with preload.cjs.
 const IPC_PROGRESS_EVENT = "install:progress";
@@ -72,14 +73,45 @@ function registerIpcHandlers() {
   });
 }
 
+// ── Stage labels ────────────────────────────────────────────────────────────
+
+// Keyed by installer.STAGES values; the ids themselves stay in the install log.
+const STAGE_LABELS = Object.freeze({
+  "pre-checks": "Checking your PC",
+  "ensure-uv": "Getting the installer ready",
+  "create-venv": "Preparing GAIA's workspace",
+  "install-package": "Installing GAIA",
+  "gaia-init": "Getting the AI model ready",
+  verify: "Finishing up",
+});
+const NEUTRAL_STAGE_LABEL = "Setting up GAIA";
+
+const unlabeledStages = new Set();
+
+/** What the window shows for an installer stage id. */
+function stageLabel(stage) {
+  if (Object.prototype.hasOwnProperty.call(STAGE_LABELS, stage)) return STAGE_LABELS[stage];
+  if (stage && !unlabeledStages.has(stage)) {
+    unlabeledStages.add(stage);
+    installer.log(
+      `Warning: install stage "${stage}" has no label; the window shows "${NEUTRAL_STAGE_LABEL}"`
+    );
+  }
+  return NEUTRAL_STAGE_LABEL;
+}
+
 // ── Embedded HTML ───────────────────────────────────────────────────────────
+
+function escapeHtml(text) {
+  return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 /**
  * HTML payload for the progress window. Rendered via `loadURL('data:...')`.
  * The script uses `window.gaiaInstall` exposed by preload.cjs.
  */
 function buildProgressHtml({ logPath }) {
-  const escapedLog = String(logPath || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const escapedLog = escapeHtml(logPath || "");
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -90,13 +122,13 @@ function buildProgressHtml({ logPath }) {
    * src/styles/index.css, so the dark theme's role values are mirrored
    * here. Keep them in step with that file; nothing below names a hex. */
   :root {
-    --bg-primary: #17161C;
-    --bg-tertiary: #2A2831;
-    --border: #3A3842;
-    --text-primary: #F0EDE7;
-    --text-secondary: #AAA5B0;
-    --text-muted: #8C8794;
-    --accent-fill: #9A4930;
+    --bg-primary: #1A1917;
+    --bg-tertiary: #2C2B27;
+    --border: #4A4740;
+    --text-primary: #EFECE6;
+    --text-secondary: #B3ADA5;
+    --text-muted: #958F87;
+    --accent-solid: #D4B47E;
   }
   html, body {
     margin: 0;
@@ -132,8 +164,6 @@ function buildProgressHtml({ logPath }) {
   .stage {
     font-size: 12px;
     color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
     margin-bottom: 6px;
     min-height: 15px;
   }
@@ -152,7 +182,7 @@ function buildProgressHtml({ logPath }) {
   }
   .fill {
     height: 100%;
-    background: var(--accent-fill);
+    background: var(--accent-solid);
     border-radius: 9999px;
     transition: width 300ms ease-out;
     width: 0%;
@@ -201,11 +231,11 @@ function buildProgressHtml({ logPath }) {
 </head>
 <body>
   <h1>Setting up GAIA</h1>
-  <p class="subtitle">First-launch backend install — this can take a few minutes</p>
+  <p class="subtitle">First-time setup — this can take a few minutes</p>
   <div class="stage" id="stage">Starting…</div>
   <div class="bar"><div class="fill indeterminate" id="fill"></div></div>
   <div class="percent" id="percent"></div>
-  <div class="message" id="message">Running pre-flight checks…</div>
+  <div class="message" id="message">Checking your PC…</div>
   <div class="footer">Log: <code>${escapedLog}</code></div>
 <script>
   (function() {
@@ -216,7 +246,7 @@ function buildProgressHtml({ logPath }) {
 
     function onProgress(payload) {
       if (!payload) return;
-      const stage = payload.stage || '';
+      const stage = payload.label || '';
       const percent = typeof payload.percent === 'number' ? payload.percent : null;
       const message = payload.message || '';
 
@@ -268,8 +298,9 @@ function createProgressWindow() {
     frame: false,
     transparent: false,
     show: false,
-    backgroundColor: "#17161C", // --bg-primary, dark theme (see the :root block above)
+    backgroundColor: "#1A1917", // --bg-primary, dark theme (see the :root block above)
     title: "Installing GAIA",
+    icon: appIconPath(),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -305,7 +336,7 @@ function createProgressWindow() {
   });
 
   const onProgress = (stage, percent, message) => {
-    lastProgress = { stage, percent, message };
+    lastProgress = { stage, label: stageLabel(stage), percent, message };
     if (window.isDestroyed()) return;
     if (!rendererReady) return; // will be replayed on did-finish-load
     try {
@@ -364,21 +395,19 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
     .filter(Boolean)
     .join("\n");
 
-  // Loop so that certain actions (Copy/Open log) return control to the
-  // same dialog rather than exiting the flow. The dialog includes a
-  // one-click "Install uv" action which attempts the packaged rescue
-  // installer and then returns 'retry' on success so the caller can
-  // re-run the full backend install.
-  const buttons = [
-    "Install uv (auto)",
-    "Retry",
-    "Manual install instructions",
-    "Copy log path",
-    "Open log file",
-    "Quit",
+  // Copy/Open log return to the same dialog. "Install uv" is offered only
+  // when uv is what failed; for any other stage it would just repeat Retry.
+  const uvFailed = stage === "ensure-uv";
+  const actions = [
+    ...(uvFailed ? [["install-uv", "Install uv (auto)"]] : []),
+    ["retry", "Retry"],
+    ["manual", "Manual install instructions"],
+    ["copy-log", "Copy log path"],
+    ["open-log", "Open log file"],
+    ["quit", "Quit"],
   ];
+  const buttons = actions.map(([, label]) => label);
 
-  // Helper to show the dialog and handle the response.
   const show = async () => {
     const result = await dialog.showMessageBox(parentWindow || null, {
       type: "error",
@@ -391,15 +420,12 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
       noLink: true,
     });
 
-    switch (result.response) {
-      case 0: {
-        // Run the full packaged install flow (ensureBackend) so the user
-        // gets a single-click recovery that attempts the entire backend
-        // install rather than only uv provisioning. Show progress UI
-        // while the operation runs. On success, tell the caller to retry
-        // (which will detect READY and proceed); on failure, re-show the
-        // dialog with augmented details.
-        const { window, onProgress, close } = createProgressWindow();
+    const action = (actions[result.response] || ["quit"])[0];
+    switch (action) {
+      case "install-uv": {
+        // Run the full packaged install (ensureBackend), with progress, so one
+        // click retries everything, not only uv; re-show with the new error.
+        const { onProgress, close } = createProgressWindow();
         try {
           await installer.ensureBackend({ onProgress, isPackaged: true });
           try { close(); } catch {}
@@ -414,9 +440,9 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
           return showFailureDialog(parentWindow, nextInfo);
         }
       }
-      case 1:
+      case "retry":
         return "retry";
-      case 2: {
+      case "manual": {
         try {
           await shell.openExternal("https://amd-gaia.ai/docs/quickstart#cli-install");
         } catch {
@@ -424,7 +450,7 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
         }
         return "manual";
       }
-      case 3: {
+      case "copy-log": {
         try {
           clipboard.writeText(logPath);
         } catch {
@@ -432,7 +458,7 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
         }
         return showFailureDialog(parentWindow, errorInfo);
       }
-      case 4: {
+      case "open-log": {
         try {
           await shell.openPath(logPath);
         } catch {
@@ -440,7 +466,6 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
         }
         return showFailureDialog(parentWindow, errorInfo);
       }
-      case 5:
       default:
         return "quit";
     }
@@ -472,6 +497,9 @@ async function showPreCheckFailureDialog(parentWindow, { title, message, detail 
 
 module.exports = {
   createProgressWindow,
+  buildProgressHtml,
+  stageLabel,
+  STAGE_LABELS,
   showFailureDialog,
   showPreCheckFailureDialog,
   // IPC channel names for preload.cjs

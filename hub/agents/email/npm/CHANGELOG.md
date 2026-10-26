@@ -6,6 +6,38 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **Answers stream as they are written.** `/v1/email/query` now emits `token`
+  events while the model writes, so a relayed turn shows text live instead of
+  "Waiting on the model", cancelling the run cuts the model call short, and a
+  stopped turn keeps what was written.
+- **A long conversation no longer overflows a small model window.** The
+  agent used the history you pushed as-is, so on a 32K window (an NPU model)
+  it plus the agent's own prompt could exceed the window and fail the turn.
+  It now keeps the newest whole turns that fit and says so in a `status`
+  event when older ones drop out of view.
+- **Token counts are exact in the published binary, offline too.** The
+  binary could not load its tokenizer and counted tokens by an estimate that
+  overcounts. The tokenizer and its data now ship inside the binary, so it
+  no longer downloads anything to count tokens.
+- **A mailbox connection being saved is reported as transient.** When another
+  GAIA process or request is mid-save on the mailbox connection, a mailbox
+  route now answers `502` with a detail saying the connection "is being saved
+  by another GAIA operation" (it used to answer `403`, as if the account needed
+  reconnecting), and the `/v1/email/agent/*` routes answer `503` with
+  `Retry-After`. Treat both as transient and retry; see SPEC.md.
+- **A request waiting for the model says so.** When another GAIA process or
+  request is using the local model, `/v1/email/query` now streams a `status`
+  every ~2 s with `phase: "model_queue"` and the request's place in line, who
+  holds the model and how long it has waited. Before, the stream went silent
+  for the whole wait. The request also goes ahead of background work, and
+  cancelling the run takes it out of the queue.
+- **A scheduled send or snooze cut off mid-fire no longer stays stuck.** If
+  the agent crashed while firing one, the job stayed "firing" forever and was
+  never reported. About 10 minutes later, a send is now marked failed with the
+  reason (it is still never sent twice) and listed when you ask for your
+  scheduled jobs, and a snooze runs again and brings the message back to the
+  inbox. A send another copy of the agent is still sending is left alone while that copy keeps checking in. If one is marked failed and then does go out, it changes to sent, so check your Sent folder before scheduling it again.
+
 - **A bulk archive, label, star or mark-read that changed nothing now says it
   failed.** When every message in the batch failed, the agent used to report
   the action as done. It now reports the failure with each message's reason,

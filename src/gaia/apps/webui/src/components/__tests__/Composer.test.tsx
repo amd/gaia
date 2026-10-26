@@ -4,7 +4,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Composer } from '../Composer';
+import { Composer, MAX_MESSAGE_CHARS } from '../Composer';
 import { useAttachments } from '../../hooks/useAttachments';
 import * as api from '../../services/api';
 
@@ -121,6 +121,75 @@ describe('Composer', () => {
     });
 });
 
+type ClipItem = { kind: 'file'; file: File } | { kind: 'string'; type: string };
+
+/** Pastes into the message box; returns false when the paste was prevented. */
+function paste(items: ClipItem[]): boolean {
+    const clipboardData = {
+        items: items.map((i) => (i.kind === 'file'
+            ? { kind: 'file', type: i.file.type, getAsFile: () => i.file }
+            : { kind: 'string', type: i.type, getAsFile: () => null })),
+    };
+    return fireEvent.paste(screen.getByLabelText('Message'), { clipboardData });
+}
+
+describe('Composer paste', () => {
+    beforeEach(() => {
+        mockedApi.uploadFile.mockResolvedValue({ url: '/api/files/uploads/x' } as Awaited<ReturnType<typeof api.uploadFile>>);
+    });
+
+    it('attaches and uploads a pasted text file', async () => {
+        render(<Harness />);
+        const file = new File(['notes'], 'notes.txt', { type: 'text/plain' });
+
+        expect(paste([{ kind: 'file', file }])).toBe(false);
+
+        expect(mockedApi.uploadFile).toHaveBeenCalledWith(file);
+        expect(screen.getByRole('list', { name: 'Attached files' })).toHaveTextContent('notes.txt');
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    });
+
+    it('attaches a pasted PDF', () => {
+        render(<Harness />);
+        const file = new File(['%PDF'], 'report.pdf', { type: 'application/pdf' });
+        paste([{ kind: 'file', file }]);
+        expect(mockedApi.uploadFile).toHaveBeenCalledWith(file);
+        expect(screen.getByRole('list', { name: 'Attached files' })).toHaveTextContent('report.pdf');
+    });
+
+    it('prefers the file over the filename text pasted alongside it', () => {
+        render(<Harness />);
+        const file = new File(['a,b'], 'data.csv', { type: '' });
+        expect(paste([{ kind: 'string', type: 'text/plain' }, { kind: 'file', file }])).toBe(false);
+        expect(mockedApi.uploadFile).toHaveBeenCalledOnce();
+        expect(mockedApi.uploadFile).toHaveBeenCalledWith(file);
+    });
+
+    it('leaves a plain-text paste to the browser', () => {
+        render(<Harness />);
+        expect(paste([{ kind: 'string', type: 'text/plain' }, { kind: 'string', type: 'text/html' }])).toBe(true);
+        expect(mockedApi.uploadFile).not.toHaveBeenCalled();
+        expect(screen.queryByRole('list', { name: 'Attached files' })).not.toBeInTheDocument();
+    });
+
+    it('shows the upload error for an unsupported or oversized file', async () => {
+        mockedApi.uploadFile.mockRejectedValue(new Error("Upload failed: File type '.exe' is not allowed."));
+        render(<Harness />);
+        paste([{ kind: 'file', file: new File(['MZ'], 'setup.exe', { type: 'application/x-msdownload' }) }]);
+        expect(await screen.findByRole('alert')).toHaveTextContent("File type '.exe' is not allowed.");
+        expect(screen.getByRole('list', { name: 'Attached files' })).toHaveTextContent('setup.exe');
+    });
+
+    it('still attaches a pasted screenshot as an image', () => {
+        const { container } = render(<Harness />);
+        const file = new File(['png'], '', { type: 'image/png' });
+        expect(paste([{ kind: 'file', file }])).toBe(false);
+        expect(mockedApi.uploadFile).toHaveBeenCalledWith(file);
+        expect(container.querySelector('img.composer-attachment-thumb')).toHaveAttribute('src', 'blob:preview');
+        expect(screen.getByRole('list', { name: 'Attached files' })).toHaveTextContent(/screenshot-.*\.png/);
+    });
+});
+
 describe('Composer height', () => {
     it('shrinks back when a long disabled-reason placeholder clears', () => {
         // Chrome counts the placeholder in scrollHeight; jsdom has no layout.
@@ -135,5 +204,39 @@ describe('Composer height', () => {
         rerender(<Harness disabledReason={null} />);
         expect(box.style.height).toBe('24px');
         spy.mockRestore();
+    });
+});
+
+describe('Composer message length (#5716)', () => {
+    it('blocks a message over the limit and says what to do instead', () => {
+        const onSubmit = vi.fn();
+        render(<Harness initial={'x'.repeat(MAX_MESSAGE_CHARS + 1)} onSubmit={onSubmit} />);
+
+        expect(screen.getByRole('alert')).toHaveTextContent('Too long to send');
+        expect(screen.getByRole('alert')).toHaveTextContent('attach it');
+        expect(screen.getByLabelText('Send')).toBeDisabled();
+        fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+        expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it("counts an attached file's link, which goes out with the text", async () => {
+        mockedApi.uploadFile.mockResolvedValue({ url: '/u/a.txt' } as Awaited<ReturnType<typeof api.uploadFile>>);
+        const { container } = render(<Harness initial={'x'.repeat(MAX_MESSAGE_CHARS - 5)} />);
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+        const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+        fireEvent.change(input, { target: { files: [new File(['x'], 'a.txt')] } });
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Too long to send');
+        expect(screen.getByLabelText('Send')).toBeDisabled();
+    });
+
+    it('sends a message right at the limit', () => {
+        const onSubmit = vi.fn();
+        render(<Harness initial={'x'.repeat(MAX_MESSAGE_CHARS)} onSubmit={onSubmit} />);
+
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+        expect(onSubmit).toHaveBeenCalledTimes(1);
     });
 });

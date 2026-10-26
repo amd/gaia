@@ -676,7 +676,7 @@ def check_workflow_triggers() -> CheckResult:
 
 
 def check_workflow_ancestor_skip() -> CheckResult:
-    """Warn on job `if:` conditions vulnerable to GitHub Actions' ancestor-skip gotcha."""
+    """Fail on job `if:` conditions vulnerable to GitHub Actions' ancestor-skip gotcha."""
     print("\nChecking workflow job conditions for ancestor-skip risk...")
     print("-" * 40)
 
@@ -690,7 +690,7 @@ def check_workflow_ancestor_skip() -> CheckResult:
             from check_workflow_ancestor_skip import run_check
         except ImportError as exc:
             print(f"[!] Could not import check_workflow_ancestor_skip.py: {exc}")
-            return CheckResult("Workflow Ancestor-Skip", False, True, 1, str(exc))
+            return CheckResult("Workflow Ancestor-Skip", False, False, 1, str(exc))
 
     exit_code = run_check()
 
@@ -698,13 +698,13 @@ def check_workflow_ancestor_skip() -> CheckResult:
         return CheckResult(
             "Workflow Ancestor-Skip",
             False,
-            True,
+            False,
             1,
             "See output above; each flagged job needs an explicit "
-            "!cancelled()/always() guard once triaged (#3929, #3922).",
+            "!cancelled()/always() guard (#3929, #3922).",
         )
 
-    return CheckResult("Workflow Ancestor-Skip", True, True, 0, "")
+    return CheckResult("Workflow Ancestor-Skip", True, False, 0, "")
 
 
 def check_test_lanes() -> CheckResult:
@@ -737,6 +737,38 @@ def check_test_lanes() -> CheckResult:
         )
 
     return CheckResult("Test Lane Coverage", True, False, 0, "")
+
+
+def check_ci_paths() -> CheckResult:
+    """Reject CI lanes whose path filter misses a file they run, import or read."""
+    print("\nChecking every CI lane triggers on what it depends on...")
+    print("-" * 40)
+
+    try:
+        from check_ci_path_coverage import run_check
+    except ImportError:
+        util_dir = str(Path(__file__).parent)
+        if util_dir not in sys.path:
+            sys.path.insert(0, util_dir)
+        try:
+            from check_ci_path_coverage import run_check
+        except ImportError as exc:
+            print(f"[!] Could not import check_ci_path_coverage.py: {exc}")
+            return CheckResult("CI Path Coverage", False, False, 1, str(exc))
+
+    exit_code = run_check()
+
+    if exit_code != 0:
+        return CheckResult(
+            "CI Path Coverage",
+            False,
+            False,
+            1,
+            "See output above; add the path to the lane's `paths:` filter, or "
+            "list it in util/ci_path_allowlist.yml with a reason.",
+        )
+
+    return CheckResult("CI Path Coverage", True, False, 0, "")
 
 
 def check_tool_descriptions() -> CheckResult:
@@ -813,6 +845,32 @@ def check_doc_versions() -> CheckResult:
         )
 
     return CheckResult("Doc Version Consistency", True, False, 0, "")
+
+
+def check_release_versions() -> CheckResult:
+    """Fail when a version field drifts from src/gaia/version.py or its agent's."""
+    print("\nChecking release version fields...")
+    print("-" * 40)
+
+    util_dir = str(Path(__file__).parent)
+    if util_dir not in sys.path:
+        sys.path.insert(0, util_dir)
+    try:
+        from release_versions import run_check
+    except ImportError as exc:
+        print(f"[!] Could not import release_versions.py: {exc}")
+        return CheckResult("Release Versions", False, False, 1, str(exc))
+
+    if run_check() != 0:
+        return CheckResult(
+            "Release Versions",
+            False,
+            False,
+            1,
+            "See output above; run: python util/release_versions.py --stamp",
+        )
+
+    return CheckResult("Release Versions", True, False, 0, "")
 
 
 def count_python_files() -> tuple[int, int]:
@@ -969,12 +1027,17 @@ def main():
     parser.add_argument(
         "--workflow-ancestor-skip",
         action="store_true",
-        help="Warn on job if: conditions vulnerable to GitHub Actions' ancestor-skip gotcha",
+        help="Fail on job if: conditions vulnerable to GitHub Actions' ancestor-skip gotcha",
     )
     parser.add_argument(
         "--test-lanes",
         action="store_true",
         help="Reject test files that no CI lane runs (see util/test_lane_allowlist.yml)",
+    )
+    parser.add_argument(
+        "--ci-paths",
+        action="store_true",
+        help="Reject CI lanes whose path filter misses a file they depend on",
     )
     parser.add_argument(
         "--tool-descriptions",
@@ -985,6 +1048,11 @@ def main():
         "--doc-versions",
         action="store_true",
         help="Check doc version consistency",
+    )
+    parser.add_argument(
+        "--release-versions",
+        action="store_true",
+        help="Check every version field matches its source (util/release_versions.py)",
     )
     parser.add_argument("--all", action="store_true", help="Run all checks")
     parser.add_argument(
@@ -1008,8 +1076,10 @@ def main():
             args.workflow_triggers,
             args.workflow_ancestor_skip,
             args.test_lanes,
+            args.ci_paths,
             args.tool_descriptions,
             args.doc_versions,
+            args.release_versions,
             args.all,
         ]
     )
@@ -1074,11 +1144,17 @@ def main():
     if args.test_lanes or run_all:
         results.append(check_test_lanes())
 
+    if args.ci_paths or run_all:
+        results.append(check_ci_paths())
+
     if args.tool_descriptions or run_all:
         results.append(check_tool_descriptions())
 
     if args.doc_versions or run_all:
         results.append(check_doc_versions())
+
+    if args.release_versions or run_all:
+        results.append(check_release_versions())
 
     exit_code = print_summary(results)
     sys.exit(exit_code)

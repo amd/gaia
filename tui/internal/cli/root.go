@@ -269,8 +269,11 @@ func init() {
 		if err := client.ValidateClaudeModel(claudeModel); err != nil {
 			return fmt.Errorf("--claude-model: %w", err)
 		}
-		return nil
+		return startPprof(pprofAddr)
 	}
+	rootCmd.PersistentFlags().StringVar(&pprofAddr, "pprof", "",
+		"serve Go's profiler at this loopback host:port (e.g. 127.0.0.1:6060), "+
+			"to measure startup and render cost")
 	rootCmd.PersistentFlags().BoolVar(&controlEnabled, "control", false,
 		"expose the loopback control API so an assistant can drive this session (auto-assigned port)")
 	rootCmd.PersistentFlags().IntVar(&controlPort, "control-port", 0,

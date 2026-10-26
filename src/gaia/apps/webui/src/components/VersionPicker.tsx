@@ -3,6 +3,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReleaseInfo } from '../hooks/useUpdateStatus';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import './VersionPicker.css';
 
 interface VersionPickerProps {
@@ -57,14 +59,8 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
             });
     }, []);
 
-    // Esc to close.
-    useEffect(() => {
-        function onKeyDown(e: KeyboardEvent) {
-            if (e.key === 'Escape') onClose();
-        }
-        document.addEventListener('keydown', onKeyDown);
-        return () => document.removeEventListener('keydown', onKeyDown);
-    }, [onClose]);
+    useEscapeToClose(true, onClose);
+    useFocusTrap(dialogRef, true);
 
     // Move focus into the dialog ONCE on mount. Doing this per view change
     // would yank focus mid-flow (list → confirm → installing).

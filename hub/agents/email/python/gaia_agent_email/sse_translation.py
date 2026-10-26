@@ -52,6 +52,20 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+#: What a ``model_queue`` status carries under ``queue`` (the core translator's
+#: ``_QUEUE_FIELDS``; see ``gaia.daemon.broker_client.queue_status_event``).
+_QUEUE_FIELDS = (
+    "event",
+    "scope",
+    "position",
+    "queue_length",
+    "holder",
+    "holder_model",
+    "held_for_s",
+    "waited_s",
+    "model",
+)
+
 # Mirrors ``gaia.ui.sse_handler.SSEOutputHandler._RENDER_TOOL_TO_LANG`` — the
 # tool→card-key map that tells the host which typed ``tool_result.render`` card to
 # draw (spec §4.2, replacing the #1000 fence-injection hack). Duplicated (not
@@ -106,7 +120,7 @@ class CanonicalTranslator:
         etype = event.get("type")
 
         # tool_args merges into the buffered tool_call; every other event first
-        # flushes any pending tool_call (an argument-less tool), then maps.
+        # flushes any pending tool_call (its producer sent no tool_args), then maps.
         if etype == "tool_args":
             return self._on_tool_args(event)
 
@@ -152,7 +166,7 @@ class CanonicalTranslator:
         return {"type": "tool_call", "tool": tool, "args": args}
 
     def _on_tool_start(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
-        # Flush a previous, arg-less pending tool_call before buffering this one.
+        # Flush a previous pending tool_call that never got its tool_args.
         out = self._flush_pending()
         self._pending_tool = {"tool": event.get("tool") or "unknown", "args": {}}
         return out
@@ -173,8 +187,14 @@ class CanonicalTranslator:
 
     def _on_status(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Already the canonical shape; keep only ``message`` (drop the
-        # progress-only status/steps/elapsed sub-fields).
-        return [{"type": "status", "message": str(event.get("message", ""))}]
+        # progress-only status/steps/elapsed sub-fields) — except for a turn
+        # waiting for the model, whose place in line rides along.
+        out = {"type": "status", "message": str(event.get("message", ""))}
+        queue = event.get("queue")
+        if event.get("phase") == "model_queue" and isinstance(queue, dict):
+            out["phase"] = "model_queue"
+            out["queue"] = {k: queue[k] for k in _QUEUE_FIELDS if k in queue}
+        return [out]
 
     def _on_step(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         step = event.get("step")
@@ -265,7 +285,9 @@ class CanonicalTranslator:
             # status line, same pattern as ``_on_tool_confirm_denied``, so
             # the user still SEES the failure without the stream (and the
             # still-retrying agent) being cut out from under it (#2515).
-            return [{"type": "status", "message": f"Tool call failed, retrying: {detail}"}]
+            return [
+                {"type": "status", "message": f"Tool call failed, retrying: {detail}"}
+            ]
         return [{"type": "error", "detail": detail, "status": _ERROR_STATUS_AGENT}]
 
     def _on_policy_alert(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:

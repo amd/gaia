@@ -114,6 +114,19 @@ class TestSystemStatus:
         assert "disk_space_gb" in data
         assert "version" in data
 
+    def test_system_status_names_the_real_data_folder(self, tmp_path):
+        """Privacy showed a hard-coded ~/.gaia/chat/, wrong under GAIA_HOME."""
+        db_file = tmp_path / "home" / "chat" / "gaia_chat.db"
+        data = (
+            TestClient(create_app(db_path=str(db_file)))
+            .get("/api/system/status")
+            .json()
+        )
+        assert data["data_dir"] == str(db_file.parent)
+
+    def test_system_status_reports_no_folder_for_an_in_memory_database(self, client):
+        assert client.get("/api/system/status").json()["data_dir"] is None
+
     def test_system_status_lemonade_field_is_boolean(self, client):
         """lemonade_running should be a boolean regardless of server state."""
         resp = client.get("/api/system/status")
@@ -128,7 +141,7 @@ class TestSystemStatus:
         assert data["version"] == __version__
 
     def test_unreadable_config_is_reported_not_hidden(
-        self, client, tmp_path, monkeypatch
+        self, client, tmp_path, monkeypatch, gaia_owned_lemonade
     ):
         bad = tmp_path / "config.json"
         bad.write_text("{not json", encoding="utf-8")
@@ -170,6 +183,19 @@ class TestSystemStatus:
         ]
         for field in expected_fields:
             assert field in data, f"Missing field: {field}"
+
+    def test_system_status_reports_a_failed_desktop_setup(
+        self, client, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        assert client.get("/api/system/status").json()["setup_error"] is None
+
+        reason = "Gemma-4-E4B-it-GGUF - Not enough free memory to load it."
+        (tmp_path / "electron-install-state.json").write_text(
+            f'{{"state": "ready", "init": "failed", "initError": "{reason}"}}',
+            encoding="utf-8",
+        )
+        assert client.get("/api/system/status").json()["setup_error"] == reason
 
     def test_system_status_disk_space_non_negative(self, client):
         resp = client.get("/api/system/status")
@@ -1289,6 +1315,32 @@ class TestSessionEndpoints:
         assert resp.status_code == 200
         assert resp.json()["title"] == "Updated"
 
+    def test_create_rejects_title_over_cap(self, client):
+        """#5257: a title above the cap is a 422, not a stored 100K-char row."""
+        from gaia.ui.models import MAX_SESSION_TITLE_CHARS
+
+        resp = client.post(
+            "/api/sessions", json={"title": "x" * (MAX_SESSION_TITLE_CHARS + 1)}
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"][0]["loc"] == ["body", "title"]
+
+    def test_create_accepts_title_at_cap(self, client):
+        from gaia.ui.models import MAX_SESSION_TITLE_CHARS
+
+        title = "x" * MAX_SESSION_TITLE_CHARS
+        resp = client.post("/api/sessions", json={"title": title})
+        assert resp.status_code == 200
+        assert resp.json()["title"] == title
+
+    def test_rename_rejects_title_over_cap(self, client):
+        """#5257: the stress test renamed a chat to 100,000 characters."""
+        sid = client.post("/api/sessions", json={"title": "Original"}).json()["id"]
+        resp = client.put(f"/api/sessions/{sid}", json={"title": "x" * 100_000})
+        assert resp.status_code == 422
+        assert resp.json()["detail"][0]["loc"] == ["body", "title"]
+        assert client.get(f"/api/sessions/{sid}").json()["title"] == "Original"
+
     def test_create_with_explicit_title_pins_it(self, client):
         """#2165: a title passed by an API caller is explicit → pinned."""
         resp = client.post("/api/sessions", json={"title": "My Research Project"})
@@ -1467,7 +1519,49 @@ class TestExportEndpoint:
         resp = client.get(f"/api/sessions/{session_id}/export?format=markdown")
         content = resp.json()["content"]
         assert "*Created:" in content
-        assert "*Model:" in content
+        assert "*Model (current setting):" in content
+
+    def test_export_names_the_model_that_answers(self, client, db):
+        sid = client.post("/api/sessions", json={"model": "Stored-GGUF"}).json()["id"]
+        client.put("/api/settings", json={"custom_model": "My-Override-GGUF"})
+        db.add_message(sid, "user", "Hi")
+        db.add_message(sid, "assistant", "Hello")
+        db.add_message(
+            sid, "assistant", "Retried", inference_stats={"model": "Retry-GGUF"}
+        )
+
+        md = client.get(f"/api/sessions/{sid}/export?format=markdown").json()
+        # "Hello" has no recorded model, so the header can only name the setting.
+        assert "*Model (current setting): My-Override-GGUF*" in md["content"]
+        assert "Stored-GGUF" not in md["content"]
+        assert "**Assistant:**\n\nHello" in md["content"]
+        assert "**Assistant (Retry-GGUF):**\n\nRetried" in md["content"]
+
+        js = client.get(f"/api/sessions/{sid}/export?format=json").json()
+        assert js["session"]["model"] == "Stored-GGUF"
+        assert js["session"]["effective_model"] == "My-Override-GGUF"
+
+    def test_export_names_each_answers_own_model_after_a_switch(self, client, db):
+        sid = client.post("/api/sessions", json={"model": "Old-GGUF"}).json()["id"]
+        db.add_message(sid, "user", "Q1")
+        db.add_message(sid, "assistant", "A1", inference_stats={"model": "Old-GGUF"})
+        db.add_message(sid, "user", "Q2")
+        db.add_message(sid, "assistant", "A2", inference_stats={"model": "New-GGUF"})
+        client.put("/api/settings", json={"custom_model": "Later-GGUF"})
+
+        content = client.get(f"/api/sessions/{sid}/export").json()["content"]
+        assert "*Models: Old-GGUF, New-GGUF*" in content
+        assert "Later-GGUF" not in content
+        assert "**Assistant (Old-GGUF):**\n\nA1" in content
+        assert "**Assistant (New-GGUF):**\n\nA2" in content
+
+    def test_export_single_recorded_model_is_singular(self, client, db):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        db.add_message(sid, "user", "Q")
+        db.add_message(sid, "assistant", "A", inference_stats={"model": "Only-GGUF"})
+
+        content = client.get(f"/api/sessions/{sid}/export").json()["content"]
+        assert "*Model: Only-GGUF*" in content
 
     def test_export_json(self, client, db):
         create_resp = client.post("/api/sessions", json={"title": "JSON Export"})
@@ -2131,6 +2225,49 @@ class TestSpaShellServing:
             or "agent ui" in r.text.lower()
             or "backend" in r.text.lower()
         )
+
+    def test_unknown_api_path_is_json_404_not_the_spa(self, tmp_path):
+        """#5257: a wrong /api path must not get index.html with a 200."""
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text('<div id="root"></div>')
+        client = TestClient(create_app(db_path=":memory:", webui_dist=str(dist)))
+
+        for method, path in [
+            ("get", "/api/no-such-endpoint"),
+            ("get", "/api/sessions/x/no-such-child"),
+            ("get", "/api"),
+            ("post", "/api/no-such-endpoint"),
+            ("delete", "/api/no-such-endpoint"),
+        ]:
+            r = client.request(method.upper(), path)
+            assert r.status_code == 404, (method, path, r.status_code)
+            assert r.headers["content-type"].startswith("application/json")
+            assert r.json() == {"detail": "Not Found"}
+
+    def test_unknown_api_path_is_404_without_a_build(self, tmp_path):
+        """The no-build fallback page must not answer /api paths either."""
+        app = create_app(db_path=":memory:", webui_dist=str(tmp_path / "none"))
+        r = TestClient(app).get("/api/no-such-endpoint")
+        assert r.status_code == 404
+        assert r.json() == {"detail": "Not Found"}
+
+    def test_wrong_method_on_real_api_path_is_405(self, client):
+        r = client.delete("/api/health")
+        assert r.status_code == 405
+        assert "GET" in r.headers["allow"]
+
+    def test_app_routes_near_api_prefix_still_get_the_spa(self, tmp_path):
+        """Only /api and /api/... are carved out; /apis or /settings are SPA routes."""
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text('<div id="root"></div>')
+        client = TestClient(create_app(db_path=":memory:", webui_dist=str(dist)))
+
+        for path in ("/settings", "/apis", "/apiary/x", "/chat/api/x"):
+            r = client.get(path)
+            assert r.status_code == 200, path
+            assert 'id="root"' in r.text
 
     def test_default_webui_dist_resolves_under_gaia_apps_webui(self):
         """The default dist/ path must resolve under the gaia.apps.webui package.

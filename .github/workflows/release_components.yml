@@ -1,27 +1,24 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Publish the two non-agent Hub packages to the Agent Hub R2 catalog:
+# Build the terminal hub and its installers for a final release, then:
 #
-#   terminal-hub  (type: component, Go)         — the `gaia tui` binary, 6 targets
-#   agent-ui      (type: app, TypeScript)       — the Electron desktop installers
+#   GitHub release  — the terminal installers (.pkg/.deb/.rpm and the one
+#                     Windows setup) plus gaia-installers-SHA256SUMS.txt. The
+#                     website's download buttons link these; publish.yml
+#                     attaches everything else (desktop app, raw binaries).
+#   Agent Hub (R2)  — terminal-hub's six raw binaries, and nothing else. The
+#                     flagship agent's binaries.lock.json pins them, so its npm
+#                     package and `gaia hub install gaia` fetch them from there.
 #
-# Same pattern as release_agent_email.yml / release_agent_chat.yml: CI never
-# talks to R2 directly, it POSTs to the Worker's /publish endpoint, which
-# computes the SHA-256 server-side and stores each object immutably at
+# Installers are not uploaded to R2: install.sh / install.ps1 and the website
+# take everything from the GitHub release, so an R2 copy would have no reader.
+# Versions published before this change stay on R2 untouched.
+#
+# The R2 publish goes through the Worker's /publish endpoint, which computes
+# the SHA-256 server-side and stores each object immutably at
 # agents/<id>/<version>/<filename>. Re-running a published version is a no-op
 # (409 version_exists is reconciled by byte-comparison, not overwritten).
-#
-# Why these are Hub packages at all: the hub catalog is what the website builds
-# its download surfaces from. Before this, the terminal hub had NO user-facing
-# distribution — `docs/reference/cli.mdx` documented `gaia tui` while the only
-# way to get the binary was `cd tui && make build`.
-#
-# Ordering note: terminal-hub builds its own binaries here and has no external
-# dependency. agent-ui does NOT rebuild the Electron installers (that is
-# build-installers.yml, which runs on the same tag) — it waits for that
-# workflow to attach them to the GitHub release, then republishes them to R2.
-# The wait is bounded and fails loudly; it never publishes a partial set.
 
 name: Publish Hub Components (R2)
 
@@ -29,14 +26,14 @@ on:
   push:
     # Not for a release candidate (vX.Y.Z-rcN): the catalog has no pre-release
     # channel and picks latest_version by highest SemVer, so an RC published to
-    # these immutable paths would become what the website offers everyone.
+    # these immutable paths would become what install.sh offers everyone.
     tags:
       - 'v*'
       - '!v*-rc*'
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Build and validate without publishing to R2'
+        description: 'Build and validate without publishing to R2 or the GitHub release'
         type: boolean
         default: true
 
@@ -49,7 +46,6 @@ permissions:
 
 env:
   TERMINAL_HUB_MANIFEST: hub/components/terminal-hub/gaia-agent.yaml
-  AGENT_UI_MANIFEST: hub/components/agent-ui/gaia-agent.yaml
 
 jobs:
   # ── Resolve each component's own version ───────────────────────────────────
@@ -60,7 +56,6 @@ jobs:
     name: Resolve & gate version
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.v.outputs.version }}
       tui_version: ${{ steps.v.outputs.tui_version }}
       dry_run: ${{ steps.v.outputs.dry_run }}
     steps:
@@ -68,24 +63,23 @@ jobs:
         with:
           fetch-depth: 0   # the flagship gate below compares against its agent tag
 
-      # The Windows setup published below bundles the flagship the lock pins.
+      # The Windows setup attached below bundles the flagship the lock pins.
       # Same gate as publish.yml's validate: never ship one older than the release.
       - name: Verify the flagship agent is built from this release
         if: github.event_name != 'workflow_dispatch'
         run: python3 util/check_flagship_release.py --ref "${GITHUB_SHA}"
 
-      # Both components ship as part of the core release and carry its version,
+      # terminal-hub ships as part of the core release and carries its version,
       # deliberately: one number for the whole release is simpler to reason
-      # about than three, and agent-ui's npm package already tracks
-      # src/gaia/version.py through installer/version/bump-ui-version.mjs.
+      # about than two.
       #
-      # A TAG therefore requires both manifests to already match it (asserted
+      # A TAG therefore requires the manifest to already match it (asserted
       # below). A DISPATCH does not: re-running a publish, or shipping a rebuilt
       # binary between core releases, must not require cutting a core release —
       # that coupling is what made every terminal-hub re-run fail.
       #
-      # Each still publishes under the version in its own manifest, read by
-      # publish_to_r2.py. The assertion keeps them equal to the release; it is
+      # It still publishes under the version in its own manifest, read by
+      # publish_to_r2.py. The assertion keeps it equal to the release; it is
       # not what supplies the path.
       - id: v
         shell: bash
@@ -107,9 +101,8 @@ jobs:
           fi
 
           TUI_V="$(read_ver "${TERMINAL_HUB_MANIFEST}")"
-          UI_V="$(read_ver "${AGENT_UI_MANIFEST}")"
 
-          for pair in "terminal-hub:${TUI_V}" "agent-ui:${UI_V}" "core:${CORE}"; do
+          for pair in "terminal-hub:${TUI_V}" "core:${CORE}"; do
             name="${pair%%:*}"; val="${pair#*:}"
             if ! printf '%s' "${val}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'; then
               echo "::error::${name} version '${val}' is not a valid x.y.z version."
@@ -117,8 +110,8 @@ jobs:
             fi
           done
 
-          # Both components ship as part of the core release and carry its
-          # version, so a TAG must find them already bumped: publishing under a
+          # terminal-hub ships as part of the core release and carries its
+          # version, so a TAG must find it already bumped: publishing under a
           # stale version writes to an immutable path that cannot be corrected,
           # and the catalog picks latest_version by highest SemVer, so a stale
           # one is not even reachable as "latest".
@@ -127,31 +120,22 @@ jobs:
           # split: re-running a component publish, or shipping a rebuilt binary
           # between core releases, must not require cutting a core release.
           if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
-            fail=0
-            for pair in "${TERMINAL_HUB_MANIFEST}:${TUI_V}" "${AGENT_UI_MANIFEST}:${UI_V}"; do
-              m="${pair%:*}"; got="${pair##*:}"
-              if [ "${got}" != "${CORE}" ]; then
-                echo "::error file=${m}::version ${got} does not match the release ${CORE}. Bump it before tagging — R2 paths are immutable, so publishing under a stale version cannot be undone."
-                fail=1
-              else
-                echo "✓ ${m} = ${got}"
-              fi
-            done
-            [ "${fail}" -eq 0 ] || exit 1
+            if [ "${TUI_V}" != "${CORE}" ]; then
+              echo "::error file=${TERMINAL_HUB_MANIFEST}::version ${TUI_V} does not match the release ${CORE}. Bump it before tagging — R2 paths are immutable, so publishing under a stale version cannot be undone."
+              exit 1
+            fi
+            echo "✓ ${TERMINAL_HUB_MANIFEST} = ${TUI_V}"
           fi
 
           echo "version=${CORE}"       >> "$GITHUB_OUTPUT"
           echo "tui_version=${TUI_V}"  >> "$GITHUB_OUTPUT"
           echo "core release : ${CORE}  (min_gaia_version gate only)"
-          echo "terminal-hub : ${TUI_V} -> agents/terminal-hub/${TUI_V}/"
-          # agent-ui publishes under its manifest version, read by
-          # publish_to_r2.py itself -- logged here, not passed as an output.
-          echo "agent-ui     : ${UI_V} -> agents/agent-ui/${UI_V}/"
+          echo "terminal-hub : ${TUI_V} -> agents/terminal-hub/${TUI_V}/ (raw binaries)"
 
       # A manifest can agree with the tag and STILL be a lie: the terminal hub
       # needs daemon host API v1.1, which released 0.22.0 does not serve.
-      # --verify-released re-reads what each release shipped from its published
-      # wheel, because this tree is ahead of all of them.
+      # The guard reads what each release shipped from its published PyPI wheel,
+      # because this tree is ahead of all of them.
       - name: Assert each component's declared minimum core can serve it
         shell: bash
         env:
@@ -159,9 +143,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --quiet pyyaml
-          python util/check_component_core_api.py \
-            --verify-released \
-            --release-version "${VERSION}"
+          python util/check_component_core_api.py --release-version "${VERSION}"
 
   # ── Prove the Worker builds, before anything decides to deploy it ───────────
   # Runs on dry runs too, which is the point: the deploy job below is skipped on
@@ -305,9 +287,9 @@ jobs:
   # script had no CI and the first execution of that code was a live release.
   #
   # !cancelled() rather than a plain needs-success: an installer leg failing must
-  # not stop the six raw binaries from publishing, because install.ps1 and
-  # install.sh depend on them. The two outputs are what let the publish job tell
-  # those cases apart.
+  # not stop the six raw binaries from publishing, because the flagship agent's
+  # lock pins them. The two outputs are what let the jobs below tell those cases
+  # apart.
   tui:
     name: TUI
     needs: version
@@ -340,7 +322,11 @@ jobs:
       agent_ui_release: ${{ github.event_name != 'push' && format('v{0}', needs.version.outputs.tui_version) || '' }}
 
 
-  # ── terminal-hub: publish the binaries and the installers ───────────────────
+  # ── terminal-hub: publish the six raw binaries to the Agent Hub ─────────────
+  # The flagship agent's binaries.lock.json pins these by hub URL and SHA-256,
+  # so its npm package and `gaia hub install gaia` read them from R2. Nothing
+  # reads the installers from R2, so they are not uploaded there; they go to
+  # the GitHub release (github-release-installers below).
   terminal-hub:
     name: Publish terminal-hub
     needs: [version, worker-check, deploy-worker, tui]
@@ -349,11 +335,8 @@ jobs:
     # !cancelled() rather than always(): always() survives a cancelled run, and
     # an upload that outlives Cancel lands in an immutable path.
     #
-    # The installers are deliberately NOT required here. The six raw
-    # binaries are what install.ps1 / install.sh download and what the website
-    # links; gating them on the newer installer legs would make one packaging
-    # tool breaking take down the whole release, redeploy-website included. It
-    # gates the installer publish STEP below instead.
+    # Only the raw binaries gate this job: one installer packaging tool breaking
+    # must not take the hub publish, and redeploy-website with it, down too.
     if: |
       !cancelled()
       && needs.version.result == 'success'
@@ -365,7 +348,11 @@ jobs:
     # not here: it must include v* or every release tag is rejected before any step
     # runs (#2935). It also requires a reviewer, so admitted v* runs pause for approval,
     # same as the agent-pkg-* tags the sibling release workflows already use.
-    environment: agent-publish
+    #
+    # A dry run publishes nothing and reads no secret, so it takes no environment:
+    # it needs no approval and runs from any branch. A dispatch with dry_run off
+    # still lands in agent-publish, whose ref allowlist rejects a feature branch.
+    environment: ${{ needs.version.outputs.dry_run == 'false' && 'agent-publish' || '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -380,22 +367,10 @@ jobs:
           name: tui-binaries
           path: bin
 
-      - uses: actions/download-artifact@v8
-        if: needs.tui.outputs.installers_ok == 'true'
-        with:
-          pattern: tui-installers-*
-          merge-multiple: true
-          path: dist
-
-      - name: Say why no installers are being published
-        if: needs.tui.outputs.installers_ok != 'true'
-        run: |
-          echo "::warning::the installers did not build and smoke-test cleanly, so no setup / .pkg / .deb / .rpm is published for this version. The raw binaries below ARE published, so install.ps1 and install.sh keep working. Fix the failing leg in the TUI installers workflow and re-run this one to add the installers to the same version."
-
       # R2 stores bytes, not modes, so the executable bit an artifact download
       # drops does not matter here -- but a missing or truncated file does.
       - name: Show what will be published
-        run: ls -l bin; ls -l dist || true
+        run: ls -l bin
 
       - name: Require the publish token
         if: needs.version.outputs.dry_run == 'false'
@@ -419,9 +394,12 @@ jobs:
             exit 1
           fi
 
+      # No boto3 and no R2 S3 credentials: each binary is ~20 MB, far under the
+      # Worker's 90 MiB body cap, so nothing here takes the direct-to-R2 lane.
+      # publish_to_r2.py names the missing credentials if one ever grows past it.
       - name: Install publisher deps
         if: needs.version.outputs.dry_run == 'false'
-        run: python -m pip install --upgrade requests pyyaml boto3
+        run: python -m pip install --upgrade requests pyyaml
 
       - name: Publish to the Agent Hub (POST /publish)
         if: needs.version.outputs.dry_run == 'false'
@@ -429,13 +407,6 @@ jobs:
         env:
           AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          # Artifacts at/over 90 MiB cannot travel through the Worker at all
-          # (Cloudflare caps request bodies at 100 MB on Free/Pro), so the
-          # publisher PUTs them straight into R2 and publishes them by
-          # reference. Only the Agent UI installers hit this today.
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           # Explicit =<platform-key> on every artifact: the publisher's
@@ -454,72 +425,42 @@ jobs:
           echo "=== publish summary (binaries) ==="
           cat published.json
 
-      # Must stay SECOND: the Worker fills a version's singular `artifact` field
-      # from the FIRST publish, and that is the field src/gaia/hub/installer.py
-      # downloads -- publish a setup.exe first and hub installs fetch an
-      # installer where they expect a binary. It is also why the installers use
-      # non-standard platform keys: hub installs pick an artifact with an
-      # `endswith` on the key (`_filename_matches_platform`), so a setup
-      # published under "win-x64" would be a candidate for the raw binary too.
-      #
-      # The filenames and keys come from installer/tui/artifacts.py, which also
-      # asserts every one of them is on disk before the first upload -- the
-      # publisher uploads serially into immutable paths, so a rename that
-      # reached the build script but not this step would half-publish a version
-      # that can never be completed.
-      - name: Publish the installers (POST /publish)
-        if: needs.version.outputs.dry_run == 'false' && needs.tui.outputs.installers_ok == 'true'
-        shell: bash
-        env:
-          AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
-          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          VERSION: ${{ needs.version.outputs.tui_version }}
-        run: |
-          set -euo pipefail
-          # The Windows setup publishes from publish-windows-setup below.
-          python installer/tui/artifacts.py publish-args \
-            --version "${VERSION}" --dir dist \
-            --exclude-platform win-x64 \
-            > publish-args.txt
-          artifact_args=()
-          while IFS= read -r spec; do
-            [ -n "${spec}" ] || continue
-            artifact_args+=(--artifact "${spec}")
-          done < publish-args.txt
-          if [ "${#artifact_args[@]}" -eq 0 ]; then
-            echo "::error::installer/tui/artifacts.py named no artifacts to publish. Nothing was published."
-            exit 1
-          fi
-          python hub/agents/email/python/packaging/publish_to_r2.py \
-            --base-url "${GAIA_HUB_PUBLISH_URL}" \
-            --manifest "${TERMINAL_HUB_MANIFEST}" \
-            "${artifact_args[@]}" \
-            --summary-out published-installers.json
-          echo "=== publish summary (installers) ==="
-          cat published-installers.json
+  # No environment, so no approval prompt: this only says why the release is
+  # missing its Windows setup.
+  windows-setup-missing:
+    name: Windows setup not attached
+    needs: [version, windows-setup]
+    if: '!cancelled() && needs.version.result == ''success'' && needs.windows-setup.outputs.ok != ''true'''
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::warning::the Windows setup did not build and smoke-test cleanly, so gaia-${{ needs.version.outputs.tui_version }}-win-x64-setup.exe is not attached to the release. Everything else is. Fix the Windows setup run and re-run this workflow to attach it."
 
-  # ── The Windows setup, published under terminal-hub's win-x64-setup key ─────
-  # After terminal-hub, never before: the Worker fills a version's singular
-  # `artifact` field from the FIRST publish, and hub installs download that
-  # field expecting the raw binary (see "Must stay SECOND" above).
+  # ── Attach the terminal installers to the GitHub release ─────────────────────
+  # The website's download buttons and the release page are where users get
+  # these, and each click lands in GitHub's per-asset download_count.
+  # publish.yml attaches the raw binaries and the desktop app; these installers
+  # are built only here, so this job attaches them.
   #
-  # Gated on the setup at the job level, not per step: the environment asks for
-  # approval when the job starts, and nobody should be asked to approve a
-  # publish that has nothing to publish.
-  publish-windows-setup:
-    name: Publish the Windows setup
-    needs: [version, terminal-hub, windows-setup]
+  # No environment and no R2 credentials: it only touches the GitHub release,
+  # which publish.yml creates after its own approval gate. --clobber makes a
+  # re-run replace rather than fail. It requests its own website redeploy, so
+  # the installers show up however late the release appears or the job re-runs.
+  #
+  # A dry run stops after writing the checksum file and looking the release up,
+  # so the file list and the checksums are proven without touching any release.
+  github-release-installers:
+    name: Attach installers to the GitHub release
+    needs: [version, tui, windows-setup]
     if: |
       !cancelled()
       && needs.version.result == 'success'
-      && needs.terminal-hub.result == 'success'
-      && needs.windows-setup.outputs.ok == 'true'
+      && (needs.tui.outputs.installers_ok == 'true' || needs.windows-setup.outputs.ok == 'true')
     runs-on: ubuntu-latest
-    # Same tag-allowlist requirement as terminal-hub above (#2935).
-    environment: agent-publish
+    timeout-minutes: 200
+    permissions:
+      contents: write
+      actions: write
     steps:
       - uses: actions/checkout@v7
 
@@ -528,234 +469,126 @@ jobs:
           python-version: '3.x'
 
       - uses: actions/download-artifact@v8
+        if: needs.tui.outputs.installers_ok == 'true'
+        with:
+          pattern: tui-installers-*
+          merge-multiple: true
+          path: dist
+
+      - uses: actions/download-artifact@v8
+        if: needs.windows-setup.outputs.ok == 'true'
         with:
           name: windows-setup
           path: dist
 
-      # Before anything else: the setup carries the desktop app, so it is over
-      # the Worker's 90 MiB body cap and goes straight to R2 -- the R2 pair is
-      # as load-bearing here as the hub token.
-      - name: Require the publish credentials
-        if: needs.version.outputs.dry_run == 'false'
+      # The names come from installer/tui/artifacts.py, the one table the build
+      # and this attach read, and publish-args fails if a named file is missing
+      # -- so this never attaches a partial set without saying so.
+      - name: List the installers and write their checksums
         env:
-          GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
-          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          missing=""
-          [ -n "${GAIA_HUB_TOKEN:-}" ]        || missing="${missing} GAIA_HUB_TOKEN"
-          [ -n "${GAIA_HUB_PUBLISH_URL:-}" ]  || missing="${missing} GAIA_HUB_PUBLISH_URL(variable)"
-          [ -n "${R2_ACCESS_KEY_ID:-}" ]      || missing="${missing} R2_ACCESS_KEY_ID"
-          [ -n "${R2_SECRET_ACCESS_KEY:-}" ]  || missing="${missing} R2_SECRET_ACCESS_KEY"
-          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="${missing} CLOUDFLARE_ACCOUNT_ID"
-          if [ -n "${missing}" ]; then
-            echo "::error::missing:${missing}. Same credentials as the agent-ui job: GAIA_HUB_TOKEN must match the Worker's PUBLISH_TOKENS, and the R2_* pair are R2 S3 credentials for the direct-to-R2 lane. See workers/agent-hub/README.md."
-            exit 1
-          fi
-
-      - name: Install publisher deps
-        if: needs.version.outputs.dry_run == 'false'
-        run: python -m pip install --upgrade requests pyyaml boto3
-
-      - name: Publish (POST /publish)
-        if: needs.version.outputs.dry_run == 'false'
-        shell: bash
-        env:
-          AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
-          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           VERSION: ${{ needs.version.outputs.tui_version }}
+          INSTALLERS_OK: ${{ needs.tui.outputs.installers_ok }}
+          WINDOWS_SETUP_OK: ${{ needs.windows-setup.outputs.ok }}
         run: |
           set -euo pipefail
-          spec="$(python installer/tui/artifacts.py publish-args \
-            --version "${VERSION}" --dir dist --platform win-x64)"
-          [ -n "${spec}" ] || { echo "::error::installer/tui/artifacts.py named no Windows setup to publish. Nothing was published."; exit 1; }
-          python hub/agents/email/python/packaging/publish_to_r2.py \
-            --base-url "${GAIA_HUB_PUBLISH_URL}" \
-            --manifest "${TERMINAL_HUB_MANIFEST}" \
-            --artifact "${spec}" \
-            --summary-out published-windows-setup.json
-          echo "=== publish summary (Windows setup) ==="
-          cat published-windows-setup.json
-
-  # No environment, so no approval prompt: this only says why there is nothing
-  # to publish.
-  windows-setup-missing:
-    name: Windows setup not published
-    needs: [version, windows-setup]
-    if: '!cancelled() && needs.version.result == ''success'' && needs.windows-setup.outputs.ok != ''true'''
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          echo "::warning::the Windows setup did not build and smoke-test cleanly, so no gaia-${{ needs.version.outputs.tui_version }}-win-x64-setup.exe is published for this version. Everything else is. Fix the Windows setup run and re-run this workflow to add it to the same version."
-
-  # ── agent-ui: republish the installers build-installers.yml already made ────
-  agent-ui:
-    name: Publish agent-ui
-    needs: [version, worker-check, deploy-worker]
-    # deploy-worker is skipped on a dry run; a skipped dependency would skip this
-    # job too, so admit 'skipped' explicitly while still refusing 'failure'.
-    # !cancelled() rather than always(): always() survives a cancelled run, and
-    # an upload that outlives Cancel lands in an immutable path.
-    if: |
-      !cancelled()
-      && needs.version.result == 'success'
-      && needs.worker-check.result == 'success'
-      && (needs.deploy-worker.result == 'success' || needs.deploy-worker.result == 'skipped')
-    runs-on: ubuntu-latest
-    # Same tag-allowlist requirement as terminal-hub above (#2935).
-    environment: agent-publish
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.x'
-
-      # build-installers.yml runs on this same tag, so the assets may not exist
-      # yet. Wait for the full set, bounded — and fail loudly on timeout rather
-      # than publishing a partial platform set that the catalog would then
-      # advertise as complete.
-      # Before the wait, not after: this job can sit for up to an hour on the
-      # installer assets and then pull ~400 MB, and discovering a missing secret
-      # at the end wastes all of it. Covers the R2 credentials too — the
-      # installers are large enough to take the direct-to-R2 lane, so those are
-      # as load-bearing here as the hub token.
-      - name: Require the publish credentials
-        if: needs.version.outputs.dry_run == 'false'
-        env:
-          GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          missing=""
-          [ -n "${GAIA_HUB_TOKEN:-}" ]        || missing="${missing} GAIA_HUB_TOKEN"
-          [ -n "${R2_ACCESS_KEY_ID:-}" ]      || missing="${missing} R2_ACCESS_KEY_ID"
-          [ -n "${R2_SECRET_ACCESS_KEY:-}" ]  || missing="${missing} R2_SECRET_ACCESS_KEY"
-          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="${missing} CLOUDFLARE_ACCOUNT_ID"
-          if [ -n "${missing}" ]; then
-            echo "::error::missing secret(s):${missing}. GAIA_HUB_TOKEN must match the Worker's PUBLISH_TOKENS; the R2_* pair are R2 S3 credentials (Cloudflare -> R2 -> Manage API Tokens, Object Read & Write) needed because these installers exceed the Worker request-body cap and go straight to R2. See workers/agent-hub/README.md."
+          scope=()
+          if [ "${INSTALLERS_OK}" != "true" ]; then
+            scope=(--platform win-x64)
+            echo "::warning::the macOS/Linux installers did not build, so only the Windows setup is attached to v${VERSION}."
+          elif [ "${WINDOWS_SETUP_OK}" != "true" ]; then
+            scope=(--exclude-platform win-x64)
+            echo "::warning::the Windows setup did not build, so it is not attached to v${VERSION}."
+          fi
+          python installer/tui/artifacts.py publish-args \
+            --version "${VERSION}" --dir dist "${scope[@]}" > specs.txt
+          : > files.txt
+          while IFS= read -r spec; do
+            [ -n "${spec}" ] && printf '%s\n' "${spec%=*}" >> files.txt
+          done < specs.txt
+          if [ ! -s files.txt ]; then
+            echo "::error::installer/tui/artifacts.py named no installers to attach. Nothing was attached."
             exit 1
           fi
+          mapfile -t files < files.txt
+          (cd dist && sha256sum "${files[@]#dist/}") > dist/gaia-installers-SHA256SUMS.txt
+          cat dist/gaia-installers-SHA256SUMS.txt
+          ls -l "${files[@]}"
 
-      - name: Require the publish URL
-        if: needs.version.outputs.dry_run == 'false'
-        env:
-          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-        run: |
-          set -euo pipefail
-          if [ -z "${GAIA_HUB_PUBLISH_URL:-}" ]; then
-            echo "::error::missing repository variable GAIA_HUB_PUBLISH_URL — the Worker's workers.dev origin CI POSTs uploads to (the proxied hub.amd-gaia.ai custom domain's managed WAF blocks large uploads). Set it as a repository variable, or as an environment variable on the agent-publish environment. See workers/agent-hub/README.md."
-            exit 1
-          fi
-
-      - name: Wait for the installer assets on the release
-        if: needs.version.outputs.dry_run == 'false'
-        shell: bash
+      # On a tag push publish.yml creates the release behind its own approval,
+      # so wait for it, bounded: a release that never appears is a failed
+      # publish run, not something to wait out. A dispatch looks once: run
+      # before the release exists (publishing terminal-hub ahead of a flagship
+      # release, or a dry run), there is nothing to attach to yet.
+      - name: Find the GitHub release
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.version.outputs.version }}
+          TAG: v${{ needs.version.outputs.tui_version }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          TAG="v${VERSION}"
-          want_exe="gaia-agent-ui-${VERSION}-x64-setup.exe"
-          want_dmg="gaia-agent-ui-${VERSION}-arm64.dmg"
-          want_app="gaia-agent-ui-${VERSION}-x86_64.AppImage"
-          deadline=$(( SECONDS + 3600 ))
-          while :; do
-            names="$(gh release view "${TAG}" --json assets --jq '.assets[].name' 2>/dev/null || true)"
-            missing=""
-            for w in "${want_exe}" "${want_dmg}" "${want_app}"; do
-              grep -qxF "${w}" <<<"${names}" || missing="${missing} ${w}"
-            done
-            if [ -z "${missing}" ]; then
-              echo "✓ all three installers present on ${TAG}"
-              break
+          exists() { gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName >/dev/null 2>&1; }
+          if [ "${EVENT}" = "workflow_dispatch" ]; then
+            if exists; then
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              echo "✓ release ${TAG} exists"
+            else
+              echo "exists=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::there is no GitHub release ${TAG} yet, so no installer is attached. publish.yml creates it on the tag; once it exists, re-run this job (it redeploys the website itself)."
             fi
+            exit 0
+          fi
+          deadline=$(( SECONDS + 3 * 3600 ))
+          until exists; do
             if [ "${SECONDS}" -ge "${deadline}" ]; then
-              echo "::error::timed out after 60m waiting for installer assets on ${TAG}. Missing:${missing}. build-installers.yml likely failed — check that run, then re-run this workflow. Nothing was published."
+              echo "::error::timed out after 3h waiting for the GitHub release ${TAG}. publish.yml creates it; check that run, then re-run this job (it redeploys the website itself). Nothing was attached, so the website offers no terminal installer for ${TAG}."
               exit 1
             fi
-            echo "waiting for:${missing}"
+            echo "waiting for release ${TAG}"
             sleep 60
           done
+          echo "exists=true" >> "$GITHUB_OUTPUT"
 
-      - name: Download the installers
-        if: needs.version.outputs.dry_run == 'false'
-        shell: bash
+      - name: Attach the installers and their checksums
+        if: needs.version.outputs.dry_run == 'false' && steps.release.outputs.exists == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.version.outputs.version }}
+          TAG: v${{ needs.version.outputs.tui_version }}
         run: |
           set -euo pipefail
-          mkdir -p dist
-          gh release download "v${VERSION}" --dir dist \
-            --pattern "gaia-agent-ui-${VERSION}-x64-setup.exe" \
-            --pattern "gaia-agent-ui-${VERSION}-arm64.dmg" \
-            --pattern "gaia-agent-ui-${VERSION}-x86_64.AppImage"
-          ls -la dist
+          mapfile -t files < files.txt
+          gh release upload "${TAG}" "${files[@]}" dist/gaia-installers-SHA256SUMS.txt \
+            --repo "${GITHUB_REPOSITORY}" --clobber
+          echo "✓ attached ${#files[@]} installers to ${TAG}"
 
-      - name: Install publisher deps
-        if: needs.version.outputs.dry_run == 'false'
-        run: python -m pip install --upgrade requests pyyaml boto3
-
-      - name: Publish to the Agent Hub (POST /publish)
-        if: needs.version.outputs.dry_run == 'false'
-        shell: bash
+      - name: Redeploy the website to show them
+        if: needs.version.outputs.dry_run == 'false' && steps.release.outputs.exists == 'true'
         env:
-          AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
-          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          # Artifacts at/over 90 MiB cannot travel through the Worker at all
-          # (Cloudflare caps request bodies at 100 MB on Free/Pro), so the
-          # publisher PUTs them straight into R2 and publishes them by
-          # reference. Only the Agent UI installers hit this today.
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          VERSION: ${{ needs.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # One artifact per platform key. The .deb stays on the GitHub release
-          # for apt users — publishing it as a second linux-x64 object would
-          # make the catalog's per-platform download ambiguous.
-          python hub/agents/email/python/packaging/publish_to_r2.py \
-            --base-url "${GAIA_HUB_PUBLISH_URL}" \
-            --manifest "${AGENT_UI_MANIFEST}" \
-            --artifact "dist/gaia-agent-ui-${VERSION}-x64-setup.exe=win-x64" \
-            --artifact "dist/gaia-agent-ui-${VERSION}-arm64.dmg=darwin-arm64" \
-            --artifact "dist/gaia-agent-ui-${VERSION}-x86_64.AppImage=linux-x64" \
-            --summary-out published.json
-          echo "=== publish summary ==="
-          cat published.json
+          gh workflow run deploy_website.yml --repo "${GITHUB_REPOSITORY}" --ref main
+          echo "✓ requested website redeploy (deploy_website.yml on main)"
 
-  # ── The website builds its Hub pages from the live index.json at deploy time,
-  # so a publish only becomes visible after a rebuild. deploy_website.yml
-  # auto-triggers on website/** only, and a hub publish touches no such file.
+  # ── The website builds its download links from the GitHub release at deploy
+  # time, so a release only becomes visible after a rebuild. deploy_website.yml
+  # auto-triggers on website/** only, and a release touches no such file.
   redeploy-website:
     name: Redeploy website
-    # publish-windows-setup is waited for, not required: the site renders the
-    # Windows setup when it is published and today's two downloads when not.
-    needs: [version, terminal-hub, agent-ui, publish-windows-setup]
+    # github-release-installers is not waited for: it redeploys the site itself
+    # once it has attached.
+    needs: [version, terminal-hub]
     # No status-check function in `needs.version.outputs...` means GitHub
-    # implicitly ANDs this with success() -- so a 'skipped' terminal-hub or
-    # agent-ui (e.g. worker-check failed, or tui's binaries were not ok) would
-    # silently skip this too, with no error, even on a real release. That
-    # happened to be the desired outcome so far by accident, not by the
-    # explicit intent below: redeploy only on a real (non-dry-run) release
-    # where both components actually published, and never leave a cancelled
-    # run's ambiguous state silently wired through.
+    # implicitly ANDs this with success() -- so a 'skipped' terminal-hub (e.g.
+    # worker-check failed, or tui's binaries were not ok) would silently skip
+    # this too, with no error, even on a real release. The explicit intent:
+    # redeploy only on a real (non-dry-run) release where the hub publish
+    # actually succeeded, and never leave a cancelled run's ambiguous state
+    # silently wired through.
     if: |
       !cancelled()
       && needs.version.outputs.dry_run == 'false'
       && needs.terminal-hub.result == 'success'
-      && needs.agent-ui.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       actions: write

@@ -10,19 +10,27 @@ the DNS-rebind TOCTOU window between ``validate_url`` (which calls
 ``urllib3`` would resolve a second time).
 """
 
+import http.client
 import ipaddress
 import os
+import random
 import re
 import socket
+import threading
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Callable, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
 
 import requests
+import urllib3
 from requests.adapters import HTTPAdapter
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
 from gaia.logger import get_logger
+from gaia.tool_cancellation import ToolCancelled
 
 log = get_logger(__name__)
 
@@ -44,6 +52,243 @@ BLOCKED_PORTS = {22, 23, 25, 445, 3306, 5432, 6379, 27017}
 #: Carrier-grade NAT (RFC 6598). ``ipaddress`` does not call it private, but
 #: Tailscale addresses every machine on the user's mesh from it.
 CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _shutdown_socket(sock) -> None:
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError as e:
+        log.debug("Socket already closed while aborting a fetch: %s", e)
+
+
+def _abort_stream(response: requests.Response) -> None:
+    """Unblock a read in progress on ``response``'s socket from another thread.
+
+    Closing the response is not enough on every platform: a thread blocked in
+    ``recv`` stays blocked until the socket is shut down.
+    """
+    raw = getattr(response, "raw", None)
+    conn_sock = getattr(getattr(raw, "_connection", None), "sock", None)
+    fp = getattr(getattr(raw, "_fp", None), "fp", None)
+    fp_sock = getattr(getattr(fp, "raw", fp), "_sock", None)
+    for sock in {s for s in (conn_sock, fp_sock) if s is not None}:
+        _shutdown_socket(sock)
+    response.close()
+
+
+# Thread id -> the socket that thread is connecting, handshaking or reading
+# headers on, and thread id -> the deadline it is fetching under, so a deadline
+# can unblock a server that trickles its TLS handshake or its headers.
+_THREAD_SOCKETS: Dict[int, socket.socket] = {}
+_THREAD_DEADLINES: Dict[int, "_Deadline"] = {}
+_SOCKETS_LOCK = threading.Lock()
+
+#: A read whose timeout was cut to the time left can fail a few ms before the
+#: timer thread runs (or before Windows' clock ticks over); that close to the
+#: deadline, the failure is the deadline.
+_DEADLINE_SLACK_SECONDS = 0.25
+
+
+def _track_socket(sock) -> None:
+    """Register ``sock`` for this thread; abort it at once if the thread's
+    deadline has already passed (it fired while DNS or connect blocked)."""
+    thread_id = threading.get_ident()
+    with _SOCKETS_LOCK:
+        _THREAD_SOCKETS[thread_id] = sock
+        deadline = _THREAD_DEADLINES.get(thread_id)
+        if deadline is not None and deadline.fired.is_set():
+            _shutdown_socket(sock)
+
+
+def _untrack_socket(sock) -> None:
+    thread_id = threading.get_ident()
+    with _SOCKETS_LOCK:
+        if _THREAD_SOCKETS.get(thread_id) is sock:
+            del _THREAD_SOCKETS[thread_id]
+
+
+def _tracked(connection_cls):
+    """``connection_cls`` with its socket registered from creation through
+    the header read, so a fetch deadline can unblock it."""
+
+    class Tracked(connection_cls):
+        # Both inherited from urllib3's HTTPConnection; pylint misses them.
+        def _new_conn(self):
+            sock = super()._new_conn()  # pylint: disable=no-member
+            _track_socket(sock)
+            return sock
+
+        def getresponse(self, *args, **kwargs):
+            sock = self.sock
+            _track_socket(sock)
+            try:
+                return super().getresponse(*args, **kwargs)  # pylint: disable=no-member
+            finally:
+                _untrack_socket(sock)
+
+    Tracked.__name__ = Tracked.__qualname__ = f"Tracked{connection_cls.__name__}"
+    return Tracked
+
+
+def _tracked_pools(http_pool, https_pool) -> Dict[str, type]:
+    return {
+        scheme: type(
+            f"Tracked{pool.__name__}",
+            (pool,),
+            {"ConnectionCls": _tracked(pool.ConnectionCls)},
+        )
+        for scheme, pool in (("http", http_pool), ("https", https_pool))
+    }
+
+
+_TRACKED_POOLS = _tracked_pools(HTTPConnectionPool, HTTPSConnectionPool)
+_TRACKED_SOCKS_POOLS: Dict[str, type] = {}
+
+
+def _pools_for(manager) -> Dict[str, type]:
+    """Tracked pool classes matching ``manager``'s own (plain, or SOCKS)."""
+    try:
+        from urllib3.contrib.socks import (
+            SOCKSHTTPConnectionPool,
+            SOCKSHTTPSConnectionPool,
+            SOCKSProxyManager,
+        )
+    except ImportError:
+        return _TRACKED_POOLS  # PySocks absent: no SOCKS manager can exist
+    if not isinstance(manager, SOCKSProxyManager):
+        return _TRACKED_POOLS
+    if not _TRACKED_SOCKS_POOLS:
+        _TRACKED_SOCKS_POOLS.update(
+            _tracked_pools(SOCKSHTTPConnectionPool, SOCKSHTTPSConnectionPool)
+        )
+    return _TRACKED_SOCKS_POOLS
+
+
+class FetchDeadlineExceeded(requests.exceptions.Timeout):
+    """A fetch or download ran past its overall deadline.
+
+    The per-request ``timeout`` bounds each socket read, so a server that sends
+    a byte just inside it, again and again, never trips it. This bounds the
+    whole operation: every redirect hop, the connection and the body.
+    """
+
+
+class _Deadline:
+    """One overall deadline for a fetch or download, enforced by a timer.
+
+    When it passes, the timer shuts down whatever socket the calling thread is
+    blocked on (handshake, headers or body), so the blocked read returns at
+    once. A socket or response that appears after it fired is aborted on
+    arrival.
+    """
+
+    def __init__(self, seconds: float, url: str, what: str) -> None:
+        self.seconds = seconds
+        self.url = url
+        self.what = what
+        self.received = 0
+        self.fired = threading.Event()
+        self._at = time.monotonic() + seconds
+        self._thread_id = threading.get_ident()
+        self._response = None
+        self._done = False
+        self._timer = threading.Timer(seconds, self._fire)
+        self._timer.daemon = True
+
+    def __enter__(self) -> "_Deadline":
+        with _SOCKETS_LOCK:
+            _THREAD_DEADLINES[self._thread_id] = self
+            _THREAD_SOCKETS.pop(self._thread_id, None)
+        self._timer.start()
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self._timer.cancel()
+        # cancel() cannot stop a _fire already running; _done makes it a no-op,
+        # so it never touches a socket this thread's next request registered.
+        with _SOCKETS_LOCK:
+            self._done = True
+            if _THREAD_DEADLINES.get(self._thread_id) is self:
+                del _THREAD_DEADLINES[self._thread_id]
+
+    def expired(self) -> bool:
+        return (
+            self.fired.is_set()
+            or time.monotonic() >= self._at - _DEADLINE_SLACK_SECONDS
+        )
+
+    def remaining(self) -> float:
+        left = self._at - time.monotonic()
+        if left <= 0 or self.fired.is_set():
+            raise self.error()
+        return left
+
+    def watch(self, response: requests.Response) -> None:
+        with _SOCKETS_LOCK:
+            self._response = response
+            if self.fired.is_set():
+                _abort_stream(response)
+
+    def error(self) -> FetchDeadlineExceeded:
+        got = f" after receiving {self.received} bytes" if self.received else ""
+        return FetchDeadlineExceeded(
+            f"The {self.what} of {self.url} did not finish within "
+            f"{self.seconds:.0f}s{got}, so it was stopped. The server is sending "
+            "too slowly or not at all. Try again later, or use a different "
+            "source."
+        )
+
+    def _fire(self) -> None:
+        with _SOCKETS_LOCK:
+            if self._done:
+                return
+            self.fired.set()
+            sock = _THREAD_SOCKETS.get(self._thread_id)
+            if sock is not None:
+                _shutdown_socket(sock)
+            response = self._response
+            if response is not None:
+                _abort_stream(response)
+
+
+#: What a read cut short by the deadline (its timeout, or the timer's
+#: shutdown) raises. Anything else, a blocked address or a bug, is not
+#: relabelled as a slow server.
+_TRANSPORT_ERRORS = (
+    requests.exceptions.RequestException,
+    OSError,
+    http.client.HTTPException,
+    urllib3.exceptions.HTTPError,
+)
+
+
+def _is_deadline_failure(
+    error: BaseException, deadline: "_Deadline", reading_body: bool = False
+) -> bool:
+    if isinstance(error, _TRANSPORT_ERRORS):
+        return deadline.expired()
+    # The timer closing a response mid-read can surface as one of these from
+    # inside http.client, but only while a body is being read.
+    return (
+        reading_body
+        and isinstance(error, (AttributeError, ValueError))
+        and deadline.fired.is_set()
+    )
+
+
+def _cap_timeout(timeout, remaining: float):
+    """``timeout`` (a number or a ``(connect, read)`` pair) capped at ``remaining``.
+
+    Any other form (a ``urllib3.Timeout``) is passed through; the deadline's
+    timer still bounds the fetch.
+    """
+    if isinstance(timeout, tuple):
+        return tuple(remaining if t is None else min(t, remaining) for t in timeout)
+    if timeout is None:
+        return remaining
+    if isinstance(timeout, (int, float)):
+        return min(timeout, remaining)
+    return timeout
 
 
 def _is_blocked_ip(ip: "ipaddress._BaseAddress") -> bool:
@@ -183,6 +428,19 @@ class PinnedIPAdapter(HTTPAdapter):
         super().__init__(*args, **kwargs)
         self._pinned_cache: Dict[Tuple[str, int], str] = {}
 
+    def init_poolmanager(self, *args, **kwargs):
+        super().init_poolmanager(*args, **kwargs)
+        # Lets a fetch deadline reach a socket still connecting or reading
+        # headers.
+        self.poolmanager.pool_classes_by_scheme = dict(_TRACKED_POOLS)
+
+    def proxy_manager_for(self, proxy, **proxy_kwargs):
+        manager = super().proxy_manager_for(proxy, **proxy_kwargs)
+        # The same for requests sent through a proxy; a SOCKS proxy keeps its
+        # own pool classes, tracked the same way.
+        manager.pool_classes_by_scheme = dict(_pools_for(manager))
+        return manager
+
     def _resolve_first_ip(self, host: str, port: int) -> str:
         key = (host, port)
         if key in self._pinned_cache:
@@ -239,36 +497,45 @@ class PinnedIPAdapter(HTTPAdapter):
         return clean, tls_hostname
 
     def send(self, request: requests.PreparedRequest, **kwargs) -> requests.Response:
-        parsed = urlparse(request.url)
+        original_url = request.url
+        parsed = urlparse(original_url)
         host = parsed.hostname
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
 
-        if host:
-            pinned_ip = self._resolve_first_ip(host, port)
-            url_ip = self._format_ip_for_url(pinned_ip)
+        if not host:
+            return super().send(request, **kwargs)
 
-            if parsed.scheme == "https":
-                # Carry the original hostname in userinfo; it is read back in
-                # build_connection_pool_key_attributes to set the TLS SNI and
-                # the certificate-name assertion. Never sent on the wire.
-                new_netloc = f"{host}@{url_ip}:{port}"
-            else:
-                new_netloc = f"{url_ip}:{port}"
+        pinned_ip = self._resolve_first_ip(host, port)
+        url_ip = self._format_ip_for_url(pinned_ip)
 
-            new_url = urlunparse(
-                (
-                    parsed.scheme,
-                    new_netloc,
-                    parsed.path or "",
-                    parsed.params or "",
-                    parsed.query or "",
-                    parsed.fragment or "",
-                )
+        if parsed.scheme == "https":
+            # Carry the original hostname in userinfo; it is read back in
+            # build_connection_pool_key_attributes to set the TLS SNI and
+            # the certificate-name assertion. Never sent on the wire.
+            new_netloc = f"{host}@{url_ip}:{port}"
+        else:
+            new_netloc = f"{url_ip}:{port}"
+
+        request.url = urlunparse(
+            (
+                parsed.scheme,
+                new_netloc,
+                parsed.path or "",
+                parsed.params or "",
+                parsed.query or "",
+                parsed.fragment or "",
             )
-            request.url = new_url
-            request.headers.setdefault("Host", host)
+        )
+        request.headers.setdefault("Host", host)
 
-        return super().send(request, **kwargs)
+        # The pinned form only steers the connection. Restore the real URL so
+        # HTTPError text, response.url and cookie domains never show host@ip.
+        try:
+            response = super().send(request, **kwargs)
+        finally:
+            request.url = original_url
+        response.url = original_url
+        return response
 
     def build_connection_pool_key_attributes(self, request, verify, cert=None):
         """Pin the connect address to the IP while keeping the TLS identity.
@@ -287,6 +554,130 @@ class PinnedIPAdapter(HTTPAdapter):
         return host_params, pool_kwargs
 
 
+# -- Search pacing and block detection -----------------------------------------
+
+#: Statuses DuckDuckGo uses to turn away automated traffic. Any other non-200
+#: is a real failure and is not retried.
+SEARCH_BLOCK_STATUSES = frozenset({202, 403, 429, 503})
+
+#: Markup only DDG's bot-check page carries; a 200 with these holds no results.
+_DDG_CHALLENGE_MARKERS = (
+    "anomaly-modal",
+    'id="challenge-form"',
+    "bots use duckduckgo too",
+)
+
+_DDG_ENDPOINTS = (
+    ("html", "https://html.duckduckgo.com/html/"),
+    ("lite", "https://lite.duckduckgo.com/lite/"),
+)
+
+
+class SearchUnavailableError(RuntimeError):
+    """Every search endpoint turned the query away; waiting may fix it.
+
+    ``retry_after`` is the seconds to wait before searching again.
+    """
+
+    def __init__(self, message: str, retry_after: float, status: Optional[int]):
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.status = status
+
+
+class _SearchGate:
+    """Process-wide pacing for search requests, shared by every ``WebClient``.
+
+    Agents fire searches in parallel; each caller reserves the next free slot,
+    so requests leave at least ``min_interval`` apart. A block signal pushes
+    every caller back until ``blocked_until``.
+    """
+
+    def __init__(self, min_interval: float, sleep=time.sleep) -> None:
+        self.min_interval = min_interval
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self._next_slot = 0.0
+        self._blocked_until = 0.0
+
+    def blocked_for(self) -> float:
+        """Seconds until searching is allowed again after a block, or 0."""
+        with self._lock:
+            return max(0.0, self._blocked_until - time.monotonic())
+
+    #: Longest single sleep while a stop check is wired, so Stop ends a wait promptly.
+    STOP_POLL_SECONDS = 0.25
+
+    def wait_turn(self, should_stop: Optional[Callable[[], bool]] = None) -> None:
+        """Wait for this caller's slot; raise ``ToolCancelled`` if *should_stop* fires."""
+        with self._lock:
+            now = time.monotonic()
+            slot = max(now, self._next_slot, self._blocked_until)
+            self._next_slot = slot + self.min_interval
+        remaining = slot - now
+        if should_stop is None:
+            if remaining > 0:
+                self._sleep(remaining)
+            return
+        while True:
+            if should_stop():
+                raise ToolCancelled(
+                    "web search was stopped while waiting out a DuckDuckGo rate limit"
+                )
+            if remaining <= 0:
+                return
+            step = min(remaining, self.STOP_POLL_SECONDS)
+            self._sleep(step)
+            remaining -= step
+
+    def back_off(self, seconds: float) -> None:
+        with self._lock:
+            self._blocked_until = max(self._blocked_until, time.monotonic() + seconds)
+
+
+_SEARCH_GATE = _SearchGate(min_interval=1.5)
+
+
+def _retry_after_seconds(response: requests.Response) -> Optional[float]:
+    """The ``Retry-After`` header in seconds (delta or HTTP-date), if present."""
+    value = (response.headers or {}).get("Retry-After")
+    if not value:
+        return None
+    value = str(value).strip()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        log.debug("Unparseable Retry-After header: %r", value)
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
+def _ddg_block_reason(response: requests.Response) -> Optional[str]:
+    """Why DDG refused to answer, or ``None`` when the page holds real results."""
+    if response.status_code in SEARCH_BLOCK_STATUSES:
+        return f"HTTP {response.status_code}"
+    if response.status_code == 200:
+        page = (response.text or "").lower()
+        if any(marker in page for marker in _DDG_CHALLENGE_MARKERS):
+            return "a bot-check page (HTTP 200)"
+    return None
+
+
+def _unwrap_ddg_href(href: str) -> str:
+    """DDG wraps result URLs in a redirect; return the real target."""
+    if "uddg=" in href:
+        params = parse_qs(urlparse(href).query)
+        if "uddg" in params:
+            return params["uddg"][0]
+    return href
+
+
 class WebClient:
     """Lightweight HTTP client for web content extraction.
 
@@ -300,6 +691,11 @@ class WebClient:
     """
 
     DEFAULT_TIMEOUT = 30
+    #: Whole fetch, redirects and body included. At the 10 MB body cap this
+    #: still allows a ~85 KB/s link.
+    DEFAULT_FETCH_DEADLINE = 120
+    #: Whole download; a 100 MB file needs ~55 KB/s to finish inside it.
+    DEFAULT_DOWNLOAD_DEADLINE = 1800
     DEFAULT_MAX_RESPONSE_SIZE = 10 * 1024 * 1024  # 10 MB
     DEFAULT_MAX_DOWNLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
     DEFAULT_USER_AGENT = "GAIA-Agent/0.15 (https://github.com/amd/gaia)"
@@ -313,8 +709,12 @@ class WebClient:
         max_download_size: int = None,
         user_agent: str = None,
         rate_limit: float = None,
+        fetch_deadline: float = None,
+        download_deadline: float = None,
     ):
         self._timeout = timeout or self.DEFAULT_TIMEOUT
+        self._fetch_deadline = fetch_deadline or self.DEFAULT_FETCH_DEADLINE
+        self._download_deadline = download_deadline or self.DEFAULT_DOWNLOAD_DEADLINE
         self._max_response_size = max_response_size or self.DEFAULT_MAX_RESPONSE_SIZE
         self._max_download_size = max_download_size or self.DEFAULT_MAX_DOWNLOAD_SIZE
         self._user_agent = user_agent or self.DEFAULT_USER_AGENT
@@ -411,6 +811,44 @@ class WebClient:
             time.sleep(self._rate_limit - elapsed)
         self._domain_last_request[domain] = time.monotonic()
 
+    # -- Deadlines -----------------------------------------------------------
+
+    def _send_hop(self, deadline: _Deadline, send, caller_timeout=None):
+        """Send one request inside ``deadline``; ``send`` takes the timeout."""
+        timeout = _cap_timeout(
+            self._timeout if caller_timeout is None else caller_timeout,
+            deadline.remaining(),
+        )
+        try:
+            response = send(timeout)
+        except Exception as e:
+            if _is_deadline_failure(e, deadline):
+                raise deadline.error() from e
+            raise
+        deadline.watch(response)
+        return response
+
+    @staticmethod
+    def _read_chunks(response: requests.Response, deadline: _Deadline):
+        """Yield ``response``'s body, stopping the read when ``deadline`` fires.
+
+        A chunk read blocks until 8 KB arrive, which at a byte per read timeout
+        is hours, so the deadline's timer unblocks the socket mid-read.
+        """
+        try:
+            for chunk in response.iter_content(chunk_size=8192):
+                if deadline.fired.is_set():
+                    break
+                deadline.received += len(chunk)
+                yield chunk
+        except Exception as e:
+            if _is_deadline_failure(e, deadline, reading_body=True):
+                raise deadline.error() from e
+            raise
+        # An unblocked socket can also read as a clean, truncated end.
+        if deadline.fired.is_set():
+            raise deadline.error()
+
     # -- HTTP Methods --------------------------------------------------------
 
     def get(self, url: str, **kwargs) -> requests.Response:
@@ -438,17 +876,30 @@ class WebClient:
 
         domain = urlparse(url).hostname
         self._rate_limit_wait(domain)
+        # Started after the first rate-limit wait. A redirect to a new domain
+        # waits up to rate_limit (1 s) inside it, which the deadline absorbs.
+        with _Deadline(self._fetch_deadline, url, "fetch") as deadline:
+            return self._follow_redirects(method, url, domain, deadline, **kwargs)
 
+    def _follow_redirects(
+        self, method: str, url: str, domain: str, deadline: _Deadline, **kwargs
+    ) -> requests.Response:
         # Disable auto-redirects -- we follow manually to validate each hop.
         # Force streaming so we can cap decompressed body size before it
         # reaches memory (requests would otherwise eagerly decode gzip).
-        kwargs.setdefault("timeout", self._timeout)
+        caller_timeout = kwargs.pop("timeout", None)
         kwargs["allow_redirects"] = False
         kwargs["stream"] = True
 
         current_url = url
         for redirect_count in range(self.MAX_REDIRECTS + 1):
-            response = self._session.request(method, current_url, **kwargs)
+            response = self._send_hop(
+                deadline,
+                lambda timeout, hop_url=current_url: self._session.request(
+                    method, hop_url, timeout=timeout, **kwargs
+                ),
+                caller_timeout,
+            )
 
             # Pre-check declared Content-Length (still useful — rejects cheap
             # DoS before we stream anything).
@@ -462,6 +913,9 @@ class WebClient:
 
             # Not a redirect -- consume body with a hard byte cap and return.
             if response.status_code not in (301, 302, 303, 307, 308):
+                # Read first: apparent_encoding reads response.content, which
+                # would pull the body outside the deadline-bounded read.
+                self._consume_body_capped(response, deadline)
                 # Use apparent_encoding for better charset handling
                 if response.encoding and response.apparent_encoding:
                     if (
@@ -469,7 +923,6 @@ class WebClient:
                         and response.apparent_encoding.lower() != "iso-8859-1"
                     ):
                         response.encoding = response.apparent_encoding
-                self._consume_body_capped(response)
                 return response
 
             # Follow redirect -- validate the new URL
@@ -477,7 +930,7 @@ class WebClient:
             if not redirect_url:
                 # No Location header; cap body just like a normal response
                 # before returning.
-                self._consume_body_capped(response)
+                self._consume_body_capped(response, deadline)
                 return response
 
             # Resolve relative redirects
@@ -516,8 +969,15 @@ class WebClient:
 
         raise ValueError(f"Too many redirects (max {self.MAX_REDIRECTS})")
 
-    def _consume_body_capped(self, response: requests.Response) -> None:
+    def _consume_body_capped(
+        self,
+        response: requests.Response,
+        deadline: "_Deadline",
+    ) -> None:
         """Read ``response`` body in chunks up to ``self._max_response_size``.
+
+        When ``deadline`` fires the read is abandoned with
+        :class:`FetchDeadlineExceeded`.
 
         Because we forced ``stream=True`` in ``_request``, ``response.content``
         would otherwise lazily fetch everything on first access. This replaces
@@ -536,7 +996,7 @@ class WebClient:
 
         chunks = []
         total = 0
-        for chunk in response.iter_content(chunk_size=8192):
+        for chunk in self._read_chunks(response, deadline):
             if not chunk:
                 continue
             total += len(chunk)
@@ -776,13 +1236,20 @@ class WebClient:
         self.validate_url(url)
         domain = urlparse(url).hostname
         self._rate_limit_wait(domain)
+        with _Deadline(self._download_deadline, url, "download") as deadline:
+            return self._download_within(
+                url, save_dir, filename, max_size, on_path_resolved, deadline
+            )
 
+    def _download_within(
+        self, url, save_dir, filename, max_size, on_path_resolved, deadline
+    ) -> dict:
         # Stream the download
-        response = self._session.get(
-            url,
-            stream=True,
-            timeout=self._timeout,
-            allow_redirects=False,
+        response = self._send_hop(
+            deadline,
+            lambda timeout: self._session.get(
+                url, stream=True, timeout=timeout, allow_redirects=False
+            ),
         )
 
         # Handle redirects manually for downloads too
@@ -797,11 +1264,11 @@ class WebClient:
             redirect_url = urljoin(url, redirect_url)
             self.validate_url(redirect_url)
             response.close()
-            response = self._session.get(
-                redirect_url,
-                stream=True,
-                timeout=self._timeout,
-                allow_redirects=False,
+            response = self._send_hop(
+                deadline,
+                lambda timeout, hop_url=redirect_url: self._session.get(
+                    hop_url, stream=True, timeout=timeout, allow_redirects=False
+                ),
             )
             url = redirect_url
 
@@ -837,7 +1304,6 @@ class WebClient:
 
         # Resolve save path
         save_dir = Path(save_dir).expanduser().resolve()
-        save_dir.mkdir(parents=True, exist_ok=True)
         save_path = save_dir / filename
 
         # Verify path is still within save_dir (prevent traversal). Compare
@@ -875,6 +1341,9 @@ class WebClient:
                 response.close()
                 raise
 
+        # Created only after the screen, so a refused download leaves no folder.
+        save_dir.mkdir(parents=True, exist_ok=True)
+
         # Stream to a sibling .part file and rename into place, so an
         # interrupted download never leaves a truncated file under the real
         # name. Exclusive create means a concurrent download of the same name,
@@ -896,7 +1365,7 @@ class WebClient:
         downloaded = 0
         try:
             with part_file as f:
-                for chunk in response.iter_content(chunk_size=8192):
+                for chunk in self._read_chunks(response, deadline):
                     downloaded += len(chunk)
                     if downloaded > max_size:
                         raise ValueError(
@@ -925,64 +1394,133 @@ class WebClient:
 
     # -- Search --------------------------------------------------------------
 
-    def search_duckduckgo(self, query: str, num_results: int = 5) -> list:
+    #: Retries after a block: exponential from this base, plus up to this much jitter.
+    SEARCH_BACKOFF_BASE = 2.0
+    #: A wait longer than this is not slept inside one tool call; the caller is
+    #: told how long to wait instead.
+    SEARCH_BACKOFF_CAP = 20.0
+
+    def search_duckduckgo(
+        self,
+        query: str,
+        num_results: int = 5,
+        max_attempts: int = 3,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> list:
         """Search DuckDuckGo and parse results from HTML.
 
-        Uses the HTML-only version (html.duckduckgo.com) which does not
-        require JavaScript rendering. Uses POST as DDG expects form submission.
+        Tries the HTML endpoint (html.duckduckgo.com), then the lite one
+        (lite.duckduckgo.com), by POST as DDG expects. When both turn the query
+        away (202/403/429/503 or a bot-check page) it waits with jittered
+        exponential backoff, honouring ``Retry-After``, for up to
+        ``max_attempts`` rounds. Searches from every client in the process are
+        paced through one gate.
 
         Returns: [{"title": str, "url": str, "snippet": str}]
+
+        ``should_stop`` is polled during pacing and backoff waits, so a user's
+        Stop ends the wait instead of sitting it out.
+
+        Raises:
+            SearchUnavailableError: every attempt was turned away.
+            ToolCancelled: ``should_stop`` returned True during a wait.
+            RuntimeError: DDG answered another non-200 status.
         """
         if not BS4_AVAILABLE:
             raise ImportError("beautifulsoup4 is required for web search.")
+        if max_attempts < 1:
+            raise ValueError(f"max_attempts must be at least 1, got {max_attempts}")
 
-        response = self.post(
-            "https://html.duckduckgo.com/html/",
-            data={"q": query, "b": ""},
-        )
-        # A blocked or challenged search is not "no results" (DDG answers an
-        # automated-traffic check with 202 and a page that holds none).
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"DuckDuckGo answered HTTP {response.status_code}, so no results "
-                "were read. It may be rate-limiting automated searches; wait a "
-                "minute before searching again."
-            )
+        pending = _SEARCH_GATE.blocked_for()
+        if pending > self.SEARCH_BACKOFF_CAP:
+            raise self._search_unavailable("an earlier block", pending, None)
 
-        soup = self.parse_html(response.text)
-        results = []
-
-        for result_div in soup.select(".result"):
-            title_el = result_div.select_one(".result__title a, .result__a")
-            snippet_el = result_div.select_one(".result__snippet")
-
-            if not title_el:
-                continue
-
-            title = title_el.get_text(strip=True)
-            href = title_el.get("href", "")
-            snippet = snippet_el.get_text(strip=True) if snippet_el else ""
-
-            # DDG wraps URLs in a redirect -- extract the actual URL
-            if "uddg=" in href:
-                parsed = urlparse(href)
-                params = parse_qs(parsed.query)
-                if "uddg" in params:
-                    href = params["uddg"][0]
-
-            if title and href:
-                results.append(
-                    {
-                        "title": title,
-                        "url": href,
-                        "snippet": snippet,
-                    }
+        reason, status, wait = "", None, 0.0
+        for attempt in range(max_attempts):
+            hinted = None
+            for name, url in _DDG_ENDPOINTS:
+                _SEARCH_GATE.wait_turn(should_stop)
+                response = self.post(url, data={"q": query, "b": ""})
+                blocked = _ddg_block_reason(response)
+                if blocked is None:
+                    if response.status_code != 200:
+                        raise RuntimeError(
+                            f"DuckDuckGo answered HTTP {response.status_code}, so "
+                            "no results were read."
+                        )
+                    if reason:
+                        log.warning(
+                            "DuckDuckGo %s endpoint answered after an earlier "
+                            "refusal (%s)",
+                            name,
+                            reason,
+                        )
+                    return self._parse_ddg(name, response.text, num_results)
+                reason, status = blocked, response.status_code
+                after = _retry_after_seconds(response)
+                if after is not None:
+                    hinted = max(hinted or 0.0, after)
+                log.warning(
+                    "DuckDuckGo %s endpoint refused a search (%s), attempt %d/%d",
+                    name,
+                    blocked,
+                    attempt + 1,
+                    max_attempts,
                 )
-
-            if len(results) >= num_results:
+            backoff = self.SEARCH_BACKOFF_BASE * 2**attempt + random.uniform(
+                0, self.SEARCH_BACKOFF_BASE
+            )
+            wait = max(backoff, hinted or 0.0)
+            _SEARCH_GATE.back_off(wait)
+            if wait > self.SEARCH_BACKOFF_CAP:
                 break
+        raise self._search_unavailable(reason, wait, status)
 
-        return results
+    @staticmethod
+    def _search_unavailable(
+        reason: str, wait: float, status: Optional[int]
+    ) -> SearchUnavailableError:
+        return SearchUnavailableError(
+            f"DuckDuckGo turned the search away ({reason}), so no results were "
+            f"read. It is rate-limiting automated searches; searching again in "
+            f"about {wait:.0f} seconds may work.",
+            retry_after=wait,
+            status=status,
+        )
+
+    def _parse_ddg(self, endpoint: str, html: str, num_results: int) -> list:
+        """Results from an html- or lite-endpoint page."""
+        soup = self.parse_html(html)
+        results = []
+        if endpoint == "lite":
+            for link in soup.select("a.result-link"):
+                after = link.find_next(
+                    ["a", "td"], class_=["result-link", "result-snippet"]
+                )
+                snippet = (
+                    after.get_text(strip=True)
+                    if after is not None and after.name == "td"
+                    else ""
+                )
+                results.append((link, snippet))
+        else:
+            for result_div in soup.select(".result"):
+                title_el = result_div.select_one(".result__title a, .result__a")
+                if not title_el:
+                    continue
+                snippet_el = result_div.select_one(".result__snippet")
+                snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+                results.append((title_el, snippet))
+
+        parsed = []
+        for title_el, snippet in results:
+            title = title_el.get_text(strip=True)
+            href = _unwrap_ddg_href(title_el.get("href", ""))
+            if title and href:
+                parsed.append({"title": title, "url": href, "snippet": snippet})
+            if len(parsed) >= num_results:
+                break
+        return parsed
 
     # -- Utility -------------------------------------------------------------
 

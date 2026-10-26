@@ -7,28 +7,36 @@
 #
 # Flow:
 #   validate → build (pypi + npm + desktop installers, parallel)
-#     → approve (single manual gate)
+#            → ci-green (the tagged commit passed CI; parallel with the builds)
+#     → approve (single manual gate for a final; none for an RC)
 #       → publish (pypi + npm, parallel)
 #         → post-publish smoke test (PyPI install verification)
 #         → github release (sigstore + desktop installers)
 #
-# Release candidates: a `vX.Y.Z-rcN` tag runs the same pipeline, behind the same
-# approval, with these differences (a `vX.Y.Z` final is untouched by them):
+# Release candidates: a `vX.Y.Z-rcN` tag runs the same pipeline with these
+# differences (a `vX.Y.Z` final is untouched by them):
+#   • no human approval: approve-publish runs in the reviewer-less "publish-rc"
+#     environment, and stops if a newer tag of the same X.Y.Z exists
 #   • version.py must say X.Y.Z; each build stamps X.Y.ZrcN (PyPI) and
 #     X.Y.Z-rc.N (npm, Electron) from the tag — util/release_tag.py
 #   • npm publishes under the `next` dist-tag, so `latest` does not move
 #   • the GitHub Release is a pre-release and never "latest"
 #   • release notes are the final's (docs/releases/vX.Y.Z.mdx)
-#   • no Context7 refresh; release_components.yml (Agent Hub R2) does not run
-#   • so the combined Windows setup, which a final gets from release_components.yml,
-#     is built here instead (rc-windows-setup) and attached to the pre-release only
+#   • release_components.yml (Agent Hub R2) does not run
+#   • so the terminal installers, which a final gets from release_components.yml,
+#     are built here instead and attached to the pre-release only: the macOS
+#     .pkg and Linux .deb/.rpm (rc-tui, required before anything publishes;
+#     attached by rc-github-release-installers) and the combined Windows setup
+#     (rc-windows-setup)
 #   • the flagship agent (gaia-agent) is frozen from the RC's own commit
 #     (rc-flagship) and attached to the pre-release with gaia-agent-release.json,
 #     which an RC core installs it from; the hub's flagship is never used by an RC
 #
 # Environment setup (one-time, in GitHub repo settings):
 #   1. Create a "publish" environment with required reviewers.
-#      This is the single approval gate for all publishing.
+#      This is the single approval gate for a final release.
+#      Create "publish-rc" with NO reviewers and deployments limited to tags
+#      matching v*-rc*; approve-publish uses it for a release candidate.
 #   2. Keep the "pypi" environment for OIDC trusted publishing,
 #      but remove its required reviewers — the "publish" gate handles approval.
 #   3. Update the PyPI trusted publisher config (pypi.org → Manage → Publishing)
@@ -42,9 +50,12 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# One group per tag, never cancelled: a new tag must not kill a release that may
+# be mid-publish. An older RC that a newer tag supersedes stops itself before
+# publishing (approve-publish), and a re-run of the same tag waits its turn.
 concurrency:
-  group: publish-release
-  cancel-in-progress: true
+  group: publish-release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -382,45 +393,55 @@ jobs:
       needs.validate.outputs.is_rc == 'true'
     uses: ./.github/workflows/build_flagship_sidecar.yml
 
-  # ── Email eval suite (release gate, self-hosted) ────────────────────
-  # Runs the triage + drafting + action-item eval suite (test_email_agent_eval.yml)
-  # on the [self-hosted, lemonade-eval] AMD runner, so the core release
-  # exercises the email agent on its committed corpus before
-  # publish. Report mode: it runs + uploads its scorecard/gate reports and only
-  # HARD-BLOCKS the release when a tests/fixtures/email/ threshold manifest sets
-  # enforce:true (data, not code). The approval gate below waits on it; the
-  # shared `lemonade-eval` concurrency group keeps it serial with the other
-  # runs on the single Lemonade slot.
-  #
-  # NOTE: the general `gaia eval agent` gate is intentionally NOT wired here yet.
-  # It runs on every qualifying PR (eval_flagship.yml) against the committed
-  # flagship baseline, but in report mode, so it has no enforced verdict to
-  # gate a release on. Wire it once the eval is enforcing.
-  email-eval:
-    name: Email eval suite (release gate)
-    needs: validate
-    uses: ./.github/workflows/test_email_agent_eval.yml
-    secrets: inherit
+  # No eval gates this workflow. The same v* tag starts eval_flagship.yml as a
+  # separate run that reports (job summary + an issue when it does not pass) and
+  # never blocks publishing; regressions are reported, not gated (#5172).
 
-  # ── Stage 3: Approve (single manual gate) ───────────────────────────
-  # All builds must pass before the approval prompt appears.
-  # Configure the "publish" GitHub environment with required reviewers.
+  # ── The tagged commit passed CI ─────────────────────────────────────
+  # The test workflows ran when this commit reached main, not on the tag, and
+  # most of those runs were cancelled by the next merge. util/check_release_ci.py
+  # requires a passing run of each required workflow on this exact commit,
+  # dispatches any that has none against the tag, and waits. Parallel with the
+  # builds, so it only adds time when CI is slower than they are.
+  ci-green:
+    name: Tagged commit passed CI
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: write   # read the commit's runs; dispatch the missing ones
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+      - name: Check the required workflows passed on this commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+        run: |
+          python3 util/check_release_ci.py --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --tag "${TAG_NAME}"
+
+  # ── Stage 3: Approve (single manual gate, finals only) ──────────────
+  # All builds and CI must pass before anything publishes. A final waits for a
+  # reviewer in the "publish" environment; an RC runs in "publish-rc", which has
+  # none. pypi and npm keep their own environments: the trusted publishers are
+  # bound to those names.
 
   approve-publish:
     name: Approve Publishing
-    # email-eval dropped from the gate: the email agent's capability is moving
-    # into the core flagship agent (#3329), so its eval suite no longer blocks
-    # a core release. (The job is also disabled at its source in
-    # test_email_agent_eval.yml — if: false — so this isn't the only guard.)
-    needs: [validate, build-pypi, build-npm, build-desktop-installers, email-eval, rc-flagship]
+    needs: [validate, build-pypi, build-npm, build-desktop-installers, rc-flagship, rc-tui-complete, ci-green]
     if: >-
       !cancelled() &&
       needs.build-pypi.result == 'success' &&
       needs.build-npm.result == 'success' &&
       needs.build-desktop-installers.result == 'success' &&
-      (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
+      needs.ci-green.result == 'success' &&
+      (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success') &&
+      (needs.validate.outputs.is_rc != 'true' || needs.rc-tui-complete.result == 'success')
     runs-on: ubuntu-latest
-    environment: publish
+    environment: ${{ needs.validate.outputs.is_rc == 'true' && 'publish-rc' || 'publish' }}
     steps:
       - run: |
           echo "=== Build Results ==="
@@ -428,8 +449,31 @@ jobs:
           echo "  npm:                ${{ needs.build-npm.result }}"
           echo "  Desktop Installers: ${{ needs.build-desktop-installers.result }}"
           echo "  RC flagship agent:  ${{ needs.rc-flagship.result }}"
+          echo "  RC terminal pkgs:   ${{ needs.rc-tui-complete.result }}"
+          echo "  CI on this commit:  ${{ needs.ci-green.result }}"
           echo ""
           echo "All builds passed. Publishing approved."
+
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      # After the approval, immediately before the first publish: an RC whose
+      # newer sibling was tagged while it built must not overwrite `next`.
+      - name: Stop if a newer tag of this release exists
+        env:
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+          NOTES_TAG: ${{ needs.validate.outputs.notes_tag }}
+        run: |
+          set -euo pipefail
+          tags="$(git ls-remote --tags --refs origin "refs/tags/${NOTES_TAG}*" | sed 's#.*refs/tags/##')"
+          echo "Tags of ${NOTES_TAG}:"
+          echo "${tags}"
+          if ! echo "${tags}" | python3 util/release_tag.py superseded "${TAG_NAME}"; then
+            echo "::error::${TAG_NAME} is superseded by a newer tag of ${NOTES_TAG}; stopped before publishing anything."
+            exit 1
+          fi
 
   # ── Stage 4: Publish (parallel, after single approval) ──────────────
 
@@ -437,8 +481,8 @@ jobs:
     name: Publish to PyPI
     needs: approve-publish
     # Explicit `if:` on purpose, not the default: GitHub's implicit success()
-    # check walks the FULL ancestor chain (including email-eval, disabled and
-    # reporting 'skipped'), not just this job's direct `needs:` — so without
+    # check walks the FULL ancestor chain (including rc-flagship, which a final
+    # release skips), not just this job's direct `needs:` — so without
     # this, a clean approve-publish success still gets silently skipped
     # downstream. approve-publish already carries its own explicit override;
     # this one has to carry its own too, independently. `!cancelled()` is
@@ -510,24 +554,23 @@ jobs:
         # No silent fallback (see CLAUDE.md "No Silent Fallbacks"). If the
         # lockfile is stale, fail here rather than publish a divergent tree.
         run: npm ci --omit=dev
+      # util/npm_publish_once.py, not a bare `npm publish`: a re-run skips a
+      # version already on npm with the same bytes and fails on different ones.
+      # --ignore-scripts: skip prepublishOnly (which runs tsc && vite build)
+      # because the dist/ was already built in the build-npm job and
+      # downloaded from the artifact. Dev dependencies are omitted, so
+      # tsc would fail with missing @types/react.
       - name: Publish @amd-gaia/agent-ui
         if: needs.validate.outputs.is_rc != 'true'
         working-directory: src/gaia/apps/webui
-        # --ignore-scripts: skip prepublishOnly (which runs tsc && vite build)
-        # because the dist/ was already built in the build-npm job and
-        # downloaded from the artifact. Dev dependencies are omitted, so
-        # tsc would fail with missing @types/react.
-        run: npm publish --access public --provenance --ignore-scripts
+        run: python3 ../../../../util/npm_publish_once.py --dist-tag latest -- --access public --provenance --ignore-scripts
       # `next`, never `latest`: `npm install @amd-gaia/agent-ui` must keep
       # resolving to the last final.
       - name: Publish @amd-gaia/agent-ui (release candidate, dist-tag next)
         if: needs.validate.outputs.is_rc == 'true'
         working-directory: src/gaia/apps/webui
-        env:
-          NPM_VERSION: ${{ needs.validate.outputs.npm_version }}
         run: |
-          npm publish --access public --provenance --ignore-scripts --tag next
-          echo "Published @amd-gaia/agent-ui@$NPM_VERSION under the 'next' dist-tag"
+          python3 ../../../../util/npm_publish_once.py --dist-tag next -- --access public --provenance --ignore-scripts
           echo "Install with: npm install -g @amd-gaia/agent-ui@next"
       - name: Verify publication
         if: needs.validate.outputs.is_rc != 'true'
@@ -543,8 +586,8 @@ jobs:
   post-publish-smoke:
     name: Post-Publish Smoke Test
     needs: [validate, publish-pypi]
-    # Missing !cancelled() cascaded a skip through github-release and
-    # refresh-context7 too on the v0.24.0 retag, even though publish-pypi
+    # Missing !cancelled() cascaded a skip through github-release on the
+    # v0.24.0 retag, even though publish-pypi
     # itself succeeded — same bug as #3915/#3916, on the one job the sweep
     # for it missed. See publish-pypi's comment for the full explanation.
     if: >-
@@ -632,14 +675,27 @@ jobs:
           go-version-file: tui/go.mod
           cache-dependency-path: tui/go.sum
 
-      # Stamped with the RELEASE TAG, not the branch name: `gaia version` is the
-      # first thing asked for in a bug report, and "main" tells nobody which
-      # build they are on.
+      # Go links no Windows resource unless a .syso sits beside the main
+      # package, so without this the .exe has no icon and a blank Details tab.
+      # Same script and version as tui_installers.yml, so this copy and the one
+      # inside the Windows setup describe themselves the same way.
+      - name: Generate Windows resources (icon + version)
+        if: matrix.goos == 'windows'
+        working-directory: .
+        env:
+          VERSION: ${{ needs.validate.outputs.npm_version }}
+        run: tui/scripts/gen-winres.sh --version "${VERSION}"
+
+      # Stamped with the release version (0.25.1, or 0.25.1-rc.2 for an RC), not
+      # the branch name: `gaia version` is the first thing asked for in a bug
+      # report, and "main" tells nobody which build they are on. No `v`, to
+      # match tui_installers.yml's builds of the same release.
       - name: Build
         env:
           CGO_ENABLED: '0'
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ needs.validate.outputs.npm_version }}
         run: |
           EXT=""
           if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
@@ -651,11 +707,23 @@ jobs:
           # runner's absolute paths out of the binary.
           DATE="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)"
           go build -trimpath -ldflags="-s -w \
-            -X ${PKG}.version=${{ needs.validate.outputs.tag_name }} \
+            -X ${PKG}.version=${VERSION} \
             -X ${PKG}.commit=${{ github.sha }} \
             -X ${PKG}.date=${DATE}" \
             -o ../release-assets/gaia-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
             ./cmd/gaia
+
+      # Reads the linked binary's PE resource directory: the linker silently
+      # drops a .syso whose GOARCH suffix does not match, so only the shipped
+      # bytes prove the icon and version are there.
+      - name: Verify the Windows binary carries its icon and version
+        if: matrix.goos == 'windows'
+        working-directory: .
+        env:
+          VERSION: ${{ needs.validate.outputs.npm_version }}
+        run: |
+          python3 util/check_pe_resources.py --expect-version "${VERSION}" \
+            "release-assets/gaia-${{ matrix.goos }}-${{ matrix.goarch }}.exe"
 
       - name: Upload
         uses: actions/upload-artifact@v7
@@ -664,34 +732,84 @@ jobs:
           path: release-assets/gaia-*
           if-no-files-found: error
 
-  # ── Release candidate: the combined Windows setup ──────────────────
-  # A final's setup comes from release_components.yml, which never runs for an
-  # RC because the Agent Hub catalog has no pre-release channel. An RC builds it
-  # with the same two reusable workflows and attaches it to its GitHub
-  # pre-release -- never to R2. Only the terminal binaries are built here: the
-  # macOS and Linux packages cannot carry an -rc.N version (rpm forbids '-').
-  rc-tui-binaries:
-    name: Terminal binaries (release candidate)
-    needs: validate
+  # ── Release candidate: the terminal installers ─────────────────────
+  # A final's come from release_components.yml, which never runs for an RC
+  # because the Agent Hub catalog has no pre-release channel. An RC builds them
+  # with the same reusable workflows and attaches them to its GitHub
+  # pre-release -- never to R2 or the hub.
+  #
+  # The binaries, the macOS .pkg and the Linux .deb/.rpm, each smoke-tested on a
+  # clean runner, wrapping the flagship agent THIS run froze (rc-flagship), never
+  # the hub's. The files are named with -rc.N like every other RC asset; inside,
+  # the .deb/.rpm carry X.Y.Z~rc.N so the final upgrades over them
+  # (installer/tui/linux/README.md). approve-publish requires rc-tui-complete:
+  # a candidate whose terminal packages do not install is not one to test.
+  rc-tui:
+    name: Terminal binaries and installers (release candidate)
+    needs: [validate, rc-flagship]
     if: >-
       !cancelled() &&
       needs.validate.result == 'success' &&
-      needs.validate.outputs.is_rc == 'true'
+      needs.validate.outputs.is_rc == 'true' &&
+      needs.rc-flagship.result == 'success'
     uses: ./.github/workflows/tui_installers.yml
     with:
       version: ${{ needs.validate.outputs.npm_version }}
-      installers: false
+      sidecar: artifact
+
+  # installers_ok means every leg that ran passed its clean-runner install. It
+  # does not mean all four packages exist: tui_installers.yml builds no Intel
+  # .pkg when the best-effort darwin-x64 agent leg was skipped. This checks the
+  # four files by name BEFORE anything publishes, so a candidate is never
+  # released short of one.
+  rc-tui-complete:
+    name: Terminal installers complete (release candidate)
+    needs: [validate, rc-tui]
+    if: >-
+      !cancelled() &&
+      needs.validate.outputs.is_rc == 'true' &&
+      needs.rc-tui.outputs.installers_ok == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: tui-installers-*
+          merge-multiple: true
+          path: dist
+
+      - name: Every terminal installer is present
+        env:
+          VERSION: ${{ needs.validate.outputs.npm_version }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for platform in darwin-arm64 darwin-x64 linux-x64; do
+            while IFS= read -r f; do
+              if [ -s "dist/${f}" ]; then ls -l "dist/${f}"; else missing+=("${f}"); fi
+            done < <(python3 installer/tui/artifacts.py names --version "${VERSION}" --platform "${platform}")
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::the release candidate built no ${missing[*]}, so nothing publishes. A missing darwin-x64 .pkg means the best-effort Intel agent leg in 'Flagship agent (release candidate)' did not build. Fix it and 'Re-run failed jobs'."
+            exit 1
+          fi
 
   # Embeds THIS run's desktop app setup and flagship agent (same commit, same
   # tag), never published ones.
   rc-windows-setup:
     name: Windows setup (release candidate)
-    needs: [validate, build-desktop-installers, rc-tui-binaries, rc-flagship]
+    needs: [validate, build-desktop-installers, rc-tui, rc-flagship]
     if: >-
       !cancelled() &&
       needs.validate.outputs.is_rc == 'true' &&
       needs.build-desktop-installers.result == 'success' &&
-      needs.rc-tui-binaries.outputs.binaries_ok == 'true' &&
+      needs.rc-tui.outputs.binaries_ok == 'true' &&
       needs.rc-flagship.result == 'success'
     permissions:
       contents: read
@@ -724,13 +842,20 @@ jobs:
     # rc-windows-setup is waited for, not required: its own timeouts bound the
     # wait, it is skipped on a final, and a failure is reported by
     # rc-windows-setup-missing rather than by holding back the pre-release.
-    needs: [validate, post-publish-smoke, publish-npm, build-desktop-installers, build-tui, rc-windows-setup, rc-flagship]
+    # build-tui IS required: install.sh / install.ps1 download these binaries
+    # from the latest release, so one missing leg breaks installs on that
+    # platform until the next release.
+    # rc-tui-complete is required too, though approve-publish already was: a
+    # candidate whose terminal packages did not install is not one to release.
+    needs: [validate, post-publish-smoke, publish-npm, build-desktop-installers, build-tui, rc-windows-setup, rc-flagship, rc-tui-complete]
     if: >-
       !cancelled() &&
       needs.post-publish-smoke.result == 'success' &&
       needs.publish-npm.result == 'success' &&
       needs.build-desktop-installers.result == 'success' &&
-      (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
+      needs.build-tui.result == 'success' &&
+      (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success') &&
+      (needs.validate.outputs.is_rc != 'true' || needs.rc-tui-complete.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -807,6 +932,7 @@ jobs:
           NPM_VERSION: ${{ needs.validate.outputs.npm_version }}
           WINDOWS_SETUP_OK: ${{ needs.rc-windows-setup.outputs.ok }}
         run: |
+          PKG_VERSION="$(installer/tui/linux/build-packages.sh --version "${NPM_VERSION}" --print-package-version)" || exit 1
           NOTES_FILE="docs/releases/${NOTES_TAG}.mdx"
           cat > RELEASE_BODY.md << 'EOF'
           > [!IMPORTANT]
@@ -838,9 +964,26 @@ jobs:
           - **macOS** — `gaia-agent-ui-@NPM_VERSION@-arm64.dmg` (Apple Silicon only)
           - **Linux** — `gaia-agent-ui-@NPM_VERSION@-amd64.deb` (Debian/Ubuntu) or `gaia-agent-ui-@NPM_VERSION@-x86_64.AppImage` (any distro)
 
-          The terminal hub is also attached as standalone binaries (`gaia-<os>-<arch>`, checksums in `gaia-tui-SHA256SUMS.txt`). The terminal's .pkg/.deb/.rpm packages ship with the final release.
+          The terminal on its own:
+
+          - **macOS** — `gaia-@NPM_VERSION@-darwin-arm64.pkg` (Apple Silicon) or `gaia-@NPM_VERSION@-darwin-x64.pkg` (Intel)
+          - **Linux** — `gaia_@NPM_VERSION@_amd64.deb` (Debian/Ubuntu) or `gaia-@NPM_VERSION@.x86_64.rpm` (Fedora/RHEL/SUSE). They install as version `@PKG_VERSION@`, so the final release upgrades over them
+
+          Installer checksums are in `gaia-installers-SHA256SUMS.txt`. The terminal hub is also attached as standalone binaries (`gaia-<os>-<arch>`, checksums in `gaia-tui-SHA256SUMS.txt`).
 
           The GAIA agent itself is attached as `gaia-agent-<os>-<arch>`, built from this candidate's commit. This candidate's `gaia init` and `gaia hub install gaia` install it from here rather than from the Agent Hub, and say so if it is missing.
+
+          ### One-line installer
+
+          Installs this candidate's Python CLI, terminal and GAIA agent together:
+
+          ```bash
+          curl -fsSL https://amd-gaia.ai/install.sh | GAIA_RELEASE_TAG=@TAG_NAME@ sh
+          ```
+
+          ```powershell
+          $env:GAIA_RELEASE_TAG = "@TAG_NAME@"; irm https://amd-gaia.ai/install.ps1 | iex
+          ```
 
           ### Python CLI
 
@@ -857,7 +1000,7 @@ jobs:
 
           Found a problem? [Open an issue](https://github.com/amd/gaia/issues/new) and mention `@TAG_NAME@`.
           EOF
-          sed -i             -e "s/@NOTES_TAG@/${NOTES_TAG}/g"             -e "s/@TAG_NAME@/${TAG_NAME}/g"             -e "s/@PEP440_VERSION@/${PEP440_VERSION}/g"             -e "s/@NPM_VERSION@/${NPM_VERSION}/g"             RELEASE_BODY.md
+          sed -i             -e "s/@NOTES_TAG@/${NOTES_TAG}/g"             -e "s/@TAG_NAME@/${TAG_NAME}/g"             -e "s/@PEP440_VERSION@/${PEP440_VERSION}/g"             -e "s/@NPM_VERSION@/${NPM_VERSION}/g"             -e "s/@PKG_VERSION@/${PKG_VERSION}/g"             RELEASE_BODY.md
           echo "Release body generated: $(wc -l < RELEASE_BODY.md) lines"
 
       # ── Desktop installers ─────────────────────────────────────────
@@ -869,7 +1012,7 @@ jobs:
       # only as a CI artifact that expires in 14 days, so nothing can install it
       # — install.sh has no URL to fetch and the docs describe a command users
       # cannot obtain.
-      # build-tui's six artifacts only. An RC run also holds rc-tui-binaries'
+      # build-tui's six artifacts only. An RC run also holds rc-tui's
       # `tui-binaries`, which is the setup's input, not a release asset.
       - name: Download TUI binaries
         uses: actions/download-artifact@v8
@@ -880,10 +1023,23 @@ jobs:
 
       # A checksum file is what lets install.sh verify what it downloaded. A
       # binary published without one can only be trusted blindly.
+      # Exactly these six, the build-tui matrix: install.sh and install.ps1
+      # refuse a binary with no checksum line, so a missing one is a broken
+      # install for that platform.
       - name: Checksum TUI binaries
         run: |
+          set -euo pipefail
           cd release-assets
-          sha256sum gaia-* > gaia-tui-SHA256SUMS.txt
+          expected=(gaia-linux-amd64 gaia-linux-arm64 gaia-darwin-amd64 gaia-darwin-arm64 gaia-windows-amd64.exe gaia-windows-arm64.exe)
+          missing=()
+          for f in "${expected[@]}"; do
+            [ -s "${f}" ] || missing+=("${f}")
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::the release is missing terminal binaries: ${missing[*]}. install.sh / install.ps1 fetch these from the latest release, so it must not ship without them. Re-run the failed 'Build TUI binary' leg, then this job."
+            exit 1
+          fi
+          sha256sum "${expected[@]}" > gaia-tui-SHA256SUMS.txt
           cat gaia-tui-SHA256SUMS.txt
 
       # After the checksum step, which covers the terminal binaries only.
@@ -966,6 +1122,85 @@ jobs:
           prerelease: true
           make_latest: false
 
+  # ── Release candidate: attach the terminal installers ──────────────
+  # The same four packages, under the same names, that a final attaches from
+  # release_components.yml's github-release-installers, plus the same
+  # gaia-installers-SHA256SUMS.txt. The website and test_installers_headless.yml
+  # resolve them through installer/tui/artifacts.py.
+  #
+  # Every package is required: approve-publish already refused to publish
+  # unless all four installed cleanly (rc-tui-complete), so a missing file here
+  # is a broken run, and this job fails naming it. --clobber makes a re-run
+  # replace, not fail.
+  rc-github-release-installers:
+    name: Attach terminal installers (release candidate)
+    needs: [validate, github-release, rc-tui-complete, rc-windows-setup]
+    if: >-
+      !cancelled() &&
+      needs.validate.outputs.is_rc == 'true' &&
+      needs.github-release.result == 'success' &&
+      needs.rc-tui-complete.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: tui-installers-*
+          merge-multiple: true
+          path: dist
+
+      # Checksummed only: github-release already attached it.
+      - uses: actions/download-artifact@v8
+        if: needs.rc-windows-setup.outputs.ok == 'true'
+        with:
+          name: windows-setup
+          path: dist
+
+      - name: List the installers and write their checksums
+        env:
+          VERSION: ${{ needs.validate.outputs.npm_version }}
+          WINDOWS_SETUP_OK: ${{ needs.rc-windows-setup.outputs.ok }}
+        run: |
+          set -euo pipefail
+          : > files.txt
+          for platform in darwin-arm64 darwin-x64 linux-x64; do
+            python3 installer/tui/artifacts.py names --version "${VERSION}" --platform "${platform}" >> files.txt
+          done
+          cp files.txt summed.txt
+          if [ "${WINDOWS_SETUP_OK}" = "true" ]; then
+            python3 installer/tui/artifacts.py names --version "${VERSION}" --platform win-x64 >> summed.txt
+          fi
+          missing=()
+          while IFS= read -r f; do
+            [ -s "dist/${f}" ] || missing+=("${f}")
+          done < summed.txt
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::the release candidate is missing terminal installers: ${missing[*]}. Nothing was attached. Re-run the failed 'Terminal binaries and installers (release candidate)' leg, then this job."
+            exit 1
+          fi
+          mapfile -t summed < summed.txt
+          (cd dist && sha256sum "${summed[@]}") > dist/gaia-installers-SHA256SUMS.txt
+          cat dist/gaia-installers-SHA256SUMS.txt
+
+      - name: Attach the installers and their checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          mapfile -t files < files.txt
+          gh release upload "${TAG}" "${files[@]/#/dist/}" dist/gaia-installers-SHA256SUMS.txt \
+            --repo "${GITHUB_REPOSITORY}" --clobber
+          echo "✓ attached ${#files[@]} terminal installers and their checksums to ${TAG}"
+
   # The website builds its "Try the release candidate" entry from the GitHub
   # releases at deploy time, so a new RC only appears after a rebuild. A final
   # gets its rebuild from release_components.yml, which also hides the RC again.
@@ -987,48 +1222,3 @@ jobs:
           gh workflow run deploy_website.yml --repo "${GITHUB_REPOSITORY}" --ref main
           echo "Requested website redeploy (deploy_website.yml on main)"
 
-  refresh-context7:
-    runs-on: ubuntu-latest
-    needs: [validate, github-release]
-    # See publish-pypi's comment: explicit if, same reason — github-release
-    # succeeding doesn't stop the default ancestor check further down the
-    # chain from still seeing email-eval's 'skipped' and cascading it here.
-    # `!cancelled()` is likewise required (a bare comparison skipped anyway,
-    # confirmed on this exact tag).
-    # Not for a release candidate: Context7 indexes the docs of what users get.
-    if: >-
-      !cancelled() &&
-      needs.github-release.result == 'success' &&
-      needs.validate.outputs.is_rc != 'true'
-    steps:
-      - name: Refresh Context7
-        run: |
-          # Fail loudly on unexpected status; 429 is the only tolerated non-2xx.
-          BODY_FILE=$(mktemp)
-          HTTP_STATUS=$(curl -s -o "$BODY_FILE" -w "%{http_code}" \
-            -X POST https://context7.com/api/v1/refresh \
-            -H "Authorization: Bearer ${{ secrets.CONTEXT7_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d '{"libraryName": "/amd/gaia"}')
-          BODY=$(cat "$BODY_FILE")
-          rm -f "$BODY_FILE"
-          if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "202" ]; then
-            echo "Context7 refresh triggered (HTTP $HTTP_STATUS)"
-          elif [ "$HTTP_STATUS" = "429" ]; then
-            echo "::warning::Context7 rate limited (HTTP 429) — refresh skipped"
-            # Body is third-party content; bracket with stop-commands so any
-            # ::cmd:: lines inside cannot inject GHA workflow commands.
-            TOKEN=$(uuidgen)
-            echo "::stop-commands::$TOKEN"
-            echo "Response body:"
-            echo "$BODY"
-            echo "::$TOKEN::"
-          else
-            echo "::error::Context7 refresh failed (HTTP $HTTP_STATUS) — see body below"
-            TOKEN=$(uuidgen)
-            echo "::stop-commands::$TOKEN"
-            echo "Response body:"
-            echo "$BODY"
-            echo "::$TOKEN::"
-            exit 1
-          fi

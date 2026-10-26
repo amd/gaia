@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Tests for TrayManager icon loading
- * (src/gaia/apps/webui/services/tray-manager.cjs)
+ * Tests for TrayManager (src/gaia/apps/webui/services/tray-manager.cjs)
  *
  * Covers: per-platform tray-icon selection (small purpose-built assets, never
- * the 4K app icon), macOS template-image flag, and the fail-loud behaviour
- * when a tray-icon asset is missing.
+ * the 4K app icon) and the fail-loud behaviour when one is missing; the live
+ * state on the icon, tooltip and menu; the Windows taskbar overlay; the menu's
+ * actions, including Free memory; the one-time close notice; and tray config.
  */
 
 const electronMock = require("electron");
@@ -32,6 +32,52 @@ function setPlatform(platform) {
   Object.defineProperty(process, "platform", { value: platform });
 }
 
+/** A window snapshot with nothing going on; override what a test needs. */
+function activity(overrides = {}) {
+  return {
+    backendConnected: true,
+    modelServerRunning: true,
+    model: { name: "Gemma-4-E4B-it-GGUF", where: "gpu" },
+    waitingOnModel: null,
+    running: [],
+    needsYou: [],
+    recent: [],
+    ...overrides,
+  };
+}
+
+/**
+ * OS login items that read back what was last set, as Windows and macOS do.
+ * Like Electron on Windows, a `name` picks the Run value written; without one
+ * the value is named after the AppUserModelId, which `openAtLogin` reports,
+ * while `launchItems` lists the named values. Returns the named values.
+ */
+function mockLoginItems({ runValues = {} } = {}) {
+  let openAtLogin = false;
+  const named = new Map(Object.entries(runValues));
+  electronMock.app.setLoginItemSettings = jest.fn((s) => {
+    if (s.name === undefined) openAtLogin = s.openAtLogin;
+    else if (s.openAtLogin) named.set(s.name, true);
+    else named.delete(s.name);
+  });
+  electronMock.app.getLoginItemSettings = jest.fn(() => ({
+    openAtLogin,
+    launchItems: [...named].map(([name, enabled]) => ({
+      name,
+      path: "/mock/exe",
+      args: ["--minimized"],
+      scope: "user",
+      enabled,
+    })),
+  }));
+  return named;
+}
+
+/** A TrayManager whose reopenWindow hands back a fresh mock window. */
+function newTray(win, options = {}) {
+  return new TrayManager(win, { reopenWindow: jest.fn(() => createMockWindow()), ...options });
+}
+
 function createMockWindow() {
   const win = new electronMock.BrowserWindow();
   win.isMinimized = jest.fn(() => false);
@@ -51,103 +97,201 @@ afterEach(() => {
 // ── Tests ────────────────────────────────────────────────────────────────
 
 describe("TrayManager icon loading", () => {
-  test("macOS loads the template asset and marks it a template image", () => {
+  const loadedFiles = () =>
+    electronMock.nativeImage.createFromPath.mock.calls.map((c) => require("path").basename(c[0]));
+
+  test("macOS draws on the template assets and marks the image a template", () => {
     setPlatform("darwin");
-    const mgr = new TrayManager(createMockWindow());
+    const mgr = newTray(createMockWindow());
 
-    expect(electronMock.nativeImage.createFromPath).toHaveBeenCalledTimes(1);
-    const loadedPath = electronMock.nativeImage.createFromPath.mock.calls[0][0];
-    expect(loadedPath).toContain("tray-iconTemplate.png");
+    expect(loadedFiles()).toEqual(["tray-iconTemplate.png", "tray-iconTemplate@2x.png"]);
     expect(mgr._icon._isTemplate).toBe(true);
+    expect(mgr._icon._reps.map((r) => [r.scaleFactor, r.width])).toEqual([[1, 16], [2, 32]]);
   });
 
-  test("Windows loads the .ico tray asset", () => {
+  test("Windows draws a 16 DIP icon at every common display scale", () => {
     setPlatform("win32");
-    new TrayManager(createMockWindow());
+    const mgr = newTray(createMockWindow());
 
-    const loadedPath = electronMock.nativeImage.createFromPath.mock.calls[0][0];
-    expect(loadedPath).toContain("tray-icon.ico");
+    expect(new Set(loadedFiles())).toEqual(new Set(["tray-icon.png"]));
+    expect(mgr._icon._reps.map((r) => [r.scaleFactor, r.width])).toEqual([
+      [1, 16],
+      [1.25, 20],
+      [1.5, 24],
+      [2, 32],
+    ]);
+    expect(mgr._icon._isTemplate).toBe(false);
   });
 
-  test("Linux loads the full-colour PNG tray asset", () => {
+  test("Linux draws on the full-colour PNG assets", () => {
     setPlatform("linux");
-    new TrayManager(createMockWindow());
+    const mgr = newTray(createMockWindow());
 
-    const loadedPath = electronMock.nativeImage.createFromPath.mock.calls[0][0];
-    expect(loadedPath).toContain("tray-icon.png");
-    expect(loadedPath).not.toContain("Template");
+    expect(loadedFiles()).toEqual(["tray-icon.png", "tray-icon@2x.png"]);
+    expect(mgr._icon._reps.map((r) => r.width)).toEqual([32, 64]);
   });
 
   test("never feeds the 4K app icon (icon.png) into the tray", () => {
-    setPlatform("darwin");
-    new TrayManager(createMockWindow());
+    for (const platform of ["darwin", "win32", "linux"]) {
+      setPlatform(platform);
+      electronMock.nativeImage.createFromPath.mockClear();
+      const mgr = newTray(createMockWindow());
+      mgr.create();
+      mgr.setActivity(activity({ running: [{ id: "a", title: "A" }] }));
+      expect(loadedFiles()).not.toContain("icon.png");
+    }
+  });
 
-    const loadedPath = electronMock.nativeImage.createFromPath.mock.calls[0][0];
-    expect(loadedPath).not.toMatch(/[/\\]icon\.png$/);
+  test("each representation carries a full bitmap for its pixel size", () => {
+    setPlatform("win32");
+    const mgr = newTray(createMockWindow());
+    for (const rep of mgr._icon._reps) {
+      expect(rep.buffer.length).toBe(rep.width * rep.height * 4);
+    }
   });
 
   test("fails loudly when the tray-icon asset is missing", () => {
     setPlatform("darwin");
     fs.existsSync.mockReturnValue(false);
 
-    expect(() => new TrayManager(createMockWindow())).toThrow(
+    expect(() => newTray(createMockWindow())).toThrow(
       /icon asset missing/
     );
-    expect(electronMock.nativeImage.createEmpty).not.toHaveBeenCalled();
+  });
+
+  test("fails loudly when the tray-icon asset cannot be decoded", () => {
+    setPlatform("linux");
+    electronMock.nativeImage.createFromPath.mockImplementationOnce((p) => ({
+      _path: p,
+      isEmpty: () => true,
+    }));
+
+    expect(() => newTray(createMockWindow())).toThrow(
+      /icon asset could not be decoded: .*tray-icon\.png/
+    );
+  });
+});
+
+// The Linux tray shipped a flat red 16px square as its "logo" (#5268).
+describe("Linux tray-icon asset", () => {
+  const realFs = jest.requireActual("fs");
+  const zlib = require("zlib");
+  const path = require("path");
+  const { assertTrayLogoPng } = require("./_helpers/tray-icon-png.cjs");
+
+  const WEBUI = path.join(__dirname, "..", "..", "src", "gaia", "apps", "webui");
+  const ASSETS = path.join(WEBUI, "assets");
+
+  function solidPng(size, rgba) {
+    const chunk = (type, data) => {
+      const len = Buffer.alloc(4);
+      len.writeUInt32BE(data.length);
+      // The decoder under test skips CRCs, so a zero CRC is fine here.
+      return Buffer.concat([len, Buffer.from(type, "ascii"), data, Buffer.alloc(4)]);
+    };
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(size, 0);
+    ihdr.writeUInt32BE(size, 4);
+    ihdr[8] = 8;
+    ihdr[9] = 6;
+    const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(size * 4).fill(Buffer.from(rgba))]);
+    return Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk("IHDR", ihdr),
+      chunk("IDAT", zlib.deflateSync(Buffer.concat(Array(size).fill(row)))),
+      chunk("IEND", Buffer.alloc(0)),
+    ]);
+  }
+
+  test.each([
+    ["tray-icon.png", 32],
+    ["tray-icon@2x.png", 64],
+  ])("%s is the %ipx GAIA logo, not a placeholder", (file, size) => {
+    const buf = realFs.readFileSync(path.join(ASSETS, file));
+    expect(() => assertTrayLogoPng(buf, size, file)).not.toThrow();
+  });
+
+  test("the check rejects the old flat red square", () => {
+    expect(() => assertTrayLogoPng(solidPng(32, [226, 60, 64, 255]), 32, "red")).toThrow(
+      /corner .* is opaque/
+    );
+  });
+
+  test("the check rejects a transparent-cornered flat placeholder", () => {
+    const buf = solidPng(32, [226, 60, 64, 0]);
+    expect(() => assertTrayLogoPng(buf, 32, "flat")).toThrow(/distinct visible colours/);
+  });
+
+  test("the check rejects a wrong-sized icon", () => {
+    const buf = realFs.readFileSync(path.join(ASSETS, "tray-icon.png"));
+    expect(() => assertTrayLogoPng(buf, 16, "small")).toThrow(/expected 16x16, got 32x32/);
+  });
+
+  test("Linux resolves the icon next to services/, which is packed into the asar", () => {
+    setPlatform("linux");
+    newTray(createMockWindow());
+    const loadedPath = electronMock.nativeImage.createFromPath.mock.calls[0][0];
+    expect(path.normalize(loadedPath)).toBe(path.join(ASSETS, "tray-icon.png"));
+
+    // Packaged, the same __dirname-relative path lives inside app.asar, so
+    // both directories must stay in electron-builder's `files:` list.
+    const builderYml = realFs.readFileSync(path.join(WEBUI, "electron-builder.yml"), "utf8");
+    expect(builderYml).toMatch(/^\s*-\s*services\/\*\*\/\*\s*$/m);
+    expect(builderYml).toMatch(/^\s*-\s*assets\/\*\*\/\*\s*$/m);
   });
 });
 
 describe("TrayManager.setNotificationCount", () => {
   test("reflects the unread count in the tray tooltip", () => {
     setPlatform("win32");
-    const mgr = new TrayManager(createMockWindow());
+    const mgr = newTray(createMockWindow());
     mgr.create();
 
     mgr.setNotificationCount(1);
-    expect(mgr.tray._toolTip).toBe("GAIA — 1 unread notification");
+    expect(mgr.tray._toolTip).toBe("GAIA — starting · 1 unread notification");
     mgr.setNotificationCount(4);
-    expect(mgr.tray._toolTip).toBe("GAIA — 4 unread notifications");
+    expect(mgr.tray._toolTip).toBe("GAIA — starting · 4 unread notifications");
     mgr.setNotificationCount(0);
-    expect(mgr.tray._toolTip).toBe("GAIA");
+    expect(mgr.tray._toolTip).toBe("GAIA — starting");
   });
 
   test("does not call app.setBadgeCount on Windows", () => {
     setPlatform("win32");
-    const mgr = new TrayManager(createMockWindow());
+    const mgr = newTray(createMockWindow());
     mgr.setNotificationCount(3);
     expect(electronMock.app.setBadgeCount).not.toHaveBeenCalled();
   });
 
   test("sets the dock badge on macOS", () => {
     setPlatform("darwin");
-    const mgr = new TrayManager(createMockWindow());
+    const mgr = newTray(createMockWindow());
     mgr.setNotificationCount(2);
     expect(electronMock.app.setBadgeCount).toHaveBeenCalledWith(2);
   });
 
   test("a count set before create() is applied when the tray appears", () => {
     setPlatform("win32");
-    const mgr = new TrayManager(createMockWindow());
+    const mgr = newTray(createMockWindow());
     mgr.setNotificationCount(5);
     mgr.create();
-    expect(mgr.tray._toolTip).toBe("GAIA — 5 unread notifications");
+    expect(mgr.tray._toolTip).toBe("GAIA — starting · 5 unread notifications");
   });
 
   test.each([[-1], [NaN], [Infinity], [undefined], ["3"]])(
     "treats %p as zero",
     (bad) => {
       setPlatform("win32");
-      const mgr = new TrayManager(createMockWindow());
+      const mgr = newTray(createMockWindow());
       mgr.create();
       mgr.setNotificationCount(bad);
       expect(mgr.notificationCount).toBe(0);
-      expect(mgr.tray._toolTip).toBe("GAIA");
+      expect(mgr.tray._toolTip).toBe("GAIA — starting");
     }
   );
 
   test("is a no-op on the tooltip after the tray is destroyed", () => {
     setPlatform("win32");
-    const mgr = new TrayManager(createMockWindow());
+    const mgr = newTray(createMockWindow());
     mgr.create();
     const destroyed = mgr.tray;
     destroyed._destroyed = true;
@@ -161,12 +305,12 @@ describe("TrayManager.setNotificationCount", () => {
 describe("tray:set-config validation", () => {
   function setConfig(payload) {
     setPlatform("win32");
-    new TrayManager(createMockWindow());
+    newTray(createMockWindow());
     return electronMock.ipcMain.simulateInvoke("tray:set-config", payload);
   }
 
   beforeEach(() => {
-    electronMock.app.setLoginItemSettings = jest.fn();
+    mockLoginItems();
   });
 
   test.each([[null], [undefined], ["tray"], [[]]])(
@@ -241,7 +385,7 @@ describe("agent config persistence", () => {
 
   function freshManager() {
     setPlatform("win32");
-    return new TrayManager(createMockWindow());
+    return newTray(createMockWindow());
   }
 
   const invoke = (channel, ...args) =>
@@ -365,11 +509,11 @@ describe("tray config already on disk from the unvalidated handler", () => {
     fs.readFileSync.mockReturnValue(
       typeof stored === "string" ? stored : JSON.stringify(stored)
     );
-    return new TrayManager(createMockWindow());
+    return newTray(createMockWindow());
   }
 
   beforeEach(() => {
-    electronMock.app.setLoginItemSettings = jest.fn();
+    mockLoginItems();
   });
 
   afterEach(() => {
@@ -422,5 +566,643 @@ describe("tray config already on disk from the unvalidated handler", () => {
   test("a JSON file that is not an object falls back to defaults", () => {
     const mgr = managerWithStoredConfig("[1, 2, 3]");
     expect(mgr.config.tray).toEqual(DEFAULT_TRAY);
+  });
+});
+
+describe("live state on the tray", () => {
+  function liveTray(platform = "win32") {
+    setPlatform(platform);
+    const win = createMockWindow();
+    const mgr = newTray(win);
+    mgr.create();
+    return { mgr, win };
+  }
+
+  const menuLabels = (mgr) => mgr.tray._contextMenu._template.map((i) => i.label || i.type);
+
+  test.each([
+    [activity(), "idle"],
+    [activity({ running: [{ id: "a", title: "Trip plan" }] }), "working"],
+    [activity({ running: [{ id: "a", title: "T" }], waitingOnModel: "Loading Gemma into memory" }), "waiting"],
+    [activity({ running: [{ id: "a", title: "T" }], needsYou: [{ id: "a", title: "T", reason: "approval" }] }), "needs-you"],
+    [activity({ backendConnected: false }), "error"],
+    [activity({ modelServerRunning: false }), "error"],
+  ])("a snapshot sets the icon to its state (%#)", (snapshot, state) => {
+    const { mgr } = liveTray();
+    mgr.setActivity(snapshot);
+    expect(mgr.state).toBe(state);
+    expect(mgr.tray._icon).toBe(mgr._iconFor(state));
+  });
+
+  test("each state has its own image", () => {
+    const { mgr } = liveTray();
+    const images = ["idle", "working", "waiting", "needs-you", "error"].map((s) => mgr._iconFor(s));
+    expect(new Set(images).size).toBe(5);
+  });
+
+  test("the image is swapped only when the state changes", () => {
+    const { mgr } = liveTray();
+    mgr.setActivity(activity({ running: [{ id: "a", title: "A" }] }));
+    mgr.setActivity(activity({ running: [{ id: "b", title: "B" }] }));
+    expect(mgr.tray.setImage).toHaveBeenCalledTimes(1);
+  });
+
+  test("the tooltip says what is happening", () => {
+    const { mgr } = liveTray();
+    mgr.setActivity(activity({ running: [{ id: "a", title: "Trip plan" }] }));
+    expect(mgr.tray._toolTip).toBe("GAIA — answering in 'Trip plan'");
+    mgr.setActivity(
+      activity({
+        needsYou: [
+          { id: "a", title: "A", reason: "approval" },
+          { id: "b", title: "B", reason: "approval" },
+        ],
+      })
+    );
+    expect(mgr.tray._toolTip).toBe("GAIA — 2 chats need you");
+  });
+
+  test("the GAIA service exiting shows the error state", () => {
+    const { mgr } = liveTray();
+    mgr.setActivity(activity({ running: [{ id: "a", title: "A" }] }));
+    mgr.setBackendAlive(false);
+    expect(mgr.state).toBe("error");
+    expect(mgr.tray._toolTip).toMatch(/GAIA service stopped/);
+  });
+
+  test("the menu is rebuilt when its text changes, so Linux trays redraw it", () => {
+    const { mgr } = liveTray("linux");
+    const before = mgr.tray.setContextMenu.mock.calls.length;
+    mgr.setActivity(activity());
+    mgr.setActivity(activity());
+    expect(mgr.tray.setContextMenu.mock.calls.length).toBe(before + 1);
+    expect(menuLabels(mgr)[0]).toBe("Gemma-4-E4B-it on GPU · idle");
+  });
+
+  test("tray:set-activity rejects a malformed snapshot and keeps the last good one", async () => {
+    const { mgr } = liveTray();
+    mgr.setActivity(activity({ running: [{ id: "a", title: "A" }] }));
+    await expect(
+      electronMock.ipcMain.simulateInvoke("tray:set-activity", { backendConnected: "yes" })
+    ).rejects.toThrow(/backendConnected must be a boolean/);
+    expect(mgr.state).toBe("working");
+  });
+
+  test("tray:set-activity drives the tray", async () => {
+    const { mgr } = liveTray();
+    await electronMock.ipcMain.simulateInvoke(
+      "tray:set-activity",
+      activity({ needsYou: [{ id: "a", title: "A", reason: "answer" }] })
+    );
+    expect(mgr.state).toBe("needs-you");
+  });
+
+  test("a Needs you item opens that chat in the window", () => {
+    const { mgr, win } = liveTray();
+    win.show = jest.fn();
+    mgr.setActivity(activity({ needsYou: [{ id: "s-42", title: "Trip plan", reason: "approval" }] }));
+    const item = mgr.tray._contextMenu._template.find((i) => i.label === "Trip plan — approve");
+    item.click();
+    expect(win.show).toHaveBeenCalled();
+    expect(win.webContents.send).toHaveBeenCalledWith("tray:command", {
+      type: "open-chat",
+      sessionId: "s-42",
+    });
+  });
+
+  test("New chat and Settings… reach the window", () => {
+    const { mgr, win } = liveTray();
+    mgr.setActivity(activity());
+    const byLabel = (l) => mgr.tray._contextMenu._template.find((i) => i.label === l);
+    byLabel("New chat").click();
+    byLabel("Settings…").click();
+    expect(win.webContents.send).toHaveBeenCalledWith("tray:command", { type: "new-chat" });
+    expect(win.webContents.send).toHaveBeenCalledWith("tray:command", {
+      type: "open-settings",
+      section: "general",
+    });
+  });
+
+  test("with the window closed, a menu action reopens it and runs once it reports", () => {
+    const { mgr, win } = liveTray();
+    mgr.setActivity(activity({ recent: [{ id: "s-7", title: "Old chat" }] }));
+    win._isDestroyed = true;
+    const fresh = createMockWindow();
+    mgr._reopenWindow.mockReturnValue(fresh);
+
+    mgr.tray._contextMenu._template.find((i) => i.label === "Old chat").click();
+    expect(mgr._reopenWindow).toHaveBeenCalledTimes(1);
+    expect(mgr.mainWindow).toBe(fresh);
+    // Not yet: the new window's tray bridge isn't listening until it reports.
+    expect(fresh.webContents.send).not.toHaveBeenCalled();
+
+    mgr.setActivity(activity());
+    expect(fresh.webContents.send).toHaveBeenCalledWith("tray:command", { type: "open-chat", sessionId: "s-7" });
+    mgr.setActivity(activity({ running: [{ id: "a", title: "A" }] }));
+    expect(fresh.webContents.send).toHaveBeenCalledTimes(1);
+  });
+
+  test("Show GAIA brings back a closed window", () => {
+    const { mgr, win } = liveTray();
+    mgr.setActivity(activity());
+    win._isDestroyed = true;
+    mgr.tray._contextMenu._template.find((i) => i.label === "Show GAIA").click();
+    expect(mgr._reopenWindow).toHaveBeenCalledTimes(1);
+  });
+
+  test("a closed window's last report no longer shows", () => {
+    const { mgr } = liveTray();
+    mgr.setActivity(activity({ running: [{ id: "a", title: "A" }] }));
+    mgr.windowClosed();
+    expect(mgr.state).toBe("idle");
+    expect(mgr.tray._toolTip).toBe("GAIA — starting");
+  });
+
+  test("needs a way to reopen a closed window", () => {
+    setPlatform("win32");
+    expect(() => new TrayManager(createMockWindow())).toThrow(/needs options.reopenWindow/);
+  });
+});
+
+describe("Windows taskbar overlay", () => {
+  test("shows needs-you, then unread, then clears", () => {
+    setPlatform("win32");
+    const win = createMockWindow();
+    const mgr = newTray(win);
+    mgr.create();
+
+    mgr.setActivity(activity({ needsYou: [{ id: "a", title: "A", reason: "approval" }] }));
+    expect(win.setOverlayIcon).toHaveBeenLastCalledWith(mgr._overlayImage("needs-you"), "1 chat needs you");
+
+    mgr.setActivity(activity());
+    mgr.setNotificationCount(3);
+    expect(win.setOverlayIcon).toHaveBeenLastCalledWith(mgr._overlayImage("unread"), "3 unread notifications");
+
+    mgr.setNotificationCount(0);
+    expect(win.setOverlayIcon).toHaveBeenLastCalledWith(null, "");
+  });
+
+  test("is not set again when nothing changed", () => {
+    setPlatform("win32");
+    const win = createMockWindow();
+    const mgr = newTray(win);
+    mgr.create();
+    mgr.setNotificationCount(2);
+    const calls = win.setOverlayIcon.mock.calls.length;
+    mgr.setActivity(activity());
+    expect(win.setOverlayIcon.mock.calls.length).toBe(calls);
+  });
+
+  test("a reopened window gets the overlay again, with nothing else changing", () => {
+    setPlatform("win32");
+    const win = createMockWindow();
+    const mgr = newTray(win);
+    mgr.create();
+    mgr.setNotificationCount(3);
+    expect(win.setOverlayIcon).toHaveBeenLastCalledWith(mgr._overlayImage("unread"), "3 unread notifications");
+
+    win._isDestroyed = true;
+    mgr.windowClosed();
+    const fresh = createMockWindow();
+    mgr._reopenWindow.mockReturnValue(fresh);
+    mgr._showWindow();
+
+    // Same unread count, no new report: the new window must still get the overlay.
+    expect(fresh.setOverlayIcon).toHaveBeenLastCalledWith(mgr._overlayImage("unread"), "3 unread notifications");
+  });
+
+  test("is Windows-only", () => {
+    setPlatform("darwin");
+    const win = createMockWindow();
+    const mgr = newTray(win);
+    mgr.create();
+    mgr.setNotificationCount(2);
+    expect(win.setOverlayIcon).not.toHaveBeenCalled();
+  });
+});
+
+describe("Free memory", () => {
+  const realFetch = global.fetch;
+  const IDLE_WORK = { answers: [], indexing: [] };
+
+  afterEach(() => {
+    global.fetch = realFetch;
+  });
+
+  /** The GAIA service: work-in-progress answers `work`; unload-model answers `unload`. */
+  function backend({ work = IDLE_WORK, unload = { ok: true, status: 200, body: { status: "unloaded" } } } = {}) {
+    global.fetch = jest.fn(async (url) => {
+      if (String(url).endsWith("/api/system/work-in-progress")) {
+        return { ok: true, status: 200, json: async () => work };
+      }
+      return { ok: unload.ok, status: unload.status, json: async () => unload.body };
+    });
+  }
+  const unloadCalls = () =>
+    global.fetch.mock.calls.filter(([url]) => String(url).endsWith("/api/system/unload-model"));
+
+  function freeMemoryTray() {
+    setPlatform("win32");
+    const win = createMockWindow();
+    const mgr = newTray(win, { backendPort: 4321 });
+    mgr.create();
+    mgr.setActivity(activity());
+    return { mgr, win };
+  }
+
+  const freeItem = (mgr) =>
+    mgr.tray._contextMenu._template.find((i) => String(i.label).startsWith("Free memory"));
+
+  test("asks first, unloads the model, and the status line shows it", async () => {
+    const { mgr, win } = freeMemoryTray();
+    backend();
+    electronMock.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 });
+
+    await mgr._freeMemory();
+
+    expect(electronMock.dialog.showMessageBox.mock.calls[0][0].message).toBe(
+      "Unload Gemma-4-E4B-it-GGUF from memory?"
+    );
+    expect(unloadCalls()).toEqual([
+      [
+        "http://127.0.0.1:4321/api/system/unload-model",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({ "X-Gaia-UI": "1", "Content-Type": "application/json" }),
+          body: JSON.stringify({ model_name: "Gemma-4-E4B-it-GGUF" }),
+        }),
+      ],
+    ]);
+    expect(mgr.tray._contextMenu._template[0].label).toBe("No model loaded · idle");
+    expect(freeItem(mgr).enabled).toBe(false);
+    expect(win.webContents.send).toHaveBeenCalledWith("tray:command", { type: "refresh-status" });
+  });
+
+  test("does nothing when the user cancels", async () => {
+    const { mgr } = freeMemoryTray();
+    backend();
+    electronMock.dialog.showMessageBox.mockResolvedValueOnce({ response: 1 });
+    await mgr._freeMemory();
+    expect(unloadCalls()).toHaveLength(0);
+  });
+
+  test.each([
+    [{ answers: [{ session_id: "b", title: "Elsewhere" }], indexing: [] }, "An answer is being written."],
+    [{ answers: [], indexing: [{ document_id: "d", filename: "report.pdf" }] }, "A document is being indexed."],
+    [
+      { answers: [{ session_id: "a", title: null }, { session_id: "b", title: null }], indexing: [{ document_id: "d" }] },
+      "2 answers are being written. A document is being indexed.",
+    ],
+  ])("says why it can't, without asking or unloading, while work runs (%#)", async (work, reason) => {
+    const { mgr } = freeMemoryTray();
+    backend({ work });
+    await mgr._freeMemory();
+    expect(electronMock.dialog.showMessageBox).toHaveBeenCalledTimes(1);
+    const box = electronMock.dialog.showMessageBox.mock.calls[0][0];
+    expect(box.message).toBe("The model is in use.");
+    expect(box.detail).toBe(`${reason} Try again when it has finished.`);
+    expect(unloadCalls()).toHaveLength(0);
+  });
+
+  test("a failed check is shown, and nothing is unloaded", async () => {
+    const { mgr } = freeMemoryTray();
+    global.fetch = jest.fn(async () => {
+      throw new Error("ECONNREFUSED");
+    });
+    await mgr._freeMemory();
+    const box = electronMock.dialog.showMessageBox.mock.calls[0][0];
+    expect(box.type).toBe("error");
+    expect(box.message).toBe("GAIA couldn't check whether the model is in use.");
+    expect(box.detail).toMatch(/ECONNREFUSED/);
+  });
+
+  test("a second click while the first is open opens no second dialog", async () => {
+    const { mgr } = freeMemoryTray();
+    backend();
+    let answer;
+    electronMock.dialog.showMessageBox.mockImplementationOnce(() => new Promise((r) => { answer = r; }));
+    const first = mgr._freeMemory();
+    await new Promise((r) => setImmediate(r));
+    await mgr._freeMemory();
+    expect(electronMock.dialog.showMessageBox).toHaveBeenCalledTimes(1);
+    answer({ response: 1 });
+    await first;
+  });
+
+  test("shows the backend's reason when it refuses", async () => {
+    const { mgr } = freeMemoryTray();
+    backend({ unload: { ok: false, status: 409, body: { detail: "A document is still being indexed." } } });
+    electronMock.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 });
+    await mgr._freeMemory();
+    const errorBox = electronMock.dialog.showMessageBox.mock.calls[1][0];
+    expect(errorBox.type).toBe("error");
+    expect(errorBox.detail).toBe("A document is still being indexed.");
+    expect(mgr.tray._contextMenu._template[0].label).toMatch(/^Gemma/);
+  });
+
+  test("an unexpected failure from the menu reaches the user", async () => {
+    const { mgr } = freeMemoryTray();
+    jest.spyOn(mgr, "_freeMemoryFlow").mockRejectedValueOnce(new Error("boom"));
+    const errors = jest.spyOn(console, "error").mockImplementation(() => {});
+    freeItem(mgr).click();
+    await new Promise((r) => setImmediate(r));
+    expect(electronMock.dialog.showErrorBox).toHaveBeenCalledWith("GAIA", "Free memory failed: boom");
+    errors.mockRestore();
+  });
+
+  test("is disabled while an answer is running", () => {
+    const { mgr } = freeMemoryTray();
+    mgr.setActivity(activity({ running: [{ id: "a", title: "A" }] }));
+    expect(freeItem(mgr).enabled).toBe(false);
+    expect(freeItem(mgr).label).toBe("Free memory — an answer is running");
+  });
+});
+
+describe("first-close notice", () => {
+  let disk;
+
+  beforeEach(() => {
+    disk = null;
+    fs.existsSync.mockImplementation((p) => !String(p).endsWith("tray-config.json") || disk !== null);
+    fs.readFileSync.mockImplementation(() => disk);
+    fs.writeFileSync.mockImplementation((_p, data) => {
+      disk = data;
+    });
+  });
+
+  afterEach(() => {
+    fs.existsSync.mockImplementation(() => true);
+    fs.readFileSync.mockImplementation(() => "{}");
+    fs.writeFileSync.mockImplementation(() => {});
+  });
+
+  test("shows once, and never again after a restart", async () => {
+    setPlatform("win32");
+    const mgr = newTray(createMockWindow());
+    expect(mgr.closeNoticeDue).toBe(true);
+    await mgr.showCloseNotice();
+    await mgr.showCloseNotice();
+    expect(electronMock.dialog.showMessageBox).toHaveBeenCalledTimes(1);
+    expect(electronMock.dialog.showMessageBox.mock.calls[0][0].message).toBe(
+      "GAIA is still running in the tray."
+    );
+
+    const restarted = newTray(createMockWindow());
+    expect(restarted.closeNoticeDue).toBe(false);
+  });
+
+  test("says menu bar on macOS", async () => {
+    setPlatform("darwin");
+    await newTray(createMockWindow()).showCloseNotice();
+    expect(electronMock.dialog.showMessageBox.mock.calls[0][0].message).toBe(
+      "GAIA is still running in the menu bar."
+    );
+  });
+
+  test("Quit GAIA in the notice reports the user's choice", async () => {
+    setPlatform("win32");
+    electronMock.dialog.showMessageBox.mockResolvedValueOnce({ response: 1 });
+    expect(await newTray(createMockWindow()).showCloseNotice()).toBe(true);
+  });
+
+  test("saving tray settings keeps the notice marked as shown", async () => {
+    setPlatform("win32");
+    const mgr = newTray(createMockWindow());
+    await mgr.showCloseNotice();
+    await electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { minimizeToTray: false } });
+    expect(JSON.parse(disk).notices.firstClose).toBe(true);
+  });
+});
+
+describe("start at login", () => {
+  beforeEach(() => {
+    mockLoginItems();
+  });
+
+  test("a refused login item fails the save and leaves the setting off", async () => {
+    setPlatform("win32");
+    const mgr = newTray(createMockWindow());
+    electronMock.app.setLoginItemSettings.mockImplementation(() => {
+      throw new Error("access denied");
+    });
+    await expect(
+      electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: true } })
+    ).rejects.toThrow(/start at sign-in: access denied/);
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+    expect(mgr.startOnLogin).toBe(false);
+  });
+
+  test("an OS that quietly keeps the old setting fails the save", async () => {
+    setPlatform("win32");
+    const mgr = newTray(createMockWindow());
+    electronMock.app.getLoginItemSettings.mockReturnValue({ openAtLogin: false });
+    await expect(
+      electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: true } })
+    ).rejects.toThrow(/the system still reports it off/);
+    expect(mgr.startOnLogin).toBe(false);
+  });
+
+  test("macOS waiting on the user's approval says where to give it", async () => {
+    setPlatform("darwin");
+    newTray(createMockWindow());
+    electronMock.app.getLoginItemSettings.mockReturnValue({ openAtLogin: true, status: "requires-approval" });
+    await expect(
+      electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: true } })
+    ).rejects.toThrow(/System Settings → General → Login Items/);
+  });
+
+  test("a failed save undoes the login item, so the toggle and the OS agree", async () => {
+    setPlatform("win32");
+    newTray(createMockWindow());
+    fs.writeFileSync.mockImplementationOnce(() => {
+      throw new Error("EACCES");
+    });
+    await expect(
+      electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: true } })
+    ).rejects.toThrow(/Could not save settings/);
+    expect(electronMock.app.setLoginItemSettings.mock.calls.map((c) => c[0].openAtLogin)).toEqual([true, false]);
+  });
+
+  test("saving another setting leaves the login item alone", async () => {
+    setPlatform("win32");
+    newTray(createMockWindow());
+    await electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startMinimized: true } });
+    expect(electronMock.app.setLoginItemSettings).not.toHaveBeenCalled();
+  });
+
+  test("registers the app without forcing it minimized", async () => {
+    setPlatform("darwin");
+    newTray(createMockWindow());
+    await electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: true } });
+    expect(electronMock.app.setLoginItemSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ openAtLogin: true, args: [] })
+    );
+  });
+
+  test("Windows uses the installer's Run value, launched into the tray", async () => {
+    setPlatform("win32");
+    const runValues = mockLoginItems();
+    const mgr = newTray(createMockWindow());
+    await electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: true } });
+    expect(electronMock.app.setLoginItemSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "GAIA", args: ["--minimized"], openAtLogin: true })
+    );
+    expect(runValues.get("GAIA")).toBe(true);
+    expect(mgr.startOnLogin).toBe(true);
+  });
+
+  test("turning it off removes the entry the installer wrote", async () => {
+    setPlatform("win32");
+    const runValues = mockLoginItems({ runValues: { GAIA: true } });
+    electronMock.app.isPackaged = true;
+    try {
+      const mgr = newTray(createMockWindow());
+      mgr.syncLoginItem();
+      await electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: false } });
+      expect(runValues.has("GAIA")).toBe(false);
+      const saved = JSON.parse(fs.writeFileSync.mock.calls.at(-1)[1]);
+      expect(saved.tray.startOnLogin).toBe(false);
+      expect(saved.choices.startOnLogin).toBe(true);
+    } finally {
+      delete electronMock.app.isPackaged;
+    }
+  });
+
+  test("a Run value named after the app id does not count as the installer's entry", async () => {
+    setPlatform("win32");
+    mockLoginItems();
+    electronMock.app.getLoginItemSettings.mockReturnValue({ openAtLogin: true, launchItems: [] });
+    await expect(
+      (newTray(createMockWindow()),
+      electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: true } }))
+    ).rejects.toThrow(/the system still reports it off/);
+  });
+
+  describe("at startup", () => {
+    let errorSpy;
+
+    beforeEach(() => {
+      setPlatform("win32");
+      electronMock.app.isPackaged = true;
+      errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      delete electronMock.app.isPackaged;
+      errorSpy.mockRestore();
+      fs.readFileSync.mockReturnValue("{}");
+    });
+
+    function managerWith(stored) {
+      fs.readFileSync.mockReturnValue(JSON.stringify(stored));
+      return newTray(createMockWindow());
+    }
+
+    test("a fresh install shows the switch on, matching the installer's entry", async () => {
+      mockLoginItems({ runValues: { GAIA: true } });
+      const mgr = managerWith({});
+      mgr.syncLoginItem();
+      expect(mgr.startOnLogin).toBe(true);
+      expect((await electronMock.ipcMain.simulateInvoke("tray:get-config")).tray.startOnLogin).toBe(true);
+      expect(electronMock.app.setLoginItemSettings).not.toHaveBeenCalled();
+    });
+
+    test("an old saved 'off' the user never chose does not remove the installer's entry", () => {
+      const runValues = mockLoginItems({ runValues: { GAIA: true } });
+      const mgr = managerWith({ tray: { minimizeToTray: true, startMinimized: false, startOnLogin: false } });
+      mgr.syncLoginItem();
+      expect(runValues.get("GAIA")).toBe(true);
+      expect(mgr.startOnLogin).toBe(true);
+    });
+
+    test("an update that writes the entry back is undone when the user turned it off", () => {
+      const runValues = mockLoginItems({ runValues: { GAIA: true } });
+      const mgr = managerWith({
+        tray: { minimizeToTray: true, startMinimized: false, startOnLogin: false },
+        choices: { startOnLogin: true },
+      });
+      mgr.syncLoginItem();
+      expect(runValues.has("GAIA")).toBe(false);
+      expect(mgr.startOnLogin).toBe(false);
+    });
+
+    test("turned off in Task Manager: the switch follows, nothing is rewritten", () => {
+      mockLoginItems({ runValues: { GAIA: false } });
+      const mgr = managerWith({
+        tray: { minimizeToTray: true, startMinimized: false, startOnLogin: true },
+        choices: { startOnLogin: true },
+      });
+      mgr.syncLoginItem();
+      expect(mgr.startOnLogin).toBe(false);
+      expect(electronMock.app.setLoginItemSettings).not.toHaveBeenCalled();
+    });
+
+    test("when the entry can't be removed again, the switch shows on and the error is logged", () => {
+      mockLoginItems({ runValues: { GAIA: true } });
+      electronMock.app.setLoginItemSettings.mockImplementation(() => {
+        throw new Error("access denied");
+      });
+      const mgr = managerWith({
+        tray: { minimizeToTray: true, startMinimized: false, startOnLogin: false },
+        choices: { startOnLogin: true },
+      });
+      expect(() => mgr.syncLoginItem()).not.toThrow();
+      expect(mgr.startOnLogin).toBe(true);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/could not be turned off again: .*access denied/));
+    });
+
+    test("a non-boolean choice on disk counts as never chosen", () => {
+      const runValues = mockLoginItems({ runValues: { GAIA: true } });
+      const mgr = managerWith({
+        tray: { minimizeToTray: true, startMinimized: false, startOnLogin: false },
+        choices: { startOnLogin: "yes" },
+      });
+      mgr.syncLoginItem();
+      expect(runValues.get("GAIA")).toBe(true);
+      expect(mgr.startOnLogin).toBe(true);
+    });
+
+    test("a dev build never reads or touches the installed app's entry", () => {
+      delete electronMock.app.isPackaged;
+      const runValues = mockLoginItems({ runValues: { GAIA: true } });
+      const mgr = managerWith({
+        tray: { minimizeToTray: true, startMinimized: false, startOnLogin: false },
+        choices: { startOnLogin: true },
+      });
+      mgr.syncLoginItem();
+      expect(electronMock.app.getLoginItemSettings).not.toHaveBeenCalled();
+      expect(runValues.get("GAIA")).toBe(true);
+      expect(mgr.startOnLogin).toBe(false);
+    });
+  });
+
+  test("Linux writes an XDG autostart entry, and removes it again", async () => {
+    setPlatform("linux");
+    const path = require("path");
+    const prevXdg = process.env.XDG_CONFIG_HOME;
+    const prevAppImage = process.env.APPIMAGE;
+    process.env.XDG_CONFIG_HOME = "/home/u/.config";
+    process.env.APPIMAGE = "/home/u/Apps/GAIA $1 100%.AppImage";
+    fs.unlinkSync = jest.fn();
+    try {
+      newTray(createMockWindow());
+      await electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: true } });
+      const entry = fs.writeFileSync.mock.calls.find((c) => String(c[0]).endsWith(".desktop"));
+      expect(path.normalize(entry[0])).toBe(
+        path.normalize("/home/u/.config/autostart/gaia-agent-ui.desktop")
+      );
+      // `$` is escaped inside the quotes, then the backslash is escaped again;
+      // `%` would start a field code, so it is doubled.
+      expect(entry[1]).toContain('Exec="/home/u/Apps/GAIA \\\\$1 100%%.AppImage"');
+      expect(electronMock.app.setLoginItemSettings).not.toHaveBeenCalled();
+
+      await electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: false } });
+      expect(fs.unlinkSync).toHaveBeenCalledWith(entry[0]);
+    } finally {
+      if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevXdg;
+      if (prevAppImage === undefined) delete process.env.APPIMAGE;
+      else process.env.APPIMAGE = prevAppImage;
+    }
   });
 });

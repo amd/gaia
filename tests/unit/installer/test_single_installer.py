@@ -412,14 +412,85 @@ def test_main_requires_exactly_one_source(tmp_path):
         fetch.main(["--publish-run-sha", "abc", "--out", str(tmp_path)])
 
 
-def test_workflow_publishes_the_windows_setup_after_the_raw_binaries():
-    # The Worker fills a version's `artifact` field from the FIRST publish, and
-    # hub installs download that field expecting the raw binary.
+def test_workflow_attaches_the_windows_setup_to_the_release_not_r2():
+    # Users get the setup from the GitHub release; an R2 copy has no reader.
     wf = (REPO_ROOT / ".github" / "workflows" / "release_components.yml").read_text(
         encoding="utf-8"
     )
-    job = re.search(r"^  publish-windows-setup:\n(.*?)(?=^  \S)", wf, re.M | re.S)
-    assert job, "release_components.yml has no publish-windows-setup job"
-    needs = re.search(r"needs: \[([^\]]+)\]", job.group(1)).group(1)
-    assert "terminal-hub" in needs
+    assert "publish-windows-setup:" not in wf
+    job = re.search(
+        r"^  github-release-installers:\n(.*?)(?=^  \S|\Z)", wf, re.M | re.S
+    )
+    assert job, "release_components.yml has no github-release-installers job"
+    assert "name: windows-setup" in job.group(1)
     assert "--platform win-x64" in job.group(1)
+    hub = re.search(r"^  terminal-hub:\n(.*?)(?=^  \S)", wf, re.M | re.S)
+    assert hub, "release_components.yml has no terminal-hub job"
+    assert "windows-setup" not in hub.group(1)
+    assert "artifacts.py" not in hub.group(1)
+
+
+def _function(name: str) -> str:
+    m = re.search(rf"^Function {name}\r?\n(.*?)^FunctionEnd", _nsi(), re.M | re.S)
+    assert m, f"gaia-setup.nsi has no Function {name}"
+    return m.group(1)
+
+
+def test_finish_page_offers_each_app_its_own_checkbox():
+    nsi = _nsi()
+    assert "!define MUI_FINISHPAGE_RUN_FUNCTION LaunchDesktopApp" in nsi
+    assert '!define MUI_FINISHPAGE_RUN_TEXT "Open GAIA Agent UI"' in nsi
+    assert "!define MUI_FINISHPAGE_SHOWREADME_FUNCTION LaunchTerminal" in nsi
+    assert '!define MUI_FINISHPAGE_SHOWREADME_TEXT "Open GAIA Terminal UI"' in nsi
+    # Both checked by default: the user chose to install both.
+    assert "SHOWREADME_NOTCHECKED" not in nsi
+    assert "RUN_NOTCHECKED" not in nsi
+    assert "Start ${SETUP_NAME}" not in nsi
+
+
+def test_each_checkbox_opens_only_its_own_app():
+    desktop = _function("LaunchDesktopApp")
+    terminal = _function("LaunchTerminal")
+    assert "${UI_EXE}" in desktop and "$LaunchExe" not in desktop
+    assert "$LaunchExe" in terminal and "${UI_EXE}" not in terminal
+
+
+def test_finish_page_hides_and_unchecks_apps_that_were_not_installed():
+    # MUI runs a checked box's function even when it is hidden, so hiding
+    # alone would still launch an app that isn't there.
+    show = _function("FinishShow")
+    for var, box in (
+        ("$UiDir", "$mui.FinishPage.Run"),
+        ("$LaunchExe", "$mui.FinishPage.ShowReadme"),
+    ):
+        block = re.search(
+            rf'\$\{{If\}} {re.escape(var)} == ""\r?\n(.*?)\$\{{EndIf\}}', show, re.S
+        )
+        assert block, f"FinishShow does not handle a missing {var}"
+        assert f"SendMessage {box} ${{BM_SETCHECK}} ${{BST_UNCHECKED}}" in block.group(
+            1
+        )
+        assert f"ShowWindow {box} ${{SW_HIDE}}" in block.group(1)
+    # The hook must sit right before the finish page, or it attaches to another page.
+    nsi = _nsi()
+    hook = nsi.index("!define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishShow")
+    between = nsi[hook : nsi.index("!insertmacro MUI_PAGE_FINISH")]
+    assert "!insertmacro" not in between
+
+
+def test_documentation_links_open_the_docs_not_the_home_page():
+    # The site root is the marketing page; the docs live under /docs/.
+    nsi = _nsi()
+    assert _define("DOCS_URL") == "https://amd-gaia.ai/docs"
+    assert _define("INSTALL_DOCS_URL").startswith("https://amd-gaia.ai/docs/")
+    assert '!define MUI_FINISHPAGE_LINK_LOCATION "${DOCS_URL}"' in nsi
+    assert "Details: ${INSTALL_DOCS_URL}" in nsi
+    assert "Details: ${PRODUCT_URL}" not in nsi
+
+
+def test_docs_urls_point_at_existing_pages():
+    # A renamed guide would otherwise leave Setup linking to a 404.
+    install = _define("INSTALL_DOCS_URL").removeprefix("https://amd-gaia.ai/docs/")
+    assert (REPO_ROOT / "docs" / f"{install}.mdx").is_file()
+    nav = (REPO_ROOT / "docs" / "docs.json").read_text(encoding="utf-8")
+    assert f'"{install}"' in nav

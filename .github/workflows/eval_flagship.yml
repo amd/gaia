@@ -5,8 +5,8 @@
 # agent users actually meet.
 #
 # Unit tests cover code paths, not model behavior, so this is the only thing that
-# catches a behavioral regression — which is why CLAUDE.md requires a run against
-# the paths below before an LLM-affecting change lands.
+# catches a behavioral regression. It runs on release and RC tags (see `on:`);
+# CLAUDE.md says how an LLM-affecting PR relies on the next RC's run.
 #
 # Runner-only by construction. `gaia eval agent` drives the real GAIA UI backend
 # against a real Lemonade Server on AMD hardware; a GitHub-hosted runner has
@@ -63,10 +63,8 @@
 #
 # So the default posture is REPORT: every category is compared, the full diff is
 # printed, the scorecards are uploaded as an artifact, and a regression surfaces
-# as a `::warning::` annotation. Make it blocking either by dispatching with
-# `enforce: true`, or — since workflow_dispatch is only offered for workflows
-# already on the default branch — by putting `[eval-enforce]` in the PR TITLE,
-# which works on a branch before this file has merged.
+# as a `::warning::` annotation. Make it blocking by dispatching with
+# `enforce: true`; a tag run always reports.
 #
 # This mirrors how intentional regressions are handled elsewhere: the
 # `--allow-regression` flag in src/gaia/eval/scorecard_gate.py prints a
@@ -145,38 +143,58 @@
 # refuses to start without it on PATH. Installed below via npm, as
 # docs/guides/eval-ci.mdx prescribes.
 #
-# WHAT TRIGGERS IT. A `pull_request` path filter, so the gate fires on the PR's
-# own base..head diff and only when that diff touches an LLM-affecting path. It
-# used to be a `push` filter, which matches the files in the PUSH — so merging
-# main into a branch replayed all of main's churn through the filter and fired
-# this multi-hour gate on PRs containing no Python at all (#2807 and #2809 are
-# C++-only and both wore its red X). Scoping is the only thing that changed: the
-# path list is untouched, and a PR that does touch one still runs and still
-# fails loudly.
+# WHAT TRIGGERS IT, AND HOW MUCH RUNS. Tiers, from eval/ci_tiers.json via
+# util/eval_tiers.py (#5493 section 6.6):
 #
-# Two consequences of leaving `push` behind, both intended. A branch with no PR
-# no longer triggers the gate — use `workflow_dispatch --ref <branch>`. And the
-# checkout is now `refs/pull/N/merge`, so the eval measures main+PR rather than
-# the branch head, which is the thing about to land.
+#   RC tag (v*-rc*)            smoke: 30 stable scenarios, 13 protected, 3 machines
+#   RC tag with [full eval]    full: every lane minus the weekly backlog's
+#     in its annotation          leaves_full scenarios. Nominate the RC you
+#                                will promote; [skip eval] still skips
+#   final tag (vX.Y.Z)         verify: nothing re-runs (the release train
+#                                promotes the measured RC, #5492); verify-final
+#                                checks a full sweep measured this commit or an RC
+#   weekly (Sun 06:17 UTC)     backlog: always-fail and high-flip scenarios on 3
+#                                machines, with a rolling trend artifact. Skipped
+#                                while any other run of this workflow holds the pool
+#   dispatch                   `tier` (default smoke), or a targeted selection
+#                                through `categories` / `scenarios`
 #
-# FORKS AND DRAFTS. Both are skipped by the job-level `if` below, not silently.
-# A fork PR could not pass anyway — ANTHROPIC_API_KEY, the eval judge, is not
-# exposed to fork PRs — and must not put unreviewed code on the lab pool. For
-# the PRs that do run the key is present; if it ever is not, the preflight fails
-# with instructions instead of running a judge-less eval that would produce a
-# meaningless scorecard.
+# THE MODEL UNDER TEST on this pool is Qwen3.6-35B-A3B, what `gaia init`
+# installs on a 64 GB+ Strix Halo, pinned in every category's GAIA home and
+# checked per scenario (--agent-model). It compares only against the Qwen
+# baseline (tests/fixtures/eval_baselines/gaia-flagship-qwen); until one is
+# committed every category reports "no baseline yet". Gemma-4-E4B is scored on
+# the Strix Point pool. A dispatch can still pick `model: Gemma-4-E4B-it-GGUF`
+# here, which compares against the Gemma-on-Halo baseline in gaia-flagship/ -
+# the way a targeted re-run joins an earlier Gemma tag run.
+#
+# FORKS AND DRAFTS. The job-level `if` guards below still skip fork and draft
+# PRs, in case a `pull_request` trigger is ever added back: a fork PR could not
+# pass (ANTHROPIC_API_KEY is not exposed to it) and must not put unreviewed code
+# on the lab pool. If the key is ever missing, the preflight fails with
+# instructions instead of running a judge-less eval.
 
 name: Agent Eval — flagship
 
 on:
-  # Nightly against the default branch. PR runs are path-filtered, so environment
-  # drift — a Lemonade version bump, a model re-quantisation, a driver or runner
-  # image change — alters nothing in the repo and therefore triggers nothing. The
-  # nightly is the only thing that catches that class, and it files an issue when
-  # a lane does not pass so the regression lands in the tracker instead of dying
-  # as an annotation nobody reads.
+  # Release and release-candidate tags (v0.24.1, v0.25.0-rc14), one weekly
+  # backlog run, and manual dispatch. Not per-PR and not nightly: the Strix Halo
+  # pool is too scarce for either - per-PR runs queued for hours and had to be
+  # cancelled. An LLM-affecting PR names the categories to watch; the next RC's
+  # run covers it. A tag run checks out the tagged commit, compares it with the
+  # committed baseline in report mode, and files an issue when it does not pass
+  # (release-escalation below). `v*.*.*` already matches the -rc tags; the
+  # second pattern says so out loud. Agent-package tags (agent-pkg-*) match
+  # neither.
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*-rc*'
+  # The weekly backlog lane (maintainer-approved). Sunday 06:17 UTC is the
+  # quietest hour on the pool; the minute is off the hour so it does not land
+  # with every other cron. Owner and README: eval/ci_tiers.json, docs/reference/eval.mdx.
   schedule:
-    - cron: '17 8 * * *'
+    - cron: '17 6 * * 0'
   workflow_dispatch:
     inputs:
       enforce:
@@ -185,58 +203,42 @@ on:
         type: boolean
         default: false
       eval_model:
-        description: 'Driver + judge model for the eval harness (must match the baseline)'
+        description: 'Driver + judge model for the eval harness. Blank = the model the flagship baseline was captured under (tests/fixtures/eval_baselines/gaia-flagship/meta.json)'
         required: false
-        default: 'claude-sonnet-4-6'
+        default: ''
       deep_diagnostics:
-        description: 'Run the full embedder-failure ladder (purges the model from disk, unloads all models). Off on PRs - it costs ~7 extra min and disturbs other jobs on the box.'
+        description: 'Run the full embedder-failure ladder (purges the model from disk, unloads all models). Off by default - it costs ~7 extra min and disturbs other jobs on the box.'
         required: false
         type: boolean
         default: false
       task_suite:
-        description: 'Space-separated suites from eval/tasks/tasks.json (PRs run core; the nightly runs everyday therock; adversarial is the traps; full is everything)'
+        description: 'Space-separated suites from eval/tasks/tasks.json (a tag run uses everyday therock; adversarial is the traps; full is everything)'
         required: false
         default: 'core'
-  # `pull_request`, NOT `push`. A `push` path filter matches the files in the
-  # PUSH, so merging main into a branch replays all of main's churn through the
-  # filter — which is how #2807 and #2809, both pure C++ PRs with no Python in
-  # their diff at all, ended up wearing a red X from an LLM-quality gate and
-  # burning hours of the scarcest runner pool. `pull_request` filters on the
-  # PR's own base..head diff, so the gate fires only when the PR itself edits a
-  # path below. The `types:` list follows test_email_agent_eval.yml;
-  # `ready_for_review` is what runs the gate on a PR
-  # that was opened as a draft (see the draft clause in the job `if:`).
-  #
-  # THE PATH LIST BELOW IS UNCHANGED ON PURPOSE. This change is mechanism only:
-  # it makes the filter mean what it already says. Note the list now includes
-  # `hub/agents/*/python/**`, so 18 hub packages newly qualify for a
-  # single-slot pool — scoping to the PR diff is what keeps that affordable.
-  pull_request:
-    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      # The surfaces that move flagship behavior.
-      - 'src/gaia/agents/base/agent.py'
-      - 'src/gaia/agents/registry.py'
-      - 'src/gaia/llm/lemonade_client.py'
-      - 'src/gaia/llm/factory.py'
-      - 'hub/agents/*/python/**'
-      - 'tests/fixtures/eval_baselines/**'
-      - '.github/workflows/eval_flagship.yml'
-      # The lane map decides which categories run at all, so an edit that orphans
-      # one has to be able to trigger the gate that would notice.
-      - 'eval/ci_lanes.json'
-      - 'util/eval_lane_matrix.py'
-      - 'tests/fixtures/gaia/stage_eval_env.py'
-      # In-core agents that carry their own model_id, plus the prompt/tool
-      # surfaces CLAUDE.md lists as eval-requiring — a tool docstring edit
-      # changes the JSON tool schema and is exactly what tool_selection scores.
-      # (ChatAgent is not listed: it now lives under hub/agents/chat/python/,
-      # already covered above.)
-      - 'src/gaia/agents/tools/**'
-      - 'src/gaia/chat/**'
-      - 'src/gaia/eval/flagship_tasks.py'
-      - 'eval/tasks/**'
+      tier:
+        description: 'smoke (30 scenarios, 3 machines), full (the promotion sweep, ~13 machines), or backlog (the weekly lane). Ignored when categories or scenarios is set.'
+        required: false
+        type: choice
+        options: [smoke, full, backlog]
+        default: smoke
+      # Qwen is what a 64 GB+ Strix Halo runs. Gemma compares against the
+      # Gemma-on-Halo baseline: use it to re-run part of a Gemma tag run.
+      model:
+        description: 'Local model under test. Each compares only against its own baseline (eval/ci_tiers.json).'
+        required: false
+        type: choice
+        options: [Qwen3.6-35B-A3B-GGUF, Gemma-4-E4B-it-GGUF]
+        default: Qwen3.6-35B-A3B-GGUF
+      # Targeted runs. Blank both to run the `tier`. Validated by
+      # util/eval_lane_matrix.py before any lane takes a lab machine.
+      categories:
+        description: 'Comma-separated categories to run (blank = the tier). Add "outcomes" to also run the outcomes job, which a targeted run otherwise skips.'
+        required: false
+        default: ''
+      scenarios:
+        description: 'Comma-separated scenario ids to run (blank = every scenario in the selected categories). Only lanes holding them get a machine.'
+        required: false
+        default: ''
 
 # NO WORKFLOW-LEVEL CONCURRENCY, deliberately. A group declared here is held by
 # the whole run, so every lane would wait on the one the first lane took and the
@@ -253,11 +255,12 @@ permissions:
   contents: read
 
 env:
-  # One scorecard per ci_lanes.json category, copied unedited from a real nightly
-  # on this pool (meta.json names the run). Captured under EVAL_MODEL below; a
-  # run under any other driver is not comparable to it. Replace the files from a
-  # newer nightly; never edit a number in them.
-  BASELINE_DIR: tests/fixtures/eval_baselines/gaia-flagship
+  # No BASELINE_DIR here: it depends on the model under test, so the lanes job
+  # resolves it from eval/ci_tiers.json (`baselines`) and each job sets it.
+  # A baseline holds one scorecard per category, copied unedited from a real run
+  # on this pool; its meta.json names the model, the run and the eval_model every
+  # job runs under unless a dispatch overrides it. Never edit a number in one.
+  #
   # THE LANE MAP IS THE SOURCE OF TRUTH: eval/ci_lanes.json. The `lanes` job below
   # reads it, checks it, and hands each lane its own category list as
   # EVAL_CATEGORIES at job level — which is what the four steps downstream already
@@ -294,25 +297,15 @@ env:
   # `setup.index_documents` block 403s and scores as a failure (#3585).
   # Declares the checkout's corpus, nothing wider.
   GAIA_DOCUMENT_ROOTS: ${{ github.workspace }}\eval\corpus
-  # A dispatch input always wins. Otherwise `[eval-enforce]` in the PR TITLE opts
-  # in — workflow_dispatch is not offered until this file is on the default
-  # branch, so without this there is no way to enforce pre-merge. Reads the PR
-  # title, not `head_commit.message`: that context exists only on `push`, so it
-  # is permanently null now that this triggers on `pull_request`.
-  #
-  # `edited` is deliberately NOT in the `types:` above — a title tweak must not
-  # be able to launch a multi-hour run on the shared slot. So retitling alone
-  # does not re-run the gate: add the tag, then push (or close/reopen).
-  ENFORCE: ${{ github.event.inputs.enforce || (contains(github.event.pull_request.title, '[eval-enforce]') && 'true') || 'false' }}
-  # PINNED, and that is not a stale value to bump. `--model` is not a judge-only
-  # knob: runner.py passes it to `claude -p`, which DRIVES every scenario as well
-  # as scoring it. So the driver is part of the agent under test, and the
-  # committed baseline was recorded under this value. Changing it compares two
-  # different agents and folds the new driver's wall clock into the same >2x
-  # time verdict, so change it only together with a re-captured baseline.
-  # #2859 moved every other Claude workflow to Opus 5. Override per-run via the
-  # dispatch input above.
-  EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-sonnet-4-6' }}
+  # Only a dispatch can enforce; a tag run compares with the baseline and reports.
+  ENFORCE: ${{ github.event.inputs.enforce || 'false' }}
+  # EVAL_MODEL is not set here: each job reads it from $BASELINE_DIR/meta.json
+  # (eval_model), because `--model` is not a judge-only knob. runner.py passes it
+  # to `claude -p`, which DRIVES every scenario as well as scoring it, so the
+  # driver is part of the agent under test and must be the one the baseline was
+  # recorded under. It changes only with a re-captured baseline. #2859 moved
+  # every other Claude workflow to Opus 5. A dispatch input overrides it per run.
+  EVAL_MODEL_OVERRIDE: ${{ github.event.inputs.eval_model }}
   # Deep ladder is opt-in. Its rungs purge the embedder from disk and unload every
   # resident model, which is fine while investigating and wrong to repeat on every
   # PR: the cause is known (#3016) and the box is shared, so the next job landing
@@ -336,8 +329,9 @@ env:
   # Long-term memory surviving between categories makes a later category's score
   # depend on an earlier one's run order (convention: test_chat_agent.yml,
   # test_email_agent_eval.yml). The memory lane is the one place that state IS
-  # the subject, and it can opt back in safely because it is alone on a machine
-  # that is destroyed when the job ends.
+  # the subject, and it can opt back in safely because every category runs on
+  # its own fresh GAIA home (see the run step). Do not rely on the machine being
+  # wiped: the runner's ~/.gaia survived between runs and leaked memory (rc16).
   #
   # Do NOT flip these here. Workflow scope would re-enable memory for every lane
   # and bring back the cross-category bleed this is guarding.
@@ -356,6 +350,38 @@ env:
   GAIA_EVAL_SCRIPTED_USER: '1'
 
 jobs:
+  # An RC tag annotated with `[skip eval]` skips every lane below; a final
+  # release, a lightweight tag and a dispatch always run (util/eval_tag_gate.py).
+  # Then the tier (util/eval_tiers.py): RC smoke, [full eval] full sweep, final
+  # verify, weekly backlog, or a dispatch's choice. Hosted and seconds long, so
+  # the decision costs no lab-pool time.
+  eval-gate:
+    name: Eval gate (release tag)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The weekly run lists this workflow's queued and running runs, to stay
+      # off the pool while a release eval is on it.
+      actions: read
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+      tier: ${{ steps.tier.outputs.tier }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Read the tag annotation
+        id: gate
+        run: python util/eval_tag_gate.py
+      - name: Pick the tier
+        id: tier
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVAL_DISPATCH_TIER: ${{ github.event_name == 'workflow_dispatch' && inputs.tier || '' }}
+          EVAL_SELECT_CATEGORIES: ${{ github.event_name == 'workflow_dispatch' && inputs.categories || '' }}
+          EVAL_SELECT_SCENARIOS: ${{ github.event_name == 'workflow_dispatch' && inputs.scenarios || '' }}
+        run: python util/eval_tiers.py decide >> "$GITHUB_OUTPUT"
+
   # Build the lane matrix, and refuse to build a bad one. Runs on a hosted runner
   # in seconds, BEFORE anything reaches the scarce AMD pool, so a broken lane map
   # costs nothing to discover.
@@ -368,19 +394,61 @@ jobs:
   # left to a comment nobody re-reads.
   lanes:
     name: Resolve the lane matrix
+    needs: eval-gate
+    if: >-
+      !cancelled() && needs.eval-gate.result == 'success' &&
+      needs.eval-gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
+      has_lanes: ${{ steps.build.outputs.has_lanes }}
+      targeted: ${{ steps.build.outputs.targeted }}
+      outcomes: ${{ steps.build.outputs.outcomes }}
+      selection: ${{ steps.build.outputs.selection }}
+      tier: ${{ steps.build.outputs.tier }}
+      agent_model: ${{ steps.build.outputs.agent_model }}
+      baseline_dir: ${{ steps.build.outputs.baseline_dir }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Validate the lane map and emit the matrix
+      - name: Validate the lane map and tiers, and emit the matrix
         id: build
         # The rules (which lane gets memory, which gets the gaia_* fixtures,
-        # what may never be in a lane) live in util/eval_lane_matrix.py, where
-        # tests/unit/eval/test_eval_lane_matrix.py covers them.
-        run: python util/eval_lane_matrix.py >> "$GITHUB_OUTPUT"
+        # what may never be in a lane, what a dispatch may select) live in
+        # util/eval_lane_matrix.py; which scenarios each tier runs, on which
+        # machine, against which model's baseline, in util/eval_tiers.py and
+        # eval/ci_tiers.json. It re-runs the tier coverage check first, so a bad
+        # tier file fails here in seconds. Tests: tests/unit/eval/test_eval_lane_matrix.py,
+        # tests/unit/eval/test_eval_tiers.py. Inputs arrive through env, never
+        # inline in the script.
+        env:
+          EVAL_TIER: ${{ needs.eval-gate.outputs.tier }}
+          EVAL_AGENT_MODEL: ${{ github.event_name == 'workflow_dispatch' && inputs.model || '' }}
+          EVAL_SELECT_CATEGORIES: ${{ github.event_name == 'workflow_dispatch' && inputs.categories || '' }}
+          EVAL_SELECT_SCENARIOS: ${{ github.event_name == 'workflow_dispatch' && inputs.scenarios || '' }}
+        run: python util/eval_tiers.py matrix >> "$GITHUB_OUTPUT"
+
+      - name: Label a partial run in the summary
+        if: steps.build.outputs.targeted == 'true'
+        env:
+          SELECTION: ${{ steps.build.outputs.selection }}
+          TIER: ${{ steps.build.outputs.tier }}
+          CATEGORIES: ${{ inputs.categories }}
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: |
+          {
+            echo "## ${SELECTION}"
+            echo ""
+            echo "This is NOT a full sweep. Only the selection below ran; every other scenario has no result in this run."
+            echo ""
+            if [ "${TIER}" = "targeted" ]; then
+              echo "- categories input: \`${CATEGORIES:-<blank>}\`"
+              echo "- scenarios input: \`${SCENARIOS:-<blank>}\`"
+            else
+              echo "- tier \`${TIER}\`: the scenarios and the reason each is in it are in \`eval/ci_tiers.json\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # The flagship GaiaAgent on outcome-scored tasks (`gaia eval tasks`, docs:
   # docs/reference/eval.mdx), served by GAIA's own embedded Lemonade. Three steps
@@ -394,28 +462,36 @@ jobs:
   # measured", never a regression. Memory is off here, as it is outside the
   # memory and gaia_* lanes.
   #
-  # Which suites: a PR runs `core` (the traps, ~7 tasks); the nightly runs
-  # `everyday` (the 14 tasks the published model rankings cite) and `therock`
-  # (four real fixes in a 144K-line repo). A dispatch runs the suites it names.
-  # Each suite is judged and gated on its own against
+  # Which suites: a release or RC tag runs `everyday` (the 14 tasks the
+  # published model rankings cite) and `therock` (four real fixes in a
+  # 144K-line repo). A dispatch runs the suites it names (default `core`, the
+  # traps, ~7 tasks). Each suite is judged and gated on its own against
   # eval/tasks/expectations/<model>.<suite>.json once they are committed (from
   # `gaia eval tasks propose` over repeated TASK_MODEL runs on this pool); until
-  # then the gate reports only. A nightly failure files an issue naming the suite
-  # (nightly-escalation below). PRs also run TASK_MODEL, so its 23 GB download
-  # is part of every PR's budget.
+  # then the gate reports only. A failing tag run files an issue naming the
+  # suite (release-escalation below).
   #
   # A lane in everything but the matrix. It stays its own job because its
   # steps are a different shape - embedded Lemonade, `gaia eval tasks` - not
   # because it is ordered against the others; it runs alongside them.
+  #
+  # Only the full sweep runs it, so the RC smoke tier stays on three machines.
+  # A targeted dispatch skips it unless its `categories` input names
+  # `outcomes`; the weekly backlog and a final tag never run it. The lanes job
+  # decides (`outcomes` output) for every event.
   flagship-tasks:
     name: Scenario eval - outcomes
+    needs: [eval-gate, lanes]
     outputs:
       failed_suites: ${{ steps.gate.outputs.failed }}
     if: >-
-      github.event_name != 'pull_request' ||
+      !cancelled() && needs.eval-gate.result == 'success' &&
+      needs.eval-gate.outputs.run == 'true' && needs.lanes.result == 'success' &&
+      needs.lanes.outputs.outcomes == 'true' &&
+      (github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.pull_request.draft == false ||
-      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')))
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))))
     concurrency:
       group: ${{ github.workflow }}-outcomes-${{ github.ref }}
       cancel-in-progress: false
@@ -429,7 +505,11 @@ jobs:
     # timeout cancels and skips the judge, gate and upload steps.
     timeout-minutes: ${{ github.event_name != 'pull_request' && 420 || 200 }}
     env:
-      TASK_SUITES: ${{ github.event.inputs.task_suite || (github.event_name == 'schedule' && 'everyday therock') || 'core' }}
+      # The venv's interpreter and CLI by full path. A bare `python` resolves
+      # through PATH, which a runner's own setup can put ahead of the venv.
+      VENV_PY: ${{ github.workspace }}\.venv\Scripts\python.exe
+      VENV_GAIA: ${{ github.workspace }}\.venv\Scripts\gaia.exe
+      TASK_SUITES: ${{ github.event.inputs.task_suite || (github.event_name == 'push' && 'everyday therock') || 'core' }}
       # The local model the expectations were measured on. Changing it means
       # measuring and committing new expectations for it first.
       TASK_MODEL: Qwen3.6-35B-A3B-GGUF
@@ -442,11 +522,35 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup Python Environment
+        id: venv
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
           # The flagship ships as its own hub package and builds on ChatAgent.
           install-package: '-e .[dev,eval,ui,api] -e hub/agents/chat/python -e hub/agents/gaia/python'
+
+      - name: Check the venv interpreter
+        env:
+          SETUP_VENV_PY: ${{ steps.venv.outputs.python-path }}
+        run: |
+          if ($env:SETUP_VENV_PY -ne $env:VENV_PY) {
+            Write-Host "::error::setup-venv built '$env:SETUP_VENV_PY' but this job runs '$env:VENV_PY'. Point VENV_PY/VENV_GAIA in the job env at setup-venv's venv-name."
+            exit 1
+          }
+          foreach ($exe in @($env:VENV_PY, $env:VENV_GAIA)) {
+            if (-not (Test-Path $exe)) {
+              Write-Host "::error::$exe is missing - the venv install did not complete. See the Setup Python Environment step."
+              exit 1
+            }
+          }
+          & $env:VENV_PY -c "import gaia, gaia_agent, gaia_agent_chat"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::$env:VENV_PY cannot import gaia / gaia_agent / gaia_agent_chat - the editable installs in the Setup Python Environment step are broken."
+            exit 1
+          }
+          $bare = (Get-Command python -ErrorAction SilentlyContinue).Source
+          Write-Host "Venv interpreter: $env:VENV_PY"
+          Write-Host "Bare 'python' on this runner: $(if ($bare) { $bare } else { 'none' })"
 
       - name: Set up Node
         uses: actions/setup-node@v7
@@ -464,14 +568,14 @@ jobs:
         timeout-minutes: 20
         run: |
           $ErrorActionPreference = "Continue"
-          gaia lemonade embedded start --timeout 180
+          & $env:VENV_GAIA lemonade embedded start --timeout 180
           if ($LASTEXITCODE -ne 0) {
             Get-Content "$HOME\.gaia\lemonade\lemond.log" -Tail 60 -ErrorAction SilentlyContinue
             throw "The embedded Lemonade did not start; its log is above."
           }
-          gaia lemonade embedded install-backend llamacpp:vulkan
+          & $env:VENV_GAIA lemonade embedded install-backend llamacpp:vulkan
           if ($LASTEXITCODE -ne 0) { throw "Could not install llamacpp:vulkan into the embedded Lemonade." }
-          gaia lemonade embedded status
+          & $env:VENV_GAIA lemonade embedded status
 
       # This pool is ephemeral, so the model is never cached. Download it here,
       # or the first task's clock pays for a 23 GB download.
@@ -479,7 +583,7 @@ jobs:
         timeout-minutes: 60
         run: |
           . "$HOME\.gaia\lemonade\env.ps1"
-          python -c "import os, sys; from gaia.llm.lemonade_client import LemonadeClient; sys.exit(0 if LemonadeClient().ensure_model_downloaded(os.environ['TASK_MODEL'], timeout=3300) else 1)"
+          & $env:VENV_PY -c "import os, sys; from gaia.llm.lemonade_client import LemonadeClient; sys.exit(0 if LemonadeClient().ensure_model_downloaded(os.environ['TASK_MODEL'], timeout=3300) else 1)"
           if ($LASTEXITCODE -ne 0) { throw "Could not download $env:TASK_MODEL into the embedded Lemonade; the error is above." }
 
       # No credentials in this step's environment: the agent runs shell commands.
@@ -492,7 +596,7 @@ jobs:
           # One suite crashing must not stop the next from being measured.
           $crashed = @()
           foreach ($suite in ($env:TASK_SUITES -split ' ')) {
-            gaia eval tasks run --suite $suite --model $env:TASK_MODEL --no-judge --out "$env:TASKS_OUT\$suite"
+            & $env:VENV_GAIA eval tasks run --suite $suite --model $env:TASK_MODEL --no-judge --out "$env:TASKS_OUT\$suite"
             if ($LASTEXITCODE -ne 0) { $crashed += "$suite (exit $LASTEXITCODE)" }
           }
           if ($crashed.Count -gt 0) { throw "gaia eval tasks run crashed for: $($crashed -join ', '). A harness failure, not a verdict." }
@@ -510,7 +614,7 @@ jobs:
           foreach ($suite in ($env:TASK_SUITES -split ' ')) {
             $out = "$env:TASKS_OUT\$suite"
             if (-not (Test-Path "$out\scorecard.json")) { $failed += "$suite (no results to judge)"; continue }
-            gaia eval tasks judge $out --judge-model $env:TASK_JUDGE_MODEL --judge-attempts 2
+            & $env:VENV_GAIA eval tasks judge $out --judge-model $env:TASK_JUDGE_MODEL --judge-attempts 2
             if ($LASTEXITCODE -ne 0) { $failed += "$suite (exit $LASTEXITCODE)" }
           }
           if ($failed.Count -gt 0) { throw "gaia eval tasks judge failed for: $($failed -join ', ')." }
@@ -526,7 +630,7 @@ jobs:
           foreach ($suite in ($env:TASK_SUITES -split ' ')) {
             $out = "$env:TASKS_OUT\$suite"
             if (-not (Test-Path "$out\scorecard.json")) { $failed += "$suite (no results - its run crashed)"; continue }
-            gaia eval tasks gate $out --enforce --propose "$out\proposed-expectations.json"
+            & $env:VENV_GAIA eval tasks gate $out --enforce --propose "$out\proposed-expectations.json"
             if ($LASTEXITCODE -ne 0) { $failed += "$suite (exit $LASTEXITCODE)" }
           }
           "failed=$($failed -join ', ')" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
@@ -537,7 +641,7 @@ jobs:
 
       - name: Stop the embedded Lemonade
         if: always()
-        run: gaia lemonade embedded stop
+        run: '& $env:VENV_GAIA lemonade embedded stop'
 
       - name: Keep the embedded Lemonade log
         if: always()
@@ -597,7 +701,7 @@ jobs:
 
   agent-eval:
     name: Scenario eval - ${{ matrix.lane }}
-    needs: lanes
+    needs: [eval-gate, lanes]
     strategy:
       # One lane's failure must not cancel the others. They measure different
       # categories on different machines, and a lane that dies is exactly when
@@ -627,6 +731,9 @@ jobs:
     # Kept flat-indented on purpose: a YAML folded scalar preserves newlines on
     # more-indented lines, and an `if:` expression must fold to a single line.
     if: >-
+      !cancelled() && needs.eval-gate.result == 'success' &&
+      needs.eval-gate.outputs.run == 'true' && needs.lanes.result == 'success' &&
+      needs.lanes.outputs.has_lanes == 'true' &&
       (github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.pull_request.draft == false ||
@@ -722,11 +829,31 @@ jobs:
     # That is how run 30869194618 threw away 124 min of rag_quality data.
     timeout-minutes: 420
     env:
+      # The venv's interpreter and CLI by full path. A bare `python` resolves
+      # through PATH, which a runner's own setup can put ahead of the venv.
+      VENV_PY: ${{ github.workspace }}\.venv\Scripts\python.exe
+      VENV_GAIA: ${{ github.workspace }}\.venv\Scripts\gaia.exe
       # The lane's categories, from eval/ci_lanes.json via the `lanes` job. Every
       # step below reads this one list, so run / collect / gate / compare cannot
       # disagree about what this lane was supposed to measure.
       EVAL_CATEGORIES: ${{ matrix.categories }}
       EVAL_LANE: ${{ matrix.lane }}
+      # Targeted dispatch only: "category=id,id category=id". Blank runs every
+      # scenario in each category, which is what a tag run always does.
+      EVAL_SCENARIOS: ${{ matrix.scenarios }}
+      EVAL_SELECTION: ${{ needs.lanes.outputs.selection }}
+      EVAL_TARGETED: ${{ needs.lanes.outputs.targeted }}
+      EVAL_TIER: ${{ needs.lanes.outputs.tier }}
+      # The local model under test, pinned in every category's GAIA home and
+      # checked per scenario, and the baseline captured on that model. Both
+      # from eval/ci_tiers.json via the lanes job, so they cannot disagree.
+      AGENT_MODEL: ${{ needs.lanes.outputs.agent_model }}
+      BASELINE_DIR: ${{ needs.lanes.outputs.baseline_dir }}
+      # Every run, tag runs included, fails on scenarios that errored before
+      # Claude spent a token (an exhausted quota, as on v0.25.1-rc2). That is a
+      # run that measured nothing, not a regression, so report mode does not
+      # soften it.
+      FAIL_ON_ZERO_TOKENS: 'true'
       # Memory ON for the memory lane, OFF everywhere else. Job scope beats the
       # workflow defaults, and everything that reads these is started from here:
       # the backend inherits the job environment through Start-Process, and the
@@ -737,11 +864,32 @@ jobs:
       GAIA_MEMORY_ADMIN: ${{ matrix.memory_admin }}
       GAIA_MEMORY_MCP_ALWAYS: ${{ matrix.memory_mcp }}
       GAIA_FIXTURES: ${{ matrix.gaia_fixtures }}
+      # A tier machine can hold `memory` beside other non-gaia categories. The
+      # job runs with memory off, and the run step turns the store on for the
+      # categories named here only, each on its own backend and GAIA home.
+      EVAL_MEMORY_CATEGORIES: ${{ matrix.memory_categories }}
     steps:
       - name: Show which Claude account this job uses
         run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
       - name: Checkout
         uses: actions/checkout@v7
+
+      # The Claude model drives every scenario as well as judging it, so it must
+      # be the one the model's baseline was captured under: its meta.json is the
+      # single source. A dispatch input overrides it.
+      - name: Resolve the eval driver model
+        run: |
+          $model = $env:EVAL_MODEL_OVERRIDE
+          if (-not $model) {
+            $meta = "$env:BASELINE_DIR/meta.json"
+            $model = (Get-Content -Raw $meta | ConvertFrom-Json).eval_model
+            if (-not $model) {
+              Write-Host "::error title=No eval model::$meta has no eval_model, so this run cannot know which Claude model the baseline was captured under. | WHAT TO DO: restore eval_model in $meta, or dispatch with the eval_model input."
+              exit 1
+            }
+          }
+          "EVAL_MODEL=$model" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+          Write-Host "Eval driver and judge model: $model"
 
       # A memory lane with memory switched off does not fail - it scores badly,
       # and the scorecard reads as a quality regression rather than a setup
@@ -755,20 +903,27 @@ jobs:
           $cats = @($env:EVAL_CATEGORIES -split '\s+' | Where-Object { $_ })
           $needsMemory = $cats -contains 'memory'
           $gaiaLane = @($cats | Where-Object { $_ -like 'gaia_*' }).Count -gt 0
+          # A tier machine with memory beside other non-gaia categories runs
+          # with memory off and turns it on for `memory` alone (run step).
+          $mixedMemory = $needsMemory -and $cats.Count -gt 1 -and -not $gaiaLane
           if ($gaiaLane) {
-            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '0'; GAIA_MEMORY_ADMIN = '1'; GAIA_MEMORY_MCP_ALWAYS = '0'; GAIA_FIXTURES = '1' }
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '0'; GAIA_MEMORY_ADMIN = '1'; GAIA_MEMORY_MCP_ALWAYS = '0'; GAIA_FIXTURES = '1'; EVAL_MEMORY_CATEGORIES = '' }
             $why = "gaia_* categories must run the way test_gaia_agent_eval.yml runs them and their baselines were captured: memory live with admin seeding, fixtures staged."
+          } elseif ($mixedMemory) {
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '1'; GAIA_MEMORY_ADMIN = '0'; GAIA_MEMORY_MCP_ALWAYS = '0'; GAIA_FIXTURES = '0'; EVAL_MEMORY_CATEGORIES = 'memory' }
+            $why = "This machine runs memory beside other categories: the job runs with the store off and the run step turns it on for the memory category alone, so EVAL_MEMORY_CATEGORIES must name exactly memory."
           } elseif ($needsMemory) {
-            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '0'; GAIA_MEMORY_ADMIN = '1'; GAIA_MEMORY_MCP_ALWAYS = '1'; GAIA_FIXTURES = '0' }
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '0'; GAIA_MEMORY_ADMIN = '1'; GAIA_MEMORY_MCP_ALWAYS = '1'; GAIA_FIXTURES = '0'; EVAL_MEMORY_CATEGORIES = '' }
             $why = "The memory scenarios call remember/recall and verify through memory_recall, so this lane must run with the store live and its admin and MCP read tools registered."
           } else {
-            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '1'; GAIA_MEMORY_ADMIN = '0'; GAIA_MEMORY_MCP_ALWAYS = '0'; GAIA_FIXTURES = '0' }
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '1'; GAIA_MEMORY_ADMIN = '0'; GAIA_MEMORY_MCP_ALWAYS = '0'; GAIA_FIXTURES = '0'; EVAL_MEMORY_CATEGORIES = '' }
             $why = "No category in this lane touches long-term memory, and leaving the store live lets state from one scenario change the next one's score."
           }
           $wrong = @()
           foreach ($name in $want.Keys) {
             $have = [Environment]::GetEnvironmentVariable($name)
-            if ($null -eq $have) { $have = '<unset>' }
+            # Windows drops an env var set to '', so unset IS the empty value.
+            if ($null -eq $have) { $have = if ($want[$name] -eq '') { '' } else { '<unset>' } }
             if ($have -ne $want[$name]) { $wrong += "$name is '$have' but should be '$($want[$name])'" }
           }
           if ($wrong.Count -gt 0) {
@@ -778,6 +933,7 @@ jobs:
           Write-Host "Lane '$env:EVAL_LANE' environment is correct (memory lane: $needsMemory, gaia_* lane: $gaiaLane)."
 
       - name: Setup Python Environment
+        id: venv
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
@@ -798,6 +954,29 @@ jobs:
           # ModuleNotFoundError before writing a protocol frame — which the client
           # reports only as CONNECTION_CLOSED.
           install-package: '-e .[dev,eval,ui,api,mcp] -e hub/agents/chat/python -e hub/agents/gaia/python'
+
+      - name: Check the venv interpreter
+        env:
+          SETUP_VENV_PY: ${{ steps.venv.outputs.python-path }}
+        run: |
+          if ($env:SETUP_VENV_PY -ne $env:VENV_PY) {
+            Write-Host "::error::setup-venv built '$env:SETUP_VENV_PY' but this job runs '$env:VENV_PY'. Point VENV_PY/VENV_GAIA in the job env at setup-venv's venv-name."
+            exit 1
+          }
+          foreach ($exe in @($env:VENV_PY, $env:VENV_GAIA)) {
+            if (-not (Test-Path $exe)) {
+              Write-Host "::error::$exe is missing - the venv install did not complete. See the Setup Python Environment step."
+              exit 1
+            }
+          }
+          & $env:VENV_PY -c "import gaia, gaia_agent, gaia_agent_chat"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::$env:VENV_PY cannot import gaia / gaia_agent / gaia_agent_chat - the editable installs in the Setup Python Environment step are broken."
+            exit 1
+          }
+          $bare = (Get-Command python -ErrorAction SilentlyContinue).Source
+          Write-Host "Venv interpreter: $env:VENV_PY"
+          Write-Host "Bare 'python' on this runner: $(if ($bare) { $bare } else { 'none' })"
 
       # `gaia eval agent` does not merely call the Anthropic API - it shells out
       # to `claude -p` with an MCP config to DRIVE each scenario (runner.py:937),
@@ -822,16 +1001,34 @@ jobs:
         uses: ./.github/actions/install-lemonade
 
       - name: Start Lemonade Server (version-matched, warmed)
-        timeout-minutes: 15
+        # 15 min for the server and Gemma, plus up to 30 min to pull a 23 GB
+        # Qwen3.6 onto a fresh machine.
+        timeout-minutes: 50
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
           # Launches the version-matched server as a persistent Scheduled Task
-          # (survives across CI jobs), reuses it if healthy, and warms the model.
-          # Default -WarmModel is already Gemma-4-E4B-it-GGUF, the model under test.
+          # (survives across CI jobs), reuses it if healthy, and warms
+          # Gemma-4-E4B, its default. Gemma is pulled whatever the model under
+          # test: vision loads it by name, and every PC `gaia init` sets up has
+          # it, Qwen machines included.
           powershell -ExecutionPolicy Bypass -File installer\scripts\ensure-lemonade-running.ps1
           if ($LASTEXITCODE -ne 0) { throw "Lemonade server not ready" }
+          # Then the model under test, pulled here rather than through a second
+          # script call: the script returns early on a healthy server without
+          # warming anything, and swallows a failed pull.
+          if ($env:AGENT_MODEL -ne 'Gemma-4-E4B-it-GGUF') {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $base = $env:LEMONADE_BASE_URL.TrimEnd('/') -replace '/api/v1$', ''
+            $body = @{ model_name = $env:AGENT_MODEL } | ConvertTo-Json
+            try {
+              Invoke-RestMethod "$base/api/v1/pull" -Method POST -ContentType "application/json" -Body $body -TimeoutSec 1800 | Out-Null
+            } catch {
+              throw "Could not pull $env:AGENT_MODEL into Lemonade at $base : $($_.Exception.Message). Check the runner's network and disk, then re-run."
+            }
+            Write-Host "Pulled $env:AGENT_MODEL in $([math]::Round($sw.Elapsed.TotalMinutes, 1)) min."
+          }
 
       - name: Preflight — judge key, baselines, Lemonade
         env:
@@ -856,12 +1053,12 @@ jobs:
             $ErrorActionPreference = "Continue"
             $global:LASTEXITCODE = 0
             if ($LlamacppArgs) {
-              $out = & python tests/ci_lemonade_check.py `
+              $out = & $env:VENV_PY tests/ci_lemonade_check.py `
                 --model $embeddingModel --checkpoint $embeddingCheckpoint `
                 --recipe $embeddingRecipe --register-embedding --embeddings `
                 --llamacpp-args $LlamacppArgs 2>&1
             } else {
-              $out = & python tests/ci_lemonade_check.py `
+              $out = & $env:VENV_PY tests/ci_lemonade_check.py `
                 --model $embeddingModel --checkpoint $embeddingCheckpoint `
                 --recipe $embeddingRecipe --register-embedding --embeddings 2>&1
             }
@@ -969,7 +1166,7 @@ jobs:
           $probeExit = $LASTEXITCODE
           $probeFile = Join-Path $env:RUNNER_TEMP "claude_probe.txt"
           Set-Content -Path $probeFile -Value $probe -Encoding UTF8
-          python util/classify_claude_probe.py --exit-code $probeExit --text-file $probeFile
+          & $env:VENV_PY util/classify_claude_probe.py --exit-code $probeExit --text-file $probeFile
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
           # No baseline is a legitimate state right now, and it is reported, never
@@ -979,23 +1176,38 @@ jobs:
           $categories = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
           if (-not (Test-Path $env:BASELINE_DIR)) {
             if ($env:ENFORCE -eq 'true') {
-              Write-Host "::error::enforce=true but no baseline exists at $env:BASELINE_DIR, so there is nothing to enforce against and every category would pass by default. Land a flagship baseline first (run the eval on this hardware and commit the scorecards as $env:BASELINE_DIR\scorecard_<category>.json), or re-run without [eval-enforce]."
+              Write-Host "::error::enforce=true but no baseline exists at $env:BASELINE_DIR, so there is nothing to enforce against and every category would pass by default. Land a flagship baseline first (run the eval on this hardware and commit the scorecards as $env:BASELINE_DIR\scorecard_<category>.json), or re-dispatch with enforce: false."
               exit 1
             }
             Write-Host "::warning::NO BASELINE COMMITTED. Regression detection is OFF for this run: the eval still measures every category and uploads its scorecards, but nothing compares them to a known-good run. Restore the flagship baseline in $env:BASELINE_DIR."
             "REGRESSION DETECTION OFF: no baseline at ``$env:BASELINE_DIR``. Scorecards are produced and uploaded; nothing is compared." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           } else {
+            # The baseline must have been captured on the model under test.
+            # eval/ci_tiers.json maps each model to its directory and a unit test
+            # checks the meta, so this only fires if the two drift at runtime.
+            $metaModel = (Get-Content -Raw (Join-Path $env:BASELINE_DIR 'meta.json') | ConvertFrom-Json).model
+            if ($metaModel -ne $env:AGENT_MODEL) {
+              Write-Host "::error::$env:BASELINE_DIR was captured on '$metaModel', but this run scores '$env:AGENT_MODEL'. Comparing them would report the model swap as regressions. Fix the baselines map in eval/ci_tiers.json."
+              exit 1
+            }
+            $noScorecards = @(Get-ChildItem $env:BASELINE_DIR -Filter 'scorecard_*.json').Count -eq 0
+            if ($noScorecards) {
+              Write-Host "::warning::NO $env:AGENT_MODEL BASELINE YET: $env:BASELINE_DIR holds no scorecards, so nothing in this run is compared. Every category still runs and uploads its scorecard. Capture the baseline from a full sweep ($env:BASELINE_DIR/README.md)."
+              "**No $env:AGENT_MODEL baseline yet** (``$env:BASELINE_DIR``): this run measured quality and compared it to nothing." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            }
             foreach ($category in $categories) {
               $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
               if (-not (Test-Path $baseline)) {
                 # A category added since the baseline was captured has none until
-                # its first nightly; that is reported, and never enforced against.
+                # its first tag run; that is reported, and never enforced against.
                 if ($env:ENFORCE -eq 'true') {
-                  Write-Host "::error::enforce=true but there is no baseline at $baseline, so '$category' would pass by default. Commit its scorecard from a nightly on this hardware first, or re-run without [eval-enforce]."
+                  Write-Host "::error::enforce=true but there is no $env:AGENT_MODEL baseline at $baseline, so '$category' would pass by default. Commit its scorecard from a run on this hardware first, or re-dispatch with enforce: false."
                   exit 1
                 }
-                Write-Host "::warning::${category}: NOT COMPARED - no baseline at $baseline yet. The category still runs and its scorecard is uploaded; commit that scorecard as the baseline."
-                "``$category``: not compared, no baseline yet. Its scorecard from this run is the baseline candidate." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+                if (-not $noScorecards) {
+                  Write-Host "::warning::${category}: NOT COMPARED - no $env:AGENT_MODEL baseline at $baseline yet. The category still runs and its scorecard is uploaded; commit that scorecard as the baseline."
+                  "``$category``: not compared, no $env:AGENT_MODEL baseline yet. Its scorecard from this run is the baseline candidate." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+                }
                 continue
               }
               Write-Host "baseline ok: $baseline"
@@ -1010,13 +1222,15 @@ jobs:
           # gaia.rag.sdk registers it from, so the probe below cannot drift from
           # what RAG will actually ask Lemonade for.
           $global:LASTEXITCODE = 0
-          $probe = @(python -c "from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL_NAME, MODELS, _get_lemonade_config; m = next(x for x in MODELS.values() if x.model_id == DEFAULT_EMBEDDING_MODEL); print(_get_lemonade_config()[2]); print(DEFAULT_MODEL_NAME); print(DEFAULT_EMBEDDING_MODEL); print(m.checkpoint); print(m.recipe)")
+          $probe = @(& $env:VENV_PY -c "from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL_NAME, MODELS, _get_lemonade_config; m = next(x for x in MODELS.values() if x.model_id == DEFAULT_EMBEDDING_MODEL); print(_get_lemonade_config()[2]); print(DEFAULT_MODEL_NAME); print(DEFAULT_EMBEDDING_MODEL); print(m.checkpoint); print(m.recipe)")
           if ($LASTEXITCODE -ne 0 -or $probe.Count -lt 5) {
             Write-Host "::error::Could not resolve the Lemonade URL / models under test - the venv install is broken."
             exit 1
           }
           $lemonadeUrl = $probe[-5]
-          $modelUnderTest = $probe[-4]
+          # Not DEFAULT_MODEL_NAME ($probe[-4]): the model under test is pinned
+          # per run (AGENT_MODEL), and on this pool it is not the code default.
+          $modelUnderTest = $env:AGENT_MODEL
           $embeddingModel = $probe[-3]
           $embeddingCheckpoint = $probe[-2]
           $embeddingRecipe = $probe[-1]
@@ -1040,7 +1254,7 @@ jobs:
           # gate, and must not be able to fail a run on its own.
           $ErrorActionPreference = "Continue"
           Write-Host "=== Lemonade system-info (device + llamacpp backend state) ==="
-          python -c "import json; from gaia.llm.lemonade_client import LemonadeClient; si = LemonadeClient().get_system_info(); print(json.dumps({k: v for k, v in si.items() if k != 'recipes'}, indent=2, default=str)[:2000]); print('--- recipes.llamacpp ---'); print(json.dumps(si.get('recipes', {}).get('llamacpp'), indent=2, default=str)[:2000])"
+          & $env:VENV_PY -c "import json; from gaia.llm.lemonade_client import LemonadeClient; si = LemonadeClient().get_system_info(); print(json.dumps({k: v for k, v in si.items() if k != 'recipes'}, indent=2, default=str)[:2000]); print('--- recipes.llamacpp ---'); print(json.dumps(si.get('recipes', {}).get('llamacpp'), indent=2, default=str)[:2000])"
           if ($LASTEXITCODE -ne 0) { Write-Host "(system-info unavailable on this Lemonade build - continuing, this is diagnostic only)" }
           $global:LASTEXITCODE = 0
           $ErrorActionPreference = "Stop"
@@ -1050,7 +1264,7 @@ jobs:
           # about the model this job exists to measure. `/models` (no show_all)
           # lists DOWNLOADED models only, so this is the assertion that the model
           # is actually on disk. Without it a run can score every scenario against
-          # whatever was resident and compare it to the Gemma baseline.
+          # whatever was resident and compare it to the wrong baseline.
           try {
             $downloaded = @((Invoke-RestMethod -Uri "$lemonadeUrl/models" -TimeoutSec 60).data | ForEach-Object { $_.id })
           } catch {
@@ -1058,7 +1272,7 @@ jobs:
             exit 1
           }
           if ($downloaded -notcontains $modelUnderTest) {
-            Write-Host "::error::$modelUnderTest is not downloaded on this runner (Lemonade has: $($downloaded -join ', ')). The warm-pull step failed silently. Pull it on the runner (POST $lemonadeUrl/pull with model_name=$modelUnderTest) and re-run; do NOT let this eval score a different model against the Gemma baseline."
+            Write-Host "::error::$modelUnderTest is not downloaded on this runner (Lemonade has: $($downloaded -join ', ')). The warm-pull step failed silently. Pull it on the runner (POST $lemonadeUrl/pull with model_name=$modelUnderTest) and re-run; do NOT let this eval score a different model against the $modelUnderTest baseline."
             exit 1
           }
           Write-Host "Model under test present: $modelUnderTest"
@@ -1074,7 +1288,7 @@ jobs:
           # binary, so if it also fails, the embedder is not the variable.
           $ErrorActionPreference = "Continue"
           $global:LASTEXITCODE = 0
-          $chatOut = & python tests/ci_lemonade_check.py --model $modelUnderTest --chat 2>&1
+          $chatOut = & $env:VENV_PY tests/ci_lemonade_check.py --model $modelUnderTest --chat 2>&1
           $chatCode = $LASTEXITCODE
           $ErrorActionPreference = "Stop"
           $chatOut | ForEach-Object { Write-Host "$_" }
@@ -1208,7 +1422,7 @@ jobs:
             Show-LemonadeTaskLog | Out-Null
             "EMBEDDER_OK=false" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
             $level = if ($env:ENFORCE -eq 'true') { 'error' } else { 'warning' }
-            Write-Host "::${level}::The RAG embedder $embeddingModel will not load on this runner - a known Strix Halo limitation tracked in #3016, NOT a fault in this PR. The chat model loaded and served over the same llama-server binary earlier in this step, and the same embedder loads fine on the Strix Point boxes, so llama-server works here and the gap is specific to the embeddings path on this SoC. Re-running this gate will not clear it. rag_quality and context_retention cannot be measured at all; tool_selection WILL still run, but only its two corpus-free scenarios (no_tools_needed, smart_discovery) can produce a measurement - the other three index documents and need the same embedder. The deeper rungs (purge the model from disk, load without --ubatch-size 2048, load with everything else unloaded) are skipped on PR runs on purpose because they disturb other jobs on this shared box - re-dispatch with deep_diagnostics: true if you need the full elimination ladder."
+            Write-Host "::${level}::The RAG embedder $embeddingModel will not load on this runner - a known Strix Halo limitation tracked in #3016, NOT a fault in the code under test. The chat model loaded and served over the same llama-server binary earlier in this step, and the same embedder loads fine on the Strix Point boxes, so llama-server works here and the gap is specific to the embeddings path on this SoC. Re-running this gate will not clear it. rag_quality and context_retention cannot be measured at all; tool_selection WILL still run, but only its two corpus-free scenarios (no_tools_needed, smart_discovery) can produce a measurement - the other three index documents and need the same embedder. The deeper rungs (purge the model from disk, load without --ubatch-size 2048, load with everything else unloaded) are skipped by default on purpose because they disturb other jobs on this shared box - re-dispatch with deep_diagnostics: true if you need the full elimination ladder."
             exit 0
           }
 
@@ -1264,7 +1478,7 @@ jobs:
             # on unified-memory hardware that is a GAIA problem, not a CI one.
             Write-Host "=== Final discriminator: unloading ALL models, then loading the embedder ALONE ==="
             $ErrorActionPreference = "Continue"
-            python -c "from gaia.llm.lemonade_client import LemonadeClient; LemonadeClient().unload_model(ignore_if_not_loaded=True); print('[ci] unloaded all models')"
+            & $env:VENV_PY -c "from gaia.llm.lemonade_client import LemonadeClient; LemonadeClient().unload_model(ignore_if_not_loaded=True); print('[ci] unloaded all models')"
             $ErrorActionPreference = "Stop"
             $aloneOk = Invoke-EmbedProbe -LlamacppArgs "--ubatch-size 2048"
             Show-LemonadeTaskLog | Out-Null
@@ -1279,11 +1493,17 @@ jobs:
 
       # gaia_* scenarios read fixtures under ~/gaia-eval, starter skills and a
       # signed fixture hub. Same script as test_gaia_agent_eval.yml, so the two
-      # workflows cannot disagree on what "staged" means.
+      # workflows cannot disagree on what "staged" means. Skills and the hub's
+      # trust store go into a TEMPLATE GAIA home that the run step copies into
+      # each category's fresh home - never into the runner's real ~/.gaia, where
+      # skills captured by an earlier run were still installed (rc16).
       - name: Stage the gaia_* fixtures, skills and fixture hub
         if: env.GAIA_FIXTURES == '1'
         run: |
-          python tests/fixtures/gaia/stage_eval_env.py --home "$env:USERPROFILE"
+          $template = Join-Path $env:RUNNER_TEMP "gaia-eval-homes\_staged"
+          if (Test-Path $template) { Remove-Item $template -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $template | Out-Null
+          & $env:VENV_PY tests/fixtures/gaia/stage_eval_env.py --home "$env:USERPROFILE" --gaia-home $template
           if ($LASTEXITCODE -ne 0) { throw "Staging the gaia_* fixtures failed; the output above says which part." }
 
       - name: Run this lane's categories serially
@@ -1332,25 +1552,70 @@ jobs:
           # The GAIA UI backend must live in the SAME shell session as the evals:
           # a backgrounded child does not survive a step boundary. Hence backend
           # start + all this lane's categories in one step.
-          # Start-Process resolves relative paths against the .NET process CWD,
-          # which is not guaranteed to track the PowerShell location. Pin the
-          # child's working directory AND give it absolute redirect targets, so
-          # the backend and its logs both land in the workspace.
-          $outLog = Join-Path $PWD "eval-out\backend.out.log"
-          $errLog = Join-Path $PWD "eval-out\backend.err.log"
+          #
+          # ONE BACKEND PER CATEGORY, each on a fresh, empty GAIA home under the
+          # job's temp dir. The runner's real ~/.gaia outlives the job on this
+          # pool, and in rc16 the agent recalled "facts" a previous day's memory
+          # scenario had stored, and capture scenarios found skills an earlier
+          # run had captured. util/eval_gaia_home.py names the variables that move
+          # every state root GAIA reads from the environment (memory DB, skills,
+          # MCP list, agents, daemon host dir, UI database, config). The shared
+          # Lemonade and its models are reached through LEMONADE_BASE_URL and are
+          # not touched. A restart per category also keeps one category's memory
+          # out of the next one's score.
+          $homesRoot = Join-Path $env:RUNNER_TEMP "gaia-eval-homes"
+          $stagedHome = Join-Path $homesRoot "_staged"
+          New-Item -ItemType Directory -Force -Path $homesRoot | Out-Null
+
           # The agent under test runs shell commands, so it must not inherit the
-          # judge's credentials; only `claude -p` below needs them.
+          # judge's credentials; only `claude -p` below needs them. Every child
+          # this step starts goes through Start-Isolated for that reason.
+          # Start-Process resolves relative paths against the .NET process CWD,
+          # which is not guaranteed to track the PowerShell location, so callers
+          # pass an absolute working directory and absolute redirect targets.
           $judgeCredentials = @{}
           foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")) {
             $judgeCredentials[$name] = [Environment]::GetEnvironmentVariable($name)
-            Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
           }
+          function Start-Isolated($argList, $cwd, $out, $err) {
+            foreach ($name in $judgeCredentials.Keys) { Remove-Item "Env:\$name" -ErrorAction SilentlyContinue }
+            try {
+              return Start-Process -FilePath $env:VENV_PY -ArgumentList $argList `
+                -WorkingDirectory $cwd -RedirectStandardOutput $out -RedirectStandardError $err `
+                -NoNewWindow -PassThru
+            }
+            finally {
+              foreach ($name in $judgeCredentials.Keys) {
+                if ($judgeCredentials[$name]) { Set-Item "Env:\$name" $judgeCredentials[$name] }
+              }
+            }
+          }
+
+          # Stops a category's backend and the gaia daemon it spawned. The daemon
+          # lives in the category's GAIA home, so `gaia daemon stop` must run
+          # while GAIA_HOME still names that home. taskkill /T takes the
+          # backend's children (MCP servers, sidecars) with it; Stop-Process
+          # alone orphans them. Returns $false if :4200 is still answering.
+          function Stop-CategoryBackend($proc) {
+            & $env:VENV_GAIA daemon stop 2>&1 | ForEach-Object { Write-Host "$_" }
+            if ($proc -and -not $proc.HasExited) {
+              Write-Host "Stopping backend pid $($proc.Id) and its children..."
+              & taskkill /F /T /PID $proc.Id 2>&1 | Out-Null
+            }
+            foreach ($attempt in 1..30) {
+              if (-not (Test-Backend)) { return $true }
+              Start-Sleep -Seconds 1
+            }
+            return $false
+          }
+
           # gaia_* lanes: the fixture server, and the env the corpus is written
-          # against (tests/fixtures/gaia/README.md), set before the backend
+          # against (tests/fixtures/gaia/README.md), set before any backend
           # starts so the agents it spawns inherit them.
           $fixture = $null
+          $backend = $null
           $extraArgs = @()
-          $backendCwd = $PWD
+          $backendCwd = "$PWD"
           if ($env:GAIA_FIXTURES -eq '1') {
             # The backend's working directory is a session's file scope when
             # nothing is attached. The staged fixtures are what the scenarios
@@ -1365,12 +1630,12 @@ jobs:
             $env:PATH = (Join-Path $env:USERPROFILE ".gaia-eval-bin") + ";" + $env:PATH
             # gaia_email reads this offline mailbox, never a connected account.
             $env:GAIA_EVAL_MAILBOX = Join-Path $PWD "tests/fixtures/gaia/email/eval_inbox.mbox"
-            $fixture = Start-Process -FilePath "python" `
-              -ArgumentList "tests/fixtures/gaia/serve_fixtures.py","--port","8765" `
-              -WorkingDirectory $PWD `
-              -RedirectStandardOutput (Join-Path $PWD "eval-out\fixtures.log") `
-              -RedirectStandardError (Join-Path $PWD "eval-out\fixtures.err.log") `
-              -NoNewWindow -PassThru
+            if (-not (Test-Path (Join-Path $stagedHome "skills"))) {
+              Write-Host "::error::$stagedHome\skills is missing - the staging step did not write the template GAIA home the gaia_* categories copy their skills from."
+              exit 1
+            }
+            $fixture = Start-Isolated @("tests/fixtures/gaia/serve_fixtures.py","--port","8765") "$PWD" `
+              (Join-Path $PWD "eval-out\fixtures.log") (Join-Path $PWD "eval-out\fixtures.err.log")
             if (-not $fixture) {
               Write-Host "::error::Could not start tests/fixtures/gaia/serve_fixtures.py - the gaia_* web and skill-hub scenarios depend on it."
               exit 1
@@ -1379,40 +1644,8 @@ jobs:
             # until a CI run confirms the staged gh.exe answers (#4427).
             $extraArgs = @('--exclude-tag', 'live', '--exclude-tag', 'local_blocked_win_shim')
           }
-          $backend = Start-Process -FilePath "python" `
-            -ArgumentList "-m","gaia.ui.server","--port","4200","--host","127.0.0.1" `
-            -WorkingDirectory $backendCwd `
-            -RedirectStandardOutput $outLog `
-            -RedirectStandardError $errLog `
-            -NoNewWindow -PassThru
-          foreach ($name in $judgeCredentials.Keys) {
-            if ($judgeCredentials[$name]) { Set-Item "Env:\$name" $judgeCredentials[$name] }
-          }
-          if (-not $backend) {
-            Write-Host "::error::Could not start gaia.ui.server - the venv install is broken or python is not on PATH."
-            exit 1
-          }
 
           try {
-            # 120 x 5s sleeps = ~10 min of waiting, more when a probe itself
-            # times out. The job timeout is the real backstop.
-            Write-Host "Waiting ~10 min for the GAIA UI backend on $env:BACKEND_URL (pid $($backend.Id))..."
-            $ready = $false
-            foreach ($attempt in 1..120) {
-              if ($backend.HasExited) {
-                Write-Host "::error::gaia.ui.server exited during startup (exit $($backend.ExitCode)). Backend log follows."
-                Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
-                exit 1
-              }
-              if (Test-Backend) { $ready = $true; break }
-              Start-Sleep -Seconds 5
-            }
-            if (-not $ready) {
-              Write-Host "::error::GAIA UI backend did not become healthy at $env:BACKEND_URL/api/health in time. Backend log follows."
-              Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
-              exit 1
-            }
-            Write-Host "Backend healthy."
             if ($fixture) {
               $served = $false
               foreach ($attempt in 1..6) {
@@ -1428,57 +1661,13 @@ jobs:
               Write-Host "Fixture server healthy."
             }
 
-            # Healthy is not the same as "can run these scenarios". The eval asks
-            # the backend for DEFAULT_AGENT_TYPE on every scenario, and an agent
-            # that ships as a hub package is simply absent when its editable
-            # install is missing: POST /api/sessions 422s, every scenario in this
-            # lane records INFRA_ERROR, and the eval still exits 0 because it
-            # produced a scorecard. Assert the id resolves BEFORE spending the
-            # slot - the install line is one place to get wrong but four lanes
-            # build their own venv from it, so the check runs four times and a
-            # miss costs seconds rather than a whole lane each.
             # Deliberately not asserting a literal "gaia": the id is read from
-            # gaia.eval.config so this check tracks the default instead of
-            # becoming a second place to update.
-            $defaultAgent = (python -c "from gaia.eval.config import DEFAULT_AGENT_TYPE; print(DEFAULT_AGENT_TYPE)" 2>&1 | Out-String).Trim()
+            # gaia.eval.config so the registration check below tracks the default
+            # instead of becoming a second place to update.
+            $defaultAgent = (& $env:VENV_PY -c "from gaia.eval.config import DEFAULT_AGENT_TYPE; print(DEFAULT_AGENT_TYPE)" 2>&1 | Out-String).Trim()
             if ($LASTEXITCODE -ne 0 -or -not $defaultAgent) {
               Write-Host "::error::Could not read DEFAULT_AGENT_TYPE from gaia.eval.config - the venv install is broken. Output: $defaultAgent"
               exit 1
-            }
-            try {
-              $agentList = Invoke-RestMethod -Uri "$env:BACKEND_URL/api/agents" -TimeoutSec 30 -ErrorAction Stop
-            } catch {
-              Write-Host "::error::GET $env:BACKEND_URL/api/agents failed after the backend reported healthy: $($_.Exception.Message). Backend log follows."
-              Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
-              exit 1
-            }
-            $agentIds = @($agentList.agents | ForEach-Object { $_.id })
-            if ($agentIds -notcontains $defaultAgent) {
-              Write-Host "::error::The eval's default agent '$defaultAgent' is not registered in this backend, so every scenario would 422 at session creation and record INFRA_ERROR. Registered ids: $($agentIds -join ', '). Fix: add the hub package that ships '$defaultAgent' to install-package in this job's Setup Python Environment step (hub/agents/<id>/python; the flagship is hub/agents/gaia/python). See src/gaia/eval/config.py for the default and src/gaia/agents/registry.py for how entry-point agents register."
-              Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
-              exit 1
-            }
-            Write-Host "Default agent '$defaultAgent' is registered. Agents: $($agentIds -join ', ')"
-
-            # GAIA_MEMORY_DISABLED=0 keeps the store alive, but the Agent UI's own
-            # memory switch defaults OFF, and with it off every `remember` returns
-            # "skipped". Flip it for the lanes that measure memory; the runner's
-            # preflight refuses to start a memory scenario while it is still off.
-            if ($env:GAIA_MEMORY_DISABLED -eq '0') {
-              try {
-                $memory = Invoke-RestMethod -Method Put -Uri "$env:BACKEND_URL/api/memory/settings" `
-                  -Headers @{ "X-Gaia-UI" = "1" } -ContentType "application/json" `
-                  -Body '{"memory_enabled": true}' -TimeoutSec 30 -ErrorAction Stop
-              } catch {
-                Write-Host "::error::PUT $env:BACKEND_URL/api/memory/settings failed: $($_.Exception.Message). This lane measures long-term memory and cannot run with it off. Backend log follows."
-                Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
-                exit 1
-              }
-              if ($memory.memory_enabled -ne $true) {
-                Write-Host "::error::The backend did not switch memory on (settings: $($memory | ConvertTo-Json -Compress)). This lane measures long-term memory and cannot run with it off."
-                exit 1
-              }
-              Write-Host "Long-term memory switched on in the backend."
             }
 
             # Per-category wall clock. The job timeout was guessed once and cost a
@@ -1486,7 +1675,8 @@ jobs:
             # these lines are what replaces the guess with a measurement. Each is
             # written the moment its category ends - appended to the step summary,
             # not buffered to the end - so a run that overruns or crashes still
-            # leaves behind the timings of whatever DID finish.
+            # leaves behind the timings of whatever DID finish. A category's time
+            # includes its own backend start.
             #
             # Not `Out-File -Encoding utf8`: on Windows PowerShell 5.1 that
             # prepends a BOM, and a BOM ahead of the leading `##` stops GitHub
@@ -1499,8 +1689,20 @@ jobs:
               }
             }
             $swTotal = [Diagnostics.Stopwatch]::StartNew()
-            Add-Summary "## Eval wall clock - lane ``$env:EVAL_LANE`` on $env:COMPUTERNAME"
+            Add-Summary "## Eval wall clock - lane ``$env:EVAL_LANE`` on $env:COMPUTERNAME, model ``$env:AGENT_MODEL``"
             Add-Summary ""
+            # category -> "id,id", from a targeted dispatch. Empty on a tag run.
+            $selected = @{}
+            foreach ($pair in (($env:EVAL_SCENARIOS -split '\s+') | Where-Object { $_ })) {
+              $kv = $pair -split '=', 2
+              $selected[$kv[0]] = $kv[1]
+            }
+            if ($env:EVAL_TARGETED -eq 'true') {
+              Add-Summary "**$env:EVAL_SELECTION**"
+              Add-Summary ""
+              foreach ($c in $selected.Keys) { Add-Summary "- ``$c``: $($selected[$c] -replace ',', ', ')" }
+              Add-Summary ""
+            }
             Add-Summary "| category | minutes |"
             Add-Summary "| --- | ---: |"
 
@@ -1544,32 +1746,207 @@ jobs:
               Write-Host "  gaia eval agent --category $category"
               Write-Host "=================================================================="
               $swCat = [Diagnostics.Stopwatch]::StartNew()
+
+              # A fresh GAIA home for this category: the gaia_* skills template
+              # copied in, every state root pointed at it, then checked.
+              $catHome = Join-Path $homesRoot $category
+              if (Test-Path $catHome) {
+                Write-Host "::error::$catHome exists before $category started. Every category must start on a GAIA home nothing has written to."
+                exit 1
+              }
+              New-Item -ItemType Directory -Force -Path $catHome | Out-Null
+              if ($env:GAIA_FIXTURES -eq '1') {
+                Copy-Item (Join-Path $stagedHome "skills") (Join-Path $catHome "skills") -Recurse -Force
+              }
+              $isoEnv = @(& $env:VENV_PY util/eval_gaia_home.py env --home $catHome)
+              if ($LASTEXITCODE -ne 0 -or $isoEnv.Count -eq 0) {
+                Write-Host "::error::util/eval_gaia_home.py env failed for $catHome; the output above says why."
+                exit 1
+              }
+              foreach ($line in $isoEnv) {
+                $kv = $line -split '=', 2
+                Set-Item "Env:\$($kv[0])" $kv[1]
+                Write-Host "  $($kv[0])=$($kv[1])"
+              }
+              # The pre-run check: every state root resolves into this home and
+              # the memory database holds nothing.
+              & $env:VENV_PY util/eval_gaia_home.py check --home $catHome
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "::error::$category would not start on an isolated, empty GAIA home (NOT ISOLATED lines above). Refusing to score it with state from another run."
+                exit 1
+              }
+              # The model under test is this home's default_model, read back
+              # through GAIA's own config. Without it a fresh home resolves to
+              # the code default, whatever this pool is meant to measure.
+              & $env:VENV_PY util/eval_gaia_home.py pin-model --home $catHome --model $env:AGENT_MODEL
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "::error::Could not pin $env:AGENT_MODEL in $catHome for $category (NOT PINNED lines above). Refusing to score whatever model the home would fall back to."
+                exit 1
+              }
+              # A tier machine holding memory beside other categories: the store
+              # is live for `memory` alone. Set before this category's backend
+              # starts, which is what reads it.
+              if ($env:EVAL_MEMORY_CATEGORIES) {
+                $memOn = @($env:EVAL_MEMORY_CATEGORIES -split '\s+') -contains $category
+                $env:GAIA_MEMORY_DISABLED = if ($memOn) { '0' } else { '1' }
+                $env:GAIA_MEMORY_ADMIN = if ($memOn) { '1' } else { '0' }
+                $env:GAIA_MEMORY_MCP_ALWAYS = if ($memOn) { '1' } else { '0' }
+                Write-Host "  memory for ${category}: $(if ($memOn) { 'live' } else { 'off' })"
+              }
+
               # The acme MCP stub exists only for gaia_mcp; staged for any other
-              # category it would widen that category's toolset. Each session
-              # builds a fresh agent, so staging mid-run takes effect.
+              # category it would widen that category's toolset. It writes the MCP
+              # list in this category's GAIA home, which the backend reads.
               $stub = 'tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py'
               if ($category -eq 'gaia_mcp') {
-                python $stub install
+                & $env:VENV_PY $stub install
                 if ($LASTEXITCODE -ne 0) { Write-Host "::error::Staging the gaia_mcp stub servers failed; the output above says why."; exit 1 }
               }
+
+              # A leftover backend still holding :4200 would answer the health
+              # probe below, and this category would measure the previous
+              # checkout (or the previous category's home) while reporting green.
+              if (Test-Backend) {
+                Write-Host "::error::$env:BACKEND_URL is already serving before $category started - a stale GAIA backend is running on this runner. Kill it (gaia kill) and re-run; otherwise this eval measures the wrong backend."
+                exit 1
+              }
+              $outLog = Join-Path $PWD "eval-out\backend-$category.out.log"
+              $errLog = Join-Path $PWD "eval-out\backend-$category.err.log"
+              $backend = Start-Isolated @("-m","gaia.ui.server","--port","4200","--host","127.0.0.1") $backendCwd $outLog $errLog
+              if (-not $backend) {
+                Write-Host "::error::Could not start gaia.ui.server - the venv install is broken or python is not on PATH."
+                exit 1
+              }
+
+              # 120 x 5s sleeps = ~10 min of waiting, more when a probe itself
+              # times out. The job timeout is the real backstop.
+              Write-Host "Waiting ~10 min for the GAIA UI backend on $env:BACKEND_URL (pid $($backend.Id))..."
+              $ready = $false
+              foreach ($attempt in 1..120) {
+                if ($backend.HasExited) {
+                  Write-Host "::error::gaia.ui.server exited during startup (exit $($backend.ExitCode)). Backend log follows."
+                  Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                  exit 1
+                }
+                if (Test-Backend) { $ready = $true; break }
+                Start-Sleep -Seconds 5
+              }
+              if (-not $ready) {
+                Write-Host "::error::GAIA UI backend did not become healthy at $env:BACKEND_URL/api/health in time. Backend log follows."
+                Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                exit 1
+              }
+              Write-Host "Backend healthy."
+
+              # Healthy is not the same as "can run these scenarios". The eval asks
+              # the backend for DEFAULT_AGENT_TYPE on every scenario, and an agent
+              # that ships as a hub package is simply absent when its editable
+              # install is missing: POST /api/sessions 422s, every scenario in this
+              # lane records INFRA_ERROR, and the eval still exits 0 because it
+              # produced a scorecard. Assert the id resolves BEFORE spending the
+              # slot.
+              try {
+                $agentList = Invoke-RestMethod -Uri "$env:BACKEND_URL/api/agents" -TimeoutSec 30 -ErrorAction Stop
+              } catch {
+                Write-Host "::error::GET $env:BACKEND_URL/api/agents failed after the backend reported healthy: $($_.Exception.Message). Backend log follows."
+                Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                exit 1
+              }
+              $agentIds = @($agentList.agents | ForEach-Object { $_.id })
+              if ($agentIds -notcontains $defaultAgent) {
+                Write-Host "::error::The eval's default agent '$defaultAgent' is not registered in this backend, so every scenario would 422 at session creation and record INFRA_ERROR. Registered ids: $($agentIds -join ', '). Fix: add the hub package that ships '$defaultAgent' to install-package in this job's Setup Python Environment step (hub/agents/<id>/python; the flagship is hub/agents/gaia/python). See src/gaia/eval/config.py for the default and src/gaia/agents/registry.py for how entry-point agents register."
+                Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                exit 1
+              }
+              Write-Host "Default agent '$defaultAgent' is registered. Agents: $($agentIds -join ', ')"
+
+              # GAIA_MEMORY_DISABLED=0 keeps the store alive, but the Agent UI's own
+              # memory switch defaults OFF, and with it off every `remember` returns
+              # "skipped". Flip it for the lanes that measure memory; the runner's
+              # preflight refuses to start a memory scenario while it is still off.
+              # Per category, because each category's backend has a fresh database.
+              if ($env:GAIA_MEMORY_DISABLED -eq '0') {
+                try {
+                  $memory = Invoke-RestMethod -Method Put -Uri "$env:BACKEND_URL/api/memory/settings" `
+                    -Headers @{ "X-Gaia-UI" = "1" } -ContentType "application/json" `
+                    -Body '{"memory_enabled": true}' -TimeoutSec 30 -ErrorAction Stop
+                } catch {
+                  Write-Host "::error::PUT $env:BACKEND_URL/api/memory/settings failed: $($_.Exception.Message). This lane measures long-term memory and cannot run with it off. Backend log follows."
+                  Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                  exit 1
+                }
+                if ($memory.memory_enabled -ne $true) {
+                  Write-Host "::error::The backend did not switch memory on (settings: $($memory | ConvertTo-Json -Compress)). This lane measures long-term memory and cannot run with it off."
+                  exit 1
+                }
+                Write-Host "Long-term memory switched on in the backend."
+              }
+
+              # The same pre-run check, asked of the store the BACKEND opened: it
+              # must be empty, and it must be this category's file. A backend that
+              # ignored GAIA_MEMORY_DB would pass the check above and still read
+              # the runner's real memory.
+              try {
+                $stats = Invoke-RestMethod -Uri "$env:BACKEND_URL/api/memory/stats" -Headers @{ "X-Gaia-UI" = "1" } -TimeoutSec 30 -ErrorAction Stop
+              } catch {
+                Write-Host "::error::GET $env:BACKEND_URL/api/memory/stats failed: $($_.Exception.Message). Without it there is no proof $category starts with empty memory."
+                exit 1
+              }
+              $held = [ordered]@{
+                knowledge = $stats.knowledge.total
+                procedures = $stats.procedures.total
+                conversation_turns = $stats.conversations.total_turns
+              }
+              $notEmpty = @($held.Keys | Where-Object { $held[$_] -ne 0 } | ForEach-Object { "$_=$($held[$_])" })
+              if ($notEmpty.Count -gt 0) {
+                Write-Host "::error::The backend's memory store is not empty at the start of $category ($($notEmpty -join ', ')). Its answers would draw on another run's memory, as rc16's did. Stats: $($stats | ConvertTo-Json -Compress -Depth 4)"
+                exit 1
+              }
+              if (-not (Test-Path $env:GAIA_MEMORY_DB)) {
+                Write-Host "::error::The backend answered /api/memory/stats but did not create $env:GAIA_MEMORY_DB, so the store it opened is somewhere else - not $category's isolated GAIA home."
+                exit 1
+              }
+              Write-Host "Memory at the start of ${category}: empty, at $env:GAIA_MEMORY_DB."
+
               # Reset first: a command that fails to LAUNCH leaves $LASTEXITCODE
               # at its previous value, so an unset/stale 0 would read as success.
               $global:LASTEXITCODE = 0
+              # A targeted run names its scenarios; the CLI refuses any that
+              # would not run, so a typo cannot shrink the run silently.
+              $pick = @()
+              if ($selected.ContainsKey($category)) { $pick = @('--scenario', $selected[$category]) }
               # Not Tee-Object: on Windows PowerShell 5.1 it has no -Encoding and
               # writes UTF-16, which the `Output:` parse in the next step then has
               # to guess at. Echo + Out-File keeps the log UTF-8 and greppable.
-              gaia eval agent --category $category --backend "$env:BACKEND_URL" --model "$env:EVAL_MODEL" @extraArgs 2>&1 |
+              # --agent-model turns any scenario whose session ran another model
+              # into INFRA_ERROR and records the model in the scorecard, which is
+              # what --compare checks against the baseline's meta.json.
+              & $env:VENV_GAIA eval agent --category $category --backend "$env:BACKEND_URL" --model "$env:EVAL_MODEL" --agent-model "$env:AGENT_MODEL" @extraArgs @pick 2>&1 |
                 ForEach-Object { Write-Host "$_"; "$_" } |
                 Out-File -FilePath "eval-out\$category.log" -Encoding utf8
               # Capture BEFORE anything else can clobber it. .NET calls and
               # Write-Host leave $LASTEXITCODE alone, but reading it first keeps
               # that from being a thing a later edit has to remember.
               $code = $LASTEXITCODE
-              $swCat.Stop()
               if ($category -eq 'gaia_mcp') {
-                python $stub remove
+                & $env:VENV_PY $stub remove
                 if ($LASTEXITCODE -ne 0) { Write-Host "::error::Removing the gaia_mcp stub servers failed; the output above says why."; exit 1 }
               }
+
+              $stopped = Stop-CategoryBackend $backend
+              $backend = $null
+              # The daemon's log dies with the home; keep it beside the backend's.
+              $daemonLog = Join-Path $catHome "host\daemon.log"
+              if (Test-Path $daemonLog) { Copy-Item $daemonLog "eval-out\daemon-$category.log" -Force }
+              if (-not $stopped) {
+                Write-Host "::error::The backend for $category still answers on $env:BACKEND_URL after being stopped; the next category would talk to it."
+                exit 1
+              }
+              Remove-Item $catHome -Recurse -Force -ErrorAction SilentlyContinue
+              if (Test-Path $catHome) {
+                Write-Host "::warning::Could not fully delete $catHome after $category (a file is still open). The next category uses its own home, so its score is unaffected; the cleanup step retries."
+              }
+              $swCat.Stop()
 
               $mins = [math]::Round($swCat.Elapsed.TotalMinutes, 1)
               Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min of the 360-min step budget)"
@@ -1597,16 +1974,49 @@ jobs:
           }
           finally {
             # Persistent runner: never leave the stub registered for the next job.
+            # Its server list sat in a category home; its activation did not.
             if ($env:GAIA_FIXTURES -eq '1') {
-              python tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py remove
+              & $env:VENV_PY tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py remove
             }
-            foreach ($proc in @($backend, $fixture)) {
-              if ($proc -and -not $proc.HasExited) {
-                Write-Host "Stopping pid $($proc.Id)..."
-                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-              }
+            if ($backend) { Stop-CategoryBackend $backend | Out-Null }
+            if ($fixture -and -not $fixture.HasExited) {
+              Write-Host "Stopping fixture server pid $($fixture.Id)..."
+              Stop-Process -Id $fixture.Id -Force -ErrorAction SilentlyContinue
             }
           }
+
+      # Deletes every category's GAIA home, in its own always() step so a step
+      # timeout (which kills the shell above before its `finally`) still cleans
+      # up. Stops any daemon a home still holds first: a running daemon keeps
+      # its host dir open. The runner's real ~/.gaia is never touched.
+      - name: Delete the per-category GAIA homes
+        if: always()
+        run: |
+          $ErrorActionPreference = "Continue"
+          # The stub's activation lives in the real ~/.gaia; a step timeout skips
+          # the run step's `finally`, so deactivate it here too.
+          if ($env:GAIA_FIXTURES -eq '1' -and $env:VENV_PY -and (Test-Path $env:VENV_PY)) {
+            & $env:VENV_PY tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py remove 2>&1 | ForEach-Object { Write-Host "$_" }
+          }
+          $homesRoot = Join-Path $env:RUNNER_TEMP "gaia-eval-homes"
+          if (-not (Test-Path $homesRoot)) { Write-Host "No GAIA homes to delete."; exit 0 }
+          foreach ($dir in @(Get-ChildItem $homesRoot -Directory)) {
+            if (Test-Path (Join-Path $dir.FullName "host\instance.json")) {
+              $env:GAIA_HOME = $dir.FullName
+              $env:GAIA_DAEMON_HOME = Join-Path $dir.FullName "host"
+              & $env:VENV_GAIA daemon stop 2>&1 | ForEach-Object { Write-Host "$_" }
+            }
+          }
+          Remove-Item $homesRoot -Recurse -Force -ErrorAction SilentlyContinue
+          if (Test-Path $homesRoot) {
+            # Not an error: no later category can read it, because each one
+            # refuses to start on a home that already exists, and the runner
+            # clears its temp dir before the next job.
+            Write-Host "::warning::Could not fully delete $homesRoot; a process still holds a file in it. Files left:"
+            Get-ChildItem $homesRoot -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 20 | ForEach-Object { Write-Host "  $($_.FullName)" }
+            exit 0
+          }
+          Write-Host "Deleted $homesRoot."
 
       - name: Collect scorecards from the printed run directories
         # Not always(): on a concurrency cancel or a job-level timeout this would
@@ -1729,14 +2139,15 @@ jobs:
             foreach ($c in $all) { $gateArgs += @("--category", $c) }
           }
           if ($env:ENFORCE -eq 'true') { $gateArgs += "--enforce" }
+          if ($env:FAIL_ON_ZERO_TOKENS -eq 'true') { $gateArgs += "--fail-on-zero-token-errors" }
 
           # Reset first: a command that fails to LAUNCH leaves $LASTEXITCODE at its
           # previous value, so a stale 0 would read as a complete run.
           $global:LASTEXITCODE = 0
-          python -m gaia.eval.integrity_gate @gateArgs
+          & $env:VENV_PY -m gaia.eval.integrity_gate @gateArgs
           $code = $LASTEXITCODE
           if ($code -ne 0) {
-            Write-Host "::error::Integrity gate failed (exit $code) with enforce=$env:ENFORCE for lane '$env:EVAL_LANE'. Download this run's 'eval-$env:EVAL_LANE' artifact: it carries the traces, the backend log (backend.err.log) and the Lemonade task logs from this machine, which no longer exists."
+            Write-Host "::error::Integrity gate failed (exit $code) with enforce=$env:ENFORCE for lane '$env:EVAL_LANE'. Download this run's 'eval-$env:EVAL_LANE' artifact: it carries the traces, the backend logs (backend-<category>.err.log) and the Lemonade task logs from this machine, which no longer exists."
             exit 1
           }
 
@@ -1757,6 +2168,17 @@ jobs:
             "### Regression check, lane ``$env:EVAL_LANE``: NOT PERFORMED" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
             "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
             "No flagship baseline is committed at ``$env:BASELINE_DIR``, so this run measured quality but compared it to nothing. A green check here does NOT mean no regression." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            exit 0
+          }
+          # The model's baseline directory exists but holds no scorecards yet
+          # (the Qwen one, until a full sweep is captured). Never fall back to
+          # another model's baseline.
+          if (@(Get-ChildItem $env:BASELINE_DIR -Filter 'scorecard_*.json').Count -eq 0) {
+            Write-Host "::warning::NO $env:AGENT_MODEL BASELINE YET: nothing in lane '$env:EVAL_LANE' was compared. The scorecards are uploaded as the 'eval-$env:EVAL_LANE' artifact. Capture the baseline from a full sweep ($env:BASELINE_DIR/README.md)."
+            "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "### Regression check, lane ``$env:EVAL_LANE``: NO $env:AGENT_MODEL BASELINE YET" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "``$env:BASELINE_DIR`` holds no scorecards, so this run compared nothing. It is not compared with another model's baseline. A green check here does NOT mean no regression." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
             exit 0
           }
 
@@ -1790,12 +2212,18 @@ jobs:
             # Reset first: a launch failure would otherwise inherit the PREVIOUS
             # category's 2 and be misreported as this category regressing.
             $global:LASTEXITCODE = 0
-            gaia eval agent --compare "$baseline" "$current"
+            & $env:VENV_GAIA eval agent --compare "$baseline" "$current"
             switch ($LASTEXITCODE) {
               0 { Write-Host "${category}: no regression vs baseline." }
               2 {
                 Write-Host "::warning::${category}: regression detected vs $baseline (see the diff above)."
                 $regressed += $category
+              }
+              # Exit 3: the baseline was measured on another agent model or
+              # eval model. A config error, never a verdict, so always fatal.
+              3 {
+                Write-Host "::error::${category}: refused to compare - $baseline was captured on a different agent model or eval model than this run ($env:AGENT_MODEL, $env:EVAL_MODEL). The reason is printed above."
+                $failedCompare = $true
               }
               default {
                 Write-Host "::error::${category}: compare failed with exit $LASTEXITCODE (not a regression verdict - a harness/IO error)."
@@ -1808,17 +2236,21 @@ jobs:
           Write-Host "=================================================================="
           Write-Host "  SUMMARY - enforce=$env:ENFORCE"
           Write-Host "=================================================================="
+          if ($env:EVAL_TARGETED -eq 'true') {
+            Write-Host "$env:EVAL_SELECTION"
+            Write-Host "Each comparison above judged only the selected scenarios; its NOT RUN list names the rest."
+          }
           if ($regressed.Count -gt 0) {
             Write-Host "Regressed categories: $($regressed -join ' ')"
           } else {
             Write-Host "Regressed categories: none"
           }
-          Write-Host "Baselines: $env:BASELINE_DIR"
+          Write-Host "Model under test: $env:AGENT_MODEL"
+          Write-Host "Baselines: $env:BASELINE_DIR (captured on the same model)"
           Write-Host "Scorecards, traces and logs uploaded as the 'eval-$env:EVAL_LANE' artifact."
           Write-Host ""
-          Write-Host "Code-generation and data-analysis scenarios are EXPECTED to regress on"
-          Write-Host "this consolidation (35B MoE -> ~4B dense) and that tradeoff is accepted."
-          Write-Host "Read the per-scenario diff above before treating a regression as a bug."
+          Write-Host "Read the per-scenario diff above before treating a regression as a bug:"
+          Write-Host "about 18% of scenarios flip between two runs of the same code (#5493)."
           Write-Host ""
           Write-Host "TIME regressions (>2x per-scenario wall clock) count toward the same"
           Write-Host "verdict, and are the weakest signal here. Each lane runs on a freshly"
@@ -1908,7 +2340,16 @@ jobs:
             # Whether the agent under test could remember anything, recorded next
             # to the scores so a memory result is never read without it.
             memory_enabled = ($env:GAIA_MEMORY_DISABLED -ne '1')
-          } | ConvertTo-Json -Compress
+            memory_categories = $env:EVAL_MEMORY_CATEGORIES
+            tier = $env:EVAL_TIER
+            agent_model = $env:AGENT_MODEL
+          }
+          if ($env:EVAL_TARGETED -eq 'true') {
+            $status.targeted = $true
+            $status.selection = $env:EVAL_SELECTION
+            $status.scenarios = $env:EVAL_SCENARIOS
+          }
+          $status = $status | ConvertTo-Json -Compress
           [System.IO.File]::WriteAllText("$PWD\eval-out\lane-status.json", $status, (New-Object System.Text.UTF8Encoding($false)))
 
       # Scores AND evidence, because this pool is ephemeral: the machine that
@@ -1934,7 +2375,7 @@ jobs:
   aggregate:
     name: Scenario eval - all lanes
     needs: [lanes, agent-eval, flagship-tasks]
-    # Not on a run where the lanes were deliberately skipped (fork PR, draft):
+    # Not on a run where the lanes were deliberately skipped (`[skip eval]` RC):
     # a table of empty lanes reads as "nothing was measured" when the truth is
     # "nothing was meant to be".
     if: >-
@@ -1956,19 +2397,35 @@ jobs:
         env:
           OUTCOMES_RESULT: ${{ needs.flagship-tasks.result }}
           LANES_RESULT: ${{ needs.agent-eval.result }}
+          TARGETED: ${{ needs.lanes.outputs.targeted }}
+          MATRIX: ${{ needs.lanes.outputs.matrix }}
+          SELECTION: ${{ needs.lanes.outputs.selection }}
+          TIER: ${{ needs.lanes.outputs.tier }}
+          AGENT_MODEL: ${{ needs.lanes.outputs.agent_model }}
+          BASELINE_DIR: ${{ needs.lanes.outputs.baseline_dir }}
         run: |
           set -euo pipefail
+          # The report covers the lanes this run's matrix held: tier machines
+          # are not ci_lanes.json lanes, and the full sweep drops the backlog's
+          # scenarios. A partial run (smoke, backlog, targeted) gets a banner.
+          scope=(--matrix-json "${MATRIX}")
+          if [ "${TARGETED}" = "true" ]; then
+            scope+=(--selection "${SELECTION}")
+          fi
           # Run as a file, not `-m gaia.eval.lane_summary`: this is a hosted runner
           # with no gaia install, and the module is stdlib-only by design.
           python src/gaia/eval/lane_summary.py \
             --lanes-file eval/ci_lanes.json \
             --artifacts-dir lane-artifacts \
-            --baseline-dir tests/fixtures/eval_baselines/gaia-flagship \
+            --baseline-dir "${BASELINE_DIR}" \
+            "${scope[@]}" \
             | tee -a "$GITHUB_STEP_SUMMARY"
           {
             echo ""
             echo "| job | result |"
             echo "| --- | --- |"
+            echo "| tier | \`${TIER}\` |"
+            echo "| model under test | \`${AGENT_MODEL}\` (baseline \`${BASELINE_DIR}\`) |"
             echo "| scenario lanes (matrix) | \`${LANES_RESULT}\` |"
             echo "| outcomes (\`gaia eval tasks\`) | \`${OUTCOMES_RESULT}\` |"
             echo ""
@@ -1977,70 +2434,197 @@ jobs:
             echo "are the only copy - download them before they expire (14 days)."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Environment drift is the whole reason the nightly exists: PR runs are
-  # path-filtered, so a Lemonade version bump, a model re-quantisation, a driver
-  # or a runner-image change alters nothing in the repo and therefore triggers
-  # nothing. The nightly is the only thing that catches that class - and an
-  # annotation on a 3am scheduled run is an annotation nobody reads, so it lands
-  # in the issue tracker instead.
-  #
-  # Schedule-only on purpose. A PR author already sees their own red check; a
-  # failing PR does not need an issue filed about it.
+      # What this run was, kept 90 days. A final tag's verify-final job looks
+      # for the `flagship-tier-full` one on its commit or its RCs' commits.
+      - name: Record the tier
+        env:
+          TIER: ${{ needs.lanes.outputs.tier }}
+          AGENT_MODEL: ${{ needs.lanes.outputs.agent_model }}
+          LANES_RESULT: ${{ needs.agent-eval.result }}
+          OUTCOMES_RESULT: ${{ needs.flagship-tasks.result }}
+        run: |
+          mkdir -p tier
+          jq -n --arg tier "$TIER" --arg model "$AGENT_MODEL" --arg sha "$GITHUB_SHA" \
+            --arg ref "$GITHUB_REF" --arg lanes "$LANES_RESULT" --arg outcomes "$OUTCOMES_RESULT" \
+            '{tier: $tier, agent_model: $model, sha: $sha, ref: $ref, lanes: $lanes, outcomes: $outcomes}' \
+            > tier/tier.json
+          cat tier/tier.json
+      - name: Upload the tier marker
+        uses: actions/upload-artifact@v7
+        with:
+          name: flagship-tier-${{ needs.lanes.outputs.tier }}
+          path: tier/tier.json
+          retention-days: 90
+
+  # The weekly backlog's whole point is its trend: one run of a scenario that
+  # always fails says nothing new. Picks up the previous week's trend artifact,
+  # appends this run, and re-uploads it, so the history rolls forward. A gap
+  # longer than the 90-day retention starts a new trend, and says so.
+  backlog-trend:
+    name: Weekly backlog trend
+    needs: [lanes, agent-eval]
+    if: >-
+      always() && needs.lanes.result == 'success' &&
+      needs.lanes.outputs.tier == 'backlog' && needs.agent-eval.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download the backlog lanes' artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: eval-backlog-*
+          path: lane-artifacts
+        continue-on-error: true
+
+      - name: Fetch the previous trend
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Newest first across the repo, this run's own not uploaded yet.
+          found="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=flagship-backlog-trend&per_page=1" \
+            --jq '.artifacts[0] | select(. != null) | "\(.workflow_run.id) \(.expired)"')"
+          if [ -z "${found}" ]; then
+            echo "::notice title=Backlog trend::No earlier trend artifact exists. This run starts the trend."
+            echo "path=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          read -r run expired <<< "${found}"
+          if [ "${expired}" = "true" ]; then
+            echo "::warning title=Backlog trend::The last trend artifact (run ${run}) has expired, so the history before it is gone. This run starts a new trend."
+            echo "path=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh run download "${run}" --repo "${GITHUB_REPOSITORY}" -n flagship-backlog-trend -D previous
+          echo "path=previous/trend.json" >> "$GITHUB_OUTPUT"
+
+      - name: Append this week and summarise
+        env:
+          PREVIOUS: ${{ steps.previous.outputs.path }}
+          AGENT_MODEL: ${{ needs.lanes.outputs.agent_model }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          previous=()
+          if [ -n "${PREVIOUS}" ]; then previous=(--previous "${PREVIOUS}"); fi
+          python util/eval_backlog_trend.py --artifacts-dir lane-artifacts \
+            "${previous[@]}" --out trend/trend.json --run-url "${RUN_URL}" \
+            --sha "${GITHUB_SHA}" --date "$(date -u +%F)" --model "${AGENT_MODEL}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the trend
+        if: always() && hashFiles('trend/trend.json') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: flagship-backlog-trend
+          path: trend/trend.json
+          retention-days: 90
+
+  # A final tag does not re-run the eval: the release train promotes the RC
+  # that was measured (#5492). This checks that measurement exists - a
+  # full-sweep run (its `flagship-tier-full` marker) of this commit or of one of
+  # its RCs' commits - and fails loudly when it does not. It does not judge the
+  # results; that gate is #5497.
+  verify-final:
+    name: Final tag - a full sweep measured this release
+    needs: [eval-gate]
+    if: >-
+      !cancelled() && needs.eval-gate.result == 'success' &&
+      needs.eval-gate.outputs.run == 'true' && needs.eval-gate.outputs.tier == 'verify'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Find the full sweep
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python util/eval_tiers.py verify-final
+
+  # A release or RC tag run that does not pass files an issue, one per tag.
+  # The nightly that used to catch environment drift (a Lemonade bump, a
+  # re-quantised model, a runner-image change) is gone, so the tag run is now the
+  # only recurring measurement - and its annotations would otherwise go unread.
+  # It does not block publish.yml: the release proceeds, the issue records why
+  # the eval did not pass. A dispatch does not file one; the dispatcher is
+  # watching. A skipped RC (`[skip eval]`) files nothing.
   #
   # This job claims NO lane's concurrency group. A caller that holds the group
   # its callee needs deadlocks the callee before a job record exists, so
   # `needs.*.result` reads `failure` for a job that never ran and the issue filed
   # describes nothing. The now-deleted weekly caller did exactly that, every run
   # for ten days, filing issues about a job that never started.
-  nightly-escalation:
-    name: File an issue when the nightly does not pass
-    needs: [agent-eval, flagship-tasks, aggregate]
+  #
+  # A job a tier deliberately leaves out reads `skipped` (outcomes on an RC
+  # smoke, every lane on a final), so only `failure` and `cancelled` count.
+  # A final tag files one when verify-final finds no full sweep.
+  release-escalation:
+    name: File an issue when the release eval does not pass
+    needs: [eval-gate, lanes, agent-eval, flagship-tasks, aggregate, verify-final]
     if: >-
-      always() && github.event_name == 'schedule' &&
-      (needs.agent-eval.result != 'success' || needs.flagship-tasks.result != 'success')
+      always() && github.event_name == 'push' && github.ref_type == 'tag' &&
+      needs.eval-gate.outputs.run == 'true' &&
+      (contains(fromJSON('["failure", "cancelled"]'), needs.lanes.result) ||
+      contains(fromJSON('["failure", "cancelled"]'), needs.agent-eval.result) ||
+      contains(fromJSON('["failure", "cancelled"]'), needs.flagship-tasks.result) ||
+      contains(fromJSON('["failure", "cancelled"]'), needs.verify-final.result))
     runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: write
     steps:
-      - name: File (or update) the rolling nightly-eval issue
+      - name: File (or update) the issue for this tag
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TAG: ${{ github.ref_name }}
           LANES_RESULT: ${{ needs.agent-eval.result }}
           OUTCOMES_RESULT: ${{ needs.flagship-tasks.result }}
           OUTCOMES_FAILED: ${{ needs.flagship-tasks.outputs.failed_suites }}
+          TIER: ${{ needs.eval-gate.outputs.tier }}
+          VERIFY_RESULT: ${{ needs.verify-final.result }}
         run: |
           set -euo pipefail
           # This job has no checkout, so every gh call names the repo; without it gh
           # dies with "not a git repository" and the alert is never filed.
-          # STABLE DEDUP KEY - do not reword. The lookup below searches this exact
-          # title; changing it orphans the open issue and files a duplicate.
-          TITLE="Nightly flagship eval did not pass"
+          # DEDUP KEY - do not reword. The lookup below searches this exact title,
+          # so a re-run of the same tag comments on its issue instead of filing another.
+          TITLE="Flagship eval did not pass on ${TAG}"
           gh label create eval-failure --repo "$GITHUB_REPOSITORY" --color B60205 \
             --description "Automated eval failure" --force
           BODY="$(cat <<EOF
-          The nightly flagship eval on \`main\` did not pass.
+          The flagship eval on release tag \`${TAG}\` did not pass. Publishing is not blocked by it.
 
           - Run: ${RUN_URL}
+          - Tier: \`${TIER}\` (eval/ci_tiers.json)
           - Scenario lanes: \`${LANES_RESULT}\`
           - Outcomes (\`gaia eval tasks\`): \`${OUTCOMES_RESULT}\`${OUTCOMES_FAILED:+ - gate failed for: ${OUTCOMES_FAILED}}
+          - Final tag, full sweep found for this commit or an RC: \`${VERIFY_RESULT}\` (\`skipped\` on an RC)
 
           Start with the run's summary page: it names which lanes measured, which measured nothing, and
           how long each took. Then download the failing lane's \`eval-<lane>\` artifact - it carries the
           transcripts, judge rationales, backend log and Lemonade logs. Those machines are ephemeral and
           already destroyed, so the artifact is the only copy, and it expires in 14 days.
 
-          A nightly failure with no PR behind it usually means the environment moved, not the code: a
-          Lemonade version bump, a re-quantised model, a driver or runner-image change. PR runs are
-          path-filtered and cannot see any of that, which is why this run exists.
+          Compare with the previous tag's run first. A failure no change since then explains usually means
+          the environment moved, not the code: a Lemonade version bump, a re-quantised model, a driver or
+          runner-image change.
 
           \`cancelled\` rather than \`failure\` means no measurement happened at all - a manual cancel, or a
-          lane that waited out GitHub's 24h queue limit. Re-dispatch the workflow.
+          lane that waited out GitHub's 24h queue limit. Re-dispatch the workflow on the tag.
           EOF
           )"
           EXISTING="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label eval-failure \
-            --search "${TITLE} in:title" --json number --jq '.[0].number // empty')"
+            --search "${TITLE} in:title" --json number,title \
+            | jq -r --arg t "${TITLE}" 'map(select(.title == $t)) | .[0].number // empty')"
           if [ -n "${EXISTING}" ]; then
             gh issue comment "${EXISTING}" --repo "$GITHUB_REPOSITORY" --body "${BODY}"
             echo "commented on existing issue #${EXISTING}"

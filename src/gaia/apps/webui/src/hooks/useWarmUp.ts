@@ -8,15 +8,22 @@ import { log } from '../utils/logger';
 
 const POLL_MS = 1_000;
 
+export interface WarmUpProgress {
+    seconds: number;
+    /** What is being loaded, once the backend has resolved it. */
+    model: string | null;
+    device: WarmUpStatus['device'];
+}
+
 /**
  * Prime the backend for this new chat's first turn and report progress.
  *
- * Returns the seconds the warm-up has been running, or null when it is not
- * running. Never blocks sending: a message sent mid-warm-up waits for it
- * server-side instead of reading the prompt twice.
+ * Returns what is loading and for how long, or null when nothing is. Never
+ * blocks sending: a message sent mid-warm-up waits for it server-side instead
+ * of reading the prompt twice.
  */
-export function useWarmUp(): number | null {
-    const [elapsed, setElapsed] = useState<number | null>(null);
+export function useWarmUp(): WarmUpProgress | null {
+    const [progress, setProgress] = useState<WarmUpProgress | null>(null);
 
     useEffect(() => {
         let stopped = false;
@@ -24,10 +31,14 @@ export function useWarmUp(): number | null {
         const show = (status: WarmUpStatus) => {
             if (stopped) return;
             if (status.state !== 'warming') {
-                setElapsed(null);
+                setProgress(null);
                 return;
             }
-            setElapsed(Math.floor(status.elapsed_seconds ?? 0));
+            setProgress({
+                seconds: Math.floor(status.elapsed_seconds ?? 0),
+                model: status.model ?? null,
+                device: status.device ?? null,
+            });
             timer = setTimeout(() => {
                 api.getWarmUp().then(show, fail);
             }, POLL_MS);
@@ -35,7 +46,7 @@ export function useWarmUp(): number | null {
         const fail = (err: unknown) => {
             if (stopped) return;
             log.system.warn('Warm-up status unavailable', err);
-            setElapsed(null);
+            setProgress(null);
         };
         api.requestWarmUp().then(show, fail);
         return () => {
@@ -44,5 +55,5 @@ export function useWarmUp(): number | null {
         };
     }, []);
 
-    return elapsed;
+    return progress;
 }

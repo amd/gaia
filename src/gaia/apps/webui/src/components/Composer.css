@@ -4,18 +4,17 @@
 .composer {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     width: 100%;
-    padding: 10px 10px 8px 14px;
+    padding: 12px 12px 10px 16px;
     background: var(--bg-input);
-    border: 1px solid var(--border);
     border-radius: var(--radius-xl);
     box-shadow: var(--shadow-sm);
-    transition: border-color var(--duration-fast) var(--ease);
 }
 
+/* A hairline, not a glow. This mix holds 3:1 against the input in every palette. */
 .composer:focus-within {
-    border-color: var(--accent-light);
+    box-shadow: var(--shadow-sm), inset 0 0 0 1px color-mix(in srgb, var(--text-muted) 80%, var(--bg-input));
 }
 
 .composer-disabled {
@@ -33,7 +32,7 @@
     background: transparent;
     color: var(--text-primary);
     font-family: var(--font-sans);
-    font-size: 15px;
+    font-size: var(--fs-prose);
     line-height: 1.5;
 }
 
@@ -43,6 +42,12 @@
 
 .composer-input:focus-visible {
     outline: none;
+}
+
+.composer-limit-error {
+    margin: 4px 0 0;
+    color: var(--danger);
+    font-size: 12px;
 }
 
 .composer-row {
@@ -100,21 +105,33 @@
     background: var(--accent-fill);
     color: var(--accent-fill-text);
     flex-shrink: 0;
-    transition: background var(--duration-fast) var(--ease), opacity var(--duration-fast) var(--ease);
+    transition: background var(--duration-fast) var(--ease), transform var(--duration) var(--ease-spring);
 }
 
 .composer-send:hover:not(:disabled) {
     background: var(--accent-fill-hover);
+    transform: translateY(-1px);
+}
+
+.composer-send:active:not(:disabled) {
+    transform: scale(0.94);
+    transition-duration: var(--duration-press);
 }
 
 .composer-send:disabled {
-    opacity: 0.35;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
     cursor: default;
 }
 
+/* Stop is neutral: brass is for starting things, not halting them. */
 .composer-send.is-stop {
-    background: var(--text-primary);
-    color: var(--text-inverse);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.composer-send.is-stop:hover:not(:disabled) {
+    background: var(--bg-active);
 }
 
 .composer-attachments {
@@ -130,15 +147,14 @@
     gap: 6px;
     max-width: 260px;
     padding: 3px 4px 3px 8px;
-    border: 1px solid var(--border-light);
     border-radius: var(--radius-md);
-    background: var(--bg-card);
+    background: var(--bg-tertiary);
     color: var(--text-secondary);
-    font-size: 12px;
+    font-size: var(--fs-label);
 }
 
 .composer-attachment.has-error {
-    border-color: var(--danger);
+    background: var(--danger-dim);
 }
 
 .composer-attachment-thumb {
@@ -179,7 +195,8 @@
     padding: 0 8px;
     border-radius: var(--radius-md);
     color: var(--text-secondary);
-    font-size: 12.5px;
+    font-size: var(--fs-label);
+    font-weight: 500;
     white-space: nowrap;
 }
 
@@ -199,4 +216,9 @@
 
 .composer-chip.is-danger {
     color: var(--danger);
+}
+
+.composer-chip.is-on {
+    background: var(--accent-dim);
+    color: var(--accent);
 }

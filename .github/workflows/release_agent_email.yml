@@ -25,13 +25,13 @@
 # Atomic + idempotent: POST /publish is immutable per filename (re-publishing the
 # same bytes is a verified 409 no-op; different bytes under a published name fail
 # loudly); the post-upload fetch-verify is the release's real integrity gate and
-# fails if any object's bytes don't match the lock; npm publish is skipped if
-# that exact version already exists on the registry.
+# fails if any object's bytes don't match the lock; npm publish
+# (util/npm_publish_once.py) skips a version already on npm with the same
+# tarball and fails if the registry holds different bytes.
 #
 # Tag namespace: `agent-pkg-email-*` (NOT `v*`). This is the established Agent
 # Hub package-share namespace (see build_agent_package.yml) and deliberately
-# does NOT fire publish.yml (v* only) or the paused publish_agents.yml (no tag
-# trigger). Example: `git tag agent-pkg-email-v0.1.0 && git push origin --tags`.
+# does NOT fire publish.yml (v* only). Example: `git tag agent-pkg-email-v0.1.0 && git push origin --tags`.
 #
 # Maintainer setup (one-time):
 #   Environment:
@@ -184,7 +184,9 @@ jobs:
           uv venv .venv-freeze --python 3.12
           # faiss-cpu backs the stateful agent's memory index. [api] does not
           # carry it, and without it the binary boots with semantic recall off.
-          uv pip install --python .venv-freeze -e ".[api]" -e hub/agents/email/python "faiss-cpu>=1.7.0" pyinstaller
+          # tiktoken is named rather than left to arrive through tavily-python:
+          # freeze.py bundles its cl100k_base data and fails the build without it.
+          uv pip install --python .venv-freeze -e ".[api]" -e hub/agents/email/python "faiss-cpu>=1.7.0" tiktoken pyinstaller
 
       # #2590: hub/agents/email/python's declared floor (amd-gaia[api]>=0.22.0)
       # cannot express "needs gaia.connectors.setup_routes" — that module
@@ -524,6 +526,11 @@ jobs:
             echo "::error::version mismatch — tag/input=${VERSION}, package.json=${PKG_VER}, gaia-agent.yaml=${MAN_VER}. Align all three before tagging."
             exit 1
           fi
+          # Fail before the immutable Hub upload, not at the npm step.
+          if [[ "${VERSION}" == *-* ]]; then
+            echo "::error::${VERSION} is a prerelease; agent packages publish only final X.Y.Z versions under the npm 'latest' dist-tag. Tag a final version."
+            exit 1
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "base_url=${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}/${HUB_PREFIX}/${VERSION}" >> "$GITHUB_OUTPUT"
 
@@ -816,18 +823,23 @@ jobs:
       - name: Publish to npm (OIDC trusted publishing, provenance)
         working-directory: ${{ env.PKG_DIR }}
         shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${{ steps.ver.outputs.version }}"
-          if npm view "@amd-gaia/agent-email@${VERSION}" version >/dev/null 2>&1; then
-            echo "@amd-gaia/agent-email@${VERSION} already on npm — skipping (idempotent)."
-            exit 0
+          # Agents ship no release candidates: a prerelease under `latest` would
+          # become what `npm install` resolves, so refuse it.
+          if [[ "${VERSION}" == *-* ]]; then
+            echo "::error::${VERSION} is a prerelease; agent packages publish only final X.Y.Z versions under the npm 'latest' dist-tag. Tag a final version."
+            exit 1
           fi
+          # npm_publish_once.py: a re-run skips a version already on npm with the
+          # same tarball and fails on different bytes (same helper as publish.yml).
           # --ignore-scripts: dist/ was already built by the "Build npm package"
-          # step, so no lifecycle script (prepublishOnly/prepare/prepack) needs to
-          # run here — and we don't want any package/dependency script executing in
-          # this OIDC-privileged job. Matches publish.yml.
-          npm publish --access public --provenance --ignore-scripts
+          # step, so no lifecycle script (prepublishOnly/prepare/prepack) needs
+          # to run here — and we don't want any package/dependency script
+          # executing in this OIDC-privileged job.
+          python3 "${GITHUB_WORKSPACE}/util/npm_publish_once.py" --dist-tag latest -- --access public --provenance --ignore-scripts
 
       - name: Redeploy the website to publish the new catalog entry
         shell: bash

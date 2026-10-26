@@ -144,7 +144,8 @@ describe('ChatView question lifecycle', () => {
     beforeEach(() => {
         callbacks = null;
         mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
-        mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [] });
+        mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
+        mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
         mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
         mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
         mockedApi.cancelStream.mockResolvedValue(undefined as never);
@@ -206,6 +207,24 @@ describe('ChatView question lifecycle', () => {
             callbacks!.onAgentEvent({ type: 'status', status: 'info', message: 'Saved memory' } as unknown as StreamEvent);
         });
         expect(useChatStore.getState().awaitingUser).toBe(false);
+        await waitFor(() => expect(document.querySelector('.thinking-indicator-text')?.textContent).toBe('Waiting for you'));
+    });
+
+    it('an open permission prompt keeps the header on "Waiting for you" after a status event', async () => {
+        render(<ChatView sessionId={SESSION.id} />);
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'delete it' } });
+            fireEvent.click(screen.getByLabelText('Send'));
+        });
+        act(() => {
+            callbacks!.onAgentEvent({
+                type: 'permission_request', tool: 'run_shell_command', confirm_id: 'c-1',
+                summary: 'del note.txt', args: { command: 'del note.txt' },
+            } as unknown as StreamEvent);
+        });
+        act(() => {
+            callbacks!.onAgentEvent({ type: 'status', status: 'info', message: 'Running command' } as unknown as StreamEvent);
+        });
         await waitFor(() => expect(document.querySelector('.thinking-indicator-text')?.textContent).toBe('Waiting for you'));
     });
 

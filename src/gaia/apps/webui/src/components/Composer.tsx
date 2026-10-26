@@ -14,6 +14,8 @@ interface ComposerProps {
     streaming?: boolean;
     /** Stop was pressed and the run is winding down. */
     stopping?: boolean;
+    /** While streaming, Enter still submits: the message is queued for the next turn. */
+    queueWhileStreaming?: boolean;
     /** Blocks typing and sending, with the reason shown as the placeholder. */
     disabledReason?: string | null;
     attachments: UseAttachments;
@@ -28,16 +30,22 @@ interface ComposerProps {
 
 const MAX_INPUT_HEIGHT = 240;
 
+/** The most a message may carry; the backend refuses more (`ChatRequest.message` in ui/models.py). */
+export const MAX_MESSAGE_CHARS = 100_000;
+
 export function Composer({
-    value, onChange, onSubmit, onStop, streaming = false, stopping = false, disabledReason, attachments,
+    value, onChange, onSubmit, onStop, streaming = false, stopping = false, queueWhileStreaming = false, disabledReason, attachments,
     placeholder = 'Ask GAIA anything', autoFocus, inputRef, leftControls, rightControls,
 }: ComposerProps) {
     const ownRef = useRef<HTMLTextAreaElement | null>(null);
     const textareaRef = inputRef ?? ownRef;
     const fileRef = useRef<HTMLInputElement>(null);
     const disabled = !!disabledReason;
-    const canSend = !disabled && !streaming && !attachments.uploading
-        && (value.trim().length > 0 || attachments.hasUploaded);
+    const hasContent = value.trim().length > 0 || attachments.hasUploaded;
+    // What is sent: the text plus a link for each attached file.
+    const sentLength = attachments.compose(value.trim()).length;
+    const tooLong = sentLength > MAX_MESSAGE_CHARS;
+    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong;
 
     const shownPlaceholder = disabledReason || placeholder;
 
@@ -118,6 +126,12 @@ export function Composer({
                 autoFocus={autoFocus}
                 aria-label="Message"
             />
+            {tooLong && (
+                <p className="composer-limit-error" role="alert">
+                    Too long to send: {sentLength.toLocaleString()} of {MAX_MESSAGE_CHARS.toLocaleString()} characters.
+                    {' '}Save it as a file and attach it with +, and GAIA can read all of it.
+                </p>
+            )}
             <div className="composer-row">
                 <div className="composer-row-left">
                     <button
@@ -144,6 +158,18 @@ export function Composer({
                 </div>
                 <div className="composer-row-right">
                     {rightControls}
+                    {streaming && queueWhileStreaming && hasContent && (
+                        <button
+                            type="button"
+                            className="composer-send"
+                            onClick={onSubmit}
+                            disabled={!canSend}
+                            aria-label="Queue message"
+                            title="Queue it to send when this reply ends (Enter)"
+                        >
+                            <ArrowUp size={16} />
+                        </button>
+                    )}
                     {streaming ? (
                         <button
                             type="button"

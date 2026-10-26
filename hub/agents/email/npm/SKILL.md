@@ -177,7 +177,8 @@ The v2 keystone (#2016): NL request in, the agent reasons and chains its tools, 
 `tool_result` / `needs_confirmation` / `needs_input` / `final` / `error`, terminated by
 exactly one `final` or `error`. This is the one loop every v2 front-door relays to. The **host
 mints `run_id`** and **pushes** the transcript slice in `context`, so the sidecar
-stays stateless. The typed client wraps it (#2097): `query()` returns an async
+stays stateless. A slice too big for the model's window beside the agent's prompt
+keeps only its newest whole turns, announced in a `status` event. The typed client wraps it (#2097): `query()` returns an async
 iterator of typed `QueryEvent`s; `cancelQuery(runId)` stops the run between steps:
 
 ```ts
@@ -437,6 +438,10 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
   `.ready` / read `.hint`. `POST /v1/email/init` streams a model-pull (no wrapper yet).
 - **HTTP 502 from `triage`** → Lemonade isn't running/reachable, or the model isn't
   pulled. It is not a bug in this package.
+- **HTTP 502 saying the connection "is being saved by another GAIA operation"** →
+  transient: another GAIA process or request is mid-save on the mailbox
+  connection. Retry shortly; don't send the user to reconnect. The
+  `/v1/email/agent/*` routes answer the same case with `503` + `Retry-After`.
 - **Addresses are objects, not strings.** `to` (and `triage`'s `from` / `principal`)
   are `{ email, name? }`; `to` is a non-empty array of them. A plain string → 422.
 - **`send` needs the draft `confirmation_token`** (missing/invalid → 403), but it

@@ -18,24 +18,104 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'src/gaia/version.py'
-      - '.github/actions/install-lemonade/**'
-      - 'examples/**'
-      - 'src/gaia/**'
-      - 'tests/integration/test_example_agents.py'
-      - 'setup.py'
       - '.github/workflows/test_examples.yml'
+      - '.github/actions/setup-venv/**'
+      - '.github/actions/install-lemonade/**'
+      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      - 'installer/scripts/*lemonade*.ps1'
+      - 'tests/ci_lemonade_check.py'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      # The LLM client every hardware test drives, the daemon modules it imports,
+      # the init profile that sets its minimum Lemonade, and the leaf modules.
+      - 'src/gaia/llm/**'
+      - 'src/gaia/daemon/__init__.py'
+      - 'src/gaia/daemon/broker_client.py'
+      - 'src/gaia/daemon/client.py'
+      - 'src/gaia/daemon/constants.py'
+      - 'src/gaia/daemon/errors.py'
+      - 'src/gaia/daemon/instance.py'
+      - 'src/gaia/daemon/lemonade.py'
+      - 'src/gaia/daemon/lock.py'
+      - 'src/gaia/daemon/paths.py'
+      - 'src/gaia/daemon/custody/constants.py'
+      - 'src/gaia/daemon/sidecars/errors.py'
+      - 'src/gaia/daemon/sidecars/spec.py'
+      - 'src/gaia/installer/init_command.py'
+      - 'src/gaia/utils/**'
+      - 'src/gaia/config.py'
+      - 'src/gaia/env.py'
+      - 'src/gaia/logger.py'
+      - 'src/gaia/log_rotation.py'
+      - 'src/gaia/ports.py'
+      - 'src/gaia/version.py'
+      - 'examples/**'
+      # What the examples import: `from gaia import Agent, tool` and the
+      # mixins they compose.
+      - 'src/gaia/__init__.py'
+      - 'src/gaia/agents/base/**'
+      - 'src/gaia/agents/tools/**'
+      - 'src/gaia/mcp/**'
+      - 'src/gaia/rag/**'
+      - 'src/gaia/vlm/**'
+      - 'src/gaia/sd/**'
+      - 'src/gaia/skills/**'
+      - 'src/gaia/governance/**'
+      - 'tests/integration/conftest.py'
+      - 'tests/integration/test_example_agents.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'src/gaia/version.py'
-      - '.github/actions/install-lemonade/**'
-      - 'examples/**'
-      - 'src/gaia/**'
-      - 'tests/integration/test_example_agents.py'
-      - 'setup.py'
       - '.github/workflows/test_examples.yml'
+      - '.github/actions/setup-venv/**'
+      - '.github/actions/install-lemonade/**'
+      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      - 'installer/scripts/*lemonade*.ps1'
+      - 'tests/ci_lemonade_check.py'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      # The LLM client every hardware test drives, the daemon modules it imports,
+      # the init profile that sets its minimum Lemonade, and the leaf modules.
+      - 'src/gaia/llm/**'
+      - 'src/gaia/daemon/__init__.py'
+      - 'src/gaia/daemon/broker_client.py'
+      - 'src/gaia/daemon/client.py'
+      - 'src/gaia/daemon/constants.py'
+      - 'src/gaia/daemon/errors.py'
+      - 'src/gaia/daemon/instance.py'
+      - 'src/gaia/daemon/lemonade.py'
+      - 'src/gaia/daemon/lock.py'
+      - 'src/gaia/daemon/paths.py'
+      - 'src/gaia/daemon/custody/constants.py'
+      - 'src/gaia/daemon/sidecars/errors.py'
+      - 'src/gaia/daemon/sidecars/spec.py'
+      - 'src/gaia/installer/init_command.py'
+      - 'src/gaia/utils/**'
+      - 'src/gaia/config.py'
+      - 'src/gaia/env.py'
+      - 'src/gaia/logger.py'
+      - 'src/gaia/log_rotation.py'
+      - 'src/gaia/ports.py'
+      - 'src/gaia/version.py'
+      - 'examples/**'
+      # What the examples import: `from gaia import Agent, tool` and the
+      # mixins they compose.
+      - 'src/gaia/__init__.py'
+      - 'src/gaia/agents/base/**'
+      - 'src/gaia/agents/tools/**'
+      - 'src/gaia/mcp/**'
+      - 'src/gaia/rag/**'
+      - 'src/gaia/vlm/**'
+      - 'src/gaia/sd/**'
+      - 'src/gaia/skills/**'
+      - 'src/gaia/governance/**'
+      - 'tests/integration/conftest.py'
+      - 'tests/integration/test_example_agents.py'
   merge_group:
   workflow_dispatch:
 
@@ -55,9 +135,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
 
       - name: Setup Python environment
         uses: ./.github/actions/setup-venv

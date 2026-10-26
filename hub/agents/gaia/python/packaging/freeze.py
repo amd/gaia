@@ -34,6 +34,10 @@ Design notes / gotchas baked in (mirrors the email sidecar's freeze):
   the ML stack (torch, transformers, ...). All inference is Lemonade over HTTP
   and never runs in-process, so the ML stack is EXCLUDED to keep the binary lean.
   ``faiss`` stays collected: the memory/RAG working-context index needs it.
+- tiktoken finds ``cl100k_base`` through a plugin it discovers at runtime and
+  downloads the encoding's data on first use -> hidden-import the plugin and
+  bundle the data (``gaia.utils.tiktoken_bundle``), or every token count in the
+  binary is an estimate.
 """
 
 from __future__ import annotations
@@ -45,6 +49,8 @@ import shutil
 import sys
 import time
 from pathlib import Path
+
+from gaia.utils import tiktoken_bundle
 
 HERE = Path(__file__).resolve().parent
 ENTRY = HERE / "server.py"
@@ -62,6 +68,9 @@ PATHEX = [
 
 MANIFEST_SRC = PKG_ROOT / "gaia-agent.yaml"
 SKILLS_SRC = PKG_ROOT / "gaia_agent" / "skills"
+# Linux only: the bundled OpenSSL looks for CA certs where the BUILD distro keeps
+# them, so point it at the host's bundle (see the hook's docstring).
+LINUX_CA_HOOK = HERE / "rthook_linux_ca.py"
 
 # Modules PyInstaller must pull in wholesale, and the distributions whose
 # metadata must travel with them. Declared once so the preflight guard below
@@ -90,17 +99,23 @@ COLLECT_SUBMODULES = [
 # collect-all because the wheel carries native .dll/.pyd payloads that static
 # analysis cannot see. ~29 MB, Apache-2.0 (its vendored onnxruntime is MIT).
 COLLECT_ALL = ["faiss", "sherpa_onnx"]
+# Package data the analyzer can't see. pymupdf 2.x imports its layout module on
+# import, which loads ONNX model configs from pymupdf/layout/resources at runtime;
+# without them every ``import pymupdf`` in a run_python script fails.
+COLLECT_DATA = ["pymupdf"]
 # Imported behind an ``except ImportError`` guard, so PyInstaller bundles them
 # only when they are installed and the binary otherwise boots without them.
 # anthropic: ``--use-claude`` and ``/model``, which the TUI forwards to the binary.
 REQUIRED_IMPORTS = ["anthropic"]
+# Modules only ever imported by name at runtime.
+HIDDEN_IMPORTS = [tiktoken_bundle.PLUGIN_MODULE]
 # importlib.metadata version probes + entry-point agent discovery.
 COPY_METADATA = ["keyring", "amd-gaia", "gaia-agent-gaia", "gaia-agent-chat"]
 
 # What a ``run_python`` script may import. The frozen binary is the only Python
 # a user of the release has, and nothing in GAIA imports most of these, so the
 # import analyzer would leave them out. Office output (.xlsx, .docx, .pptx,
-# .pdf), tables and charts are what knowledge-work tasks ask for.
+# .pdf), tables and charts are what users' document and analysis tasks ask for.
 SCRIPT_LIBRARIES = [
     "openpyxl",
     "xlsxwriter",
@@ -174,6 +189,7 @@ def _verify_collect_targets() -> None:
         mod
         for mod in COLLECT_SUBMODULES
         + COLLECT_ALL
+        + COLLECT_DATA
         + REQUIRED_IMPORTS
         + SCRIPT_LIBRARIES
         if importlib.util.find_spec(mod) is None
@@ -283,6 +299,8 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         for d in (work, dist):
             if d.exists():
                 shutil.rmtree(d, ignore_errors=True)
+    tiktoken_cache = tiktoken_bundle.stage_cache(work / tiktoken_bundle.BUNDLE_DIR)
+    add_data.append((tiktoken_cache, tiktoken_bundle.BUNDLE_DIR))
 
     args = [
         str(ENTRY),
@@ -304,7 +322,9 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         args += ["--collect-submodules", mod]
     for mod in COLLECT_ALL:
         args += ["--collect-all", mod]
-    for mod in script_hidden_imports():
+    for mod in COLLECT_DATA:
+        args += ["--collect-data", mod]
+    for mod in HIDDEN_IMPORTS + script_hidden_imports():
         args += ["--hidden-import", mod]
     for distribution in COPY_METADATA:
         args += ["--copy-metadata", distribution]
@@ -312,6 +332,8 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         args += ["--add-data", f"{source}{os.pathsep}{dest}"]
     for mod in EXCLUDES:
         args += ["--exclude-module", mod]
+    if sys.platform.startswith("linux"):
+        args += ["--runtime-hook", str(LINUX_CA_HOOK)]
     args.append("--onefile" if onefile else "--onedir")
 
     t0 = time.time()

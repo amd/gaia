@@ -45,7 +45,8 @@ API_KEY_SECRET_NAME = "lemonade_api_key"
 #: the pre-10.1 one. Same list the TUI's preflight probes.
 DETECT_PORTS = (13305, 8000)
 
-_DETECT_TIMEOUT = (0.5, 3.0)
+# A busy server accepts the connection at once but can take seconds to answer.
+_DETECT_TIMEOUT = (0.5, 10.0)
 _PROBE_TIMEOUT = (3.0, 10.0)
 
 #: Where a user who wants GAIA's own server back is pointed, in one line.
@@ -239,6 +240,8 @@ class ProbeResult:
     version: Optional[str] = None
     minimum: Optional[str] = None
     detail: str = ""
+    #: Something accepted the connection but did not answer in time.
+    timed_out: bool = False
 
     @property
     def usable(self) -> bool:
@@ -253,8 +256,12 @@ class ProbeResult:
             "message": self.message(),
         }
 
-    def message(self) -> str:
-        """One plain sentence and the next step."""
+    def message(self, *, in_use: bool = False) -> str:
+        """One plain sentence and the next step.
+
+        ``in_use``: GAIA is already set to this server, so the way back to its
+        own is a next step. Before a switch GAIA still runs its own, so it isn't.
+        """
         if self.status == OK:
             return f"Lemonade Server v{self.version} is running at {self.url}."
         if self.status == NEEDS_KEY:
@@ -271,16 +278,19 @@ class ProbeResult:
             return (
                 f"The Lemonade Server at {self.url} is v{self.version}; GAIA needs "
                 f"v{self.minimum} or newer. Upgrade it from "
-                "https://lemonade-server.ai, or " + SWITCH_BACK_HINT + "."
+                "https://lemonade-server.ai"
+                + (", or " + SWITCH_BACK_HINT if in_use else "")
+                + "."
             )
         if self.status == NOT_LEMONADE:
             return (
                 f"Something answers at {self.url}, but it is not a Lemonade "
                 f"Server ({self.detail}). Check the address and port."
             )
+        next_step = SWITCH_BACK_HINT if in_use else "check the address and port"
         return (
-            f"No Lemonade Server is answering at {self.url} ({self.detail}). "
-            "Start it, or " + SWITCH_BACK_HINT + "."
+            f"No Lemonade Server is answering at {self.url}: {self.detail}. "
+            f"Start it, or {next_step}."
         )
 
 
@@ -314,7 +324,14 @@ def probe(
             f"{base}/health", headers=headers, timeout=timeout, allow_redirects=False
         )
     except requests.exceptions.RequestException as e:
-        return ProbeResult(base, UNREACHABLE, minimum=minimum, detail=_short(e))
+        log.debug("Lemonade probe of %s/health failed: %r", base, e)
+        return ProbeResult(
+            base,
+            UNREACHABLE,
+            minimum=minimum,
+            detail=_unreachable_reason(e),
+            timed_out=isinstance(e, requests.exceptions.ReadTimeout),
+        )
     if response.status_code in (401, 403):
         return ProbeResult(base, BAD_KEY if api_key else NEEDS_KEY, minimum=minimum)
     if response.status_code != 200:
@@ -341,12 +358,58 @@ def probe(
     return ProbeResult(base, OK, version=version, minimum=minimum)
 
 
-def _short(error: Exception) -> str:
-    text = str(error).splitlines()[0] if str(error) else type(error).__name__
-    return text[:160]
+def _unreachable_reason(error: Exception) -> str:
+    """Why nothing answered, in plain words a person can act on."""
+    import socket
+
+    import requests
+
+    # SSLError and ConnectTimeout are ConnectionErrors too: check them first.
+    if isinstance(error, requests.exceptions.SSLError):
+        return "the secure (HTTPS) connection could not be set up"
+    if isinstance(error, requests.exceptions.ConnectTimeout):
+        return "nothing accepted the connection in time"
+    if isinstance(error, requests.exceptions.ReadTimeout):
+        return "it accepted the connection but did not answer in time"
+    if isinstance(error, requests.exceptions.ConnectionError):
+        for cause in _causes(error):
+            if isinstance(cause, ConnectionRefusedError):
+                return "nothing is listening on that port"
+            if isinstance(cause, socket.gaierror):
+                return "the host name could not be found"
+    return "the connection failed"
+
+
+def _causes(error: BaseException):
+    """*error* and what it wraps: urllib3 nests the socket error a few deep."""
+    seen = set()
+    stack = [error]
+    while stack:
+        current = stack.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        yield current
+        stack.extend((current.__cause__, current.__context__))
+        stack.append(getattr(current, "reason", None))
+        stack.extend(a for a in current.args if isinstance(a, BaseException))
+
+
+@dataclass(frozen=True)
+class Detection:
+    """What :func:`detect_lemonade` found, and the ports it could not judge."""
+
+    found: Optional[ProbeResult]
+    #: URLs where something accepted the connection but never answered.
+    unchecked: Tuple[str, ...] = ()
 
 
 def detect_running_lemonade() -> Optional[ProbeResult]:
+    """A Lemonade the user runs on this machine's default ports, if any."""
+    return detect_lemonade().found
+
+
+def detect_lemonade() -> Detection:
     """A Lemonade the user runs on this machine's default ports, if any.
 
     Only offered when it really is Lemonade: a ``/health`` answer that says so,
@@ -354,8 +417,10 @@ def detect_running_lemonade() -> Optional[ProbeResult]:
     :func:`~gaia.llm.lemonade_launcher.resolve_lemonade` finds one). GAIA's own
     private server is never offered back to it.
 
-    Returns the first usable or key-protected server, else a too-old one so
-    the caller can say why it was not offered, else None.
+    ``found`` is the first usable or key-protected server, else a too-old one
+    so the caller can say why it was not offered, else None. ``unchecked``
+    names ports that did not answer in time, so "none found" is not claimed
+    when the answer is "could not tell".
     """
     from gaia.llm.lemonade_client import running_embedded_lemonade_url
     from gaia.llm.lemonade_launcher import resolve_lemonade
@@ -363,21 +428,24 @@ def detect_running_lemonade() -> Optional[ProbeResult]:
     own = running_embedded_lemonade_url()
     too_old: Optional[ProbeResult] = None
     installed: Optional[bool] = None
+    unchecked = []
     for port in DETECT_PORTS:
         url = f"http://localhost:{port}/api/v1"
         if own and urlparse(own).port == port:
             continue
         result = probe(url, timeout=_DETECT_TIMEOUT)
         if result.status == OK:
-            return result
+            return Detection(result)
         if result.status == NEEDS_KEY:
             if installed is None:
                 installed = resolve_lemonade().found
             if installed:
-                return result
+                return Detection(result)
         if result.status == TOO_OLD and too_old is None:
             too_old = result
-    return too_old
+        if result.timed_out:
+            unchecked.append(result.url)
+    return Detection(too_old, tuple(unchecked))
 
 
 # ---------------------------------------------------------------------------
@@ -726,7 +794,8 @@ def set_mode(mode: str) -> Optional[ProbeResult]:
         )
     result = probe(cfg.lemonade_base_url, _stored_key(cfg))
     if not result.usable:
-        raise LemonadeChoiceError(result.message(), result.status)
+        in_use = cfg.lemonade_mode == MODE_EXTERNAL
+        raise LemonadeChoiceError(result.message(in_use=in_use), result.status)
     cfg.lemonade_mode = MODE_EXTERNAL
     cfg.save()
     return result
@@ -762,7 +831,7 @@ def set_url(url: Optional[str]) -> Optional[ProbeResult]:
                 NEEDS_KEY,
             )
         if not result.usable:
-            raise LemonadeChoiceError(result.message(), result.status)
+            raise LemonadeChoiceError(result.message(in_use=True), result.status)
     if base != cfg.lemonade_base_url and cfg.lemonade_api_key_stored:
         _forget_key()
         cfg.lemonade_api_key_stored = False

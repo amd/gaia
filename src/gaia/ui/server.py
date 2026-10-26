@@ -25,17 +25,20 @@ import shutil  # noqa: F401  # pylint: disable=unused-import
 import sys
 import threading
 import traceback
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.convertors import PathConvertor, register_url_convertor
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from gaia.agents.install_hints import agent_import_error_message
+from gaia.agents.install_hints import agent_wheel_failed_message
 from gaia.config import UnsafeGaiaHomeError
 from gaia.security import AllowedPathsEnvError, env_allowed_paths
 
@@ -51,16 +54,20 @@ from ._chat_helpers import _get_chat_response  # noqa: F401
 from ._chat_helpers import _index_document  # noqa: F401
 from ._chat_helpers import _resolve_rag_paths  # noqa: F401
 from ._chat_helpers import _stream_chat_response  # noqa: F401
+from ._chat_helpers import writing_tool_registry
 from .agent_loop import agent_loop
 
 # pylint: enable=unused-import
 from .database import ChatDatabase
 from .document_monitor import DocumentMonitor
 from .memory_settings import memory_enabled
+from .restart_recovery import recover_interrupted_work, sweep_interrupted_work
 from .routers import agents as agents_router_mod
+from .routers import changes as changes_router_mod
 from .routers import chat as chat_router_mod
 from .routers import connectors as connectors_router_mod
 from .routers import documents as documents_router_mod
+from .routers import environment as environment_router_mod
 from .routers import files as files_router_mod
 from .routers import goals as goals_router_mod
 from .routers import hub as hub_router_mod
@@ -73,6 +80,7 @@ from .routers import schedules as schedules_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import setup as setup_router_mod
 from .routers import skills as skills_router_mod
+from .routers import spending as spending_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
 from .security import UIRequestGuardMiddleware
@@ -101,6 +109,53 @@ _AUTH_EXEMPT_PATHS = {"/api/health"}
 # app's subsequent ``fetch('/api/...')`` calls carry it automatically
 # (same-origin fetches include cookies by default).
 _TUNNEL_COOKIE_NAME = "gaia_tunnel_token"
+
+
+class _SpaPathConvertor(PathConvertor):
+    """A path that is never ``/api`` or under it.
+
+    Keeps the SPA catch-all off unknown API paths, so they get a JSON 404
+    (or a 405 for a real path with the wrong method) instead of index.html.
+    """
+
+    regex = r"(?!api(?:/|$)).*"
+
+
+register_url_convertor("spa_path", _SpaPathConvertor())
+
+
+class Utf8JsonMiddleware:
+    """Declare ``charset=utf-8`` on every ``application/json`` response.
+
+    Without it, clients that apply HTTP's Latin-1 default (Windows PowerShell
+    5.1's ``Invoke-RestMethod``) show a stored "—" as "â€”".
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_charset(message):
+            if message["type"] == "http.response.start":
+                message = {
+                    **message,
+                    "headers": [
+                        (
+                            (name, b"application/json; charset=utf-8")
+                            if name.lower() == b"content-type"
+                            and value.strip().lower() == b"application/json"
+                            else (name, value)
+                        )
+                        for name, value in message.get("headers", [])
+                    ],
+                }
+            await send(message)
+
+        await self.app(scope, receive, send_with_charset)
 
 
 # ── Tunnel Auth Middleware ──────────────────────────────────────────────────
@@ -194,6 +249,7 @@ class TunnelAuthMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Invalid tunnel authentication token"},
             )
 
+        tunnel.note_device(request.headers.get("user-agent", ""))
         return await call_next(request)
 
 
@@ -228,19 +284,61 @@ def lemonade_is_remote() -> bool:
     return bool(base_url) and not _is_loopback(urlparse(base_url).hostname or "")
 
 
-def _run_scheduled_prompt(db: ChatDatabase, prompt: str) -> str:
-    """Run one scheduled prompt through a fresh GAIA agent; returns the answer."""
+_SCHEDULED_AGENT = "gaia"
+_SCHEDULED_MAX_STEPS = 5
+
+
+def _flagship_missing_message(registry) -> str:
+    """Why a scheduled run found no GAIA agent, and the one fix that works."""
+    reason = registry.get_load_error(_SCHEDULED_AGENT) if registry else None
+    return (
+        "The GAIA agent is not installed, so the scheduled task could not run"
+        + (f" (it failed to load: {reason})" if reason else "")
+        + ". Run `gaia init` to install it, then re-run the scheduled task."
+    )
+
+
+def _run_scheduled_prompt(
+    db: ChatDatabase,
+    prompt: str,
+    cancel_event: Optional[threading.Event] = None,
+    console=None,
+) -> str:
+    """Run one scheduled prompt through a fresh GAIA agent; returns the answer.
+
+    Uses the same agent a chat would: the daemon sidecar when the flagship is
+    installed as one (a desktop install), else the in-process package.
+
+    Setting *cancel_event* stops the agent at its next step; *console*
+    (an ``SSEOutputHandler`` in background mode) reports whether a tool is
+    running, and cancelling it ends a streaming model reply or relayed run.
+    """
+    from gaia.ui._chat_helpers import (
+        _agent_type_unknown,
+        _should_relay_to_sidecar,
+        get_agent_registry,
+    )
+
+    registry = get_agent_registry()
+    if registry is None:
+        raise RuntimeError(
+            "Scheduled run started before the Agent UI finished discovering "
+            "agents; it will run again at its next time. If this repeats, "
+            "check the server log for agent registry errors."
+        )
+    if _agent_type_unknown(_SCHEDULED_AGENT, registry):
+        raise RuntimeError(_flagship_missing_message(registry))
+    if _should_relay_to_sidecar(_SCHEDULED_AGENT, registry):
+        return _relay_scheduled_prompt(db, prompt, cancel_event, console)
+
     try:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    except ModuleNotFoundError as e:
+        if (e.name or "").partition(".")[0] != "gaia_agent":
+            raise RuntimeError(_scheduled_import_error(e)) from e
+        raise RuntimeError(_flagship_missing_message(registry)) from e
     except ImportError as e:
-        raise RuntimeError(
-            agent_import_error_message(
-                e,
-                "The GAIA agent is not installed",
-                "gaia-agent-gaia",
-                next_step="Then re-run the scheduled task.",
-            )
-        ) from e
+        raise RuntimeError(_scheduled_import_error(e)) from e
 
     # Beta dynamic tool loader (#1798). Inert here: scheduled runs
     # use the default "full" prompt profile and the loader only
@@ -251,19 +349,158 @@ def _run_scheduled_prompt(db: ChatDatabase, prompt: str) -> str:
     # (shell, file writes) are denied here — same posture as an
     # autonomous background tick (#2210).
     config = GaiaAgentConfig(
-        max_steps=5,
+        model_id=_scheduled_model(db),
+        max_steps=_SCHEDULED_MAX_STEPS,
         silent_mode=True,
         debug=False,
         dynamic_tools=dynamic_tools,
         memory_incognito=not memory_enabled(db),
     )
-    agent = GaiaAgent(config)
+    with writing_tool_registry():
+        agent = GaiaAgent(config)
     agent._incognito_reason = "memory_off"
+    agent._cancel_event = cancel_event
+    if console is not None:
+        agent.console = console
     result = agent.process_query(prompt)
     if isinstance(result, dict):
         val = result.get("result")
-        return val if val is not None else result.get("answer", "")
+        answer = val if val is not None else result.get("answer", "")
+        if result.get("model_failed"):
+            raise RuntimeError(str(answer or "The GAIA agent's run failed."))
+        return answer
     return str(result) if result else ""
+
+
+def _scheduled_model(db: ChatDatabase) -> Optional[str]:
+    """The model a new chat would run: the user's pick, else the agent default."""
+    return (db.get_setting("custom_model") or "").strip() or None
+
+
+def _scheduled_import_error(error: ImportError) -> str:
+    return agent_wheel_failed_message(
+        "The GAIA agent is not installed",
+        "gaia-agent-gaia",
+        error,
+        next_step="Then re-run the scheduled task.",
+    )
+
+
+def _relay_scheduled_prompt(
+    db: ChatDatabase,
+    prompt: str,
+    cancel_event: Optional[threading.Event],
+    console,
+) -> str:
+    """Relay one scheduled prompt to the flagship's daemon sidecar.
+
+    The chat relay, run fresh each time (no history, no sidecar session) as
+    the in-process run is. Its events are read back off *console*: the answer
+    is returned, and an error the relay reported is raised.
+    """
+    from gaia.ui._chat_helpers import _dispatch_sidecar_query, _memory_mode
+    from gaia.ui.models import ChatRequest
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    handler = console if console is not None else SSEOutputHandler(background_mode=True)
+    if not handler.background_mode:
+        raise ValueError(
+            "A scheduled run needs a background-mode console: nobody is there "
+            "to answer its tool prompts."
+        )
+    if (
+        cancel_event is not None and cancel_event.is_set()
+    ) or handler.cancelled.is_set():
+        raise RuntimeError("Scheduled run was stopped before it started.")
+
+    _dispatch_sidecar_query(
+        handler,
+        ChatRequest(session_id="", message=prompt, agent_type=_SCHEDULED_AGENT),
+        history_pairs=[],
+        model_id=_scheduled_model(db),
+        agent_type=_SCHEDULED_AGENT,
+        memory=_memory_mode({}, db),
+        max_steps=_SCHEDULED_MAX_STEPS,
+    )
+
+    # Drained only after the turn ends: safe because event_queue is unbounded.
+    answer = None
+    failure = None
+    while not handler.event_queue.empty():
+        event = handler.event_queue.get_nowait()
+        if not event:
+            continue
+        if event.get("type") == "agent_error":
+            failure = str(event.get("content") or "The GAIA agent reported an error.")
+        elif event.get("type") == "answer":
+            answer = event
+    if failure:
+        raise RuntimeError(failure)
+    if handler.cancelled.is_set():
+        raise RuntimeError("Scheduled run was stopped before it finished.")
+    if answer is None:
+        raise RuntimeError(
+            "The GAIA agent ended the scheduled run without an answer. Check "
+            "the agent log under ~/.gaia/logs/ and re-run the scheduled task."
+        )
+    content = str(answer.get("content") or "")
+    if answer.get("failed"):
+        raise RuntimeError(content or "The GAIA agent's run failed.")
+    return content
+
+
+class _ScheduledRuns:
+    """Runs scheduled prompts one at a time, in line with chat turns.
+
+    A run waits in the turn queue (it builds and drives an agent on the same
+    model) and gets *timeout* seconds once it reaches the model. On timeout
+    its agent is told to stop, a model reply in progress included, and the
+    run keeps its place on the model while a model call may still run: chats
+    wait in line meanwhile and see that they are waiting. A run stuck in a
+    tool frees the model; told to stop, it calls the model no more.
+    """
+
+    def __init__(self, db: ChatDatabase, timeout: float):
+        self._db = db
+        self._timeout = timeout
+
+    async def run(self, prompt: str) -> str:
+        from gaia.ui.agent_threads import run_in_own_thread, wait_until_off_the_model
+        from gaia.ui.sse_handler import SSEOutputHandler
+        from gaia.ui.turn_queue import turn_queue
+
+        await turn_queue.acquire(f"schedule:{uuid.uuid4()}")
+        try:
+            cancel = threading.Event()
+            # Background mode: nobody is watching, so gated tools are denied.
+            console = SSEOutputHandler(background_mode=True)
+            worker = run_in_own_thread(
+                lambda: _run_scheduled_prompt(
+                    self._db, prompt, cancel_event=cancel, console=console
+                ),
+                name="gaia-scheduled-run",
+            )
+            done, _ = await asyncio.wait({worker}, timeout=self._timeout)
+            if done:
+                return worker.result()
+            cancel.set()
+            console.cancelled.set()
+            # A relayed run parks in a socket read; this wakes it.
+            console.close_active_relay_response()
+            if not await wait_until_off_the_model(
+                worker, console, what="Scheduled run"
+            ):
+                logger.error(
+                    "Scheduled run is still running after its %gs timeout; "
+                    "freeing the model while its thread winds down",
+                    self._timeout,
+                )
+            raise asyncio.TimeoutError(
+                f"Scheduled run did not finish within {self._timeout:g}s and was "
+                "stopped. Raise GAIA_SCHEDULE_TIMEOUT if the task needs longer."
+            )
+        finally:
+            turn_queue.release()
 
 
 # ── Application Factory ────────────────────────────────────────────────────
@@ -285,6 +522,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
     # Initialize database early so lifespan can access it
     db = ChatDatabase(db_path)
+    # What a crashed or closed server left mid-way, before anything new starts.
+    recover_interrupted_work(db)
 
     # Background indexing: track running tasks by document ID
     # so we can report status and cancel them.
@@ -398,16 +637,16 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 resolve_lemonade_base_url,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
-            from gaia.ui._chat_helpers import model_load_lock
+            from gaia.ui._chat_helpers import model_load_lock, note_model_loaded
             from gaia.ui.warmup import preload_skip_reason
+
+            base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
+            _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
 
             low_memory = preload_skip_reason()
             if low_memory:
                 logger.info("Model preload skipped: %s", low_memory)
                 return
-
-            base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
-            _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
 
             # Check if a chat model is already loaded.
             # Let exceptions propagate so the DispatchQueue marks the job as
@@ -466,6 +705,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 client.load_model(
                     model_id, ctx_size=resolve_ctx_size(model_id), prompt=False
                 )
+                note_model_loaded(model_id)
 
         # Dispatch startup tasks.  Jobs A and B run in parallel; Job C
         # waits for A (needs Lemonade reachable) before loading the model.
@@ -506,6 +746,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         from gaia.ui.scheduler import Scheduler
 
         _sched_timeout = float(os.environ.get("GAIA_SCHEDULE_TIMEOUT", "300"))
+        scheduled_runs = _ScheduledRuns(db, _sched_timeout)
 
         async def _schedule_executor(prompt: str) -> str:
             """Execute a scheduled prompt through a fresh GAIA (flagship) agent.
@@ -525,11 +766,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                     "Stop the tunnel or set GAIA_AUTONOMOUS_ALLOW_TUNNEL=1."
                 )
 
-            loop = asyncio.get_running_loop()
-            return await asyncio.wait_for(
-                loop.run_in_executor(None, _run_scheduled_prompt, db, prompt),
-                timeout=_sched_timeout,
-            )
+            return await scheduled_runs.run(prompt)
 
         scheduler = Scheduler(db=db, executor=_schedule_executor)
         app.state.scheduler = scheduler
@@ -546,6 +783,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         app.state.document_monitor = monitor
         await monitor.start()
         logger.info("Document file monitor started (30s polling interval)")
+        recovery_sweep = asyncio.create_task(sweep_interrupted_work(db))
 
         # ── Connector activation watcher (issue #1226) ──────────────────
         # CLI/SDK activation writes land in the activations ledger from a
@@ -622,6 +860,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         await stop_watcher()
         logger.info("Connector activation watcher stopped")
+        recovery_sweep.cancel()
         db.close()
         logger.info("Database connection closed")
         memory_router_mod.close_store()
@@ -667,11 +906,15 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     # that CORS preflight (OPTIONS) responses are handled first.
     app.add_middleware(TunnelAuthMiddleware)
 
-    # Host / Origin / X-Gaia-UI guard. Added last so it is the OUTERMOST
-    # middleware: it runs before tunnel auth (which passes everything
+    # Host / Origin / X-Gaia-UI guard. Added after tunnel auth so it wraps
+    # it: it runs before tunnel auth (which passes everything
     # through while the tunnel is off) and its rejections carry no CORS
     # headers, so a cross-site page cannot read why it failed.
     app.add_middleware(UIRequestGuardMiddleware)
+
+    # Outermost, so the guard's and tunnel auth's own rejections get the
+    # charset too. It only rewrites a header, so the guard still runs first.
+    app.add_middleware(Utf8JsonMiddleware)
 
     # Store shared state on app.state so routers can access via Depends
     app.state.db = db
@@ -682,12 +925,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     tunnel = TunnelManager(port=DEFAULT_PORT)
     app.state.tunnel = tunnel
 
-    # Concurrency control for /api/chat/send
-    # ChatAgent is expensive (LLM connection, RAG indexing), so we limit
-    # the number of concurrent chat requests to avoid resource exhaustion.
-    app.state.chat_semaphore = asyncio.Semaphore(
-        1
-    )  # serialize: _TOOL_REGISTRY is global
     # Per-session locks prevent the same session from having multiple
     # concurrent requests, which would corrupt conversation state.
     app.state.session_locks: dict = {}  # session_id -> asyncio.Lock
@@ -697,6 +934,16 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     # Prevent stack traces from leaking to external users (CodeQL
     # py/stack-trace-exposure).  Log the full traceback server-side
     # for debugging, but return only a generic error message.
+    from gaia.ui._chat_helpers import DocumentsFolderError
+
+    @app.exception_handler(DocumentsFolderError)
+    async def _documents_folder_error_handler(
+        request: Request, exc: DocumentsFolderError
+    ):
+        # Its message is the fix; "Internal server error" would hide it.
+        logger.error("%s %s: %s", request.method, request.url.path, exc)
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+
     @app.exception_handler(Exception)
     async def _global_exception_handler(request: Request, exc: Exception):
         logger.error(
@@ -706,9 +953,11 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             exc,
             traceback.format_exc(),
         )
+        # Served outside every middleware, so it names its own charset.
         return JSONResponse(
             status_code=500,
             content={"detail": "Internal server error"},
+            media_type="application/json; charset=utf-8",
         )
 
     # ── Include Routers ──────────────────────────────────────────────────
@@ -717,11 +966,14 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(setup_router_mod.router)
     app.include_router(lemonade_router_mod.router)
     app.include_router(providers_router_mod.router)
+    app.include_router(spending_router_mod.router)
     app.include_router(skills_router_mod.router)
     app.include_router(hub_router_mod.router)
     app.include_router(agents_router_mod.router)
     app.include_router(sessions_router_mod.router)
     app.include_router(chat_router_mod.router)
+    app.include_router(changes_router_mod.router)
+    app.include_router(environment_router_mod.router)
     app.include_router(documents_router_mod.router)
     app.include_router(files_router_mod.router)
     app.include_router(tunnel_router_mod.router)
@@ -923,7 +1175,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         )
         return redirect
 
-    @app.get("/{full_path:path}")
+    @app.get("/{full_path:spa_path}")
     async def serve_spa(request: Request, full_path: str):
         """Serve the React SPA for all non-API routes.
 

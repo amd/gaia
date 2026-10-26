@@ -281,6 +281,27 @@ class TestErrors:
         assert "lemonade-server serve" not in message
         assert "Lemonade" in message
 
+    @pytest.mark.parametrize(
+        "body, shown",
+        [
+            ({"error": "Unauthorized: invalid API key"}, "invalid API key"),
+            ({"error": {"message": "bad provider", "type": "x"}}, "bad provider"),
+            ("plain text", "plain text"),
+            ([], ""),
+        ],
+    )
+    def test_any_error_body_becomes_a_gateway_error(self, manager, body, shown):
+        """Lemonade's 401 (a restarted server holds a new key) says
+        {"error": "<text>"}, not an object; reading it once crashed every cloud
+        turn's key replay with AttributeError."""
+        with patch(
+            "gaia.llm.gateway.requests.request",
+            return_value=_response(status_code=401, body=body),
+        ):
+            with pytest.raises(GatewayError, match="HTTP 401") as excinfo:
+                manager.status()
+        assert shown in str(excinfo.value)
+
     def test_404_on_a_cloud_route_points_at_the_version_requirement(self, manager):
         with patch(
             "gaia.llm.gateway.requests.request",
@@ -882,3 +903,54 @@ class TestPreCloudOffloadServerIsRejected:
             assert (
                 manager.install("https://gw.example.com/v1")["models_discovered"] == 0
             )
+
+
+# ── check_reachable (#5604) ────────────────────────────────────────────────
+
+
+def test_check_reachable_dials_the_gateway_host_on_443(monkeypatch):
+    import socket
+
+    from gaia.llm import gateway
+
+    dialed = []
+
+    class _Conn:
+        def close(self):
+            pass
+
+    def fake_connect(addr, timeout):
+        dialed.append((addr, timeout))
+        return _Conn()
+
+    monkeypatch.setattr(socket, "create_connection", fake_connect)
+    gateway.check_reachable("https://llm-api.amd.com/Unified/v1")
+    gateway.check_reachable("http://gw.example.test:8080/v1")
+    assert [a for a, _ in dialed] == [
+        ("llm-api.amd.com", 443),
+        ("gw.example.test", 8080),
+    ]
+    assert all(t == gateway.REACH_TIMEOUT for _, t in dialed)
+
+
+def test_check_reachable_raises_no_network_for_an_unresolvable_host(monkeypatch):
+    import socket
+
+    from gaia.llm import gateway
+
+    def fail(addr, timeout):
+        raise socket.gaierror(8, "nodename nor servname provided, or not known")
+
+    monkeypatch.setattr(socket, "create_connection", fail)
+    with pytest.raises(gateway.GatewayUnreachable) as exc:
+        gateway.check_reachable(None)
+    assert exc.value.host == "llm-api.amd.com"
+    assert str(exc.value).startswith("No network available")
+    assert "key" not in str(exc.value).lower()
+
+
+def test_check_reachable_refuses_a_url_with_no_host():
+    from gaia.llm import gateway
+
+    with pytest.raises(ValueError):
+        gateway.check_reachable("not a url")

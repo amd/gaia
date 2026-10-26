@@ -31,9 +31,15 @@ from gaia.agents.base.checks import (
     check_from_command,
     check_from_python_run,
 )
-from gaia.agents.base.claims import claims_success, passing_test_claim
+from gaia.agents.base.claims import (
+    claims_success,
+    passing_test_claim,
+    reports_test_failure,
+)
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import (
+    NO_TEST_RUN,
+    TEST_RUN_FAILED,
     is_file_mutation,
     strip_verification_scope,
     unsupported_test_claim,
@@ -52,6 +58,27 @@ FABRICATED = (
 HONEST = (
     "Fixed the family matrix lookup in amdgpu_family_matrix.py.\n\n"
     "I never got to run anything — treat that file as unfinished work."
+)
+
+
+#: Honest reports of a run that partly failed: the pass half sits in a clause
+#: next to the failure, so a clause split alone would read it as a claim.
+MIXED_REPORTS = (
+    "The unit tests pass, but the integration test fails.",
+    "52 passed; 3 failed.",
+    "52 tests passed - 3 failed.",
+    "69 passed, 3 failed.",
+    "Most tests pass, but 3 fail.",
+    "40 tests pass but 2 are failing.",
+    "The unit tests pass, but the integration tests don't pass.",
+    "The unit tests pass, but the e2e suite does not pass yet.",
+    "Unit tests pass; the e2e suite is still failing.",
+    "The tests pass, however test_login fails intermittently.",
+    "All but one test pass - test_api failed.",
+    "Tests: 52 passed, 2 errors.",
+    "The unit tests pass, but test_api has 2 failures.",
+    "The parser tests pass, whereas 3 tests in test_io.py failed.",
+    "Unit tests are green; integration tests are not passing.",
 )
 
 
@@ -361,6 +388,21 @@ def test_a_malformed_check_fails_loudly():
             "tests pass",
         ),
         ("To confirm, I checked: 12 passed.", "12 passed"),
+        # A negation exempts its own clause, not the claim beside it.
+        ("All 55 tests pass, but I did not run the linter.", "55 tests pass"),
+        ("I did not run lint, but all 55 tests pass.", "55 tests pass"),
+        ("The tests pass; however, coverage was not checked.", "tests pass"),
+        ("All 9 tests pass - I never ran the linter.", "9 tests pass"),
+        # A zero failure count is part of the pass report.
+        ("52 passed, 0 failed.", "52 passed"),
+        (
+            "All 12 tests pass with no failures, but I did not run lint.",
+            "12 tests pass",
+        ),
+        ("None of the tests fail now; 52 passed.", "52 passed"),
+        ("52 passed, 3 xfailed.", "52 passed"),
+        # "The failure" names what was fixed; it reports no failing run.
+        ("I fixed the import failure; all tests pass.", "tests pass"),
     ],
 )
 def test_a_concrete_test_outcome_is_a_claim(answer, expected):
@@ -385,6 +427,13 @@ def test_a_concrete_test_outcome_is_a_claim(answer, expected):
         "Next steps:\n- Run the full test suite\n- Tag a release",
         "I rewrote the loader and documented TOYBOX_CONFIG.",
         "Done. Both bugs are fixed.",
+        "Two tests still fail, but the discount one passes now.",
+        "The tests do not pass, but the build is green.",
+        "Not all tests pass, but most do.",
+        "I could not run the tests, but they should pass.",
+        "Although I didn't run the integration tests, the unit tests pass.",
+        # A sentence that also reports a failure is an honest mixed report.
+        *MIXED_REPORTS,
         "",
     ],
 )
@@ -399,6 +448,8 @@ def test_the_broad_success_detector_lives_in_one_place():
     assert code_bench.claims_success is claims_success
     assert claims_success("Both bugs are fixed now.")
     assert not claims_success("I could not get the last test passing.")
+    # Sentence-wide negation on purpose: this one is an honest report.
+    assert not claims_success("Done, but two tests still fail.")
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +520,75 @@ def test_a_refused_check_never_ran():
     claim, why = unsupported_test_claim(FABRICATED, [refused])
     assert claim == "111 passed"
     assert "no tests were run" in why
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("52 passed; 3 failed.", True),
+        ("the integration test fails", True),
+        ("2 tests are failing", True),
+        ("the tests do not pass", True),
+        ("4 errors", True),
+        ("52 passed, 0 failed.", False),
+        ("no failures", False),
+        ("none of the tests fail", False),
+        ("without any errors", False),
+        ("I fixed the failing test.", False),
+        ("I fixed the import failure.", False),
+        ("3 xfailed", False),
+        ("", False),
+    ],
+)
+def test_a_failure_report_is_told_from_a_failure_named(text, expected):
+    assert reports_test_failure(text) is expected
+
+
+@pytest.mark.parametrize("answer", MIXED_REPORTS)
+def test_a_mixed_report_after_a_failed_run_is_honest(answer):
+    assert unsupported_test_claim(answer, [_run(_check(False))]) is None
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "52 tests pass. 3 fail.",
+        "Fixed the parser. 52 passed.\n\nThe remaining 3 failed on the old fixture.",
+        "All unit tests pass.\nThe integration suite is still failing.",
+    ],
+)
+def test_a_mixed_report_split_over_sentences_is_honest_after_a_failed_run(answer):
+    """The run failed and the answer says so: the pass half is the run, too."""
+    assert unsupported_test_claim(answer, [_run(_check(False))]) is None
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "52 tests pass. 3 fail.",
+        "Fixed the parser. 52 passed.\n\nThe remaining 3 failed on the old fixture.",
+    ],
+)
+def test_a_mixed_report_with_no_run_behind_it_is_still_unsupported(answer):
+    claim, why = unsupported_test_claim(answer, [_run()])
+    assert claim
+    assert "no tests were run" in why
+
+
+@pytest.mark.parametrize(
+    "answer, claim",
+    [
+        ("All 55 tests pass, but I did not run lint.", "55 tests pass"),
+        ("All 55 tests pass; I never ran the linter.", "55 tests pass"),
+        ("I fixed the failing test. All 55 tests pass.", "55 tests pass"),
+        ("52 passed, 0 failed.", "52 passed"),
+    ],
+)
+def test_a_pass_claim_beside_a_non_failure_is_still_caught(answer, claim):
+    assert unsupported_test_claim(answer, []) == (claim, NO_TEST_RUN)
+    found, why = unsupported_test_claim(answer, [_run(_check(False))])
+    assert found == claim
+    assert why == TEST_RUN_FAILED
 
 
 def test_an_answer_without_a_claim_is_never_unsupported():
@@ -616,6 +736,17 @@ def test_a_failed_check_in_the_record_is_named_in_the_correction(agent):
     assert "didn't pass" in sent[2][-1]["content"]
 
 
+def test_an_honest_mixed_report_after_a_failed_run_is_not_corrected(agent):
+    agent.run_result = attach_check({"status": "success"}, _check(False))
+    mixed = "Fixed the parser. The unit tests pass, but the integration test fails."
+    sent = _stub_chat(agent, _run_tests(), _answer(mixed))
+
+    result = agent.process_query("Fix the parser", max_steps=10)
+
+    assert len(sent) == 2
+    assert _final_text(result) == mixed
+
+
 def test_a_check_before_the_last_edit_does_not_support_the_claim(agent):
     agent.run_result = attach_check({"status": "success"}, _check())
     sent = _stub_chat(
@@ -647,24 +778,49 @@ def test_an_answer_without_a_claim_is_never_corrected(agent):
     assert _final_text(result) == HONEST
 
 
-def test_a_second_unsupported_answer_is_suppressed(agent):
+def test_a_repeated_unsupported_claim_is_kept_with_a_caveat(agent):
+    """The same claim after its correction is a disagreement, not a new slip."""
     repeats = [_answer(FABRICATED)] * (_MAX_TEST_CLAIM_CORRECTIONS + 2)
     sent = _stub_chat(agent, *repeats)
 
     result = agent.process_query("Fix the matrix lookup", max_steps=10)
 
-    assert len(sent) == _MAX_TEST_CLAIM_CORRECTIONS + 1
-    assert FABRICATED not in result["result"]
+    assert len(sent) == 2
+    assert result["result"].startswith(FABRICATED)
+    assert "No tests were run this turn." in result["result"]
     assert result["status"] == "incomplete"
 
 
-def test_no_step_left_returns_incomplete_without_the_claim(agent):
+def test_a_new_false_claim_in_the_rewrite_is_corrected_too(agent):
+    rewrite = "Fixed the lookup. All 55 tests pass, but I did not run the linter."
+    sent = _stub_chat(agent, _answer(FABRICATED), _answer(rewrite), _answer(HONEST))
+
+    result = agent.process_query("Fix the matrix lookup", max_steps=10)
+
+    assert len(sent) == 3
+    assert "55 tests pass" in sent[2][-1]["content"]
+    assert _final_text(result) == HONEST
+
+
+def test_corrections_stop_at_the_cap(agent):
+    claims = [_answer(f"Fixed it. {n} passed.") for n in range(1, 6)]
+    sent = _stub_chat(agent, *claims)
+
+    result = agent.process_query("Fix the matrix lookup", max_steps=10)
+
+    assert len(sent) == _MAX_TEST_CLAIM_CORRECTIONS + 1
+    assert "No tests were run this turn." in result["result"]
+    assert result["status"] == "incomplete"
+
+
+def test_no_step_left_keeps_the_claim_and_names_the_gap(agent):
     sent = _stub_chat(agent, _answer(FABRICATED))
 
     result = agent.process_query("Fix the matrix lookup", max_steps=1)
 
     assert len(sent) == 1
-    assert FABRICATED not in result["result"]
+    assert result["result"].startswith(FABRICATED)
+    assert "No tests were run this turn." in result["result"]
     assert result["status"] == "incomplete"
     assert "No tests were run this turn." in result["result"]
 

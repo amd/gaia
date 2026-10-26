@@ -302,7 +302,7 @@ func formatByteSize(n int) string {
 
 // quotePathForComposer wraps path in double quotes when it contains
 // whitespace, matching how Windows Terminal already quotes a dropped file's
-// path before it ever reaches the composer (see docs/guides/terminal-hub.mdx)
+// path before it ever reaches the composer (see docs/guides/tui.mdx)
 // — a pasted screenshot's temp path must parse the same way a dropped one
 // does, and %TEMP% commonly contains a space (the Windows profile directory
 // name).

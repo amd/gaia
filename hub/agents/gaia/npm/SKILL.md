@@ -247,7 +247,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.17**; the stream is
+package — call it with plain `fetch`. Contract version **2.21**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -256,9 +256,13 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 |---|---|---|
 | `query` | yes | Non-empty. |
 | `run_id` | yes | **You mint it**, and it must be a UUID (non-UUID → 422). It is the cancel handle, valid from the instant the request is sent. |
-| `context` | yes | Transcript slice, pushed in the body — may be `[]`, never absent. Each item `{ role, content }`; `role` ∈ `user` / `assistant` / `system` / `tool`. |
+| `context` | yes | Transcript slice, pushed in the body — may be `[]`, never absent. Each item `{ role, content }`; `role` ∈ `user` / `assistant` / `system` / `tool`. If it doesn't fit beside the agent's prompt and tools in the model's window, the agent keeps the newest whole turns that do and says so in a `status` event. |
 | `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. 1–128 characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a **400**. |
 | `documents` | no | Contract ≥ 2.16. Absolute paths of the files the user attached to this conversation — send the whole set **every turn**. The agent indexes any it has not read yet before the turn runs, granting each exact file and not its folder. A relative path is a **422**. A missing file, a folder, or a refused secret is named as not indexed in the turn's `index_documents` step, and the turn still runs. |
+| `allowed_paths` | no | Contract ≥ 2.18. Absolute folder or file paths the conversation may read — the scope your UI shows. A new session gets exactly this scope; a retained session adds any entry it lacks and never drops one until the session ends. `GAIA_ALLOWED_PATHS` still narrows it. A relative path is a **422**. Omit it for the agent's default scope. |
+| `memory` | no | Contract ≥ 2.18. `"on"`, `"private"` or `"off"`. Under `"private"` or `"off"` the turn saves nothing to memory, including errors and lessons the agent saves on its own. A retained session keeps the last value: send it every turn. |
+| `changes_turn_id` | no | Contract ≥ 2.19. Needs `session_id`. The agent copies each file before changing it, under `<GAIA home>/snapshots/<session_id>/<changes_turn_id>/`, so the turn can be reviewed and undone; the copies are complete before the terminal event. Format: 14 digits of local time, `-`, 8 hex digits (`YYYYmmddHHMMSS-xxxxxxxx`); anything else is a **422**. Omit it to copy nothing. |
+| `surface` | no | Contract ≥ 2.20. `"agent_ui"`, `"tui"` or `"cli"` — the front-end the turn comes from. With `"agent_ui"` the agent points recurring requests at the Agent UI's **Scheduled tasks** page. It also picks where a model-provider error tells the user to fix it; omitted (a headless caller), that is the model server the GAIA host uses (`LEMONADE_BASE_URL`). Read when a session is built. |
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
 | `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
 | `provider` | no | `"lemonade"` (the default backend) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. When you name it, `model` must agree: under `"claude"` it must be a `claude-*` id, under `"lemonade"` it must not be. A mismatch is a **400**, on a new session or an existing one. Omit it and the `model` decides instead — a `claude-*` id alone reaches Anthropic, any other id runs locally — so there is nothing to mismatch. On a retained `session_id`, naming a different provider switches the session to it in place, onto `model` or, without one, the provider's default model; omitting both leaves the session where it is. |
@@ -317,13 +321,13 @@ The canonical event shapes, as emitted:
 
 | Event | Shape |
 |---|---|
-| `status` | `{ type, message, phase?, words?, chars? }` — progress and reasoning narration. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`) names what the model is doing; show it as the live line, not as narration |
+| `status` | `{ type, message, phase?, words?, chars?, queue? }` — progress and reasoning narration. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`, `model_queue`) names what the model is doing; show it as the live line, not as narration. `model_queue` means the turn is waiting for the model behind another request: it repeats every ~2 s with a `queue` object (`event`, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`), so its steady arrival means queued, not stuck |
 | `token` | `{ type, delta }` — answer text to append |
-| `tool_call` | `{ type, tool, args }` |
-| `tool_result` | `{ type, tool, data, render? }` |
-| `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope? }` — answer it, or it ends the run; see §8 |
+| `tool_call` | `{ type, tool, args, mcp_server?, mcp_server_label?, mcp_tool? }` — an MCP tool names its connector (`mcp_server_label`, e.g. `"Git"`) and the server's own tool name (`mcp_tool`, e.g. `"git_log"`); label the call with those, not the prefixed `tool` |
+| `tool_result` | `{ type, tool, data, render? }` — an MCP tool that returned text carries it in `data.mcp_output` (`{ text, truncated }`) |
+| `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say) and `risk_note` (why GAIA's checks don't cover the call) |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
-| `final` | `{ type, answer, usage? }` — terminal |
+| `final` | `{ type, answer, usage?, failed? }` — terminal. `failed: true`: the model failed mid-turn and `answer` says what was and wasn't done; show it as an error, not a result |
 | `error` | `{ type, detail, status }` — terminal, surface `detail` verbatim |
 
 Rules a client must respect:
@@ -342,7 +346,10 @@ Rules a client must respect:
 - **Cancel with `POST /v1/gaia/query/{run_id}/cancel`.** It returns
   `{ run_id, cancelled }` — an unknown id reports `cancelled: false` with a
   **200**, not a 404, because a cancel racing a normal completion is expected.
-  Dropping the HTTP connection also cancels the run.
+  Dropping the HTTP connection also cancels the run. A run stopped mid-answer
+  ends with an empty `final`, and no `token` follows the cancel, so keep the
+  text the `token` events already delivered. Text not yet sent when the
+  cancel lands is dropped, not delivered late.
 - **Add to a running turn with `POST /v1/gaia/query/{run_id}/followup`**
   (contract ≥ 2.15, body `{ text }`). The run is not interrupted and no second
   turn starts: the agent folds the text in at its next step boundary and
@@ -374,8 +381,7 @@ land is additionally **code-inert**: its instructions load, but any
 indexing, querying, web fetching, memory, and the read-only `check_cli_setup`
 — runs without asking. A write or edit inside the agent's own scratch
 folder (`gaia-scratch-…` under the system temp folder) runs without asking too,
-and running a script from it carries `always_scope` "Python scripts in GAIA's
-scratch folder".
+so running a script from it asks every time and carries no `always_scope`. So does a shell command run there or naming a path there, and a script handed a scratch path as an argument.
 
 The eight live-browser tools are gated by a **hook**, not a set, so a name
 alone does not tell you whether a call will ask. `browser_login` always asks.
@@ -390,7 +396,7 @@ Design a workflow around the approval path, not around a fixed tool list.
 carrying a `confirm_id` and then **stays open** while the agent waits:
 
 ```
-data: {"type":"needs_confirmation","run_id":"…","action":"run_shell_command","summary":"python -m pytest -q tests/\nCan run any code, with your permissions.","confirm_id":"…","always_scope":"pytest","risk":"execute"}
+data: {"type":"needs_confirmation","run_id":"…","action":"run_shell_command","summary":"python -m pytest -q tests/\nCan run any code, with your permissions.","confirm_id":"…","always_scope":"pytest (runs the test code it finds)","risk":"execute"}
 ```
 
 Answer it on the same run, then keep reading the stream:
@@ -440,6 +446,12 @@ arbitrary code execution, appropriate for one local parent on a private pipe and
 not for a bound socket, so it stays on stdio: HTTP sessions never lift the shell
 gates, and the request body rejects unknown fields so a client cannot ask. See
 SPEC §5.5.
+
+So a shell command past those gates (a delete, `git add`) is never run unasked
+under bypass. On a run someone can answer (`can_answer_questions` not `false`,
+with a `session_id`) it emits `needs_confirmation` and waits for
+`/tool_decision`, exactly as with bypass off; commands that need no approval
+still run unasked. A run nobody can answer refuses it, as below.
 
 **A run nobody can answer is still refused.** With `can_answer_questions: false`,
 or with no `session_id`, the server emits `needs_confirmation`, follows it
@@ -525,7 +537,10 @@ request for every item in a document to it, and it drives
 `extract_document_items` and `save_extracted_items` so a long transcript yields
 a complete, source-quoted inventory rather than a summary. A skill turns that
 inventorying on only by listing `extract_document_items` in `tools_required`;
-wording such as "find every call site" in another skill does not.
+wording such as "find every call site" in another skill does not. Loading it
+registers the tools at once, so `load_skill` never reports them missing; coverage
+is enforced only when the request itself names a source document or asks for
+every item, and a file the user named as a deliverable is never a source.
 
 **No skill *set* loads.** `gaia-agent.yaml` ships its `skill_sets:` and
 `default_skill_set:` blocks **commented out** — following the email agent's
@@ -638,7 +653,7 @@ There is no silent null.
   temp dir) is dropped, and a **shared** bin directory is moved to the end
   instead of removed, so the `python3` / `lemonade-server` / real `gaia` beside
   it stay reachable. If the Python CLI isn't installed anywhere, the daemon never
-  comes up. It must also be **0.25.0+**: an older core's daemon starts fine but
+  comes up. It must also be **0.25.1+**: an older core's daemon starts fine but
   cannot run this agent, which reads as a UI with a dead agent rather than as
   a version problem.
 - **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact
@@ -669,7 +684,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.17","agentVersion":"0.1.1"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.21","agentVersion":"0.3.1"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \

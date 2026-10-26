@@ -169,6 +169,8 @@ def unrestricted(monkeypatch):
     monkeypatch.setattr(
         ShellToolsMixin, "_validate_command", staticmethod(lambda *a, **k: None)
     )
+    # So is the system-install guard, which depends on this machine's `pip`.
+    monkeypatch.setattr(ShellToolsMixin, "_system_install_block", lambda *a, **k: None)
 
 
 # ---------------------------------------------------------------------------
@@ -179,11 +181,12 @@ def unrestricted(monkeypatch):
 class TestTimeoutClasses:
     """Every class in the table is named, enumerated, and has a stated default."""
 
-    def test_the_four_classes_and_their_defaults(self):
+    def test_the_classes_and_their_defaults(self):
         assert {name: cls.seconds for name, cls in TIMEOUT_CLASSES.items()} == {
             "test": 900,
             "build": 1800,
             "network": 300,
+            "script": 600,
             "default": 30,
         }
 
@@ -258,6 +261,137 @@ class TestTimeoutClasses:
     )
     def test_everything_else(self, command):
         assert classify_command(command).name == "default"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "python analyze.py big.csv",
+            "python3 -u scripts/train.py --epochs 3",
+            "py -3 report.py",
+            "python -m mypkg.analyze data/",
+            "python -c \"import pandas; print(pandas.read_csv('big.csv').shape)\"",
+            "uv run python analyze.py",
+            "FOO=1 python analyze.py",
+            "node scripts/migrate.js",
+            "Rscript model.R",
+            "bash ./run_all.sh",
+            "./run_all.sh",
+            r"powershell -File .\convert.ps1",
+            "cd data && python clean.py | tail -5",
+        ],
+    )
+    def test_scripts_get_the_script_class(self, command):
+        # A user's script is real work: under a saturated machine it is the
+        # first thing a 30s kill hits.
+        assert classify_command(command).name == "script"
+
+    @pytest.mark.parametrize(
+        "command,expected_class",
+        [
+            ("python -m pytest tests/", "test"),
+            ("python -m pip install requests", "build"),
+            ("python --version", "default"),
+            ("python", "default"),
+            ("node --version", "default"),
+            ("bash --version", "default"),
+            ("sh", "default"),
+            ("bash -c 'pytest -q'", "test"),
+            ("bash -c 'ls -la'", "default"),
+            ("bash -lc 'pip install requests'", "build"),
+            # Each of these differs from what -c/a cluster/an operand alone gives.
+            ("bash -ec 'pip install requests'", "build"),
+            ("bash -lc 'ls'", "default"),
+            ("bash run.sh -c cfg.yml", "script"),
+            ('powershell -Command "npm run build"', "build"),
+            ("pwsh -c 'pytest -q'", "test"),
+            ("powershell Get-ChildItem", "default"),
+            ("powershell -File build.ps1", "script"),
+            ("powershell -ExecutionPolicy Bypass -File build.ps1", "script"),
+            (
+                'powershell -NoProfile -ExecutionPolicy Bypass -Command "pip install x"',
+                "build",
+            ),
+            ("pwsh -WindowStyle Hidden -Command 'pytest -q'", "test"),
+            ("bash -o pipefail -c 'pytest -q'", "test"),
+            ("bash -euo pipefail -c 'pytest -q'", "test"),
+            ("set -euo pipefail; pytest -q", "test"),
+            ("python3.12 analyze.py", "script"),
+            (r"C:\Python312\python.exe analyze.py", "script"),
+            ("cmd /c build.bat", "script"),
+            ("cmd /c dir", "default"),
+            ("cmd /c npm install", "build"),
+            ("node -e 'console.log(1)'", "script"),
+            ("npm.cmd install", "build"),
+            ("npm.cmd test", "test"),
+            ("pytest.cmd tests/", "test"),
+            ("gradlew.bat test", "test"),
+            ("gaia.cmd eval agent", "test"),
+            ("cat run.sh", "default"),
+            ("grep foo main.py", "default"),
+        ],
+    )
+    def test_a_known_tool_keeps_its_class_whatever_launches_it(
+        self, command, expected_class
+    ):
+        assert classify_command(command).name == expected_class
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "python -m http.server 8000",
+            "python app.py",
+            "python3 -u server.py --port 5000",
+            "python manage.py runserver",
+            "node server.js",
+            "uvicorn main:app --reload",
+            "flask run",
+            "streamlit run dashboard.py",
+            "npm start",
+            "npm run dev",
+            "pnpm dev",
+            "yarn start",
+            "vite",
+            "next dev",
+            "jupyter lab",
+            "cd web && npm run dev",
+            "npx vite",
+            "python -m flask run",
+            "php -S localhost:8000",
+            'powershell -Command "npm run dev"',
+            "node -r dotenv/config server.js",
+            "php artisan serve",
+            "python -m mkdocs serve",
+            "mkdocs serve",
+        ],
+    )
+    def test_dev_servers_stay_at_the_short_default(self, command):
+        # A server never exits: a longer budget only holds the turn silently.
+        assert classify_command(command).name == "default"
+
+    @pytest.mark.parametrize(
+        "command,expected_class",
+        [
+            ("vite build", "build"),
+            ("npm run build", "build"),
+            ("python analyze_app_logs.py", "script"),
+            ("pytest tests/test_server.py", "test"),
+            ("cat server.py", "default"),
+            # Installing or fetching a server is not running one.
+            ("pip install uvicorn", "build"),
+            ("uv pip install uvicorn", "build"),
+            ("npm install vite", "build"),
+            ("npm i nodemon", "build"),
+            ("pnpm add vite", "build"),
+            ("apt-get install -y nodemon", "build"),
+            ("git clone https://github.com/http-party/http-server", "network"),
+            ("pip install flask && flask --version", "build"),
+            ("node -r dotenv/config migrate.js", "script"),
+            ("php artisan migrate", "script"),
+            ("mkdocs build", "default"),
+        ],
+    )
+    def test_server_rules_do_not_catch_ordinary_commands(self, command, expected_class):
+        assert classify_command(command).name == expected_class
 
     def test_a_pipeline_takes_its_longest_segment(self):
         # The shell waits for the whole pipeline, so `grep` does not make a
@@ -352,6 +486,7 @@ class TestResolveTimeout:
         ("cd . && pytest tests/", 900, "test"),
         ("pip install -e . && pytest -q", 1800, "build"),
         ("git clone --help", 300, "network"),
+        ("python analyze.py big.csv", 600, "script"),
         ("ls -la", 30, "default"),
     ],
 )

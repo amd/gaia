@@ -1,8 +1,9 @@
 # GAIA Website
 
-Developer-focused landing page and Agent Hub for GAIA - Local AI Agents framework.
+Developer-focused landing page for GAIA - Local AI Agents framework.
 
-Serves `amd-gaia.ai` (landing page + `/hub`). The `/docs` tab is Mintlify, a
+Serves `amd-gaia.ai` (the landing page and its downloads). The retired `/hub`
+pages redirect to `/#install` (`public/serve.json`). The `/docs` tab is Mintlify, a
 separate origin — see [Deployment](#deployment) for how the two are stitched
 together.
 
@@ -18,11 +19,11 @@ together.
 # Install dependencies
 npm install
 
-# Start dev server (HUB_CATALOG_URL is REQUIRED — see below)
-HUB_CATALOG_URL=https://hub.amd-gaia.ai npm run dev
+# Start dev server (fetches the GitHub release at build time — see below)
+npm run dev
 
 # Build for production
-HUB_CATALOG_URL=https://hub.amd-gaia.ai npm run build
+npm run build
 
 # Preview production build
 npm run preview
@@ -31,28 +32,29 @@ npm run preview
 npm test
 ```
 
-## Hub catalog data (`HUB_CATALOG_URL`)
+## Download data (GitHub releases)
 
-The Agent Hub pages (`/hub`) are built **entirely from the live hub catalog**,
-fetched at build time from `${HUB_CATALOG_URL}/index.json` (the agent-hub Worker,
-`workers/agent-hub/`).
+Every download button on the home page links to an asset of the newest stable
+GitHub release (`github.com/amd/gaia/releases`), resolved at build time by
+`src/data/github.ts`. Linking GitHub rather than `hub.amd-gaia.ai` is what makes
+the site's downloads countable: GitHub keeps a `download_count` per asset. The
+release candidate entry links the candidate's own assets the same way.
 
-**`HUB_CATALOG_URL` is required. There is no bundled fixture and no offline
-path.** If it is unset, or the fetch fails, or the shape is wrong, the build
-**fails loudly** — it never falls back to stale data, so the site can never drift
-from what is actually published. This is deliberate; do not add a fallback.
+A platform whose asset is not on the release gets no button. **There is no
+bundled fixture and no fallback to the hub.** If the GitHub API fetch fails, or
+the stable release carries no desktop or no terminal build at all, the build
+**fails loudly**. This is deliberate; do not add a fallback.
+
+`GITHUB_TOKEN` is optional and only raises the API rate limit (60/hr
+unauthenticated, 5,000/hr with a token). A build that hits the limit fails with
+HTTP 403; set the token and rebuild.
+
+To read the counts:
 
 ```bash
-HUB_CATALOG_URL=https://hub.amd-gaia.ai npm run build
+gh api repos/amd/gaia/releases/tags/v0.25.1 \
+  --jq '.assets[] | "\(.download_count)\t\(.name)"'
 ```
-
-Consequences worth knowing before you debug a red build:
-
-- **A hub outage blocks every website build** — local, CI, and deploy alike.
-  A failing build here is often a hub problem, not a website problem. Check
-  `GET https://hub.amd-gaia.ai/health` first.
-- The entry shape is defined by `workers/agent-hub/schemas/index.schema.json`
-  and mirrored by the `Agent` interface in `src/data/catalog.ts`.
 
 ## Project Structure
 
@@ -61,30 +63,13 @@ website/
 ├── public/                          # Static assets
 │   ├── favicon.ico
 │   ├── gaia-icon.png
-│   └── robots.txt
+│   ├── robots.txt
+│   └── serve.json                   # `serve` redirects (retired /hub → /#install)
 ├── scripts/
 ├── src/
-│   ├── components/                  # 18 Astro components
-│   │   ├── AgentIcon.astro
-│   │   ├── AgentRow.astro
-│   │   ├── DocTabs.astro
-│   │   ├── Eyebrow.astro
-│   │   ├── FeaturedCard.astro
-│   │   ├── FileTree.astro
-│   │   ├── Footer.astro
-│   │   ├── Header.astro
-│   │   ├── InstallCard.astro
-│   │   ├── InstallCommand.astro
-│   │   ├── InstallMethods.astro
-│   │   ├── SidebarCard.astro
-│   │   ├── StarField.astro          # Mounts the background canvas
-│   │   ├── StatBlock.astro
-│   │   ├── Terminal.astro
-│   │   └── WayCard.astro
+│   ├── components/                  # Astro components (Downloads, Header, Footer, …)
 │   ├── data/
-│   │   ├── catalog.ts               # Live hub catalog access (build-time fetch)
-│   │   ├── fileTree.ts              # Nested tree from package file listings
-│   │   ├── markdown.ts              # Dependency-free Markdown → semantic HTML
+│   │   ├── github.ts                # Build-time GitHub releases (downloads) and npm stats
 │   │   └── *.test.ts                # Vitest unit tests
 │   ├── design/
 │   │   ├── global.css               # Owns the @tailwind directives
@@ -94,9 +79,6 @@ website/
 │   ├── layouts/
 │   │   └── Layout.astro             # Base HTML layout
 │   ├── pages/
-│   │   ├── hub/
-│   │   │   ├── [id].astro           # Agent detail page (one per catalog entry)
-│   │   │   └── index.astro          # Agent Hub listing
 │   │   └── index.astro              # Landing page
 │   └── env.d.ts
 ├── .railwayignore                   # Excluded from the `railway up` upload
@@ -123,9 +105,14 @@ trusting a copy — the headlines only:
 - **Font (Display)**: Antonio — headings, buttons, figures, the wordmark
 - **Font (UI)**: Titillium Web, standing in for AMD's Klavika
 - **Font (Code)**: JetBrains Mono
-- **Background**: `src/scripts/starfield.ts`, a canvas of streaking stars. It
-  holds a still frame under `prefers-reduced-motion` or when a visitor pauses it
-  from the footer.
+- **Background**: `src/scripts/starfield.ts`, a deep Hubble field flown through
+  at warp: streaking stars, and real Hubble galaxies and clusters from the one
+  atlas in `public/space/` (credits in `public/space/CREDITS.md`). It holds a still
+  frame under `prefers-reduced-motion` or when a visitor pauses it from the footer.
+- **Headline**: `src/scripts/scramble.ts` resolves it out of the writing systems in
+  `src/data/scramble-scripts.ts`, on the starfield's warp clock. Their characters
+  come from `public/fonts/gaia-scripts.woff2`, a Noto subset (SIL OFL 1.1). Adding a
+  character means regenerating that subset, or it renders as a missing-glyph box.
 
 ## Deployment
 
@@ -161,29 +148,25 @@ domain, and is not affected by the apex route.
 Railway builds from `railway.json` (NIXPACKS, `npm install && npm run build`,
 served by `serve dist`) — it does **not** auto-detect Astro.
 
-Two pieces of configuration are required, and a missing one is a hard failure, not
-a degraded deploy:
+One piece of configuration is required, and missing it is a hard failure, not a
+degraded deploy:
 
 | What | Where | Why |
 | ---- | ----- | --- |
 | `RAILWAY_TOKEN` | GitHub repo secret | A Railway **project** token for `gaia-agent-hub`, production environment (Railway → project → Settings → Tokens). |
-| `HUB_CATALOG_URL=https://hub.amd-gaia.ai` | Railway service variable on `website` | The build has no fixture fallback, so without it the deploy **fails**. Set it in Railway → Variables. |
+| `GITHUB_TOKEN` (optional) | Railway service variable on `website` | Raises the GitHub API rate limit for the build. Unset works; a build that hits the 60/hr limit fails until it is set. |
 
-> Both live outside this repo (GitHub secrets and the Railway dashboard), so they
+> These live outside this repo (GitHub secrets and the Railway dashboard), so they
 > cannot be verified from a checkout. Treat the table as the required
 > configuration and confirm it in the respective dashboard when a deploy fails.
 
 ### Deploys only fire on `website/**` changes
 
-Both `deploy_website.yml` and `website-ci.yml` are path-filtered to `website/**`.
-A commit that only adds an agent under `hub/agents/` therefore **does not redeploy
-the site** — and since `/hub` is built from the live catalog at deploy time, a
-newly published agent will not appear on its own.
-
-Release workflows work around this by dispatching the deploy explicitly after a
-successful publish (see the "Redeploy the website to publish the new catalog
-entry" step in `.github/workflows/release_agent_email.yml`). You can do the same
-by hand:
+Both `deploy_website.yml` and `website-ci.yml` are path-filtered. The download
+links are resolved at build time, so a release dispatches the deploy explicitly
+once its assets are attached (`release_components.yml`, and `publish.yml` for a
+release candidate). You can do the
+same by hand:
 
 ```bash
 gh workflow run deploy_website.yml --ref main
@@ -193,13 +176,13 @@ gh workflow run deploy_website.yml --ref main
 
 To take the Astro site off the apex, delete the `amd-gaia.ai/*` Worker route (in
 the Cloudflare dashboard, or `npx wrangler triggers`) — traffic falls back to the
-zone origin, Mintlify. `/docs` keeps working; `/` and `/hub` disappear. This is
+zone origin, Mintlify. `/docs` keeps working; `/` disappears. This is
 the fastest way to revert a bad website deploy without touching Railway.
 
 ### Manual deploy
 
 ```bash
-HUB_CATALOG_URL=https://hub.amd-gaia.ai npm run build
+npm run build
 # Upload contents of dist/ to your hosting provider
 ```
 

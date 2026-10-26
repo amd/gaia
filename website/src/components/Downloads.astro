@@ -15,36 +15,34 @@
 // terminal — never shown a disabled button, a dead link, or wording that
 // implies a build is on the way.
 //
-// Every platform renders server-side, so a visitor with no JS gets the full
-// list below and a working link for both surfaces. JS reveals the block for
-// the machine it can place; a Mac behind Safari reports no architecture and so
-// matches BOTH Mac blocks (which is why the desktop card reads "Apple Silicon
-// download" and "no Intel build" together there), and a machine it cannot
-// place at all keeps the full list rather than guessing.
+// At first glance a placed machine sees one download per card, or on Windows
+// x64 with the combined setup that one installer under both cards. Every other
+// file is in the folded list, which a visitor with no JS can open too. JS
+// reveals the blocks for the machine it can place; a Mac behind Safari reports no
+// architecture and so matches BOTH Mac blocks (which is why the desktop card
+// reads "Apple Silicon download" and "no Intel build" together there), and a
+// machine it cannot place at all gets the full list opened rather than a guess.
 //
-// Windows is the one exception to "pick a card": from WINDOWS_SETUP_SINCE the
-// Windows setup asks for the desktop app, the terminal, or both while it runs,
-// so a Windows visitor gets that one setup instead of two cards to choose
-// between. Until a release publishes it, Windows renders as before.
-//
-// No link is invented here. A key resolves to an exact filename, that filename
-// has to match an artifact the hub published, and the href is that artifact's
-// `url` — the hub origin joined to the object `path` the manifest itself
-// declares (see getComponentRelease). A platform the hub has not published for
-// is therefore absent rather than a dead link.
+// Every link is an asset of the newest stable GitHub release, so GitHub's
+// per-asset download_count counts the site's downloads. No link is invented: a
+// key resolves to an exact asset name, that name has to be on the release, and
+// the href is that asset's own browser_download_url. A platform the release
+// carries no asset for is therefore absent rather than a dead link.
 
-import { formatBytes, getComponentRelease, type PlatformBinary } from '../data/catalog';
+import SurfacePreview from './SurfacePreview.astro';
+import { formatBytes, getStableRelease, type ReleaseAsset } from '../data/github';
+import { windowsCombinedSetup } from '../data/install-targets';
 import {
   DESKTOP_DOWNLOAD_LABELS,
   DESKTOP_MISSING_PLATFORMS,
   DESKTOP_PLATFORMS,
   DOWNLOAD_LABELS,
   INSTALLERS_FOR,
-  INSTALLER_CTA_LABELS,
   PLATFORM_LABELS,
   PLATFORM_ORDER,
   artifactFileName,
   desktopArtifactFileName,
+  desktopExtraFileNames,
   windowsSetupOffersChoice,
   type DownloadKey,
   type InstallerKey,
@@ -57,80 +55,96 @@ interface Props {
 
 const { class: className = '' } = Astro.props;
 
-const [desktop, tui] = await Promise.all([
-  getComponentRelease('agent-ui'),
-  getComponentRelease('terminal-hub'),
-]);
+const release = await getStableRelease();
+const { version } = release;
 
-// Key -> exact filename -> the artifact the hub actually published. The reverse
-// direction does not work: the manifest records no platform field, so deriving
-// one from a filename that carries a version silently drops artifacts.
-const publishedBy = (binaries: PlatformBinary[]) => {
-  const byFilename = new Map(binaries.map((b) => [b.filename, b]));
-  return (filename: string | null) => (filename ? byFilename.get(filename) : undefined);
-};
-
-const desktopPublished = publishedBy(desktop.binaries);
-const tuiPublished = publishedBy(tui.binaries);
+// Key -> exact asset name -> the asset the release actually carries. The reverse
+// direction does not work: a release also carries wheels, blockmaps and
+// checksum files, and deriving a platform from a name that carries a version
+// silently drops assets.
+const byName = new Map(release.assets.map((a) => [a.name, a]));
+const published = (name: string | null) => (name ? byName.get(name) : undefined);
 
 const desktopRows = DESKTOP_PLATFORMS.flatMap((platform) => {
-  const artifact = desktopPublished(desktopArtifactFileName(platform, desktop.version));
+  const artifact = published(desktopArtifactFileName(platform, version));
   return artifact ? [{ platform, artifact }] : [];
 });
 
-// A single platform missing is a coverage decision the page renders around.
-// ALL of them missing is not: the manifest has artifacts (getComponentRelease
-// throws otherwise), so the naming convention drifted and the desktop card
-// would quietly render with no download at all.
-if (!desktopRows.length) {
-  throw new Error(
-    `[downloads] The 'agent-ui' manifest publishes ${desktop.binaries.length} artifacts at ` +
-      `${desktop.version}, none of which match a known desktop filename ` +
-      `(${DESKTOP_PLATFORMS.map((p) => desktopArtifactFileName(p, desktop.version)).join(', ')}). ` +
-      `Update DESKTOP_FILENAMES in src/scripts/download-target.ts to what the hub now publishes.`,
-  );
-}
+// Other packagings of the desktop app (Linux's .deb): the list only, never a button.
+const desktopExtraRows = DESKTOP_PLATFORMS.flatMap((platform) =>
+  desktopExtraFileNames(platform, version).flatMap(({ label, name }) => {
+    const artifact = published(name);
+    return artifact ? [{ platform, label, artifact }] : [];
+  }),
+);
 
 interface TuiRow {
   platform: PlatformKey;
-  binary: PlatformBinary | undefined;
-  installers: { key: InstallerKey; artifact: PlatformBinary }[];
+  binary: ReleaseAsset | undefined;
+  installers: { key: InstallerKey; artifact: ReleaseAsset }[];
 }
 
 const tuiRow = (platform: PlatformKey): TuiRow => ({
   platform,
-  binary: tuiPublished(artifactFileName(platform, tui.version)),
+  binary: published(artifactFileName(platform, version)),
   installers: INSTALLERS_FOR[platform].flatMap((key) => {
-    const artifact = tuiPublished(artifactFileName(key as DownloadKey, tui.version));
+    const artifact = published(artifactFileName(key as DownloadKey, version));
     return artifact ? [{ key, artifact }] : [];
   }),
 });
 
 const tuiRows = PLATFORM_ORDER.map(tuiRow).filter((r) => r.binary || r.installers.length);
 
-// The setup that asks desktop app / terminal / both. Present only when the
-// published win-x64-setup is new enough to be that setup rather than the
-// terminal-only one earlier releases used the same filename for.
-const windowsSetup = windowsSetupOffersChoice(tui.version)
-  ? tuiRow('win-x64').installers.find((i) => i.key === 'win-x64-setup')?.artifact
-  : undefined;
+// A single platform missing is a coverage decision the page renders around. A
+// whole card with nothing to offer is not: the asset names drifted (or this is
+// not the release it looks like), and the card would quietly render with no
+// download at all.
+if (!desktopRows.length) {
+  throw new Error(
+    `[downloads] ${release.tag} carries ${release.assets.length} assets, none of which is a ` +
+      `desktop app build (${DESKTOP_PLATFORMS.map((p) => desktopArtifactFileName(p, version)).join(', ')}). ` +
+      `Check https://github.com/amd/gaia/releases/tag/${release.tag}; if the names changed, ` +
+      `update DESKTOP_FILENAMES in src/scripts/download-target.ts.`,
+  );
+}
+if (!tuiRows.length) {
+  throw new Error(
+    `[downloads] ${release.tag} carries ${release.assets.length} assets, none of which is a ` +
+      `terminal build (${PLATFORM_ORDER.map((p) => artifactFileName(p, version)).join(', ')}). ` +
+      `Check https://github.com/amd/gaia/releases/tag/${release.tag}; if the names changed, ` +
+      `update BINARY_FILENAMES in src/scripts/download-target.ts.`,
+  );
+}
 
-// With it, the per-surface Windows buttons are not rendered -- the setup is where
-// that choice is made -- and the terminal's Windows row in the full list keeps
-// only its raw binary, since the setup has a line of its own there.
+// Whether this release's win-x64-setup is the setup that asks desktop app /
+// terminal / both, rather than the terminal-only one earlier releases used the
+// same filename for. Shared with the header's Install button.
+const windowsCombined = windowsSetupOffersChoice(version);
+const windowsSetup = windowsCombinedSetup(release);
+
+// The terminal's Windows row in the full list keeps only its raw binary: the
+// setup, which installs either app or both, has a line of its own there.
 const isWindowsX64 = (p: PlatformKey) => p === 'win-x64';
-const desktopCtaRows = windowsSetup ? desktopRows.filter((r) => !isWindowsX64(r.platform)) : desktopRows;
-const tuiCtaRows = windowsSetup ? tuiRows.filter((r) => !isWindowsX64(r.platform)) : tuiRows;
-const tuiListRows = windowsSetup
+const tuiListRows = windowsCombined
   ? tuiRows.map((r) => (isWindowsX64(r.platform) ? { ...r, installers: [] } : r))
   : tuiRows;
+// "only" contrasts with the setup's line, so it needs that line on the page.
 const desktopListLabel = (p: PlatformKey) =>
   windowsSetup && isWindowsX64(p) ? 'Desktop app only (.exe)' : DESKTOP_DOWNLOAD_LABELS[p];
 
-// Until a release publishes installers none of these exist — a valid state, and
-// the terminal card is the binary offer it was before. Naming the architectures
-// that have no installer only makes sense once some architecture has one.
-const anyInstaller = tuiRows.some((r) => r.installers.length > 0);
+// One button per card at first glance; every other file is in the folded list.
+// A release with the combined Windows setup offers Windows x64 that one
+// installer under both cards instead of a button in each.
+const cardPlatform = (p: PlatformKey) => !(windowsSetup && isWindowsX64(p));
+const desktopCtaRows = desktopRows.filter((r) => cardPlatform(r.platform));
+const tuiCtaRows = tuiRows.filter((r) => cardPlatform(r.platform)).flatMap((r) => {
+  const installer = r.installers[0];
+  if (installer) {
+    return [{ platform: r.platform, kind: 'installer', artifact: installer.artifact, caption: DOWNLOAD_LABELS[installer.key] }];
+  }
+  if (!r.binary) return [];
+  return [{ platform: r.platform, kind: 'binary', artifact: r.binary, caption: DOWNLOAD_LABELS[r.platform] }];
+});
 
 // "a, b or c" — the missing-desktop platforms read as a sentence, not a list.
 const joinWithOr = (parts: string[]): string =>
@@ -149,45 +163,15 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
       the page's own headings. */}
   <h2 class="sr-only">Get GAIA</h2>
 
-  {/* One setup for Windows. Revealed for a Windows x64 visitor, and then the
-      two cards below are hidden: the choice between them is made in the setup.
-      space-y-3 for the same reason as the card stacks below. */}
-  {windowsSetup && (
-    <div class="mx-auto w-full max-w-[720px] space-y-3 text-left">
-      <section
-        data-dl-cta
-        data-surface="setup"
-        data-kind="setup"
-        data-platform="win-x64"
-        class="g-card p-[26px]"
-        hidden
-      >
-        <h3 class="g-h-card">GAIA for Windows</h3>
-        <p class="g-body mt-2.5">
-          One installer for both ways to use GAIA. While it runs, choose the desktop app,
-          the terminal, or both. Choosing both installs the two side by side, each with its
-          own shortcut, and they use the same local models.
-        </p>
-        <div class="mt-5">
-          <a href={windowsSetup.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
-            <Fragment set:html={DOWNLOAD_ICON} />
-            <span>{INSTALLER_CTA_LABELS['win-x64-setup']}</span>
-          </a>
-          <p class="g-body mt-2.5 text-[13px]">
-            Installer (.exe) · v{tui.version} · {formatBytes(windowsSetup.size_bytes)}
-          </p>
-        </div>
-      </section>
-    </div>
-  )}
-
-  {/* A plain wrapper carries `hidden`: the grid's own display class would
-      override the attribute. */}
-  <div data-dl-cards>
   <div class="mx-auto grid w-full max-w-[720px] gap-[18px] text-left sm:grid-cols-2">
     {/* ---- Desktop app ---- */}
     <section class="g-card p-[26px]">
-      <h3 class="g-h-card">Desktop app</h3>
+      <SurfacePreview
+        surface="agent-ui"
+        alt="The GAIA desktop app answering a question about an employee handbook, with each step it takes shown as it runs."
+        class="mb-5"
+      />
+      <h3 class="g-h-card">GAIA Agent UI</h3>
       <p class="g-body mt-2.5">
         A window you open like any other app. Chat, your documents and your files, with
         every tool call shown as it runs. Start here if you have not used GAIA before.
@@ -205,8 +189,7 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
               <span>Download for {PLATFORM_LABELS[row.platform]}</span>
             </a>
             <p class="g-body mt-2.5 text-[13px]">
-              {DESKTOP_DOWNLOAD_LABELS[row.platform]} · v{desktop.version} ·{' '}
-              {formatBytes(row.artifact.size_bytes)}
+              {DESKTOP_DOWNLOAD_LABELS[row.platform]} · v{version} · {formatBytes(row.artifact.sizeBytes)}
             </p>
           </div>
         ))}
@@ -215,10 +198,7 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
             build for these three, so there is nothing to wait for. */}
         {DESKTOP_MISSING_PLATFORMS.map((platform) => (
           <div data-dl-cta data-surface="desktop" data-kind="none" data-platform={platform} hidden>
-            <p class="g-body text-[13.5px]">
-              There is no desktop build for {PLATFORM_LABELS[platform]}. The terminal runs
-              there — take that one instead.
-            </p>
+            <p class="g-body text-[13.5px]">No desktop app for {PLATFORM_LABELS[platform]}. Use the terminal.</p>
           </div>
         ))}
       </div>
@@ -226,161 +206,161 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
 
     {/* ---- Terminal ---- */}
     <section class="g-card p-[26px]">
-      <h3 class="g-h-card">Terminal</h3>
+      <SurfacePreview
+        surface="tui"
+        alt="The GAIA terminal app writing a short Python function, with the code syntax-highlighted."
+        class="mb-5"
+      />
+      <h3 class="g-h-card">GAIA Terminal UI</h3>
       <p class="g-body mt-2.5">
         The same agent in your shell, on every platform GAIA builds for. Start here if you
         work over SSH, or would rather stay in a terminal.
       </p>
 
-      <div class="mt-5">
-        {/* Same reason as the desktop card: a Safari Mac reveals the Apple
-            Silicon and Intel blocks together. The captions stay outside so
-            they keep their tighter gap to the block they describe. */}
-        <div class="space-y-3">
-          {tuiCtaRows.map((row) => (
-            <div
-              data-dl-cta
-              data-surface="tui"
-              data-kind={row.installers.length ? 'installer' : 'binary'}
-              data-platform={row.platform}
-              hidden
-            >
-              <div class="flex flex-wrap items-center gap-3">
-                {/* One installer reads like the desktop card's button, so two cards
-                    side by side do not offer "Download" against "Install GAIA" for
-                    the same machine. Linux keeps its package-format labels. */}
-                {row.installers.length > 0
-                  ? row.installers.map((i) => (
-                      <a href={i.artifact.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
-                        <Fragment set:html={DOWNLOAD_ICON} />
-                        <span>
-                          {row.installers.length > 1
-                            ? INSTALLER_CTA_LABELS[i.key]
-                            : `Download for ${PLATFORM_LABELS[row.platform]}`}
-                        </span>
-                      </a>
-                    ))
-                  : row.binary && (
-                      <a href={row.binary.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
-                        <Fragment set:html={DOWNLOAD_ICON} />
-                        <span>Download for {PLATFORM_LABELS[row.platform]}</span>
-                      </a>
-                    )}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* One caption per kind, at card level: with two Mac blocks revealed at
-            once, a caption inside each would say the same thing twice. */}
-        <p data-dl-note="installer" class="g-body mt-2.5 text-[13px]" hidden>
-          Installs the agent and puts <code class="text-g-text">gaia-tui</code> on your PATH.
-          v{tui.version}.
-        </p>
-        <p data-dl-note="binary" class="g-body mt-2.5 text-[13px]" hidden>
-          {anyInstaller
-            ? 'No installer is published for this architecture, so this is the standalone binary — put it on your PATH yourself.'
-            : 'The standalone binary — put it on your PATH and run gaia-tui.'}
-          {' '}v{tui.version}.
-        </p>
+      {/* Same reason as the desktop card: a Safari Mac reveals the Apple Silicon
+          and Intel blocks together. */}
+      <div class="mt-5 space-y-3">
+        {tuiCtaRows.map((row) => (
+          <div data-dl-cta data-surface="tui" data-kind={row.kind} data-platform={row.platform} hidden>
+            <a href={row.artifact.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
+              <Fragment set:html={DOWNLOAD_ICON} />
+              <span>Download for {PLATFORM_LABELS[row.platform]}</span>
+            </a>
+            <p class="g-body mt-2.5 text-[13px]">
+              {row.caption} · v{version} · {formatBytes(row.artifact.sizeBytes)}
+            </p>
+          </div>
+        ))}
       </div>
     </section>
   </div>
-  </div>
+
+  {/* Windows x64's one installer, under both cards: it asks for either app or
+      both. A plain wrapper carries `hidden`; a display class would override it. */}
+  {windowsSetup && (
+    <div data-dl-cta data-surface="setup" data-kind="setup" data-platform="win-x64" hidden>
+      <div class="mx-auto mt-6 w-full max-w-[720px] text-center">
+        <a href={windowsSetup.url} class="g-btn g-btn-primary px-6 py-3.5 text-[15px]">
+          <Fragment set:html={DOWNLOAD_ICON} />
+          <span>Download for {PLATFORM_LABELS['win-x64']}</span>
+        </a>
+        <p class="g-body mt-2.5 text-[13px]">
+          One installer for both apps · v{version} · {formatBytes(windowsSetup.sizeBytes)}
+        </p>
+      </div>
+    </div>
+  )}
 
   {/* Every download, both surfaces, grouped so each version and each coverage
-      gap is stated once beside the thing it applies to. Rendered open; JS folds
-      it away once a machine has been placed. */}
-  <div data-dl-list class="mx-auto mt-8 w-full max-w-[720px] text-left">
-    <div class="g-label mb-3" data-dl-list-label>Download for your platform</div>
-
-    {windowsSetup && (
-      <div class="mb-7">
-        <div class="text-[13.5px] font-semibold text-g-text">
-          Windows · desktop app, terminal, or both · v{tui.version}
-        </div>
-        <ul class="mt-1.5 space-y-1">
-          <li>
-            <a
-              href={windowsSetup.url}
-              aria-label={`GAIA setup for ${PLATFORM_LABELS['win-x64']}: desktop app, terminal, or both`}
-              class="inline-flex items-baseline gap-2 text-[13.5px] text-g-muted transition-colors hover:text-g-accent-text"
-            >
-              <span class="text-g-accent-text" aria-hidden="true">↓</span>
-              <span>
-                {PLATFORM_LABELS['win-x64']} — Installer (.exe) · {formatBytes(windowsSetup.size_bytes)}
-              </span>
-            </a>
-          </li>
-        </ul>
-      </div>
-    )}
-
-    <div class="grid gap-x-10 gap-y-7 sm:grid-cols-2">
-      <div>
-        <div class="text-[13.5px] font-semibold text-g-text">
-          Desktop app · v{desktop.version}
-        </div>
-        <ul class="mt-1.5 space-y-1">
-          {desktopRows.map((row) => (
+      gap is stated once beside the thing it applies to. Folded so the page
+      leads with this machine's one download. */}
+  <details data-dl-list class="group mx-auto mt-8 w-full max-w-[720px] text-left">
+    <summary class="g-label inline-flex cursor-pointer list-none items-center gap-2 py-1 transition-colors hover:text-g-text [&::-webkit-details-marker]:hidden">
+      <span aria-hidden="true" class="inline-block transition-transform group-open:rotate-90">›</span>
+      Other platforms and installers
+    </summary>
+    <div class="mt-4">
+      {windowsSetup && (
+        <div class="mb-7">
+          <div class="text-[13.5px] font-semibold text-g-text">
+            Windows · desktop app, terminal, or both · v{version}
+          </div>
+          <ul class="mt-1.5 space-y-1">
             <li>
               <a
-                href={row.artifact.url}
+                href={windowsSetup.url}
+                aria-label={`GAIA setup for ${PLATFORM_LABELS['win-x64']}: desktop app, terminal, or both`}
                 class="inline-flex items-baseline gap-2 text-[13.5px] text-g-muted transition-colors hover:text-g-accent-text"
               >
                 <span class="text-g-accent-text" aria-hidden="true">↓</span>
                 <span>
-                  {PLATFORM_LABELS[row.platform]} — {desktopListLabel(row.platform)} ·{' '}
-                  {formatBytes(row.artifact.size_bytes)}
+                  {PLATFORM_LABELS['win-x64']} — Installer (.exe) · {formatBytes(windowsSetup.sizeBytes)}
                 </span>
               </a>
             </li>
-          ))}
-        </ul>
-        {noDesktopFor && (
-          <p class="g-body mt-2 text-[12.5px]">No desktop build for {noDesktopFor}.</p>
-        )}
-      </div>
+          </ul>
+        </div>
+      )}
 
-      <div>
-        <div class="text-[13.5px] font-semibold text-g-text">Terminal · v{tui.version}</div>
-        <ul class="mt-1.5 space-y-1">
-          {tuiListRows.map((row) => (
-            <li>
-              <div class="text-[13.5px] text-g-muted">
-                {PLATFORM_LABELS[row.platform]}
-                <span class="ml-2 inline-flex flex-wrap gap-x-3">
-                  {[
-                    ...row.installers.map((i) => ({
-                      href: i.artifact.url,
-                      label: DOWNLOAD_LABELS[i.key],
-                    })),
-                    ...(row.binary
-                      ? [{ href: row.binary.url, label: DOWNLOAD_LABELS[row.platform] }]
-                      : []),
-                  ].map((o) => (
-                    /* The platform stays visible once per row — a platform can
-                       carry three links and printing it three times is worse to
-                       scan. aria-label puts it back into each link's NAME, so a
-                       links list does not read six identical "Standalone
-                       binary" entries. */
-                    <a
-                      href={o.href}
-                      aria-label={`${o.label} for ${PLATFORM_LABELS[row.platform]}`}
-                      class="inline-flex items-baseline gap-1.5 transition-colors hover:text-g-accent-text"
-                    >
-                      <span class="text-g-accent-text" aria-hidden="true">↓</span>
-                      <span>{o.label}</span>
-                    </a>
-                  ))}
-                </span>
-              </div>
-            </li>
-          ))}
-        </ul>
+      <div class="grid gap-x-10 gap-y-7 sm:grid-cols-2">
+        <div>
+          <div class="text-[13.5px] font-semibold text-g-text">
+            Desktop app · v{version}
+          </div>
+          <ul class="mt-1.5 space-y-1">
+            {desktopRows.map((row) => (
+              <li>
+                <a
+                  href={row.artifact.url}
+                  class="inline-flex items-baseline gap-2 text-[13.5px] text-g-muted transition-colors hover:text-g-accent-text"
+                >
+                  <span class="text-g-accent-text" aria-hidden="true">↓</span>
+                  <span>
+                    {PLATFORM_LABELS[row.platform]} — {desktopListLabel(row.platform)} ·{' '}
+                    {formatBytes(row.artifact.sizeBytes)}
+                  </span>
+                </a>
+              </li>
+            ))}
+            {desktopExtraRows.map((row) => (
+              <li>
+                <a
+                  href={row.artifact.url}
+                  class="inline-flex items-baseline gap-2 text-[13.5px] text-g-muted transition-colors hover:text-g-accent-text"
+                >
+                  <span class="text-g-accent-text" aria-hidden="true">↓</span>
+                  <span>
+                    {PLATFORM_LABELS[row.platform]} — {row.label} · {formatBytes(row.artifact.sizeBytes)}
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ul>
+          {noDesktopFor && (
+            <p class="g-body mt-2 text-[12.5px]">No desktop build for {noDesktopFor}.</p>
+          )}
+        </div>
+
+        <div>
+          <div class="text-[13.5px] font-semibold text-g-text">Terminal · v{version}</div>
+          <ul class="mt-1.5 space-y-1">
+            {tuiListRows.map((row) => (
+              <li>
+                <div class="text-[13.5px] text-g-muted">
+                  {PLATFORM_LABELS[row.platform]}
+                  <span class="ml-2 inline-flex flex-wrap gap-x-3">
+                    {[
+                      ...row.installers.map((i) => ({
+                        href: i.artifact.url,
+                        label: DOWNLOAD_LABELS[i.key],
+                      })),
+                      ...(row.binary
+                        ? [{ href: row.binary.url, label: DOWNLOAD_LABELS[row.platform] }]
+                        : []),
+                    ].map((o) => (
+                      /* The platform stays visible once per row — a platform can
+                         carry three links and printing it three times is worse to
+                         scan. aria-label puts it back into each link's NAME, so a
+                         links list does not read six identical "Standalone
+                         binary" entries. */
+                      <a
+                        href={o.href}
+                        aria-label={`${o.label} for ${PLATFORM_LABELS[row.platform]}`}
+                        class="inline-flex items-baseline gap-1.5 transition-colors hover:text-g-accent-text"
+                      >
+                        <span class="text-g-accent-text" aria-hidden="true">↓</span>
+                        <span>{o.label}</span>
+                      </a>
+                    ))}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
       </div>
     </div>
-  </div>
+  </details>
 </div>
 
 <script>
@@ -391,44 +371,15 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
     if (!blocks.length) return;
 
     const targets = await resolveTargets(navigator).catch(() => []);
-    // An unplaceable machine — an iPad sending the Mac UA, an unreadable arch —
-    // keeps the full list open rather than being shown a guess.
     const matched = blocks.filter((b) => targets.includes(b.dataset.platform as never));
-    if (!matched.length) return;
-
-    for (const block of matched) block.hidden = false;
-
-    // A Windows visitor who has the one setup does not also choose a card.
-    if (matched.some((b) => b.dataset.surface === 'setup')) {
-      const cards = root.querySelector<HTMLElement>('[data-dl-cards]');
-      if (cards) cards.hidden = true;
+    // An unplaceable machine — an iPad sending the Mac UA, an unreadable arch —
+    // gets the full list opened rather than a guess.
+    if (!matched.length) {
+      const list = root.querySelector<HTMLDetailsElement>('[data-dl-list]');
+      if (list) list.open = true;
+      return;
     }
 
-    // The captions live at card level, so reveal the ones whose kind is now on
-    // screen. Two Mac blocks can share a caption; that is the point of it.
-    const kinds = new Set(matched.map((b) => b.dataset.kind));
-    root.querySelectorAll<HTMLElement>('[data-dl-note]').forEach((note) => {
-      if (kinds.has(note.dataset.dlNote)) note.hidden = false;
-    });
-
-    // Every platform stays one disclosure away, including this machine's other
-    // options — so someone who came for the standalone binary still finds it.
-    const list = root.querySelector<HTMLElement>('[data-dl-list]');
-    const listLabel = root.querySelector('[data-dl-list-label]');
-    if (!list || !listLabel) return;
-    const details = document.createElement('details');
-    details.className = 'group mx-auto mt-8 w-full max-w-[720px] text-left';
-    const summary = document.createElement('summary');
-    summary.className =
-      'g-label inline-flex cursor-pointer list-none items-center gap-2 py-1 transition-colors hover:text-g-text [&::-webkit-details-marker]:hidden';
-    const chevron = document.createElement('span');
-    chevron.setAttribute('aria-hidden', 'true');
-    chevron.className = 'inline-block transition-transform group-open:rotate-90';
-    chevron.textContent = '›';
-    summary.append(chevron, 'Other platforms and formats');
-    list.replaceWith(details);
-    details.append(summary, list);
-    list.classList.replace('mt-8', 'mt-4');
-    listLabel.remove();
+    for (const block of matched) block.hidden = false;
   });
 </script>

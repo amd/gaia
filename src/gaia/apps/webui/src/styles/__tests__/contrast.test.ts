@@ -143,16 +143,8 @@ const ON_SURFACES = [
     '--danger',
 ];
 
-/**
- * Every opaque surface that carries body text. `--bg-active` is deliberately
- * absent: it is the darkest light surface, and `--accent` is pinned to #9A4930
- * across all three surfaces (`website/src/design/cross-surface.test.ts`), which
- * reads 4.15:1 on it. Nothing can fix that pair -- the copper is fixed, and the
- * bg would have to go *lighter* than `--bg-hover` to clear the floor, inverting
- * the depth ramp. Every rule that paints on `--bg-active` today pairs it with
- * `--text-primary` (10.55:1); the guard below catches it if one stops.
- */
-const SURFACES = ['--bg-primary', '--bg-card', '--bg-tertiary', '--bg-hover', '--bg-recessed'];
+/** Every opaque surface that carries body text, from the canvas down to the selected-row fill. */
+const SURFACES = ['--bg-primary', '--bg-card', '--bg-tertiary', '--bg-hover', '--bg-active', '--bg-recessed'];
 
 /** A tinted chip paints its own hue as text on a wash of itself. */
 const TINTS: Array<[string, string]> = [
@@ -191,6 +183,12 @@ const CASES: Case[] = [
     ['--border-light', '--bg-card', 'chrome'],
     ['--border-recessed', '--bg-recessed', 'chrome'],
     ['--switch-knob', '--border', 'chrome'],
+    // Raw brass marks carry no text (an on switch track, a native checkbox),
+    // so they owe the chrome floor on the surfaces they sit on, and the knob
+    // owes it against the track.
+    ['--accent-solid', '--bg-primary', 'chrome'],
+    ['--accent-solid', '--bg-card', 'chrome'],
+    ['--switch-knob', '--accent-solid', 'chrome'],
 
     // The sunk pane is not held to a floor against its parent: no fill can
     // clear 1.5:1 below the dark canvas, since even pure black is 1.17:1
@@ -503,7 +501,8 @@ describe('component stylesheets route colour through tokens', () => {
     it('has no colour literal outside index.css', () => {
         const offenders: string[] = [];
         for (const [path, source] of Object.entries(CSS_SOURCES)) {
-            if (path === INDEX_PATH) continue;
+            // palettes.css re-declares index.css tokens per palette; palettes.test.ts checks it.
+            if (path === INDEX_PATH || path === '/src/styles/palettes.css') continue;
             source
                 .replace(/\/\*[\s\S]*?\*\//g, '')
                 .split(/\r?\n/)
@@ -530,6 +529,8 @@ describe('component stylesheets route colour through tokens', () => {
     const LITERAL_ALLOWED: Record<string, string> = {
         '/src/utils/logger.ts':
             'DevTools `%c` category palette -- never painted in the app',
+        '/src/utils/palette.ts':
+            'derives every token from the two colors a person picks, and previews each palette as a swatch before it applies',
         '/src/utils/theme.ts':
             '<meta name="theme-color"> has no cascade to read --bg-primary from; both values are pinned to it below',
     };
@@ -598,10 +599,12 @@ describe('the Electron windows mirror the dark theme rather than inventing one',
     const MIRRORED: Array<{ path: string; literal: string; token: string; why: string }> = [
         {
             path: '/services/backend-installer-progress-dialog.cjs',
-            literal: '#17161C',
+            literal: '#1A1917',
             token: '--bg-primary',
             why: 'BrowserWindow backgroundColor is a main-process option, not CSS -- there is no cascade to read a custom property from',
         },
+        { path: '/services/window-frame.cjs', literal: '#1A1917', token: '--bg-primary', why: 'titleBarOverlay colors are main-process options drawn by the OS, not CSS -- the window controls use these until the renderer sends the live tokens' },
+        { path: '/services/window-frame.cjs', literal: '#EFECE6', token: '--text-primary', why: 'titleBarOverlay colors are main-process options drawn by the OS, not CSS -- the window controls use these until the renderer sends the live tokens' },
     ];
 
     it('reads the Electron sources, not an empty set', () => {

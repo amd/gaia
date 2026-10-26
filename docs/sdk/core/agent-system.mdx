@@ -537,6 +537,19 @@ back to full size after its first turn. `read_tool_output` pages and
 are never changed. Each batch adds `evicted_results` and `evicted_tokens_est`
 to that step's `stats` entry in the conversation log and logs one info line.
 
+**When the backend refuses a request as too long**, the overflow retry runs once,
+eviction on or off. It moves every older tool result out of the request the same
+way, archived whole with a stub that names the `read_tool_output` call that reads
+it back. A large result from the latest step is cut to its first 2,000 characters
+plus a handle to the rest; a `read_tool_output` page the model just asked for, a
+refusal, and a `delegate_task` answer stay whole. Assistant text over 800
+characters is clipped, and any lesson memory learned this turn is restated on the
+last user message. The retry runs only when the shrink frees more than the
+request was over by (read from the backend's error), or, when the error gives no
+numbers, at least a tenth of the request. Otherwise nothing is archived and the
+turn ends with the message that the request needs more than fits, rather than
+repeating a refusal.
+
 ## Common Pitfalls and Solutions
 
 <AccordionGroup>
@@ -865,7 +878,14 @@ The flagship TUI persists these traces in private SQLite files under
 `~/.gaia/tui/history/` (`GAIA_TUI_HOME/history/` when configured). Each launch
 starts a separate session. Set `GAIA_HISTORY_FILE=/path/session.sqlite3` to
 explicitly resume the same transcript, or pass `--history-file` to the stdio
-agent. This archive contains tool output, including local file contents.
+agent. A turn is written to the archive when it starts, marked as the running
+process's, and replaced by its full trace when it ends. A turn cut short by the
+TUI closing (stdin reaching end of file, or the output pipe breaking) ends with
+"This answer was interrupted when GAIA closed." So does one the TUI had to
+kill, so a resumed session knows that turn never finished. A process sharing
+the file leaves out another live process's running turn. A turn that failed
+while the TUI was open leaves no entry. This archive contains tool output,
+including local file contents.
 Delete the file to remove it. A host calling `conversation_history.clear()`
 erases both the visible history and its archived turns.
 
@@ -878,8 +898,9 @@ that receives a `HistoryCut(turns, tokens)` when more turns are hidden than
 before. `select_history()` alone compares with the view minus the newest turn;
 pass a `CutReporter` (as `SessionHistory.prepare()` does) to compare with the
 last reported view, so a switch to a smaller model is reported too. The TUI and
-Agent UI use it to tell the user. The terminal event is sent only after the completed trace is committed;
-a storage failure is reported as an error rather than a successful saved turn.
+Agent UI use it to tell the user. The terminal event is sent only after the
+completed trace is committed; a storage failure is reported as an error rather
+than a successful saved turn.
 
 
 <Accordion title="How process_query() Works Internally">
@@ -1057,11 +1078,11 @@ without looking and report work they never did:
 | Check | Fires when |
 |-------|------------|
 | look | The request names a file (that exists) or a lowercase snake_case symbol such as `parse_updated()`, and no successful read named it — a failed read, or the name appearing in a directory listing, does not count; the correction says where the file is on disk. A symbol only counts in a turn about the project (a named file exists or a tool ran), so "what does `max_tokens` do?" is not a lookup request. Or, in such a turn, the answer says something "does not exist" with no search, listing or read on record. |
-| content | The answer presents data — a table or an untagged/CSV/JSON code block — and its values (with any decimals, dates and percentages in the surrounding prose) appear in no tool output or earlier user or tool message. A tool's own arguments are not evidence: a search that repeats its query does not confirm the query. A value one arithmetic step from two grounded values the answer shows (a sum, a difference, an average of two, a ratio) counts as grounded; small whole numbers, versions and estimates are not judged. |
-| file | A file the turn wrote (`.md`, `.txt`, `.csv`, `.tsv`, `.json`, and the text and table cells of `.xlsx`, `.docx`, `.pptx`; up to 5 MB) holds money, percentages or unit quantities (`27 W`, `8 GB`) that no tool result this turn, input file the tools were pointed at, or user message shows. Prices only count when the evidence shows them as prices — beside a currency, on a price line, or in a data row — so a datasheet's "60 Hz" is not a source for "$60". A scale or spelling the source doesn't use still matches: "$14.5M", "$14.5 million" and "$14,500,000" are one figure, as are "$500k" and "$500,000", "12%", "0.12" and "twelve percent", and a range like "$3–5M" and its two ends. Totals, line amounts, per-unit splits, taxes and shares computed from sourced figures pass, and a figure computed from an unsourced one is not listed beside it. Reading the file back, and the numbers a script hard-codes, are not sources. A figure the file marks as an estimate ("est.", "~", "unverified", or "all prices are estimates") is not flagged. An answer that calls the figures unverified and names them is not corrected. The correction names the file and figures and asks for any still unverified in one short line, so the answer stays about the work; the file is never edited. |
+| content | The answer presents data — a table or an untagged/CSV/JSON code block — and its values (with any decimals, dates and percentages in the surrounding prose) appear in no tool output or earlier user or tool message. A tool's own arguments are not evidence: a search that repeats its query does not confirm the query. A scaled amount matches its other spellings ("$14.5M" and "14,500,000"; a "B" after a currency sign is billions, not bytes). A value one arithmetic step from two grounded values the answer shows (a sum, a difference, an average of two, a ratio) counts as grounded; small whole numbers, versions and estimates are not judged. |
+| file | A file the turn wrote (`.md`, `.txt`, `.csv`, `.tsv`, `.json`, and the text and table cells of `.xlsx`, `.docx`, `.pptx`; up to 5 MB) holds money, percentages or unit quantities (`27 W`, `8 GB`) that no tool result this turn, input file the tools were pointed at, or user message shows. Prices only count when the evidence shows them as prices — beside a currency, on a price line, or in a data row — so a datasheet's "60 Hz" is not a source for "$60". A scale or spelling the source doesn't use still matches: "$14.5M", "$14.5 million" and "$14,500,000" are one figure, as are "$293.5B", "$293.5 billion" and "293,500,000,000", "$500k" and "$500,000", "12%", "0.12" and "twelve percent", and a range like "$3–5M" and its two ends. Totals, line amounts, per-unit splits, taxes and shares computed from sourced figures pass, and a figure computed from an unsourced one is not listed beside it. Reading the file back, and the numbers a script hard-codes, are not sources. A figure the file marks as an estimate ("est.", "~", "unverified", or "all prices are estimates") is not flagged. An answer that calls the figures unverified and names them gets no note. This check never asks the model for a correction: a false positive would have it edit a correct deliverable, so what it finds goes straight into the "not confirmed" note, naming the file and figures. The file is never edited. |
 | action | The answer says it searched, read, ran, tested, verified or documented something, and no tool of that kind ran. Negated clauses ("I did not run the tests"), advice ("once you have run it") and descriptions ("it is tested on every pull request") are not claims. |
 
-Each check asks for at most one correction per turn, before the answer is
+Each check except file asks for at most one correction per turn, before the answer is
 marked answered, so the lookup it asks for is not refused as off-request work.
 An answer that already admits the gap ("I haven't opened it", "these figures
 are unverified") is not corrected. If a gap survives its correction, or no step
@@ -1341,10 +1362,14 @@ semantic recall of every implicit item. Recall must be measured against known
 source items. General summaries, advice about extraction, negated enumeration
 requests, analysis of code files ("find all bugs in `main.py`"), binary documents
 such as PDFs, and agents without a file permission validator do not activate this
-path. Active extraction skills can activate it. Sources are existing files a
-request reads from; a path after "to" or "into" is an output, and a name that is
-not a file ("Node.js") is a topic. Data files (CSV, JSON, logs, YAML, XML) are
-left to code tools.
+path. An active extraction skill registers the tools, but enforces coverage only
+when the request names a source document or asks for every item; a redaction or
+rewrite that happens to load the skill is not checked. Sources are existing files
+a request reads from. Every file the request names as a deliverable, and every
+file the turn wrote, is an output and never a source; a name that is not a file
+("Node.js") is a topic. Data files (CSV, JSON, logs, YAML, XML) are left to code
+tools. When a source still lacks an extraction, the answer is kept and a short
+"I couldn't confirm all of this" list follows it.
 
 Existing memory hooks record extraction actions and compact provenance (source
 fingerprint, page coverage and item count), while conversation history retains the

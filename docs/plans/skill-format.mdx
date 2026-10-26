@@ -482,7 +482,7 @@ Skills are contributed **by pull request** — there is no self-serve publish pa
 (the hub's publish endpoint is gated on a maintainer-held token secret), so the
 PR check *is* the gate: `BLOCK` fails it, `REVIEW` holds the PR for maintainer
 sign-off, `ALLOW` passes. Submit under `skills/community/<name>/`; see
-[Publishing to the Hub → Publishing a skill](/guides/hub-publishing#publishing-a-skill-instead-of-an-agent).
+[CLI Reference → Skills](/reference/cli#skills).
 
 Authors run the same engine locally, so a clean local audit is the whole
 requirement:
@@ -1183,7 +1183,7 @@ breaks because a GAIA feature is absent.
 | **No `metadata.gaia` block** | All GAIA fields take their omitted-defaults (above). A standard runtime ignores `metadata.gaia` entirely → lossless both directions. |
 | **`compatibility` / `allowed-tools` present** | Ignored (not part of GAIA's adopted base). The skill still parses. |
 | **`tools_required` names a tool unknown to the framework** | **Not yet checked.** The Phase 1 validator coerces `tools_required` to strings and stops there — no catalog lookup runs, because the active registry is assembled dynamically (see [Open question 1](#open-questions)). The field is inert until #1451 consumes it. When the check does land, an unknown name **fails loudly**; a name that is *valid but simply not active in the current agent's registry* stays scoping, not a defect — omitted from selection and logged, never silently invented. |
-| **Skill directory fails to parse** | Skipped from discovery **and surfaced** — logged at ERROR, listed in `SkillManager.discovery_errors`, printed by `gaia skill list`, which exits `4`. Never quietly missing. |
+| **Skill directory fails to parse** | Skipped from discovery **and surfaced** — logged at ERROR, listed in `SkillManager.discovery_errors`, printed by `gaia skill list`, which exits `4` — except under a read-only `claude-import` root, where it is a warning logged once and the exit stays `0`. Never quietly missing. |
 | **Two roots ship the same skill `name`** | The higher-precedence copy wins and the loser stays visible via `SkillManager.shadowed()` / `gaia skill info`. Precedence is auditable, not silent. |
 | **A skill body references a file outside its own directory** | Rejected — `SkillManager.resource_path` refuses traversal, as does `.zip` import. |
 | **Enforcement layers not yet shipped** | `/api/skills` and the sandbox degrade to **absent**, not permissive: an unenforceable permission refuses the load rather than loading unguarded. Install-time tier ceilings now ship. |

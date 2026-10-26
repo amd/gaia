@@ -11,7 +11,7 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
 ## What you'll need
 
 - A computer running **Windows 10/11**, **macOS 14+** (Apple Silicon), or **Linux** (Debian/Ubuntu/Fedora/Arch)
-- **5 GB** of free disk space (for the app + Python environment + minimal model)
+- **5 GB** of free disk space for the app and its Python environment, plus room for the models it downloads on first launch: about **6 GB** on most PCs, about **30 GB** on PCs that get the larger Qwen3.6 model. Setup checks this before downloading, and the progress window shows the download as it runs
 - **16 GB** of RAM or more. On a 16 GB PC, close other large apps first: the model needs about 8 GB free (see [Not enough free memory](/reference/troubleshooting#not-enough-free-memory))
 - An **internet connection** for the first launch (the app downloads its Python backend automatically)
 - About **10–15 minutes** total: ~30 seconds to download, ~10 seconds to install, ~10 minutes or more for the first-launch backend setup
@@ -24,8 +24,8 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
 
     | Choice | What you get | Shortcut it adds |
     |---|---|---|
-    | **Desktop app** | A window with chat, your documents and files, and every tool call shown as it runs. Starts when you sign in to Windows — turn that off from the app's tray menu or Task Manager → Startup. | **GAIA**, on the desktop and Start menu |
-    | **Terminal** | `gaia-tui` on your PATH, with a GAIA profile and font for Windows Terminal. See [Terminal UI](/guides/terminal-hub). | **GAIA Terminal Hub**, on the desktop and Start menu |
+    | **GAIA Agent UI** (desktop app) | A window with chat, your documents and files, and every tool call shown as it runs. Starts when you sign in to Windows — turn that off in the app's Settings → General or Task Manager → Startup. | **GAIA**, on the desktop and Start menu |
+    | **GAIA Terminal UI** (terminal) | `gaia-tui` on your PATH, with a GAIA profile and font for Windows Terminal. See [Terminal UI](/guides/tui). | **GAIA Terminal UI**, on the desktop and Start menu |
 
     1. On [amd-gaia.ai](https://amd-gaia.ai/#install), click **Install GAIA for Windows**. The file is `gaia-<version>-win-x64-setup.exe`.
     2. Run it. It needs no administrator rights — everything installs for your account only.
@@ -60,7 +60,7 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
 
     Intel Macs are not currently supported by the desktop app.
 
-    Want the terminal instead, or as well? Its `.pkg` (Apple Silicon and Intel) is on [amd-gaia.ai](https://amd-gaia.ai/#install) — see [Terminal UI](/guides/terminal-hub#installing).
+    Want the terminal instead, or as well? Its `.pkg` (Apple Silicon and Intel) is on [amd-gaia.ai](https://amd-gaia.ai/#install) — see [Terminal UI](/guides/tui#installing).
   </Tab>
 
   <Tab title="Linux (Debian/Ubuntu)">
@@ -74,7 +74,7 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
 
     Or install via the GUI: double-click the `.deb` file and your software center will install it.
 
-    Want the terminal instead, or as well? Its `.deb` and `.rpm` are on [amd-gaia.ai](https://amd-gaia.ai/#install) — see [Terminal UI](/guides/terminal-hub#installing).
+    Want the terminal instead, or as well? Its `.deb` and `.rpm` are on [amd-gaia.ai](https://amd-gaia.ai/#install) — see [Terminal UI](/guides/tui#installing).
   </Tab>
 
   <Tab title="Linux (other distros)">
@@ -232,7 +232,7 @@ installations using that folder will stop working. Silent uninstalls keep it.
 Each part you installed has its own entry in **Settings → Apps → Installed apps**, so you can remove one and keep the other. To remove GAIA completely, uninstall both:
 
 - **GAIA** — the desktop app. Removes the app, its Start Menu / Desktop shortcuts, and the autostart registry entry.
-- **GAIA Terminal Hub** — the terminal. Removes `gaia-tui`, `gaia-agent`, the PATH entry, the Windows Terminal profile, the font if the installer added it, and its shortcuts.
+- **GAIA Terminal UI** — the terminal. Removes `gaia-tui`, `gaia-agent`, the PATH entry, the Windows Terminal profile, the font if the installer added it, and its shortcuts.
 
 Each uninstaller shows the cleanup prompt above; decline it and `~/.gaia/` is left alone. For tiered cleanup instead of deleting the whole shared folder, open a terminal (PowerShell or `cmd`) and run:
 ```powershell
@@ -270,7 +270,7 @@ The CLI lets you escalate cleanup as far as you want — useful for reclaiming d
 ```bash
 gaia uninstall --purge --dry-run            # Preview the purge tier without deleting
 gaia uninstall --venv                       # Just the Python env
-gaia uninstall --purge                      # Venv + chats + documents + config + installer binaries, daemon state and PATH edits
+gaia uninstall --purge                      # Venv + chats, documents, memory, sessions, undo snapshots, config, agents, saved keys + installer leftovers
 gaia uninstall --purge --purge-lemonade     # Also remove Lemonade Server install
 gaia uninstall --purge --purge-models       # Also remove downloaded Lemonade models
 gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
@@ -286,8 +286,8 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Document Library uploads | `~/.gaia/documents/` |
 | Chat file attachments | `~/.gaia/chat/uploads/` |
 | Configuration | `~/.gaia/electron-config.json` |
-| Logs | `~/.gaia/gaia.log` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
-| Terminal hub and agent binaries (one-line installer) | `~/.gaia/bin/` |
+| Logs | `~/.gaia/gaia.log`, or the path in `GAIA_LOG_FILE` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
+| Terminal UI and agent binaries (one-line installer) | `~/.gaia/bin/` |
 | Agent run traces | `~/.gaia/traces/` |
 | Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |
 | Models (managed by Lemonade) | `~/.cache/lemonade/models/` |

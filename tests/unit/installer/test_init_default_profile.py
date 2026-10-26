@@ -333,7 +333,7 @@ class TestGoTuiContract:
         assert exc.value.code == 2
         assert "explained problem" in capsys.readouterr().err
 
-    def test_the_tuis_exact_argv_is_accepted_by_the_real_cli(self):
+    def test_the_tuis_exact_argv_is_accepted_by_the_real_cli(self, tmp_path):
         """End-to-end on the argv gaiainit.CheckArgs builds. An unrecognised
         flag exits 2, which the TUI reports as "could not determine" — this
         catches that before a user sees it."""
@@ -344,7 +344,9 @@ class TestGoTuiContract:
             text=True,
             timeout=180,
             cwd=REPO_ROOT,
-            env={**_child_env()},
+            # A tmp home: against an installed GAIA the check starts a daemon
+            # for the real Lemonade Server, which then outlives the test.
+            env={**_child_env(), "GAIA_HOME": str(tmp_path)},
         )
         assert proc.returncode in (0, 1), (
             f"`gaia {' '.join(argv)}` exited {proc.returncode}; "
@@ -455,9 +457,10 @@ class TestFlagshipCompletionMessage:
             cmd._print_completion()
         return "\n".join(printed)
 
-    def test_missing_flagship_names_the_hub_not_the_chat_wheel(self):
+    def test_missing_flagship_names_gaia_init_not_the_chat_wheel(self):
         out = self._completion(available=False)
-        assert "gaia hub install gaia" in out
+        assert "run: gaia init" in out
+        assert "gaia hub" not in out
         assert "incomplete" in out
 
     def test_quick_start_names_something_that_starts_the_flagship(self):
@@ -477,3 +480,121 @@ class TestFlagshipCompletionMessage:
         assert init_command._INSTALLER_HINT in out
         assert "https://amd-gaia.ai/install." in init_command._INSTALLER_HINT
         assert "gaia chat --ui" in out
+
+
+class TestRuntimeFailureStillInstallsTheFlagship:
+    """A Lemonade or model failure must not also leave the flagship missing.
+
+    The flagship used to install only as init's last step, so any earlier
+    failure skipped it. The desktop app opens after a failed init, and every
+    chat then failed with "Unknown agent_type 'gaia'" -- reported on a fresh
+    Mac install. Runs from the cold state: an empty GAIA home and no
+    importable ``gaia_agent``.
+    """
+
+    @pytest.fixture
+    def cold_home(self, tmp_path, monkeypatch):
+        import importlib.util
+
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path / ".gaia"))
+        real_find_spec = importlib.util.find_spec
+        # The repo's conftest puts hub/agents/gaia/python on sys.path; a user's
+        # machine has no such wheel.
+        monkeypatch.setattr(
+            importlib.util,
+            "find_spec",
+            lambda name, *a, **kw: (
+                None if name == FLAGSHIP_IMPORT_NAME else real_find_spec(name, *a, **kw)
+            ),
+        )
+        return tmp_path
+
+    def _run(self, failing_step, install_effect=None):
+        from gaia.hub import installer as hub_installer
+
+        cmd = InitCommand(profile=FLAGSHIP_AGENT_ID, yes=True, skip_webui_build=True)
+        steps = {
+            "_choose_lemonade": True,
+            "_ensure_lemonade_ready": True,
+            "_download_models": True,
+            "_install_pip_extras": True,
+        }
+        steps[failing_step] = False
+        patches = [
+            patch.object(InitCommand, name, return_value=ok)
+            for name, ok in steps.items()
+        ]
+        install = patch.object(
+            hub_installer,
+            "install",
+            return_value=SimpleNamespace(path=None),
+            side_effect=install_effect,
+        )
+        with (
+            patch("gaia.hub.prerelease.flagship_source", return_value=None),
+            patch(
+                "gaia.hub.catalog.load_index",
+                return_value=SimpleNamespace(agents=[{"id": FLAGSHIP_AGENT_ID}]),
+            ),
+            install as install_mock,
+        ):
+            for p in patches:
+                p.start()
+            try:
+                code = cmd.run()
+            finally:
+                for p in patches:
+                    p.stop()
+        return code, install_mock
+
+    @pytest.mark.parametrize(
+        "failing_step",
+        [
+            "_choose_lemonade",
+            "_ensure_lemonade_ready",
+            "_download_models",
+            "_install_pip_extras",
+        ],
+    )
+    def test_flagship_installs_and_init_still_fails(self, cold_home, failing_step):
+        code, install_mock = self._run(failing_step)
+
+        assert code == 1, "a failed runtime step must still fail init"
+        install_mock.assert_called_once_with(FLAGSHIP_AGENT_ID, trusted=True)
+
+    def test_an_installed_flagship_is_not_downloaded_again(self, cold_home):
+        from gaia.hub import installer as hub_installer
+
+        with patch.object(hub_installer, "read_sentinel", return_value=object()):
+            code, install_mock = self._run("_ensure_lemonade_ready")
+
+        assert code == 1
+        install_mock.assert_not_called()
+
+    def test_no_build_for_this_machine_does_not_claim_setup_finished(
+        self, cold_home, capsys
+    ):
+        from gaia.hub.installer import UnsupportedPlatformError
+
+        code, _ = self._run(
+            "_ensure_lemonade_ready",
+            install_effect=UnsupportedPlatformError("no artifact for win-arm64"),
+        )
+
+        assert code == 1
+        out = capsys.readouterr().out
+        assert "has no build for this machine" in out
+        assert "Everything else is set up" not in out
+
+    def test_a_failed_agent_install_still_fails_init(self, cold_home, capsys):
+        from gaia.hub.installer import InstallError
+
+        code, install_mock = self._run(
+            "_download_models", install_effect=InstallError("network died")
+        )
+
+        assert code == 1
+        install_mock.assert_called_once()
+        out = capsys.readouterr().out
+        assert "did not install either: network died" in out
+        assert "Unexpected error" not in out

@@ -18,14 +18,22 @@ on:
       - 'tests/**'
       - 'setup.py'
       - 'pyproject.toml'
-      - 'util/lint.py'
-      - 'util/check_*.py'
-      - 'util/test_lane_allowlist.yml'
+      # lint.py and the checks it imports, and the allowlists they read.
+      - 'util/**'
+      # util/release_versions.py --check reads the docs.json navbar label.
+      - 'docs/docs.json'
       - '.security-suppressions.json'
       - '.github/dependabot.yml'
       # `util/check_workflow_triggers.py` validates these, same as
       # `check_dependabot.py` validates `.github/dependabot.yml` above.
       - '.github/workflows/**'
+      # `util/check_ci_path_coverage.py` reads every action, and fails on a tracked
+      # file under tui/ or installer/ that no workflow triggers on.
+      - '.github/actions/**'
+      - 'tui/**'
+      - 'installer/**'
+      # `check_agent_conventions.py` checks agents against the docs nav.
+      - 'docs/docs.json'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -35,14 +43,22 @@ on:
       - 'tests/**'
       - 'setup.py'
       - 'pyproject.toml'
-      - 'util/lint.py'
-      - 'util/check_*.py'
-      - 'util/test_lane_allowlist.yml'
+      # lint.py and the checks it imports, and the allowlists they read.
+      - 'util/**'
+      # util/release_versions.py --check reads the docs.json navbar label.
+      - 'docs/docs.json'
       - '.security-suppressions.json'
       - '.github/dependabot.yml'
       # `util/check_workflow_triggers.py` validates these, same as
       # `check_dependabot.py` validates `.github/dependabot.yml` above.
       - '.github/workflows/**'
+      # `util/check_ci_path_coverage.py` reads every action, and fails on a tracked
+      # file under tui/ or installer/ that no workflow triggers on.
+      - '.github/actions/**'
+      - 'tui/**'
+      - 'installer/**'
+      # `check_agent_conventions.py` checks agents against the docs nav.
+      - 'docs/docs.json'
   merge_group:
   workflow_dispatch:
 
@@ -62,9 +78,6 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
       - uses: actions/checkout@v7
-
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
 
       - name: Set up Python
         uses: actions/setup-python@v7

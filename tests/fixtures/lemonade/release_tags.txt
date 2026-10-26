@@ -1,0 +1,30 @@
+# Every stable lemonade-sdk/lemonade release from LEMONADE_MIN_VERSION through
+# LEMONADE_VERSION (src/gaia/version.py), oldest first, one tag per line.
+# tests/unit/test_lemonade_download_urls.py fails when any of them lacks a pinned
+# MSI; tests/integration/test_lemonade_embeddable_assets.py fails when upstream
+# published one this list is missing. A Lemonade version bump appends its tag.
+v10.2.0
+v10.3.0
+v10.4.0
+v10.5.0
+v10.5.1
+v10.6.0
+v10.7.0
+v10.8.0
+v10.8.1
+v10.9.0
+v10.10.0
+v11.0.0
+v11.5.0
+v11.5.1
+v11.5.2
+v11.6.0
+v11.7.0
+v11.8.0
+v11.8.1
+v11.9.0
+v2026.39.1
+v2026.40.0
+v2026.41.1
+v2026.42.1
+v2026.43.3

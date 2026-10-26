@@ -8,44 +8,124 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'src/gaia/version.py'
+      - '.github/workflows/test_rag.yml'
+      - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
-      - 'src/gaia/rag/**'
+      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      - 'installer/scripts/*lemonade*.ps1'
+      - 'tests/ci_lemonade_check.py'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      # The LLM client every hardware test drives, the daemon modules it imports,
+      # the init profile that sets its minimum Lemonade, and the leaf modules.
       - 'src/gaia/llm/**'
+      - 'src/gaia/daemon/__init__.py'
+      - 'src/gaia/daemon/broker_client.py'
+      - 'src/gaia/daemon/client.py'
+      - 'src/gaia/daemon/constants.py'
+      - 'src/gaia/daemon/errors.py'
+      - 'src/gaia/daemon/instance.py'
+      - 'src/gaia/daemon/lemonade.py'
+      - 'src/gaia/daemon/lock.py'
+      - 'src/gaia/daemon/paths.py'
+      - 'src/gaia/daemon/custody/constants.py'
+      - 'src/gaia/daemon/sidecars/errors.py'
+      - 'src/gaia/daemon/sidecars/spec.py'
+      - 'src/gaia/installer/init_command.py'
+      - 'src/gaia/utils/**'
+      - 'src/gaia/config.py'
+      - 'src/gaia/env.py'
+      - 'src/gaia/logger.py'
+      - 'src/gaia/log_rotation.py'
+      - 'src/gaia/ports.py'
+      - 'src/gaia/version.py'
+      - 'src/gaia/rag/**'
       - 'src/gaia/vlm/**'
-      - 'tests/test_rag*.py'
-      - 'tests/unit/rag/**'
+      - 'src/gaia/chat/**'
       - 'src/gaia/agents/tools/rag_tools.py'
-      - 'hub/agents/chat/python/gaia_agent_chat/agent.py'
+      - 'src/gaia/agents/tools/__init__.py'
+      - 'src/gaia/agents/base/tools.py'
+      - 'src/gaia/ui/routers/sessions.py'
+      - 'src/gaia/ui/sse_handler.py'
+      # The integration job runs `python -m gaia.cli eval retrieval`.
+      - 'src/gaia/cli.py'
       - 'src/gaia/eval/retrieval/**'
+      - 'hub/agents/chat/python/**'
       - 'eval/retrieval/**'
       - 'eval/corpus/**'
       - 'data/pdf/**'
+      - 'tests/test_rag*.py'
+      - 'tests/integration/conftest.py'
+      - 'tests/integration/test_rag_no_break_spaces.py'
+      - 'tests/unit/conftest.py'
+      - 'tests/unit/denied_folder.py'
+      - 'tests/unit/rag/**'
+      - 'tests/unit/eval/conftest.py'
       - 'tests/unit/eval/test_retrieval_bench.py'
       - 'tests/fixtures/eval_baselines/rag-retrieval/**'
-      - 'setup.py'
-      - '.github/workflows/test_rag.yml'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'src/gaia/version.py'
+      - '.github/workflows/test_rag.yml'
+      - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
-      - 'src/gaia/rag/**'
+      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      - 'installer/scripts/*lemonade*.ps1'
+      - 'tests/ci_lemonade_check.py'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      # The LLM client every hardware test drives, the daemon modules it imports,
+      # the init profile that sets its minimum Lemonade, and the leaf modules.
       - 'src/gaia/llm/**'
+      - 'src/gaia/daemon/__init__.py'
+      - 'src/gaia/daemon/broker_client.py'
+      - 'src/gaia/daemon/client.py'
+      - 'src/gaia/daemon/constants.py'
+      - 'src/gaia/daemon/errors.py'
+      - 'src/gaia/daemon/instance.py'
+      - 'src/gaia/daemon/lemonade.py'
+      - 'src/gaia/daemon/lock.py'
+      - 'src/gaia/daemon/paths.py'
+      - 'src/gaia/daemon/custody/constants.py'
+      - 'src/gaia/daemon/sidecars/errors.py'
+      - 'src/gaia/daemon/sidecars/spec.py'
+      - 'src/gaia/installer/init_command.py'
+      - 'src/gaia/utils/**'
+      - 'src/gaia/config.py'
+      - 'src/gaia/env.py'
+      - 'src/gaia/logger.py'
+      - 'src/gaia/log_rotation.py'
+      - 'src/gaia/ports.py'
+      - 'src/gaia/version.py'
+      - 'src/gaia/rag/**'
       - 'src/gaia/vlm/**'
-      - 'tests/test_rag*.py'
-      - 'tests/unit/rag/**'
+      - 'src/gaia/chat/**'
       - 'src/gaia/agents/tools/rag_tools.py'
-      - 'hub/agents/chat/python/gaia_agent_chat/agent.py'
+      - 'src/gaia/agents/tools/__init__.py'
+      - 'src/gaia/agents/base/tools.py'
+      - 'src/gaia/ui/routers/sessions.py'
+      - 'src/gaia/ui/sse_handler.py'
+      # The integration job runs `python -m gaia.cli eval retrieval`.
+      - 'src/gaia/cli.py'
       - 'src/gaia/eval/retrieval/**'
+      - 'hub/agents/chat/python/**'
       - 'eval/retrieval/**'
       - 'eval/corpus/**'
       - 'data/pdf/**'
+      - 'tests/test_rag*.py'
+      - 'tests/integration/conftest.py'
+      - 'tests/integration/test_rag_no_break_spaces.py'
+      - 'tests/unit/conftest.py'
+      - 'tests/unit/denied_folder.py'
+      - 'tests/unit/rag/**'
+      - 'tests/unit/eval/conftest.py'
       - 'tests/unit/eval/test_retrieval_bench.py'
       - 'tests/fixtures/eval_baselines/rag-retrieval/**'
-      - 'setup.py'
-      - '.github/workflows/test_rag.yml'
   merge_group:
   workflow_dispatch:
 
@@ -65,9 +145,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
-
-    - name: Free disk space
-      uses: ./.github/actions/free-disk-space
 
     - name: Setup Python environment
       uses: ./.github/actions/setup-venv
@@ -178,8 +255,12 @@ jobs:
             python tests/test_rag_integration.py
             if ($LASTEXITCODE -ne 0) { throw "Tests failed with exit code $LASTEXITCODE" }
 
+            Write-Host "`n=== Dense no-break-space embedding regression ==="
+            python -m pytest tests/integration/test_rag_no_break_spaces.py -v --tb=short
+            if ($LASTEXITCODE -ne 0) { throw "No-break-space regression failed with exit code $LASTEXITCODE" }
+
             # Offline, retrieval-only subset over committed documents, compared to
-            # the committed baseline. The full suite runs nightly (eval_retrieval.yml).
+            # the committed baseline. The full suite runs on release tags (eval_retrieval.yml).
             Write-Host "`n=== Retrieval benchmark gate (gaia eval retrieval --suite pr) ==="
             # gaia is installed as a wheel here, so name the checkout that holds the labels.
             python -m gaia.cli eval retrieval --suite pr --offline --repo-root $env:GITHUB_WORKSPACE --gate tests/fixtures/eval_baselines/rag-retrieval/pr.json --out retrieval-pr

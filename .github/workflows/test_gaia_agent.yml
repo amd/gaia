@@ -14,33 +14,116 @@ on:
   push:
     branches: [ main ]
     paths:
+      - '.github/workflows/test_gaia_agent.yml'
+      - '.github/workflows/build_flagship_sidecar.yml'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      - 'util/check_module_skips.py'
+      - 'util/check_test_lane_coverage.py'
+      - 'util/test_lane_allowlist.yml'
+      # test_flagship_ci.py checks this filter with the CI path guard's matcher.
+      - 'util/check_ci_path_coverage.py'
       - 'hub/agents/gaia/python/**'
       - 'hub/agents/gaia/CAPABILITY_MATRIX.md'
       - 'hub/agents/chat/python/**'
+      - 'hub/skills/**'
       # The flagship composes providers, RAG, connectors and the UI's stdio
       # adapters; restricting this to agent modules misses runtime regressions.
       # It also covers src/gaia/api, where agent_registry.py's init_params are
       # pinned against the flagship's constructor and sse_handler.py against
       # its console.
       - 'src/gaia/**'
-      - 'hub/skills/**'
-      - 'tests/**'
-      - 'setup.py'
-      - 'pyproject.toml'
-      - '.github/workflows/test_gaia_agent.yml'
+      # Frontend-only trees: no Python test here imports them.
+      - '!src/gaia/apps/webui/**'
+      - '!src/gaia/apps/*/webui/**'
+      - '!src/gaia/electron/**'
+      - 'docs/guides/starter-skills.mdx'
+      # The tests this workflow names, and their conftests.
+      - 'tests/unit/conftest.py'
+      - 'tests/unit/agents/conftest.py'
+      - 'tests/unit/chat/ui/conftest.py'
+      - 'tests/integration/conftest.py'
+      - 'tests/integration/test_gaia_sidecar_relay_live.py'
+      - 'tests/unit/agents/test_binary_install_dispatch.py'
+      - 'tests/unit/agents/test_model_history.py'
+      - 'tests/unit/agents/test_sidecar_card_drift.py'
+      - 'tests/unit/chat/ui/test_sidecar_dispatch_coverage.py'
+      - 'tests/unit/chat/ui/test_sidecar_relay_profiles.py'
+      - 'tests/unit/messaging/**'
+      - 'tests/unit/test_agent_lazy_skill_prompt.py'
+      - 'tests/unit/test_execute_python_file_cwd.py'
+      - 'tests/unit/test_flagship_ci.py'
+      - 'tests/unit/test_flagship_code_index_scope.py'
+      - 'tests/unit/test_powershell_command_injection.py'
+      - 'tests/unit/test_skill_loader.py'
+      - 'tests/unit/test_skill_sets.py'
+      - 'tests/unit/test_starter_skills.py'
+      - 'tests/unit/test_stdio_permission_control.py'
+      - 'tests/unit/test_tool_loader_token_budget.py'
+      - 'tests/fixtures/**'
+      - 'tests/unit/__init__.py'
+      - 'tests/unit/agents/__init__.py'
+      - 'tests/unit/agents/test_parallel_tool_calls.py'
+      - 'tests/unit/skills_helpers.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - '.github/workflows/test_gaia_agent.yml'
+      - '.github/workflows/build_flagship_sidecar.yml'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      - 'util/check_module_skips.py'
+      - 'util/check_test_lane_coverage.py'
+      - 'util/test_lane_allowlist.yml'
+      # test_flagship_ci.py checks this filter with the CI path guard's matcher.
+      - 'util/check_ci_path_coverage.py'
       - 'hub/agents/gaia/python/**'
       - 'hub/agents/gaia/CAPABILITY_MATRIX.md'
       - 'hub/agents/chat/python/**'
-      - 'src/gaia/**'
       - 'hub/skills/**'
-      - 'tests/**'
-      - 'setup.py'
-      - 'pyproject.toml'
-      - '.github/workflows/test_gaia_agent.yml'
+      # The flagship composes providers, RAG, connectors and the UI's stdio
+      # adapters; restricting this to agent modules misses runtime regressions.
+      # It also covers src/gaia/api, where agent_registry.py's init_params are
+      # pinned against the flagship's constructor and sse_handler.py against
+      # its console.
+      - 'src/gaia/**'
+      # Frontend-only trees: no Python test here imports them.
+      - '!src/gaia/apps/webui/**'
+      - '!src/gaia/apps/*/webui/**'
+      - '!src/gaia/electron/**'
+      - 'docs/guides/starter-skills.mdx'
+      # The tests this workflow names, and their conftests.
+      - 'tests/unit/conftest.py'
+      - 'tests/unit/agents/conftest.py'
+      - 'tests/unit/chat/ui/conftest.py'
+      - 'tests/integration/conftest.py'
+      - 'tests/integration/test_gaia_sidecar_relay_live.py'
+      - 'tests/unit/agents/test_binary_install_dispatch.py'
+      - 'tests/unit/agents/test_model_history.py'
+      - 'tests/unit/agents/test_sidecar_card_drift.py'
+      - 'tests/unit/chat/ui/test_sidecar_dispatch_coverage.py'
+      - 'tests/unit/chat/ui/test_sidecar_relay_profiles.py'
+      - 'tests/unit/messaging/**'
+      - 'tests/unit/test_agent_lazy_skill_prompt.py'
+      - 'tests/unit/test_execute_python_file_cwd.py'
+      - 'tests/unit/test_flagship_ci.py'
+      - 'tests/unit/test_flagship_code_index_scope.py'
+      - 'tests/unit/test_powershell_command_injection.py'
+      - 'tests/unit/test_skill_loader.py'
+      - 'tests/unit/test_skill_sets.py'
+      - 'tests/unit/test_starter_skills.py'
+      - 'tests/unit/test_stdio_permission_control.py'
+      - 'tests/unit/test_tool_loader_token_budget.py'
+      - 'tests/fixtures/**'
+      - 'tests/unit/__init__.py'
+      - 'tests/unit/agents/__init__.py'
+      - 'tests/unit/agents/test_parallel_tool_calls.py'
+      - 'tests/unit/skills_helpers.py'
   merge_group:
   workflow_dispatch:
 
@@ -60,9 +143,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -174,6 +254,7 @@ jobs:
           # test, so test_unit.yml collects them and runs none of it (#4206).
           python -m pytest \
             tests/unit/messaging/test_bridge_contract.py \
+            tests/unit/messaging/test_bridge_hung_tool.py \
             tests/unit/test_execute_python_file_cwd.py \
             tests/unit/test_flagship_code_index_scope.py \
             tests/unit/test_stdio_permission_control.py \

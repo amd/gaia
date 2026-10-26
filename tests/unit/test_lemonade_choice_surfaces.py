@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+import requests
 
 from gaia.config import GaiaConfig
 from gaia.llm import lemonade_choice as choice
@@ -160,6 +161,14 @@ class TestAgentUiRouter:
             client.get("/api/lemonade/target", headers=self.H).json()["offer"] is False
         )
 
+    def test_detect_says_which_ports_it_could_not_check(self, client, monkeypatch):
+        url = "http://localhost:13305/api/v1"
+        monkeypatch.setattr(
+            choice, "detect_lemonade", lambda: choice.Detection(None, (url,))
+        )
+        r = client.get("/api/lemonade/detect", headers={"X-Gaia-UI": "1"})
+        assert r.json() == {"found": None, "unchecked": [url]}
+
     def test_reads_need_the_ui_header(self, client):
         assert client.get("/api/lemonade/target").status_code == 403
         assert client.get("/api/lemonade/detect").status_code == 403
@@ -201,6 +210,30 @@ class TestAgentUiRouter:
         assert r.status_code == 422
         assert r.json()["detail"]["status"] == "needs_key"
         assert GaiaConfig.load().lemonade_mode is None
+        self.applied.assert_not_called()
+
+    def test_a_dead_address_is_refused_in_plain_words(self, client, monkeypatch):
+        import urllib3
+
+        conn = urllib3.exceptions.NewConnectionError(None, "Failed to establish")
+        conn.__cause__ = ConnectionRefusedError(10061, "actively refused")
+        refused = requests.exceptions.ConnectionError(
+            urllib3.exceptions.MaxRetryError(None, "/api/v1/health", conn)
+        )
+        monkeypatch.setattr(requests, "get", mock.Mock(side_effect=refused))
+        r = client.post(
+            "/api/lemonade/target",
+            json={"mode": "external", "base_url": "http://127.0.0.1:9"},
+            headers=self.H,
+        )
+        assert r.status_code == 422
+        message = r.json()["detail"]["message"]
+        assert message == (
+            "No Lemonade Server is answering at http://127.0.0.1:9/api/v1: "
+            "nothing is listening on that port. Start it, or check the address "
+            "and port."
+        )
+        assert "gaia config set" not in message
         self.applied.assert_not_called()
 
     def test_malformed_url_is_rejected(self, client):

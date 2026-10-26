@@ -126,6 +126,21 @@
         "additionalProperties": false,
         "description": "``POST /v1/gaia/query`` body (frozen #2015 contract, spec §2.2).",
         "properties": {
+          "allowed_paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The conversation's file scope as the caller computed it (contract >= 2.18), so the agent works where the caller's UI says it does. Absolute paths. Builds a new session with exactly this scope; a retained session gains any entry it lacks and keeps what the user granted. GAIA_ALLOWED_PATHS still narrows it. Omit for the agent's default scope.",
+            "title": "Allowed Paths"
+          },
           "can_answer_questions": {
             "anyOf": [
               {
@@ -137,6 +152,19 @@
             ],
             "description": "Whether the caller can answer a mid-run question (contract >= 2.6). False for a one-shot run: the agent must not park on needs_input with nobody there to answer, which reads as a hang.",
             "title": "Can Answer Questions"
+          },
+          "changes_turn_id": {
+            "anyOf": [
+              {
+                "pattern": "^\\d{14}-[0-9a-f]{8}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Record this turn's file changes for undo, under this turn of the session (contract >= 2.19). Needs session_id. A copy of each file the agent writes is saved first, in the snapshot store of the agent's GAIA home, keyed by session_id and this id, and the recording is complete before the terminal event is sent. Use file_snapshots.new_turn_id() to make one. Omit it to record nothing.",
+            "title": "Changes Turn Id"
           },
           "context": {
             "description": "Transcript slice, pushed in the body. May be empty, never absent.",
@@ -173,6 +201,23 @@
             ],
             "description": "Cap on agent-loop steps for this turn. Omit for the agent's default.",
             "title": "Max Steps"
+          },
+          "memory": {
+            "anyOf": [
+              {
+                "enum": [
+                  "on",
+                  "private",
+                  "off"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether this turn may save to memory (contract >= 2.18): 'on', 'private' (a private chat) or 'off' (memory turned off in the caller's settings). With 'private' or 'off' nothing is written, including the errors and lessons the agent saves on its own. Send it every turn: a retained session keeps the last value. Omit it to leave memory as the agent has it.",
+            "title": "Memory"
           },
           "model": {
             "anyOf": [
@@ -220,6 +265,23 @@
             ],
             "description": "Conversation handle (contract >= 2.12). Threaded to the agent as its UI session so indexed documents survive across turns — without it a document agent forgets what it just indexed.",
             "title": "Session Id"
+          },
+          "surface": {
+            "anyOf": [
+              {
+                "enum": [
+                  "agent_ui",
+                  "tui",
+                  "cli"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The front-end this turn comes from (contract >= 2.20). 'agent_ui' tells the agent that features like Scheduled tasks are in the caller's sidebar, and each front-end gets model-provider errors worded for its own settings. Fixed when a session is built; omit it for a headless caller, whose provider advice then points at the model server this GAIA host uses.",
+            "title": "Surface"
           }
         },
         "required": [
@@ -397,7 +459,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.17"
+    "version": "2.21"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -501,11 +563,14 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/event-stream": {
+                "schema": {
+                  "example": "data: {\"type\": \"needs_confirmation\", \"run_id\": \"…\", \"action\": \"run_shell_command\", \"summary\": \"git push\", \"confirm_id\": \"…\", \"risk\": \"execute\", \"args\": {\"command\": \"git push\"}}\n\n",
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`: status {message, phase?, queue?} | token {delta} | tool_call {tool, args} | tool_result {tool, data, render?} | needs_confirmation {run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?} | needs_input {run_id, request_id, question, options, allow_free_text, sensitive, respond_url, timeout_seconds?} | final {answer, usage?, failed?} | error {detail, status}. A needs_confirmation's `args` are exactly the arguments the model sent for the gated call, each value capped at 64,000 characters (`args_truncated: true` when one was cut); what the agent adds to its prompt is in `prompt_context` {working_directory?, risk_note?}, never in `args`. The stream ends with exactly one `final` or `error`. `:`-prefixed heartbeat comments carry no payload."
           },
           "422": {
             "content": {

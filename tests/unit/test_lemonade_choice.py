@@ -10,6 +10,7 @@ answer. The unit conftest points ``config.json`` at a per-test tmp file.
 from __future__ import annotations
 
 import json
+import socket
 from types import SimpleNamespace
 from unittest import mock
 
@@ -338,7 +339,8 @@ class TestProbe:
         assert result.status == choice.TOO_OLD
         msg = result.message()
         assert "v10.2.0" in msg and f"v{choice.minimum_version()}" in msg
-        assert "Upgrade" in msg and "lemonade_mode gaia" in msg
+        assert "Upgrade" in msg and "lemonade_mode" not in msg
+        assert "lemonade_mode gaia" in result.message(in_use=True)
 
     def test_calver_is_new_enough(self, http):
         http.routes[f"{USER_URL}/health"] = _lemonade("2026.40.0")
@@ -348,6 +350,79 @@ class TestProbe:
         result = choice.probe(USER_URL)
         assert result.status == choice.UNREACHABLE
         assert "Start it" in result.message()
+
+
+def _wrapped(cause):
+    """A ConnectionError shaped like the one requests raises: socket error inside."""
+    import urllib3
+
+    conn = urllib3.exceptions.NewConnectionError(None, "Failed to establish")
+    conn.__cause__ = cause
+    pool = urllib3.exceptions.MaxRetryError(None, "/api/v1/health", conn)
+    return requests.exceptions.ConnectionError(pool)
+
+
+class TestUnreachableReason:
+    """Why nothing answered, in words, never the raw urllib3 exception."""
+
+    @pytest.mark.parametrize(
+        "error,reason",
+        [
+            (
+                _wrapped(ConnectionRefusedError(10061, "actively refused")),
+                "nothing is listening on that port",
+            ),
+            (
+                _wrapped(socket.gaierror(11002, "getaddrinfo failed")),
+                "the host name could not be found",
+            ),
+            (
+                requests.exceptions.ConnectTimeout("connect timeout=3"),
+                "nothing accepted the connection in time",
+            ),
+            (
+                requests.exceptions.ReadTimeout("read timeout=10"),
+                "did not answer in time",
+            ),
+            (
+                requests.exceptions.SSLError("[SSL: WRONG_VERSION_NUMBER]"),
+                "secure (HTTPS) connection could not be set up",
+            ),
+            (requests.exceptions.ConnectionError("odd"), "the connection failed"),
+        ],
+    )
+    def test_each_failure_reads_plainly(self, http, error, reason):
+        http.routes[f"{USER_URL}/health"] = error
+        result = choice.probe(USER_URL)
+        assert result.status == choice.UNREACHABLE
+        msg = result.message()
+        assert reason in msg
+        assert msg.endswith("Start it, or check the address and port.")
+        for leak in ("HTTPConnectionPool", "Max retries", "WinError", "Errno"):
+            assert leak not in msg
+
+    def test_only_a_server_already_in_use_names_the_way_back(self, http):
+        result = choice.probe(USER_URL)
+        assert "gaia config set" not in result.message()
+        assert "gaia config set lemonade_mode gaia" in result.message(in_use=True)
+
+    def test_the_full_error_is_logged(self, http, caplog):
+        http.routes[f"{USER_URL}/health"] = _wrapped(ConnectionRefusedError(111, "x"))
+        with caplog.at_level("DEBUG", logger=choice.log.name):
+            choice.probe(USER_URL)
+        assert "NewConnectionError" in caplog.text or "MaxRetryError" in caplog.text
+
+    @pytest.mark.allow_network
+    def test_a_real_closed_port_reads_plainly(self):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        result = choice.probe(f"http://127.0.0.1:{port}", timeout=(5.0, 1.0))
+        assert result.status == choice.UNREACHABLE
+        assert result.detail in (
+            "nothing is listening on that port",
+            "nothing accepted the connection in time",
+        )
 
 
 class TestDetect:
@@ -391,6 +466,29 @@ class TestDetect:
     def test_too_old_is_reported_not_offered(self, http):
         http.routes[f"{USER_URL}/health"] = _lemonade("10.2.0")
         assert choice.detect_running_lemonade().status == choice.TOO_OLD
+
+    def test_a_busy_server_gets_time_to_answer(self, http, monkeypatch):
+        seen = []
+        real = choice.probe
+
+        def probe(url, api_key=None, *, timeout=choice._PROBE_TIMEOUT):
+            seen.append(timeout)
+            return real(url, api_key, timeout=timeout)
+
+        monkeypatch.setattr(choice, "probe", probe)
+        http.routes[f"{USER_URL}/health"] = _lemonade()
+        assert choice.detect_lemonade().found.status == choice.OK
+        assert seen[0][1] >= 10
+
+    def test_a_server_that_never_answers_is_unchecked_not_absent(self, http):
+        http.routes[f"{USER_URL}/health"] = requests.exceptions.ReadTimeout("read")
+        detection = choice.detect_lemonade()
+        assert detection.found is None
+        assert detection.unchecked == (USER_URL,)
+
+    def test_a_closed_port_is_simply_absent(self, http):
+        http.routes[f"{USER_URL}/health"] = requests.exceptions.ConnectTimeout("syn")
+        assert choice.detect_lemonade().unchecked == ()
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +541,14 @@ class TestUseExternal:
         with pytest.raises(choice.LemonadeChoiceError) as err:
             choice.set_mode("external")
         assert err.value.status == choice.UNREACHABLE
+        assert "gaia config set" not in str(err.value)
         assert GaiaConfig.load().lemonade_mode == "gaia"
+
+    def test_a_dead_server_already_in_use_names_the_way_back(self, http, keyring):
+        _save(lemonade_mode="external", lemonade_base_url=USER_URL)
+        with pytest.raises(choice.LemonadeChoiceError) as err:
+            choice.set_url("http://other:13305")
+        assert "gaia config set lemonade_mode gaia" in str(err.value)
 
     def test_set_mode_external_needs_a_saved_server(self):
         with pytest.raises(choice.LemonadeChoiceError, match="lemonade connect"):

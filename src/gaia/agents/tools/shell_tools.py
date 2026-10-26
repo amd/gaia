@@ -25,17 +25,32 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from gaia.agents.base.call_risk import (
     DESTRUCTIVE,
+    NEEDS_PERSON_ARG,
     RISK_NOTE_ARG,
     shell_command_risk,
 )
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.errors import exit_error
+from gaia.agents.base.file_snapshots import (
+    SnapshotError,
+    before_change,
+    note_untracked,
+)
 from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
     TIMEOUT_CLASSES,
     resolve_timeout,
     terminate_process_tree,
+)
+from gaia.agents.tools.package_installs import (
+    install_refusal_hint,
+    system_install_target,
+)
+from gaia.agents.tools.shell_deletes import (
+    MAX_SHELL_DELETE_COPY_BYTES,
+    delete_operands,
+    split_exact,
 )
 from gaia.agents.tools.shell_session import ShellSession
 from gaia.env import child_env
@@ -355,7 +370,7 @@ def _one_time_hard_reason(command: str) -> str:
         if not piece:
             continue
         try:
-            argv = shlex.split(piece)
+            argv = _tokenize(piece)
         except ValueError:
             argv = piece.split()
         if _destroys(argv):
@@ -396,6 +411,12 @@ def _reaches_the_prompt(error: Optional[Dict[str, Any]]) -> bool:
         TIER_CONFIRM,
         TIER_CONFIRM_ONCE,
     )
+
+
+def _call_key(command: Any, working_directory: Any) -> Tuple[Any, Any]:
+    """The identity an approval is bound to: this text, in this folder."""
+    # As run: the tool expands ~ before checking, so the key must too.
+    return command, _expand_home(working_directory) or None
 
 
 # The binaries a developer session needs and a read-only session must not have
@@ -1464,6 +1485,62 @@ def _script_words(body: str, dialect: str) -> list:
     return words
 
 
+def _gh_remote_positions(argv: list) -> set:
+    """Indexes of *argv* that ``gh`` reads as GitHub ids, never as local paths.
+
+    The ``-R``/``--repo`` value (``amd/gaia``) and the ``gh api`` endpoint
+    (``repos/amd/gaia``). Every other ``gh`` operand is still scanned:
+    ``--body-file`` and ``gist create`` do read local files.
+    """
+    if os.path.basename(argv[0]).lower().removesuffix(".exe") != "gh":
+        return set()
+    remote = set()
+    seen_api = False
+    value_next = False
+    for index, token in enumerate(argv[1:], start=1):
+        if value_next:
+            value_next = False
+            continue
+        if token in ("-R", "--repo"):
+            remote.add(index + 1)
+            value_next = True
+        elif token.startswith(("--repo=", "-R")) and token not in ("-R",):
+            # --repo=x, -R=x and pflag's attached -Rx.
+            remote.add(index)
+        elif token == "api" and index == 1:
+            seen_api = True
+        elif seen_api and token in _GH_API_VALUE_FLAGS:
+            value_next = True
+        elif seen_api and not token.startswith("-"):
+            remote.add(index)
+            seen_api = False
+    return remote
+
+
+#: ``gh api`` flags whose next word is their value, not the endpoint.
+_GH_API_VALUE_FLAGS = frozenset(
+    {
+        "-X",
+        "--method",
+        "-H",
+        "--header",
+        "-f",
+        "--raw-field",
+        "-F",
+        "--field",
+        "-q",
+        "--jq",
+        "-t",
+        "--template",
+        "-p",
+        "--preview",
+        "--hostname",
+        "--cache",
+        "--input",
+    }
+)
+
+
 def _path_operands(argv: list) -> list:
     """``(label, operand)`` for every operand of *argv* the path check reads.
 
@@ -1477,7 +1554,10 @@ def _path_operands(argv: list) -> list:
     for start, token in enumerate(argv[:-1] if wrapped else argv[:1]):
         if _interpreter_name(token) == "env":
             operands.extend(_env_wrapper_assignments(argv[start:]))
+    remote = _gh_remote_positions(argv)
     for index, token in enumerate(argv[1:], start=1):
+        if index in remote:
+            continue
         dialect = positions.get(index)
         if dialect is None or dialect.endswith(_MAYBE):
             operands.append(("Argument", token))
@@ -1665,12 +1745,16 @@ def _tokenize(command: str, bypass_gates: bool = False) -> list:
     than being eaten as a space. Inside quotes it is still ordinary data, so
     ``echo "a<newline>b"`` remains one operand.
     """
-    if not bypass_gates:
-        return shlex.split(command)
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=_BYPASS_PUNCTUATION)
+    if bypass_gates:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=_BYPASS_PUNCTUATION)
+        lexer.whitespace = " \t\r"
+    else:
+        lexer = shlex.shlex(command, posix=True)
     lexer.whitespace_split = True
     lexer.commenters = ""  # same as shlex.split: '#' is data, not a comment
-    lexer.whitespace = " \t\r"
+    if _pipe_dialect() == "cmd":
+        # cmd.exe reads '\' as a separator; POSIX escaping hid C:\x from the path check.
+        lexer.escape = ""
     return list(lexer)
 
 
@@ -1894,6 +1978,49 @@ _ANSWER_EXIT_ONE = {
 _GIT_DIFF_EXIT_CODE_FLAGS = frozenset({"--exit-code", "--quiet", "--no-index"})
 
 
+#: ``test`` / ``[`` operators that ask whether a path exists, as a file test.
+_FILE_TEST_FLAGS = frozenset({"-e", "-f", "-d", "-s", "-r", "-w", "-x", "-L", "-h"})
+
+#: ``Get-Command NAME`` (or its alias ``gcm``) as a whole PowerShell script.
+_GET_COMMAND_SCRIPT = re.compile(
+    r"\s*(?:get-command|gcm)\s+[^\s;|&]+[^;|&\r\n]*", re.IGNORECASE
+)
+
+
+def _probe_exit(segment: list) -> Optional[str]:
+    """Why exit 1 from *segment* means "not there", when it is an existence probe.
+
+    Each reading is the program's own documented status: where.exe and which
+    exit 1 when nothing is found, ``command -v`` / ``type`` when the name does
+    not resolve, ``test -f`` when the test is false.
+    """
+    name = _interpreter_name(segment[0])
+    operands = [a for a in segment[1:] if not a.startswith(("-", "/"))]
+    if name in ("where", "which") and operands:
+        return f"not found: {', '.join(operands)} ({name} exits 1 for that)"
+    if name == "command" and len(segment) >= 3 and segment[1] in ("-v", "-V"):
+        return f"not found: {segment[2]} (command -v exits 1 for that)"
+    # cmd.exe's `type` prints a file, so only the POSIX builtin is a lookup.
+    if name == "type" and os.name != "nt" and operands:
+        return f"not found: {', '.join(operands)} (type exits 1 for that)"
+    # One unary test only: `test -f a -a -x b` is not a probe.
+    unary = (name == "test" and len(segment) == 3) or (
+        name == "[" and len(segment) == 4 and segment[3] == "]"
+    )
+    if unary and segment[1] in _FILE_TEST_FLAGS:
+        return f"test {segment[1]} {segment[2]} is false (exit 1 is its answer)"
+    if name == "powershell":
+        script = [
+            segment[i]
+            for i, kind in sorted(_powershell_script_positions(segment).items())
+            if kind == "powershell"
+        ]
+        text = " ".join(script)
+        if _GET_COMMAND_SCRIPT.fullmatch(text):
+            return f"not found: {text.split()[1]} (Get-Command exits 1 for that)"
+    return None
+
+
 def _answer_exit(segment: list, code: int) -> Optional[str]:
     """Why *code* from *segment* is the program's answer, or None if it failed."""
     if code != 1 or not segment:
@@ -1901,6 +2028,9 @@ def _answer_exit(segment: list, code: int) -> Optional[str]:
     name = _interpreter_name(segment[0])
     if name in _ANSWER_EXIT_ONE:
         return _ANSWER_EXIT_ONE[name]
+    probe = _probe_exit(segment)
+    if probe:
+        return probe
     if name != "git":
         return None
     argv, error = _git_policy_argv(segment)
@@ -2025,13 +2155,21 @@ def _take_segment_envs(segments: list) -> tuple:
     return tuple(envs), stripped, None
 
 
+def _expand_home(path: Any) -> Any:
+    """``~/x`` -> the user's ``x``, as a shell would; anything else unchanged."""
+    if isinstance(path, str) and path.startswith("~"):
+        return os.path.expanduser(path)
+    return path
+
+
 def _ambiguous_pipe_refusal(piece: str, exc: ValueError) -> Dict[str, Any]:
     """The shell cuts at a ``|`` the argument quoting says is data."""
+    # The fix comes first: a cut-off error line still says what to do.
     return {
         "status": "error",
         "error": (
-            "Cannot tell where this pipeline's commands begin and end: the "
-            "shell would cut it at a '|' that the quoting puts inside an "
+            "Not run: wrap any argument containing '|' in double quotes. The "
+            "shell would cut this line at a '|' its quoting puts inside an "
             f"argument ({exc} in {piece.strip()!r})."
         ),
         "has_errors": True,
@@ -2845,7 +2983,8 @@ class ShellToolsMixin:
         ``TIER_CONFIRM`` (``git commit``, ``npm test``) and ``TIER_CONFIRM_ONCE``
         (``git push``, ``python -c``, a path outside the project) fall through
         to the prompt. The exception is a run where only a blanket pre-approval
-        would answer it; see :meth:`_approval_is_blanket_only`.
+        would answer it; see :meth:`_approval_is_blanket_only`. If a person is
+        watching that run (:meth:`_a_person_answers`), the call is put to them.
 
         Duck-typed rather than an override: ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
@@ -2855,6 +2994,8 @@ class ShellToolsMixin:
         # Every shell call starts with no approval on record; only this call's
         # own prompt can write one.
         self._approved_once = None
+        self._needs_person = None
+        self._person_approved = None
         command = (tool_args or {}).get("command")
         if not isinstance(command, str):
             return None
@@ -2875,6 +3016,12 @@ class ShellToolsMixin:
             }
         if _reaches_the_prompt(error):
             if not self._approval_is_blanket_only():
+                return None
+            if tool_name == _POLICY_GATED_SHELL_TOOL and self._a_person_answers():
+                # Pre-approval stands, but this call goes to that person.
+                self._needs_person = _call_key(
+                    command, (tool_args or {}).get("working_directory")
+                )
                 return None
             error = self._blanket_approval_refusal(error, command)
         logger.info(
@@ -2904,6 +3051,30 @@ class ShellToolsMixin:
         from gaia.agents.base import console as console_mod
 
         return console_mod.auto_approve_env_enabled()
+
+    def _a_person_answers(self) -> bool:
+        """True when a pre-approving run can still put a call to a person.
+
+        A watched Full access chat over the sidecar's socket: tools are
+        pre-approved, the shell gates stay on (#3373), and someone is there to
+        answer. A command past the gates is asked about there instead of
+        refused. ``GAIA_AUTO_APPROVE_TOOLS`` marks an unattended run, so it
+        keeps refusing whatever the console says.
+        """
+        console = getattr(self, "console", None)
+        if console is None or getattr(console, "full_access", False) is True:
+            return False
+        if not (
+            getattr(console, "asks_past_preapproval", False) is True
+            and getattr(console, "answers_confirmations", False) is True
+            and getattr(console, "grants_paths", False) is True
+            and not getattr(console, "background_mode", False)
+        ):
+            return False
+        # Deferred: the console module imports the package root.
+        from gaia.agents.base import console as console_mod
+
+        return not console_mod.auto_approve_env_enabled()
 
     def _nothing_could_have_confirmed(self) -> bool:
         """True when this call reached execution without anyone approving it.
@@ -3057,8 +3228,23 @@ class ShellToolsMixin:
         always names its folder and carries ``RISK_NOTE_ARG``: the prompt shows
         the line verbatim with that note, and offers no "always".
 
+        A call the pre-flight left for a person (:meth:`_a_person_answers`)
+        carries ``NEEDS_PERSON_ARG``, so pre-approval does not answer it.
+
         Duck-typed, like :meth:`skill_grant_covers_call`.
         """
+        shown = self._shown_args(tool_name, tool_args)
+        if (
+            tool_name == _POLICY_GATED_SHELL_TOOL
+            and isinstance(tool_args, dict)
+            and getattr(self, "_needs_person", None)
+            == _call_key(tool_args.get("command"), tool_args.get("working_directory"))
+        ):
+            return {**shown, NEEDS_PERSON_ARG: True}
+        return shown
+
+    def _shown_args(self, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
+        """:meth:`confirmation_args_for_call` before any approval marker."""
         if tool_name != _POLICY_GATED_SHELL_TOOL or not isinstance(tool_args, dict):
             return tool_args
         command = tool_args.get("command")
@@ -3092,26 +3278,71 @@ class ShellToolsMixin:
         """
         if tool_name != _POLICY_GATED_SHELL_TOOL or not isinstance(tool_args, dict):
             return
-        self._approved_once = (
-            tool_args.get("command"),
-            tool_args.get("working_directory") or None,
-        )
+        key = _call_key(tool_args.get("command"), tool_args.get("working_directory"))
+        self._approved_once = key
+        # The marked call reached a person, so its approval was theirs.
+        if key == getattr(self, "_needs_person", None):
+            self._person_approved = key
 
     def _take_once_approval(self, command: str, working_directory: Any) -> bool:
         """Consume the approval for exactly this call; False when there is none."""
         approved = getattr(self, "_approved_once", None)
         self._approved_once = None
-        return approved == (command, working_directory or None)
+        return approved == _call_key(command, working_directory)
+
+    def _take_person_approval(self, command: str, working_directory: Any) -> bool:
+        """Consume a person's approval of exactly this call; False when there is none."""
+        approved = getattr(self, "_person_approved", None)
+        self._person_approved = None
+        self._needs_person = None
+        return approved is not None and approved == _call_key(
+            command, working_directory
+        )
 
     def _call_cwd(self, working_directory: Any) -> Optional[Tuple[str, bool]]:
         """``(folder, explicit)`` a call runs in, or None when it names no real one."""
+        working_directory = _expand_home(working_directory)
         if working_directory:
             if not isinstance(working_directory, str) or not os.path.isdir(
                 working_directory
             ):
                 return None
             return str(Path(working_directory).resolve()), True
-        return self.shell_session.cwd, False
+        return self._live_session_cwd(), False
+
+    def _live_session_cwd(self) -> str:
+        """The session's folder, repaired if it was deleted since the last call.
+
+        The scratch directory sits in the shared temp folder, where another
+        GAIA process or a temp cleaner can remove it; it is re-created in
+        place. Any other vanished folder sends the session back to where it
+        started, and the next result says so (``_shell_cwd_note``).
+        """
+        session = self.shell_session
+        cwd = session.cwd
+        if os.path.isdir(cwd):
+            return cwd
+        validator = getattr(self, "path_validator", None)
+        scratch = getattr(validator, "scratch_dir", None)
+        if scratch is not None and os.path.normcase(str(scratch)) == os.path.normcase(
+            cwd
+        ):
+            from gaia.security import ensure_scratch_dir
+
+            try:
+                ensure_scratch_dir(Path(cwd))
+                return cwd
+            except OSError as exc:
+                logger.error("Could not re-create scratch dir %s: %s", cwd, exc)
+        session.reset()
+        logger.warning(
+            "Shell session folder %s no longer exists; back to %s", cwd, session.cwd
+        )
+        self._shell_cwd_note = (
+            f"The folder this session was in ({cwd}) no longer exists, so this "
+            f"ran in {session.cwd} instead."
+        )
+        return session.cwd
 
     def _line_verdict(self, command: str, working_directory: Any = None) -> tuple:
         """``(error, steps)`` for this call, path scope included.
@@ -3123,8 +3354,28 @@ class ShellToolsMixin:
         A credential folder, or one no approval may grant, is refused outright.
 
         Full access keeps its own rules: its path checks run at execution.
+        An install into an environment outside the project (the system Python,
+        ``npm -g``) is the exception: it is a one-time approval normally, and
+        refused under full access, where nobody is asked.
         """
         error, steps = self._validate_shell_command(command)
+        if error is None or _reaches_the_prompt(error):
+            install = self._system_install_block(steps, working_directory)
+            if install is not None:
+                if self.full_access_active():
+                    logger.warning(
+                        "Refusing %r under full access: %s", command, install["error"]
+                    )
+                    return {**install, "tier": TIER_REFUSE, **NOT_EXECUTED}, steps
+                error = _hard_if_unofferable(
+                    {
+                        **_confirm_once(
+                            {**(error or {}), **install}, install["risk_note"]
+                        ),
+                        **NOT_EXECUTED,
+                    },
+                    command,
+                )
         if self.full_access_active():
             return error, steps
         if error is not None and not _reaches_the_prompt(error):
@@ -3188,6 +3439,43 @@ class ShellToolsMixin:
                 return {"tier": TIER_REFUSE, **refusal, **NOT_EXECUTED}, steps
         return error, steps
 
+    def _system_install_block(
+        self, steps: list, working_directory: Any
+    ) -> Optional[Dict[str, Any]]:
+        """The block for a step that installs outside the project, or None.
+
+        Each step is judged in the folder it runs in, so ``cd app &&
+        .venv/bin/python -m pip install x`` finds the project's own venv.
+        """
+        # Read-only: repairing the session folder waits until the call runs.
+        located = self._call_cwd(working_directory) if working_directory else None
+        cwd = located[0] if located else self.shell_session.cwd
+        for step in steps:
+            if step.is_cd:
+                cwd = os.path.normpath(
+                    os.path.join(cwd, os.path.expanduser(step.cd_target))
+                )
+                continue
+            for segment in step.segments:
+                target = system_install_target(segment, cwd)
+                if target is None:
+                    continue
+                return {
+                    "status": "error",
+                    "error": (
+                        f"`{' '.join(segment)}` installs packages into {target}, "
+                        "not into this project."
+                    ),
+                    "has_errors": True,
+                    "hint": install_refusal_hint(target),
+                    "risk_note": (
+                        f"Changes {target}, which other programs on this "
+                        "computer share."
+                    ),
+                    "system_install": True,
+                }
+        return None
+
     #: Slice length for the pacing wait. Short enough that a Stop lands
     #: promptly, long enough not to spin.
     _PACE_POLL_SECONDS = 0.25
@@ -3217,6 +3505,60 @@ class ShellToolsMixin:
                 time.sleep(slice_s)
                 remaining -= slice_s
                 waited += slice_s
+
+    def _withheld_cwd_error(self, cwd: str) -> Optional[Dict[str, Any]]:
+        """The refusal for running in a folder the user removed, or None."""
+        validator = getattr(self, "path_validator", None)
+        withheld_root = getattr(validator, "withheld_root", None)
+        if not callable(withheld_root) or withheld_root(cwd) is None:
+            return None
+        return {
+            **NOT_EXECUTED,
+            "status": "error",
+            "error": validator.access_denied_message(cwd)
+            + " Pass a working_directory in a folder this chat can still use.",
+            "has_errors": True,
+        }
+
+    def _snapshot_shell_deletes(self, steps: list, step_cwds: list) -> bool:
+        """Copy each file a plain delete on this line names, for the turn's undo.
+
+        Returns True only when that accounts for everything the line can
+        change: every step is a ``cd`` or a delete whose operands are all
+        regular files inside the allowed paths, each one copied. Anything else
+        keeps the line as untracked shell work, though the files it did copy
+        still show as deleted.
+        """
+        covered = True
+        for step, step_cwd in zip(steps, step_cwds):
+            if step.is_cd:
+                continue
+            argv = (
+                split_exact(step.text)
+                if len(step.segments) == 1 and not any(step.envs or ())
+                else None
+            )
+            operands = delete_operands(argv) if argv else None
+            if operands is None:
+                covered = False
+                continue
+            for operand in operands:
+                path = os.path.join(step_cwd, operand)
+                if not self._restorable_delete_target(path):
+                    covered = False
+                    continue
+                before_change(path, "run_shell_command")
+        return covered
+
+    def _restorable_delete_target(self, path: str) -> bool:
+        """Whether *path* is a file a shell delete can be undone for."""
+        if os.path.islink(path) or not os.path.isfile(path):
+            return False
+        if os.path.getsize(path) > MAX_SHELL_DELETE_COPY_BYTES:
+            return False
+        if _protected_folder(os.path.realpath(path)):
+            return False
+        return self._path_allowed(path, prompt_user=False)
 
     def _path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         """Whether *path* is inside this agent's allowed paths.
@@ -3270,7 +3612,7 @@ class ShellToolsMixin:
         the allowed paths is collected for the prompt instead of refused.
         """
         try:
-            resolved = str(Path(cwd).joinpath(target).resolve())
+            resolved = str(Path(cwd).joinpath(_expand_home(target)).resolve())
         except (OSError, ValueError) as exc:
             return cwd, {
                 **NOT_EXECUTED,
@@ -3362,6 +3704,13 @@ class ShellToolsMixin:
         if os.name == "nt" and candidate_path.startswith("/"):
             if "/" not in candidate_path[1:]:
                 return None
+        # cmd.exe drops an unquoted '^' that shlex keeps; check its reading too.
+        if _pipe_dialect() == "cmd" and "^" in candidate_path:
+            refusal = self._path_candidate_refusal(
+                label, arg, re.sub(r"\^(.?)", r"\1", candidate_path), cwd, outside
+            )
+            if refusal:
+                return refusal
         # A shell or script may expand '~' and '$HOME'; check both readings.
         expanded = os.path.expandvars(os.path.expanduser(candidate_path))
         looks_like_path = (
@@ -4229,7 +4578,7 @@ class ShellToolsMixin:
             # to send "60". None still means "use the class default".
             timeout: int = None,
         ) -> Dict[str, Any]:
-            """Execute a shell command. Leave timeout unset — it defaults by class: 900s test runners, 1800s builds and installs, 300s git/network, 30s everything else.
+            """Execute a shell command. Leave timeout unset — it defaults by class: 900s tests, 1800s builds/installs, 300s git/network, 600s scripts, 30s the rest.
 
             Chain on one line: 'a && b', 'a || b', 'a; b', 'a | b',
             'cd <dir> && b'. One approval covers the line; every part is
@@ -4249,6 +4598,7 @@ class ShellToolsMixin:
                 code), the applied 'timeout' and 'timeout_class'; one killed at
                 the limit carries 'timed_out'.
             """
+            working_directory = _expand_home(working_directory)
             try:
                 bypass = self.full_access_active()
                 try:
@@ -4316,8 +4666,26 @@ class ShellToolsMixin:
                     # An explicit working_directory is a one-shot override that
                     # never touches the session; with none, resume where the
                     # last call's cd left off.
-                    cwd = self.shell_session.cwd
+                    cwd = self._live_session_cwd()
                     session_scoped = True
+                    if not os.path.isdir(cwd):
+                        return {
+                            **NOT_EXECUTED,
+                            "status": "error",
+                            "error": (
+                                f"Nothing ran: the shell's starting folder {cwd} "
+                                "no longer exists. Pass an existing "
+                                "working_directory, or ask the user to re-open "
+                                "the project folder."
+                            ),
+                            "has_errors": True,
+                        }
+
+                # A folder the user removed from the chat is refused even under
+                # full access, and even as the folder a new session starts in.
+                withheld = self._withheld_cwd_error(cwd)
+                if withheld is not None:
+                    return withheld
 
                 # Operators, syntax, and the per-command whitelist, for every
                 # segment of every pipeline on the line. Shared with the
@@ -4331,9 +4699,13 @@ class ShellToolsMixin:
                 # Spent by every run, so an approval reaches only the call it
                 # was given for and never a later one.
                 approved_once = self._take_once_approval(command, working_directory)
+                if self._take_person_approval(command, working_directory):
+                    unconfirmed = False
                 error, steps = self._line_verdict(command, working_directory)
                 if error and not _reaches_the_prompt(error):
                     return error
+                # Only the read-only tier is known not to write files.
+                may_write = bool(error) or bypass
                 if error and unconfirmed:
                     return self._blanket_approval_refusal(error, command)
                 if error and error.get("tier") == TIER_CONFIRM_ONCE:
@@ -4349,11 +4721,18 @@ class ShellToolsMixin:
                             ),
                             "has_errors": True,
                         }
+                    note_untracked("shell", command)
                     return self._run_approved_once(
                         command, cwd, steps, timeout, timeout_class, waited
                     )
 
                 granted = skill_granted_binaries(self)
+                # A skill-granted CLI is allowed without a prompt, not read-only.
+                may_write = may_write or any(
+                    _is_granted_segment(seg, granted)
+                    for st in steps
+                    for seg in st.segments
+                )
 
                 # A `cd` step moves the steps after it, so each step's directory
                 # — and what its arguments resolve against — is settled here,
@@ -4401,6 +4780,20 @@ class ShellToolsMixin:
                         "cwd": cwd,
                     }
 
+                if may_write:
+                    try:
+                        covered = self._snapshot_shell_deletes(steps, step_cwds)
+                    except SnapshotError as e:
+                        return {
+                            **NOT_EXECUTED,
+                            "status": "error",
+                            "error": str(e),
+                            "command": command,
+                            "has_errors": True,
+                        }
+                    if not covered:
+                        note_untracked("shell", command)
+
                 start_time = time.monotonic()
                 deadline = start_time + timeout
                 stdout_parts: list = []
@@ -4408,6 +4801,7 @@ class ShellToolsMixin:
                 ran: list = []
                 last_code = 0
                 last_answer: Optional[str] = None
+                answer_step = ""
                 # The first failure nothing on the line handles, as
                 # (and-or list, step, exit code, output to quote).
                 unhandled_failure: Optional[Tuple[int, str, int, str]] = None
@@ -4419,6 +4813,16 @@ class ShellToolsMixin:
                     if step.connector not in ("&&", "||"):
                         and_or_list += 1
                     if not _connector_runs(step.connector, last_code):
+                        # `where x && x --version` did not do what it asked
+                        # when x is missing: a probe that gates work is a
+                        # failure. grep's `&&` stays a conditional, as before.
+                        if step.connector == "&&" and last_answer and answer_step:
+                            unhandled_failure = unhandled_failure or (
+                                and_or_list,
+                                answer_step,
+                                last_code,
+                                f"{last_answer}, so '{step.text}' did not run",
+                            )
                         continue
                     # `||` handles a failure in its own and-or list, as in sh;
                     # one before a `;` still stands, so `pytest -q; ls` (or
@@ -4547,6 +4951,11 @@ class ShellToolsMixin:
                     last_answer = (
                         _step_answer_exit(step, result) if last_code != 0 else None
                     )
+                    answer_step = (
+                        step.text
+                        if last_answer and _probe_exit(step.segments[-1])
+                        else ""
+                    )
                     if last_code != 0 and last_answer is None:
                         # Under 2>&1 the verdict is on stdout.
                         unhandled_failure = unhandled_failure or (
@@ -4624,6 +5033,10 @@ class ShellToolsMixin:
                     "output_truncated": truncated,
                     "steps": ran,
                 }
+                moved = getattr(self, "_shell_cwd_note", None)
+                if moved:
+                    self._shell_cwd_note = None
+                    outcome["note"] = moved
                 if failure:
                     outcome["error"] = failure
                 elif last_answer:
@@ -4847,6 +5260,8 @@ class ShellToolsMixin:
             Shell commands share one session, so a `cd` from an earlier command
             (when it was not a one-shot `working_directory` override) is still
             in effect. Call this to read that directory instead of guessing it.
+            When the user asks you to run a command, `pwd` included, run it with
+            `run_shell_command`; this only reads the session's state.
             """
             return {
                 "status": "success",

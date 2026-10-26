@@ -4,10 +4,10 @@
 
 Seen on a data task: every exploration step wrote ``exploreN.py`` into the
 agent's scratch folder and then ran it, two prompts a step, 30 in all. Writing
-there is not a change to anything the user owns, so it runs unasked; running a
-script there is still asked, but "always" covers the scratch folder for the
-session, so one answer covers the next script. Everything outside it is
-asked as before.
+there is not a change to anything the user owns, so it runs unasked. Running a
+script there is asked every time, with only "allow once" on offer: because the
+writes are free, a standing grant to run what is there would cover code the
+user was never shown. Everything outside it is asked as before.
 """
 
 from __future__ import annotations
@@ -20,13 +20,12 @@ from unittest.mock import patch
 import pytest
 
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.tool_grants import SCRATCH_ARG, grant_scope
 from gaia.agents.base.tools import tool
 from gaia.security import PathValidator
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
-
-SCRATCH_LABEL = "Python scripts in GAIA's scratch folder"
 
 
 class _Probe(Agent):
@@ -144,12 +143,12 @@ def test_a_write_anywhere_else_still_asks(folders, where):
     assert agent.ran == []
 
 
-def test_always_on_a_scratch_script_covers_the_next_one_and_nothing_else(folders):
+def test_a_scratch_script_is_asked_each_run_and_never_offered_always(folders):
     project, scratch = folders
     agent, handler = _agent(folders)
     first = str(scratch / "explore.py")
 
-    _, prompts = _drive(
+    result, prompts = _drive(
         agent,
         handler,
         "execute_python_file",
@@ -157,22 +156,23 @@ def test_always_on_a_scratch_script_covers_the_next_one_and_nothing_else(folders
         answer=(True, True),
     )
     [request] = prompts
-    assert request["always_scope"] == SCRATCH_LABEL
+    assert result["status"] == "success"
+    assert "always_scope" not in request
     assert request["args"][SCRATCH_ARG] == str(scratch.resolve())
+    assert handler.session_grants() == set()
 
-    # The TUI's wire: a deliverable prompt (confirm_id) naming what "a" grants,
-    # which is when the TUI shows `a always: <scope> (this session)`.
+    # The TUI's wire carries no scope either, so `a` is inert there.
     [wire] = CanonicalTranslator(run_id="r", agent_id="gaia").translate(request)
-    assert wire["always_scope"] == SCRATCH_LABEL
-    assert wire["confirm_id"] == request["confirm_id"]
+    assert not wire.get("always_scope")
     assert SCRATCH_ARG not in wire["summary"]
 
-    second = str(scratch / "explore2.py")
-    result, prompts = _drive(
-        agent, handler, "execute_python_file", {"file_path": second}
-    )
-    assert prompts == []
-    assert result["status"] == "success"
+    # The same script again, and the next one, are each asked about.
+    for script in (first, str(scratch / "explore2.py")):
+        result, prompts = _drive(
+            agent, handler, "execute_python_file", {"file_path": script}
+        )
+        assert len(prompts) == 1
+        assert result["status"] == "denied"
 
     outside = str(project / "tool.py")
     result, prompts = _drive(
@@ -181,10 +181,7 @@ def test_always_on_a_scratch_script_covers_the_next_one_and_nothing_else(folders
     assert len(prompts) == 1
     assert prompts[0]["always_scope"] == "running Python files"
     assert result["status"] == "denied"
-    assert agent.ran == [
-        ("execute_python_file", first),
-        ("execute_python_file", second),
-    ]
+    assert agent.ran == [("execute_python_file", first)]
 
 
 def test_run_python_offers_always_for_snippets(folders):
@@ -200,26 +197,43 @@ def test_run_python_offers_always_for_snippets(folders):
     assert again["status"] == "success"
 
 
-def test_the_scratch_grant_is_only_for_paths_inside_the_marked_folder(tmp_path):
+def test_a_scratch_marked_call_has_no_grant_scope(tmp_path):
     scratch = str(tmp_path / "gaia-scratch-test")
-    inside = grant_scope(
+    marked = grant_scope(
         "execute_python_file",
         {
             "file_path": str(tmp_path / "gaia-scratch-test" / "a.py"),
             SCRATCH_ARG: scratch,
         },
     )
-    elsewhere = grant_scope(
-        "execute_python_file",
-        {"file_path": str(tmp_path / "project" / "a.py"), SCRATCH_ARG: scratch},
-    )
     unmarked = grant_scope(
-        "execute_python_file",
-        {"file_path": str(tmp_path / "gaia-scratch-test" / "a.py")},
+        "execute_python_file", {"file_path": str(tmp_path / "project" / "a.py")}
     )
 
-    assert inside.label == SCRATCH_LABEL
-    # A marker that does not contain the path grants only the usual family.
-    assert elsewhere.label == "running Python files"
+    assert marked is None
     assert unmarked.label == "running Python files"
-    assert inside.keys != elsewhere.keys
+
+
+def test_the_wire_args_are_only_what_the_model_sent(folders):
+    """#5361: a policy client must not match on keys GAIA added to the prompt."""
+    project, scratch = folders
+    agent, handler = _agent(folders)
+    risk_note = "Sends your commits to the remote repository."
+    # A host that names the folder and a risk note the model never sent.
+    agent.confirmation_args_for_call = lambda _name, args: {
+        **args,
+        "working_directory": str(project),
+        RISK_NOTE_ARG: risk_note,
+    }
+    call = {"file_path": str(scratch / "explore.py")}
+
+    _, [request] = _drive(agent, handler, "execute_python_file", call)
+    assert request["args"][SCRATCH_ARG] == str(scratch.resolve())
+    assert request["args"]["working_directory"] == str(project)
+
+    [wire] = CanonicalTranslator(run_id="r", agent_id="gaia").translate(request)
+    assert wire["args"] == call
+    assert wire["prompt_context"] == {
+        "working_directory": str(project),
+        "risk_note": risk_note,
+    }

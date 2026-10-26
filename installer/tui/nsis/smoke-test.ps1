@@ -16,6 +16,8 @@ $ErrorActionPreference = 'Stop'
 $Setup = (Resolve-Path $Setup).Path
 $repo = (Resolve-Path "$PSScriptRoot\..\..\..").Path
 
+# The folder and registry ids keep the legacy "Terminal Hub" name so upgrades
+# land in place; only the display name is "GAIA Terminal UI".
 $tuiDir    = "$env:LOCALAPPDATA\Programs\GAIA Terminal Hub"
 $tuiArp    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub'
 # electron-builder's identity for appId ai.amd.gaia; the .nsi pins the same.
@@ -27,6 +29,9 @@ $uiDefault = "$env:LOCALAPPDATA\Programs\gaia-desktop"
 $desktop   = [Environment]::GetFolderPath('Desktop')
 $startMenu = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
 $runKey    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$tuiName   = 'GAIA Terminal UI'
+# Shortcuts an earlier setup made under the old display name.
+$legacyLnks = @("$desktop\GAIA Terminal Hub.lnk", "$startMenu\GAIA\GAIA Terminal Hub.lnk", "$startMenu\GAIA\Uninstall GAIA Terminal Hub.lnk")
 
 function Invoke-Setup([string[]]$Arguments) {
     $p = Start-Process -FilePath $Setup -ArgumentList $Arguments -PassThru -Wait
@@ -46,6 +51,36 @@ function Wait-Gone([string]$Path, [int]$Seconds = 90) {
     $deadline = (Get-Date).AddSeconds($Seconds)
     while ((Test-Path $Path) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
     if (Test-Path $Path) { throw "$Path was still there $Seconds s after the uninstaller ran" }
+}
+
+# A freshly written exe can stay locked for a moment by something outside the
+# setup's process tree (an on-access scan, shell icon extraction), and the setup
+# reads any lock as "GAIA is running". Wait for the same write-open its
+# running-check makes, but fail at once if a GAIA program really is running.
+function Wait-Writable([string]$Path, [int]$Seconds = 60) {
+    if (-not (Test-Path $Path)) { throw "$Path is missing" }
+    # Long, normalised form on both sides: InstallLocation can carry a trailing \ or an 8.3 name.
+    $full = (Get-Item -LiteralPath $Path).FullName
+    # SilentlyContinue: "no process by that name" is the expected case.
+    $running = Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($Path)) -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and (Get-Item -LiteralPath $_.Path).FullName -eq $full }
+    if ($running) { throw "$Path is running (pid $($running.Id -join ', ')) - a silent install must not start it" }
+    $start = Get-Date
+    while ($true) {
+        try {
+            [System.IO.File]::Open($Path, 'Open', 'ReadWrite', 'ReadWrite').Dispose()
+            break
+        } catch {
+            $err = $_.Exception.GetBaseException()
+            if ($err -isnot [System.IO.IOException]) { throw }
+            if (((Get-Date) - $start).TotalSeconds -ge $Seconds) {
+                throw "$Path was still locked $Seconds s after the install, with no GAIA process running: $($err.Message)"
+            }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    $waited = ((Get-Date) - $start).TotalSeconds
+    if ($waited -ge 0.25) { Write-Host ("{0} was locked for {1:N1} s after the install" -f $Path, $waited) }
 }
 
 function Get-UiDir { (Get-ItemProperty -Path $uiKey -Name InstallLocation).InstallLocation }
@@ -93,6 +128,10 @@ try {
 }
 
 # ── 2. Terminal only ───────────────────────────────────────────────────────
+# Plant the old-named shortcuts an earlier setup left, so the install below
+# proves an upgrade removes them rather than leaving both names.
+New-Item -ItemType Directory -Force -Path "$startMenu\GAIA" | Out-Null
+foreach ($l in $legacyLnks) { Set-Content -Path $l -Value 'stale' }
 $rc = Invoke-Setup @('/S', '/COMPONENTS=tui')
 if ($rc -ne 0) { throw "terminal-only install exited $rc" }
 
@@ -108,7 +147,9 @@ foreach ($f in 'gaia-tui.exe', 'gaia-agent.exe', 'Uninstall.exe') {
 $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
 if ($regPath -notlike "*$tuiDir*") { throw "the terminal's folder was not added to the user PATH" }
 if (-not (Test-Path $tuiArp)) { throw "no Installed-apps entry for the terminal" }
-if (-not (Test-Path "$desktop\GAIA Terminal Hub.lnk")) { throw "no desktop shortcut for the terminal" }
+if (-not (Test-Path "$desktop\$tuiName.lnk")) { throw "no desktop shortcut for the terminal" }
+if (-not (Test-Path "$startMenu\GAIA\Uninstall $tuiName.lnk")) { throw "no Start menu uninstall shortcut for the terminal" }
+foreach ($l in $legacyLnks) { if (Test-Path $l) { throw "the old-named shortcut $l survived the install" } }
 
 # Terminal profile: the per-user fonts, their HKCU registration, and a Windows
 # Terminal fragment that parses and names the bundled family.
@@ -133,7 +174,7 @@ if ($text -match '__GAIA_INSTDIR__') { throw "fragment still carries the install
 # Shortcuts go through Windows Terminal only when it is installed -- detected
 # the way the setup does: the app alias, then PATH.
 $wtExe = (Test-Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\wt.exe") -or [bool](Get-Command wt.exe -ErrorAction SilentlyContinue)
-$lnk = (New-Object -ComObject WScript.Shell).CreateShortcut("$startMenu\GAIA\GAIA Terminal Hub.lnk")
+$lnk = (New-Object -ComObject WScript.Shell).CreateShortcut("$startMenu\GAIA\$tuiName.lnk")
 Write-Host "terminal shortcut -> $($lnk.TargetPath) $($lnk.Arguments) (wt.exe on runner: $wtExe)"
 if ($wtExe) {
     if ($lnk.TargetPath -notlike '*wt.exe' -or $lnk.Arguments -notlike "*$($wtProfile.guid)*") {
@@ -176,13 +217,14 @@ if (-not (Get-ItemProperty -Path $runKey -Name 'GAIA' -ErrorAction SilentlyConti
 if ((Get-FileHash "$tuiDir\gaia-tui.exe" -Algorithm SHA256).Hash -ne $before.Hash) { throw "adding the desktop app changed the terminal" }
 
 # ── 5. Plain /S with both installed updates both, and leaves one of each ──
+foreach ($exe in "$uiDir\gaia-desktop.exe", "$tuiDir\gaia-tui.exe", "$tuiDir\gaia-agent.exe") { Wait-Writable $exe }
 $rc = Invoke-Setup @('/S')
 if ($rc -ne 0) { throw "re-running with both installed exited $rc" }
 $entries = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
     ForEach-Object { Get-ItemProperty $_.PSPath } |
-    Where-Object { $_.DisplayName -in @('GAIA', 'GAIA Terminal Hub') }
+    Where-Object { $_.DisplayName -in @('GAIA', $tuiName, 'GAIA Terminal Hub') }
 $names = ($entries | ForEach-Object DisplayName | Sort-Object) -join ', '
-if ($names -ne 'GAIA, GAIA Terminal Hub') { throw "expected one entry per component, found: $names" }
+if ($names -ne "GAIA, $tuiName") { throw "expected one entry per component, found: $names" }
 
 # ── 6. Refuse while the desktop app is in use ──────────────────────────────
 $uiBefore = Get-FileHash "$uiDir\gaia-desktop.exe" -Algorithm SHA256
@@ -205,7 +247,7 @@ Wait-Gone $tuiDir
 $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
 if ($regPath -like "*Programs\GAIA Terminal Hub*") { throw "the terminal's folder was left on the user PATH" }
 if (Test-Path $tuiArp) { throw "the terminal's Installed-apps entry survived its uninstall" }
-if (Test-Path "$desktop\GAIA Terminal Hub.lnk") { throw "the terminal's desktop shortcut survived its uninstall" }
+if (Test-Path "$desktop\$tuiName.lnk") { throw "the terminal's desktop shortcut survived its uninstall" }
 foreach ($f in $lock.fonts) {
     if (Test-Path "$fontsDir\$($f.filename)") { throw "$($f.filename) survived the uninstall" }
     if ((Get-ItemProperty -Path $fontsReg -ErrorAction SilentlyContinue).PSObject.Properties.Name -contains "$($f.full_name) (TrueType)") {

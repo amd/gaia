@@ -16,8 +16,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.errors import require_host_attr
+from gaia.agents.base.file_snapshots import before_change
 from gaia.agents.install_hints import missing_extra_hint
 from gaia.agents.tools.path_access import (
+    missing_file_error,
     read_access_error,
     readable_entry,
     write_access_error,
@@ -74,6 +76,8 @@ class _IndexJob:
         self.embed_started: Optional[float] = None
         self.embedded = 0
         self.total: Optional[int] = None
+        #: Seconds the batch now embedding has waited on a busy embedder.
+        self.embedder_wait = 0
         self.result: Optional[Dict[str, Any]] = None
         self.error: Optional[BaseException] = None
         self.done = threading.Event()
@@ -82,6 +86,9 @@ class _IndexJob:
         if self.embed_started is None:
             self.embed_started = time.monotonic()
         self.embedded, self.total = embedded, total
+
+    def waiting(self, seconds: int) -> None:
+        self.embedder_wait = seconds
 
     def seconds_remaining(self) -> Optional[int]:
         if not (self.total and self.embedded and self.embed_started):
@@ -108,10 +115,16 @@ def _index_within_budget(
             jobs[path] = job
 
             def _run():
+                from gaia.daemon.broker_client import detached_from_turn
+
                 try:
-                    job.result = rag.index_document(
-                        path, progress_callback=job.progress
-                    )
+                    # Outlives the turn that started it: not its Stop, not its stream.
+                    with detached_from_turn():
+                        job.result = rag.index_document(
+                            path,
+                            progress_callback=job.progress,
+                            wait_callback=job.waiting,
+                        )
                 except BaseException as e:  # noqa: BLE001 — re-raised by the waiter
                     job.error = e
                 finally:
@@ -152,18 +165,26 @@ def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
         progress = f"{job.embedded:,} of {job.total:,} chunks embedded"
     remaining = job.seconds_remaining()
     eta = f", about {max(1, round(remaining / 60))} min left" if remaining else ""
+    waiting = (
+        f" The embedding model has taken {job.embedder_wait}s on its current "
+        "batch, longer than usual: it is likely sharing the GPU or CPU with "
+        "other work, so indexing is slowed, not stuck."
+        if job.embedder_wait
+        else ""
+    )
     return {
         "status": "in_progress",
         "file_name": name,
         "message": (
             f"{name} is large and is still being indexed in the background "
             f"({progress} after {elapsed}s{eta}). It cannot be searched yet; "
-            "nothing failed."
+            f"nothing failed.{waiting}"
         ),
         "chunks_embedded": job.embedded,
         "total_chunks": job.total,
         "elapsed_seconds": elapsed,
         "estimated_seconds_remaining": remaining,
+        "embedder_wait_seconds": job.embedder_wait,
         "hint": (
             "Tell the user the document is still indexing and how long is left. "
             "To answer now, read the relevant part of the file directly with "
@@ -178,7 +199,12 @@ def _rag_not_available() -> str:
     return f"RAG not available. {missing_extra_hint('rag')}"
 
 
-def _embedding_next_step(unreachable: bool, retry: str) -> str:
+def _embedding_next_step(unreachable: bool, retry: str, busy: bool = False) -> str:
+    if busy:
+        return (
+            "The embedding model's GPU or CPU is busy with another model or app. "
+            f"Wait for that work to finish, then {retry}."
+        )
     if unreachable:
         from gaia.llm.lemonade_launcher import describe_start_hint
 
@@ -196,7 +222,9 @@ def _embedding_error(error: EmbeddingUnavailableError) -> Dict[str, Any]:
         "status": "error",
         "error_type": "embedding_unavailable",
         "error": f"Document search did not run. {error}",
-        "next_step": _embedding_next_step(error.unreachable, "retry the search"),
+        "next_step": _embedding_next_step(
+            error.unreachable, "retry the search", busy=error.busy
+        ),
         "instruction": (
             "Tell the user document search is unavailable, why, and the next "
             "step. The documents were not searched, so do not say they hold "
@@ -212,8 +240,41 @@ def _index_embedding_error(stats: Dict[str, Any]) -> Dict[str, Any]:
         "error_type": "embedding_unavailable",
         "error": f"Indexing failed: {stats.get('error')}",
         "next_step": _embedding_next_step(
-            bool(stats.get("lemonade_unreachable")), "index it again"
+            bool(stats.get("lemonade_unreachable")),
+            "index it again",
+            busy=bool(stats.get("embedder_busy")),
         ),
+    }
+
+
+_CACHE_LOCK_HINTS = {
+    "cache_busy": (
+        "Another process is using the document cache ({cache}). Tell the "
+        "user, and index the document again once it finishes."
+    ),
+    "cache_unwritable": (
+        "The document is fine: GAIA cannot write its document cache folder "
+        "({cache}). Tell the user to fix that folder's permissions; do not "
+        "suggest they check the document."
+    ),
+    "cache_lock_error": (
+        "The document is fine: GAIA could not open the lock file in its "
+        "document cache folder ({cache}). Tell the user the error; do not "
+        "suggest they check the document."
+    ),
+}
+
+
+def _index_cache_error(stats: Dict[str, Any], file_path: str) -> Dict[str, Any]:
+    """The result for a document whose cache lock could not be taken."""
+    error_type = stats["error_type"]
+    return {
+        "status": "error",
+        "error_type": error_type,
+        "error": stats.get("error"),
+        "file_name": stats.get("file_name", Path(file_path).name),
+        "cache_dir": stats.get("cache_dir"),
+        "hint": _CACHE_LOCK_HINTS[error_type].format(cache=stats.get("cache_dir")),
     }
 
 
@@ -330,6 +391,14 @@ class RAGToolsMixin:
     are provided by FileSearchToolsMixin from gaia.agents.tools.file_tools
     """
 
+    def _no_documents_message(self) -> str:
+        """What an empty index means, as the tools report it to the model.
+
+        A host whose documents are scoped to one conversation overrides this:
+        "nothing is indexed" there reads as an empty library, which it may not be.
+        """
+        return "No documents are currently indexed."
+
     def register_rag_tools(self) -> None:
         """Register RAG-related tools."""
         from gaia.agents.base.tools import tool
@@ -351,11 +420,12 @@ class RAGToolsMixin:
             try:
                 # Check if RAG is initialized and has documents
                 if not rag or not rag.index or len(rag.chunks) == 0:
+                    message = self._no_documents_message()
                     return {
                         "status": "no_documents",
-                        "message": "No documents are currently indexed.",
+                        "message": message,
                         "instruction": (
-                            "No documents are indexed yet. "
+                            f"{message} "
                             "For domain-specific questions (HR policies, PTO, remote work, company procedures, "
                             "financial data, project plans, technical specs): use the SMART DISCOVERY WORKFLOW — "
                             "use search_file to find relevant files, index_document to index them, then query_specific_file to answer. "
@@ -858,6 +928,8 @@ class RAGToolsMixin:
                                 idx_result.get("error_type") == "embedding_unavailable"
                             ):
                                 return _index_embedding_error(idx_result)
+                            elif idx_result.get("error_type") in _CACHE_LOCK_HINTS:
+                                return _index_cache_error(idx_result, file_path)
                             else:
                                 return {
                                     "status": "error",
@@ -1283,7 +1355,7 @@ class RAGToolsMixin:
                 )
 
                 if not self.rag.chunks:
-                    return {"status": "error", "error": "No documents indexed."}
+                    return {"status": "error", "error": self._no_documents_message()}
 
                 # Search through chunks for pattern
                 matching_chunks = []
@@ -1445,7 +1517,7 @@ class RAGToolsMixin:
                     return denied
 
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
 
                 # Resolve to real path for consistent validation
                 real_file_path = os.path.realpath(file_path)
@@ -1519,6 +1591,8 @@ class RAGToolsMixin:
                             **_index_embedding_error(result),
                             "file_name": result.get("file_name", Path(file_path).name),
                         }
+                    if result.get("error_type") in _CACHE_LOCK_HINTS:
+                        return _index_cache_error(result, file_path)
                     err = result.get("error", f"Failed to index: {file_path}")
                     hint = (
                         "The file is empty (0 bytes) — tell the user there is no content to read."
@@ -1555,6 +1629,7 @@ class RAGToolsMixin:
                         "count": 0,
                         "total_chunks": 0,
                         "total_size_mb": 0,
+                        "message": self._no_documents_message(),
                     }
                 docs = list(self.rag.indexed_files)
 
@@ -1602,7 +1677,7 @@ class RAGToolsMixin:
                         doc_info["pages"] = num_pages
                     doc_details.append(doc_info)
 
-                return {
+                listing = {
                     "status": "success",
                     "documents": doc_details,
                     "count": len(docs),
@@ -1610,6 +1685,9 @@ class RAGToolsMixin:
                     "total_size_mb": round(total_size_bytes / (1024 * 1024), 2),
                     "document_types": type_counts,
                 }
+                if not docs:
+                    listing["message"] = self._no_documents_message()
+                return listing
             except Exception as e:
                 logger.error(f"Error in list_indexed_documents: {e}")
                 return {
@@ -2059,6 +2137,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
 {full_text}
 """
 
+                before_change(output_path, "dump_document")
                 # Ensure output directory exists
                 os.makedirs(
                     (

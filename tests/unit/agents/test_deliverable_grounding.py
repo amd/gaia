@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Tests for the deliverable-figure check (``gaia.agents.base.deliverables``).
 
-The flagged shape is kw-02 from the rc12 knowledge-work run: a BOM whose unit
+The flagged shape is a BOM deliverable whose unit
 prices ($95, $60, $12) no tool result held, written through ``run_python``.
 The quiet shapes are ordinary deliverables: values copied from an input, a
 fetched price, totals and per-unit splits computed from them, dates, IDs, and
@@ -41,7 +41,7 @@ BOM_QUERY = (
     "write bom.xlsx with a 40-unit BOM and a total."
 )
 
-#: What the tools showed in kw-02: specs everywhere, two real prices.
+#: What the tools showed for the BOM: specs everywhere, two real prices.
 DATASHEET = (
     "Compute Module 5\nQuad-core Cortex-A76 at 2.4 GHz\nUp to 16 GB LPDDR4X\n"
     "Dual 4Kp60 HDMI\nPCIe Gen 2 x1\nOperating temperature 0-85 C\n"
@@ -110,7 +110,7 @@ INVENTED_BOM = (
 
 
 # ---------------------------------------------------------------------------
-# The kw-02 shape is flagged
+# Invented BOM prices are flagged
 # ---------------------------------------------------------------------------
 
 
@@ -472,23 +472,22 @@ SEAM_QUERY = "Look up the CM5 price and write bom.md with a 40-unit BOM and a to
 SEAM_ANSWER = "Wrote `bom.md`: 40 CM5 modules, IO boards and PSUs, $6,680.00 total."
 
 
-def test_invented_prices_in_a_written_file_get_one_correction_then_a_note(bom_agent):
+def test_invented_prices_in_a_written_file_get_a_note_never_a_rewrite(bom_agent):
     sent = _stub_chat(
         bom_agent,
         _call("fetch_page", url="https://example.com/cm5"),
         _call("write_file", file_path="bom.md", content=INVENTED_BOM),
         _answer(SEAM_ANSWER),
-        _answer(SEAM_ANSWER),
     )
 
     result = bom_agent.process_query(SEAM_QUERY, max_steps=10)
 
-    assert len(sent) == 4, "the file gate corrects once, never loops"
-    correction = sent[3][-1]["content"]
-    assert correction.startswith("[check:grounding] ")
-    assert "`bom.md`" in correction and "$60.00" in correction
-    assert "$95.00" not in correction  # the fetched page has it
+    assert len(sent) == 3, "the file check never sends the model back"
+    assert not any("[check:" in str(m.get("content")) for m in sent[-1])
     assert strip_verification_scope(result["result"]).strip() == SEAM_ANSWER
+    note = result["result"][len(SEAM_ANSWER) :]
+    assert "`bom.md`" in note and "$60.00" in note
+    assert "$95.00" not in note  # the fetched page has it
     assert result["result"].count(VERIFICATION_NOTE_OPENER) == 1
     assert "$60.00" in result["result"] and "$12.00" in result["result"]
     with open("bom.md", encoding="utf-8") as handle:

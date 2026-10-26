@@ -7,6 +7,7 @@ LemonadeManager, LemonadeClient, and httpx are imported lazily (inside the
 try-block) so patches must target their source modules, not _chat_helpers.
 """
 
+import threading
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -26,6 +27,13 @@ _BASE_URL = "http://localhost:13305/api/v1"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _sse():
+    """An SSE handler stand-in whose turn has not been stopped."""
+    sse = MagicMock()
+    sse.cancelled = threading.Event()
+    return sse
 
 
 def _health_ok(all_models):
@@ -185,12 +193,12 @@ def test_vlm_active_skips_load():
 
 
 # ---------------------------------------------------------------------------
-# 5. Lemonade returns non-200 → load_model NOT called, no crash
+# 5. Lemonade returns non-200 → load_model NOT called; the turn says why
 # ---------------------------------------------------------------------------
 
 
-def test_non_200_health_skips_load():
-    """Non-200 /health → skip silently; LemonadeClient must NOT be instantiated."""
+def test_non_200_health_ends_the_turn():
+    """Non-200 /health → the turn fails saying so; nothing is loaded."""
     bad = MagicMock(spec=httpx.Response)
     bad.status_code = 503
 
@@ -201,7 +209,8 @@ def test_non_200_health_skips_load():
     ):
         mock_mgr.get_base_url.return_value = _BASE_URL
 
-        _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF")  # must not raise
+        with pytest.raises(RuntimeError, match="HTTP 503"):
+            _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF")
 
         mock_cls.assert_not_called()
 
@@ -211,8 +220,8 @@ def test_non_200_health_skips_load():
 # ---------------------------------------------------------------------------
 
 
-def test_connect_error_no_crash():
-    """httpx.ConnectError during /health → swallowed; LemonadeClient NOT instantiated."""
+def test_connect_error_ends_the_turn_with_what_to_check():
+    """httpx.ConnectError during /health → the turn fails saying what to check."""
     with (
         patch(_LEMONADE_MANAGER) as mock_mgr,
         patch(_HTTPX_GET, side_effect=httpx.ConnectError("refused")),
@@ -220,7 +229,8 @@ def test_connect_error_no_crash():
     ):
         mock_mgr.get_base_url.return_value = _BASE_URL
 
-        _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF")  # must not raise
+        with pytest.raises(RuntimeError, match="Check that Lemonade is running"):
+            _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF")
 
         mock_cls.assert_not_called()
 
@@ -239,14 +249,13 @@ def test_empty_model_id_no_http(model_id):
 
 
 # ---------------------------------------------------------------------------
-# 8. load_model raises → warning SSE emitted, exception NOT re-raised
+# 8. load_model raises → the turn fails; it never answers on a missing model
 # ---------------------------------------------------------------------------
 
 
-def test_load_model_exception_emits_warning_sse():
-    """If load_model raises, a warning SSE is emitted and the exception is swallowed."""
+def test_load_model_exception_ends_the_turn():
+    """If load_model raises, the turn fails with the reason, not a quiet warning."""
     health = _health_ok([])
-    sse = MagicMock()
 
     with (
         patch(_LEMONADE_MANAGER) as mock_mgr,
@@ -258,12 +267,8 @@ def test_load_model_exception_emits_warning_sse():
         mock_instance.load_model.side_effect = RuntimeError("load failed")
         mock_cls.return_value = mock_instance
 
-        _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF", sse_handler=sse)
-
-    warning_calls = [
-        c for c in sse._emit.call_args_list if c.args[0].get("status") == "warning"
-    ]
-    assert warning_calls, "Expected a warning SSE event after load_model failure"
+        with pytest.raises(RuntimeError, match="load failed"):
+            _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF", sse_handler=_sse())
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +279,7 @@ def test_load_model_exception_emits_warning_sse():
 def test_sse_loading_message_emitted():
     """When a load is triggered, an info SSE with 'Loading LLM model...' is sent."""
     health = _health_ok([])
-    sse = MagicMock()
+    sse = _sse()
 
     with (
         patch(_LEMONADE_MANAGER) as mock_mgr,
@@ -303,7 +308,7 @@ def test_sse_loading_message_emitted():
 def test_sse_not_called_on_fast_path():
     """Right LLM + ctx >= 32K (fast path) → SSE handler must NOT be called."""
     health = _health_ok([_model("llm", name=_EXPECTED_LLM)])
-    sse = MagicMock()
+    sse = _sse()
 
     with (
         patch(_LEMONADE_MANAGER) as mock_mgr,
@@ -345,20 +350,18 @@ def test_concurrent_second_thread_skips_load():
 
 
 # ---------------------------------------------------------------------------
-# 11b. Wrong chat model resident → unload BEFORE load (issue #1382)
+# 11b. Another chat model resident → left loaded. The load's own free-memory
+#      check decides whether both fit (see test_model_slot_discipline.py).
 # ---------------------------------------------------------------------------
 
 
-def test_wrong_model_resident_unloads_before_load():
-    """Issue #1382: a different chat model resident (e.g. Gemma-4 preloaded at
-    boot) must be unloaded before loading the expected model. Lemonade does not
-    evict on /load, so without the unload both models stay resident — a
-    double-load that wastes memory and can degrade output (the slash-spew)."""
-    wrong = _health_ok([_model("llm", name="Gemma-4-E4B-it-GGUF")])
+def test_another_resident_model_is_left_loaded():
+    """Another app or chat may be answering on it: never unload it to load ours."""
+    other = _health_ok([_model("llm", name="Gemma-4-E4B-it-GGUF")])
 
     with (
         patch(_LEMONADE_MANAGER) as mock_mgr,
-        patch(_HTTPX_GET, return_value=wrong),
+        patch(_HTTPX_GET, return_value=other),
         patch(_LEMONADE_CLIENT) as mock_cls,
     ):
         mock_mgr.get_base_url.return_value = _BASE_URL
@@ -367,12 +370,8 @@ def test_wrong_model_resident_unloads_before_load():
 
         _maybe_load_expected_model(_EXPECTED_LLM)
 
-        mock_instance.unload_model.assert_called_once()
+        mock_instance.unload_model.assert_not_called()
         mock_instance.load_model.assert_called_once()
-        order = [c[0] for c in mock_instance.method_calls]
-        assert order.index("unload_model") < order.index(
-            "load_model"
-        ), f"unload must precede load; got call order {order}"
 
 
 # ---------------------------------------------------------------------------
@@ -431,11 +430,12 @@ def test_recheck_non200_proceeds_to_load():
 # ---------------------------------------------------------------------------
 
 
-def test_recheck_exception_caught_by_outer_handler():
-    """If the re-check inside the lock raises (e.g. ConnectError), the outer
-    except block catches it — no crash, warning SSE emitted."""
+def test_recheck_exception_ends_the_turn_and_frees_the_load_lock():
+    """If the re-check inside the lock raises (e.g. ConnectError), the turn
+    fails with what to check, and the load lock is not left held."""
+    from gaia.ui._chat_helpers import model_load_lock
+
     empty_health = _health_ok([])
-    sse = MagicMock()
 
     with (
         patch(_LEMONADE_MANAGER) as mock_mgr,
@@ -447,16 +447,11 @@ def test_recheck_exception_caught_by_outer_handler():
     ):
         mock_mgr.get_base_url.return_value = _BASE_URL
 
-        _maybe_load_expected_model(
-            "Qwen3.5-35B-A3B-GGUF", sse_handler=sse
-        )  # must not raise
+        with pytest.raises(RuntimeError, match="refused"):
+            _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF", sse_handler=_sse())
 
         mock_cls.assert_not_called()
-
-    warning_calls = [
-        c for c in sse._emit.call_args_list if c.args[0].get("status") == "warning"
-    ]
-    assert warning_calls, "Expected a warning SSE after exception in re-check"
+    assert not model_load_lock.locked()
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +502,10 @@ def test_a_cloud_model_not_yet_resident_still_loads_nothing_locally():
 
 def test_a_reload_uses_the_agents_ctx_and_keeps_the_embedder():
     """Loading below the agent's window made it reload again on its first turn."""
+    from gaia.ui._chat_helpers import note_model_loaded
+
     expected = "Qwen3.6-35B-A3B-GGUF"
+    note_model_loaded(expected)  # This UI loaded it, at the smaller window.
     health = _health_ok(
         [
             _model("llm", expected, ctx_size=32768),
@@ -538,7 +536,6 @@ def test_a_load_refused_for_memory_tells_the_user_what_to_close():
         "Not enough free memory to load Gemma-4-E4B-it-GGUF with a 32,768-token "
         "window: it needs about 7.8 GB and only 6.0 GB is free. Close apps..."
     )
-    sse = MagicMock()
     with (
         patch(_LEMONADE_MANAGER) as mock_mgr,
         patch(_HTTPX_GET, return_value=_health_ok([])),
@@ -547,8 +544,109 @@ def test_a_load_refused_for_memory_tells_the_user_what_to_close():
         mock_mgr.get_base_url.return_value = _BASE_URL
         mock_cls.return_value.load_model.side_effect = refusal
 
-        _maybe_load_expected_model("Gemma-4-E4B-it-GGUF", sse_handler=sse)
+        with pytest.raises(InsufficientMemoryError) as raised:
+            _maybe_load_expected_model("Gemma-4-E4B-it-GGUF", sse_handler=_sse())
 
-    (event,), _ = sse._emit.call_args
-    assert event["message"] == str(refusal)
-    assert "Lemonade is running" not in event["message"]
+    assert raised.value is refusal
+    assert "Lemonade is running" not in str(raised.value)
+
+
+def test_a_load_is_recorded_with_how_long_it_took():
+    """The Context & performance panel lists each load and how long it took."""
+    health = _health_ok([_model("llm", "Other-GGUF")])
+    loads = []
+
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, return_value=health),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        mock_cls.return_value = MagicMock()
+
+        _maybe_load_expected_model(_EXPECTED_LLM, loads=loads)
+
+    assert len(loads) == 1
+    assert loads[0]["model"] == _EXPECTED_LLM
+    # Another app's model stays resident, so nothing was replaced.
+    assert loads[0]["replaced"] == []
+    assert loads[0]["seconds"] >= 0
+
+
+def test_no_load_records_nothing():
+    health = _health_ok([_model("llm", _EXPECTED_LLM, ctx_size=262144)])
+    loads = []
+
+    with patch(_LEMONADE_MANAGER) as mock_mgr, patch(_HTTPX_GET, return_value=health):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        _maybe_load_expected_model(_EXPECTED_LLM, loads=loads)
+
+    assert loads == []
+
+
+# ---------------------------------------------------------------------------
+# A custom (user.) model is listed by Lemonade without its namespace
+# ---------------------------------------------------------------------------
+
+#: Lemonade reports ``user.X`` in /health as ``X`` (seen on v2026.40.0).
+_CUSTOM = "user.Qwen3.8-Flash-Next-GGUF"
+_CUSTOM_AS_LISTED = "Qwen3.8-Flash-Next-GGUF"
+
+
+def _preflight(*health_replies):
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, side_effect=list(health_replies)),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+        patch("gaia.llm.lemonade_client.resolve_ctx_size", return_value=65536),
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        _maybe_load_expected_model(_CUSTOM)
+        return mock_cls
+
+
+def test_a_resident_custom_model_is_not_reloaded_every_turn():
+    """It was: every gpt-oss-20b turn paid a ~20 s unload and reload."""
+    resident = _health_ok([_model("llm", name=_CUSTOM_AS_LISTED, ctx_size=65536)])
+    # Both /health reads answered, so a wrong verdict reaches load_model.
+    mock_cls = _preflight(resident, resident)
+    mock_cls.return_value.load_model.assert_not_called()
+    mock_cls.return_value.unload_model.assert_not_called()
+
+
+def test_a_custom_model_loaded_by_another_thread_is_recognised_after_the_lock():
+    empty = _health_ok([])
+    loaded = _health_ok([_model("llm", name=_CUSTOM_AS_LISTED, ctx_size=65536)])
+    _preflight(empty, loaded).assert_not_called()
+
+
+def test_a_resident_custom_model_with_too_small_a_window_is_still_reloaded():
+    small = _health_ok([_model("llm", name=_CUSTOM_AS_LISTED, ctx_size=4096)])
+    mock_cls = _preflight(small, small)
+    mock_cls.return_value.load_model.assert_called_once()
+    assert mock_cls.return_value.load_model.call_args.args[0] == _CUSTOM
+    # The too-small copy is unloaded under its listed name, not loaded twice.
+    mock_cls.return_value.unload_model.assert_called_once_with(
+        _CUSTOM_AS_LISTED, ignore_if_not_loaded=True
+    )
+
+
+def test_a_different_model_sharing_the_custom_name_as_a_prefix_is_still_replaced():
+    other = _health_ok([_model("llm", name=f"{_CUSTOM_AS_LISTED}-v2", ctx_size=65536)])
+    mock_cls = _preflight(other, other)
+    assert mock_cls.return_value.load_model.call_args.args[0] == _CUSTOM
+
+
+def test_a_built_in_model_is_still_matched_when_listed_with_a_namespace():
+    listed = _health_ok(
+        [_model("llm", name="user.Gemma-4-E4B-it-GGUF", ctx_size=65536)]
+    )
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, side_effect=[listed, listed]),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+        patch("gaia.llm.lemonade_client.resolve_ctx_size", return_value=65536),
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        _maybe_load_expected_model("Gemma-4-E4B-it-GGUF")
+    mock_cls.return_value.load_model.assert_not_called()

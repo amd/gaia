@@ -14,9 +14,10 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from gaia.config import GaiaConfig, gaia_home
+from gaia.utils.process_owner import current_owner, owner_is_gone
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,19 @@ def resolved_default_model() -> str:
 
 # Auto-generated placeholder titles the auto-retitler may replace (#2165).
 # Anything else is treated as explicitly chosen and pinned via title_is_custom.
+SESSION_KINDS = ("chat", "eval", "scheduled")
+
+
+def session_kind_for_title(title: str | None) -> str:
+    """Eval and scheduler chats are named by their runner; a person's never are."""
+    t = (title or "").lstrip()
+    if t.startswith("Eval:"):
+        return "eval"
+    if t.startswith("Schedule:"):
+        return "scheduled"
+    return "chat"
+
+
 PLACEHOLDER_TITLES = {
     "",
     "new chat",
@@ -81,7 +95,8 @@ CREATE TABLE IF NOT EXISTS documents (
     chunk_count INTEGER DEFAULT 0,
     indexed_at TEXT DEFAULT (datetime('now')),
     last_accessed_at TEXT,
-    last_error TEXT
+    last_error TEXT,
+    error_kind TEXT
 );
 
 -- Sessions (conversations)
@@ -98,6 +113,15 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- Mailbox FILTER (#1596): NULL = every connected mailbox; the legacy
     -- ALTER migration below still backfills pre-Phase-2 rows to 'google'.
     mail_provider TEXT
+);
+
+-- What one chat may reach, set from the session panel (#5276).
+-- folders: added by the user; withheld: removed, refused even under a wider grant.
+CREATE TABLE IF NOT EXISTS session_environment (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    folders TEXT NOT NULL DEFAULT '[]',
+    withheld TEXT NOT NULL DEFAULT '[]',
+    internet_off INTEGER NOT NULL DEFAULT 0
 );
 
 -- Many-to-many: which docs are attached to which session
@@ -121,6 +145,23 @@ CREATE TABLE IF NOT EXISTS messages (
     tokens_completion INTEGER
 );
 
+-- A chat turn that has started and not yet saved its reply, one row per
+-- question. Saving the reply deletes the row in the same transaction, so a row
+-- whose owner has exited belongs to a turn that process never finished.
+CREATE TABLE IF NOT EXISTS unfinished_turns (
+    question_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    -- The server process running the turn (process_owner.current_owner).
+    owner TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    partial_content TEXT NOT NULL DEFAULT '',
+    -- JSON list of the tools the turn had started, in order.
+    tools_run TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_unfinished_turns_owner
+    ON unfinished_turns(session_id, owner);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -139,7 +180,8 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     run_count        INTEGER DEFAULT 0,
     error_count      INTEGER DEFAULT 0,
     session_id       TEXT,
-    schedule_config  TEXT
+    schedule_config  TEXT,
+    last_error       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS schedule_results (
@@ -150,7 +192,20 @@ CREATE TABLE IF NOT EXISTS schedule_results (
     error       TEXT
 );
 
+-- One row per cloud chat turn; usd is NULL when the model has no known price.
+CREATE TABLE IF NOT EXISTS cloud_spend (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at    TEXT DEFAULT (datetime('now')),
+    month         TEXT NOT NULL,
+    model         TEXT NOT NULL,
+    provider      TEXT NOT NULL,
+    input_tokens  INTEGER,
+    output_tokens INTEGER,
+    usd           REAL
+);
+
 -- Indexes
+CREATE INDEX IF NOT EXISTS idx_cloud_spend_month ON cloud_spend(month);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_session_docs ON session_documents(session_id);
@@ -285,9 +340,15 @@ class ChatDatabase:
         self._add_column("messages", "model_messages", "TEXT")
         self._add_column("messages", "agent_steps", "TEXT")
         self._add_column("messages", "inference_stats", "TEXT")
+        self._add_column("messages", "turn_summary", "TEXT")
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
         self._add_column("documents", "file_mtime", "REAL")
         self._add_column("documents", "last_error", "TEXT")
+        # Why a failure is permanent (corrupted, encrypted, empty, empty_file,
+        # unsupported_workbook); NULL otherwise.
+        self._add_column("documents", "error_kind", "TEXT")
+        # The server indexing it, so a restart can tell a dead index from a live one.
+        self._add_column("documents", "indexing_owner", "TEXT")
         # Per-session incognito mode and agent selection.
         self._add_column("sessions", "private", "INTEGER NOT NULL DEFAULT 0")
         self._add_column(
@@ -320,18 +381,42 @@ class ChatDatabase:
             tuple(PLACEHOLDER_TITLES),
         )
 
+        # The chat list as a queue (#5221): pin, unread, how the last turn
+        # ended, and whether a person or the eval/scheduler started the chat.
+        self._add_column("sessions", "pinned", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column("sessions", "unread", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column("sessions", "last_run_status", "TEXT")
+        # The last run's error text, or NULL when it succeeded.
+        self._add_column("scheduled_tasks", "last_error", "TEXT")
+        self._add_column(
+            "sessions",
+            "kind",
+            "TEXT NOT NULL DEFAULT 'chat'",
+            "UPDATE sessions SET kind = CASE "
+            "WHEN title LIKE 'Eval:%' THEN 'eval' "
+            "WHEN title LIKE 'Schedule:%' THEN 'scheduled' "
+            "ELSE 'chat' END",
+        )
+
+    @property
+    def db_path(self) -> str:
+        """The SQLite file this database opened, or ``:memory:``."""
+        return self._db_path
+
     def close(self):
         """Close database connection."""
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        # Wait for a query on another thread; closing under it crashes SQLite.
+        with self._lock:
+            if self._conn:
+                self._conn.close()
+                self._conn = None
 
     @contextmanager
     def _transaction(self):
         """Execute operations atomically with thread safety."""
-        if self._conn is None:
-            raise RuntimeError("Database connection is closed")
         with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed")
             try:
                 yield
                 self._conn.commit()
@@ -355,8 +440,13 @@ class ChatDatabase:
         agent_type: str | None = None,
         device: str | None = None,
         mail_provider: str | None = None,
+        kind: str | None = None,
     ) -> Optional[Dict[str, Any]]:
-        """Create a new chat session."""
+        """Create a new chat session.
+
+        ``kind`` defaults from the title (``Eval:`` / ``Schedule:`` prefixes),
+        since the eval driver creates chats through the plain API.
+        """
         session_id = str(uuid.uuid4())
         now = self._now()
         # An explicit caller-supplied model wins; otherwise resolve against
@@ -371,13 +461,18 @@ class ChatDatabase:
         # picker no longer offers.
         agent_type = agent_type or "gaia"
         device = device or "gpu"
+        kind = kind or session_kind_for_title(title)
+        if kind not in SESSION_KINDS:
+            raise ValueError(
+                f"Unknown session kind {kind!r}; expected one of {SESSION_KINDS}"
+            )
         # mail_provider is a FILTER (#1596): no pick stays NULL ("every
         # connected mailbox") — never silently coerce to google.
 
         with self._transaction():
             self._conn.execute(
-                """INSERT INTO sessions (id, title, title_is_custom, created_at, updated_at, model, system_prompt, private, agent_type, device, mail_provider)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO sessions (id, title, title_is_custom, created_at, updated_at, model, system_prompt, private, agent_type, device, mail_provider, kind)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     title,
@@ -390,6 +485,7 @@ class ChatDatabase:
                     agent_type,
                     device,
                     mail_provider,
+                    kind,
                 ),
             )
 
@@ -452,6 +548,34 @@ class ChatDatabase:
                 sessions.append(session)
 
             return sessions
+
+    def set_session_pinned(self, session_id: str, pinned: bool) -> bool:
+        """Pin or unpin a chat. Leaves ``updated_at`` alone so it keeps its place."""
+        with self._transaction():
+            cur = self._conn.execute(
+                "UPDATE sessions SET pinned = ? WHERE id = ?",
+                (1 if pinned else 0, session_id),
+            )
+        return cur.rowcount > 0
+
+    def mark_session_read(self, session_id: str) -> bool:
+        """Clear a chat's unread flag (the user opened it)."""
+        with self._transaction():
+            cur = self._conn.execute(
+                "UPDATE sessions SET unread = 0 WHERE id = ?", (session_id,)
+            )
+        return cur.rowcount > 0
+
+    def finish_session_run(self, session_id: str, status: str) -> bool:
+        """Record how a turn ended (``done``/``failed``/``stopped``) and mark it unread."""
+        if status not in ("done", "failed", "stopped"):
+            raise ValueError(f"Unknown run status {status!r}")
+        with self._transaction():
+            cur = self._conn.execute(
+                "UPDATE sessions SET last_run_status = ?, unread = 1 WHERE id = ?",
+                (status, session_id),
+            )
+        return cur.rowcount > 0
 
     def count_sessions(self) -> int:
         """Count total sessions."""
@@ -534,6 +658,39 @@ class ChatDatabase:
 
         return self.get_session(session_id)
 
+    def set_provisional_title(self, session_id: str, title: str) -> bool:
+        """Name a chat that still has a placeholder title; True when renamed.
+
+        ``title_is_custom`` stays off, so the auto-titler can still replace it.
+        A title the user or an API caller chose is never touched.
+        """
+        with self._transaction():
+            row = self._conn.execute(
+                "SELECT title, title_is_custom FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is None or row[1] or not is_placeholder_title(row[0]):
+                return False
+            self._conn.execute(
+                "UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?",
+                (title, self._now(), session_id),
+            )
+        return True
+
+    def replace_auto_title(self, session_id: str, expected: str, title: str) -> bool:
+        """Swap an auto title for *title* only if it is still *expected*.
+
+        True when renamed. A rename that lands first (a new title or a pin)
+        makes this a no-op, in one statement, so it can never be overwritten.
+        """
+        with self._transaction():
+            cursor = self._conn.execute(
+                """UPDATE sessions SET title = ?, updated_at = ?
+                   WHERE id = ? AND title = ? AND title_is_custom = 0""",
+                (title, self._now(), session_id, expected),
+            )
+            return cursor.rowcount > 0
+
     def delete_session(self, session_id: str) -> bool:
         """Delete a session and its messages."""
         with self._transaction():
@@ -564,19 +721,27 @@ class ChatDatabase:
         tokens_completion: int | None = None,
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
+        turn_summary: Dict | None = None,
+        ends_turn: bool = False,
     ) -> int:
-        """Add a message to a session. Returns message ID."""
+        """Add a message to a session. Returns message ID.
+
+        ``ends_turn`` marks it as the reply of this process's running turn in
+        the session, whose unfinished-turn row is deleted with it.
+        """
         sources_json = json.dumps(rag_sources) if rag_sources else None
         steps_json = json.dumps(agent_steps) if agent_steps else None
         stats_json = json.dumps(inference_stats) if inference_stats else None
         model_json = json.dumps(model_messages) if model_messages is not None else None
+        summary_json = json.dumps(turn_summary) if turn_summary else None
 
         with self._transaction():
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
-                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
+                    turn_summary)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -588,6 +753,7 @@ class ChatDatabase:
                     tokens_completion,
                     stats_json,
                     model_json,
+                    summary_json,
                 ),
             )
 
@@ -597,6 +763,8 @@ class ChatDatabase:
                 (self._now(), session_id),
             )
             msg_id = cursor.lastrowid
+            if ends_turn:
+                self._end_own_turn(session_id)
 
         return msg_id or 0
 
@@ -612,6 +780,8 @@ class ChatDatabase:
         tokens_completion: int | None = None,
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
+        turn_summary: Dict | None = None,
+        ends_turn: bool = False,
     ) -> int:
         """Atomically replace a message with a fresh row. Returns the new ID.
 
@@ -620,11 +790,15 @@ class ChatDatabase:
         the session without the message (the failure mode of a separate
         ``delete_message`` + ``add_message``). A new id is minted rather than
         reusing ``msg_id`` to keep the delete-then-insert id semantics.
+
+        ``ends_turn`` marks it as the reply of this process's running turn,
+        as in :meth:`add_message`.
         """
         sources_json = json.dumps(rag_sources) if rag_sources else None
         steps_json = json.dumps(agent_steps) if agent_steps else None
         stats_json = json.dumps(inference_stats) if inference_stats else None
         model_json = json.dumps(model_messages) if model_messages is not None else None
+        summary_json = json.dumps(turn_summary) if turn_summary else None
 
         with self._transaction():
             if msg_id is not None:
@@ -636,8 +810,9 @@ class ChatDatabase:
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
-                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
+                    turn_summary)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -649,6 +824,7 @@ class ChatDatabase:
                     tokens_completion,
                     stats_json,
                     model_json,
+                    summary_json,
                 ),
             )
 
@@ -658,6 +834,8 @@ class ChatDatabase:
                 (self._now(), session_id),
             )
             new_id = cursor.lastrowid
+            if ends_turn:
+                self._end_own_turn(session_id)
 
         return new_id or 0
 
@@ -711,9 +889,51 @@ class ChatDatabase:
                     msg["inference_stats"] = json.loads(msg["inference_stats"])
                 except (json.JSONDecodeError, TypeError):
                     msg["inference_stats"] = None
+            if msg.get("turn_summary"):
+                try:
+                    msg["turn_summary"] = json.loads(msg["turn_summary"])
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.warning(
+                        "Message %s has an unreadable turn summary: %s",
+                        msg.get("id"),
+                        exc,
+                    )
+                    msg["turn_summary"] = None
             messages.append(msg)
 
         return messages
+
+    def get_turn_summaries(self, session_id: str) -> List[Dict[str, Any]]:
+        """Every answer's id, time and turn summary, oldest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, created_at, turn_summary FROM messages "
+                "WHERE session_id = ? AND role = 'assistant' "
+                "AND turn_summary IS NOT NULL ORDER BY created_at ASC, id ASC",
+                (session_id,),
+            ).fetchall()
+        out = []
+        for row in rows:
+            try:
+                summary = json.loads(row["turn_summary"])
+            except ValueError as e:
+                raise RuntimeError(
+                    f"Message {row['id']} in chat {session_id} has an unreadable "
+                    f"turn summary ({e})."
+                ) from e
+            out.append(
+                {"id": row["id"], "created_at": row["created_at"], "summary": summary}
+            )
+        return out
+
+    def get_message_times(self, session_id: str) -> Dict[int, str]:
+        """Message id -> when it was written, for every message in the chat."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, created_at FROM messages WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        return {row["id"]: row["created_at"] for row in rows}
 
     def get_context_messages(self, session_id: str) -> List[Dict[str, Any]]:
         """Read model history separately from paginated UI activity metadata."""
@@ -736,6 +956,95 @@ class ChatDatabase:
                     ) from exc
             messages.append(message)
         return messages
+
+    def latest_message_id(
+        self, session_id: str, role: Optional[str] = None
+    ) -> Optional[int]:
+        """The id of the newest message (of *role*, if given), or None when none."""
+        role_clause = " AND role = ?" if role else ""
+        params = (session_id, role) if role else (session_id,)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id FROM messages WHERE session_id = ?"
+                + role_clause
+                + " ORDER BY created_at DESC, id DESC LIMIT 1",
+                params,
+            ).fetchone()
+        return row["id"] if row else None
+
+    def get_message_record(
+        self, session_id: str, message_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """One message with its model messages and stats decoded."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, role, content, model_messages, inference_stats "
+                "FROM messages WHERE session_id = ? AND id = ?",
+                (session_id, message_id),
+            ).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        for key in ("model_messages", "inference_stats"):
+            if record[key] is not None:
+                try:
+                    record[key] = json.loads(record[key])
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise ValueError(
+                        f"Cannot read {key} of message {message_id} in session "
+                        f"{session_id}; inspect the messages table in the chat "
+                        "database."
+                    ) from exc
+        return record
+
+    def turn_performance(self, session_id: str) -> List[Dict[str, Any]]:
+        """Each answered turn's recorded performance, oldest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, created_at, inference_stats FROM messages "
+                "WHERE session_id = ? AND role = 'assistant' "
+                "AND inference_stats IS NOT NULL ORDER BY created_at ASC, id ASC",
+                (session_id,),
+            ).fetchall()
+        turns = []
+        for row in rows:
+            try:
+                stats = json.loads(row["inference_stats"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError(
+                    f"Cannot read inference_stats of message {row['id']} in session "
+                    f"{session_id}; inspect the messages table in the chat database."
+                ) from exc
+            performance = stats.get("performance") if isinstance(stats, dict) else None
+            if isinstance(performance, dict):
+                turns.append(
+                    {
+                        "message_id": row["id"],
+                        "created_at": row["created_at"],
+                        **performance,
+                    }
+                )
+        return turns
+
+    def replace_answer(
+        self,
+        session_id: str,
+        message_id: int,
+        content: str,
+        model_messages: List[Dict] | None,
+        inference_stats: Dict | None,
+    ) -> bool:
+        """Swap an assistant message's answer in place, keeping its id and steps."""
+        model_json = json.dumps(model_messages) if model_messages is not None else None
+        stats_json = json.dumps(inference_stats) if inference_stats else None
+        with self._transaction():
+            cursor = self._conn.execute(
+                "UPDATE messages SET content = ?, model_messages = ?, "
+                "inference_stats = ? "
+                "WHERE session_id = ? AND id = ? AND role = 'assistant'",
+                (content, model_json, stats_json, session_id, message_id),
+            )
+        return cursor.rowcount > 0
 
     def delete_message(self, session_id: str, message_id: int) -> bool:
         """Delete a single message by ID.
@@ -806,6 +1115,139 @@ class ChatDatabase:
                 (session_id,),
             ).fetchone()
             return int(row["cnt"])
+
+    # ── Unfinished turns ────────────────────────────────────────────────
+
+    def begin_turn(self, session_id: str, question: str) -> int:
+        """Save the user's *question* and mark its reply as started, together.
+
+        The row is this process's: only this process saves into or closes it,
+        and another server closes it only once this process has exited.
+        Returns the question's message id.
+        """
+        now = self._now()
+        with self._transaction():
+            cursor = self._conn.execute(
+                "INSERT INTO messages (session_id, role, content, created_at) "
+                "VALUES (?, 'user', ?, ?)",
+                (session_id, question, now),
+            )
+            question_id = cursor.lastrowid
+            self._conn.execute(
+                """INSERT INTO unfinished_turns
+                   (question_id, session_id, owner, started_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (question_id, session_id, current_owner(), now, now),
+            )
+            self._conn.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id)
+            )
+        return question_id
+
+    def _end_own_turn(self, session_id: str) -> None:
+        # Inside the caller's transaction. A session runs one turn at a time
+        # per process, so this is the turn the reply belongs to.
+        self._conn.execute(
+            "DELETE FROM unfinished_turns WHERE session_id = ? AND owner = ?",
+            (session_id, current_owner()),
+        )
+
+    def own_turn(self, session_id: str) -> Optional[int]:
+        """The question id of this process's unfinished turn in the session."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT question_id FROM unfinished_turns "
+                "WHERE session_id = ? AND owner = ?",
+                (session_id, current_owner()),
+            ).fetchone()
+        return row["question_id"] if row else None
+
+    def save_turn_partial(
+        self, question_id: int, content: str, tools_run: List[str]
+    ) -> None:
+        """Keep the reply streamed so far, and the tools it started."""
+        with self._transaction():
+            self._conn.execute(
+                "UPDATE unfinished_turns SET partial_content = ?, tools_run = ?, "
+                "updated_at = ? WHERE question_id = ? AND owner = ?",
+                (
+                    content,
+                    json.dumps(tools_run),
+                    self._now(),
+                    question_id,
+                    current_owner(),
+                ),
+            )
+
+    def discard_turn(self, question_id: int) -> None:
+        """Forget this process's turn, whose outcome the caller reported."""
+        with self._transaction():
+            self._conn.execute(
+                "DELETE FROM unfinished_turns WHERE question_id = ? AND owner = ?",
+                (question_id, current_owner()),
+            )
+
+    def turns_in_progress(self) -> List[Dict[str, Any]]:
+        """Unfinished turns: ``question_id``, ``session_id`` and ``owner``."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT question_id, session_id, owner FROM unfinished_turns"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def close_turn(
+        self,
+        question_id: int,
+        notice: str,
+        owner: Optional[str] = None,
+        tools_notice: Optional[Callable[[List[str]], str]] = None,
+    ) -> Optional[int]:
+        """Save *notice* as the reply of an unfinished turn, and end it.
+
+        *owner* is the process the turn must belong to, this one by default,
+        so one server never closes another's live turn. Whatever the turn had
+        streamed is kept above the notice; an empty notice keeps it alone.
+        *tools_notice*, given the tools the turn had started, adds a line
+        saying they ran. Returns the id of the reply written, or None when
+        there was no such turn (it saved its own reply, or its question was
+        deleted).
+        """
+        owner = owner or current_owner()
+        with self._transaction():
+            row = self._conn.execute(
+                "SELECT session_id, partial_content, tools_run FROM unfinished_turns "
+                "WHERE question_id = ? AND owner = ?",
+                (question_id, owner),
+            ).fetchone()
+            if row is None:
+                return None
+            self._conn.execute(
+                "DELETE FROM unfinished_turns WHERE question_id = ? AND owner = ?",
+                (question_id, owner),
+            )
+            tools = json.loads(row["tools_run"] or "[]")
+            parts = [
+                (row["partial_content"] or "").strip(),
+                tools_notice(tools) if tools and tools_notice else "",
+                notice,
+            ]
+            content = "\n\n".join(part for part in parts if part)
+            if not content:
+                raise ValueError(
+                    f"close_turn for question {question_id} has neither "
+                    "streamed text nor a notice to save as its reply"
+                )
+            now = self._now()
+            cursor = self._conn.execute(
+                "INSERT INTO messages (session_id, role, content, created_at) "
+                "VALUES (?, 'assistant', ?, ?)",
+                (row["session_id"], content, now),
+            )
+            self._conn.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                (now, row["session_id"]),
+            )
+            return cursor.lastrowid
 
     # ── Documents ───────────────────────────────────────────────────────
 
@@ -957,6 +1399,55 @@ class ChatDatabase:
             detached = cursor.rowcount > 0
         return detached
 
+    def get_session_environment(self, session_id: str) -> Dict[str, Any]:
+        """The chat's added and removed folders and its internet switch."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT folders, withheld, internet_off FROM session_environment "
+                "WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return {"folders": [], "withheld": [], "internet_off": False}
+        try:
+            folders, withheld = json.loads(row["folders"]), json.loads(row["withheld"])
+        except ValueError as e:
+            raise RuntimeError(
+                f"The saved folders for chat {session_id} are unreadable ({e}). "
+                "Remove and re-add them in the session panel."
+            ) from e
+        return {
+            "folders": folders,
+            "withheld": withheld,
+            "internet_off": bool(row["internet_off"]),
+        }
+
+    def set_session_environment(
+        self,
+        session_id: str,
+        *,
+        folders: List[str],
+        withheld: List[str],
+        internet_off: bool,
+    ) -> None:
+        """Replace the chat's environment settings."""
+        with self._transaction():
+            self._conn.execute(
+                """INSERT INTO session_environment
+                       (session_id, folders, withheld, internet_off)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(session_id) DO UPDATE SET
+                       folders = excluded.folders,
+                       withheld = excluded.withheld,
+                       internet_off = excluded.internet_off""",
+                (
+                    session_id,
+                    json.dumps(folders),
+                    json.dumps(withheld),
+                    1 if internet_off else 0,
+                ),
+            )
+
     def get_session_documents(self, session_id: str) -> List[Dict[str, Any]]:
         """Get all documents attached to a session."""
         with self._lock:
@@ -977,6 +1468,7 @@ class ChatDatabase:
         status: str,
         chunk_count: int | None = None,
         last_error: str | None = _UNSET,
+        error_kind: str | None = None,
     ) -> bool:
         """Update a document's indexing status and optionally its chunk count.
 
@@ -988,13 +1480,18 @@ class ChatDatabase:
                         Omit (default) to leave the existing value unchanged.
                         Pass None to clear the column (SQL NULL).
                         Pass a string to store that error message.
+            error_kind: Stored with ``last_error`` whenever that is written, so
+                        a stale kind never outlives the error it described.
 
         Returns:
             True if the document was found and updated.
         """
         with self._transaction():
-            parts = ["indexing_status = ?"]
-            params: list = [status]
+            parts = ["indexing_status = ?", "indexing_owner = ?"]
+            params: list = [
+                status,
+                current_owner() if status in ("pending", "indexing") else None,
+            ]
             if chunk_count is not None:
                 parts.append("chunk_count = ?")
                 params.append(chunk_count)
@@ -1003,7 +1500,11 @@ class ChatDatabase:
             if status == "complete":
                 parts.append("last_error = ?")
                 params.append(None)
+                parts.append("error_kind = ?")
+                params.append(None)
             elif last_error is not _UNSET:
+                parts.append("error_kind = ?")
+                params.append(error_kind if last_error is not None else None)
                 parts.append("last_error = ?")
                 if (
                     isinstance(last_error, str)
@@ -1019,6 +1520,22 @@ class ChatDatabase:
                 params,
             )
             return cursor.rowcount > 0
+
+    def fail_unfinished_indexing(self, error: str) -> List[str]:
+        """Mark documents left pending or indexing by a process that has ended
+        as failed with *error*. Returns their ids."""
+        with self._transaction():
+            rows = self._conn.execute(
+                "SELECT id, indexing_owner FROM documents "
+                "WHERE indexing_status IN ('pending', 'indexing')"
+            ).fetchall()
+            ids = [row["id"] for row in rows if owner_is_gone(row["indexing_owner"])]
+            self._conn.executemany(
+                "UPDATE documents SET indexing_status = 'failed', last_error = ?, "
+                "error_kind = NULL, last_accessed_at = ? WHERE id = ?",
+                [(error, self._now(), doc_id) for doc_id in ids],
+            )
+        return ids
 
     def reindex_document(
         self,
@@ -1081,6 +1598,54 @@ class ChatDatabase:
                 (file_mtime, doc_id),
             )
             return cursor.rowcount > 0
+
+    def recent_inference_stats(self, limit: int = 500) -> List[Dict]:
+        """Inference stats of the newest assistant messages that recorded any."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT inference_stats FROM messages WHERE role = 'assistant' "
+                "AND inference_stats IS NOT NULL ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        out = []
+        for row in rows:
+            try:
+                stats = json.loads(row["inference_stats"])
+            except ValueError:
+                logger.warning("Skipping a message with unreadable inference_stats")
+                continue
+            if isinstance(stats, dict):
+                out.append(stats)
+        return out
+
+    # ── Cloud spending ────────────────────────────────────────────────
+
+    def add_cloud_spend(
+        self,
+        month: str,
+        model: str,
+        provider: str,
+        input_tokens: Optional[int],
+        output_tokens: Optional[int],
+        usd: Optional[float],
+    ) -> None:
+        """Record one cloud chat turn; *usd* None when its price is unknown."""
+        with self._transaction():
+            self._conn.execute(
+                "INSERT INTO cloud_spend (month, model, provider, input_tokens, "
+                "output_tokens, usd) VALUES (?, ?, ?, ?, ?, ?)",
+                (month, model, provider, input_tokens, output_tokens, usd),
+            )
+
+    def cloud_spend_for_month(self, month: str) -> List[Dict]:
+        """Every cloud turn recorded in *month* (``YYYY-MM``)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT model, provider, input_tokens, output_tokens, usd "
+                "FROM cloud_spend WHERE month = ? ORDER BY id",
+                (month,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     # ── Settings ──────────────────────────────────────────────────────
 
@@ -1145,13 +1710,15 @@ class ChatDatabase:
         error_count: int = 0,
         session_id: str | None = None,
         schedule_config: str | None = None,
+        last_error: str | None = None,
     ) -> None:
         """Update the mutable fields of a scheduled task row."""
         with self._transaction():
             self._conn.execute(
                 """UPDATE scheduled_tasks
                    SET status = ?, last_run_at = ?, next_run_at = ?, last_result = ?,
-                       run_count = ?, error_count = ?, session_id = ?, schedule_config = ?
+                       run_count = ?, error_count = ?, session_id = ?, schedule_config = ?,
+                       last_error = ?
                    WHERE id = ?""",
                 (
                     status,
@@ -1162,9 +1729,37 @@ class ChatDatabase:
                     error_count,
                     session_id,
                     schedule_config,
+                    last_error,
                     task_id,
                 ),
             )
+
+    def claim_scheduled_run(
+        self, task_id: str, expected_next_run_at: str | None, next_run_at: str
+    ) -> bool:
+        """Take the run due at *expected_next_run_at*, moving the task on to
+        *next_run_at*. False when another server sharing this database
+        already took it (the stored time no longer matches), or paused or
+        cancelled the task."""
+        with self._transaction():
+            cursor = self._conn.execute(
+                "UPDATE scheduled_tasks SET next_run_at = ? "
+                "WHERE id = ? AND next_run_at IS ? AND status = 'active'",
+                (next_run_at, task_id, expected_next_run_at),
+            )
+            return cursor.rowcount == 1
+
+    def scheduled_task_timing(self, task_id: str) -> Dict[str, Any]:
+        """The task's stored ``status`` and ``next_run_at``, as another server
+        may have set them."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT status, next_run_at FROM scheduled_tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"No scheduled task {task_id!r} in the chat database")
+        return dict(row)
 
     def delete_scheduled_task(self, task_id: str) -> None:
         """Delete a scheduled task and its results."""

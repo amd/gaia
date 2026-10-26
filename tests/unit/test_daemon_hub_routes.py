@@ -681,7 +681,7 @@ def test_unknown_id_message_leads_with_the_actionable_clause(monkeypatch):
     "probe,expected_lead",
     [
         ("installed", "is installed but the daemon does not supervise it"),
-        ("hub", "is published on the Agent Hub but this GAIA build cannot run it"),
+        ("hub", "is published but this GAIA build cannot run it"),
         ("agent", "is a GAIA agent but is not published as an installable sidecar"),
     ],
 )
@@ -854,6 +854,69 @@ def test_a_runner_that_cannot_start_releases_the_slot(monkeypatch, install_root)
     retry = _post_install(client)
     assert retry.status_code == 202
     assert (install_root / "email" / ".installed").exists()
+
+
+def test_install_held_by_another_process_is_409_and_keeps_the_sidecar(
+    monkeypatch, install_root
+):
+    """The Agent UI or `gaia hub` installing this id must not have it stopped."""
+    from gaia.utils.file_lock import file_lock
+
+    fetcher = _RecordingFetcher(_hub_files())
+    _patch_hub(monkeypatch, fetcher)
+    registry = _FakeRegistry()
+    client = _client(registry)
+    taken, release = threading.Event(), threading.Event()
+
+    def other_process():
+        with file_lock(install_root / ".email.install"):
+            taken.set()
+            release.wait(30)
+
+    holder = threading.Thread(target=other_process)
+    holder.start()
+    assert taken.wait(10)
+    try:
+        r = _post_install(client)
+    finally:
+        release.set()
+        holder.join()
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert "Another GAIA process" in detail
+    # This daemon has no progress for an install another process runs.
+    assert "install-status" not in detail
+    assert registry.stop_calls == []
+    assert install_svc._QUEUED == set()
+
+    # Once the other install is done, this one goes through.
+    retry = _post_install(client)
+    assert retry.status_code == 202
+    assert (install_root / "email" / ".installed").exists()
+
+
+def test_install_whose_slot_lock_cannot_be_made_is_500_naming_it(
+    monkeypatch, install_root
+):
+    from gaia.hub import installer as installer_mod
+    from gaia.utils.file_lock import FileLockError
+
+    fetcher = _RecordingFetcher(_hub_files())
+    _patch_hub(monkeypatch, fetcher)
+    registry = _FakeRegistry()
+    client = _client(registry)
+
+    def unwritable(agent_id, install_root=None):
+        raise FileLockError(
+            "Cannot create the lock file /x/.email.install.lock", Path("/x")
+        )
+
+    monkeypatch.setattr(installer_mod, "claim_install_slot", unwritable)
+    r = _post_install(client)
+    assert r.status_code == 500
+    assert "Cannot create the lock file" in r.json()["detail"]
+    assert registry.stop_calls == []
+    assert install_svc._QUEUED == set()
 
 
 def test_registry_hold_blocks_ensure_for_the_duration(monkeypatch):
@@ -1055,6 +1118,58 @@ def test_uninstall_stops_the_sidecar_then_removes_the_dir(monkeypatch, install_r
     assert r.json() == {"agent_id": "email", "status": "uninstalled"}
     assert registry.stop_calls == ["email"]
     assert not (install_root / "email").exists()
+
+
+def test_uninstall_while_another_process_installs_is_409_and_keeps_the_sidecar(
+    install_root,
+):
+    from gaia.utils.file_lock import file_lock
+
+    _write_sentinel(install_root, "email", "0.5.0")
+    registry = _FakeRegistry()
+    client = _client(registry)
+    taken, release = threading.Event(), threading.Event()
+
+    def other_process():
+        with file_lock(install_root / ".email.install"):
+            taken.set()
+            release.wait(30)
+
+    holder = threading.Thread(target=other_process)
+    holder.start()
+    assert taken.wait(10)
+    try:
+        r = client.delete("/daemon/v1/agents/email", headers=_auth())
+    finally:
+        release.set()
+        holder.join()
+    assert r.status_code == 409
+    assert registry.stop_calls == []
+    assert (install_root / "email" / ".installed").exists()
+
+
+def test_uninstall_whose_slot_lock_cannot_be_made_is_500_naming_it(
+    monkeypatch, install_root
+):
+    from gaia.hub import installer as installer_mod
+    from gaia.utils.file_lock import FileLockError
+
+    _write_sentinel(install_root, "email", "0.5.0")
+    registry = _FakeRegistry()
+    client = _client(registry)
+
+    def unwritable(agent_id, install_root=None):
+        raise FileLockError(
+            "Cannot create the lock file /x/.email.install.lock", Path("/x")
+        )
+
+    monkeypatch.setattr(installer_mod, "claim_install_slot", unwritable)
+    r = client.delete("/daemon/v1/agents/email", headers=_auth())
+    assert r.status_code == 500
+    assert "Cannot create the lock file" in r.json()["detail"]
+    assert registry.stop_calls == []
+    assert install_svc._QUEUED == set()
+    assert (install_root / "email" / ".installed").exists()
 
 
 def test_uninstall_aborts_when_the_pid_survives_and_keeps_the_install(
@@ -1479,3 +1594,34 @@ def test_install_of_a_version_needing_a_newer_core_is_409_before_any_stop(
     # The running sidecar was never stopped and nothing was downloaded.
     assert registry.stop_calls == []
     assert not any(ARTIFACT_NAME in c for c in fetcher.calls)
+
+
+def test_cold_fetch_of_the_flagship_names_gaia_init(monkeypatch, install_root):
+    """The flagship installs with `gaia init`, which installs it whenever no
+    sentinel is on disk; the daemon reads that install on the next start."""
+    from gaia.daemon.sidecars import fetch as fetchmod
+    from gaia.daemon.sidecars.errors import BinaryNotFoundError
+
+    monkeypatch.setattr(
+        "gaia.daemon.sidecars.platform.default_lock_path",
+        lambda: install_root / "missing" / "binaries.lock.json",
+    )
+    with pytest.raises(BinaryNotFoundError) as exc_info:
+        fetchmod.fetch_binary(
+            out_dir=install_root / "gaia",
+            platform_key=PLATFORM_KEY,
+            agent_dir_name="gaia",
+        )
+    msg = str(exc_info.value)
+    assert "`gaia init`" in msg
+    assert "gaia hub install gaia" not in msg
+
+
+@pytest.mark.parametrize(
+    "agent_id, expected",
+    [("gaia", "gaia init"), ("email", "gaia hub install email")],
+)
+def test_install_command_names_init_only_for_the_flagship(agent_id, expected):
+    from gaia.daemon.sidecars.fetch import install_command
+
+    assert install_command(agent_id) == expected

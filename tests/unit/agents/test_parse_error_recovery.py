@@ -269,6 +269,32 @@ class TestProcessQueryRecoversOnParseError:
             assert "Agent error" not in text
 
 
+def _with_an_old_tool_result(agent):
+    """History holding a large tool result, so the overflow shrink frees enough
+    to be worth one retry (#2780)."""
+    agent.conversation_history = [
+        {"role": "user", "content": "read the report"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "h1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "h1",
+            "name": "read_file",
+            "content": "lorem " * 4000,
+        },
+        {"role": "assistant", "content": "Read it."},
+    ]
+
+
 class TestProcessQueryRecoversOnContextOverflow:
     """When the multi-step loop accumulates tool messages past the context
     window, the agent should trim and retry once before giving up."""
@@ -305,6 +331,7 @@ class TestProcessQueryRecoversOnContextOverflow:
             RuntimeError("exceed_context_size: prompt + history exceeds 32768 tokens"),
             good,
         )
+        _with_an_old_tool_result(agent)
         result = agent.process_query("anything", max_steps=5)
         assert chat.send_messages.call_count == 2
         assert any(
@@ -418,6 +445,7 @@ class TestProcessQueryRecoversOnContextOverflow:
         chat = self._stub_chat_with_exception_then_answer(
             agent, RuntimeError(flm_error_text), good
         )
+        _with_an_old_tool_result(agent)
         result = agent.process_query("anything", max_steps=5)
         assert chat.send_messages.call_count == 2
         assert any(
@@ -463,6 +491,7 @@ class TestProcessQueryRecoversOnContextOverflowStreaming:
             return iter(good_stream)
 
         agent.chat.send_messages_stream = MagicMock(side_effect=_send_stream)
+        _with_an_old_tool_result(agent)
 
         result = agent.process_query("anything", max_steps=5)
 
@@ -495,6 +524,7 @@ class TestProcessQueryRecoversOnContextOverflowStreaming:
             raise RuntimeError("exceeds the available context size")
 
         agent.chat.send_messages_stream = MagicMock(side_effect=_send_stream)
+        _with_an_old_tool_result(agent)
 
         result = agent.process_query("anything", max_steps=5)
 
@@ -599,15 +629,11 @@ class TestParseLLMResponseRecoversFromInvalidEscapes:
 
 
 class TestPostFailureOverrideSkippedAfterCapabilitySuccess:
-    """Issue #1023 step 3: the verbose-failure override at process_query
-    must NOT fire when the capability tool (``generate_image``) succeeded.
+    """Issue #1023 step 3: the model's reply after ``generate_image`` is kept.
 
-    The original guard fired solely on ``has_tried_capability_tool`` --
-    "was generate_image called this turn?" -- with no check on whether the
-    call actually returned an error.  As a result, when generate_image
-    succeeded and a SUBSEQUENT tool's parse error provoked a verbose
-    apology, the override clobbered the model's reply with a misleading
-    "Image generation is not available" message.
+    A canned "Image generation is not available" line once replaced the
+    model's reply, even after the call succeeded. Success or failure, the
+    model's own answer now reaches the user.
     """
 
     def _stub_chat(self, agent, *responses):
@@ -687,89 +713,27 @@ class TestPostFailureOverrideSkippedAfterCapabilitySuccess:
         # And the model's actual answer must be visible.
         assert "image was generated successfully" in text.lower()
 
-    def test_override_still_fires_when_generate_image_failed(self, agent):
-        """Regression guard: legitimate failure path keeps the canonical message.
+    @pytest.mark.parametrize("tool_name", ["generate_image", "Generate_Image"])
+    def test_a_failed_generate_image_keeps_the_models_answer(self, agent, tool_name):
+        """A failed image call is reported in the model's words, never rewritten.
 
-        Pairs with the post-success test above.  Without this, the gate
-        could be (intentionally or accidentally) widened to skip the
-        override unconditionally and only the post-success test would
-        catch it -- leaving the legitimate "SD not enabled" UX broken.
+        The answer used to be replaced by a canned line telling the user to
+        start GAIA with an ``--sd`` flag, which does not exist.
         """
         self._register_generate_image(agent, status="error")
-
-        # Step 1: model calls generate_image (returns error).
-        step1 = json.dumps(
-            {"tool": "generate_image", "tool_args": {"prompt": "a forest"}}
+        step1 = json.dumps({"tool": tool_name, "tool_args": {"prompt": "a forest"}})
+        answer = (
+            "I apologize for the confusion. Image generation failed: the SD "
+            "backend is not available, so there is no forest image yet."
         )
-        # Step 2: model emits a verbose-apology answer matching the
-        # ``i apologize for the confusion`` pattern.  Because the
-        # capability tool actually FAILED, the override must replace
-        # this with the canonical "Image generation is not available"
-        # message -- preserving the pre-existing UX for the legitimate
-        # "SD not enabled" case.
-        step2 = json.dumps(
-            {
-                "answer": (
-                    "I apologize for the confusion. Let me explain what "
-                    "I would have done with prompt enhancement..."
-                )
-            }
-        )
-        self._stub_chat(agent, step1, step2)
+        self._stub_chat(agent, step1, json.dumps({"answer": answer}))
 
         result = agent.process_query("make me an image", max_steps=10)
         text = result["result"]
 
-        # The override fired and replaced the verbose apology with the
-        # canonical "not available" message.
-        assert "Image generation is not available" in text
-
-    def test_override_fires_after_mixed_case_capability_failure(self, agent):
-        """The tracker must be case-insensitive (mirrors ``has_tried_capability_tool``).
-
-        Models occasionally emit tool names with non-canonical casing
-        (``Generate_Image``).  The dispatcher resolves these via
-        ``_resolve_tool_name`` for execution, but ``tool_call_log`` records
-        the un-normalized name -- so both the pre-existing
-        ``has_tried_capability_tool`` check and the new
-        ``capability_tool_last_succeeded`` tracker must apply ``.lower()``
-        for the gate to evaluate consistently.
-
-        The interesting failure mode is **mixed-case + tool error**:
-        without ``.lower()``, the tracker silently stays at ``None``, and
-        ``None is False`` is False, so the override DOESN'T fire even
-        though the capability tool legitimately errored.  The user would
-        then see a verbose model apology instead of the canonical "not
-        available" message.  This test pins that down.
-        """
-        # generate_image returns an error this time.
-        self._register_generate_image(agent, status="error")
-
-        # Step 1: model emits the tool name with mixed case.  The
-        # dispatcher resolves "Generate_Image" -> "generate_image" but
-        # ``tool_call_log`` records the original LLM-emitted casing.
-        step1 = json.dumps(
-            {"tool": "Generate_Image", "tool_args": {"prompt": "a forest"}}
-        )
-        # Step 2: verbose-apology answer that matches the failure-override
-        # regex.  With ``.lower()`` the tracker correctly registered Step
-        # 1's failure, so the gate fires and replaces this with the
-        # canonical "not available" message.
-        step2 = json.dumps(
-            {
-                "answer": (
-                    "I apologize for the confusion. Let me explain what "
-                    "I would have done with prompt enhancement..."
-                )
-            }
-        )
-        self._stub_chat(agent, step1, step2)
-
-        result = agent.process_query("make me an image", max_steps=10)
-        text = result["result"]
-
-        # Override fired despite the mixed-case tool name.
-        assert "Image generation is not available" in text
+        assert text.startswith(answer)
+        assert "--sd" not in text
+        assert "Image generation is not available in this session" not in text
 
 
 class TestEnvelopeLevelRepairAndRawDecode:

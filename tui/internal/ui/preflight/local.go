@@ -152,7 +152,8 @@ func (l localRunner) Check(ctx context.Context, cfg Config) Report {
 	var models []gaiainit.Model
 	rep := l.walk(ctx, cfg, &models)
 	if l.asksWhereChatRuns() && len(rep.Steps()) > 0 {
-		rep = withChatStep(rep, chatOptions(downloadSize(models), l.localFit(ctx, rep, models)))
+		options := chatOptions(downloadSize(models), l.localFit(ctx, rep, models))
+		rep = withChatStep(rep, withGatewayReach(ctx, options))
 	}
 	return rep
 }
@@ -311,7 +312,7 @@ func (l localRunner) checkBinary(_ context.Context, cfg Config) Row {
 				"right program to run.", found.Unverified, catalog.SentinelName)
 		row.Remedy = Remedy{
 			Action:  "Install it again so the install can finish and verify itself.",
-			Command: "gaia hub install " + cfg.AgentID,
+			Command: catalog.InstallCommand(cfg.AgentID),
 			Where:   catalog.AgentDocsURL,
 		}
 		row.Raw = found.Unverified

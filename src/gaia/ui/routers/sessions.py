@@ -13,13 +13,16 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
 
+from .. import answer_retry, followups
 from .. import permissions as session_permissions
 from .._chat_helpers import (
     _SIDECAR_AGENT_TYPES,
     _agent_type_unknown,
     evict_session_agent,
+    forget_relayed_context,
     get_agent_registry,
     resolve_device_model,
     resolve_session_model,
@@ -38,6 +41,7 @@ from ..models import (
     CreateSessionRequest,
     MessageListResponse,
     SessionListResponse,
+    SessionPinRequest,
     SessionResponse,
     UpdateSessionRequest,
 )
@@ -186,12 +190,17 @@ def _reject_unknown_agent_type(agent_type: str | None) -> None:
     )
     load_error = registry.get_load_error(agent_type)
     reason = f" It failed to load: {load_error}." if load_error else ""
+    install = (
+        "`gaia init`"
+        if agent_type == "gaia"
+        else f"`gaia hub install {agent_type} --trust`"
+    )
     raise HTTPException(
         status_code=422,
         detail=(
             f"Unknown agent_type '{agent_type}'.{reason} Registered agent ids: "
             f"{', '.join(valid_ids)}. Pick one of these, or install the agent "
-            "from the Agent Hub (`gaia hub`) and try again."
+            f"with {install} and try again."
         ),
     )
 
@@ -391,7 +400,15 @@ async def delete_session(
             raise HTTPException(status_code=404, detail="Session not found")
         session_locks.pop(session_id, None)
         evict_session_agent(session_id)
+        forget_relayed_context(session_id)
         session_permissions.forget_session(session_id)
+        followups.forget(session_id)
+        answer_retry.forget(session_id)
+    try:
+        await asyncio.to_thread(file_snapshots.delete_session, session_id)
+    except OSError as e:
+        # The chat is gone; its undo copies expire with the retention limit.
+        logger.error("Could not remove undo history of %s: %s", session_id, e)
     return {"deleted": True}
 
 
@@ -407,6 +424,26 @@ async def toggle_session_privacy(
     current = bool(session.get("private", 0))
     updated = db.update_session(session_id, private=not current)
     return await _session_response(db, updated)
+
+
+@router.put("/api/sessions/{session_id}/pin", response_model=SessionResponse)
+async def pin_session(
+    session_id: str,
+    request: SessionPinRequest,
+    db: ChatDatabase = Depends(get_db),
+):
+    """Pin a chat to the top of the list, or unpin it (#5221)."""
+    if not db.set_session_pinned(session_id, request.pinned):
+        raise HTTPException(status_code=404, detail="Session not found")
+    return await _session_response(db, db.get_session(session_id))
+
+
+@router.post("/api/sessions/{session_id}/read", response_model=SessionResponse)
+async def mark_session_read(session_id: str, db: ChatDatabase = Depends(get_db)):
+    """Clear a chat's unread mark; the UI calls this when the chat is opened (#5221)."""
+    if not db.mark_session_read(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    return await _session_response(db, db.get_session(session_id))
 
 
 # ── Messages ─────────────────────────────────────────────────────────────────
@@ -471,6 +508,12 @@ async def delete_messages_from(
 # ── Export ───────────────────────────────────────────────────────────────────
 
 
+def _answer_model(msg: dict) -> str | None:
+    """The model recorded as having written ``msg``, or None if none was saved."""
+    stats = msg.get("inference_stats")
+    return stats.get("model") if isinstance(stats, dict) else None
+
+
 @router.get("/api/sessions/{session_id}/export")
 async def export_session(
     session_id: str,
@@ -483,26 +526,46 @@ async def export_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    messages = db.get_messages(session_id, limit=10000)
-
-    if export_format == "markdown":
-        lines = [f"# {session['title']}\n"]
-        lines.append(f"*Created: {session['created_at']}*\n")
-        lines.append(f"*Model: {session['model']}*\n\n---\n")
-
-        for msg in messages:
-            role_label = "User" if msg["role"] == "user" else "Assistant"
-            lines.append(f"**{role_label}:**\n\n{msg['content']}\n\n---\n")
-
-        content = "\n".join(lines)
-        return {"content": content, "format": "markdown"}
-    elif export_format == "json":
-        return {"session": session, "messages": messages, "format": "json"}
-    else:
+    if export_format not in ("markdown", "json"):
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported format: {export_format}",
         )
+
+    messages = db.get_messages(session_id, limit=10000)
+    # The stored model stays at the install default when a custom model answers.
+    effective_model = (await _session_response(db, session)).effective_model
+
+    if export_format == "markdown":
+        answer_models = [
+            _answer_model(msg) for msg in messages if msg["role"] == "assistant"
+        ]
+        if answer_models and all(answer_models):
+            used = list(dict.fromkeys(answer_models))
+            label = "Models" if len(used) > 1 else "Model"
+            model_line = f"*{label}: {', '.join(used)}*"
+        else:
+            # An answer saved before its model was recorded can't say what wrote it.
+            model_line = f"*Model (current setting): {effective_model}*"
+
+        lines = [f"# {session['title']}\n"]
+        lines.append(f"*Created: {session['created_at']}*\n")
+        lines.append(f"{model_line}\n\n---\n")
+
+        for msg in messages:
+            role_label = "User" if msg["role"] == "user" else "Assistant"
+            answer_model = _answer_model(msg)
+            if answer_model:
+                role_label = f"{role_label} ({answer_model})"
+            lines.append(f"**{role_label}:**\n\n{msg['content']}\n\n---\n")
+
+        content = "\n".join(lines)
+        return {"content": content, "format": "markdown"}
+    return {
+        "session": {**session, "effective_model": effective_model},
+        "messages": messages,
+        "format": "json",
+    }
 
 
 # ── Session-Document Attachments ─────────────────────────────────────────────
