@@ -66,8 +66,17 @@ def test_cleanup_keeps_a_matching_installer_newer_than_cutoff(tmp_path):
     assert installer.exists()
 
 
-def test_cleanup_leaves_unrelated_old_files_alone(tmp_path):
-    unrelated = tmp_path / "unrelated-installer.msi"
+@pytest.mark.parametrize(
+    "name",
+    [
+        "unrelated-installer.msi",
+        "lemonade.msi",
+        "lemonade-1234abc.msi",
+        "lemonade-1234abcd.msi.part",
+    ],
+)
+def test_cleanup_leaves_unrelated_old_files_alone(tmp_path, name):
+    unrelated = tmp_path / name
     unrelated.write_bytes(b"keep")
     old = time.time() - 2 * KEPT_INSTALLER_MIN_AGE_S
     os.utime(unrelated, (old, old))
