@@ -88,6 +88,9 @@ describe('ModelSettings local models', () => {
         expect(within(qwen).getByText('Loaded')).toBeInTheDocument();
         const gemma = screen.getByText('Gemma 4 E4B').closest('li') as HTMLElement;
         expect(within(gemma).getByText(/GPU · Vulkan \(expected\)/)).toBeInTheDocument();
+        expect(screen.getByText('Qwen3.6 35B A3B')).toBeInTheDocument();
+        expect(screen.getByText('Gemma 4 E4B')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Show all models' })).not.toBeInTheDocument();
     });
 
     it('lists models this PC cannot run separately, with why', async () => {
