@@ -596,13 +596,6 @@ function Add-ToPath {
         }
 
         Set-RawUserPath -Value (($existing + $missing) -join ";")
-        Send-EnvironmentChange
-
-        # Update current session PATH
-        $session = @($env:PATH -split ";" | Where-Object { $_ })
-        $env:PATH = ($session + $missing) -join ";"
-
-        Write-Success "Added GAIA to PATH"
     }
     catch {
         Write-GaiaWarning "Failed to add GAIA to PATH automatically: $_"
@@ -610,6 +603,21 @@ function Add-ToPath {
         foreach ($dir in $wanted) {
             Write-Host "  $dir" -ForegroundColor $COLOR_YELLOW
         }
+        return
+    }
+
+    # Update current session PATH
+    $session = @($env:PATH -split ";" | Where-Object { $_ })
+    $env:PATH = ($session + $missing) -join ";"
+    Write-Success "Added GAIA to PATH"
+
+    # Separate: the PATH is already saved, so a failure here must not say otherwise.
+    try {
+        Send-EnvironmentChange
+    }
+    catch {
+        Write-GaiaWarning "PATH saved, but Windows could not be notified: $_"
+        Write-Host "  Sign out and back in before opening a new terminal." -ForegroundColor $COLOR_YELLOW
     }
 }
 
