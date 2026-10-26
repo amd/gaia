@@ -1297,6 +1297,8 @@ export interface SessionPermissions {
 export interface SkillInfo {
     name: string;
     description: string;
+    /** Omitted by older Hub sidecars; false means a selectable task skill. */
+    always_on?: boolean;
     version: string | null;
     tier: string | null;
     tools: string[];
