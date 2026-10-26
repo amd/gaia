@@ -13,16 +13,16 @@ import types
 
 import pytest
 
-from gaia import env
-from gaia.env import (
+from gaia import login_path as lp
+from gaia.env import child_env
+from gaia.login_path import (
     LoginPathError,
     apply_login_path,
-    child_env,
     merge_paths,
     read_login_path,
 )
 
-BEGIN, END = env._PATH_BEGIN, env._PATH_END
+BEGIN, END = lp._PATH_BEGIN, lp._PATH_END
 posix_only = pytest.mark.skipif(os.name == "nt", reason="needs a POSIX shell")
 SEP = os.pathsep
 
@@ -37,7 +37,7 @@ def completed(stdout="", returncode=0):
 
 @pytest.fixture(autouse=True)
 def fresh_state(monkeypatch):
-    monkeypatch.setattr(env, "_login_path_applied", False)
+    monkeypatch.setattr(lp, "_login_path_applied", False)
 
 
 class TestReadLoginPath:
@@ -95,7 +95,45 @@ class TestReadLoginPath:
         read_login_path(shell="/bin/zsh")
         assert seen["cmd"][:2] == ["/bin/zsh", "-ilc"]
         assert seen["stdin"] == subprocess.DEVNULL
-        assert seen["timeout"] == env.LOGIN_PATH_TIMEOUT_S
+        assert seen["timeout"] == lp.LOGIN_PATH_TIMEOUT_S
+
+    def test_a_dotenv_cannot_choose_the_startup_files_the_shell_reads(
+        self, monkeypatch
+    ):
+        """.env is merged into os.environ at import; ZDOTDIR/HOME/ENV from it
+        would make the login shell source a project's own rc file."""
+        import gaia
+
+        monkeypatch.setattr(gaia, "_PRE_DOTENV_ENVIRON", {"HOME": "/Users/real"})
+        monkeypatch.setenv("ZDOTDIR", "./evil")
+        monkeypatch.setenv("ENV", "./evil-rc")
+        monkeypatch.setenv("HOME", "/tmp/project-home")
+        seen = {}
+
+        def spy(cmd, **kw):
+            seen.update(kw)
+            return completed(f"{BEGIN}/a{END}")
+
+        monkeypatch.setattr(subprocess, "run", spy)
+        read_login_path(shell="/bin/zsh")
+        assert seen["env"] == {"HOME": "/Users/real"}
+
+    def test_fish_gets_a_script_it_can_parse(self, monkeypatch):
+        seen = {}
+
+        def spy(cmd, **kw):
+            seen["cmd"] = cmd
+            return completed(f"{BEGIN}/a:/b{END}")
+
+        monkeypatch.setattr(subprocess, "run", spy)
+        assert read_login_path(shell="/opt/homebrew/bin/fish") == "/a:/b"
+        assert "(string join : $PATH)" in seen["cmd"][2]
+        assert "${PATH}" not in seen["cmd"][2]
+
+    def test_a_shell_that_prints_nothing_is_named_in_the_error(self, monkeypatch):
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: completed("", 1))
+        with pytest.raises(LoginPathError, match="/bin/tcsh -ilc exited 1"):
+            read_login_path(shell="/bin/tcsh")
 
     @posix_only
     def test_a_real_shell_with_a_noisy_startup_file(self, tmp_path):
@@ -128,7 +166,7 @@ class TestAccountShell:
         monkeypatch.setitem(sys.modules, "pwd", fake_pwd)
         monkeypatch.setattr(os, "getuid", lambda: 501, raising=False)
         monkeypatch.setenv("SHELL", "/tmp/evil-shell")
-        assert env._account_login_shell() == sys.executable
+        assert lp._account_login_shell() == sys.executable
 
     @pytest.mark.parametrize("shell", ["", "zsh", "/does/not/exist"])
     def test_an_unusable_recorded_shell_is_an_error(self, monkeypatch, shell):
@@ -138,7 +176,7 @@ class TestAccountShell:
         monkeypatch.setitem(sys.modules, "pwd", fake_pwd)
         monkeypatch.setattr(os, "getuid", lambda: 501, raising=False)
         with pytest.raises(LoginPathError, match="not runnable"):
-            env._account_login_shell()
+            lp._account_login_shell()
 
 
 class TestMergePaths:
@@ -166,7 +204,7 @@ class TestApplyLoginPath:
     def test_does_nothing_off_macos(self, monkeypatch):
         monkeypatch.setattr(sys, "platform", "linux")
         monkeypatch.setattr(
-            env, "read_login_path", lambda: pytest.fail("must not run a shell")
+            lp, "read_login_path", lambda: pytest.fail("must not run a shell")
         )
         assert apply_login_path() is False
 
@@ -175,7 +213,7 @@ class TestApplyLoginPath:
         monkeypatch.setenv("PATH", paths("/usr/bin", "/bin"))
         calls = []
         monkeypatch.setattr(
-            env,
+            lp,
             "read_login_path",
             lambda: calls.append(1) or paths("/opt/homebrew/bin", "/usr/bin"),
         )
@@ -187,7 +225,7 @@ class TestApplyLoginPath:
     def test_children_get_the_repaired_path(self, monkeypatch):
         monkeypatch.setattr(sys, "platform", "darwin")
         monkeypatch.setenv("PATH", paths("/usr/bin", "/bin"))
-        monkeypatch.setattr(env, "read_login_path", lambda: "/opt/homebrew/bin")
+        monkeypatch.setattr(lp, "read_login_path", lambda: "/opt/homebrew/bin")
         apply_login_path()
         assert "/opt/homebrew/bin" in child_env()["PATH"].split(os.pathsep)
 
@@ -200,7 +238,7 @@ class TestApplyLoginPath:
         def fail():
             raise LoginPathError("zsh -ilc did not finish within 5s")
 
-        monkeypatch.setattr(env, "read_login_path", fail)
+        monkeypatch.setattr(lp, "read_login_path", fail)
         assert apply_login_path() is False
         captured = capsys.readouterr()
         assert captured.out == ""
@@ -227,24 +265,35 @@ class TestApplyLoginPath:
         monkeypatch.setenv("PATH", paths("/usr/bin", "/bin"))
         assert shutil.which("zz-brew-only-tool") is None
         assert probe_binaries(["zz-brew-only-tool"]) == {"zz-brew-only-tool": False}
-        monkeypatch.setattr(env, "read_login_path", lambda: str(tmp_path))
+        monkeypatch.setattr(lp, "read_login_path", lambda: str(tmp_path))
         apply_login_path()
         assert shutil.which("zz-brew-only-tool")
         assert probe_binaries(["zz-brew-only-tool"]) == {"zz-brew-only-tool": True}
 
 
-def test_cli_main_repairs_the_path_before_anything_else(monkeypatch):
+def test_cli_main_repairs_the_path_after_parsing_arguments(monkeypatch):
     import gaia.cli as cli
 
     order = []
     monkeypatch.setattr(cli, "use_os_trust_store", lambda: order.append("tls"))
     monkeypatch.setattr(cli, "apply_login_path", lambda: order.append("path"))
 
-    def stop():
-        order.append("parser")
-        raise SystemExit(0)
+    class Parser:
+        def parse_args(self):
+            order.append("parse")
+            raise SystemExit(0)
 
-    monkeypatch.setattr(cli, "build_parser", stop)
+    monkeypatch.setattr(cli, "build_parser", lambda: Parser())
     with pytest.raises(SystemExit):
         cli.main()
-    assert order == ["tls", "path", "parser"]
+    assert order == ["tls", "parse"], "--version and -h exit before the shell runs"
+
+
+def test_mcp_bridge_and_daemon_entry_points_repair_the_path():
+    import inspect
+
+    from gaia.daemon import server
+    from gaia.mcp import mcp_bridge
+
+    assert "apply_login_path()" in inspect.getsource(mcp_bridge.main)
+    assert "apply_login_path()" in inspect.getsource(server.run)

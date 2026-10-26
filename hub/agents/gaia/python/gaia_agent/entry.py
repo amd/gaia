@@ -77,7 +77,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         use_os_trust_store()
     try:
-        from gaia.env import apply_login_path
+        from gaia.login_path import apply_login_path
     except ImportError:  # amd-gaia older than the login-PATH repair; the pin allows it
         print(
             "WARNING: this amd-gaia cannot read your login PATH, so tools "

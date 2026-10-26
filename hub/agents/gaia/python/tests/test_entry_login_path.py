@@ -21,7 +21,9 @@ def _stop_after_path_repair(monkeypatch):
 
 def test_the_path_is_repaired_before_a_transport_is_chosen(monkeypatch):
     order = []
-    monkeypatch.setattr("gaia.env.apply_login_path", lambda: order.append("path"))
+    monkeypatch.setattr(
+        "gaia.login_path.apply_login_path", lambda: order.append("path")
+    )
     monkeypatch.setattr(
         entry,
         "selects_http",
@@ -35,7 +37,9 @@ def test_the_path_is_repaired_before_a_transport_is_chosen(monkeypatch):
 def test_an_older_core_without_the_repair_warns_on_stderr_and_still_runs(
     monkeypatch, capsys
 ):
-    monkeypatch.setitem(sys.modules, "gaia.env", types.ModuleType("gaia.env"))
+    monkeypatch.setitem(
+        sys.modules, "gaia.login_path", types.ModuleType("gaia.login_path")
+    )
     _stop_after_path_repair(monkeypatch)
     with pytest.raises(SystemExit):
         entry.main([])

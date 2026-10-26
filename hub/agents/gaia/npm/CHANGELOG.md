@@ -45,6 +45,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   your login shell builds, and a tool it still cannot find is reported as not
   reachable from its shell rather than missing from your machine. If your shell
   startup is slow or fails, the agent logs a warning and keeps the old path.
+
 ### For integrators: contract 2.20
 
 - **A failed model request says which endpoint failed, worded for your

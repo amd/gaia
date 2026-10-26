@@ -18,7 +18,7 @@ from gaia.agents.install_hints import (
     pip_install_hint,
 )
 from gaia.config import gaia_agents_dir
-from gaia.env import apply_login_path, load_env
+from gaia.env import load_env
 from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
@@ -35,6 +35,7 @@ from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
 from gaia.log_rotation import log_family
 from gaia.logger import get_logger
+from gaia.login_path import apply_login_path
 from gaia.mcp.ports import (
     AGENT_UI_MCP_PORT,
     MCP_BRIDGE_PORT,
@@ -4592,11 +4593,11 @@ def _handle_schedule(args):
 
 def main():
     use_os_trust_store()
-    apply_login_path()
     parser = build_parser()
     log = get_logger(__name__)
 
     args = parser.parse_args()
+    apply_login_path()  # after parsing, so --version and -h skip the shell
     if args.action == "engineering":
         from gaia.engineering.cli import run as run_engineering
 
