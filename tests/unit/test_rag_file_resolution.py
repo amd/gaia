@@ -7,6 +7,7 @@ when a request genuinely matches several indexed files the tool returns an
 ambiguity error listing the candidates instead of picking one.
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -141,6 +142,44 @@ class TestQuerySpecificFile:
 
         assert result["chunks"][0]["content"] == "Fed decision text"
         assert "page" not in result["chunks"][0]
+
+
+@pytest.mark.parametrize("tool_name", ["index_document", "query_specific_file"])
+@pytest.mark.parametrize("save_succeeds", [False, True])
+def test_indexing_reports_session_save_failure(tmp_path, tool_name, save_succeeds):
+    document = tmp_path / "report.txt"
+    document.write_text("chunk text", encoding="utf-8")
+    file_path = str(document)
+    rag = _fake_rag(set())
+    rag.chunk_to_file = {0: file_path}
+    host = _make_host(rag)
+    host.indexed_files = set()
+    host.current_session = SimpleNamespace(indexed_documents=[])
+    host.session_manager = MagicMock()
+    host.session_manager.save_session.return_value = save_succeeds
+    host.rebuild_system_prompt = MagicMock()
+
+    def index_file(_rag, path):
+        rag.indexed_files.add(path)
+        return {"success": True, "file_name": document.name}, None
+
+    arguments = {"file_path": file_path}
+    if tool_name == "query_specific_file":
+        arguments["query"] = "chunk"
+    with patch("gaia.agents.tools.rag_tools._index_within_budget", index_file):
+        result = _tool(tool_name)(**arguments)
+
+    assert result["status"] == "success", result
+    assert file_path in host.indexed_files
+    assert file_path in host.current_session.indexed_documents
+    host.session_manager.save_session.assert_called_once_with(host.current_session)
+    if save_succeeds:
+        assert "warning" not in result
+    else:
+        assert "not saved" in result["warning"]
+        assert result["warning"] in result["message"]
+        if tool_name == "query_specific_file":
+            assert result["chunks"][0]["content"] == "chunk text"
 
 
 class TestDumpDocument:
