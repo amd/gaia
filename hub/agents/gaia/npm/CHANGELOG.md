@@ -6,6 +6,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### For integrators: contract 2.22
+
+- **`/query` takes `internet_off`** (contract **2.22**, #5883). The Agent UI
+  never told the agent when a chat's Internet switch was off, so the switch
+  stayed locked in every GAIA chat on a standard install. `true` refuses web
+  search, page fetches, the browser, connector tools and commands that contact
+  another host, as it does when the agent runs inside the Agent UI. `false`
+  allows them, and omitting it leaves the agent as it is. A retained session
+  keeps the last value. Older binaries `422` the field.
+
 ### For integrators: contract 2.21
 
 - **`final` says how full the model's window is** (contract **2.21**,

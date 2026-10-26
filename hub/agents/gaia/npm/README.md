@@ -202,6 +202,13 @@ read, so the agent works in the same scope. Binaries older than 2.18 reject both
 fields with `422`, so probe `/version` first. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Internet switched off for the chat? Send `internet_off`** (contract ≥
+2.22) every turn: `true` refuses web search, page fetches, the browser,
+connector tools and commands that contact another host; `false` allows them.
+Omit it and the agent keeps its own setting. Binaries older than 2.22 reject
+the field with `422`, so probe `/version` first and do not answer an
+internet-off turn on an older one. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
 **Showing what a turn changed, with undo? Send `changes_turn_id`** (contract ≥
 2.19) along with `session_id`: the agent copies each file before it writes it,
 into the snapshot store under its GAIA home, keyed by the session and that turn

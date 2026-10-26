@@ -567,9 +567,12 @@ reads nothing.
   - **Permission mode:** Ask or Full access, the same setting as the shield in
     the message box.
 
-  An agent that runs as its own process, such as the email agent, isn't held
-  to the folder and internet settings, and the section says so instead of
-  offering them.
+  A Hub-installed GAIA, which runs as its own process, is held to the
+  internet setting but not to the folder settings (the section says so
+  instead of offering them). It needs a GAIA agent at contract 2.22 or
+  later: with the internet off, an older one refuses the message and asks
+  you to update GAIA, rather than answering online. An agent that keeps its
+  own network rules, such as the email agent, isn't held to either setting.
 - **Context & performance** is the breakdown described in
   [See how full the context is](#see-how-full-the-context-is).
 - **Outputs** lists everything the chat produced, newest first: files created

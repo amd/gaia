@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.21"`                  |
+| Contract version   | `API_VERSION = "2.22"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -286,8 +286,8 @@ checked for drift in CI — the same pattern as the email agent's own
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
-`documents`, `allowed_paths`, `memory`, `changes_turn_id`, `surface`) is
-optional.
+`documents`, `allowed_paths`, `memory`, `internet_off`, `changes_turn_id`,
+`surface`) is optional.
 
 `context` is the transcript you push. It replaces the agent's history for the
 turn. If it doesn't fit beside the agent's prompt and tools in the model's
@@ -322,6 +322,16 @@ on its own. A retained session keeps the last value, so send it every turn;
 omit it to leave memory as the agent has it. `"on"` never turns memory on when
 the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
 `422` the field.
+
+`internet_off` (contract ≥ 2.22) is `true` when the caller's chat has the
+Internet switched off and `false` when it is on. With `true` the turn refuses
+web search and page fetches, the browser, connector (MCP) tools and any call
+or shell command that contacts a host other than the agent's own machine, and
+the refusal tells the model the internet is off for this chat. A retained
+session keeps the last value, so send it every turn; omit it to leave the
+agent as it is. Pre-2.22 binaries `422` the field, so a caller whose chat has
+the internet off should check `/version` and refuse the turn on an older
+binary rather than answer it online.
 
 `changes_turn_id` (contract ≥ 2.19) asks the agent to record the turn's file
 changes for undo. Before a tool writes, edits, creates or deletes a file, the
