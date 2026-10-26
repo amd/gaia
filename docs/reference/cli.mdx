@@ -606,6 +606,8 @@ gaia kill --daemons
 ```
 </CodeGroup>
 
+`--port` finds the process bound to that port and forcefully terminates it. The command reports killed, refused, and failed listeners and exits 1 on any refusal or failure. An empty port is a successful no-op (exit 0). Listing and termination commands each have a five-second timeout.
+
 <Note>
 `--daemons` stops only *orphaned* daemons: ones whose home folder or `instance.json` is gone, so no GAIA command can reach them (test runs used to leave these behind). The daemon of your own home is listed but never stopped; use `gaia daemon stop` for that. Daemons of other homes, such as a `GAIA_HOME` you set elsewhere, are listed and left running. Exits 1 if an orphaned daemon would not stop.
 </Note>
@@ -3839,45 +3841,6 @@ the connector with `gaia connectors configure mcp-tavily --set TAVILY_API_KEY=tv
 
 ---
 
-### Kill Command
-
-Terminate processes running on specific ports.
-
-```bash
-gaia kill [OPTIONS]
-```
-
-**Options:**
-
-| Option | Type | Description |
-|--------|------|-------------|
-| `--port` | integer | Port number to kill process on |
-| `--lemonade` | flag | Kill Lemonade server (port 13305) |
-| `--daemons` | flag | List running GAIA daemons; stop those whose home folder or `instance.json` is gone |
-
-**Examples:**
-
-<CodeGroup>
-```bash Kill Lemonade Server
-gaia kill --lemonade
-```
-
-```bash Kill by Port
-gaia kill --port 13305
-```
-
-```bash Stop Orphaned Daemons
-gaia kill --daemons
-```
-</CodeGroup>
-
-This command will:
-- Find the process ID (PID) bound to the specified port
-- Forcefully terminate that process
-- Report killed, refused, and failed listeners; exit 1 on any refusal or failure. An empty port is a successful no-op (exit 0). Listing and forceful termination commands each have a five-second timeout.
-
----
-
 ### Diagnostics Command
 
 Bundle system info and logs into a tarball for bug reports.
@@ -3948,7 +3911,7 @@ Backend flags are accepted only by the commands that use them, and any other com
 |-------|-------------|
 | `--use-claude`, `--claude-model` | `chat`, `prompt`, `talk` |
 | `--model` | `chat`, `prompt`, `talk`, `llm`, `email` (and eval subcommands that define their own) |
-| `--base-url` | `chat`, `prompt`, `talk`, `llm`, `email`, `api`, `stats`, `mcp start` |
+| `--base-url` | `chat`, `prompt`, `talk`, `llm`, `api`, `stats`, `mcp start` |
 | `--trace` | `chat`, `email` |
 | `--max-steps`, `--list-tools`, `--stream` | `chat` |
 
