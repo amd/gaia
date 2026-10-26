@@ -233,6 +233,7 @@ async def create_session(
         session_environment.check_new_chat_folders(request.agent_type, request.folders)
     except session_environment.EnvironmentChangeError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    session = None
     try:
         # Read before the chat exists, so a bad config leaves no chat behind.
         start_mode = session_permissions.default_mode()
@@ -251,6 +252,14 @@ async def create_session(
             session_environment.add_folder(db, session["id"], folder)
         return await _session_response(db, session)
     except Exception as e:
+        if session is not None:
+            # A chat is made whole or not at all.
+            try:
+                db.delete_session(session["id"])
+            finally:
+                session_permissions.forget_session(session["id"])
+        if isinstance(e, session_environment.EnvironmentChangeError):
+            raise HTTPException(status_code=400, detail=str(e)) from e
         logger.error("Failed to create session: %s", e, exc_info=True)
         raise HTTPException(
             status_code=500,
@@ -259,7 +268,7 @@ async def create_session(
                 if _is_gaia_config_error(e)
                 else "Failed to create session. Check server logs for details."
             ),
-        )
+        ) from e
 
 
 @router.get("/api/sessions/events")

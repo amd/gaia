@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from gaia.security import PathValidator
 from gaia.ui import session_environment
+from gaia.ui.database import ChatDatabase
 from gaia.ui.server import create_app
 
 
@@ -252,4 +253,32 @@ def test_a_relayed_agent_cannot_start_with_a_folder(client, folder, monkeypatch)
     refused = client.post("/api/sessions", json={"folders": [str(folder)]})
     assert refused.status_code == 400
     assert "runs as its own process" in refused.text
+    assert _chat_count(client) == 0
+
+
+def test_a_folder_removed_after_the_check_leaves_no_chat_behind(
+    client, folder, monkeypatch
+):
+    checked = session_environment.check_new_chat_folders
+
+    def check_then_remove(agent_type, folders):
+        checked(agent_type, folders)
+        folder.rmdir()
+
+    monkeypatch.setattr(
+        session_environment, "check_new_chat_folders", check_then_remove
+    )
+    refused = client.post("/api/sessions", json={"folders": [str(folder)]})
+    assert refused.status_code == 400
+    assert "is not a folder" in refused.text
+    assert _chat_count(client) == 0
+
+
+def test_a_failed_folder_save_leaves_no_chat_behind(client, folder, monkeypatch):
+    def broken_save(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ChatDatabase, "set_session_environment", broken_save)
+    failed = client.post("/api/sessions", json={"folders": [str(folder)]})
+    assert failed.status_code == 500
     assert _chat_count(client) == 0
