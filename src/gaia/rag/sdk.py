@@ -2170,17 +2170,24 @@ These positions indicate where to split the text."""
 
                 # Collect rows, skipping entirely blank rows
                 rows = []
-                for row in sheet.iter_rows(values_only=True):
+                row_numbers = []
+                for number, row in enumerate(sheet.iter_rows(values_only=True), 1):
                     cells = [str(c) if c is not None else "" for c in row]
                     if any(c.strip() for c in cells):
                         rows.append(cells)
+                        row_numbers.append(number)
+                merged_starts = {
+                    (r.min_row, r.min_col)
+                    for r in sheet.merged_cells.ranges
+                    if r.max_col > r.min_col
+                }
 
                 if not rows:
                     continue
                 has_values = True
 
-                # Single-cell rows above a multi-cell row of labels are titles
-                # (often merged across the table), not the header.
+                # Single-cell rows above the header are titles when merged
+                # across the table, or when a row of labels then numbers follows.
                 first_wide = next(
                     (
                         i
@@ -2189,7 +2196,17 @@ These positions indicate where to split the text."""
                     ),
                     0,
                 )
-                if first_wide and not any(_numeric(c) for c in rows[first_wide]):
+                merged_titles = all(
+                    (row_numbers[i], next(j for j, c in enumerate(r) if c.strip()) + 1)
+                    in merged_starts
+                    for i, r in enumerate(rows[:first_wide])
+                )
+                labels_then_numbers = (
+                    first_wide + 1 < len(rows)
+                    and not any(_numeric(c) for c in rows[first_wide])
+                    and any(_numeric(c) for c in rows[first_wide + 1])
+                )
+                if first_wide and (merged_titles or labels_then_numbers):
                     for row in rows[:first_wide]:
                         parts.append(" ".join(c for c in row if c.strip()))
                     rows = rows[first_wide:]
@@ -3136,7 +3153,9 @@ These positions indicate where to split the text."""
                 "total_chunks": int,
                 "error": str (if failed),
                 "error_type": str (some failures: "file_locked",
-                    "cache_busy" or "embedding_unavailable")
+                    "cache_busy" or "embedding_unavailable"),
+                "xlsx_status": str (an unreadable workbook: "corrupted",
+                    "unsupported_workbook" or "empty_file")
             }
 
         Raises:

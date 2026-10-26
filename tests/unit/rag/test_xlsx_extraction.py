@@ -97,6 +97,35 @@ class TestExtraction:
         assert "Columns: Medication" in text
         assert "Medication: Ezetimibe" in text
 
+    def test_an_unmerged_title_above_labels_and_numbers_is_a_title(self, rag, tmp_path):
+        wb = openpyxl.Workbook()
+        for row in [["Lipid panel"], ["Date", "LDL"], ["2026-01-05", 131]]:
+            wb.active.append(row)
+        path = tmp_path / "titled.xlsx"
+        wb.save(path)
+
+        text = rag._extract_text_from_xlsx(str(path))
+
+        assert "Lipid panel\nColumns: Date, LDL" in text
+        assert "Date: 2026-01-05 | LDL: 131" in text
+
+    def test_a_one_cell_header_above_text_rows_stays_the_header(self, rag, tmp_path):
+        wb = openpyxl.Workbook()
+        for row in [
+            ["Medications"],
+            ["Atorvastatin", "daily"],
+            ["Ezetimibe", "weekly"],
+        ]:
+            wb.active.append(row)
+        path = tmp_path / "meds.xlsx"
+        wb.save(path)
+
+        text = rag._extract_text_from_xlsx(str(path))
+
+        assert "Medications: Atorvastatin" in text
+        assert "Medications: Ezetimibe | Col2: weekly" in text
+        assert "Columns: Atorvastatin" not in text
+
     def test_a_one_cell_header_above_numeric_rows_stays_the_header(self, rag, tmp_path):
         wb = openpyxl.Workbook()
         for row in [
