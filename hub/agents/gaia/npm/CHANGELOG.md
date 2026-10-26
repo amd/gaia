@@ -66,6 +66,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sent when the cancel lands is dropped.
 ### Fixed
 
+- **"How much free disk space do I have?" gets the right number, first try.**
+  On a Mac, GAIA said a nearly full disk had ~233 GB free: its system-info
+  tool reported only the share the system volume uses, so 97.8% used read as
+  5%. It now reports free space as macOS counts it, and says it answers
+  free-space questions, so GAIA no longer tries a shell command that is refused.
 - **Full access in the Agent UI asks before a gated shell command instead of
   refusing it.** With `/sessions/{id}/bypass` on, a command such as a delete or
   `git add` was refused outright, so a Full access chat could not run it at
