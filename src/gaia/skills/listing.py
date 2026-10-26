@@ -47,7 +47,9 @@ def skills_listing(
     return {"skills": skills, "invalid": manager.discovery_errors}
 
 
-def skills_listing_for_agent(agent_class: type, excluded_names: Iterable[str] = ()) -> Dict[str, Any]:
+def skills_listing_for_agent(
+    agent_class: type, excluded_names: Iterable[str] = ()
+) -> Dict[str, Any]:
     """List skills with the agent manifest's always-on distinction.
 
     Do not construct an agent merely to inspect its manifest: that would start
