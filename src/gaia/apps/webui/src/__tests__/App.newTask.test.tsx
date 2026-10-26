@@ -253,7 +253,7 @@ describe('a private new chat', () => {
             .toBeLessThan(mocked.sendMessageStream.mock.invocationCallOrder[0]);
         expect(mocked.toggleSessionPrivacy).not.toHaveBeenCalled();
         expect(useChatStore.getState().sessions.find((s) => s.id === 'sess-new-0001')?.private).toBe(true);
-        expect(await screen.findByRole('button', { name: 'Private chat on' })).toHaveAttribute('aria-pressed', 'true');
+        expect(await screen.findByRole('button', { name: 'Turn off private chat' })).toHaveAttribute('data-private', 'true');
         // The next new chat starts non-private again.
         expect(useChatStore.getState().draftPrivate).toBe(false);
     });

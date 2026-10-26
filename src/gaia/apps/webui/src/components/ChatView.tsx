@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, EyeOff } from 'lucide-react';
+import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Eye, EyeOff } from 'lucide-react';
 import { MessageBubble, isErrorContent } from './MessageBubble';
 import { toolActiveLabel } from './AgentActivity';
 import { useChatStore } from '../stores/chatStore';
@@ -1727,13 +1727,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 </div>
                 <div className="task-header-right">
                     <button
-                        className={`btn-icon-sm${session?.private ? ' active' : ''}`}
+                        className="btn-icon-sm task-header-private"
                         onClick={handleTogglePrivate}
-                        title={session?.private ? 'Private: this chat is not saved to memory' : 'Make private (not saved to memory)'}
-                        aria-label={session?.private ? 'Private chat on' : 'Make chat private'}
-                        aria-pressed={!!session?.private}
+                        title={session?.private
+                            ? "Turn off private chat. This chat isn't saved to memory."
+                            : "Turn on private chat. It won't be saved to memory."}
+                        aria-label={session?.private ? 'Turn off private chat' : 'Turn on private chat'}
+                        data-private={session?.private ? 'true' : undefined}
                     >
-                        <EyeOff size={15} />
+                        {session?.private ? <EyeOff size={15} /> : <Eye size={15} />}
                     </button>
                     <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files on this PC" aria-label="Browse files on this PC">
                         <FolderSearch size={15} />
