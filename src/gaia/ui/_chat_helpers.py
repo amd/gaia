@@ -1283,6 +1283,7 @@ def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
                 "Agent cache miss (agent_type change) for session %s", session_id[:8]
             )
             return None
+        _agent_cache[session_id] = _agent_cache.pop(session_id)
         return entry["agent"]
 
 
@@ -1293,7 +1294,7 @@ def _store_agent(
     agent,
     agent_type: str = "chat",
 ) -> None:
-    """Cache *agent* for *session_id*.  Evicts the oldest entry if over the limit.
+    """Cache *agent* for *session_id*. Evicts the least-recently-used entry if full.
 
     The agent_type is stored in canonical form so a later lookup with a
     legacy alias still matches (see ``_canonical_agent_type``).
