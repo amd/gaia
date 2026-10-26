@@ -6,12 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-
-pytest.importorskip("gaia_agent_chat")
-
-from gaia_agent_chat.agent import ChatAgent  # noqa: E402
-from gaia_agent_chat.app import interactive_mode  # noqa: E402
-from gaia_agent_chat.session import SessionManager  # noqa: E402
+from gaia_agent_chat.agent import ChatAgent
+from gaia_agent_chat.app import interactive_mode
+from gaia_agent_chat.session import SessionManager
 
 
 @pytest.fixture
