@@ -421,6 +421,32 @@
     color: var(--danger);
 }
 
+/* Phone rename: Save and Cancel, since a phone has no visible way to finish an edit. */
+.sb-row-edit-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-md);
+    color: var(--text-muted);
+}
+
+.sb-row-edit-btn.is-save {
+    color: var(--accent);
+}
+
+/* A row that just moved groups (pin/unpin) is marked briefly so it can be found. */
+.sb-row.is-moved {
+    background: var(--accent-dim);
+    transition: background var(--duration-slow) var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sb-row.is-moved { transition: none; }
+}
+
 .sb-empty,
 .sb-error {
     padding: 8px;

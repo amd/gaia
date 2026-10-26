@@ -149,3 +149,55 @@ describe('Sidebar row menu', () => {
         expect(within(menu()).getByRole('button', { name: 'Delete' })).toBeInTheDocument();
     });
 });
+
+describe('Phone rename and pin feedback', () => {
+    const renameFromMenu = (title: string) => {
+        fireEvent.click(more(title));
+        fireEvent.click(within(menu()).getByRole('button', { name: 'Rename' }));
+        return screen.getByRole('textbox', { name: `Rename ${title}` });
+    };
+
+    it('saves a phone rename with the Save button', async () => {
+        setPhone(true);
+        render(<Sidebar onNewChat={vi.fn()} />);
+        const field = renameFromMenu('Trip plan');
+        fireEvent.change(field, { target: { value: 'Lisbon trip' } });
+        const save = screen.getByRole('button', { name: 'Save name' });
+        expect(fireEvent.pointerDown(save)).toBe(false);
+        fireEvent.click(save);
+        await waitFor(() => expect(mockedApi.updateSession).toHaveBeenCalledWith('a', { title: 'Lisbon trip', title_is_custom: true }));
+        expect(screen.queryByRole('textbox', { name: /Rename/ })).not.toBeInTheDocument();
+    });
+
+    it('cancels a phone rename without saving, even though tapping Cancel would blur the field', () => {
+        setPhone(true);
+        render(<Sidebar onNewChat={vi.fn()} />);
+        const field = renameFromMenu('Trip plan');
+        fireEvent.change(field, { target: { value: 'Something else' } });
+        const cancel = screen.getByRole('button', { name: 'Cancel rename' });
+        expect(fireEvent.pointerDown(cancel)).toBe(false);
+        expect(fireEvent.mouseDown(cancel)).toBe(false);
+        fireEvent.click(cancel);
+        expect(mockedApi.updateSession).not.toHaveBeenCalled();
+        expect(screen.getByRole('button', { name: 'More actions for Trip plan' })).toBeInTheDocument();
+    });
+
+    it('shows no Save or Cancel buttons on desktop', () => {
+        setPhone(false);
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Rename Trip plan' }));
+        expect(screen.getByRole('textbox', { name: 'Rename Trip plan' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Save name' })).not.toBeInTheDocument();
+    });
+
+    it('follows a chat pinned from the menu and marks it', async () => {
+        setPhone(true);
+        const scrolled = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(more('Tax questions'));
+        fireEvent.click(within(menu()).getByRole('button', { name: 'Pin' }));
+        await waitFor(() => expect(scrolled).toHaveBeenCalled());
+        const row = screen.getByRole('button', { name: 'More actions for Tax questions' }).closest('li');
+        expect(row).toHaveClass('is-moved');
+    });
+});

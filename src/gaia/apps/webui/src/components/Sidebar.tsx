@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Bell, Brain, Clock, EyeOff, FileText, MoreHorizontal, PanelLeftClose, PanelLeftOpen,
+    Bell, Brain, Check, Clock, EyeOff, FileText, MoreHorizontal, PanelLeftClose, PanelLeftOpen,
     Pencil, Pin, PinOff, Search, Settings, Smartphone, SquarePen, Trash2, X,
 } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
@@ -52,9 +52,11 @@ function readShowAutomated(): boolean {
     }
 }
 
-function SessionRow({ session, active, phone, status, queuePlace, unsent, failed, onSelect, onDelete, onPin, onRename }: {
+function SessionRow({ session, active, phone, moved, status, queuePlace, unsent, failed, onSelect, onDelete, onPin, onRename }: {
     session: Session;
     active: boolean;
+    /** Just pinned or unpinned from the phone menu: the row jumped groups, so scroll to it and mark it. */
+    moved: boolean;
     /** Phone width: the row's actions sit behind one ⋯ menu instead of three icons. */
     phone: boolean;
     status: RowStatus | null;
@@ -65,7 +67,7 @@ function SessionRow({ session, active, phone, status, queuePlace, unsent, failed
     failed: number;
     onSelect: (id: string) => void;
     onDelete: (id: string) => void;
-    onPin: (id: string, pinned: boolean) => void;
+    onPin: (id: string, pinned: boolean, follow?: boolean) => void;
     onRename: (id: string, title: string) => void;
 }) {
     const [confirm, setConfirm] = useState(false);
@@ -88,6 +90,12 @@ function SessionRow({ session, active, phone, status, queuePlace, unsent, failed
         const t = setTimeout(() => setConfirm(false), 3000);
         return () => clearTimeout(t);
     }, [confirm]);
+    const rowRef = useRef<HTMLLIElement>(null);
+    useEffect(() => {
+        if (moved) rowRef.current?.scrollIntoView?.({ block: 'nearest' });
+    }, [moved]);
+    // Keeps the field focused, so tapping Save or Cancel isn't preceded by a blur that saves.
+    const keepFocus = (e: React.PointerEvent | React.MouseEvent) => e.preventDefault();
 
     const unread = !!session.unread && !active;
     // Done is news only until read; failed stays until the next turn.
@@ -99,7 +107,11 @@ function SessionRow({ session, active, phone, status, queuePlace, unsent, failed
     const unsentWords = `${unsent} unsent message${unsent === 1 ? '' : 's'}`;
 
     return (
-        <li className={`sb-row${active ? ' is-active' : ''}${unread ? ' is-unread' : ''}`} data-status={dot ?? undefined}>
+        <li
+            ref={rowRef}
+            className={`sb-row${active ? ' is-active' : ''}${unread ? ' is-unread' : ''}${moved ? ' is-moved' : ''}`}
+            data-status={dot ?? undefined}
+        >
             {editing ? (
                 <input
                     className="sb-row-edit"
@@ -132,6 +144,30 @@ function SessionRow({ session, active, phone, status, queuePlace, unsent, failed
                     {note && <span className={`sb-row-queue${failed > 0 ? ' is-failed' : ''}`}>{note}</span>}
                 </button>
             )}
+            {phone && editing && (
+                <>
+                    <button
+                        type="button"
+                        className="sb-row-edit-btn is-save"
+                        onPointerDown={keepFocus}
+                        onMouseDown={keepFocus}
+                        onClick={() => finishEdit(true)}
+                        aria-label="Save name"
+                    >
+                        <Check size={18} aria-hidden="true" />
+                    </button>
+                    <button
+                        type="button"
+                        className="sb-row-edit-btn"
+                        onPointerDown={keepFocus}
+                        onMouseDown={keepFocus}
+                        onClick={() => finishEdit(false)}
+                        aria-label="Cancel rename"
+                    >
+                        <X size={18} aria-hidden="true" />
+                    </button>
+                </>
+            )}
             {phone ? (!editing && (
                 <>
                     <button
@@ -151,7 +187,7 @@ function SessionRow({ session, active, phone, status, queuePlace, unsent, failed
                                 <Pencil size={15} aria-hidden="true" />
                                 Rename
                             </button>
-                            <button type="button" className="popover-item" onClick={() => { closeMenu(); onPin(session.id, !session.pinned); }}>
+                            <button type="button" className="popover-item" onClick={() => { closeMenu(); onPin(session.id, !session.pinned, true); }}>
                                 {session.pinned ? <PinOff size={15} aria-hidden="true" /> : <Pin size={15} aria-hidden="true" />}
                                 {session.pinned ? 'Unpin' : 'Pin'}
                             </button>
@@ -300,6 +336,14 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         window.addEventListener('focus', onFocus, { once: true });
         return () => window.removeEventListener('focus', onFocus);
     }, [currentSessionId, currentUnread, markRead]);
+
+    // The row a phone user just pinned or unpinned; it changes groups, so it is followed and marked briefly.
+    const [movedId, setMovedId] = useState<string | null>(null);
+    useEffect(() => {
+        if (!movedId) return;
+        const t = setTimeout(() => setMovedId(null), 1200);
+        return () => clearTimeout(t);
+    }, [movedId]);
 
     const pin = useCallback(async (id: string, pinned: boolean) => {
         setRowError(null);
@@ -452,13 +496,17 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                                         session={s}
                                         active={s.id === currentSessionId}
                                         phone={phone}
+                                        moved={s.id === movedId}
                                         status={sessionRowStatus(s, live)}
                                         queuePlace={queuedSessionIds.indexOf(s.id) + 1}
                                         unsent={messageQueues[s.id]?.length ?? 0}
                                         failed={messageQueues[s.id]?.filter((m) => m.state === 'failed').length ?? 0}
                                         onSelect={select}
                                         onDelete={remove}
-                                        onPin={(id, pinned) => void pin(id, pinned)}
+                                        onPin={(id, pinned, follow) => {
+                                            if (follow) setMovedId(id);
+                                            void pin(id, pinned);
+                                        }}
                                         onRename={(id, title) => void rename(id, title)}
                                     />
                                 ))}
