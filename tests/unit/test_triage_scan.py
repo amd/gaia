@@ -409,3 +409,51 @@ def test_a_conflict_found_by_rest_blocks(monkeypatch):
     nodes = [make_pr(mergeable="UNKNOWN")]
     ts.resolve_unknown_mergeability("gh", "amd/gaia", nodes)
     assert "conflict" in ts.assess_pr(nodes[0], TEAM)["blockers"]
+
+
+def test_a_cancelled_duplicate_does_not_mask_the_run_that_passed():
+    pr = make_pr()
+    nodes = pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"][
+        "nodes"
+    ]
+    nodes += [
+        {
+            "__typename": "CheckRun",
+            "name": "Skill Audit",
+            "conclusion": "CANCELLED",
+            "status": "COMPLETED",
+            "startedAt": "2026-10-26T10:00:00Z",
+        },
+        {
+            "__typename": "CheckRun",
+            "name": "Skill Audit",
+            "conclusion": "SUCCESS",
+            "status": "COMPLETED",
+            "startedAt": "2026-10-26T10:00:05Z",
+        },
+    ]
+    assert ts.assess_pr(pr, TEAM)["ready"]
+
+
+def test_a_newer_failure_is_not_hidden_by_an_older_pass():
+    pr = make_pr()
+    nodes = pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"][
+        "nodes"
+    ]
+    nodes += [
+        {
+            "__typename": "CheckRun",
+            "name": "Lint",
+            "conclusion": "SUCCESS",
+            "status": "COMPLETED",
+            "startedAt": "2026-10-26T10:00:00Z",
+        },
+        {
+            "__typename": "CheckRun",
+            "name": "Lint",
+            "conclusion": "FAILURE",
+            "status": "COMPLETED",
+            "startedAt": "2026-10-26T10:05:00Z",
+        },
+    ]
+    assert any("CI red: Lint" in b for b in ts.assess_pr(pr, TEAM)["blockers"])

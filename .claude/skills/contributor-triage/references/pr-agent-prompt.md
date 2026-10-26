@@ -18,6 +18,8 @@ Environment
   git fetch origin main pull/<N>/head:pr-<N>-triage
   git worktree add ~/.cache/worktrees/gaia/pr-<N> pr-<N>-triage
   Remove it when done. Never `git stash`.
+- Never run `npm ci`, `pip install` or any installer in the user's main clone; do it only inside
+  your worktree (a stray `npm ci` there wiped the user's `node_modules`).
 - Run pytest from the worktree root. Anything that installs/uninstalls or touches ~/.gaia runs
   with HOME/USERPROFILE set to a temp dir.
 - Known main-wide state: <none | list the red checks on main and who is fixing them; do NOT

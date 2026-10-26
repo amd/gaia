@@ -49,7 +49,7 @@ query($owner:String!,$name:String!,$cursor:String){
         closingIssuesReferences(first:5){nodes{number}}
         commits(last:1){nodes{commit{committedDate statusCheckRollup{contexts(first:100){totalCount pageInfo{hasNextPage} nodes{
           __typename
-          ... on CheckRun{name conclusion status}
+          ... on CheckRun{name conclusion status startedAt}
           ... on StatusContext{context state}
         }}}}}}
         comments(last:30){nodes{author{login} createdAt body}}
@@ -235,9 +235,28 @@ def classify_kind(title, labels):
     return "other"
 
 
+def latest_per_check(contexts):
+    """Keep only the newest run of each check name.
+
+    A concurrency group cancels the older of two runs started by one push; the
+    cancelled duplicate stays in the rollup next to the run that passed.
+    """
+    newest = {}
+    for c in contexts:
+        if c["__typename"] != "CheckRun":
+            newest[("ctx", c.get("context"))] = c
+            continue
+        key = ("run", c["name"])
+        if key not in newest or (c.get("startedAt") or "") >= (
+            newest[key].get("startedAt") or ""
+        ):
+            newest[key] = c
+    return list(newest.values())
+
+
 def summarize_checks(contexts):
     failing, pending, needs_approval = [], 0, 0
-    for c in contexts:
+    for c in latest_per_check(contexts):
         if c["__typename"] == "CheckRun":
             if c["status"] != "COMPLETED":
                 pending += 1
