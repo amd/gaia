@@ -227,6 +227,11 @@ its own settings screen sends `surface` (`"tui"`, `"agent_ui"` or `"cli"`) to
 get its own wording; a headless caller omits it. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Showing how full the model's window is?** From contract 2.21 the `final`
+event carries `context`: the window size, the tokens the next call will take,
+and what takes them (prompt, tools, documents, history). Older binaries leave
+it out. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
 that names what failed and what to do about it.

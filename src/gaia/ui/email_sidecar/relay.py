@@ -330,6 +330,13 @@ def _dispatch_one(
         usage = event.get("usage")
         if isinstance(usage, dict):
             out.update({k: usage[k] for k in _ANSWER_USAGE_KEYS if k in usage})
+        context = event.get("context")
+        if isinstance(context, dict):
+            # Contract >= 2.21: the composer's meter, as an in-process turn streams it.
+            handler.relay_context = context
+            handler._emit({"type": "context_usage", **context})
+        elif isinstance(event.get("context_error"), str):
+            handler.relay_context_error = event["context_error"]
         handler._emit(out)
         return True
 
