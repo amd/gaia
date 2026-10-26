@@ -198,13 +198,11 @@ export function ModelSettings() {
         );
     }, [models, query]);
     const runnable = filtered.filter((m) => m.available !== false);
-    const fireworksCollapsed = chosen === 'fireworks' && !showAllFireworksModels && !query.trim();
-    const visibleRunnable = fireworksCollapsed
-        ? runnable.filter((m) => m.rank !== null)
-        : runnable;
-    const hiddenFireworksModels = fireworksCollapsed
-        ? runnable.filter((m) => m.rank === null)
-        : [];
+    const fireworksCollapsed = chosen === 'fireworks' && !showAllFireworksModels && !query.trim()
+        && runnable.some((m) => m.rank !== null);
+    const inCollapsedView = (m: ProviderModel) => m.rank !== null || m.id === active?.model;
+    const visibleRunnable = fireworksCollapsed ? runnable.filter(inCollapsedView) : runnable;
+    const hiddenFireworksModels = fireworksCollapsed ? runnable.filter((m) => !inCollapsedView(m)) : [];
     const unavailable = filtered.filter((m) => m.available === false);
     const labels = distinctModelLabels(models ?? []);
     const activeLocal = active && !active.remote && active.model ? active.model : null;

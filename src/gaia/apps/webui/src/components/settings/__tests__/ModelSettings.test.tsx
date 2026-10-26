@@ -248,6 +248,36 @@ describe('ModelSettings model list', () => {
         expect(within(fireworksCard).getByRole('button', { name: 'Show all models' })).toBeInTheDocument();
     });
 
+    it('keeps the in-use unranked Fireworks model visible while collapsed', async () => {
+        withProviders(fireworks({ models_discovered: true, key_source: 'stored' }));
+        useModelStore.setState({
+            active: { provider: 'fireworks', model: 'fireworks.other', label: 'other', remote: true, is_default: false },
+        });
+        mockedApi.listProviderModels.mockResolvedValue({
+            provider: 'fireworks',
+            models: [model('fireworks.recommended', 1), model('fireworks.other'), model('fireworks.unused')],
+        });
+
+        const card = await openFireworks();
+        expect(await within(card).findByRole('button', { name: 'Use recommended' })).toBeInTheDocument();
+        expect(within(card).getByText('In use')).toBeInTheDocument();
+        expect(within(card).queryByRole('button', { name: 'Use unused' })).not.toBeInTheDocument();
+        expect(within(card).getByRole('button', { name: 'Show all models' })).toBeInTheDocument();
+    });
+
+    it('lists every Fireworks model when none of them is recommended', async () => {
+        withProviders(fireworks({ models_discovered: true, key_source: 'stored' }));
+        mockedApi.listProviderModels.mockResolvedValue({
+            provider: 'fireworks',
+            models: [model('fireworks.one'), model('fireworks.two')],
+        });
+
+        const card = await openFireworks();
+        expect(await within(card).findByRole('button', { name: 'Use one' })).toBeInTheDocument();
+        expect(within(card).getByRole('button', { name: 'Use two' })).toBeInTheDocument();
+        expect(within(card).queryByRole('button', { name: 'Show all models' })).not.toBeInTheDocument();
+    });
+
     it('keeps unranked models visible by default for other providers', async () => {
         const amd: ProviderInfo = {
             id: 'amd',
