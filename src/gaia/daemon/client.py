@@ -40,6 +40,7 @@ from gaia.daemon.instance import (
     pid_alive,
     probe_state,
     read_instance,
+    runs_replaced_install,
     terminate_instance,
 )
 from gaia.daemon.lock import StartLock
@@ -294,7 +295,7 @@ def start_or_attach(
         inst = attach()
     except DaemonHungError:
         inst = None  # replaced below, under the lock
-    if inst is not None:
+    if inst is not None and runs_replaced_install(inst) is None:
         return inst
 
     with StartLock(timeout=timeout):
@@ -303,7 +304,11 @@ def start_or_attach(
         try:
             if inst is not None and _answers(inst, 1.5):
                 _check_version(inst)
-                return inst
+                stale = runs_replaced_install(inst)
+                if stale is None:
+                    return inst
+                _replace_outdated(inst, stale)
+                inst = None
         except DaemonHungError as e:
             logger.warning("daemon: %s Replacing it.", e)
         # Stale registry. A live pid whose port refuses us, answers as
@@ -327,6 +332,23 @@ def start_or_attach(
                 "(or uv pip install), then retry."
             )
         return _spawn_and_wait(timeout, on_progress, drop_env)
+
+
+def _replace_outdated(inst: DaemonInstance, why: str) -> None:
+    """Stop a daemon an update left running on the previous release's code."""
+    logger.warning(
+        "daemon: pid %s is out of date (%s); restarting it and its agents",
+        inst.pid,
+        why,
+    )
+    if not request_shutdown(inst) or not wait_until_gone(
+        inst, timeout=STOP_WAIT_TIMEOUT
+    ):
+        raise DaemonError(
+            f"the GAIA daemon (pid {inst.pid}) is out of date ({why}) and did not "
+            "stop when asked. Run `gaia daemon restart`. Where to look: `gaia "
+            f"daemon logs` ({paths.log_path()})."
+        )
 
 
 def missing_daemon_deps() -> list:

@@ -17,6 +17,9 @@ check fails, and the caller reclaims the lock.
 from __future__ import annotations
 
 import json
+import os
+import re
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional, Tuple
@@ -29,7 +32,19 @@ logger = get_logger(__name__)
 
 # Fields persisted to instance.json. Kept explicit so a future field addition is a
 # deliberate contract change, not an accidental leak of internal state.
-_PERSISTED = ("pid", "port", "token", "host", "api_version", "service", "started_at")
+_PERSISTED = (
+    "pid",
+    "port",
+    "token",
+    "host",
+    "api_version",
+    "service",
+    "started_at",
+    "gaia_version",
+    "version_file",
+)
+
+_VERSION_RE = re.compile(r"""^__version__\s*=\s*["']([^"']+)["']""", re.MULTILINE)
 
 # Default timeout for the status probe. Short: a live daemon answers loopback in
 # milliseconds; a longer wait just delays reclaim of a dead one.
@@ -47,6 +62,10 @@ class DaemonInstance:
     api_version: str = DAEMON_API_VERSION
     service: str = SERVICE_ID
     started_at: float = field(default=0.0)
+    #: The GAIA release the daemon runs, and the version.py it was read from,
+    #: so a client can tell when an update replaced the daemon's own files.
+    gaia_version: str = ""
+    version_file: str = ""
 
     @property
     def base_url(self) -> str:
@@ -90,12 +109,53 @@ def read_instance(path: Optional[Path] = None) -> Optional[DaemonInstance]:
             api_version=str(data.get("api_version", DAEMON_API_VERSION)),
             service=str(data.get("service", SERVICE_ID)),
             started_at=float(data.get("started_at", 0.0)),
+            gaia_version=str(data.get("gaia_version", "")),
+            version_file=str(data.get("version_file", "")),
         )
     except (ValueError, KeyError, TypeError) as e:
         logger.warning(
             "daemon: %s is present but malformed (%s); treating as stale", path, e
         )
         return None
+
+
+def runs_replaced_install(inst: DaemonInstance) -> Optional[str]:
+    """Why *inst* runs a GAIA release since replaced on disk, or None.
+
+    Read from the daemon's own files, so every client, whichever Python it runs
+    from, gets the same answer. A daemon that predates the record is judged
+    only by a client from its own Python, against that install's files.
+    """
+    if inst.version_file:
+        try:
+            text = Path(inst.version_file).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return f"its install ({inst.version_file}) is gone"
+        except OSError as e:
+            logger.warning("daemon: cannot read %s: %s", inst.version_file, e)
+            return None
+        match = _VERSION_RE.search(text)
+        on_disk = match.group(1) if match else ""
+        if on_disk != inst.gaia_version:
+            installed = on_disk or "another version"
+            return f"it runs GAIA {inst.gaia_version}, and {installed} is installed"
+        return None
+    import psutil
+
+    try:
+        launched_with = psutil.Process(inst.pid).cmdline()[:1]
+    except (psutil.Error, OSError):
+        return None
+    if [os.path.abspath(p) for p in launched_with] != [os.path.abspath(sys.executable)]:
+        return None
+    from gaia import version
+
+    # uv links files in from its cache, keeping the cache's mtime; ctime moves.
+    stat = Path(version.__file__).stat()
+    installed_at = max(stat.st_mtime, stat.st_ctime)
+    if installed_at > inst.started_at:
+        return f"GAIA {version.__version__} was installed after it started"
+    return None
 
 
 def remove_instance(*, only_pid: Optional[int] = None) -> None:

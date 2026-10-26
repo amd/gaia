@@ -3411,6 +3411,13 @@ and no scheduled job pending, and the next GAIA command starts a fresh one. Set
 The daemon for `~/.gaia` never idles out. `gaia kill --daemons` finds and stops
 any that are still left.
 
+After an update replaces GAIA, the daemon still running the previous release is
+restarted, with its agents, by the next GAIA command or app launch that starts
+or attaches to it. The daemon records its release in `instance.json`, and a
+client compares that with the version now installed where the daemon runs from.
+A daemon started by a release older than this check is restarted only by a
+client from the same Python environment.
+
 **Daemon HTTP surface** (the daemon serves no OpenAPI schema, so this is the
 contract; every route needs `Authorization: Bearer <token>` from
 `~/.gaia/host/instance.json`):

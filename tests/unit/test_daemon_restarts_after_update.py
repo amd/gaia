@@ -1,0 +1,158 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+"""An update that replaces GAIA restarts the daemon still running the old one (#5695).
+
+After the desktop app updated, the previous release's daemon and agents kept
+running, so the new app drove old code until a reboot or `gaia daemon restart`.
+The daemon now records its release and the version.py it read it from; a client
+starting up compares that with what is on disk now.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+import pytest
+
+from gaia import version
+from gaia.daemon import client, instance
+from gaia.daemon.errors import DaemonError
+from gaia.daemon.instance import DaemonInstance, runs_replaced_install
+
+
+def _version_file(tmp_path, text='__version__ = "0.25.1"\n'):
+    path = tmp_path / "gaia" / "version.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _inst(pid=4242, **fields):
+    return DaemonInstance(pid=pid, port=5151, token="t", started_at=100.0, **fields)
+
+
+def test_a_daemon_whose_release_is_still_installed_is_current(tmp_path):
+    path = _version_file(tmp_path)
+    assert (
+        runs_replaced_install(_inst(gaia_version="0.25.1", version_file=str(path)))
+        is None
+    )
+
+
+def test_a_daemon_whose_release_was_replaced_is_out_of_date(tmp_path):
+    path = _version_file(tmp_path, '__version__ = "0.25.2"\n')
+    why = runs_replaced_install(_inst(gaia_version="0.25.1", version_file=str(path)))
+    assert why == "it runs GAIA 0.25.1, and 0.25.2 is installed"
+
+
+def test_a_daemon_whose_install_is_gone_is_out_of_date(tmp_path):
+    gone = tmp_path / "old-venv" / "gaia" / "version.py"
+    why = runs_replaced_install(_inst(gaia_version="0.25.1", version_file=str(gone)))
+    assert why and "is gone" in why
+
+
+def test_the_record_round_trips_through_instance_json(tmp_path, monkeypatch):
+    monkeypatch.setattr(instance.paths, "instance_path", lambda: tmp_path / "i.json")
+    monkeypatch.setattr(instance.paths, "ensure_host_dir", lambda: None)
+    recorded = _inst(gaia_version="0.25.1", version_file="/x/gaia/version.py")
+    instance.write_instance(recorded)
+    assert json.loads((tmp_path / "i.json").read_text())["gaia_version"] == "0.25.1"
+    assert instance.read_instance(tmp_path / "i.json") == recorded
+
+
+class _Process:
+    def __init__(self, cmdline):
+        self._cmdline = cmdline
+
+    def cmdline(self):
+        return self._cmdline
+
+
+@pytest.fixture
+def launched_with(monkeypatch):
+    import psutil
+
+    def use(cmdline):
+        monkeypatch.setattr(psutil, "Process", lambda pid: _Process(cmdline))
+
+    return use
+
+
+def test_an_older_daemon_from_this_python_is_judged_by_its_install_time(launched_with):
+    launched_with([sys.executable, "-m", "gaia.daemon"])
+    installed = os.stat(version.__file__)
+    started_after = max(installed.st_mtime, installed.st_ctime) + 60
+    started_before = max(installed.st_mtime, installed.st_ctime) - 60
+
+    assert (
+        runs_replaced_install(
+            DaemonInstance(pid=1, port=1, token="t", started_at=started_after)
+        )
+        is None
+    )
+    why = runs_replaced_install(
+        DaemonInstance(pid=1, port=1, token="t", started_at=started_before)
+    )
+    assert why and "installed after it started" in why
+
+
+def test_an_older_daemon_from_another_python_is_left_alone(launched_with):
+    launched_with(["/opt/other-venv/bin/python", "-m", "gaia.daemon"])
+    assert runs_replaced_install(DaemonInstance(pid=1, port=1, token="t")) is None
+
+
+@pytest.fixture
+def running(monkeypatch, tmp_path):
+    """A live, answering daemon; records what start_or_attach does to it."""
+    calls = {"shutdown": [], "spawned": 0}
+    path = _version_file(tmp_path, '__version__ = "0.25.2"\n')
+    state = {"inst": _inst(gaia_version="0.25.2", version_file=str(path))}
+
+    monkeypatch.setattr(client, "attach", lambda *a, **k: state["inst"])
+    monkeypatch.setattr(client, "read_instance", lambda *a: state["inst"])
+    monkeypatch.setattr(client, "_answers", lambda *a, **k: True)
+    monkeypatch.setattr(client, "missing_daemon_deps", lambda: [])
+    monkeypatch.setattr(
+        client,
+        "request_shutdown",
+        lambda inst: calls["shutdown"].append(inst.pid) or True,
+    )
+    monkeypatch.setattr(client, "wait_until_gone", lambda inst, timeout=0: True)
+
+    def spawn(timeout, on_progress=None, drop_env=()):
+        calls["spawned"] += 1
+        return _inst(pid=5353, gaia_version="0.25.2", version_file=str(path))
+
+    monkeypatch.setattr(client, "_spawn_and_wait", spawn)
+    return state, calls, path
+
+
+def test_a_current_daemon_is_attached_to(running):
+    state, calls, _path = running
+    assert client.start_or_attach(timeout=1) is state["inst"]
+    assert calls == {"shutdown": [], "spawned": 0}
+
+
+def test_an_out_of_date_daemon_is_restarted(running):
+    state, calls, path = running
+    state["inst"] = _inst(gaia_version="0.25.1", version_file=str(path))
+
+    fresh = client.start_or_attach(timeout=1)
+
+    assert calls == {"shutdown": [4242], "spawned": 1}
+    assert fresh.pid == 5353
+
+
+def test_an_out_of_date_daemon_that_will_not_stop_says_what_to_run(
+    running, monkeypatch
+):
+    state, calls, path = running
+    state["inst"] = _inst(gaia_version="0.25.1", version_file=str(path))
+    monkeypatch.setattr(client, "wait_until_gone", lambda inst, timeout=0: False)
+
+    with pytest.raises(DaemonError, match="gaia daemon restart"):
+        client.start_or_attach(timeout=1)
+    assert calls["spawned"] == 0
