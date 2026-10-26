@@ -14,6 +14,7 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, grant_scope
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
 from gaia.security import PathValidator
 from gaia.ui.sse_handler import SSEOutputHandler
 
@@ -448,3 +449,45 @@ def test_a_timeout_answer_never_approves_even_when_marked_approved(layout):
     worker.join(timeout=5)
 
     assert results["read"]["status"] == "error"
+
+
+class _BrowseAgent(_ReadAgent, FileSystemToolsMixin):
+    def _register_tools(self) -> None:
+        self.register_filesystem_tools()
+
+
+@pytest.fixture
+def home(layout, monkeypatch):
+    home = layout["file"].parent
+    (home / "Movies").mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    return home
+
+
+def _browse(agent, path):
+    return json.dumps(agent._execute_tool("browse_directory", {"path": str(path)}))
+
+
+def test_home_folder_refusal_points_at_a_folder_inside_it(layout, home):
+    console = _RecordingConsole(True)
+    agent = _BrowseAgent(layout["scope"], console)
+
+    refused = _browse(agent, home)
+    listed = _browse(agent, home / "Movies")
+
+    assert "too broad" in refused
+    assert json.dumps(str(home / "Movies"))[1:-1] in refused
+    assert "Access denied" not in listed
+    assert console.calls == [
+        (
+            PATH_ACCESS_PROMPT_TOOL,
+            {"path": str((home / "Movies").resolve()), "kind": "folder"},
+        )
+    ]
+
+
+def test_home_folder_refusal_names_no_folder_nobody_can_approve(layout, home):
+    agent = _BrowseAgent(layout["scope"], _RecordingConsole(True))
+    agent.path_validator.withhold_path(str(home / "Movies"))
+
+    assert "Movies" not in _browse(agent, home)
