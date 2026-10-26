@@ -51,7 +51,7 @@ def test_plan_collects_runs_for_the_reviewed_commit(monkeypatch):
 
 
 def test_head_moved_since_review_is_refused(monkeypatch):
-    with pytest.raises(SystemExit) as exc:
+    with pytest.raises(afr.NotApprovable) as exc:
         plan(monkeypatch, head="f" * 40)
     assert "head is now" in str(exc.value)
 
@@ -61,7 +61,7 @@ def test_runs_for_a_different_sha_are_not_approved(monkeypatch):
 
 
 def test_closed_pr_is_refused(monkeypatch):
-    with pytest.raises(SystemExit):
+    with pytest.raises(afr.NotApprovable):
         plan(monkeypatch, pr_state="closed")
 
 
@@ -136,7 +136,7 @@ def test_malformed_reviewed_argument_is_rejected(bad):
 
 
 def test_short_sha_prefix_cannot_match_a_different_commit(monkeypatch):
-    with pytest.raises(SystemExit):
+    with pytest.raises(afr.NotApprovable):
         plan(monkeypatch, sha="6d02e4e")
 
 
@@ -244,3 +244,36 @@ def test_a_failed_post_is_reported_and_fails_the_run(monkeypatch, capsys):
         afr.main()
     assert exc.value.code == 1
     assert "HTTP 500" in capsys.readouterr().out
+
+
+def test_a_moved_head_does_not_abort_the_rest_of_the_batch(monkeypatch, capsys):
+    other = "a" * 40
+    posts = Posts()
+
+    def api(gh, path, *extra):
+        if path.endswith("/files?per_page=100"):
+            return json.dumps([[{"filename": "src/gaia/x.py"}]])
+        n = path.rsplit("/", 1)[-1]
+        head = other if n == "6" else SHA
+        return json.dumps(
+            {"state": "open", "head": {"sha": head}, "user": {"login": "o"}}
+        )
+
+    monkeypatch.setattr(afr.ts, "gh_binary", lambda: "gh")
+    monkeypatch.setattr(afr.ts, "maintainers", lambda *a: TEAM)
+    monkeypatch.setattr(
+        afr.ts, "awaiting_approval", lambda *a: {SHA: [11], other: [22]}
+    )
+    monkeypatch.setattr(afr, "api", api)
+    monkeypatch.setattr(afr.subprocess, "run", posts)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["x", "--reviewed", f"5@{SHA[:7]}", "--reviewed", f"6@{SHA[:7]}", "--apply"],
+    )
+    with pytest.raises(SystemExit) as exc:
+        afr.main()
+    out = capsys.readouterr().out
+    assert exc.value.code == 1
+    assert "REFUSE #6" in out and "APPROVED #5" in out
+    assert len(posts.calls) == 1 and "11" in posts.calls[0][-1]

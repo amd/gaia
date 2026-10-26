@@ -58,17 +58,21 @@ def risky_files(files):
     return sorted(f for f in files if RISKY_PATHS.search(f))
 
 
+class NotApprovable(Exception):
+    """This PR cannot be approved as asked; the rest of the batch still can."""
+
+
 def plan_for(gh, repo, number, sha_prefix, stalled, team):
-    """Decide what approving this PR would mean; raises SystemExit on a mismatch."""
+    """Decide what approving this PR would mean; raises NotApprovable on a mismatch."""
     pr = json.loads(api(gh, f"repos/{repo}/pulls/{number}"))
     head = pr["head"]["sha"]
     if not head.startswith(sha_prefix):
-        sys.exit(
-            f"#{number}: head is now {head[:10]}, not the {sha_prefix} you reviewed. "
+        raise NotApprovable(
+            f"head is now {head[:10]}, not the {sha_prefix} you reviewed. "
             "Read the new commits, then pass the new SHA."
         )
     if pr["state"] != "open":
-        sys.exit(f"#{number} is {pr['state']}, not open.")
+        raise NotApprovable(f"it is {pr['state']}, not open.")
     author = pr["user"] or None
     files = json.loads(
         api(
@@ -119,7 +123,12 @@ def main():
 
     failures = 0
     for number, sha in sorted(reviewed.items()):
-        plan = plan_for(gh, args.repo, number, sha, stalled, team)
+        try:
+            plan = plan_for(gh, args.repo, number, sha, stalled, team)
+        except NotApprovable as exc:
+            print(f"REFUSE #{number}: {exc}")
+            failures += 1
+            continue
         label = f"#{number} @{plan['sha'][:10]} ({plan['author']}, {len(plan['files'])} files)"
         if not plan["third_party"]:
             print(
