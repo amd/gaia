@@ -72,7 +72,11 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG, plain_risk_note
-from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, SCRATCH_ARG
+from gaia.agents.base.tool_grants import (
+    PATH_ACCESS_PROMPT_TOOL,
+    PATH_TOOLS,
+    SCRATCH_ARG,
+)
 from gaia.ui.event_narration import (
     DEBUG_CHANNEL,
     derive_narration,
@@ -510,11 +514,13 @@ class CanonicalTranslator:
             args = {}
         summary = self._render_args_summary(tool, args)
         # The command, where it runs, then one plain line on what it can do.
-        note = (
-            str(args.get(RISK_NOTE_ARG) or "") or plain_risk_note(event.get("risk"))
-            if tool in COMMAND_SUMMARY_TOOLS
-            else ""
-        )
+        if tool in COMMAND_SUMMARY_TOOLS:
+            note = str(args.get(RISK_NOTE_ARG) or "") or plain_risk_note(
+                event.get("risk")
+            )
+        else:
+            # A file prompt's note says what else a yes grants.
+            note = str(args.get(RISK_NOTE_ARG) or "") if tool in PATH_TOOLS else ""
         if note:
             summary = f"{summary}\n{note}"
         # confirm_url omitted: stateless stop-and-hand-off (D1, spec §5 / Q4).
