@@ -894,7 +894,8 @@ class RAGSDK:
                 f"{EMBED_MAX_CHARS}-char input limit (longest: {max(oversized)} "
                 "chars). Split them with gaia.rag.sdk.split_for_embedding first."
             )
-        safe_texts = list(texts)
+        # No-break spaces in extracted tables can exceed one token per character.
+        safe_texts = [text.replace("\u00a0", " ") for text in texts]
 
         all_embeddings = []
 

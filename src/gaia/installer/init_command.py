@@ -2723,6 +2723,7 @@ class InitCommand:
         # input, so GAIA's own curation is the trust decision. Pass the trust
         # opt-in explicitly — every non-verified agent now needs it, and the
         # profile agents are not published in the "verified" tier.
+        before = hub_installer.read_sentinel(agent_id)
         try:
             result = hub_installer.install(agent_id, trusted=True)
         except (
@@ -2750,6 +2751,7 @@ class InitCommand:
             )
             return
         self._print_success(f"Installed the '{agent_id}' agent")
+        self._restart_replaced_agent(agent_id, result, before)
 
         # No AgentRegistry exists in this process to hot-register into (we
         # deliberately don't construct one just for this), so mirror the
@@ -2793,7 +2795,7 @@ class InitCommand:
                 f"   Installing '{agent_id}' from release candidate {rc_source.tag}..."
             )
         try:
-            hub_installer.install(agent_id, trusted=True)
+            result = hub_installer.install(agent_id, trusted=True)
         except (
             hub_installer.UnsupportedPlatformError,
             hub_installer.CompatibilityError,
@@ -2812,6 +2814,28 @@ class InitCommand:
                 )
             return
         self._print_success(f"Installed '{agent_id}' from {rc_source.tag}")
+        self._restart_replaced_agent(agent_id, result, installed)
+
+    def _restart_replaced_agent(self, agent_id: str, result, before) -> None:
+        """Stop a sidecar still running the binary this install replaced.
+
+        Otherwise an upgrade keeps answering with the previous release's agent
+        until the daemon happens to restart it.
+        """
+        from gaia.daemon.client import stop_running_agent
+        from gaia.daemon.errors import DaemonError
+        from gaia.hub import installer as hub_installer
+
+        if not hub_installer.binary_changed(agent_id, before):
+            return
+        try:
+            stopped = stop_running_agent(agent_id)
+        except DaemonError as exc:
+            raise hub_installer.InstallError(str(exc)) from exc
+        if stopped:
+            self._print_success(
+                f"Stopped the running '{agent_id}' agent; your next chat uses v{result.version}"
+            )
 
     def _print_completion(self) -> bool:
         """Print completion message with next steps.

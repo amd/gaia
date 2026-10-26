@@ -165,6 +165,12 @@ class RelayProfile:
     #: Contract version from which ``/query`` takes ``changes_turn_id`` and
     #: records the run's file changes for undo. ``None`` means never sent.
     min_changes_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query``'s ``final`` event carries
+    #: ``context``, what fills the model's window. ``None`` means it never does.
+    min_context_api_version: Optional[Tuple[int, int]] = None
+    #: Shown in the Context panel when the installed agent is below
+    #: :attr:`min_context_api_version`.
+    context_upgrade_message: str = ""
     #: Contract version from which ``/query`` takes ``surface``, the front-end
     #: the turn comes from. ``None`` means the relay never sends it.
     min_surface_api_version: Optional[Tuple[int, int]] = None
@@ -538,6 +544,12 @@ GAIA_PROFILE = RelayProfile(
     min_changes_api_version=(2, 19),
     # 2.20 added /query's surface field.
     min_surface_api_version=(2, 20),
+    # 2.21 added /query's final.context.
+    min_context_api_version=(2, 21),
+    context_upgrade_message=(
+        "The installed GAIA agent is too old to report what fills its context. "
+        "Update GAIA to the latest version, then send a message."
+    ),
 )
 
 
@@ -604,6 +616,15 @@ def documents_supported(profile: RelayProfile, api_version: Optional[str]) -> bo
     Same evidence rule as :func:`api_version_supported`: no version, no claim.
     """
     floor = profile.min_documents_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def context_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar's ``final`` event reports what fills its context.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_context_api_version
     return floor is not None and _meets(api_version, floor)
 
 
