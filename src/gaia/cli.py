@@ -8736,6 +8736,7 @@ def handle_agent_install(args):
 
     label = agent_id + (f"@{version}" if version else "")
     print(f"Installing '{label}' from the Agent Hub...")
+    before = installer.read_sentinel(agent_id)
     try:
         result = installer.install(agent_id, version=version, trusted=trusted)
     except installer.TrustRequiredError as exc:
@@ -8762,7 +8763,22 @@ def handle_agent_install(args):
     from gaia.daemon.sidecars.spec import builtin_specs
 
     if result.id in builtin_specs():
-        print(f"   Start it with: gaia daemon start-agent {result.id}")
+        from gaia.daemon.client import stop_running_agent
+        from gaia.daemon.errors import DaemonError
+
+        try:
+            restarted = installer.binary_changed(result.id, before) and (
+                stop_running_agent(result.id)
+            )
+        except DaemonError as exc:
+            print(f"❌ {exc}", file=sys.stderr)
+            sys.exit(1)
+        if restarted:
+            print(
+                f"   Stopped the running '{result.id}' agent; your next chat uses v{result.version}."
+            )
+        else:
+            print(f"   Start it with: gaia daemon start-agent {result.id}")
 
 
 def handle_agent_export(args):
