@@ -781,15 +781,14 @@ class TestExpectedVersionGuard:
         cand = _write_card(tmp_path, "0.5.0", accuracy=0.8)
         assert main(["--scorecard", str(cand)]) == 0
 
+
 # ---------------------------------------------------------------------------
 # --baseline-ref resolution: an invalid ref is not "first adoption"
 # ---------------------------------------------------------------------------
 
 
 def _git(repo, *args):
-    subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
-    )
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
 
 
 def _repo_with_scorecard(tmp_path):
@@ -813,7 +812,9 @@ class TestBaselineRefResolution:
 
         assert _parse_baseline_ref(card, "base").strip() == "# scorecard"
 
-    def test_a_missing_file_at_a_valid_ref_is_first_adoption(self, tmp_path, monkeypatch):
+    def test_a_missing_file_at_a_valid_ref_is_first_adoption(
+        self, tmp_path, monkeypatch
+    ):
         repo, _card = _repo_with_scorecard(tmp_path)
         newer = repo / "NEW.md"
         newer.write_text("new\n", encoding="utf-8")
@@ -829,6 +830,7 @@ class TestBaselineRefResolution:
 
         with pytest.raises(ValueError, match="does not resolve to a commit"):
             _parse_baseline_ref(card, "no-such-tag")
+
     def test_a_blob_hash_is_not_a_baseline_ref(self, tmp_path, monkeypatch):
         repo, card = _repo_with_scorecard(tmp_path)
         monkeypatch.chdir(repo)
