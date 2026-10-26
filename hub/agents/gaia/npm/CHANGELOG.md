@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### For integrators: contract 2.22
+
+- **Relative file paths use the chat workspace.** A new `working_directory` field
+  on `/query` tells the agent where bare file names resolve, separately from
+  `allowed_paths`. New and retained sessions use the same workspace for reads,
+  writes, edits and approval prompts. Send it only after `/version` reports
+  contract 2.22 or later.
+
 ### For integrators: contract 2.21
 
 - **`final` says how full the model's window is** (contract **2.21**,

@@ -1362,7 +1362,9 @@ async def query(request: QueryRequest):
                 )
             agent = session.agent
             if request.working_directory is not None:
-                agent.config.working_directory = request.working_directory
+                config = getattr(agent, "config", None)
+                if config is not None:
+                    config.working_directory = request.working_directory
             if request.allowed_paths:
                 # Built on an earlier turn's scope; this turn's may hold more.
                 validator = getattr(agent, "path_validator", None)

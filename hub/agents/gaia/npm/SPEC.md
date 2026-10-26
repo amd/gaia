@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.21"`                  |
+| Contract version   | `API_VERSION = "2.22"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -286,7 +286,8 @@ checked for drift in CI — the same pattern as the email agent's own
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
-`documents`, `allowed_paths`, `memory`, `changes_turn_id`, `surface`) is
+`documents`, `allowed_paths`, `working_directory`, `memory`, `changes_turn_id`,
+`surface`) is
 optional.
 
 `context` is the transcript you push. It replaces the agent's history for the
@@ -314,6 +315,14 @@ field. Whatever the scope, its existing folders are named in the system prompt
 once, when the session is built, with GAIA's documents folder first; a folder
 added to a retained session later is usable but not named. A caller that omits
 the field, like the TUI, gets the default scope (the user's home folder) named.
+
+`working_directory` (contract ≥ 2.22) is the absolute chat workspace used as the
+base for relative file paths. It is separate from `allowed_paths`: the latter is
+an access allowlist, while this field determines where a bare `notes.txt` lands.
+New and retained sessions use it for relative reads, writes, edits and approval
+prompts, so the path shown to the user matches the file that is actually changed.
+A relative or empty value is a `422`; send it only when `/version` reports 2.22 or
+later.
 
 `memory` (contract ≥ 2.18) is `"on"`, `"private"` (a private chat) or `"off"`
 (memory turned off in the caller's settings). Under `"private"` or `"off"` the

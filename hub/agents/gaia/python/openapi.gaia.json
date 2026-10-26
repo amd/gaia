@@ -138,7 +138,7 @@
                 "type": "null"
               }
             ],
-            "description": "The conversation's file scope as the caller computed it (contract >= 2.18), so the agent works where the caller's UI says it does. Absolute paths. Builds a new session with exactly this scope; a retained session gains any entry it lacks and keeps what the user granted. GAIA_ALLOWED_PATHS still narrows it. Omit for the agent's default scope.",
+            "description": "The conversation's file scope as the caller computed it (contract >= 2.18), so the agent works where the caller's UI says it does. Absolute paths. Builds a new session with exactly this scope; a retained session gains any entry it lacks and keeps what the user granted. GAIA_ALLOWED_PATHS still narrows it. This is an access allowlist, not a relative-path working directory. Omit for the agent's default scope.",
             "title": "Allowed Paths"
           },
           "can_answer_questions": {
@@ -282,6 +282,18 @@
             ],
             "description": "The front-end this turn comes from (contract >= 2.20). 'agent_ui' tells the agent that features like Scheduled tasks are in the caller's sidebar, and each front-end gets model-provider errors worded for its own settings. Fixed when a session is built; omit it for a headless caller, whose provider advice then points at the model server this GAIA host uses.",
             "title": "Surface"
+          },
+          "working_directory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absolute chat workspace used to resolve relative file paths on this turn (contract >= 2.22). It is separate from allowed_paths: an allowlist grants access but does not choose which folder a bare file name belongs in.",
+            "title": "Working Directory"
           }
         },
         "required": [
@@ -459,7 +471,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.21"
+    "version": "2.22"
   },
   "openapi": "3.1.0",
   "paths": {

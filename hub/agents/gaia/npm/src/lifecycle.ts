@@ -56,7 +56,7 @@ export const DEFAULT_PORT = 8141;
 export const RESERVED_PORT = 4001;
 
 /** The apiVersion this package is built against (`server.py: API_VERSION`). */
-export const API_VERSION = "2.21";
+export const API_VERSION = "2.22";
 
 /** The agent id in the sidecar's route prefix (`/v1/gaia/...`). */
 export const AGENT_ID = "gaia";
