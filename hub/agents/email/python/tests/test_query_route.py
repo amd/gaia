@@ -59,6 +59,7 @@ class _HappyFakeAgent:
     def __init__(self):
         self.conversation_history = []
         self.console = None
+        self.streaming = False  # GaiaAgentConfig's default; the route turns it on
         self._cancel_event = None
         self.seen_query = None
         self.seen_history = None
@@ -297,6 +298,23 @@ def test_query_streams_canonical_sequence(app_client, monkeypatch):
     assert events[-1] == {"type": "final", "answer": "Triaged 5 emails."} or (
         events[-1]["type"] == "final" and events[-1]["answer"] == "Triaged 5 emails."
     )
+
+
+def test_query_turns_streaming_on_for_the_agent(app_client, monkeypatch):
+    """#5728: the email agent's /query streams like the flagship's does.
+
+    The config default is off and the route never turned it on, so a relayed turn
+    showed "Waiting on the model" until the whole answer landed, and a stopped
+    turn kept no text.
+    """
+    fake = _HappyFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+
+    resp = app_client.post("/v1/email/query", json=_req())
+
+    assert resp.status_code == 200
+    _parse_sse(resp.text)  # drain
+    assert fake.streaming is True
 
 
 def test_query_pushes_context_as_history(app_client, monkeypatch):

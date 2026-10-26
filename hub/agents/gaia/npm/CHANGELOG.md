@@ -6,6 +6,28 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### For integrators: contract 2.22
+
+- **The agent remembers its own tool calls across turns** (contract **2.22**,
+  #5701). A caller that pushed history as `context` could send only text, so
+  on the next turn the agent saw its earlier answers but not the commands it
+  ran or their errors, and "why did that fail?" got "I have no record of the
+  tool calls". Every `final` now carries `model_messages`, the turn as the
+  model saw it, tool calls and results included. Send those back in the new
+  `turns` field, oldest first, and the agent replays them, keeping the newest
+  whole turns that fit its context window. `turns` replaces `context` when
+  sent. Pre-2.22 binaries refuse the field with `422`, so probe `/version`
+  first.
+
+### For integrators: contract 2.21
+
+- **`final` says how full the model's window is** (contract **2.21**,
+  #5738). The Agent UI's Context panel and the meter beside its message box
+  stayed empty for every GAIA chat, because only the agent can measure its
+  own prompt, tools and window. `final` now carries `context` with that
+  measurement for the next call, or `context_error` when measuring failed.
+  A stopped or failed turn carries neither. Older binaries never send it.
+
 - **An old failure in memory no longer stops a request you make now.** A note
   like "this page returned 503, don't waste tool calls on it" was obeyed as a
   standing ban, so the agent refused a URL you handed it. Memories now reach
@@ -23,19 +45,6 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exceed the window and fail the turn. The agent now keeps the newest whole
   turns that fit beside its prompt and streams a `status` event when older
   ones drop out of view.
-
-### For integrators: contract 2.21
-
-- **The agent remembers its own tool calls across turns** (contract **2.21**,
-  #5701). A caller that pushed history as `context` could send only text, so
-  on the next turn the agent saw its earlier answers but not the commands it
-  ran or their errors, and "why did that fail?" got "I have no record of the
-  tool calls". Every `final` now carries `model_messages`, the turn as the
-  model saw it, tool calls and results included. Send those back in the new
-  `turns` field, oldest first, and the agent replays them, keeping the newest
-  whole turns that fit its context window. `turns` replaces `context` when
-  sent. Pre-2.21 binaries refuse the field with `422`, so probe `/version`
-  first.
 
 ### For integrators: contract 2.20
 

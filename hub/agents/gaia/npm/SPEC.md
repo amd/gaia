@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.21"`                  |
+| Contract version   | `API_VERSION = "2.22"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -348,7 +348,7 @@ model's failure reads "the model server at `host:port`", not "Lemonade on this
 machine". Pre-2.20 binaries `422` the field and word every such error for the
 TUI.
 
-`turns` (contract ≥ 2.21) is the conversation so far as the model saw it,
+`turns` (contract ≥ 2.22) is the conversation so far as the model saw it,
 oldest first. Each entry is one earlier turn's `final.model_messages`, which
 holds the assistant's tool calls and the tool results, or a user/assistant text
 pair for a turn that recorded none. The agent replays the newest whole turns
@@ -356,7 +356,7 @@ that fit its context window and says in a `status` event when older ones drop
 out. Sent, it replaces `context`, which must then be `[]`. Every `final` carries
 `model_messages` so a caller can store it with the reply; it is absent when the
 loop had not returned 15 s after its answer, and that turn then replays as text
-only. Pre-2.21 binaries `422` `turns`.
+only. Pre-2.22 binaries `422` `turns`.
 
 ```json
 {
@@ -407,6 +407,18 @@ empty `final` and sends no `token` after the cancel, so a host keeps the text
 the `token` events already delivered. Answer text the model produced but the
 stream had not yet sent when the cancel landed is discarded with the
 half-written tail.
+
+`final` carries `context` (contract ≥ 2.21): what the next model call holds
+if the caller pushes this turn back as history — the same payload the Agent
+UI's Context panel shows. `window` is the model's context window in tokens,
+`used` the tokens taken, and `system`, `tools`, `documents`, `history` split it
+by kind; `categories` lists the panel's rows (their tokens add up to `used`),
+`tool_loading` which tools ride every request, and `tokenizer.exact` whether
+the counts came from the loaded model's own tokenizer or the shared estimate.
+A turn that was stopped or ended on a model failure carries no `context`; a
+measurement that failed carries `context_error`, one sentence saying why, and
+the answer still stands. Older binaries send neither, so read `context` only
+when `/version` reports 2.21 or later.
 
 ### 5.2 `session_id` and agent retention
 

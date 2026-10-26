@@ -299,7 +299,7 @@
                 "type": "null"
               }
             ],
-            "description": "Earlier turns as the model saw them, oldest first (contract >= 2.21): each is that turn's `final.model_messages`, tool calls and results included, or a user/assistant text pair for a turn that recorded none. Replaces `context` when sent; the agent keeps the newest whole turns that fit its context window.",
+            "description": "Earlier turns as the model saw them, oldest first (contract >= 2.22): each is that turn's `final.model_messages`, tool calls and results included, or a user/assistant text pair for a turn that recorded none. Replaces `context` when sent; the agent keeps the newest whole turns that fit its context window.",
             "title": "Turns"
           }
         },
@@ -478,7 +478,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.21"
+    "version": "2.22"
   },
   "openapi": "3.1.0",
   "paths": {
