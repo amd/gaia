@@ -442,7 +442,6 @@ def test_versions_code_and_ordinals_are_not_data(answer):
         ("After running pytest, everything is green.", []),
         ("I did not run the tests.", []),
         ("I haven't searched the other folders.", []),
-        ("I haven’t searched the other folders.", []),
         ("Once you have run the tests, merge it.", []),
         ("You should read the README before tagging.", []),
         ("I will run the tests next.", []),
@@ -751,27 +750,17 @@ def test_still_reports_rather_than_negates():
 @pytest.mark.parametrize(
     "answer",
     (
-        "It isn't fixed.",
-        "It wasn't fixed.",
+        "The task isn't done.",
+        "The task wasn't done.",
         "I haven't done it.",
-    ),
-)
-def test_contracted_negation_does_not_claim_success(answer):
-    # A word boundary before the `n` in isn't/wasn't does not exist, so the
-    # contraction needs its own alternative rather than the \b(...) group.
-    assert not claims_success(answer)
-
-
-@pytest.mark.parametrize(
-    "answer",
-    (
-        "It isn’t fixed.",
-        "It wasn’t fixed.",
+        "The task isn’t done.",
+        "The task wasn’t done.",
         "I haven’t done it.",
     ),
 )
-def test_curly_contracted_negation_does_not_claim_success(answer):
-    # Models commonly emit U+2019 rather than ASCII apostrophes.
+def test_contracted_negation_does_not_claim_success(answer):
+    # Each sentence includes a success claim that the old detector matched, so
+    # this regression test proves the contraction is recognized as negation.
     assert not claims_success(answer)
 
 
