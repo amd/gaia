@@ -128,3 +128,109 @@ def test_malformed_reviewed_argument_is_rejected(bad):
 def test_short_sha_prefix_cannot_match_a_different_commit(monkeypatch):
     with pytest.raises(SystemExit):
         plan(monkeypatch, sha="6d02e4e")
+
+
+class Posts:
+    """Records every approve POST the tool would make."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, cmd, **kw):
+        self.calls.append(cmd)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+
+def run_main(monkeypatch, capsys, argv, **api_kw):
+    posts = Posts()
+    monkeypatch.setattr(afr.ts, "gh_binary", lambda: "gh")
+    monkeypatch.setattr(afr.ts, "maintainers", lambda *a: TEAM)
+    monkeypatch.setattr(afr.ts, "awaiting_approval", lambda *a: {SHA: [11, 12]})
+    monkeypatch.setattr(afr, "api", fake_api(**api_kw))
+    monkeypatch.setattr(afr.subprocess, "run", posts)
+    monkeypatch.setattr(sys, "argv", ["approve_fork_runs.py", *argv])
+    code = 0
+    try:
+        afr.main()
+    except SystemExit as exc:
+        code = exc.code or 0
+    return code, capsys.readouterr().out, posts
+
+
+def test_dry_run_posts_nothing(monkeypatch, capsys):
+    code, out, posts = run_main(monkeypatch, capsys, ["--reviewed", f"5@{SHA[:7]}"])
+    assert code == 0 and "WOULD APPROVE" in out and posts.calls == []
+
+
+def test_apply_posts_one_request_per_stalled_run(monkeypatch, capsys):
+    code, out, posts = run_main(
+        monkeypatch, capsys, ["--reviewed", f"5@{SHA[:7]}", "--apply"]
+    )
+    assert code == 0 and len(posts.calls) == 2
+    assert all("/approve" in c[-1] for c in posts.calls)
+
+
+def test_sensitive_path_is_refused_even_with_apply(monkeypatch, capsys):
+    code, out, posts = run_main(
+        monkeypatch,
+        capsys,
+        ["--reviewed", f"5@{SHA[:7]}", "--apply"],
+        files=(".github/workflows/ci.yml",),
+    )
+    assert code == 1 and "REFUSE" in out and posts.calls == []
+
+
+def test_sensitive_path_needs_the_explicit_override(monkeypatch, capsys):
+    code, out, posts = run_main(
+        monkeypatch,
+        capsys,
+        ["--reviewed", f"5@{SHA[:7]}", "--apply", "--include-risky", "5"],
+        files=(".github/workflows/ci.yml",),
+    )
+    assert code == 0 and len(posts.calls) == 2
+
+
+def test_override_for_another_pr_does_not_unlock_this_one(monkeypatch, capsys):
+    code, out, posts = run_main(
+        monkeypatch,
+        capsys,
+        ["--reviewed", f"5@{SHA[:7]}", "--apply", "--include-risky", "6"],
+        files=("setup.py",),
+    )
+    assert code == 1 and posts.calls == []
+
+
+def test_maintainer_pr_is_skipped_and_posts_nothing(monkeypatch, capsys):
+    code, out, posts = run_main(
+        monkeypatch,
+        capsys,
+        ["--reviewed", f"5@{SHA[:7]}", "--apply"],
+        login="kovtcharov",
+    )
+    assert "SKIP" in out and posts.calls == []
+
+
+def test_moved_head_aborts_before_any_post(monkeypatch, capsys):
+    code, out, posts = run_main(
+        monkeypatch,
+        capsys,
+        ["--reviewed", f"5@{SHA[:7]}", "--apply"],
+        head="f" * 40,
+    )
+    assert code != 0 and posts.calls == []
+
+
+def test_a_failed_post_is_reported_and_fails_the_run(monkeypatch, capsys):
+    def failing(cmd, **kw):
+        return type("R", (), {"returncode": 1, "stdout": "", "stderr": "HTTP 500"})()
+
+    monkeypatch.setattr(afr.ts, "gh_binary", lambda: "gh")
+    monkeypatch.setattr(afr.ts, "maintainers", lambda *a: TEAM)
+    monkeypatch.setattr(afr.ts, "awaiting_approval", lambda *a: {SHA: [11]})
+    monkeypatch.setattr(afr, "api", fake_api())
+    monkeypatch.setattr(afr.subprocess, "run", failing)
+    monkeypatch.setattr(sys, "argv", ["x", "--reviewed", f"5@{SHA[:7]}", "--apply"])
+    with pytest.raises(SystemExit) as exc:
+        afr.main()
+    assert exc.value.code == 1
+    assert "HTTP 500" in capsys.readouterr().out
