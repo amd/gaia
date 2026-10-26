@@ -22,12 +22,15 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from gaia.agents.tools.search_scope import is_broad_root, search_roots
 
 #: Relative to home. iCloud Drive is guarded the same way, ~/Music and the TV
-#: app's ~/Movies/TV behind the "Media & Apple Music" prompt, and the Photos
-#: library behind "Photos".
+#: app's ~/Movies/TV behind the "Media & Apple Music" prompt, the Photos
+#: library behind "Photos", and other apps' sandboxed data behind "access data
+#: from other apps".
 MACOS_PROTECTED_HOME_FOLDERS = (
     "Desktop",
     "Documents",
     "Downloads",
+    "Library/Containers",
+    "Library/Group Containers",
     "Library/Mobile Documents",
     "Movies/TV",
     "Music",
