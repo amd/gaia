@@ -370,7 +370,7 @@ def _one_time_hard_reason(command: str) -> str:
         if not piece:
             continue
         try:
-            argv = shlex.split(piece)
+            argv = _tokenize(piece)
         except ValueError:
             argv = piece.split()
         if _destroys(argv):
@@ -1745,12 +1745,16 @@ def _tokenize(command: str, bypass_gates: bool = False) -> list:
     than being eaten as a space. Inside quotes it is still ordinary data, so
     ``echo "a<newline>b"`` remains one operand.
     """
-    if not bypass_gates:
-        return shlex.split(command)
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=_BYPASS_PUNCTUATION)
+    if bypass_gates:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=_BYPASS_PUNCTUATION)
+        lexer.whitespace = " \t\r"
+    else:
+        lexer = shlex.shlex(command, posix=True)
     lexer.whitespace_split = True
     lexer.commenters = ""  # same as shlex.split: '#' is data, not a comment
-    lexer.whitespace = " \t\r"
+    if _pipe_dialect() == "cmd":
+        # cmd.exe reads '\' as a separator; POSIX escaping hid C:\x from the path check.
+        lexer.escape = ""
     return list(lexer)
 
 
@@ -3700,6 +3704,13 @@ class ShellToolsMixin:
         if os.name == "nt" and candidate_path.startswith("/"):
             if "/" not in candidate_path[1:]:
                 return None
+        # cmd.exe drops an unquoted '^' that shlex keeps; check its reading too.
+        if _pipe_dialect() == "cmd" and "^" in candidate_path:
+            refusal = self._path_candidate_refusal(
+                label, arg, re.sub(r"\^(.?)", r"\1", candidate_path), cwd, outside
+            )
+            if refusal:
+                return refusal
         # A shell or script may expand '~' and '$HOME'; check both readings.
         expanded = os.path.expandvars(os.path.expanduser(candidate_path))
         looks_like_path = (

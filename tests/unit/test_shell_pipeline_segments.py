@@ -126,6 +126,14 @@ def test_a_caret_escaped_pipe_is_not_a_boundary_in_cmd(monkeypatch):
     assert segments == [["echo", "a^|rm", "x"]]
 
 
+def test_a_backslash_does_not_protect_a_pipe_in_cmd(monkeypatch):
+    _use(monkeypatch, "cmd")
+
+    error, _ = _validate("echo a\\|rm x")
+
+    assert "'rm' is not in the allowed list" in error["error"]
+
+
 def test_single_quotes_protect_a_pipe_in_sh(monkeypatch):
     _use(monkeypatch, "posix")
 
@@ -143,8 +151,6 @@ def test_single_quotes_protect_a_pipe_in_sh(monkeypatch):
         "grep 'a|b' notes.txt",
         # cmd.exe reads \" as a quote opening, shlex as an escaped character.
         'echo "\\"|rm x"',
-        # Nor does a backslash protect a pipe from cmd.exe.
-        "echo a\\|rm x",
     ],
 )
 def test_a_cut_the_quoting_disagrees_with_is_refused_in_cmd(
