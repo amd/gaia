@@ -160,7 +160,8 @@ class RelayProfile:
     #: off). ``None`` means the relay never sends it.
     min_memory_api_version: Optional[Tuple[int, int]] = None
     #: Shown instead of running a private or memory-off turn when the installed
-    #: agent is below :attr:`min_memory_api_version` — it would save to memory.
+    #: agent can't take ``memory`` — it is below :attr:`min_memory_api_version`,
+    #: or that floor is ``None`` — so it would save to memory.
     memory_upgrade_message: str = ""
     #: Contract version from which ``/query`` takes ``changes_turn_id`` and
     #: records the run's file changes for undo. ``None`` means never sent.

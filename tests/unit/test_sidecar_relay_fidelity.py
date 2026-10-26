@@ -28,7 +28,9 @@ from gaia.ui.email_sidecar import relay
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
+    SIDECAR_AGENT_IDS,
     memory_supported,
+    profile_for,
     surface_supported,
 )
 from gaia.ui.models import ChatRequest
@@ -398,6 +400,13 @@ def test_a_memory_on_turn_still_runs_on_an_older_agent(monkeypatch):
 def test_a_current_agent_is_told_the_mode(monkeypatch):
     _events, calls = _dispatch(monkeypatch, "2.18", "private")
     assert calls[0]["memory"] == "private"
+
+
+def test_every_profile_without_a_memory_floor_explains_the_refusal():
+    for agent_id in SIDECAR_AGENT_IDS:
+        profile = profile_for(agent_id)
+        if profile.min_memory_api_version is None:
+            assert profile.memory_upgrade_message.strip(), agent_id
 
 
 @pytest.mark.parametrize("version", ["2.4", "2.18", "9.9"])
