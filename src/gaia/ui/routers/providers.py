@@ -31,7 +31,7 @@ from gaia.logger import get_logger
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
-from ..security import require_ui_header
+from ..security import require_ui_header, via_tunnel
 
 logger = get_logger(__name__)
 
@@ -649,13 +649,6 @@ def _known(provider: str) -> None:
         )
 
 
-def _via_tunnel(request: Request) -> bool:
-    return any(
-        h in request.headers
-        for h in ("x-forwarded-for", "x-forwarded-host", "x-forwarded-proto")
-    )
-
-
 # Re-sends a stored key to Lemonade, so a cross-site GET must not reach it.
 @router.get("/api/providers", dependencies=[Depends(require_ui_header)])
 def list_providers(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
@@ -748,7 +741,7 @@ def connect_provider(
     if provider == LOCAL:
         raise HTTPException(status_code=422, detail="Local models need no connection.")
     key = (body.api_key or "").strip()
-    if key and _via_tunnel(request):
+    if key and via_tunnel(request):
         raise HTTPException(
             status_code=403,
             detail="Enter provider keys on the PC running GAIA, not over mobile access.",

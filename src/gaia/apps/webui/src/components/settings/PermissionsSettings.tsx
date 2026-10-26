@@ -20,6 +20,8 @@ export function PermissionsSettings() {
             const all = await api.listAllPermissions();
             setRows(all.sessions);
             setDefaultMode(all.default_mode);
+            // The new-chat chip follows the saved default without a reload.
+            useChatStore.getState().setDefaultPermissionMode(all.default_mode);
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
         }

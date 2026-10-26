@@ -215,7 +215,7 @@ def client(db):
     app.include_router(chat_router)
     app.state.db = db
     app.state.session_locks = {}
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 @pytest.fixture
@@ -469,6 +469,27 @@ class TestPermissionRoutes:
     def test_put_default_leaves_open_chats_alone(self, client, sid):
         client.put("/api/chat/permissions", json={"mode": "full_access"})
         assert permissions.get(sid) is None
+
+    @pytest.mark.parametrize(
+        "peer, headers",
+        [
+            (("127.0.0.1", 50000), {"X-Forwarded-For": "203.0.113.7"}),
+            (("127.0.0.1", 50000), {"X-Forwarded-Proto": "https"}),
+            (("192.168.1.20", 50000), {}),
+        ],
+        ids=["tunnel-for", "tunnel-proto", "lan-peer"],
+    )
+    def test_put_default_is_refused_off_this_pc(self, client, peer, headers):
+        _write_config({"full_access": False})
+        remote = TestClient(client.app, client=peer)
+        resp = remote.put(
+            "/api/chat/permissions", json={"mode": "full_access"}, headers=headers
+        )
+        assert resp.status_code == 403
+        assert "on the PC running GAIA" in resp.json()["detail"]
+        saved = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+        assert saved["full_access"] is False
+        assert permissions.default_mode() == permissions.MODE_ASK
 
     def test_put_default_refuses_an_unknown_mode(self, client):
         resp = client.put("/api/chat/permissions", json={"mode": "yolo"})

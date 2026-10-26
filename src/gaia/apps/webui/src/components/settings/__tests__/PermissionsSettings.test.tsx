@@ -126,6 +126,29 @@ describe('PermissionsSettings', () => {
             await waitFor(() => expect(mockedApi.setDefaultPermissionMode).toHaveBeenCalledExactlyOnceWith('ask'));
         });
 
+        it('a saved change moves the new-chat mode at once, both ways', async () => {
+            useChatStore.setState({
+                defaultPermissionMode: 'full_access', draftPermissionMode: 'full_access', draftPermissionModeChosen: false,
+            });
+            mockedApi.listAllPermissions.mockResolvedValue({ default_mode: 'full_access', sessions: [] });
+            mockedApi.setDefaultPermissionMode.mockImplementation(async (mode) => {
+                mockedApi.listAllPermissions.mockResolvedValue({ default_mode: mode, sessions: [] });
+                return { default_mode: mode };
+            });
+            render(<PermissionsSettings />);
+            const toggle = await screen.findByRole('checkbox', { name: TOGGLE });
+            await waitFor(() => expect(toggle).toBeChecked());
+
+            fireEvent.click(toggle);
+            await waitFor(() => expect(useChatStore.getState().draftPermissionMode).toBe('ask'));
+            expect(useChatStore.getState().defaultPermissionMode).toBe('ask');
+
+            fireEvent.click(toggle);
+            fireEvent.click(screen.getByRole('button', { name: 'Turn on full access for new chats' }));
+            await waitFor(() => expect(useChatStore.getState().draftPermissionMode).toBe('full_access'));
+            expect(useChatStore.getState().defaultPermissionMode).toBe('full_access');
+        });
+
         it('shows why saving failed and stays off', async () => {
             mockedApi.setDefaultPermissionMode.mockRejectedValue(new Error('config is read-only'));
             render(<PermissionsSettings />);

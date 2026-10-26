@@ -1557,7 +1557,9 @@ Used to reach the UI from a phone.
 
     **Request:** `{"mode": "full_access"}` or `{"mode": "ask"}` — any other
     value is a **422**. **Response:** `{"default_mode"}`. A config file that
-    can't be written is a **500** naming the cause.
+    can't be written is a **500** naming the cause. A request that didn't
+    come from this PC (a non-loopback peer, or any `X-Forwarded-*` header, as
+    mobile access adds) is a **403** before anything is written.
   </Accordion>
 
   <Accordion title="GET /api/chat/permissions/{session_id}">

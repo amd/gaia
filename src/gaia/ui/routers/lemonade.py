@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from gaia.logger import get_logger
 
-from ..security import require_ui_header
+from ..security import require_ui_header, via_tunnel
 
 logger = get_logger(__name__)
 
@@ -82,13 +82,6 @@ class TargetRequest(BaseModel):
     api_key: Optional[str] = None
 
 
-def _via_tunnel(request: Request) -> bool:
-    return any(
-        h in request.headers
-        for h in ("x-forwarded-for", "x-forwarded-host", "x-forwarded-proto")
-    )
-
-
 @router.post("/api/lemonade/target", dependencies=[Depends(require_ui_header)])
 def set_target(body: TargetRequest, request: Request) -> Dict[str, Any]:
     """Switch servers. Nothing is saved unless the user's server checks out."""
@@ -96,7 +89,7 @@ def set_target(body: TargetRequest, request: Request) -> Dict[str, Any]:
     from gaia.daemon.errors import DaemonError
     from gaia.llm import lemonade_choice as choice
 
-    if _via_tunnel(request):
+    if via_tunnel(request):
         raise HTTPException(
             status_code=403,
             detail="Change the model server on the PC running GAIA, not over "
