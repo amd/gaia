@@ -34,6 +34,13 @@ A selection of the user-visible fixes; the full list is in the changelog below.
 - **Failures are no longer hidden** — `gaia mcp` commands exit 1 on failure, TTS self-tests exit non-zero when synthesis fails, agent package loading errors surface, connector token-parse errors are kept, and undo-history save failures no longer mask the query error. (PRs [#5777](https://github.com/amd/gaia/pull/5777), [#5788](https://github.com/amd/gaia/pull/5788), [#5745](https://github.com/amd/gaia/pull/5745), [#5795](https://github.com/amd/gaia/pull/5795), [#5734](https://github.com/amd/gaia/pull/5734))
 - **Settings list recommended Fireworks models first.** (PR [#5781](https://github.com/amd/gaia/pull/5781))
 - **Eval fixes** — an invalid `--baseline-ref` is an error, and contracted negations ("doesn't") are recognized in claims. (PRs [#5784](https://github.com/amd/gaia/pull/5784), [#5808](https://github.com/amd/gaia/pull/5808))
+- **The agent's shell sees your login PATH on macOS**, so tools installed with Homebrew or similar are found. (PR [#5867](https://github.com/amd/gaia/pull/5867))
+- **Chat sessions are kept when saving fails**, instead of being lost. (PR [#5862](https://github.com/amd/gaia/pull/5862))
+- **Scratchpad measures the real database size** and refuses to re-create a table that conflicts with an existing one. (PR [#5856](https://github.com/amd/gaia/pull/5856))
+- **File search stays out of other apps' data on macOS.** (PR [#5854](https://github.com/amd/gaia/pull/5854))
+- **A final release replaces a release candidate's agent build** during `gaia init`. (PR [#5831](https://github.com/amd/gaia/pull/5831))
+- **Goals in the Agent UI** — deleting a goal no longer reports a failure, and a failed background goal run stops and says why. (PRs [#5839](https://github.com/amd/gaia/pull/5839), [#5841](https://github.com/amd/gaia/pull/5841))
+- **Undo says when macOS is asking for permission** instead of hanging. (PR [#5846](https://github.com/amd/gaia/pull/5846))
 - **Docs** — Full access still asks before a gated shell command, script shell commands time out after 10 minutes, `max_steps` defaults to 50, the eval startup reservation is 240 s, email install examples drop `--trust`, and the stateful email agent examples show their auth headers. (PRs [#5769](https://github.com/amd/gaia/pull/5769), [#5758](https://github.com/amd/gaia/pull/5758), [#5759](https://github.com/amd/gaia/pull/5759), [#5763](https://github.com/amd/gaia/pull/5763), [#5780](https://github.com/amd/gaia/pull/5780), [#5760](https://github.com/amd/gaia/pull/5760))
 
 ## Contributors
@@ -49,8 +56,8 @@ Thanks to the community members who contributed to this release:
 - [@huong8373tt-beep](https://github.com/huong8373tt-beep) — contracted negation in eval claims and a steadier hub pip test (PRs [#5808](https://github.com/amd/gaia/pull/5808), [#5814](https://github.com/amd/gaia/pull/5814))
 - [@erSpell](https://github.com/erSpell) — CP1252 and UTF-16 text files in document search (PR [#5761](https://github.com/amd/gaia/pull/5761))
 - [@AyobamiH](https://github.com/AyobamiH) — labelling always-on skills in the Agent UI (PR [#5731](https://github.com/amd/gaia/pull/5731))
-- [@chris00234](https://github.com/chris00234) — evicting least-recently-used cached chat agents (PR [#5741](https://github.com/amd/gaia/pull/5741))
-- [@akshat-lakhera](https://github.com/akshat-lakhera) — not reporting Lemonade ready when the context re-check fails (PR [#5793](https://github.com/amd/gaia/pull/5793))
+- [@chris00234](https://github.com/chris00234) — evicting least-recently-used cached chat agents and keeping chat sessions when saving fails (PRs [#5741](https://github.com/amd/gaia/pull/5741), [#5862](https://github.com/amd/gaia/pull/5862))
+- [@akshat-lakhera](https://github.com/akshat-lakhera) — not reporting Lemonade ready when the context re-check fails and measuring the real scratchpad database size (PRs [#5793](https://github.com/amd/gaia/pull/5793), [#5856](https://github.com/amd/gaia/pull/5856))
 - [@d4rshnn](https://github.com/d4rshnn) — recommended Fireworks models first in settings (PR [#5781](https://github.com/amd/gaia/pull/5781))
 - [@dannyward630](https://github.com/dannyward630) — tests for Lemonade cleanup boundaries (PR [#5757](https://github.com/amd/gaia/pull/5757))
 - [@KrBeTect2025](https://github.com/KrBeTect2025) — TTS self-tests exiting non-zero on failure (PR [#5788](https://github.com/amd/gaia/pull/5788))
@@ -58,8 +65,17 @@ Thanks to the community members who contributed to this release:
 
 ## Full Changelog
 
-**57 commits** since v0.25.1:
+**66 commits** since v0.25.1:
 
+- `2e724c47d` — fix(agent): the agent's shell sees the user's login PATH on macOS (#5867)
+- `515e5c016` — fix(tools): keep file search out of other apps' data on macOS (#5854)
+- `9475554f8` — fix(init): a final release replaces a release candidate's agent build (#5831)
+- `c8fd6b377` — fix(ui): undo says when macOS is asking, instead of hanging (#5846)
+- `8412f5c71` — fix(ui): a failed background goal run stops and says why (#5841)
+- `2160bc5d9` — fix(ui): deleting a goal no longer reports a failure (#5839)
+- `8a78027fd` — fix(scratchpad): measure the real database size and refuse a conflicting re-create (#5856)
+- `c02cb28d1` — fix: preserve chat sessions when saving fails (#5862)
+- `5f9b9af0a` — Release v0.25.2 (#5850)
 - `e2a195c7b` — feat(skills): contributor-triage skill for PR and issue triage (#5816)
 - `ca6e51b6a` — docs(email): add auth headers to stateful agent examples in SKILL.md (#5760)
 - `e44fd39c0` — fix(memory): include final day for date-only time_to (#5818)
