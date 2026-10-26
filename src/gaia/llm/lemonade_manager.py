@@ -1182,24 +1182,11 @@ class LemonadeManager:
 
     @staticmethod
     def _find_loaded_llm_id(status: "LemonadeStatus") -> Optional[str]:
-        """The model id of the LLM currently loaded, or None.
-
-        ``type=="llm"`` is the precise check on health-format entries; the
-        label fallback covers legacy code paths that populate
-        ``loaded_models`` from the catalog (which lacks ``type``). Embedding
-        and image models are excluded — reloading/clamping them with an LLM
-        ctx_size makes no sense and (pre-#1030 follow-up) used to pick the
-        wrong model entirely because the embedder can sort before ``Gemma-…``.
-        """
+        """The model id of the first loaded local LLM, or None."""
         llm_models = [
             m
             for m in status.loaded_models
-            if m.get("type") == "llm"
-            or (
-                m.get("type") is None
-                and "image" not in m.get("labels", [])
-                and "embeddings" not in m.get("labels", [])
-            )
+            if is_llm_model_entry(m) and not _is_cloud_entry(m)
         ]
         if not llm_models:
             return None

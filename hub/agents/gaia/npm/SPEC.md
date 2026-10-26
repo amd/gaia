@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.20"`                  |
+| Contract version   | `API_VERSION = "2.21"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -399,6 +399,18 @@ empty `final` and sends no `token` after the cancel, so a host keeps the text
 the `token` events already delivered. Answer text the model produced but the
 stream had not yet sent when the cancel landed is discarded with the
 half-written tail.
+
+`final` carries `context` (contract ≥ 2.21): what the next model call holds
+if the caller pushes this turn back as history — the same payload the Agent
+UI's Context panel shows. `window` is the model's context window in tokens,
+`used` the tokens taken, and `system`, `tools`, `documents`, `history` split it
+by kind; `categories` lists the panel's rows (their tokens add up to `used`),
+`tool_loading` which tools ride every request, and `tokenizer.exact` whether
+the counts came from the loaded model's own tokenizer or the shared estimate.
+A turn that was stopped or ended on a model failure carries no `context`; a
+measurement that failed carries `context_error`, one sentence saying why, and
+the answer still stands. Older binaries send neither, so read `context` only
+when `/version` reports 2.21 or later.
 
 ### 5.2 `session_id` and agent retention
 
