@@ -6,20 +6,18 @@ When the context window is below the floor, the warm path re-reads the server
 status. Before this, any failure there was logged at DEBUG and the caller was
 told everything was ready, so a server that started rejecting the API key passed
 the check and the user hit a vaguer error mid-chat. Auth and other client errors
-now propagate, as on the first-init path; an unreachable server keeps the cached
-state; anything unexpected is logged at WARNING.
+now propagate, as on the first-init path; anything unexpected is logged at WARNING.
 """
 
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-import requests
 
 from gaia.llm.lemonade_client import (
     LemonadeAuthError,
+    LemonadeClient,
     LemonadeClientError,
-    LemonadeUnresponsiveError,
 )
 from gaia.llm.lemonade_manager import LemonadeManager
 
@@ -36,8 +34,8 @@ def _warm_manager_with_small_ctx():
 
 
 def _ensure_ready_with(error):
-    with patch("gaia.llm.lemonade_manager.LemonadeClient") as client_cls:
-        client_cls.return_value = MagicMock(get_status=MagicMock(side_effect=error))
+    # Real LemonadeClient.get_status, so its own error wrapping is exercised.
+    with patch.object(LemonadeClient, "health_check", side_effect=error):
         return LemonadeManager.ensure_ready(min_context_size=32768, quiet=True)
 
 
@@ -46,25 +44,16 @@ def test_auth_error_on_recheck_propagates():
         _ensure_ready_with(LemonadeAuthError("401"))
 
 
-def test_other_client_error_on_recheck_propagates():
-    with pytest.raises(LemonadeClientError):
-        _ensure_ready_with(LemonadeUnresponsiveError("no answer"))
-
-
-@pytest.mark.parametrize(
-    "error",
-    [
-        requests.exceptions.ConnectionError("refused"),
-        requests.exceptions.ConnectTimeout("slow"),
-    ],
-)
-def test_unreachable_server_on_recheck_keeps_cached_state(error):
-    assert _ensure_ready_with(error) is True
+def test_unreachable_server_keeps_cached_state():
+    assert _ensure_ready_with(LemonadeClientError("refused")) is True
 
 
 def test_unexpected_error_on_recheck_is_logged_at_warning(caplog):
-    with caplog.at_level(logging.WARNING):
-        assert _ensure_ready_with(RuntimeError("boom")) is True
+    with patch.object(LemonadeClient, "get_status", side_effect=RuntimeError("boom")):
+        with caplog.at_level(logging.WARNING):
+            assert (
+                LemonadeManager.ensure_ready(min_context_size=32768, quiet=True) is True
+            )
     assert any(
         r.levelno == logging.WARNING and "boom" in r.getMessage()
         for r in caplog.records

@@ -13,8 +13,6 @@ import time
 from enum import Enum
 from typing import Any, Dict, Iterator, Optional, Tuple
 
-import requests
-
 from gaia.llm.lemonade_client import (
     CLOUD_RECIPE,
     DEFAULT_CONTEXT_SIZE,
@@ -943,12 +941,6 @@ class LemonadeManager:
                         # Auth and other client errors say the server is not
                         # usable; propagate like the first-init path below.
                         raise
-                    except (
-                        requests.exceptions.ConnectionError,
-                        requests.exceptions.Timeout,
-                    ) as e:
-                        # The cached state is still the best we have.
-                        cls._log.debug(f"Lemonade unreachable on re-check: {e}")
                     except Exception as e:
                         cls._log.warning(f"Failed to re-check Lemonade status: {e}")
                     return True
