@@ -43,6 +43,11 @@ _VALID_SQL_TYPES = {
 _COLUMN_DEF_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
+def _norm_type(col_type: str) -> str:
+    """Declared types that differ only by case or spacing count as the same."""
+    return "".join(col_type.split()).upper()
+
+
 class ScratchpadService(DatabaseMixin):
     """SQLite-backed working memory for multi-document data analysis.
 
@@ -404,7 +409,7 @@ class ScratchpadService(DatabaseMixin):
     def _table_info(self, full_name: str) -> List[tuple]:
         """Return (name, type, notnull, default, pk) for each column."""
         return [
-            (c["name"], c["type"], c["notnull"], c["dflt_value"], c["pk"])
+            (c["name"], _norm_type(c["type"]), c["notnull"], c["dflt_value"], c["pk"])
             for c in self.query(f"PRAGMA table_info({full_name})")
         ]
 
@@ -415,7 +420,7 @@ class ScratchpadService(DatabaseMixin):
         try:
             scratch.execute(f"CREATE TABLE t ({safe_columns})")
             return [
-                (name, col_type, notnull, default, pk)
+                (name, _norm_type(col_type), notnull, default, pk)
                 for _, name, col_type, notnull, default, pk in scratch.execute(
                     "PRAGMA table_info(t)"
                 )

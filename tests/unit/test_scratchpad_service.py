@@ -102,6 +102,13 @@ class TestCreateTable:
         assert "created" not in second
         assert scratchpad.query_data("SELECT id FROM scratch_dup") == [{"id": 1}]
 
+    def test_create_table_type_case_and_spacing_ignored(self, scratchpad):
+        """The same types written in another case or spacing are not a conflict."""
+        scratchpad.create_table("dup", "id INTEGER, code VARCHAR(10)")
+        second = scratchpad.create_table("dup", "id integer, code varchar (10)")
+
+        assert "already exists" in second
+
     def test_create_table_different_columns_refused(self, scratchpad):
         """Re-creating with other columns raises and leaves the table alone."""
         scratchpad.create_table("dup", "id INTEGER, name TEXT")
@@ -502,7 +509,7 @@ class TestTotalSizeLimit:
         could accumulate up to 100 tables * 1M rows (≈20 GB) while staying
         under each individual cap. Make the cap real.
         """
-        # 1 MB cap; 50 rows of 100 KB is ~5 MB of real data, 25 times the
+        # 1 MB cap; 50 rows of 100 KB is ~5 MB of real data, ~500 times the
         # old 200-bytes-per-row guess (10 KB).
         monkeypatch.setattr(scratchpad, "MAX_TOTAL_SIZE_BYTES", 1024 * 1024)
         scratchpad.create_table("big", "val TEXT")
