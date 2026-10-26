@@ -2533,7 +2533,11 @@ These positions indicate where to split the text."""
         vlm_paragraphs = set()
         for idx, para in enumerate(paragraphs):
             # Check if this paragraph contains VLM markers
-            if "### 🖼️ IMAGE" in para or "**Content Extracted from Images:**" in para:
+            if (
+                "### 🖼️ IMAGE" in para
+                or "**Content Extracted from Images:**" in para
+                or any(block["placeholder"] in para for block in vlm_blocks)
+            ):
                 vlm_paragraphs.add(idx)
                 self.log.debug(
                     f"Paragraph {idx} marked as VLM content (will keep atomic)"
