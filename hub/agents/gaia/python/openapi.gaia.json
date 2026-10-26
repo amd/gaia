@@ -189,6 +189,18 @@
             "description": "Absolute paths of the files the user attached to this conversation (contract >= 2.16). Each is granted as that exact file, never its folder, and indexed before the turn runs. Send the full set every turn: files already indexed in a retained session are skipped, so one attached mid-conversation is picked up on the next turn.",
             "title": "Documents"
           },
+          "internet_off": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether this turn may reach the internet (contract >= 2.22). True refuses web search, page fetches, the browser, connector tools and commands that contact another host, with a plain message the model relays; false allows them. Send it every turn: a retained session keeps the last value. Omit it to leave the agent as it is.",
+            "title": "Internet Off"
+          },
           "max_steps": {
             "anyOf": [
               {
@@ -459,7 +471,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.21"
+    "version": "2.22"
   },
   "openapi": "3.1.0",
   "paths": {

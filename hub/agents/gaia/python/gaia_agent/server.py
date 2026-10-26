@@ -86,7 +86,8 @@ AGENT_ID = "gaia"
 #: 2.19 added ``/query``'s ``changes_turn_id`` field.
 #: 2.20 added ``/query``'s ``surface`` field.
 #: 2.21 added ``context`` to ``/query``'s ``final`` event.
-API_VERSION = "2.21"
+#: 2.22 added ``/query``'s ``internet_off`` field.
+API_VERSION = "2.22"
 
 #: How long ``final`` waits for the turn's context measurement before going without.
 _CONTEXT_WAIT_SECONDS = 15.0
@@ -230,6 +231,17 @@ class QueryRequest(_Strict):
             "including the errors and lessons the agent saves on its own. Send "
             "it every turn: a retained session keeps the last value. Omit it to "
             "leave memory as the agent has it."
+        ),
+    )
+
+    internet_off: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether this turn may reach the internet (contract >= 2.22). True "
+            "refuses web search, page fetches, the browser, connector tools and "
+            "commands that contact another host, with a plain message the model "
+            "relays; false allows them. Send it every turn: a retained session "
+            "keeps the last value. Omit it to leave the agent as it is."
         ),
     )
 
@@ -781,6 +793,12 @@ def _apply_memory_mode(agent: Any, mode: Optional[str]) -> None:
         return
     agent._incognito = True
     agent._incognito_reason = "private" if mode == "private" else "memory_off"
+
+
+def _apply_internet_switch(agent: Any, internet_off: Optional[bool]) -> None:
+    """Turn *agent*'s internet guard on or off for this turn (>= 2.22)."""
+    if internet_off is not None:
+        agent.internet_off = internet_off
 
 
 def build_query_agent(**config_kwargs: Any):
@@ -1385,6 +1403,7 @@ async def query(request: QueryRequest):
             session is not None and request.can_answer_questions is not False
         )
         _apply_memory_mode(agent, request.memory)
+        _apply_internet_switch(agent, request.internet_off)
         if request.can_answer_questions is False:
             # Nobody is there to answer. Let the loop know so it resolves
             # ambiguity itself instead of parking on a question forever.
