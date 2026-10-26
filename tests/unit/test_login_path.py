@@ -41,11 +41,12 @@ def fresh_state(monkeypatch):
     import gaia
 
     monkeypatch.setattr(lp, "_login_path_applied", False)
-    monkeypatch.delenv(lp.APPLIED_MARKER, raising=False)
+    monkeypatch.setenv(lp.TRIED_MARKER, "x")  # registers the restore ...
+    monkeypatch.delenv(lp.TRIED_MARKER)  # ... then removes it for the test
     quiet = {
         k: v
         for k, v in gaia.pre_dotenv_environ().items()
-        if k not in ("SHLVL", lp.APPLIED_MARKER)
+        if k not in ("SHLVL", lp.TRIED_MARKER)
     }
     monkeypatch.setattr(gaia, "_PRE_DOTENV_ENVIRON", quiet)
 
@@ -262,8 +263,10 @@ class TestApplyLoginPath:
         import gaia
 
         monkeypatch.setattr(sys, "platform", "darwin")
-        monkeypatch.setattr(gaia, "_PRE_DOTENV_ENVIRON", {"SHLVL": "1"})
         venv_path = paths("/proj/.venv/bin", "/usr/bin")
+        monkeypatch.setattr(
+            gaia, "_PRE_DOTENV_ENVIRON", {"SHLVL": "1", "PATH": venv_path}
+        )
         monkeypatch.setenv("PATH", venv_path)
         monkeypatch.setattr(
             lp,
@@ -273,13 +276,29 @@ class TestApplyLoginPath:
         assert apply_login_path() is False
         assert os.environ["PATH"] == venv_path
 
+    def test_a_script_that_starts_the_app_with_launchds_path_still_repairs(
+        self, monkeypatch
+    ):
+        """sh -c / zsh -c exports SHLVL but a LaunchAgent keeps the stripped PATH."""
+        import gaia
+
+        monkeypatch.setattr(sys, "platform", "darwin")
+        stripped = paths("/usr/bin", "/bin", "/usr/sbin", "/sbin")
+        monkeypatch.setattr(
+            gaia, "_PRE_DOTENV_ENVIRON", {"SHLVL": "1", "PATH": stripped}
+        )
+        monkeypatch.setenv("PATH", stripped)
+        monkeypatch.setattr(lp, "read_login_path", lambda: "/opt/homebrew/bin")
+        assert apply_login_path() is True
+        assert "/opt/homebrew/bin" in os.environ["PATH"].split(os.pathsep)
+
     def test_a_child_of_a_process_that_already_applied_it_skips_the_shell(
         self, monkeypatch
     ):
         import gaia
 
         monkeypatch.setattr(sys, "platform", "darwin")
-        monkeypatch.setattr(gaia, "_PRE_DOTENV_ENVIRON", {lp.APPLIED_MARKER: "1"})
+        monkeypatch.setattr(gaia, "_PRE_DOTENV_ENVIRON", {lp.TRIED_MARKER: "1"})
         monkeypatch.setattr(
             lp, "read_login_path", lambda: pytest.fail("the parent already did it")
         )
@@ -290,8 +309,8 @@ class TestApplyLoginPath:
         monkeypatch.setenv("PATH", paths("/usr/bin", "/bin"))
         monkeypatch.setattr(lp, "read_login_path", lambda: "/opt/homebrew/bin")
         apply_login_path()
-        assert os.environ[lp.APPLIED_MARKER] == "1"
-        assert child_env()[lp.APPLIED_MARKER] == "1"
+        assert os.environ[lp.TRIED_MARKER] == "1"
+        assert child_env()[lp.TRIED_MARKER] == "1"
 
     def test_a_dotenv_cannot_switch_the_repair_off_or_on(self, monkeypatch):
         """SHLVL is read from the pre-.env snapshot: a project file that sets it
@@ -301,6 +320,20 @@ class TestApplyLoginPath:
         monkeypatch.setenv("PATH", paths("/usr/bin", "/bin"))
         monkeypatch.setattr(lp, "read_login_path", lambda: "/opt/homebrew/bin")
         assert apply_login_path() is True
+
+    def test_a_failed_attempt_is_marked_so_children_do_not_retry(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setenv("PATH", paths("/usr/bin", "/bin"))
+
+        def fail():
+            raise LoginPathError("zsh -ilc did not finish within 5s")
+
+        monkeypatch.setattr(lp, "read_login_path", fail)
+        assert apply_login_path() is False
+        assert os.environ[lp.TRIED_MARKER] == "1"
+        capsys.readouterr()
 
     def test_children_get_the_repaired_path(self, monkeypatch):
         monkeypatch.setattr(sys, "platform", "darwin")

@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 LOGIN_PATH_TIMEOUT_S = 5.0
 _PATH_BEGIN = "__GAIA_LOGIN_PATH_BEGIN__"
 _PATH_END = "__GAIA_LOGIN_PATH_END__"
-APPLIED_MARKER = "GAIA_LOGIN_PATH_APPLIED"
+TRIED_MARKER = "GAIA_LOGIN_PATH_TRIED"
+# What launchd gives a process: the folders macOS itself ships.
+_LAUNCHD_PATH = frozenset({"/usr/bin", "/bin", "/usr/sbin", "/sbin"})
 
 _login_path_applied = False
 
@@ -90,7 +92,7 @@ def read_login_path(
             [shell, "-ilc", _print_path_script(shell)],
             stdin=subprocess.DEVNULL,
             # Own session: an interactive shell with no controlling terminal
-            # cannot take the user's terminal over, and a timeout reaches it.
+            # cannot take the user's terminal over.
             start_new_session=True,
             capture_output=True,
             text=True,
@@ -135,6 +137,14 @@ def merge_paths(login: str, inherited: str) -> str:
     return os.pathsep.join(merged)
 
 
+def _started_from_a_shell(gaia_module) -> bool:
+    """True when this process inherited a shell's ``PATH``, not launchd's."""
+    if not gaia_module.pre_dotenv_env("SHLVL"):
+        return False
+    inherited = gaia_module.pre_dotenv_env("PATH") or ""
+    return not set(filter(None, inherited.split(os.pathsep))) <= _LAUNCHD_PATH
+
+
 def apply_login_path() -> bool:
     """Give this process the user's login ``PATH`` on macOS. Idempotent.
 
@@ -145,11 +155,13 @@ def apply_login_path() -> bool:
     event wire for stdio transports).
 
     Skipped, returning False, when ``PATH`` is already the user's: a process
-    started from a shell has ``SHLVL`` (a Finder, Dock or launchd launch never
-    does), and a child of a process that applied it carries the marker. Both are
-    read from the pre-``.env`` environment so a project file cannot set them.
-    Merging over a shell's ``PATH`` would put ``path_helper``'s order ahead of an
-    activated virtualenv, and every command would pay for a login shell.
+    started from a shell has ``SHLVL`` and a ``PATH`` with more than launchd's
+    four system folders (a Finder or Dock launch has no ``SHLVL``, and a script
+    that starts the app keeps launchd's ``PATH``), and a child of a process that
+    already tried carries ``TRIED_MARKER``, whether that attempt worked or not.
+    All are read from the pre-``.env`` environment so a project file cannot set
+    them. Merging over a shell's ``PATH`` would put ``path_helper``'s order ahead
+    of an activated virtualenv, and every command would pay for a login shell.
     """
     global _login_path_applied
     if sys.platform != "darwin":
@@ -158,8 +170,9 @@ def apply_login_path() -> bool:
         return True
     import gaia  # pylint: disable=import-outside-toplevel
 
-    if gaia.pre_dotenv_env("SHLVL") or gaia.pre_dotenv_env(APPLIED_MARKER):
+    if gaia.pre_dotenv_env(TRIED_MARKER) or _started_from_a_shell(gaia):
         return False
+    os.environ[TRIED_MARKER] = "1"
     try:
         login = read_login_path()
     except LoginPathError as exc:
@@ -172,7 +185,6 @@ def apply_login_path() -> bool:
         )
         return False
     os.environ["PATH"] = merge_paths(login, os.environ.get("PATH", ""))
-    os.environ[APPLIED_MARKER] = "1"
     _login_path_applied = True
     logger.debug("Applied login PATH: %s", os.environ["PATH"])
     return True
