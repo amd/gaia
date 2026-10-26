@@ -595,4 +595,6 @@ class TestRuntimeFailureStillInstallsTheFlagship:
 
         assert code == 1
         install_mock.assert_called_once()
-        assert "network died" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "did not install either: network died" in out
+        assert "Unexpected error" not in out

@@ -1501,16 +1501,25 @@ class InitCommand:
         The agent download needs neither Lemonade nor the models. Without it the
         Agent UI cannot start a chat at all, even once the runtime is fixed, so a
         Lemonade or model failure must not also leave the agent missing. An agent
-        install failure here still propagates to ``run()``'s handler.
+        install failure here is reported as a second error, after the first.
         """
         if installs_agent:
+            from gaia.hub.installer import InstallError
+
+            agent_id = INIT_PROFILES[self.profile]["agent"]
             self._runtime_failed = True
             self._print("")
             self._print(
-                f"   Setup did not finish; installing the "
-                f"'{INIT_PROFILES[self.profile]['agent']}' agent anyway..."
+                f"   Setup did not finish; installing the '{agent_id}' agent anyway..."
             )
-            self._ensure_hub_agent_installed()
+            try:
+                self._ensure_hub_agent_installed()
+            except InstallError as e:
+                self._print_error(
+                    f"The '{agent_id}' agent did not install either: {e}. Fix the "
+                    f"failure above, then run `{self._flagship_install_command()}` "
+                    "again."
+                )
         return 1
 
     def _choose_lemonade(self) -> bool:
