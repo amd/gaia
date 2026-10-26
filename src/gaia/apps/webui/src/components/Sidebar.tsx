@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Bell, Brain, Clock, EyeOff, FileText, PanelLeftClose, PanelLeftOpen,
-    Pin, PinOff, Search, Settings, Smartphone, SquarePen, Trash2, X,
+    Pencil, Pin, PinOff, Search, Settings, Smartphone, SquarePen, Trash2, X,
 } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useChatStore } from '../stores/chatStore';
@@ -18,6 +18,7 @@ import {
 import { ordinal } from '../utils/chatAlerts';
 import { formatShortcut } from '../utils/platform';
 import { cleanupAbandonedDraft } from '../utils/sessionCleanup';
+import { MAX_SESSION_TITLE_CHARS } from '../utils/constants';
 import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
 import gaiaRobot from '../assets/gaia-robot.png';
 import { useSidebarWidth } from './SidebarResizer';
@@ -49,7 +50,7 @@ function readShowAutomated(): boolean {
     }
 }
 
-function SessionRow({ session, active, status, queuePlace, unsent, failed, onSelect, onDelete, onPin }: {
+function SessionRow({ session, active, status, queuePlace, unsent, failed, onSelect, onDelete, onPin, onRename }: {
     session: Session;
     active: boolean;
     status: RowStatus | null;
@@ -61,8 +62,20 @@ function SessionRow({ session, active, status, queuePlace, unsent, failed, onSel
     onSelect: (id: string) => void;
     onDelete: (id: string) => void;
     onPin: (id: string, pinned: boolean) => void;
+    onRename: (id: string, title: string) => void;
 }) {
     const [confirm, setConfirm] = useState(false);
+    const [draft, setDraft] = useState<string | null>(null);
+    const editing = draft !== null;
+    const settled = useRef(false);
+    const startEdit = () => { settled.current = false; setDraft(session.title); };
+    const finishEdit = (save: boolean) => {
+        // Unmounting the focused input fires blur again; ignore it.
+        if (draft === null || settled.current) return;
+        settled.current = true;
+        setDraft(null);
+        if (save) onRename(session.id, draft);
+    };
     useEffect(() => {
         if (!confirm) return;
         const t = setTimeout(() => setConfirm(false), 3000);
@@ -80,19 +93,49 @@ function SessionRow({ session, active, status, queuePlace, unsent, failed, onSel
 
     return (
         <li className={`sb-row${active ? ' is-active' : ''}${unread ? ' is-unread' : ''}`} data-status={dot ?? undefined}>
-            <button
-                type="button"
-                className="sb-row-main"
-                onClick={() => onSelect(session.id)}
-                aria-current={active ? 'page' : undefined}
-                aria-label={[session.title, label, waiting, unread ? 'unread' : null].filter(Boolean).join(', ')}
-                title={session.title}
-            >
-                {dot && <span className={`sb-dot is-${dot}`} aria-hidden="true" title={label} />}
-                {session.private && <EyeOff size={12} className="sb-row-icon" aria-label="Private chat" />}
-                <span className="sb-row-title">{session.title}</span>
-                {note && <span className={`sb-row-queue${failed > 0 ? ' is-failed' : ''}`}>{note}</span>}
-            </button>
+            {editing ? (
+                <input
+                    className="sb-row-edit"
+                    value={draft}
+                    maxLength={MAX_SESSION_TITLE_CHARS}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onBlur={() => finishEdit(true)}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') finishEdit(true);
+                        if (e.key === 'Escape') { e.preventDefault(); finishEdit(false); }
+                    }}
+                    {...CLAIMS_ESCAPE}
+                    autoFocus
+                    onFocus={(e) => e.currentTarget.select()}
+                    aria-label={`Rename ${session.title}`}
+                />
+            ) : (
+                <button
+                    type="button"
+                    className="sb-row-main"
+                    onClick={() => onSelect(session.id)}
+                    onDoubleClick={startEdit}
+                    aria-current={active ? 'page' : undefined}
+                    aria-label={[session.title, label, waiting, unread ? 'unread' : null].filter(Boolean).join(', ')}
+                    title={session.title}
+                >
+                    {dot && <span className={`sb-dot is-${dot}`} aria-hidden="true" title={label} />}
+                    {session.private && <EyeOff size={12} className="sb-row-icon" aria-label="Private chat" />}
+                    <span className="sb-row-title">{session.title}</span>
+                    {note && <span className={`sb-row-queue${failed > 0 ? ' is-failed' : ''}`}>{note}</span>}
+                </button>
+            )}
+            {!editing && (
+                <button
+                    type="button"
+                    className="sb-row-rename"
+                    onClick={startEdit}
+                    aria-label={`Rename ${session.title}`}
+                    title="Rename"
+                >
+                    <Pencil size={13} />
+                </button>
+            )}
             <button
                 type="button"
                 className={`sb-row-pin${session.pinned ? ' is-pinned' : ''}`}
@@ -221,6 +264,22 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
             log.chat.error(`Could not ${pinned ? 'pin' : 'unpin'} chat ${id}`, err);
             updateSessionInList(id, { pinned: !pinned });
             setRowError(err instanceof Error ? err.message : `Could not ${pinned ? 'pin' : 'unpin'} the chat.`);
+        }
+    }, [updateSessionInList]);
+
+    const rename = useCallback(async (id: string, draft: string) => {
+        const title = draft.trim().slice(0, MAX_SESSION_TITLE_CHARS).trim();
+        const previous = useChatStore.getState().sessions.find((x) => x.id === id)?.title;
+        if (!title || title === previous) return;
+        setRowError(null);
+        updateSessionInList(id, { title });
+        try {
+            // Explicit rename: pin against the auto-retitler (#2165).
+            await api.updateSession(id, { title, title_is_custom: true });
+        } catch (err) {
+            log.chat.error(`Could not rename chat ${id}`, err);
+            if (previous !== undefined) updateSessionInList(id, { title: previous });
+            setRowError(err instanceof Error ? err.message : 'Could not rename the chat.');
         }
     }, [updateSessionInList]);
 
@@ -353,6 +412,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                                         onSelect={select}
                                         onDelete={remove}
                                         onPin={(id, pinned) => void pin(id, pinned)}
+                                        onRename={(id, title) => void rename(id, title)}
                                     />
                                 ))}
                             </ul>
