@@ -3441,7 +3441,7 @@ The flagship GAIA agent comes from `gaia init`, not from here.
 ```bash
 gaia hub list                      # what is available + what is installed
 gaia hub list --installed          # only what is installed (works offline)
-gaia hub install email --trust     # required: email is a non-verified agent
+gaia hub install email
 gaia hub uninstall email           # stops the sidecar first, then removes the dir
 ```
 
@@ -3511,7 +3511,7 @@ Options accepted by every `gaia tui` command:
 
 There is no `list`, `install`, `uninstall`, or `hub` subcommand — the TUI does
 not install agents. Installing the email sidecar is the Python CLI's job
-(`gaia hub install email --trust`, see [Hub Command](#hub-command)).
+(`gaia hub install email`, see [Hub Command](#hub-command)).
 
 #### `run --query` is a real one-shot
 
