@@ -39,6 +39,7 @@ A selection of the user-visible fixes; the full list is in the changelog below.
 - **Scratchpad measures the real database size** and refuses to re-create a table that conflicts with an existing one. (PR [#5856](https://github.com/amd/gaia/pull/5856))
 - **File search stays out of other apps' data on macOS.** (PR [#5854](https://github.com/amd/gaia/pull/5854))
 - **A final release replaces a release candidate's agent build** during `gaia init`. (PR [#5831](https://github.com/amd/gaia/pull/5831))
+- **Free disk space is reported correctly**, without the agent detouring through a shell. (PR [#5849](https://github.com/amd/gaia/pull/5849))
 - **Goals in the Agent UI** — deleting a goal no longer reports a failure, and a failed background goal run stops and says why. (PRs [#5839](https://github.com/amd/gaia/pull/5839), [#5841](https://github.com/amd/gaia/pull/5841))
 - **Undo says when macOS is asking for permission** instead of hanging. (PR [#5846](https://github.com/amd/gaia/pull/5846))
 - **Docs** — Full access still asks before a gated shell command, script shell commands time out after 10 minutes, `max_steps` defaults to 50, the eval startup reservation is 240 s, email install examples drop `--trust`, and the stateful email agent examples show their auth headers. (PRs [#5769](https://github.com/amd/gaia/pull/5769), [#5758](https://github.com/amd/gaia/pull/5758), [#5759](https://github.com/amd/gaia/pull/5759), [#5763](https://github.com/amd/gaia/pull/5763), [#5780](https://github.com/amd/gaia/pull/5780), [#5760](https://github.com/amd/gaia/pull/5760))
@@ -65,8 +66,9 @@ Thanks to the community members who contributed to this release:
 
 ## Full Changelog
 
-**66 commits** since v0.25.1:
+**67 commits** since v0.25.1:
 
+- `f404f5b2d` — fix(agent): report free disk space correctly, without a shell detour (#5849)
 - `2e724c47d` — fix(agent): the agent's shell sees the user's login PATH on macOS (#5867)
 - `515e5c016` — fix(tools): keep file search out of other apps' data on macOS (#5854)
 - `9475554f8` — fix(init): a final release replaces a release candidate's agent build (#5831)
