@@ -1150,7 +1150,8 @@ class PathValidator:
         askable = [
             f"'{home / name}'"
             for name in _USER_FOLDER_NAMES
-            if (home / name).is_dir() and not self._unaskable_reason(home / name)
+            if (home / name).is_dir()
+            and not self._unaskable_reason(Path(_real_path(home / name)))
         ]
         if not askable:
             return ""

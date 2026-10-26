@@ -491,3 +491,13 @@ def test_home_folder_refusal_names_no_folder_nobody_can_approve(layout, home):
     agent.path_validator.withhold_path(str(home / "Movies"))
 
     assert "Movies" not in _browse(agent, home)
+
+
+def test_home_folder_refusal_skips_a_folder_linked_to_a_whole_drive(layout, home):
+    (home / "Desktop").symlink_to(Path(home.anchor))
+    agent = _BrowseAgent(layout["scope"], _RecordingConsole(True))
+
+    refused = _browse(agent, home)
+
+    assert "Movies" in refused
+    assert "Desktop" not in refused
