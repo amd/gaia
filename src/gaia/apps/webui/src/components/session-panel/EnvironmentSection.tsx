@@ -236,7 +236,7 @@ function Folders({ sessionId }: { sessionId: string }) {
 }
 
 function Internet({ sessionId }: { sessionId: string }) {
-    const { env, change } = useSessionEnvironment(sessionId);
+    const { env, change, refresh } = useSessionEnvironment(sessionId);
     const [error, setError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     if (!env) return null;
@@ -247,6 +247,8 @@ function Internet({ sessionId }: { sessionId: string }) {
             await change(() => api.setInternet(sessionId, on));
         } catch (err) {
             setError(errorText(err));
+            // Saved even when the running turn couldn't be told, so show what was saved.
+            void refresh();
         } finally {
             setSaving(false);
         }

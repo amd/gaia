@@ -555,6 +555,10 @@ def relay_query(
     handler.active_relay_run_id = rid
     # Lets a mid-run switch of the chat's mode reach this sidecar session too.
     handler.active_relay_mode_session = session_id if syncs_mode else None
+    # And a mid-run Internet switch, when the sidecar took it and has a session.
+    handler.active_relay_internet_session = (
+        session_id if internet_off is not None and "session_id" in body else None
+    )
 
     def _register_response(resp: Any) -> None:
         handler.active_relay_response = resp
@@ -673,6 +677,7 @@ def relay_query(
         handler.active_relay_proxy = None
         handler.active_relay_run_id = None
         handler.active_relay_mode_session = None
+        handler.active_relay_internet_session = None
 
     if handler.cancelled.is_set():
         _best_effort_cancel(proxy, rid)

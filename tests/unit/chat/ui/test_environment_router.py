@@ -243,3 +243,27 @@ def test_an_invalid_allowed_paths_setting_is_named_not_an_empty_list(
 
     assert res.status_code == 500
     assert "GAIA_ALLOWED_PATHS" in res.json()["detail"]
+
+
+def test_a_switch_the_running_relayed_turn_cannot_take_is_a_502_naming_the_next_turn(
+    client, session_id, monkeypatch
+):
+    monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
+
+    def unreachable(_session_id, internet_off):
+        raise session_environment.RelayedSwitchError(
+            "Internet is off from the next message, but the running agent "
+            "couldn't be told (gone), so its turn was stopped. Send the message "
+            "again."
+        )
+
+    monkeypatch.setattr(session_environment, "_tell_running_relay", unreachable)
+    off = client.put(
+        f"/api/sessions/{session_id}/environment/internet", json={"on": False}
+    )
+    assert off.status_code == 502
+    assert "from the next message" in off.json()["detail"]
+    assert (
+        client.get(f"/api/sessions/{session_id}/environment").json()["internet"]
+        is False
+    )

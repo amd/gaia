@@ -569,10 +569,14 @@ reads nothing.
 
   A Hub-installed GAIA, which runs as its own process, is held to the
   internet setting but not to the folder settings (the section says so
-  instead of offering them). It needs a GAIA agent at contract 2.22 or
-  later: with the internet off, an older one refuses the message and asks
-  you to update GAIA, rather than answering online. An agent that keeps its
-  own network rules, such as the email agent, isn't held to either setting.
+  instead of offering them). Turning the internet off while it is working
+  stops its next web search, not only the next message. If GAIA can't be
+  reached to tell it, the panel says so and that turn is stopped; the
+  setting still applies from your next message. It needs a GAIA agent at
+  contract 2.22 or later: with the internet off, the Agent UI doesn't send
+  your message to an older one and asks you to update GAIA instead. An
+  agent that keeps its own network rules, such as the email agent, isn't
+  held to either setting.
 - **Context & performance** is the breakdown described in
   [See how full the context is](#see-how-full-the-context-is).
 - **Outputs** lists everything the chat produced, newest first: files created

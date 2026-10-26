@@ -226,6 +226,23 @@ class SidecarProxy:
                 f"access: {exc}"
             ) from exc
 
+    def set_internet(self, session_id: str, internet_off: bool) -> dict:
+        """Turn the sidecar session's internet on or off (contract >= 2.22).
+
+        Raises on any failure, including the 404 for a session the sidecar has
+        not created yet.
+        """
+        import requests
+
+        path = f"{self.prefix}/sessions/{session_id}/internet"
+        try:
+            return self._post(path, {"internet_off": bool(internet_off)})
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to switch the "
+                f"internet: {exc}"
+            ) from exc
+
     def query_stream(
         self,
         body: dict,

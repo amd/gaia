@@ -1435,8 +1435,9 @@ agent at once, so they take effect on its next step.
     its own process (a relayed sidecar); the folder endpoints then refuse
     changes with **409** (**400** for adding a folder). `internet_enforced`
     covers the internet switch: it is true in process and for a relayed GAIA
-    agent (one older than contract 2.22 refuses an internet-off turn with an
-    update message), and false for an agent that keeps its own
+    agent (for one older than contract 2.22, the Agent UI refuses an
+    internet-off turn with an update message instead of sending it), and
+    false for an agent that keeps its own
     network rules (the email agent), where the internet endpoint refuses
     changes with **409**.
   </Accordion>
@@ -1466,6 +1467,12 @@ agent at once, so they take effect on its next step.
     is: `localhost` exactly or a loopback IP (`127.0.0.0/8`, `::1`). Each
     command in a chained shell line is checked on its own. The refusal tells the model the
     internet is off for this chat.
+
+    For a relayed GAIA chat with a turn running, the change is also sent to
+    that turn's agent, which follows it from its next tool call. If it can't
+    be delivered, the endpoint answers **502**: the setting is saved and
+    applies from the next message, and switching off also stops the running
+    turn.
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/outputs">

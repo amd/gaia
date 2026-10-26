@@ -208,6 +208,19 @@ describe('Internet', () => {
         expect(screen.getByRole('switch', { name: 'Internet for this chat' })).toHaveAttribute('aria-checked', 'false');
     });
 
+    it("shows the saved switch and why when the running turn couldn't be told", async () => {
+        const detail = "Internet is off from the next message, but the running agent couldn't be told (gone), so its turn was stopped. Send the message again.";
+        mocked.setInternet.mockRejectedValue(Object.assign(new Error(detail), { detail, httpStatus: 502 }));
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const toggle = await screen.findByRole('switch', { name: 'Internet for this chat' });
+        mocked.getEnvironment.mockResolvedValue({ ...ENV, internet: false });
+
+        fireEvent.click(toggle);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(detail);
+        await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'));
+    });
+
     it('shows the offline notice for a chat saved with internet off', async () => {
         mocked.getEnvironment.mockResolvedValue({ ...ENV, internet: false });
         render(<OfflineNotice sessionId={SID} />);

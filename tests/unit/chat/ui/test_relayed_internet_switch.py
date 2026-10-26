@@ -5,26 +5,33 @@
 On a release install the flagship runs as its own program and every turn is
 relayed to it. The relay used to drop the chat's Internet setting, so the
 switch was locked in every GAIA chat. These check what leaves for the sidecar,
-what a sidecar too old to take it is told, and what the session panel reports.
+what a sidecar too old to take it is told, what the session panel reports, and
+that a switch flipped mid-turn reaches the turn already running.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 import gaia.ui._chat_helpers as helpers
-from gaia.ui import session_environment
+from gaia.agents.base.agent import Agent
+from gaia.ui import session_environment, turn_insights
 from gaia.ui.database import ChatDatabase
 from gaia.ui.email_sidecar import daemon_client, relay
+from gaia.ui.email_sidecar.errors import SidecarError
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
     internet_supported,
 )
+from gaia.ui.email_sidecar.proxy import SidecarProxy
 from gaia.ui.models import ChatRequest
 from gaia.ui.sse_handler import SSEOutputHandler
 
@@ -223,8 +230,9 @@ def test_a_relayed_flagship_chat_still_refuses_folder_changes(relayed_db, tmp_pa
         session_environment.add_folder(relayed_db, session["id"], str(tmp_path))
 
 
-def test_a_relayed_email_chat_keeps_its_own_network_rules(relayed_db):
+def test_a_relayed_email_chat_keeps_its_own_network_rules(relayed_db, running_relays):
     session = relayed_db.create_session(agent_type="email")
+    http = _running_relay(session["id"])
 
     assert (
         session_environment.describe(relayed_db, session)["internet_enforced"] is False
@@ -235,6 +243,7 @@ def test_a_relayed_email_chat_keeps_its_own_network_rules(relayed_db):
     assert "network rules" in str(refusal.value)
     assert "start a chat" not in str(refusal.value).lower()
     assert session_environment.load(relayed_db, session["id"])["internet_off"] is False
+    assert http.posts == []
 
 
 def test_an_in_process_chat_enforces_both(monkeypatch):
@@ -247,3 +256,287 @@ def test_an_in_process_chat_enforces_both(monkeypatch):
 
     assert body["internet_enforced"] is True
     assert body["enforced"] is True
+
+
+# ── A switch flipped while a relayed turn is running ───────────────────────
+
+
+class _Response:
+    def __init__(self, status_code, body):
+        self.status_code = status_code
+        self._body = body
+        self.text = json.dumps(body)
+
+    def json(self):
+        return self._body
+
+
+class _Http:
+    """Stands in for the proxy's ``requests`` session and keeps what it sent."""
+
+    def __init__(self, status_code=200, error=None):
+        self.headers: dict = {}
+        self.posts: list = []
+        self._status_code = status_code
+        self._error = error
+
+    def post(self, url, json=None, timeout=None):
+        self.posts.append((url, json))
+        if self._error is not None:
+            raise self._error
+        if self._status_code >= 400:
+            return _Response(self._status_code, {"detail": "No session exists."})
+        return _Response(200, {"session_id": "x", **json})
+
+
+@pytest.fixture
+def running_relays():
+    yield
+    helpers._active_sse_handlers.clear()
+
+
+def _running_relay(session_id, http=None, internet_session=True):
+    """Registers a relayed turn of *session_id* in flight on the GAIA sidecar."""
+    http = http or _Http()
+    handler = SSEOutputHandler()
+    handler.active_relay_proxy = SidecarProxy(
+        "http://127.0.0.1:9", agent_id="gaia", session=http
+    )
+    handler.active_relay_run_id = "r1"
+    handler.active_relay_internet_session = session_id if internet_session else None
+    helpers._active_sse_handlers[session_id] = handler
+    return http
+
+
+def _no_sidecar_start(monkeypatch):
+    def refuse(_agent_id):
+        raise AssertionError("a settings change must not start a sidecar")
+
+    monkeypatch.setattr(daemon_client, "acquire_handle", refuse)
+
+
+@pytest.mark.parametrize("on", [False, True])
+def test_a_running_flagship_turn_is_told_the_switch(relayed_db, running_relays, on):
+    session = relayed_db.create_session(agent_type="gaia")
+    http = _running_relay(session["id"])
+
+    session_environment.set_internet(relayed_db, session["id"], on)
+
+    assert http.posts == [
+        (
+            f"http://127.0.0.1:9/v1/gaia/sessions/{session['id']}/internet",
+            {"internet_off": not on},
+        )
+    ]
+
+
+def test_with_no_turn_running_the_switch_waits_for_the_next_one(
+    relayed_db, running_relays, monkeypatch
+):
+    _no_sidecar_start(monkeypatch)
+    session = relayed_db.create_session(agent_type="gaia")
+
+    session_environment.set_internet(relayed_db, session["id"], False)
+
+    assert session_environment.load(relayed_db, session["id"])["internet_off"] is True
+
+
+def test_a_running_turn_that_never_took_the_switch_is_not_sent_it(
+    relayed_db, running_relays, monkeypatch
+):
+    _no_sidecar_start(monkeypatch)
+    session = relayed_db.create_session(agent_type="gaia")
+    http = _running_relay(session["id"], internet_session=False)
+
+    session_environment.set_internet(relayed_db, session["id"], False)
+
+    assert http.posts == []
+
+
+@pytest.mark.parametrize(
+    "http",
+    [
+        pytest.param(_Http(status_code=404), id="sidecar-404"),
+        pytest.param(
+            _Http(error=requests.ConnectionError("refused")), id="sidecar-gone"
+        ),
+    ],
+)
+def test_a_running_turn_that_cannot_be_told_offline_is_stopped(
+    relayed_db, running_relays, http
+):
+    session = relayed_db.create_session(agent_type="gaia")
+    _running_relay(session["id"], http)
+    handler = helpers._active_sse_handlers[session["id"]]
+
+    with pytest.raises(session_environment.RelayedSwitchError) as failure:
+        session_environment.set_internet(relayed_db, session["id"], False)
+
+    assert "off from the next message" in str(failure.value)
+    assert "turn was stopped" in str(failure.value)
+    assert handler.cancelled.is_set()
+    assert session_environment.load(relayed_db, session["id"])["internet_off"] is True
+
+
+def test_a_running_turn_that_cannot_be_told_online_stays_offline(
+    relayed_db, running_relays
+):
+    session = relayed_db.create_session(agent_type="gaia")
+    session_environment.set_internet(relayed_db, session["id"], False)
+    _running_relay(session["id"], _Http(status_code=404))
+    handler = helpers._active_sse_handlers[session["id"]]
+
+    with pytest.raises(session_environment.RelayedSwitchError) as failure:
+        session_environment.set_internet(relayed_db, session["id"], True)
+
+    assert "on from the next message" in str(failure.value)
+    assert "stays offline" in str(failure.value)
+    assert not handler.cancelled.is_set()
+    assert session_environment.load(relayed_db, session["id"])["internet_off"] is False
+
+
+def test_the_relay_names_its_session_only_while_a_turn_that_took_the_switch_runs():
+    seen = {}
+
+    class _Watching(_Proxy):
+        def query_stream(self, body, read_timeout, on_response):
+            seen["during"] = self.handler.active_relay_internet_session
+            yield {"type": "final", "answer": "ok"}
+
+    for internet_off, expected in ((True, "chat-1"), (None, None)):
+        proxy = _Watching()
+        proxy.handler = SSEOutputHandler()
+        relay.relay_query(
+            proxy.handler,
+            proxy,
+            query="q",
+            context=[],
+            profile=GAIA_PROFILE,
+            session_id="chat-1",
+            internet_off=internet_off,
+        )
+        assert seen["during"] == expected
+        assert proxy.handler.active_relay_internet_session is None
+
+
+class _ParkedWebAgent:
+    """Parks mid-turn, then tries a web search through the base agent's guard."""
+
+    internet_off = False
+
+    def __init__(self, gate, **_kwargs):
+        self.gate = gate
+        self.started = threading.Event()
+        self.console = None
+        self.conversation_history = []
+        self._cancel_event = None
+        self._tools_registry = {}
+        self.refusals: list = []
+
+    def process_query(self, query, max_steps=None):
+        self.started.set()
+        self.gate.wait(timeout=10)
+        refusal = Agent._policy_refusal(self, "search_web", {"query": "weather"})
+        self.refusals.append(refusal and refusal["error_type"])
+        return {"answer": "ok"}
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def live_flagship(monkeypatch):
+    """The real flagship sidecar app on a local port, with a parked web agent."""
+    uvicorn = pytest.importorskip("uvicorn")
+    pytest.importorskip("gaia_agent")
+    from gaia_agent import caller_auth
+    from gaia_agent import server as server_mod
+    from gaia_agent import session_registry as sr
+
+    from gaia.daemon.sidecars.manager import find_free_port
+
+    caller_auth.reset()
+    monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
+    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    gate = threading.Event()
+    agents: list = []
+
+    def build(**kw):
+        agents.append(_ParkedWebAgent(gate, **kw))
+        return agents[-1]
+
+    monkeypatch.setattr(server_mod, "build_query_agent", build)
+    monkeypatch.setattr(sr, "build_session_agent", build)
+    monkeypatch.setattr(server_mod, "_warmup_blocking", lambda: None)
+    # The turn's context meter would ask the Lemonade Server on this machine.
+    monkeypatch.setattr(
+        turn_insights, "panel_context", lambda *_a, **_k: {"window": 65536}
+    )
+    sr.registry.clear()
+    server_mod._registry = server_mod._RunRegistry()
+
+    port = find_free_port()
+    server = uvicorn.Server(
+        uvicorn.Config(
+            server_mod.build_app(), host="127.0.0.1", port=port, log_level="warning"
+        )
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{port}"
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            if requests.get(f"{base_url}/health", timeout=0.5).status_code == 200:
+                break
+        except requests.exceptions.RequestException:
+            time.sleep(0.05)
+    else:
+        server.should_exit = True
+        raise RuntimeError("flagship sidecar test server never became reachable")
+    try:
+        yield SidecarProxy(base_url, agent_id="gaia"), gate, agents
+    finally:
+        gate.set()
+        server.should_exit = True
+        thread.join(timeout=5)
+        sr.registry.clear()
+        caller_auth.reset()
+
+
+@pytest.mark.allow_network
+def test_switching_off_mid_turn_stops_the_flagships_next_web_search(
+    relayed_db, running_relays, live_flagship
+):
+    proxy, gate, agents = live_flagship
+    session = relayed_db.create_session(agent_type="gaia")
+    handler = SSEOutputHandler()
+    helpers._active_sse_handlers[session["id"]] = handler
+    turn = threading.Thread(
+        target=relay.relay_query,
+        kwargs=dict(
+            handler=handler,
+            proxy=proxy,
+            query="weather today",
+            context=[],
+            profile=GAIA_PROFILE,
+            session_id=session["id"],
+            internet_off=False,
+        ),
+        daemon=True,
+    )
+    turn.start()
+    try:
+        deadline = time.monotonic() + 10
+        while not (agents and agents[0].started.is_set()):
+            assert time.monotonic() < deadline, "the relayed turn never started"
+            time.sleep(0.02)
+
+        session_environment.set_internet(relayed_db, session["id"], False)
+    finally:
+        gate.set()
+        turn.join(timeout=10)
+
+    assert agents[0].refusals == ["internet_off"]
+    errors = [e for e in _events(handler) if e["type"] == "agent_error"]
+    assert errors == []

@@ -92,6 +92,8 @@ async def set_internet(
         await asyncio.to_thread(env.set_internet, db, session_id, body.on)
     except env.EnvironmentChangeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
+    except env.RelayedSwitchError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
     return await _describe(db, session)
 
 

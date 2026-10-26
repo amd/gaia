@@ -5,7 +5,8 @@
 The settings live in the chat database. They are applied to the chat's agent
 before every turn and, when the user changes one, to the cached agent right
 away — the agent's path checks and tool policy read them on every call, so a
-change takes effect on the next step without a restart.
+change takes effect on the next step without a restart. A relayed turn already
+running is told of an Internet change over its sidecar session.
 """
 
 from __future__ import annotations
@@ -25,6 +26,10 @@ logger = get_logger(__name__)
 
 class EnvironmentChangeError(ValueError):
     """A change to the chat's folders or internet that cannot be made."""
+
+
+class RelayedSwitchError(RuntimeError):
+    """The Internet switch is saved, but the relayed turn running now wasn't told."""
 
 
 def _norm(path: str) -> str:
@@ -278,3 +283,39 @@ def set_internet(db: ChatDatabase, session_id: str, on: bool) -> None:
     if agent is not None:
         agent.internet_off = not on
     logger.info("Chat %s internet %s", session_id, "on" if on else "off")
+    _tell_running_relay(session_id, internet_off=not on)
+
+
+def _tell_running_relay(session_id: str, internet_off: bool) -> None:
+    """Carry the switch to a relayed turn of this chat that is running now.
+
+    With no turn running there is nothing to tell: the next turn sends the saved
+    value. A turn that can't be told it is offline is stopped, as a full-access
+    run is when Ask can't reach it.
+
+    Raises:
+        RelayedSwitchError: When the running turn's sidecar couldn't be told.
+    """
+    from ._chat_helpers import _active_sse_handlers
+    from .email_sidecar.errors import SidecarError
+
+    handler = _active_sse_handlers.get(session_id)
+    proxy = getattr(handler, "active_relay_proxy", None)
+    sidecar_session = getattr(handler, "active_relay_internet_session", None)
+    if proxy is None or sidecar_session is None:
+        return
+    try:
+        proxy.set_internet(sidecar_session, internet_off)
+    except SidecarError as exc:
+        if internet_off:
+            handler.cancelled.set()
+            handler.close_active_relay_response()
+            raise RelayedSwitchError(
+                f"Internet is off from the next message, but the running agent "
+                f"couldn't be told ({exc}), so its turn was stopped. Send the "
+                "message again."
+            ) from exc
+        raise RelayedSwitchError(
+            f"Internet is on from the next message, but the running agent "
+            f"couldn't be told ({exc}), so this turn stays offline."
+        ) from exc
