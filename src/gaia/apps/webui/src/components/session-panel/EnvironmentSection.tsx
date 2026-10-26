@@ -214,7 +214,7 @@ function Folders({ sessionId }: { sessionId: string }) {
                     )}
                     {!env.enforced && (
                         <span className="sp-meta">
-                            This chat's agent runs as its own process, so these settings can't be changed from here.
+                            This chat's agent runs as its own process, so its folders can't be changed from here.
                         </span>
                     )}
                     {env.removed.length > 0 && (
