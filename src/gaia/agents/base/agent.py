@@ -3227,7 +3227,7 @@ Do NOT wrap conversational replies in JSON.
         ):
             return None
         try:
-            target = Path(os.path.realpath(str(target_of(prompt_args)))).resolve()
+            target = Path(os.path.realpath(str(target_of(prompt_args))))
         except (KeyError, TypeError, ValueError, OSError) as e:
             logger.debug("could not resolve the write's target: %s", e)
             return None
