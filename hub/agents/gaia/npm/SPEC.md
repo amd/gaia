@@ -135,6 +135,10 @@ failure anywhere: it is a 404 on a user's first run.
 | `linux-arm64`  |  **no**   |  yes  |
 | `win32-arm64`  |  **no**   |  yes  |
 
+The `linux-x64` sidecar is built on a glibc 2.34 floor (#5545), so it needs
+glibc 2.34 or newer at run time (Ubuntu 22.04, Debian 12, RHEL 9 or later).
+On an older distro it fails at launch.
+
 `terminal-hub` publishes all six. The sidecar is a PyInstaller freeze, produced on
 the platform it targets, and there is no arm64 Linux or arm64 Windows freeze.
 Resolving `sidecar` on those two keys raises `PlatformError` naming the platform

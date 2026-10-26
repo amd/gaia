@@ -117,6 +117,10 @@ Windows sidecar build**.
 | `linux-arm64`  | **no**  | yes |
 | `win32-arm64`  | **no**  | yes |
 
+The `linux-x64` sidecar needs **glibc 2.34 or newer** (Ubuntu 22.04, Debian 12,
+RHEL 9 or later); an older distro fails at launch, so check `ldd --version`
+before blaming the package.
+
 Resolving the sidecar on those two keys raises `PlatformError` naming the
 platform and the supported set. It is not silently skipped, and the TUI is never
 launched with no agent behind it. `npx @amd-gaia/gaia version` prints the matrix
