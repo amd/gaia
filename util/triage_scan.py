@@ -304,12 +304,13 @@ def assess_pr(pr, team, stalled=(), required=REQUIRED_CHECKS):
     if pending:
         blockers.append(f"CI pending ({pending})")
     verdict = bot_verdict(pr)
+    notes = []
     if verdict is None:
-        blockers.append("review bot has not posted a verdict")
+        notes.append("no review-bot verdict")
     elif "approve" not in verdict[0]:
         blockers.append(f"review bot: {verdict[0]}")
     elif not verdict[1]:
-        blockers.append("review bot verdict predates the last commit")
+        notes.append("bot verdict predates the last commit")
     if unaddressed:
         blockers.append(f"{unaddressed} comment(s) since last commit")
     threads = sum(
@@ -344,6 +345,7 @@ def assess_pr(pr, team, stalled=(), required=REQUIRED_CHECKS):
         "stalled_runs": list(stalled),
         "bot_verdict": verdict[0] if verdict else None,
         "blockers": blockers,
+        "notes": notes,
         "ready": not blockers,
     }
 
@@ -411,6 +413,8 @@ def _pr_table(rows):
     ]
     for r in rows:
         state = "ready candidate" if r["ready"] else "; ".join(r["blockers"])
+        if r["notes"]:
+            state += f" [{'; '.join(r['notes'])}]"
         fork = " (fork)" if r["fork"] else ""
         lines.append(
             f"| #{r['number']} | {r['author']}{fork} | {r['kind']} | {r['lines']} "

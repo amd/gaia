@@ -48,8 +48,8 @@ python util/triage_scan.py --json   # for agents
 Read-only, ~1 minute. Third-party PRs first (bug fixes, then the rest), then maintainer PRs,
 then unanswered third-party issues, each PR with its blockers: conflict, mergeability still
 unknown, CI stalled awaiting approval, required checks missing (`--require` overrides the
-list), red or cancelled checks, review-bot verdict missing/stale/"request changes",
-unresolved review threads, comments after the last commit, draft, >5k lines. "Ready
+list), red or cancelled checks, a review-bot "request changes" verdict (a missing or
+stale approve is only a note: the verifier reads those), unresolved review threads, comments after the last commit, draft, >5k lines. "Ready
 candidate" means the cheap signals are clean: it is where reading starts, not permission to
 merge. Needs `gh` authenticated with push access; on Windows set `GH` to its full path.
 

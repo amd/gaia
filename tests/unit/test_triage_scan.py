@@ -305,11 +305,9 @@ def test_truncated_check_list_is_never_trusted():
     assert any("truncated" in b for b in ts.assess_pr(pr, TEAM)["blockers"])
 
 
-def test_missing_bot_verdict_blocks():
-    assert any(
-        "has not posted" in b
-        for b in ts.assess_pr(make_pr(comments={"nodes": []}), TEAM)["blockers"]
-    )
+def test_missing_bot_verdict_is_a_note_not_a_blocker():
+    row = ts.assess_pr(make_pr(comments={"nodes": []}), TEAM)
+    assert row["ready"] and "no review-bot verdict" in row["notes"]
 
 
 def test_bot_request_changes_blocks():
@@ -318,17 +316,28 @@ def test_bot_request_changes_blocks():
     assert any("request changes" in b for b in row["blockers"])
 
 
-def test_stale_bot_verdict_blocks_but_a_fresh_one_after_a_stale_reject_clears():
+def test_stale_approve_is_a_note_and_a_fresh_one_after_a_stale_reject_clears():
     stale = {**BOT_APPROVE, "createdAt": "2026-10-19T00:00:00Z"}
     row = ts.assess_pr(make_pr(comments={"nodes": [stale]}), TEAM)
-    assert any("predates" in b for b in row["blockers"])
+    assert row["ready"] and any("predates" in n for n in row["notes"])
     reject = {
         **BOT_APPROVE,
         "createdAt": "2026-10-19T00:00:00Z",
         "body": "**Verdict: Request changes**",
     }
-    row = ts.assess_pr(make_pr(comments={"nodes": [reject, BOT_APPROVE]}), TEAM)
-    assert row["ready"]
+    assert ts.assess_pr(make_pr(comments={"nodes": [reject, BOT_APPROVE]}), TEAM)[
+        "ready"
+    ]
+
+
+def test_a_commit_after_request_changes_does_not_clear_it():
+    reject = {
+        **BOT_APPROVE,
+        "createdAt": "2026-10-19T00:00:00Z",
+        "body": "**Verdict: Request changes**",
+    }
+    row = ts.assess_pr(make_pr(comments={"nodes": [reject]}), TEAM)
+    assert not row["ready"] and any("request changes" in b for b in row["blockers"])
 
 
 def test_bot_verdict_is_not_counted_as_an_unaddressed_comment():
@@ -338,7 +347,7 @@ def test_bot_verdict_is_not_counted_as_an_unaddressed_comment():
 def test_a_verdict_phrase_from_a_human_is_not_a_bot_verdict():
     human = {**BOT_APPROVE, "author": {"login": "outsider"}}
     row = ts.assess_pr(make_pr(comments={"nodes": [human]}), TEAM)
-    assert any("has not posted" in b for b in row["blockers"])
+    assert "no review-bot verdict" in row["notes"]
 
 
 def test_unresolved_review_thread_blocks_but_outdated_or_resolved_do_not():
