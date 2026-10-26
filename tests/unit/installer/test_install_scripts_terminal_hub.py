@@ -1456,7 +1456,7 @@ needs_windows_registry = pytest.mark.skipif(
 
 
 @pytest.fixture
-def scratch_env_key():
+def scratch_env_key(tmp_path):
     import uuid
     import winreg
 
@@ -1468,8 +1468,14 @@ def scratch_env_key():
     except FileNotFoundError:
         pass
     # Catches the scratch-key hook going stale and writing the real PATH.
-    if _real_user_path() != real:
-        if real is not None:
+    after = _real_user_path()
+    if after != real and after is not None and str(tmp_path) in after[0]:
+        if real is None:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
+            ) as key:
+                winreg.DeleteValue(key, "Path")
+        else:
             _seed_user_path("Environment", *real)
         pytest.fail("Add-ToPath changed the runner's real user PATH; restored it")
 
