@@ -13,20 +13,6 @@ const runningShell: AgentStep = {
     active: true, timestamp: Date.now() - 30_000,
 };
 
-const live = () => document.querySelector('.agent-summary-live')?.textContent;
-
-describe('AgentActivity live status', () => {
-    it('times a running tool', () => {
-        render(<AgentActivity steps={[runningShell]} isActive />);
-        expect(live()).toMatch(/^Running command · \d+s$/);
-    });
-
-    it('says it is waiting on the user, with no timer, while an approval is open', () => {
-        render(<AgentActivity steps={[runningShell]} isActive awaitingUser />);
-        expect(live()).toBe('Waiting for you');
-    });
-});
-
 const row = () => document.querySelector('.flow-tool-label')?.textContent;
 const rowTimer = () => document.querySelector('.flow-tool-latency')?.textContent;
 

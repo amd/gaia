@@ -175,24 +175,18 @@ describe('plain step lines', () => {
         expect(screen.getByText('Arguments')).toBeInTheDocument();
     });
 
-    it('says what a running call is and how long it has run', () => {
+    it('only counts steps while a call runs; the live line beside GAIA\'s name times it', () => {
         const running = call(1, 'Reading file: notes.txt', { active: true, success: undefined, result: undefined, timestamp: Date.now() - 12_000 });
-        const { container } = render(<AgentActivity steps={[running]} isActive={true} />);
+        render(<AgentActivity steps={[running]} isActive={true} />);
 
-        expect(container.querySelector('.agent-summary-live')).toHaveTextContent(/^Reading file: notes\.txt · 1[23]s$/);
+        expect(screen.getByRole('button', { name: 'Expand agent activity' })).toHaveTextContent(/^1 step · 1 tool$/);
     });
 
-    it('says when GAIA is waiting on the model rather than a tool', () => {
+    it('only counts steps while the model works', () => {
         const thought: AgentStep = { id: 1, type: 'thinking', label: 'Thinking', detail: 'Hmm', active: true, timestamp: Date.now() - 5_000 };
-        const { container } = render(<AgentActivity steps={[thought]} isActive={true} />);
+        render(<AgentActivity steps={[thought]} isActive={true} />);
 
-        expect(container.querySelector('.agent-summary-live')).toHaveTextContent(/^Waiting on the model · [56]s$/);
-    });
-
-    it('shows no live line once the turn is over', () => {
-        const { container } = render(<AgentActivity steps={[call(1, 'Reading file: a.txt')]} isActive={false} />);
-
-        expect(container.querySelector('.agent-summary-live')).toBeNull();
+        expect(screen.getByRole('button', { name: 'Expand agent activity' })).toHaveTextContent(/^1 step$/);
     });
 
     it('shows a failed call\'s reason on its row', () => {
