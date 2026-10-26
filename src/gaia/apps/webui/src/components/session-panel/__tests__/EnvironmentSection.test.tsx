@@ -133,7 +133,23 @@ describe('Can read and write', () => {
         expect(screen.queryByText('Can read and write')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Add folder/ })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
-        expect(screen.getByRole('switch', { name: 'Internet for this chat' })).toBeDisabled();
+    });
+
+    it('keeps the Internet switch usable when only the folders are not enforced', async () => {
+        mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false, internet_enforced: true });
+        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'gaia' }] });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const toggle = await screen.findByRole('switch', { name: 'Internet for this chat' });
+        expect(toggle).toBeEnabled();
+        expect(screen.queryByText(/can't be changed from this chat/)).not.toBeInTheDocument();
+    });
+
+    it('locks the Internet switch for an agent that keeps its own network rules', async () => {
+        mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false, internet_enforced: false });
+        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'email' }] });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        expect(await screen.findByRole('switch', { name: 'Internet for this chat' })).toBeDisabled();
+        expect(screen.getByText(/can't be changed from this chat/)).toBeInTheDocument();
     });
 
     it("doesn't claim another agent's scope", async () => {

@@ -256,11 +256,11 @@ function Internet({ sessionId }: { sessionId: string }) {
             <Switch
                 checked={env.internet}
                 onChange={(on) => void toggle(on)}
-                disabled={saving || !env.enforced}
+                disabled={saving || !env.internet_enforced}
                 label="Internet for this chat"
                 text={env.internet ? 'On' : 'Off: web search and pages are blocked'}
             />
-            {!env.enforced && <span className="sp-meta">Set by the agent; can't be changed from this chat.</span>}
+            {!env.internet_enforced && <span className="sp-meta">Set by the agent; can't be changed from this chat.</span>}
             {error && <span className="sp-error" role="alert">{error}</span>}
         </Row>
     );

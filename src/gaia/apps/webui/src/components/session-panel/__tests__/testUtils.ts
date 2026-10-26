@@ -19,6 +19,7 @@ export const ENV: SessionEnvironment = {
     removed: [],
     internet: true,
     enforced: true,
+    internet_enforced: true,
 };
 
 export const NO_CHANGES: SessionChanges = {
