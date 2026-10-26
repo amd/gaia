@@ -363,7 +363,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
 
             {!isCollapsed && (
                 <nav className="sb-list" aria-label="Recent chats">
-                    {groups.length === 0 && (
+                    {groups.length === 0 && !searchError && (
                         <p className="sb-empty">{!query ? 'No chats yet.' : searching ? 'Searching messages...' : 'No chats match.'}</p>
                     )}
                     {searchError && <p className="sb-empty" role="alert">{searchError}</p>}

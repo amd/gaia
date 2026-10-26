@@ -723,6 +723,15 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     **Response:** `SessionListResponse`
   </Accordion>
 
+  <Accordion title="GET /api/sessions/search">
+    Find chats whose message text contains a phrase. Case-insensitive substring match;
+    private chats are included.
+
+    **Query params:** `q` (required, 1-200 characters)
+
+    **Response:** `SessionSearchResponse` (`session_ids`: ids of matching chats)
+  </Accordion>
+
   <Accordion title="GET /api/sessions/{session_id}">
     Get session details including message count and attached document IDs.
 

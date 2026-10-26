@@ -87,6 +87,14 @@ describe('Sidebar', () => {
         expect(screen.getByText('Plan the trip')).toBeInTheDocument();
     });
 
+    it('shows only the alert, not "No chats match.", when search fails with no title match', async () => {
+        mockedApi.searchSessionMessages.mockRejectedValue(new Error('boom'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.change(screen.getByRole('searchbox', { name: /Search chats/ }), { target: { value: 'zzznomatch' } });
+        expect(await screen.findByRole('alert')).toHaveTextContent('Could not search message text: boom');
+        expect(screen.queryByText('No chats match.')).not.toBeInTheDocument();
+    });
+
     it('New chat calls onNewChat', () => {
         const onNewChat = vi.fn();
         render(<Sidebar onNewChat={onNewChat} />);
