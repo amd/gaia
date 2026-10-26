@@ -2700,7 +2700,7 @@ class InitCommand:
             if not self._installed_agent_is_stale(agent_id, installed):
                 self._print_success(f"{agent_id} agent is installed")
                 return
-            # Same version number, other bytes: a release candidate's build left behind.
+            # The hub publishes other bytes: a newer release, or a candidate's build left behind.
             replacing = installed
             self._print(
                 f"   Replacing the installed '{agent_id}' agent ({installed.version}) "
@@ -2811,7 +2811,7 @@ class InitCommand:
                 f"`{self._flagship_install_command()}` again to retry."
             )
             return False
-        return bool(want) and want != installed.artifact_sha256
+        return bool(want) and want.lower() != installed.artifact_sha256.lower()
 
     def _ensure_release_candidate_flagship(self, agent_id: str, rc_source) -> None:
         """Install the release candidate's own flagship unless it already is.

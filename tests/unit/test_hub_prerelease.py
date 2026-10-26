@@ -273,6 +273,11 @@ class TestFinalReleaseReplacesACandidatesBuild:
         install.assert_not_called()
         restart.assert_not_called()
 
+    def test_a_hash_differing_only_in_letter_case_is_the_same_build(self):
+        current = SimpleNamespace(version="0.3.1", artifact_sha256=SHA.upper())
+        install, _, _ = self._run(current, published=SHA.lower())
+        install.assert_not_called()
+
     def test_an_unreachable_hub_keeps_the_agent_and_says_so(self):
         from gaia.hub import catalog
 
