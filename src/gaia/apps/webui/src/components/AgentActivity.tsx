@@ -303,7 +303,7 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
     return result;
 }
 
-/** What a turn blocked on the user says in the message header. */
+/** What a turn blocked on the user says, in the message header and its held tool row. */
 export const WAITING_ON_USER_LABEL = 'Waiting for you';
 
 /** `8` -> "8s", `125` -> "2m 05s". */
@@ -335,10 +335,12 @@ interface AgentActivityProps {
     variant?: 'inline' | 'summary';
     /** The agent's own step count; rows (thinking, plans, tools) are not steps. */
     agentStepCount?: number;
+    /** The turn is blocked on the user (an approval or a question), so nothing is running. */
+    awaitingUser?: boolean;
 }
 
 /** Displays agent activity as a single expandable "Thinking" panel with tool calls inline. */
-export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCount }: AgentActivityProps) {
+export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCount, awaitingUser = false }: AgentActivityProps) {
     // Always start collapsed — thinking text is shown via ThinkingIndicator
     // in the message header. Users can expand to see details if they want.
     const [expanded, setExpanded] = useState(false);
