@@ -84,11 +84,11 @@ from gaia.agents.base.tool_outcome import (
 from gaia.agents.base.verification import check_was_executed
 from gaia.chat.sdk import AgentSDK, LLMCallCancelled
 from gaia.llm.lemonade_client import (
-    DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
     _endpoint_label,
     backend_crash_remedy,
     configured_lemonade_url,
+    find_model_requirement,
 )
 
 if TYPE_CHECKING:
@@ -772,6 +772,8 @@ MEMORY_UNAVAILABLE_MODEL_NOT_PULLED = "model_not_pulled"
 MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED = "model_load_failed"
 MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE = "service_unreachable"
 
+MEMORY_DOCS_URL = "https://amd-gaia.ai/docs/reference/troubleshooting"
+
 #: Substrings that identify a Lemonade "model not found" response (the
 #: service answered, it just doesn't have this model pulled) rather than a
 #: connection failure. Matches Lemonade's own error body, e.g. status 404
@@ -961,6 +963,65 @@ class MemoryMixin(ProceduralMemoryMixin):
             context,
         )
 
+    def _probe_embedder(self) -> int:
+        """Embed one string and return the live embedder's dimension.
+
+        Different embedders (e.g. the NPU FLM one) have different dims, so the
+        FAISS index must match the active model, not a constant (#1744).
+        """
+        self._get_embedder()
+        return int(self._embed_text("connectivity test").shape[0])
+
+    def _pull_missing_embedder(self, cause: Exception) -> None:
+        """Download the embedder into a running Lemonade, as ``gaia init`` does.
+
+        Raises when it cannot: the error keeps the "was not found" wording so
+        the degraded session is still reported as a model that is not pulled.
+        """
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        model = self._active_embedding_model()
+        requirement = find_model_requirement(model)
+        if requirement is None and model.startswith("user."):
+            raise RuntimeError(
+                f"Embedding model '{model}' was not found, and it is not in GAIA's "
+                "model registry, so its checkpoint is unknown and it cannot be "
+                "downloaded automatically"
+            ) from cause
+        notice = f"Downloading the embedding model '{model}' for memory…"
+        logger.warning("[MemoryMixin] %s", notice)
+        console = getattr(self, "console", None)
+        if console is not None:
+            console.print_info(notice)
+
+        errors: List[str] = []
+
+        def on_progress(event: Dict[str, Any]) -> None:
+            if event.get("event") == "error":
+                errors.append(str(event.get("error") or "unknown error"))
+
+        # A user. model registers under its registry id, whatever the caller wrote.
+        name = requirement.model_id if requirement else model
+        pull_kwargs = requirement.pull_kwargs() if requirement else {}
+        try:
+            # Streamed: a stalled pull fails after PULL_IDLE_TIMEOUT_S, and the
+            # error event carries the reason instead of only logging it.
+            pulled = LemonadeClient(model=model).ensure_model_downloaded(
+                name, show_progress=False, on_progress=on_progress, **pull_kwargs
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"Embedding model '{model}' was not found, and downloading it "
+                f"failed: {e}"
+            ) from e
+        if not pulled:
+            reason = "; ".join(errors) or "Lemonade did not report the download done"
+            raise RuntimeError(
+                f"Embedding model '{model}' was not found, and downloading it "
+                f"failed: {reason}"
+            ) from cause
+        logger.info("[MemoryMixin] downloaded embedding model '%s'", model)
+
     def _start_memory_embedder(self) -> bool:
         """Validate the embedder, then backfill and index (startup steps 2-5).
 
@@ -980,14 +1041,18 @@ class MemoryMixin(ProceduralMemoryMixin):
         # The degrade is loud (WARNING-level), reversible (next agent
         # instance with Lemonade up will init memory normally), and tracked
         # via ``_memory_store is None`` checks at every memory operation.
+        # A reachable Lemonade that lacks the embedder gets it pulled first.
         try:
-            self._get_embedder()
-            # Validate connectivity AND derive the embedding dimension from the
-            # live embedder — different embedders (e.g. the NPU FLM embedder)
-            # have different dims, so the FAISS index must match the active
-            # model rather than a hardcoded constant (#1744).
-            test_vec = self._embed_text("connectivity test")
-            dim = int(test_vec.shape[0])
+            try:
+                dim = self._probe_embedder()
+            except Exception as e:
+                if (
+                    _classify_embedding_failure(e)
+                    != MEMORY_UNAVAILABLE_MODEL_NOT_PULLED
+                ):
+                    raise
+                self._pull_missing_embedder(e)
+                dim = self._probe_embedder()
             if dim <= 0:
                 raise RuntimeError(
                     f"Embedder '{self._embedding_model}' returned a 0-length "
@@ -1286,20 +1351,19 @@ class MemoryMixin(ProceduralMemoryMixin):
                 "enable memory."
             )
         if reason == MEMORY_UNAVAILABLE_MODEL_NOT_PULLED:
-            if model == EMBEDDING_MODEL:
-                remedy = (
-                    f"Pull it — POST /api/v1/pull "
-                    f'{{"model_name": "{model}", "checkpoint": '
-                    f'"{DEFAULT_EMBEDDING_CHECKPOINT}", "recipe": "llamacpp", '
-                    '"embedding": true}'
-                )
+            if find_model_requirement(model) is not None:
+                remedy = "Run `gaia init` to download it"
             else:
                 remedy = f"Pull '{model}' in Lemonade"
+            detail = (getattr(self, "_memory_unavailable_detail", None) or "").rstrip(
+                "."
+            )
+            detail_suffix = f" ({detail})" if detail else ""
             return (
                 f"Memory is unavailable this session: the embedding model '{model}' "
                 "has not been pulled into Lemonade — Lemonade itself is "
-                f"running and reachable. {remedy}, then restart the agent. "
-                f"{restart_note}"
+                f"running and reachable{detail_suffix}. {remedy}, then restart "
+                f"the agent. {restart_note} See {MEMORY_DOCS_URL}."
             )
         if reason == MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED:
             return (

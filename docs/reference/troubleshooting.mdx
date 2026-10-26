@@ -597,6 +597,12 @@ error. To run the chat model in the cloud instead, see
     - Ensure document path is correct
   </Accordion>
 
+  <Accordion title="Embedding model not downloaded (memory off)" icon="triangle-exclamation">
+    When an agent with memory starts and Lemonade is running but doesn't have the embedding model, the agent shows `Downloading the embedding model ... for memory`, downloads it (about 330 MB, the same download `gaia init` does), and memory starts normally.
+
+    If that download fails, you see `Memory is unavailable this session: the embedding model ... has not been pulled into Lemonade`, with the reason the download failed. Run `gaia init`, then restart the agent.
+  </Accordion>
+
   <Accordion title="Embedding model downloaded but won't load (memory and document search off)" icon="triangle-exclamation">
     You see `Memory is unavailable this session: the embedding model ... is downloaded but would not load`, or indexing fails with `model_load_error` / `llama-server failed to start`.
 
