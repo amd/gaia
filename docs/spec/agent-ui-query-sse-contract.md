@@ -257,7 +257,8 @@ indistinguishable from a dead one.
       "type": "object", "additionalProperties": false,
       "properties": {
         "working_directory": { "type": "string" },
-        "risk_note":         { "type": "string" }
+        "risk_note":         { "type": "string" },
+        "file_path":         { "type": "string" }   // where a relative write lands
       } },
     "confirm_url": { "type": "string" }    // resume-model only (§0.4); omitted under stateless
   } }

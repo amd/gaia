@@ -14,6 +14,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   own prompt, tools and window. `final` now carries `context` with that
   measurement for the next call, or `context_error` when measuring failed.
   A stopped or failed turn carries neither. Older binaries never send it.
+- **A relayed write prompt names where the file lands.** When the model asks to
+  write `shop2.txt`, `needs_confirmation` now carries the absolute path the
+  write resolves to in `prompt_context.file_path`, so a front-end can show
+  `/Users/you/shop2.txt` instead of a bare name. `args` still holds exactly the
+  model's `file_path`.
 
 - **An old failure in memory no longer stops a request you make now.** A note
   like "this page returned 503, don't waste tool calls on it" was obeyed as a
