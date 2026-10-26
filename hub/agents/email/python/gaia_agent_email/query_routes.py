@@ -627,6 +627,8 @@ async def query(request: QueryRequest) -> StreamingResponse:
             {"role": item.role, "content": item.content} for item in request.context
         ]
         agent.console = handler
+        # Streamed calls put `token` events on this wire and let Stop cut a call short.
+        agent.streaming = True
         # Read by ``question.ask``: a caller that cannot answer must be
         # refused at the point of asking, not parked until it times out.
         agent.can_answer_questions = bool(request.can_answer_questions)

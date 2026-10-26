@@ -13,6 +13,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Writes, code, network, and paths outside the project still ask. `git
   merge-base`, `blame`, `shortlog`, `cat-file` and `grep` join git's read-only
   list.
+### For integrators: contract 2.21
+
+- **`final` says how full the model's window is** (contract **2.21**,
+  #5738). The Agent UI's Context panel and the meter beside its message box
+  stayed empty for every GAIA chat, because only the agent can measure its
+  own prompt, tools and window. `final` now carries `context` with that
+  measurement for the next call, or `context_error` when measuring failed.
+  A stopped or failed turn carries neither. Older binaries never send it.
 
 - **An old failure in memory no longer stops a request you make now.** A note
   like "this page returned 503, don't waste tool calls on it" was obeyed as a

@@ -390,7 +390,7 @@ async def _refresh_token(
     if response.status_code == 400:
         try:
             payload = response.json()
-        except Exception:
+        except ValueError:
             payload = {}
         if payload.get("error") == "invalid_grant":
             # The caller clears the stored entry (only if it still holds this
@@ -417,7 +417,7 @@ async def _refresh_token(
         # config-missing branch (#1638).
         try:
             err_payload = response.json()
-        except Exception:
+        except ValueError:
             err_payload = {}
         from gaia.connectors.oauth_pkce import PROVIDERS_REQUIRING_CLIENT_SECRET
 

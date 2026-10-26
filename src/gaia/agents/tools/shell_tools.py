@@ -369,7 +369,7 @@ def _one_time_hard_reason(command: str) -> str:
         if not piece:
             continue
         try:
-            argv = shlex.split(piece)
+            argv = _tokenize(piece)
         except ValueError:
             argv = piece.split()
         if _destroys(argv):
@@ -1484,6 +1484,62 @@ def _script_words(body: str, dialect: str) -> list:
     return words
 
 
+def _gh_remote_positions(argv: list) -> set:
+    """Indexes of *argv* that ``gh`` reads as GitHub ids, never as local paths.
+
+    The ``-R``/``--repo`` value (``amd/gaia``) and the ``gh api`` endpoint
+    (``repos/amd/gaia``). Every other ``gh`` operand is still scanned:
+    ``--body-file`` and ``gist create`` do read local files.
+    """
+    if os.path.basename(argv[0]).lower().removesuffix(".exe") != "gh":
+        return set()
+    remote = set()
+    seen_api = False
+    value_next = False
+    for index, token in enumerate(argv[1:], start=1):
+        if value_next:
+            value_next = False
+            continue
+        if token in ("-R", "--repo"):
+            remote.add(index + 1)
+            value_next = True
+        elif token.startswith(("--repo=", "-R")) and token not in ("-R",):
+            # --repo=x, -R=x and pflag's attached -Rx.
+            remote.add(index)
+        elif token == "api" and index == 1:
+            seen_api = True
+        elif seen_api and token in _GH_API_VALUE_FLAGS:
+            value_next = True
+        elif seen_api and not token.startswith("-"):
+            remote.add(index)
+            seen_api = False
+    return remote
+
+
+#: ``gh api`` flags whose next word is their value, not the endpoint.
+_GH_API_VALUE_FLAGS = frozenset(
+    {
+        "-X",
+        "--method",
+        "-H",
+        "--header",
+        "-f",
+        "--raw-field",
+        "-F",
+        "--field",
+        "-q",
+        "--jq",
+        "-t",
+        "--template",
+        "-p",
+        "--preview",
+        "--hostname",
+        "--cache",
+        "--input",
+    }
+)
+
+
 def _path_operands(argv: list) -> list:
     """``(label, operand)`` for every operand of *argv* the path check reads.
 
@@ -1497,7 +1553,10 @@ def _path_operands(argv: list) -> list:
     for start, token in enumerate(argv[:-1] if wrapped else argv[:1]):
         if _interpreter_name(token) == "env":
             operands.extend(_env_wrapper_assignments(argv[start:]))
+    remote = _gh_remote_positions(argv)
     for index, token in enumerate(argv[1:], start=1):
+        if index in remote:
+            continue
         dialect = positions.get(index)
         if dialect is None or dialect.endswith(_MAYBE):
             operands.append(("Argument", token))
@@ -1685,12 +1744,16 @@ def _tokenize(command: str, bypass_gates: bool = False) -> list:
     than being eaten as a space. Inside quotes it is still ordinary data, so
     ``echo "a<newline>b"`` remains one operand.
     """
-    if not bypass_gates:
-        return shlex.split(command)
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=_BYPASS_PUNCTUATION)
+    if bypass_gates:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=_BYPASS_PUNCTUATION)
+        lexer.whitespace = " \t\r"
+    else:
+        lexer = shlex.shlex(command, posix=True)
     lexer.whitespace_split = True
     lexer.commenters = ""  # same as shlex.split: '#' is data, not a comment
-    lexer.whitespace = " \t\r"
+    if _pipe_dialect() == "cmd":
+        # cmd.exe reads '\' as a separator; POSIX escaping hid C:\x from the path check.
+        lexer.escape = ""
     return list(lexer)
 
 
@@ -3656,6 +3719,13 @@ class ShellToolsMixin:
         if os.name == "nt" and candidate_path.startswith("/"):
             if "/" not in candidate_path[1:]:
                 return None
+        # cmd.exe drops an unquoted '^' that shlex keeps; check its reading too.
+        if _pipe_dialect() == "cmd" and "^" in candidate_path:
+            refusal = self._path_candidate_refusal(
+                label, arg, re.sub(r"\^(.?)", r"\1", candidate_path), cwd, outside
+            )
+            if refusal:
+                return refusal
         # A shell or script may expand '~' and '$HOME'; check both readings.
         expanded = os.path.expandvars(os.path.expanduser(candidate_path))
         looks_like_path = (
