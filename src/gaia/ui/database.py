@@ -344,7 +344,8 @@ class ChatDatabase:
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
         self._add_column("documents", "file_mtime", "REAL")
         self._add_column("documents", "last_error", "TEXT")
-        # Why a failure is permanent (corrupted, encrypted, empty, empty_file); NULL otherwise.
+        # Why a failure is permanent (corrupted, encrypted, empty, empty_file,
+        # unsupported_workbook); NULL otherwise.
         self._add_column("documents", "error_kind", "TEXT")
         # The server indexing it, so a restart can tell a dead index from a live one.
         self._add_column("documents", "indexing_owner", "TEXT")
