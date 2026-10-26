@@ -374,7 +374,7 @@ def get_thread_impl(gmail, *, thread_id: str, debug: bool = False) -> Dict[str, 
 
 
 # Gmail thread ids are hex; Outlook conversation ids are base64. Neither has
-# spaces or brackets, which is what a model's placeholder id looks like (#2834).
+# spaces or brackets, which is what a model's placeholder id looks like.
 _THREAD_ID_RE = re.compile(r"[A-Za-z0-9+/=_-]{1,512}")
 
 
@@ -2720,7 +2720,7 @@ class ReadToolsMixin:
     _SURFACED_SUBJECT_MAX_CHARS = 120
 
     def _surfaced_thread_map(self) -> Dict[str, str]:
-        # Threads a tool showed this session, oldest first (#2834). Hosts push
+        # Threads a tool showed this session, oldest first. Hosts push
         # text-only history, so this is where a thread id outlives its turn.
         surfaced = self.__dict__.get("_surfaced_threads")
         if surfaced is None:
@@ -2728,7 +2728,7 @@ class ReadToolsMixin:
         return surfaced
 
     def note_surfaced_thread(self, thread_id: str, subject: str, backend: Any) -> None:
-        """Remember a thread a tool showed, so a follow-up can name it (#2834)."""
+        """Remember a thread a tool showed, so a follow-up can name it."""
         surfaced = self._surfaced_thread_map()
         surfaced.pop(thread_id, None)
         surfaced[thread_id] = subject
