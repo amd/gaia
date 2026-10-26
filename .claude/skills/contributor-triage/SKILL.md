@@ -24,8 +24,10 @@ A PR is **ready** only when all four hold:
   failure that also fails on bare `origin/main` isn't the PR's fault; say so, don't count it
   as green.
 - no merge conflicts
-- every comment is addressed: human comments, inline threads, and the review bot's findings
-  (a stale "Request changes" is cleared by the bot re-reviewing, not by a commit alone)
+- every comment is addressed: human comments, inline threads, and the review bot's findings.
+  The bot's per-push re-review is silent unless it finds a new regression, so an old "Request
+  changes" never clears itself: the verifier confirms each finding is fixed in the current diff
+  (a commit after it proves nothing), or a full review is re-run by marking the PR ready/reopening
 - a verifier that did not touch the PR agrees
 
 The bar is strict by default and the **user** sets any waiver ("bug-only PRs, force-complete

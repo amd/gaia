@@ -343,7 +343,10 @@ def assess_pr(pr, team, stalled=(), required=REQUIRED_CHECKS):
     if verdict is None:
         notes.append("no review-bot verdict")
     elif "approve" not in verdict[0]:
-        blockers.append(f"review bot: {verdict[0]}")
+        stale = (
+            "" if verdict[1] else " (predates the head: verify each finding is fixed)"
+        )
+        blockers.append(f"review bot: {verdict[0]}{stale}")
     elif not verdict[1]:
         notes.append("bot verdict predates the last commit")
     if unaddressed:
