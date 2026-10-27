@@ -475,9 +475,23 @@ class TestPermissionRoutes:
         [
             (("127.0.0.1", 50000), {"X-Forwarded-For": "203.0.113.7"}),
             (("127.0.0.1", 50000), {"X-Forwarded-Proto": "https"}),
+            (("127.0.0.1", 50000), {"X-Forwarded-Host": "abc.ngrok.app"}),
+            (("127.0.0.1", 50000), {"x-fOrWaRdEd-fOr": ""}),
+            (("::1", 50000), {"X-Forwarded-For": "203.0.113.7"}),
             (("192.168.1.20", 50000), {}),
+            (("0.0.0.0", 50000), {}),
+            (("localhost.evil.example", 50000), {}),
         ],
-        ids=["tunnel-for", "tunnel-proto", "lan-peer"],
+        ids=[
+            "tunnel-for",
+            "tunnel-proto",
+            "tunnel-host",
+            "tunnel-empty-header-odd-case",
+            "tunnel-ipv6-loopback",
+            "lan-peer",
+            "unspecified-addr",
+            "loopback-lookalike-name",
+        ],
     )
     def test_put_default_is_refused_off_this_pc(self, client, peer, headers):
         _write_config({"full_access": False})
@@ -490,6 +504,12 @@ class TestPermissionRoutes:
         saved = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
         assert saved["full_access"] is False
         assert permissions.default_mode() == permissions.MODE_ASK
+
+    def test_put_default_is_allowed_from_ipv6_loopback(self, client):
+        local = TestClient(client.app, client=("::1", 50000))
+        resp = local.put("/api/chat/permissions", json={"mode": "full_access"})
+        assert resp.status_code == 200
+        assert permissions.default_mode() == permissions.MODE_FULL_ACCESS
 
     def test_put_default_refuses_an_unknown_mode(self, client):
         resp = client.put("/api/chat/permissions", json={"mode": "yolo"})
