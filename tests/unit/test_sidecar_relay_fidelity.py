@@ -687,6 +687,43 @@ def test_a_relayed_page_fetch_names_its_site_in_the_turn_summary():
     assert summary["live_data"] == {"attempted": 2, "failed": 0}
 
 
+_SEARCH_RESULT = (
+    'Web search results for: "2024 nobel physics"\n\n'
+    "1. The Nobel Prize in Physics 2024 - NobelPrize.org\n"
+    "   https://www.nobelprize.org/prizes/physics/2024/summary/\n"
+    "   The Nobel Prize in Physics 2024 was awarded jointly to John J. Hopfield"
+    " and Geoffrey Hinton for foundational discoveries and inventions.\n\n"
+    "2. Hopfield and Hinton win physics Nobel - Reuters\n"
+    "   https://www.reuters.com/science/nobel-physics-2024/\n"
+    "   The two scientists were honoured for work that enables machine learning"
+    " with artificial neural networks.\n\n"
+    "Use fetch_page(url) to read the full content of any result."
+)
+
+
+def test_a_relayed_web_search_lists_its_hits_as_sources_and_names_its_site():
+    handler = SSEOutputHandler()
+    _relay(
+        handler,
+        _sidecar_events("search_web", {"query": "2024 nobel physics"}, _SEARCH_RESULT),
+    )
+    summary = handler.turn_ledger.summary(location=None)
+    assert summary["pages"] == [
+        {
+            "url": "https://www.nobelprize.org/prizes/physics/2024/summary/",
+            "title": "The Nobel Prize in Physics 2024 - NobelPrize.org",
+            "kind": "search_result",
+        },
+        {
+            "url": "https://www.reuters.com/science/nobel-physics-2024/",
+            "title": "Hopfield and Hinton win physics Nobel - Reuters",
+            "kind": "search_result",
+        },
+    ]
+    assert summary["sites"] == ["duckduckgo.com"]
+    assert summary["live_data"] == {"attempted": 1, "failed": 0}
+
+
 def test_a_relayed_write_lists_the_file_in_the_turn_summary(tmp_path):
     path = tmp_path / "notes.md"
     path.write_text("hi", encoding="utf-8")
