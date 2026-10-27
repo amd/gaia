@@ -728,6 +728,20 @@ textarea:focus-visible {
 :root[data-titlebar="mac"] .sb-top {
     padding-left: 84px;
 }
+/* The collapsed rail is narrower than the lights: its icons go below them. */
+:root[data-titlebar="mac"] .sb.is-collapsed .sb-top {
+    padding: 44px 10px 8px;
+}
+/* A closed drawer leaves the window's top-left to the lights: the toggle and
+ * every top row start right of them. */
+@media (max-width: 768px) {
+    :root[data-titlebar="mac"] {
+        --sidebar-toggle-clearance: 136px;
+    }
+    :root[data-titlebar="mac"] .sidebar-toggle {
+        left: 86px;
+    }
+}
 
 .startup {
     display: flex;
