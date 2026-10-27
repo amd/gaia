@@ -606,8 +606,6 @@ gaia kill --daemons
 ```
 </CodeGroup>
 
-`--port` finds the process bound to that port and forcefully terminates it. The command reports killed, refused, and failed listeners and exits 1 on any refusal or failure. An empty port is a successful no-op (exit 0). Listing and termination commands each have a five-second timeout.
-
 <Note>
 `--daemons` stops only *orphaned* daemons: ones whose home folder or `instance.json` is gone, so no GAIA command can reach them (test runs used to leave these behind). The daemon of your own home is listed but never stopped; use `gaia daemon stop` for that. Daemons of other homes, such as a `GAIA_HOME` you set elsewhere, are listed and left running. Exits 1 if an orphaned daemon would not stop.
 </Note>
