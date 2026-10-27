@@ -49,9 +49,9 @@ const UPLOAD_URL_RE = /^\/api\/files\/uploads\/([A-Za-z0-9][A-Za-z0-9._-]*)$/;
  *
  * Schemes are matched case-insensitively. Apart from the upload links below,
  * only fragment-only URLs (`#anchor`) pass through without a scheme: the
- * renderer is loaded from `file://`, so a
- * root-relative (`/Windows/System32/calc.exe`), UNC (`//host/share/x.exe`) or
- * plain relative href resolves to a `file:` URL that the shell would hand to
+ * renderer is loaded from `file://`, so a root-relative
+ * (`/Windows/System32/calc.exe`), UNC (`//host/share/x.exe`) or plain
+ * relative href resolves to a `file:` URL that the shell would hand to
  * ShellExecute. Those are inert here.
  *
  * The one scheme-less exception is a chat attachment the composer linked:
