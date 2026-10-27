@@ -981,6 +981,13 @@
         "title": "Document Ids",
         "type": "array"
       },
+      "folders": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Folders",
+        "type": "array"
+      },
       "mail_provider": {
         "anyOf": [
           {

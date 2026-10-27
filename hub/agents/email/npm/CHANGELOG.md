@@ -6,6 +6,9 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **Connect prompts name the right Settings tab.** They sent users to a
+  "Connections" tab in Settings, which the Agent UI doesn't have; they now say
+  "Settings → Connectors".
 - **One very long turn no longer vanishes from the conversation.** A turn
   bigger than the whole history budget was dropped from what the model saw
   next, answer included. It is now kept with its longest messages cut and a

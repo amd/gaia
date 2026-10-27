@@ -55,7 +55,7 @@ beforeEach(() => {
     });
     mocked.checkSetup.mockResolvedValue(READY);
     mocked.requestWarmUp.mockResolvedValue({ state: 'ready' });
-    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false } });
+    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
     mocked.getSetupPlan.mockRejectedValue(new Error('no plan'));
     mocked.getSystemStatus.mockResolvedValue({
         lemonade_running: true,
@@ -148,6 +148,16 @@ describe('a new chat', () => {
         await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
         expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ document_ids: ['doc-lark-1'] });
         expect(useChatStore.getState().draftDocumentIds).toEqual([]);
+    });
+
+    it('starts with the folder picked on the new-chat page, then forgets it', async () => {
+        useChatStore.setState({ draftFolder: '/home/u/site' });
+        render(<App />);
+        await sendFirstMessage('list the pages');
+
+        await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
+        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ folders: ['/home/u/site'] });
+        expect(useChatStore.getState().draftFolder).toBeNull();
     });
 
     it('sends "ask" too, so a full-access default in config cannot hide behind the chip', async () => {
@@ -295,7 +305,7 @@ describe('first-run setup', () => {
     async function finishSetupWith(card: StartCard) {
         mocked.checkSetup.mockResolvedValue(NOT_READY);
         mocked.startSetup.mockResolvedValue({ state: 'ready', steps: [] });
-        mocked.getStartScreen.mockResolvedValue({ cards: [card], working_folder: { path: '/w', name: 'w', gaia_folder: false } });
+        mocked.getStartScreen.mockResolvedValue({ cards: [card], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
         render(<App />);
         await userEvent.click(await screen.findByRole('button', { name: 'Start setup' }));
         await userEvent.click(await screen.findByRole('button', { name: new RegExp(card.title) }));
