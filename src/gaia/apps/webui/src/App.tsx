@@ -515,8 +515,9 @@ function App() {
         return () => mq.removeEventListener('change', syncSystemTheme);
     }, [syncSystemTheme]);
 
-    // Drop the previous chat's in-flight stream state when switching (#1580).
-    useEffect(() => { resetStreaming(); }, [currentSessionId, resetStreaming]);
+    // Drop the previous chat's in-flight stream state when switching (#1580),
+    // and when a page replaces the chat view, which ends its stream too.
+    useEffect(() => { resetStreaming(); }, [currentSessionId, showMemoryDashboard, showSchedules, resetStreaming]);
 
     // ── Mobile access ──────────────────────────────────────────────────
     useEffect(() => {
