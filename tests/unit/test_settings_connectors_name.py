@@ -7,9 +7,15 @@ actually shows, "Connectors", never "Connections" (#2115).
 import re
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[2]
 _SCAN_ROOTS = [_ROOT / "src" / "gaia", _ROOT / "hub" / "agents", _ROOT / "docs"]
-_STALE_RE = re.compile(r"Settings\s*(?:→|->)\s*Connections\b")
+# Any arrow spelling, with or without markdown or quotes around either word.
+_STALE_RE = re.compile(
+    r"Settings[*_`\"']*\s*(?:→|->|>|»|›|&rarr;|&gt;)\s*[*_`\"']*Connections\b",
+    re.IGNORECASE,
+)
 _SCAN_EXTENSIONS = {
     ".py",
     ".tsx",
@@ -49,3 +55,37 @@ def test_settings_path_names_the_connectors_tab():
     ), "Settings has no Connections tab; say Settings → Connectors:\n  " + "\n  ".join(
         offenders
     )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Settings → Connections",
+        "Settings -> Connections -> Google",
+        "Settings>Connections",
+        "Settings » Connections",
+        "Settings › Connections",
+        "Settings &rarr; Connections",
+        "Settings &gt; Connections",
+        "**Settings** → **Connections**",
+        "`Settings` → `Connections`",
+        "settings -> connections",
+        "Settings →\n  Connections",
+    ],
+)
+def test_stale_pattern_catches_every_spelling(text):
+    assert _STALE_RE.search(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Settings → Connectors",
+        "Settings -> Connectors -> Google",
+        "one Connections panel spanning agents",
+        "stored connections for this client",
+        "Settings → ConnectionsX",
+    ],
+)
+def test_stale_pattern_leaves_correct_wording_alone(text):
+    assert not _STALE_RE.search(text)
