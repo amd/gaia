@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronRight, FileText, Folder, X } from 'lucide-react';
+import { ChevronRight, FileText, X } from 'lucide-react';
 import { Composer } from './Composer';
+import { FolderChip } from './FolderChip';
 import { ModelChip } from './ModelChip';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PrivateChip } from './PrivateChip';
@@ -271,19 +272,9 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                     leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /></>}
                     rightControls={<ModelChip />}
                 />
-                {folder && (
-                    <div className="new-chat-meta">
-                        <span
-                            className="new-chat-folder"
-                            title={folder.gaia_folder
-                                ? `GAIA works in its own folder, ${folder.path}. Attach a file or start GAIA from a project folder to work there.`
-                                : `GAIA works in ${folder.path}`}
-                        >
-                            <Folder size={13} aria-hidden="true" />
-                            <span>{folder.name}</span>
-                        </span>
-                    </div>
-                )}
+                <div className="new-chat-meta">
+                    {folder && <FolderChip folder={folder} disabled={starting || sending} />}
+                </div>
                 <LibraryDocuments />
                 {warming !== null && !starting && (
                     <p className="new-chat-warmup" role="status">{warmUpLine(warming)}</p>

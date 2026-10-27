@@ -63,9 +63,12 @@
     text-wrap: balance;
 }
 
+/* Holds its height before the folder arrives, so nothing below jumps. */
 .new-chat-meta {
     display: flex;
-    gap: 8px;
+    align-items: center;
+    gap: 4px;
+    min-height: 28px;
     margin-top: 8px;
 }
 
@@ -73,15 +76,31 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
+    min-width: 0;
     max-width: 100%;
+    color: var(--text-muted);
+    font-size: 12.5px;
+}
+
+.new-chat-folder.is-button {
     padding: 3px 9px;
     border: 1px solid var(--border-light);
     border-radius: var(--radius-full);
     color: var(--text-secondary);
-    font-size: 12.5px;
 }
 
-.new-chat-folder span {
+.new-chat-folder.is-button:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.new-chat-folder.is-on {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+    color: var(--text-primary);
+}
+
+.new-chat-folder-name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

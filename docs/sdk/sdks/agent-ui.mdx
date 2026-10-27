@@ -702,13 +702,19 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "title": "Code Review",
       "model": "Qwen3.5-35B-A3B-GGUF",
       "system_prompt": "You are a code reviewer.",
-      "document_ids": ["doc-abc123"]
+      "document_ids": ["doc-abc123"],
+      "folders": ["/home/me/projects/site"]
     }
     ```
 
     **Response:** `SessionResponse`
 
-    A `title` longer than 200 characters is a **422**.
+    A `title` longer than 200 characters is a **422**. `folders` lets the chat
+    read and write those folders from its first message, as
+    `POST /api/sessions/{session_id}/environment/folders` would. A folder that
+    is missing or too broad (a drive root, the home folder, a protected
+    folder), or any folder for an agent that runs as its own process, is a
+    **400** and no chat is created.
 
     From the Agent UI (`X-Gaia-Client: agent-ui`) a chat is always the GAIA
     agent: an omitted `agent_type` becomes `gaia` and any other value is a
@@ -2241,7 +2247,9 @@ First-run hardware scan (issues #1726, #1727).
 
   <Accordion title="GET /api/onboarding/start">
     What a new chat's empty screen offers: up to four `cards` and the
-    `working_folder` (`{path, name, gaia_folder}`) a new chat's agent works in.
+    `working_folder` (`{path, name, gaia_folder, choosable}`) a new chat's agent
+    works in. `choosable` is false when the GAIA agent runs as its own process,
+    so a new chat can't be given another folder.
     Each card is `{skill, title, note, prompt, needs_input}`. Its task runs on
     the agent's own tools, so it appears whether or not `skill` is installed;
     only the check-in card needs its skill. Cards for what the user set up

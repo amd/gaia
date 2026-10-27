@@ -399,6 +399,7 @@ function App() {
                 agent_type: FLAGSHIP_AGENT_ID,
                 document_ids: store.draftDocumentIds,
                 private: store.draftPrivate,
+                folders: store.draftFolder ? [store.draftFolder] : [],
             });
         } catch (err) {
             if (!isFlagshipMissingError(err)) throw err;
@@ -418,6 +419,7 @@ function App() {
         }
         store.clearDraftDocuments();
         store.setDraftPrivate(false);
+        store.setDraftFolder(null);
         addSession(session);
         setCurrentSession(session.id);
         setMessages([]);
