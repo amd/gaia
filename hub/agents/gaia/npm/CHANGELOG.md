@@ -157,6 +157,12 @@ contract is now **2.18**; clients built for 2.17 keep working, and the new
 `/query` fields are refused with `422` by older binaries, so probe
 `/version` before sending them.
 
+### Linux
+
+- **The Linux agent runs on glibc 2.34 or newer.** The `linux-x64` agent is
+  now built against glibc 2.34 (#5545), so it starts on Ubuntu 22.04, Debian 12
+  and RHEL 9. Before, it needed glibc 2.38 and failed at launch on those.
+
 ### For integrators: contract 2.18
 
 - **`/query` takes the chat's file scope and memory mode** (contract **2.18**).
