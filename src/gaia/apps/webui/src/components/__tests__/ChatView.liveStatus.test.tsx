@@ -157,6 +157,60 @@ describe('ChatView live status', () => {
     });
 });
 
+describe('one progress readout per turn', () => {
+    const summaryBar = () => screen.queryByRole('button', { name: 'Expand agent activity' });
+
+    it("keeps the backend's silent-wait tick out of the bubble", async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({
+                type: 'status', status: 'working', message: 'Model is processing... (15s)',
+            } as unknown as StreamEvent);
+        });
+
+        await liveLine('Thinking...');
+        expect(useChatStore.getState().agentSteps).toEqual([]);
+        expect(screen.queryByText(/Model is processing/)).toBeNull();
+        expect(summaryBar()).toBeNull();
+    });
+
+    it("does not relabel the model's reasoning with the tick", async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({ type: 'thinking', content: 'Let me look.' } as unknown as StreamEvent);
+            capturedCallbacks!.onAgentEvent({
+                type: 'status', status: 'working', message: 'Model is processing... (15s)',
+            } as unknown as StreamEvent);
+        });
+
+        expect(useChatStore.getState().agentSteps.map((s) => s.label)).toEqual(['Thinking']);
+    });
+
+    it("names a running tool beside GAIA's name and only counts steps in the activity bar", async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({
+                type: 'tool_start', tool: 'read_file', narration: 'Reading file: notes.txt',
+            } as unknown as StreamEvent);
+        });
+
+        await liveLine('Reading file: notes.txt');
+        expect(summaryBar()).toHaveTextContent(/^1 step · 1 tool$/);
+    });
+
+    it('takes a narration that arrives with the arguments', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'read_file' } as unknown as StreamEvent);
+            capturedCallbacks!.onAgentEvent({
+                type: 'tool_args', tool: 'read_file', args: { file_path: 'notes.txt' }, narration: 'Reading file: notes.txt',
+            } as unknown as StreamEvent);
+        });
+
+        await liveLine('Reading file: notes.txt');
+    });
+});
+
 describe('a tool called with no arguments', () => {
     const lastToolStep = () => {
         const tools = useChatStore.getState().agentSteps.filter((s) => s.type === 'tool');

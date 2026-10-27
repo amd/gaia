@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, EyeOff } from 'lucide-react';
+import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
 import { MessageBubble, isErrorContent } from './MessageBubble';
-import { toolActiveLabel } from './AgentActivity';
+import { toolRowText } from './AgentActivity';
+import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -30,6 +31,7 @@ import { AnswerComparison } from './AnswerComparison';
 import * as messageQueue from '../utils/messageQueue';
 import type { QueuedMessage } from '../utils/messageQueue';
 import { SessionPanel, SessionPanelToggle } from './session-panel/SessionPanel';
+import { PrivateChatButton } from './PrivateChatButton';
 import { OfflineNotice } from './session-panel/OfflineNotice';
 import { ExportErrorBar } from './ExportErrorBar';
 import { useSessionPanelStore } from '../stores/sessionPanelStore';
@@ -123,85 +125,6 @@ const historyNotices = new Map<number, string>();
 /** One quiet line saying older turns left the model's view. */
 function HistoryNotice({ text }: { text: string }) {
     return <div className="history-notice" role="note">{text}</div>;
-}
-
-/** Map an SSE agent event to an AgentStep for the UI. */
-function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<number>): AgentStep | null {
-    const id = ++stepIdRef.current;
-    const ts = Date.now();
-
-    switch (event.type) {
-        case 'thinking':
-            return {
-                id, type: 'thinking', label: 'Thinking',
-                detail: event.content, active: true, timestamp: ts,
-            };
-        case 'tool_start':
-            return {
-                id, type: 'tool',
-                // Label is determined by AgentActivity based on tool name
-                label: 'Using tool',
-                tool: event.tool,
-                detail: event.detail,
-                narration: event.narration,
-                active: true, timestamp: ts,
-                mcpServer: event.mcp_server,
-                mcpServerLabel: event.mcp_server_label,
-                mcpTool: event.mcp_tool,
-            };
-        case 'plan':
-            return {
-                id, type: 'plan', label: 'Created plan',
-                planSteps: event.steps, planNarrations: event.step_narrations,
-                currentStep: event.current_step, active: false,
-                success: true, timestamp: ts,
-            };
-        case 'step':
-            return {
-                id, type: 'status',
-                label: `Step ${event.step}${event.total ? ` of ${event.total}` : ''}`,
-                active: true, timestamp: ts,
-            };
-        case 'status':
-            if (event.message?.startsWith('Agent: ')) return null;
-            return {
-                id, type: 'status',
-                label: event.message || event.status || 'Working',
-                active: event.status === 'working',
-                timestamp: ts,
-            };
-        case 'agent_error':
-            return {
-                id, type: 'error', label: 'Error',
-                detail: event.content, success: false,
-                active: false, timestamp: ts,
-            };
-        case 'policy_alert': {
-            const toolName = event.tool || 'unknown tool';
-            const reason =
-                event.reason ||
-                event.message ||
-                event.content ||
-                'Tool execution was blocked by governance policy.';
-            return {
-                id,
-                type: 'policy_alert',
-                label: `Policy blocked ${toolName}`,
-                detail: reason,
-                tool: toolName,
-                decision: event.decision || 'BLOCK',
-                reason,
-                ruleIds: event.rule_ids ?? [],
-                policyVersion: event.policy_version,
-                receiptId: event.receipt_id,
-                success: false,
-                active: false,
-                timestamp: ts,
-            };
-        }
-        default:
-            return null;
-    }
 }
 
 /** Messages as the API sends them, with steps and stats under the names the view reads. */
@@ -1072,6 +995,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         ...(detail ? { detail } : {}),
                         ...(event.narration ? { narration: event.narration } : {}),
                     });
+                    const store = useChatStore.getState();
+                    const tool = [...store.agentSteps].reverse().find((s) => s.type === 'tool');
+                    if (event.narration && tool?.active && store.livePhase === 'tool') {
+                        store.setLiveStatus(toolRowText(tool), 'tool');
+                    }
                     return;
                 }
 
@@ -1109,6 +1037,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.phase && msg) useChatStore.getState().setLiveStatus(msg, event.phase);
                     // The client's own wait notice is not a step of the turn.
                     if (event.phase === 'waiting') return;
+                    if (isProgressTick(event)) return;
                     // Skip "Executing <tool>" messages - redundant with tool_start
                     if (msg.toLowerCase().startsWith('executing ')) return;
                     if (status === 'working' || status === 'warning' || status === 'info') {
@@ -1152,7 +1081,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.type === 'tool_start') {
                         toolOccurredRef.current = true;
                         // The model's phase ended with the call; say a tool runs, not the model.
-                        useChatStore.getState().setLiveStatus(toolActiveLabel(event.tool, step), 'tool');
+                        useChatStore.getState().setLiveStatus(toolRowText(step), 'tool');
                     }
                 }
             },
@@ -1726,15 +1655,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     )}
                 </div>
                 <div className="task-header-right">
-                    <button
-                        className={`btn-icon-sm${session?.private ? ' active' : ''}`}
-                        onClick={handleTogglePrivate}
-                        title={session?.private ? 'Private: this chat is not saved to memory' : 'Make private (not saved to memory)'}
-                        aria-label={session?.private ? 'Private chat on' : 'Make chat private'}
-                        aria-pressed={!!session?.private}
-                    >
-                        <EyeOff size={15} />
-                    </button>
+                    <PrivateChatButton isPrivate={!!session?.private} onToggle={handleTogglePrivate} />
                     <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files on this PC" aria-label="Browse files on this PC">
                         <FolderSearch size={15} />
                     </button>

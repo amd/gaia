@@ -9,6 +9,24 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **One very long turn no longer vanishes from the conversation.** A pushed
+  turn bigger than the whole history budget was dropped, answer included. It is
+  now kept with its longest messages cut and a note saying how much.
+- **A follow-up about a thread shown last turn now works in the TUI.** Find a
+  thread, then ask who said what in it: the second question used to fail,
+  because the host pushes back only the conversation's words and the thread id
+  never made it into the next turn. The model guessed one, and Gmail rejected
+  `[ID of Northgate migration sync — phase 2 sequencing]` with a 400. A
+  session-scoped agent (a `/v1/email/query` caller that sends `session_id`, as
+  the TUI does) now remembers the last 10 threads `get_thread` and
+  `summarize_thread` showed, and hands them back with the history as
+  `- [thread] <subject> (thread_id <id>)` lines, the subjects fenced as
+  untrusted. It also remembers each thread's mailbox, so the follow-up routes
+  without a `mailbox` argument. The Agent UI relay doesn't send `session_id`
+  yet, so it doesn't get this. Both tools now refuse an id that can't be a
+  thread id before calling the mail API, with `thread_id '<id>' is not a thread
+  id. Call search_messages first and pass the thread_id from its result.`
+  (#2834)
 - **Pushed history that doesn't fit the model's window no longer overflows
   it.** `/v1/email/query` used the `context` the host pushed as-is, but the
   host sizes it without seeing this agent's prompt and tools. On a 32K window

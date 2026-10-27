@@ -2684,7 +2684,11 @@ Skills are discovered from three roots, highest precedence first:
 
     The version is a SemVer range — `web-research@^1.2`, `@>=1.0.0, <2.0.0`,
     `@1.4.7`, or omitted for the latest. The highest published version satisfying
-    it wins, the same rule agent `dependencies:` use.
+    it wins. A range admits a prerelease only if one of its targets names a
+    prerelease of the same `major.minor.patch`, such as `@>=1.3.0-rc.1`.
+    Omitting the version or using `*` / `latest` prefers the highest stable
+    release; only when none exists does it select the highest prerelease.
+    `any` and an empty range behave the same way.
 
     Install verifies the artifact's SHA-256 against the hub manifest, verifies the
     bundle's `SIGNATURE.json` over every file, then installs at
@@ -3011,9 +3015,11 @@ skills:
 Every `Agent` subclass resolves this block at construction, so a **custom agent**
 under `~/.gaia/agents/<id>/` consumes an installed hub skill by dropping a
 `gaia-agent.yaml` beside its `agent.py` — no code change, no registration call.
-Resolution mirrors agent `dependencies:`: highest installed version satisfying the
-range, tool providers ordered before their consumers, and fail-loud on a conflict
-or a dependency cycle. A missing `required: true` skill raises with the
+Resolution checks the installed version against the range, orders tool providers
+before their consumers, and fails loudly on a conflict or a dependency cycle.
+A pinned range admits a prerelease only when a target names a prerelease of the
+same `major.minor.patch`. Unrestricted pins accept an installed prerelease.
+A missing `required: true` skill raises with the
 `gaia skill install` command that fixes it; a missing optional one is logged and
 skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 `load_declared_skills()` yourself.
@@ -3833,45 +3839,6 @@ the connector with `gaia connectors configure mcp-tavily --set TAVILY_API_KEY=tv
 
 ---
 
-### Kill Command
-
-Terminate processes running on specific ports.
-
-```bash
-gaia kill [OPTIONS]
-```
-
-**Options:**
-
-| Option | Type | Description |
-|--------|------|-------------|
-| `--port` | integer | Port number to kill process on |
-| `--lemonade` | flag | Kill Lemonade server (port 13305) |
-| `--daemons` | flag | List running GAIA daemons; stop those whose home folder or `instance.json` is gone |
-
-**Examples:**
-
-<CodeGroup>
-```bash Kill Lemonade Server
-gaia kill --lemonade
-```
-
-```bash Kill by Port
-gaia kill --port 13305
-```
-
-```bash Stop Orphaned Daemons
-gaia kill --daemons
-```
-</CodeGroup>
-
-This command will:
-- Find the process ID (PID) bound to the specified port
-- Forcefully terminate that process
-- Report killed, refused, and failed listeners; exit 1 on any refusal or failure. An empty port is a successful no-op (exit 0). Listing and forceful termination commands each have a five-second timeout.
-
----
-
 ### Diagnostics Command
 
 Bundle system info and logs into a tarball for bug reports.
@@ -3942,7 +3909,7 @@ Backend flags are accepted only by the commands that use them, and any other com
 |-------|-------------|
 | `--use-claude`, `--claude-model` | `chat`, `prompt`, `talk` |
 | `--model` | `chat`, `prompt`, `talk`, `llm`, `email` (and eval subcommands that define their own) |
-| `--base-url` | `chat`, `prompt`, `talk`, `llm`, `email`, `api`, `stats`, `mcp start` |
+| `--base-url` | `chat`, `prompt`, `talk`, `llm`, `api`, `stats`, `mcp start` |
 | `--trace` | `chat`, `email` |
 | `--max-steps`, `--list-tools`, `--stream` | `chat` |
 

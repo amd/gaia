@@ -35,6 +35,7 @@ from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
 from gaia.log_rotation import log_family
 from gaia.logger import get_logger
+from gaia.login_path import apply_login_path
 from gaia.mcp.ports import (
     AGENT_UI_MCP_PORT,
     MCP_BRIDGE_PORT,
@@ -1410,9 +1411,10 @@ def build_parser():
     email_parser = subparsers.add_parser(
         "email",
         help=(
-            "Email Triage Agent — read, organize, and reply to Gmail with "
-            "all body inference running locally on Lemonade. Requires the "
-            "Google connector to be configured (Settings → Connections)."
+            "Email Triage Agent — read, organize, and reply to Gmail or "
+            "Outlook with all body inference running locally on Lemonade. "
+            "Requires the Google or Microsoft connector to be configured "
+            "(Settings → Connections)."
         ),
         parents=[
             parent_parser,
@@ -4596,6 +4598,7 @@ def main():
     log = get_logger(__name__)
 
     args = parser.parse_args()
+    apply_login_path()  # after parsing, so --version and -h skip the shell
     if args.action == "engineering":
         from gaia.engineering.cli import run as run_engineering
 

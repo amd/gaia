@@ -472,7 +472,7 @@ export interface Document {
     sessions_using: number;
     indexing_status?: 'pending' | 'indexing' | 'complete' | 'failed' | 'cancelled' | 'missing';
     last_error?: string | null;
-    /** Set when retrying can't help until the file is fixed: corrupted, encrypted, empty (no text) or empty_file (0 bytes). */
+    /** Set when retrying can't help until the file is fixed: corrupted, encrypted, empty (no text), empty_file (nothing to index) or unsupported_workbook (.xls or password-protected). */
     error_kind?: string | null;
 }
 
@@ -1045,8 +1045,9 @@ export interface SetupPlan {
     download_gb: number | null;
 }
 
-/** A task a new chat offers, from an installed skill and what is set up. */
+/** A task a new chat offers, from what is set up on this PC. */
 export interface StartCard {
+    /** The skill that sharpens this task when installed; also the card's id. */
     skill: string;
     title: string;
     note: string;
