@@ -46,7 +46,9 @@ The agent searches your common folders first, then offers a deep search across a
 In-process chat agents retain file reads, tool calls and tool results for later
 questions, including after the server restarts. Complete older turns leave the
 model's context only when its estimated history budget fills; the transcript and
-stored evidence remain on your machine. When more older turns leave the model's
+stored evidence remain on your machine. A single turn too big for that budget
+stays in view shortened: long tool results become a one-line note naming the
+tool, and its longest messages are cut with a note saying how much. When more older turns leave the model's
 view — a long chat, or a switch to a smaller model — the chat shows one quiet
 line before the reply — "Older messages are now out of the model's view (N
 turns)" — and the TUI shows the same line in its transcript. Ask GAIA to recall
@@ -328,9 +330,10 @@ and where that model runs.
   Files the answer names by full path,
   such as a saved deliverable, open in your file explorer when clicked.
 - **A new chat** greets you, shows the folder GAIA works in, and offers up to
-  four tasks from the skills you have and what you've set up (indexed
-  documents, a connected mail account). A task with a subject to fill in is
-  typed into the message box; the others start straight away.
+  four tasks: first for what you've set up (indexed documents, a connected
+  mail account), then research, code and summaries, which work on a fresh
+  install, and a check-in once its skill is installed. A task with a subject
+  to fill in is typed into the message box; the others start straight away.
 - **The session panel** on the right keeps the facts about this chat in view;
   see [The session panel](#the-session-panel).
 - **"Loading Qwen3.6-35B-A3B on your GPU… 12s"** under the message box means

@@ -160,7 +160,8 @@ class RelayProfile:
     #: off). ``None`` means the relay never sends it.
     min_memory_api_version: Optional[Tuple[int, int]] = None
     #: Shown instead of running a private or memory-off turn when the installed
-    #: agent is below :attr:`min_memory_api_version` — it would save to memory.
+    #: agent can't take ``memory`` — it is below :attr:`min_memory_api_version`,
+    #: or that floor is ``None`` — so it would save to memory.
     memory_upgrade_message: str = ""
     #: Contract version from which ``/query`` takes ``changes_turn_id`` and
     #: records the run's file changes for undo. ``None`` means never sent.
@@ -325,6 +326,11 @@ EMAIL_PROFILE = RelayProfile(
     version_upgrade_message=(
         "The email agent is out of date and can't answer chat messages. Update "
         "GAIA and the email agent to the latest version, then try again."
+    ),
+    memory_upgrade_message=(
+        "The email agent does not support private chats or chats with memory "
+        "turned off yet. Your message was not sent to the email agent. Use "
+        "the GAIA agent for this chat instead."
     ),
     tool_labels=MappingProxyType(_EMAIL_TOOL_LABELS),
     mutating_tools=_EMAIL_MUTATING_TOOLS,

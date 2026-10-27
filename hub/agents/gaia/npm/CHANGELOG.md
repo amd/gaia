@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **One very long turn no longer vanishes from the conversation.** A turn
+  bigger than the whole history budget, like a pasted log or a long document
+  read, was dropped from what the model saw next, answer included, so "now
+  shorten that" ran with no record of it. It is now kept: long tool results
+  become a short note naming the tool, and its longest messages are cut with
+  a note saying how much.
+
 ### For integrators: contract 2.22
 
 - **The agent remembers its own tool calls across turns** (contract **2.22**,
@@ -169,6 +176,12 @@ Released with GAIA 0.25.1, and requires it. Integrators: the sidecar
 contract is now **2.18**; clients built for 2.17 keep working, and the new
 `/query` fields are refused with `422` by older binaries, so probe
 `/version` before sending them.
+
+### Linux
+
+- **The Linux agent runs on glibc 2.34 or newer.** The `linux-x64` agent is
+  now built against glibc 2.34 (#5545), so it starts on Ubuntu 22.04, Debian 12
+  and RHEL 9. Before, it needed glibc 2.38 and failed at launch on those.
 
 ### For integrators: contract 2.18
 

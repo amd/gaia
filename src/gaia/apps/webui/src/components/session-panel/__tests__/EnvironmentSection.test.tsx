@@ -133,7 +133,9 @@ describe('Can read and write', () => {
         expect(screen.queryByText('Can read and write')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Add folder/ })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
-        expect(screen.getByRole('switch', { name: 'Internet for this chat' })).toBeDisabled();
+        expect(screen.queryByRole('switch', { name: 'Internet for this chat' })).not.toBeInTheDocument();
+        expect(screen.getByText('On')).toBeInTheDocument();
+        expect(screen.getAllByText(/can't be changed from/)).toHaveLength(1);
     });
 
     it("doesn't claim another agent's scope", async () => {
