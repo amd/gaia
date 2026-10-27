@@ -5391,6 +5391,22 @@ Do NOT wrap conversational replies in JSON.
         return schemas
 
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
+        """Decode a reply and reject tool arguments that cannot be executed."""
+        parsed = self._decode_llm_response(response)
+        calls = parsed.get("tool_calls") or (
+            [{"name": parsed["tool"], "tool_args": parsed.get("tool_args", {})}]
+            if parsed.get("tool")
+            else []
+        )
+        for call in calls:
+            if not isinstance(call["tool_args"], dict):
+                raise ValueError(
+                    f"Malformed tool_call arguments for '{call['name']}': expected "
+                    f"a JSON object, got {type(call['tool_args']).__name__}."
+                )
+        return parsed
+
+    def _decode_llm_response(self, response: str) -> Dict[str, Any]:
         """
         Parse the LLM response to extract tool calls or conversational answers.
 
@@ -7164,7 +7180,10 @@ Do NOT wrap conversational replies in JSON.
         ).strip()
         if not response:
             raise _NotAnAnswer("the model returned an empty reply")
-        parsed = self._parse_llm_response(response)
+        try:
+            parsed = self._parse_llm_response(response)
+        except ValueError as exc:
+            raise _NotAnAnswer(str(exc)) from exc
         answer = parsed.get("answer")
         if not isinstance(answer, str):
             answer = ""

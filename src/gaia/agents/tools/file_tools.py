@@ -468,7 +468,39 @@ class FileSearchToolsMixin:
                         ".rs",
                         ".rb",
                         ".sh",
+                        # Agent work reads logs and configs, not just source and
+                        # documents: CI triage needs `ci.log`, a version bump needs
+                        # `pyproject.toml`, and neither was reachable by name.
+                        ".log",
+                        ".toml",
+                        ".yaml",
+                        ".yml",
+                        ".ini",
+                        ".cfg",
+                        ".xml",
+                        ".sql",
+                        ".html",
+                        ".css",
+                        ".tsx",
+                        ".jsx",
                     }
+
+                # An extension the caller wrote into the pattern is a named file, not a
+                # fuzzy ask, so it outranks the DEFAULT allowlist above: "ci.log" and
+                # "*.log" both mean .log, whatever the list holds. Two things do not
+                # count as naming one -- a pattern built as a regex, whose tail only
+                # looks like an extension ("(ci|build).xyz" is a pattern, not a request
+                # for a .xyz file), and an explicit `file_types`, which stays
+                # authoritative over the pattern.
+                if not file_types:
+                    _named_extension = re.search(
+                        r"\.([A-Za-z][A-Za-z0-9]{0,9})$", file_pattern.strip()
+                    )
+                    if _named_extension and not (
+                        set(file_pattern.strip()[: _named_extension.start()])
+                        & set(r"+[](){}^$|\\")
+                    ):
+                        doc_extensions.add(f".{_named_extension.group(1).lower()}")
 
                 matching_files = []
                 # Folded, so "resume" finds "résumé.txt" and "CAFE" finds "Café".
@@ -2217,7 +2249,7 @@ class FileSearchToolsMixin:
                     file_content = None
                     used_encoding = None
                     bom_codec = text_encoding(fp)
-                    # latin-1 accepts any bytes, so a BOM-marked file decodes by its BOM.
+                    # latin-1 accepts any bytes, so a BOM-marked or CP1252 file decodes by its codec.
                     for encoding in (
                         (bom_codec,)
                         if bom_codec != "utf-8"

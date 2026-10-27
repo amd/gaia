@@ -164,6 +164,11 @@ as "no documents are indexed" about a file the user can see attached.
 - **Ordering:** `status`/`token`/`tool_call`/`tool_result` may interleave freely
   during a run. `needs_confirmation` pauses the logical run pending the §0.4
   handoff. A terminal `final`/`error` is always last.
+- **Undo finalization:** recording finishes before the terminal event. If saving
+  undo history also fails after a failed turn, a `status` warning reports the undo
+  failure and the terminal `error` preserves the original turn error. A successful
+  answer is likewise preserved when only undo saving fails. Both failures remain
+  available in the server log.
 
 ---
 
@@ -252,7 +257,8 @@ indistinguishable from a dead one.
       "type": "object", "additionalProperties": false,
       "properties": {
         "working_directory": { "type": "string" },
-        "risk_note":         { "type": "string" }
+        "risk_note":         { "type": "string" },
+        "file_path":         { "type": "string" }   // where a relative write lands
       } },
     "confirm_url": { "type": "string" }    // resume-model only (§0.4); omitted under stateless
   } }

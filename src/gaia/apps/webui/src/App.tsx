@@ -280,6 +280,11 @@ function App() {
                     if (fp === sessionFingerprint.current) return;
                     sessionFingerprint.current = fp;
                     setSessions(list);
+                    // Another window or the TUI switched models: re-read it, or the footer and picker go stale.
+                    const picked = useModelStore.getState().active?.model;
+                    if (picked && list.some((s) => s.effective_model && s.effective_model !== picked)) {
+                        void useModelStore.getState().refresh();
+                    }
                 })
                 .catch((err) => { if (initial) log.system.error('Could not load chats', err); });
         };

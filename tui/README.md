@@ -122,7 +122,7 @@ CLI's job, not the terminal UI's:
 
 ```bash
 gaia hub list                 # what the Agent Hub offers, and what you have
-gaia hub install email --trust
+gaia hub install email
 gaia hub uninstall email
 ```
 
