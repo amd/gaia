@@ -1295,6 +1295,9 @@ export interface SessionPermissions {
 
 // ── Skills (GET /api/skills) ──────────────────────────────────────────────
 
+/** Which discovery root a skill was found in. */
+export type SkillSource = 'agent-bundled' | 'user' | 'claude-import';
+
 export interface SkillInfo {
     name: string;
     description: string;
@@ -1304,4 +1307,6 @@ export interface SkillInfo {
     tier: string | null;
     tools: string[];
     path: string;
+    /** Absent when an older GAIA agent answered the listing. */
+    source?: SkillSource | null;
 }
