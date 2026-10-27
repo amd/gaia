@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **One very long turn no longer vanishes from the conversation.** A turn
+  bigger than the whole history budget, like a pasted log or a long document
+  read, was dropped from what the model saw next, answer included, so "now
+  shorten that" ran with no record of it. It is now kept: long tool results
+  become a short note naming the tool, and its longest messages are cut with
+  a note saying how much.
+
 ### For integrators: contract 2.22
 
 - **`/query` takes `internet_off`** (contract **2.22**, #5883). The Agent UI
@@ -21,12 +28,6 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `{"internet_off": bool}`; the session's next tool call follows it. An
   unknown session is a `404`, as for `/bypass`. Post it only once `/query`
   has answered: until then the turn's own `internet_off` replaces it.
-- **One very long turn no longer vanishes from the conversation.** A turn
-  bigger than the whole history budget, like a pasted log or a long document
-  read, was dropped from what the model saw next, answer included, so "now
-  shorten that" ran with no record of it. It is now kept: long tool results
-  become a short note naming the tool, and its longest messages are cut with
-  a note saying how much.
 
 ### For integrators: contract 2.21
 
