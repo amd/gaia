@@ -176,7 +176,12 @@ async function indexAndAttachFiles(
 
 const isHiddenName = (name: string) => name.startsWith('.');
 
-export function FileBrowser() {
+interface FileBrowserProps {
+    /** Starts a new chat with this first message; used when no chat is open. */
+    onStartChat: (text: string) => Promise<boolean>;
+}
+
+export function FileBrowser({ onStartChat }: FileBrowserProps) {
     const { setShowFileBrowser, currentSessionId, updateSessionInList, setPendingPrompt } = useChatStore();
     const closeBrowser = useCallback(() => setShowFileBrowser(false), [setShowFileBrowser]);
     useEscapeToClose(true, closeBrowser);
@@ -406,7 +411,11 @@ export function FileBrowser() {
                 ? `Please analyze this document for me: ${fileNames[0]}`
                 : `Please analyze these documents for me:\n${fileNames.map(n => `- ${n}`).join('\n')}`;
 
-            setPendingPrompt(prompt);
+            if (currentSessionId) {
+                setPendingPrompt({ sessionId: currentSessionId, text: prompt });
+            } else {
+                await onStartChat(prompt);
+            }
             setShowFileBrowser(false);
             setSelectedFiles(new Set());
         } catch (err) {
@@ -419,7 +428,7 @@ export function FileBrowser() {
             setIndexingFiles(new Set());
             setIndexStatus(null);
         }
-    }, [selectedFiles, currentSessionId, updateSessionInList, entries, setPendingPrompt, setShowFileBrowser]);
+    }, [selectedFiles, currentSessionId, updateSessionInList, entries, setPendingPrompt, setShowFileBrowser, onStartChat]);
 
     // Build breadcrumb segments from current path
     const pathSegments = currentPath ? currentPath.replace(/\\/g, '/').split('/').filter(Boolean) : [];
