@@ -1,0 +1,275 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/*
+ * The browser pane is the app's last column, beside the chat, so the chat
+ * narrows instead of sliding under it. The page itself is a native view that
+ * main lays over .bp-viewport, so nothing in the app may draw there.
+ */
+
+.app:has(> .browser-pane) > .main-content {
+    min-width: min(var(--chat-min-w), max(0px, calc(100% - var(--sidebar-w) - var(--pane-min-w))));
+}
+
+.browser-pane {
+    --bp-handle: 8px;
+    position: relative;
+    /* Gives way when the window narrows, so the chat column keeps its minimum below. */
+    flex: 0 1 auto;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-width: var(--pane-min-w);
+    background: var(--bg-primary);
+    border-left: 1px solid var(--border-light);
+    font-family: var(--font-sans);
+    font-size: var(--fs-ui);
+    color: var(--text-primary);
+}
+
+.bp-resize {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc(var(--bp-handle) / -2);
+    width: var(--bp-handle);
+    cursor: col-resize;
+    touch-action: none;
+    z-index: 1;
+}
+
+.bp-resize::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc(var(--bp-handle) / 2 - 1px);
+    width: 2px;
+    background: var(--accent);
+    opacity: 0;
+    transition: opacity var(--duration) var(--ease);
+}
+
+.bp-resize:hover::after,
+.bp-resize:focus-visible::after,
+.bp-resize.is-dragging::after { opacity: 0.6; }
+
+/* ── Toolbar ────────────────────────────────────────────────────────── */
+
+.bp-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px 8px 6px;
+    border-bottom: 1px solid var(--border-light);
+}
+
+/* Windows draws minimize, maximize and close over the top right, as in .task-header. */
+:root[data-titlebar="overlay"] .bp-toolbar {
+    padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px);
+}
+
+.bp-tabs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.bp-tab {
+    display: flex;
+    align-items: center;
+    flex: 0 1 180px;
+    min-width: 72px;
+    height: 28px;
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+}
+
+.bp-tab:hover { background: var(--bg-hover); }
+
+.bp-tab.is-active {
+    background: var(--bg-active);
+    color: var(--text-primary);
+}
+
+.bp-tab-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    padding: 0 4px 0 10px;
+    font-size: var(--fs-label);
+    text-align: left;
+}
+
+.bp-tab-title > span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bp-tab-spinner {
+    flex-shrink: 0;
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin var(--duration-spin) var(--ease-linear) infinite;
+}
+
+.bp-tab-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    margin-right: 4px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+}
+
+.bp-tab-close:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.bp-new-tab { flex-shrink: 0; }
+
+.bp-nav {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.bp-nav .btn-icon-sm:disabled {
+    color: var(--text-muted);
+    opacity: 0.5;
+    cursor: default;
+    background: none;
+}
+
+.bp-nav .btn-icon-sm[aria-pressed='true'],
+.bp-nav .btn-icon-sm[aria-expanded='true'],
+.bp-toggle[aria-pressed='true'] {
+    color: var(--accent);
+    background: var(--accent-dim);
+}
+
+.bp-address {
+    flex: 1;
+    min-width: 0;
+    margin: 0 4px;
+}
+
+.bp-address-input {
+    width: 100%;
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    background: var(--bg-input);
+    font-family: var(--font-sans);
+    font-size: var(--fs-label);
+    color: var(--text-primary);
+}
+
+.bp-address-input:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-ring);
+}
+
+.bp-address-input.is-invalid {
+    border-color: var(--danger);
+}
+
+.bp-menu { position: relative; }
+
+/* ── Notice and viewport ───────────────────────────────────────────── */
+
+.bp-notice {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border-light);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: var(--fs-label);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.bp-notice.is-load-failed,
+.bp-notice.is-blocked {
+    color: var(--danger);
+    background: var(--danger-dim);
+}
+
+.bp-viewport {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--bg-secondary);
+}
+
+.bp-frozen {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.bp-newtab {
+    height: 100%;
+    overflow-y: auto;
+    padding: 32px 24px;
+    background: var(--bg-primary);
+}
+
+.bp-newtab-title {
+    margin: 0 0 12px;
+    font-size: var(--fs-title);
+    font-weight: 600;
+}
+
+.bp-newtab-empty {
+    margin: 0;
+    color: var(--text-secondary);
+}
+
+.bp-recent {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.bp-recent-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    text-align: left;
+}
+
+.bp-recent-item:hover,
+.bp-recent-item:focus-visible { background: var(--bg-hover); }
+
+.bp-recent-title,
+.bp-recent-url {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bp-recent-url {
+    color: var(--text-muted);
+    font-size: var(--fs-caption);
+}

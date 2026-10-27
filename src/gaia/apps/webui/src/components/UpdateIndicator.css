@@ -9,7 +9,7 @@
 
 .update-chip {
     position: fixed;
-    right: 16px;
+    right: calc(16px + var(--browser-pane-inset));
     bottom: 16px;
     z-index: 1200;
 

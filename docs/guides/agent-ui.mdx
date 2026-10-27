@@ -597,6 +597,42 @@ reads nothing.
     request with GitHub's `gh` tool; it isn't offered from the default branch
     or while the chat's internet is off.
 
+## Browser pane
+
+The desktop app has a browser beside the chat, so you can read a page and talk
+to GAIA about it without switching windows. Press **Cmd+Shift+B** (macOS) or
+**Ctrl+Shift+B** (Windows and Linux), or click the globe button in the chat's
+title bar, to show or hide it. The shortcut works while you're typing in a page
+in the pane too. The browser pane isn't in the web version of the Agent UI.
+
+- **Tabs.** **+** opens a new tab, which lists the pages you opened recently.
+  Links that open a new window open as a new tab in the pane instead.
+- **Address bar.** Type a full address or just a host. `example.com` opens
+  over https; `localhost:5173`, `127.0.0.1` and other addresses on this PC
+  open over http, so local dev servers work as typed.
+- **Back, Forward and Reload.** Reload turns into **Stop** while a page loads.
+- **Developer tools** opens Chromium's DevTools docked at the bottom of the
+  page, inspecting that page rather than GAIA.
+- **More (⋯)** has **Open in system browser**, which hands the page to your
+  default browser, and **Clear browsing data**, which deletes the pane's
+  cookies, site data, cache and recent pages. It never touches your system
+  browser or GAIA's own data.
+- **Resize** by dragging the pane's left edge, or focus the edge and use the
+  arrow keys; double-click it for the default width. The width and whether the
+  pane is open are remembered. The pane and the session panel share the right
+  side, so opening one closes the other.
+
+Pages in the pane run sandboxed and apart from GAIA. They can't use your
+camera, microphone, location or notifications, and the pane says so when a page
+asks. Downloads always ask where to save. Only http and https pages open:
+`file:` links and other schemes are refused with a note above the page, and so
+is GAIA's own local service. While a dialog or menu is open over the pane, the
+page shows as a still picture and comes back live when you close it.
+
+GAIA can't see or use the browser pane yet. The agent's browser tools still run
+their own headless browser; driving the pane is planned
+([Browser Use, Phase 3](/plans/browser-use)).
+
 ## Undo a turn
 
 Before GAIA changes a file, it saves a copy. When a turn changed files, its
@@ -744,6 +780,7 @@ Sessions let you organize conversations by topic. They sync between the CLI (`ga
 | `Ctrl+Shift+O` | New chat |
 | `Ctrl+B` | Show or hide the sidebar |
 | `Ctrl+,` | Settings |
+| `Ctrl+Shift+B` | Show or hide the [browser pane](#browser-pane) (desktop app) |
 
 On macOS, press `⌘` where this table says `Ctrl`; the app labels its shortcuts that way there.
 

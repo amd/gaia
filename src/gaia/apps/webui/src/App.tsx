@@ -12,6 +12,8 @@ import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { NotificationCenter } from './components/NotificationCenter';
 import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
+import { BrowserPane } from './components/browser-pane/BrowserPane';
+import { browserPaneApi } from './stores/browserPaneStore';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
@@ -575,6 +577,8 @@ function App() {
         );
     }
 
+    // Beside a chat or a new chat, in the desktop app only.
+    const paneApi = !showMemoryDashboard && !showSchedules ? browserPaneApi() : undefined;
     const main = showMemoryDashboard ? (
         <Suspense fallback={<Loading />}><MemoryDashboard /></Suspense>
     ) : showSchedules ? (
@@ -628,6 +632,7 @@ function App() {
                 )}
                 {main}
             </div>
+            {paneApi && <BrowserPane api={paneApi} />}
 
             {showDocLibrary && <Suspense fallback={null}><DocumentLibrary /></Suspense>}
             {showFileBrowser && <Suspense fallback={null}><FileBrowser /></Suspense>}

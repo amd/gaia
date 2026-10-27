@@ -87,7 +87,7 @@ Build the capability in this order. The driver is the swappable part; the agent 
 The case for step 3 being genuinely cheap, and why this is not premature:
 
 - **Zero new Python dependencies.** `aiohttp` is already in `install_requires`; CDP is JSON over one WebSocket.
-- **Zero new browser download for desktop users.** `electron@^44` is already a build dependency of the Agent UI and the app ships packaged via `electron-builder` — Chromium is already on disk, and `webContents.debugger` *is* CDP. On Windows, Edge is preinstalled and takes `--remote-debugging-port`.
+- **Zero new browser download for desktop users.** `electron@^45` is already a build dependency of the Agent UI and the app ships packaged via `electron-builder` — Chromium is already on disk, and `webContents.debugger` *is* CDP. On Windows, Edge is preinstalled and takes `--remote-debugging-port`.
 - **It buys the UX.** A GAIA-owned window can be watched, paused and taken over by the user mid-task. That matters enormously for login, and Playwright's window is not ours to render.
 
 That last point is why this is not just NIH: the 200 MB download conflicts with GAIA's edge positioning, and the login flow *needs* a window the user can grab.
@@ -204,6 +204,8 @@ Mitigations, all of which reuse existing machinery rather than inventing a paral
     **Exit:** user logs into a real site once; a later run restores the session unattended; a state-changing click prompts for confirmation and denies cleanly when refused.
   </Step>
   <Step title="Phase 3 — native CDP driver">
+    **In progress.** The desktop app's [browser pane](/guides/agent-ui#browser-pane) has landed: a user-driven browser beside the chat whose tabs Electron main owns. Letting the agent read and act in it comes next.
+
     Swap Playwright for the aiohttp CDP driver against Electron's Chromium, behind the same interface. Playwright stays supported for CI and non-desktop installs.
 
     **Exit:** Phase 1 and 2 suites pass unmodified against both drivers; desktop install adds no browser download.
@@ -232,7 +234,7 @@ Mitigations, all of which reuse existing machinery rather than inventing a paral
 | D3 | Text-first (a11y tree), vision as fallback | 2.6 s per 1,000 prompt tokens, and DOM refs are exact where 4B coordinate grounding guesses |
 | D4 | Driver behind an interface; Playwright first, native CDP after | The loop is the hard part; the driver is swappable. De-risk in that order |
 | D5 | Playwright as an optional extra, never core | 200 MB contradicts the edge/AI-PC positioning |
-| D6 | Native driver targets Electron's Chromium via CDP | `electron@^44` and `aiohttp` already ship — zero new dependencies, zero new download |
+| D6 | Native driver targets Electron's Chromium via CDP | `electron@^45` and `aiohttp` already ship — zero new dependencies, zero new download |
 | D7 | Browser runs as a daemon sidecar; CDP never crosses the relay | The relay is HTTP-only; the supervisor already handles crash, reap and auth |
 | D8 | The model never handles credentials | MFA, passkeys and SSO all work; nothing to leak |
 | D9 | Session blob encrypted on disk, key in keyring | Windows Credential Manager's ~1280-char cap makes the keyring-only path fail |

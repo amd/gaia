@@ -25,10 +25,19 @@ class MockBrowserWindow extends EventEmitter {
       openDevTools: jest.fn(),
       closeDevTools: jest.fn(),
       isDevToolsOpened: jest.fn(() => false),
+      getZoomFactor: jest.fn(() => 1),
       session: {
         clearCache: jest.fn((callback) => callback()),
       },
     };
+    this.contentView = {
+      children: [],
+      addChildView: jest.fn((view) => this.contentView.children.push(view)),
+      removeChildView: jest.fn((view) => {
+        this.contentView.children = this.contentView.children.filter((v) => v !== view);
+      }),
+    };
+    this.getContentBounds = jest.fn(() => ({ x: 0, y: 0, width: 1200, height: 800 }));
   }
 
   loadFile(path) {
@@ -223,12 +232,59 @@ class MockIpcRenderer extends EventEmitter {
   }
 }
 
+/** A page's webContents: emits Electron's events when a test calls emit(). */
+class MockWebContents extends EventEmitter {
+  constructor() {
+    super();
+    this._url = '';
+    this._destroyed = false;
+    this._devTools = false;
+    this.windowOpenHandler = null;
+    this.navigationHistory = {
+      canGoBack: jest.fn(() => false),
+      canGoForward: jest.fn(() => false),
+      goBack: jest.fn(),
+      goForward: jest.fn(),
+      clear: jest.fn(),
+    };
+    this.loadURL = jest.fn((url) => {
+      this._url = url;
+      return Promise.resolve();
+    });
+    this.getURL = jest.fn(() => this._url);
+    this.getTitle = jest.fn(() => this._url);
+    this.reload = jest.fn();
+    this.stop = jest.fn();
+    this.close = jest.fn(() => { this._destroyed = true; });
+    this.isDestroyed = jest.fn(() => this._destroyed);
+    this.setWindowOpenHandler = jest.fn((handler) => { this.windowOpenHandler = handler; });
+    this.openDevTools = jest.fn(() => { this._devTools = true; });
+    this.closeDevTools = jest.fn(() => { this._devTools = false; });
+    this.isDevToolsOpened = jest.fn(() => this._devTools);
+    this.capturePage = jest.fn(() => Promise.resolve({ toDataURL: () => 'data:image/png;base64,frame' }));
+  }
+}
+
+class MockWebContentsView {
+  constructor(options = {}) {
+    this.options = options;
+    this.webContents = new MockWebContents();
+    this.bounds = null;
+    this.visible = true;
+    this.setBounds = jest.fn((b) => { this.bounds = b; });
+    this.setVisible = jest.fn((v) => { this.visible = v; });
+    MockWebContentsView.instances.push(this);
+  }
+}
+MockWebContentsView.instances = [];
+
 const mockApp = new MockApp();
 const mockIpcMain = new MockIpcMain();
 const mockIpcRenderer = new MockIpcRenderer();
 
 module.exports = {
   BrowserWindow: MockBrowserWindow,
+  WebContentsView: MockWebContentsView,
   app: mockApp,
   ipcMain: mockIpcMain,
   ipcRenderer: mockIpcRenderer,

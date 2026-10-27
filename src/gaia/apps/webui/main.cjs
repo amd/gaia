@@ -107,6 +107,8 @@ const { installWindowKeys } = require("./services/window-keys.cjs");
 const { installQuitCleanup } = require("./services/quit-cleanup.cjs");
 const { chromiumSwitches } = require("./services/chromium-switches.cjs");
 const { titleBarKind, titleBarOptions } = require("./services/window-frame.cjs");
+const { resolveDevQaMode } = require("./services/dev-qa-mode.cjs");
+const { createBrowserPaneService, PANE_PARTITION } = require("./services/browser-pane/ipc.cjs");
 
 // No ozone switch: Electron 38+ already picks Wayland or X11, and users override with --ozone-platform=x11.
 for (const [name, value] of chromiumSwitches({ platform: process.platform, env: process.env })) {
@@ -199,6 +201,10 @@ const STARTUP_TIMEOUT = 30000;
 // Parse CLI args (T11: --minimized flag for auto-start)
 const startMinimized = process.argv.includes("--minimized");
 
+// GAIA_BIN in an unpackaged build: use that backend and leave the user's install alone.
+const devQa = resolveDevQaMode({ isPackaged: app.isPackaged, env: process.env });
+if (devQa) console.log(`[main] Dev QA mode: backend ${devQa.gaiaBin}; installer, pidfile and gaia:// skipped`);
+
 // Load app.config.json if available
 let appConfig = {};
 try {
@@ -247,6 +253,9 @@ let notificationService = null;
 
 /** @type {KeepAwake | null} */
 let keepAwake = null;
+
+/** @type {ReturnType<typeof createBrowserPaneService> | null} */
+let browserPane = null;
 
 /** @type {PortManager} */
 const portManager = new PortManager({
@@ -321,7 +330,7 @@ async function cleanupOrphanedBackend() {
  * (shouldn't happen post-ensureBackend, but we guard just in case).
  */
 async function startBackend() {
-  const gaiaCmd = backendInstaller.findGaiaBin();
+  const gaiaCmd = devQa ? devQa.gaiaBin : backendInstaller.findGaiaBin();
 
   if (!gaiaCmd) {
     console.error(
@@ -346,7 +355,8 @@ async function startBackend() {
   // Defensively clean up any orphaned backend in case bootstrap was skipped
   // on this path. cleanupOrphanedBackend() is idempotent and a no-op once the
   // pidfile has already been consumed earlier in app startup.
-  await cleanupOrphanedBackend();
+  // Dev QA mode leaves it alone: it belongs to the installed app's backend.
+  if (!devQa) await cleanupOrphanedBackend();
 
   console.log(`Starting backend: ${gaiaCmd} chat --ui --ui-port ${backendPort}`);
 
@@ -394,13 +404,15 @@ async function startBackend() {
   // Write a PID file so subsequent AppImage launches can detect and
   // cleanup this backend if it becomes orphaned. The pidfile is removed
   // when the child exits.
-  try {
-    try { fs.mkdirSync(_GAIA_DIR, { recursive: true }); } catch { /* ignore */ }
-    const pidFile = path.join(_GAIA_DIR, "backend.pid");
-    fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 });
-    console.log(`[main] Wrote backend pidfile ${pidFile} (pid=${child.pid})`);
-  } catch (err) {
-    console.warn(`[main] Could not write backend pidfile: ${err.message}`);
+  if (!devQa) {
+    try {
+      try { fs.mkdirSync(_GAIA_DIR, { recursive: true }); } catch { /* ignore */ }
+      const pidFile = path.join(_GAIA_DIR, "backend.pid");
+      fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 });
+      console.log(`[main] Wrote backend pidfile ${pidFile} (pid=${child.pid})`);
+    } catch (err) {
+      console.warn(`[main] Could not write backend pidfile: ${err.message}`);
+    }
   }
 
   child.on("exit", (code, signal) => {
@@ -720,6 +732,7 @@ function reopenWindow() {
   if (agentProcessManager) agentProcessManager.mainWindow = mainWindow;
   if (trayManager) trayManager.mainWindow = mainWindow;
   if (notificationService) notificationService.mainWindow = mainWindow;
+  if (browserPane) browserPane.attach(mainWindow);
   loadApp().catch((err) => {
     console.error("[main] Failed to load the reopened window:", err.message);
     dialog.showErrorBox("GAIA", `GAIA couldn't reopen its window: ${err.message}`);
@@ -762,6 +775,17 @@ function initializeServices() {
 
   // #2007: System metrics for the observability dashboard
   systemMetrics.registerIpcHandlers();
+
+  // A browser beside the chat; its pages can't reach GAIA's own backend.
+  browserPane = createBrowserPaneService({
+    ipcMain,
+    session: session.fromPartition(PANE_PARTITION),
+    shell,
+    userDataDir: app.getPath("userData"),
+    downloadsDir: () => app.getPath("downloads"),
+    blockedPorts: () => [backendPort],
+  });
+  browserPane.attach(mainWindow);
 
   console.log("[main] Services initialized");
 }
@@ -1104,7 +1128,7 @@ app.on("open-url", (event, url) => {
   handleDeepLink(url);
 });
 
-registerProtocolHandler();
+if (!devQa) registerProtocolHandler();
 
 // ── App Lifecycle ──────────────────────────────────────────────────────────
 
@@ -1166,7 +1190,12 @@ app.on("second-instance", (_event, argv, _cwd) => {
   if (deepLink) handleDeepLink(deepLink);
 });
 
-app.whenReady().then(async () => {
+/**
+ * Seed agents, stop an orphaned backend and install or upgrade the backend.
+ * Every step writes to the user's ~/.gaia, so dev QA mode skips them all.
+ * @returns {Promise<boolean>} false when the user quit the installer.
+ */
+async function prepareInstalledBackend() {
   // Phase 0: seed bundled agents BEFORE the Python backend starts, so the
   // agent registry sees them on its first discovery pass. Failures here are
   // non-fatal — the app must still launch even if seeding is blocked (e.g.
@@ -1197,7 +1226,11 @@ app.whenReady().then(async () => {
 
   // Phase A: ensure the Python backend is installed BEFORE creating the
   // main window. The progress dialog owns the UI during this phase.
-  const bootstrapOk = await bootstrapBackend();
+  return bootstrapBackend();
+}
+
+app.whenReady().then(async () => {
+  const bootstrapOk = devQa ? true : await prepareInstalledBackend();
   if (!bootstrapOk) {
     console.log("[main] Backend bootstrap aborted — quitting");
     app.quit();
@@ -1261,8 +1294,8 @@ app.whenReady().then(async () => {
   // because the install gate queries its catalog API.
   processStartupDeepLinks(backendReady);
 
-  // Auto-start enabled agents (T2)
-  if (agentProcessManager) {
+  // Auto-start enabled agents (T2); in dev QA mode the installed app owns them.
+  if (agentProcessManager && !devQa) {
     try {
       await agentProcessManager.startAllEnabled();
     } catch (err) {
