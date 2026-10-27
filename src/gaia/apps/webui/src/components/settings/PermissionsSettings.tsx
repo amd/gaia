@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import type { SessionPermissions } from '../../types';
+import { announcePermissionMode } from '../../utils/permissionModeEvents';
 
 /** Every chat with full access on or "always allow" grants, and the way to take them back. */
 export function PermissionsSettings() {
@@ -59,7 +60,10 @@ export function PermissionsSettings() {
                             <button
                                 type="button"
                                 className="btn-secondary"
-                                onClick={() => act(() => api.setPermissionMode(r.session_id, 'ask'))}
+                                onClick={() => act(async () => {
+                                    const saved = (await api.setPermissionMode(r.session_id, 'ask')).mode;
+                                    announcePermissionMode(r.session_id, saved);
+                                })}
                             >
                                 Turn off full access
                             </button>
