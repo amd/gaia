@@ -30,7 +30,7 @@ import { getApiBase } from './utils/apiBase';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 import { FLAGSHIP_AGENT_ID, hasFlagshipAgent, isFlagshipMissingError } from './utils/newTask';
 import { runWhileVisible } from './utils/visibleInterval';
-import { retryUntilOk, type Retrier } from './utils/retry';
+import { RETRY_INITIAL_MS, retryUntilOk, type Retrier } from './utils/retry';
 import type { SetupCheck, StartCard } from './types';
 
 // Heavy, occasional screens load on first use.
@@ -51,6 +51,12 @@ const LEMONADE_FAIL_THRESHOLD = 3;
 /** A backend that has answered no status request for this long is treated as gone. */
 const BACKEND_SILENT_LOST_MS = 5 * 60_000;
 const RESTORE_NOTICE_MS = 6000;
+/** How long a refused setup check counts as "still starting"; about twice the desktop app's own startup limit. */
+const BACKEND_START_WAIT_MS = 60_000;
+
+// fetch rejects with a TypeError only when no response arrived: nothing is listening yet.
+const isRefused = (err: unknown) => err instanceof TypeError;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function Loading() {
     return <div className="loading-spinner" role="status" aria-label="Loading" />;
@@ -114,15 +120,35 @@ function App() {
     const [tunnelActive, setTunnelActive] = useState(false);
     const [tunnelError, setTunnelError] = useState<string | null>(null);
 
+    // Set once the status poller and chat list exist further down.
+    const refreshStatus = useRef<() => Promise<void>>(async () => {});
+    const reloadSessions = useRef<() => Promise<void>>(async () => {});
+
     // ── First run: is GAIA set up? Same question the TUI asks. ──────────
     // Quiet: keep the current screen until the answer, so a re-check never blanks the app.
-    const checkSetup = useCallback(async (quiet = false) => {
+    // waitForStart: only the launch check treats a refused connection as "still starting".
+    const checkSetup = useCallback(async (quiet = false, waitForStart = false) => {
         if (!quiet) setSetup({ state: 'checking' });
+        let waited = 0;
         try {
-            await useModelStore.getState().refresh();
-            const active = useModelStore.getState().active;
-            const check = await api.checkSetup(!!active?.remote);
-            setSetup(check.ready ? { state: 'ready' } : { state: 'needed', check });
+            for (;;) {
+                await useModelStore.getState().refresh();
+                const active = useModelStore.getState().active;
+                let check: SetupCheck;
+                try {
+                    check = await api.checkSetup(!!active?.remote);
+                } catch (err) {
+                    if (!waitForStart || !isRefused(err) || waited >= BACKEND_START_WAIT_MS) throw err;
+                    // A refused local connection is cheap; poll steadily so the app opens as soon as it listens.
+                    await sleep(RETRY_INITIAL_MS);
+                    waited += RETRY_INITIAL_MS;
+                    continue;
+                }
+                // Read status and chats before showing the app, so it never flashes "lost connection" or "no chats".
+                if (waited > 0) await Promise.all([refreshStatus.current(), reloadSessions.current()]);
+                setSetup(check.ready ? { state: 'ready' } : { state: 'needed', check });
+                return;
+            }
         } catch (err) {
             // Could not ask — not the same as "not set up"; the chat still works if it is.
             const error = err instanceof Error ? err.message : String(err);
@@ -168,7 +194,7 @@ function App() {
     const startupLoads = useRef<Retrier[]>([]);
     useEffect(() => {
         logBanner(__APP_VERSION__);
-        void checkSetup();
+        void checkSetup(false, true);
         const loads = [
             retryUntilOk(loadAgents, {
                 onError: (err, n) => { if (shouldLogRetry(n)) log.api.warn(`Agent list unavailable (attempt ${n}); retrying`, err); },
@@ -185,6 +211,7 @@ function App() {
     const onBackendBack = useCallback(() => {
         startupLoads.current.forEach((l) => l.kick());
         useModelStore.getState().retryNow();
+        void reloadSessions.current();
         if (setupRef.current.state === 'unknown') void checkSetup(true);
     }, [checkSetup]);
     const onBackendBackRef = useRef(onBackendBack);
@@ -261,13 +288,14 @@ function App() {
     applyStatusRef.current = applyStatus;
     const [statusPoller] = useState(() => createStatusPoller((outcome) => applyStatusRef.current(outcome)));
     const checkSystemStatus = statusPoller.check;
+    refreshStatus.current = checkSystemStatus;
 
     useEffect(() => runWhileVisible(statusPoller.start), [statusPoller]);
 
     // ── Chats ───────────────────────────────────────────────────────────
     const sessionFingerprint = useRef('');
     useEffect(() => {
-        const load = (initial: boolean) => {
+        const load = (initial: boolean) =>
             api.listSessions()
                 .then((data) => {
                     const list = data.sessions || [];
@@ -287,9 +315,9 @@ function App() {
                     }
                 })
                 .catch((err) => { if (initial) log.system.error('Could not load chats', err); });
-        };
-        load(true);
-        const t = setInterval(() => load(false), 5_000);
+        reloadSessions.current = () => load(false);
+        void load(true);
+        const t = setInterval(() => void load(false), 5_000);
         return () => clearInterval(t);
     }, [setSessions]);
 
