@@ -21,6 +21,7 @@
  */
 
 const { Notification, ipcMain } = require("electron");
+const { notificationIconPath } = require("./app-icon.cjs");
 const { EventEmitter } = require("events");
 const path = require("path");
 const fs = require("fs");
@@ -283,7 +284,7 @@ class NotificationService extends EventEmitter {
       const osNotif = new Notification({
         title: notif.title,
         body: notif.message,
-        icon: path.join(__dirname, "..", "assets", "icon.png"),
+        icon: notificationIconPath(),
         urgency: notif.type === "security_alert" ? "critical" : "normal",
         // No action buttons — click-to-focus only (S5 fix)
       });
@@ -334,7 +335,7 @@ class NotificationService extends EventEmitter {
     const osNotif = new Notification({
       title: payload.title,
       body: typeof payload.body === "string" ? payload.body : "",
-      icon: path.join(__dirname, "..", "assets", "icon.png"),
+      icon: notificationIconPath(),
       silent: true,
     });
     osNotif.on("click", () => {
