@@ -170,8 +170,8 @@ catches what the first missed.
 - **In a git repository** each workspace is a clone that borrows the
   repository's history and copies its branches, tags, remotes and upstreams, so
   `git diff main...HEAD` works as it does for you. It holds your current files,
-  uncommitted work included, and leaves out ignored files (build output,
-  `node_modules`). Its branches, stash and config are its own: nothing an
+  uncommitted work and ignored files included, except build output,
+  dependency folders (`node_modules`, virtual environments) and caches. Its branches, stash and config are its own: nothing an
   attempt commits, stashes or deletes reaches your repository, and no
   repository hooks run. Submodule folders are empty, Git LFS files stay as
   pointers, and untracked files over 2 GB in total are refused.

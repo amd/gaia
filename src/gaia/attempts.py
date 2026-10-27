@@ -127,12 +127,18 @@ def clean_env(**extra: str) -> Dict[str, str]:
     return env
 
 
-def _git(*args: str, cwd: Path, env: Optional[Dict[str, str]] = None) -> str:
+def _git(
+    *args: str,
+    cwd: Path,
+    env: Optional[Dict[str, str]] = None,
+    stdin: Optional[str] = None,
+) -> str:
     done = subprocess.run(
         # Long paths: workspaces sit deeper than the real folder.
         ["git", "-c", "core.longpaths=true", *args],
         cwd=cwd,
         env=env or clean_env(),
+        input=stdin,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -163,8 +169,37 @@ def _index_path(top: Path) -> Path:
     return (top / _git("rev-parse", "--git-path", "index", cwd=top)).resolve()
 
 
+def _ignored_files(top: Path) -> List[str]:
+    """Ignored files a task may read or write, outside rebuilt folders.
+
+    Task inputs, logs and local notes are often ignored, and an attempt's
+    deliverable may land in an ignored folder too; build output, dependencies
+    and caches are not worth a copy per attempt.
+    """
+    listing = _git(
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--directory",
+        "-z",
+        cwd=top,
+    )
+    found: List[str] = []
+    for entry in filter(None, listing.split("\0")):
+        rel = entry.rstrip("/")
+        if any(part in _SKIP_DIRS for part in rel.split("/")):
+            continue
+        path = top / rel
+        if path.is_dir() and not _is_link(path):
+            found.extend(f"{rel}/{inner}" for inner in _walk(path))
+        elif path.is_file():
+            found.append(rel)
+    return found
+
+
 def _tree_of(top: Path) -> str:
-    """The tree of *top*'s working files as git sees them, ignored files left out.
+    """The tree of *top*'s working files: unignored ones, plus :func:`_ignored_files`.
 
     Built in a throwaway index seeded from the repository's own (for its stat
     cache), so the real index, HEAD and branches are never touched.
@@ -179,6 +214,17 @@ def _tree_of(top: Path) -> str:
             os.unlink(index)
         env = clean_env(GIT_INDEX_FILE=index)
         _git("add", "--all", "--", ".", cwd=top, env=env)
+        ignored = _ignored_files(top)
+        if ignored:
+            _git(
+                "add",
+                "--force",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+                cwd=top,
+                env={**env, "GIT_LITERAL_PATHSPECS": "1"},
+                stdin="\0".join(ignored),
+            )
         return _git("write-tree", cwd=top, env=env)
     finally:
         if os.path.exists(index):
@@ -186,10 +232,10 @@ def _tree_of(top: Path) -> str:
 
 
 def _check_untracked_size(top: Path) -> None:
-    """Refuse when untracked, unignored files are too big to snapshot per attempt."""
+    """Refuse when the untracked files an attempt gets are too big to snapshot."""
     listing = _git("ls-files", "--others", "--exclude-standard", "-z", cwd=top)
     total = 0
-    for rel in filter(None, listing.split("\0")):
+    for rel in [*filter(None, listing.split("\0")), *_ignored_files(top)]:
         try:
             total += (top / rel).stat().st_size
         except OSError:
@@ -198,7 +244,7 @@ def _check_untracked_size(top: Path) -> None:
         raise AttemptsError(
             f"--attempts would snapshot {total / 1024**3:.1f} GB of untracked files "
             f"in {top} for every attempt; the limit is {MAX_COPY_BYTES // 1024**3} GB. "
-            "Add them to .gitignore, or run without --attempts."
+            "Move them out of the project, or run without --attempts."
         )
 
 
@@ -512,6 +558,9 @@ def _run_attempt(prompt: str, workdir: Path, flags: Sequence[str]) -> Dict[str, 
         except ValueError:
             continue
         if isinstance(record, dict):
+            if record.get("is_error"):
+                # The record says only the status; the attempt's log says why.
+                record["stderr_tail"] = _warnings_tail(done.stderr)
             return record
     tail = (done.stderr or "").strip().splitlines()[-5:]
     return {
@@ -519,6 +568,16 @@ def _run_attempt(prompt: str, workdir: Path, flags: Sequence[str]) -> Dict[str, 
         "status": "error",
         "error": f"printed no result (exit {done.returncode}): {' | '.join(tail)}",
     }
+
+
+def _warnings_tail(stderr: Optional[str], keep: int = 8) -> List[str]:
+    """The attempt's last warnings and errors, which say why it stopped."""
+    lines = [
+        line.strip()
+        for line in (stderr or "").splitlines()
+        if "WARNING" in line or "ERROR" in line or line.lstrip().startswith("❌")
+    ]
+    return lines[-keep:]
 
 
 def run_attempts(
@@ -557,6 +616,13 @@ def run_attempts(
                 written += 1
                 collect(ws, record.get("result", ""), drafts / f"attempt-{written}")
         if not written:
+            for k, record in enumerate(records, start=1):
+                log.warning(
+                    "--attempts: attempt %d failed: %s\n%s",
+                    k,
+                    record.get("error"),
+                    "\n".join(record.get("stderr_tail") or []),
+                )
             raise AttemptsError(
                 f"every attempt failed; the last said: {records[-1].get('error')}"
             )

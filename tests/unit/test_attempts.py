@@ -267,6 +267,60 @@ def test_original_changed_by_the_user_mid_run_is_not_diffed_backwards(folder, sc
     assert "user edit" not in patch
 
 
+@needs_git
+def test_ignored_task_inputs_come_along_but_build_output_does_not(repo, scratch):
+    (repo / ".git" / "info").mkdir(exist_ok=True)
+    (repo / ".git" / "info" / "exclude").write_text("_task/\n", encoding="utf-8")
+    _write(repo / "_task" / "PROMPT.md", "review the diff\n")
+    _write(repo / "_task" / "pr-diff.txt", "+x\n")
+    _write(repo / "_task" / "a[1].txt", "brackets are literal\n")
+    _write(repo / "build" / "out.bin", "ignored and rebuilt\n")
+    _write(repo / ".gitignore", "build/\nnode_modules/\n")
+    _write(repo / "node_modules" / "dep" / "i.js", "//\n")
+    ws = attempts.prepare(repo, scratch / "w")
+    try:
+        assert (ws.cwd / "_task" / "PROMPT.md").read_text(encoding="utf-8") == (
+            "review the diff\n"
+        )
+        assert (ws.cwd / "_task" / "pr-diff.txt").is_file()
+        assert (ws.cwd / "_task" / "a[1].txt").is_file()
+        assert not (ws.cwd / "build").exists()
+        assert not (ws.cwd / "node_modules").exists()
+        # Nothing changed yet: the inputs are part of the starting point.
+        assert attempts.collect(ws, "", scratch / "d0") == []
+    finally:
+        attempts.dispose(ws)
+
+
+@needs_git
+def test_a_deliverable_written_to_an_ignored_folder_reaches_the_draft(repo, scratch):
+    (repo / ".git" / "info").mkdir(exist_ok=True)
+    (repo / ".git" / "info" / "exclude").write_text("_task/\n", encoding="utf-8")
+    _write(repo / "_task" / "PROMPT.md", "write OUTPUT.md\n")
+    ws = attempts.prepare(repo, scratch / "w")
+    try:
+        _write(ws.cwd / "_task" / "OUTPUT.md", "the review\n")
+        _write(ws.cwd / "build" / "tmp.o", "rebuilt\n")
+        draft = scratch / "d"
+        assert attempts.collect(ws, "done", draft) == ["_task/OUTPUT.md"]
+    finally:
+        attempts.dispose(ws)
+    assert (draft / "files" / "_task" / "OUTPUT.md").read_text(encoding="utf-8") == (
+        "the review\n"
+    )
+    assert not (repo / "_task" / "OUTPUT.md").exists()
+
+
+@needs_git
+def test_ignored_files_count_toward_the_size_limit(repo, scratch, monkeypatch):
+    (repo / ".git" / "info").mkdir(exist_ok=True)
+    (repo / ".git" / "info" / "exclude").write_text("data/\n", encoding="utf-8")
+    _write(repo / "data" / "big.csv", "x" * 5000)
+    monkeypatch.setattr(attempts, "MAX_COPY_BYTES", 1000)
+    with pytest.raises(attempts.AttemptsError, match="untracked files"):
+        attempts.prepare(repo, scratch / "w")
+
+
 # --- plain-folder copies -----------------------------------------------------
 
 
