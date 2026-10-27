@@ -396,7 +396,11 @@ class _TavilyBase(DatabaseMixin):
             )
 
     def usage(self) -> Dict[str, Any]:
-        """Return a credit-usage summary for this cache DB."""
+        """Return a credit-usage summary for this cache DB.
+
+        ``total_credits`` is lifetime; ``session_credits`` and ``remaining`` cover
+        only spend since this client was created, the scope the cap applies to.
+        """
         used = self._credits_used()
         session_used = self._session_credits_used()
         rows = self.query(
