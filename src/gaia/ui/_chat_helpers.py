@@ -60,6 +60,7 @@ from gaia.ui.email_sidecar.profiles import (
     api_version_supported,
     changes_supported,
     confirmations_supported,
+    context_supported,
     documents_supported,
     memory_supported,
     profile_for,
@@ -1283,6 +1284,7 @@ def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
                 "Agent cache miss (agent_type change) for session %s", session_id[:8]
             )
             return None
+        _agent_cache[session_id] = _agent_cache.pop(session_id)
         return entry["agent"]
 
 
@@ -1293,7 +1295,7 @@ def _store_agent(
     agent,
     agent_type: str = "chat",
 ) -> None:
-    """Cache *agent* for *session_id*.  Evicts the oldest entry if over the limit.
+    """Cache *agent* for *session_id*. Evicts the least-recently-used entry if full.
 
     The agent_type is stored in canonical form so a later lookup with a
     legacy alias still matches (see ``_canonical_agent_type``).
@@ -1806,30 +1808,132 @@ def _session_mail_provider(session: dict) -> str | None:
 # before the first POST.
 
 
-_RELAY_CONTEXT_PAIRS = 5
-
-# Last history view per in-process chat session, so a model switch that hides
-# more turns is announced too.
+# Last history view per chat session, so a model switch that hides more
+# turns is announced too.
 _history_cuts: dict = {}
+# Messages each relayed chat last showed clipped, so a clip is announced once.
+_relay_clips: dict = {}
+# Each relayed chat's last context measurement, or the reason it has none.
+_relayed_contexts: dict = {}
+_relayed_contexts_lock = threading.Lock()
 
 
-def _query_context_from_history(history_pairs: list) -> list[dict]:
-    """Flatten (user, assistant) history pairs into ``QueryContextItem``-shaped
-    dicts for the sidecar's ``/query`` request body (#2109).
+def record_relayed_context(
+    session_id: str, usage: Optional[dict], reason: Optional[str]
+) -> None:
+    """Keep what a relayed turn measured, or why it has no measurement.
 
-    Mirrors the truncation the in-process chat branches already apply, so an
-    email session's context window stays comparable: last 5 pairs, 2000 chars
-    per turn.
+    A turn with neither (an error, a Stop) keeps the previous measurement.
     """
-    _MAX_CHARS = 2000
-    context: list[dict] = []
-    for user_msg, assistant_msg in history_pairs[-_RELAY_CONTEXT_PAIRS:]:
-        u = user_msg[:_MAX_CHARS]
-        a = assistant_msg[:_MAX_CHARS]
-        if len(assistant_msg) > _MAX_CHARS:
-            a += "... (truncated)"
-        context.append({"role": "user", "content": u})
-        context.append({"role": "assistant", "content": a})
+    with _relayed_contexts_lock:
+        if usage is not None:
+            _relayed_contexts[session_id] = {"usage": usage}
+        elif reason:
+            _relayed_contexts[session_id] = {"reason": reason}
+
+
+def relayed_context_reason(profile, api_version, handler) -> Optional[str]:
+    """Why a relayed turn has no measurement: an old agent, or its own error."""
+    if not context_supported(profile, api_version):
+        return profile.context_upgrade_message
+    return getattr(handler, "relay_context_error", None)
+
+
+def forget_relayed_context(session_id: str) -> None:
+    with _relayed_contexts_lock:
+        _relayed_contexts.pop(session_id, None)
+
+
+def relayed_context(session_id: str) -> Optional[dict]:
+    """``{"usage": ...}`` or ``{"reason": ...}`` for a relayed chat, else None."""
+    with _relayed_contexts_lock:
+        return _relayed_contexts.get(session_id)
+
+
+def _relayed_history(
+    history_pairs: list,
+    model_id: str | None,
+    query: str,
+    sse_handler,
+    session_id: str | None,
+) -> list[dict]:
+    """The chat's earlier turns as ``QueryContextItem`` dicts for ``/query``.
+
+    The in-process policy: whole turns, newest first, within *model_id*'s
+    history budget. A turn larger than the whole budget has its longest
+    messages cut, with a marker saying how much, and anything newly out of the
+    model's view streams a ``history_cut`` status.
+    """
+    from gaia.agents.base.history import (
+        CutReporter,
+        clip_turn,
+        relayed_history_budget,
+        select_history,
+        turn_cost,
+    )
+
+    budget = relayed_history_budget(
+        model_id, query, cloud=bool(model_id) and bool(_ui_cloud_provider(model_id))
+    )
+    turns = []
+    clipped = {}
+    clipped_tokens = {}
+    for pair, (user_msg, assistant_msg) in enumerate(history_pairs):
+        turn = [
+            {"role": "user", "content": user_msg},
+            {"role": "assistant", "content": assistant_msg},
+        ]
+        if budget > 0 and turn_cost(turn) > budget:
+            # To half, where overflow evicts down to, so the next turn keeps it.
+            fitted, clips = clip_turn(turn, budget // 2)
+            for index, cut, total in clips:
+                clipped[(pair, index)] = (cut, total)
+            if clips:
+                clipped_tokens[pair] = turn_cost(turn) - turn_cost(fitted)
+            turn = fitted
+        turns.append(turn)
+
+    cuts = []
+    reporter = (
+        _history_cuts.setdefault(session_id, CutReporter()) if session_id else None
+    )
+    context = select_history(turns, budget, cuts.append, reporter)
+
+    # select_history returns the turns' own message dicts, so identity says
+    # which clipped messages the model still sees.
+    in_view = {id(message) for message in context}
+    shown = {key for key in clipped if id(turns[key[0]][key[1]]) in in_view}
+    seen = _relay_clips.get(session_id, set()) if session_id else set()
+    if session_id:
+        _relay_clips[session_id] = shown
+    new_keys = [key for key in clipped if key in shown and key not in seen]
+    new_clips = [clipped[key] for key in new_keys]
+    notices = [cut.notice for cut in cuts]
+    if new_clips:
+        cut_chars = sum(c[0] for c in new_clips)
+        if len(new_clips) == 1:
+            notices.append(
+                f"An earlier message is too long for the model's context window, so "
+                f"the last {cut_chars:,} of its {new_clips[0][1]:,} characters are "
+                "out of its view."
+            )
+        else:
+            notices.append(
+                f"{len(new_clips)} earlier messages are too long for the model's "
+                f"context window, so {cut_chars:,} of their characters are out of "
+                "its view."
+            )
+    if notices:
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": " ".join(notices),
+                "turns": sum(cut.turns for cut in cuts),
+                "tokens": sum(cut.tokens for cut in cuts)
+                + sum(clipped_tokens[pair] for pair in {key[0] for key in new_keys}),
+            }
+        )
     return context
 
 
@@ -2097,7 +2201,7 @@ def _dispatch_sidecar_query(
 
     *memory* is the chat's memory mode (:func:`_memory_mode`). Likewise, a
     private or memory-off turn is stopped rather than sent to a sidecar that
-    keeps memory but is too old to be told not to save.
+    keeps memory but cannot be told not to save.
 
     *recording* is the turn's undo recording. A sidecar that takes it records
     its own file changes under a turn of this chat, which is where Changes,
@@ -2109,14 +2213,17 @@ def _dispatch_sidecar_query(
     immediately after calling this — it never falls through to the shared
     agent trunk, which assumes a constructed in-process ``agent`` and calls
     ``agent.process_query``/``_maybe_load_expected_model``. The sidecar owns
-    its own model lifecycle; nothing about Lemonade ctx/model selection
-    happens here.
+    its own model lifecycle; nothing here loads or selects a model. The
+    model's window is only read, to size the earlier turns sent with the query.
 
     Every exception the sidecar manager/proxy can raise is caught HERE and
     turned into a terminal SSE error — never left to reach
     ``_classify_chat_exception``, whose substring matching would misclassify
     a sidecar connection error as a Lemonade error and show the wrong remedy.
     """
+    from gaia.config import GaiaConfigError
+    from gaia.llm.lemonade_client import LemonadeClientError
+    from gaia.llm.model_fit import ModelFitError
     from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.email_sidecar.errors import SidecarError
     from gaia.ui.email_sidecar.relay import relay_query
@@ -2174,21 +2281,19 @@ def _dispatch_sidecar_query(
             return
 
     relayed_memory = None
-    if profile.min_memory_api_version is not None:
-        if memory_supported(profile, handle.api_version):
-            relayed_memory = memory
-        elif memory != "on":
-            logger.warning(
-                "%s agent at contract %s can't take memory=%s (needs %s)",
-                agent_type,
-                handle.api_version,
-                memory,
-                profile.min_memory_api_version,
-            )
-            sse_handler._emit(
-                {"type": "agent_error", "content": profile.memory_upgrade_message}
-            )
-            return
+    if memory_supported(profile, handle.api_version):
+        relayed_memory = memory
+    elif memory != "on":
+        logger.warning(
+            "%s agent at contract %s can't take memory=%s",
+            agent_type,
+            handle.api_version,
+            memory,
+        )
+        sse_handler._emit(
+            {"type": "agent_error", "content": profile.memory_upgrade_message}
+        )
+        return
 
     proxy = handle.proxy()
 
@@ -2197,10 +2302,24 @@ def _dispatch_sidecar_query(
 
     # First-turn-per-session readiness check (#2101 lesson): a 503 from
     # /v1/<agent>/init is contract ("not ready yet"), not a transport failure.
+    import requests
+
     try:
         status_code, init_body = proxy.init()
     except SidecarError as exc:
         sse_handler._emit({"type": "agent_error", "content": str(exc)})
+        return
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+        # The agent stopped answering (crashed, hung or shutting down): not the model server.
+        logger.warning(
+            "chat: %s agent at %s did not answer its readiness check: %s",
+            agent_type,
+            proxy.base_url,
+            exc,
+        )
+        sse_handler._emit(
+            {"type": "agent_error", "content": profile.start_failed_text()}
+        )
         return
     if (
         status_code != 200
@@ -2243,25 +2362,22 @@ def _dispatch_sidecar_query(
     if sse_handler.cancelled.is_set():
         return
 
-    context = _query_context_from_history(history_pairs)
-    if len(history_pairs) == _RELAY_CONTEXT_PAIRS + 1:
-        from gaia.agents.base.turn_metrics import count_tokens
-
-        # The window slides from here on; say so once, when it first does.
+    try:
+        context = _relayed_history(
+            history_pairs, model_id, request.message, sse_handler, session_id
+        )
+    except (LemonadeClientError, ModelFitError, GaiaConfigError) as exc:
         sse_handler._emit(
             {
-                "type": "status",
-                "status": "history_cut",
-                "message": (
-                    "Older messages are now out of the model's view: this agent "
-                    f"sees the last {_RELAY_CONTEXT_PAIRS} exchanges of the chat."
-                ),
-                "turns": 1,
-                "tokens": count_tokens(
-                    json.dumps(list(history_pairs[0]), ensure_ascii=False)
+                "type": "agent_error",
+                "content": (
+                    "Could not size this chat's earlier messages to the model's "
+                    f"context window: {exc}"
                 ),
             }
         )
+        return
+
     from gaia.ui.email_sidecar.profiles import full_access_supported
 
     relay_query(
@@ -2296,6 +2412,12 @@ def _dispatch_sidecar_query(
         ),
         max_steps=max_steps,
     )
+    if session_id and profile.min_context_api_version is not None:
+        record_relayed_context(
+            session_id,
+            getattr(sse_handler, "relay_context", None),
+            relayed_context_reason(profile, handle.api_version, sse_handler),
+        )
 
 
 def _find_last_tool_step(steps: list) -> dict | None:
@@ -2552,6 +2674,7 @@ def _empty_answer_outcome(
     has_steps: bool,
     has_card: bool,
     backend_problem: Optional[str] = None,
+    turn_reported_error: bool = False,
 ) -> tuple[str, str, bool]:
     """Classify a chat turn that ended with no answer text, for the shared
     persistence tail's empty-``full_response`` branch.
@@ -2566,6 +2689,10 @@ def _empty_answer_outcome(
         the steps so the card survives a reload.
       * steps but no card → ``(<no-answer copy>, "failed", True)`` — the agent
         ran tools and ended without answering; say so and keep the steps.
+        *has_steps* counts tool steps only, never thinking, plan or error steps.
+      * no tool ran but the turn reported an error → ``("", "failed", True)``
+        — the error step already says what went wrong (e.g. "GAIA couldn't
+        start its agent"); keep it and add no second, contradicting line.
       * nothing, backend at fault → ``(backend_problem, "error", False)`` —
         the only case that names Lemonade (see _empty_answer_backend_problem).
       * nothing, backend fine → ``(<empty-model copy>, "failed", False)`` —
@@ -2577,6 +2704,8 @@ def _empty_answer_outcome(
         return "", "done", True
     if has_steps:
         return _NO_ANSWER_AFTER_TOOLS_MSG, "failed", True
+    if turn_reported_error:
+        return "", "failed", True
     if backend_problem:
         return backend_problem, "error", False
     return _EMPTY_MODEL_ANSWER_MSG, "failed", False
@@ -4299,11 +4428,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # already sent but not yet dispatched arrive immediately.
                 if idle_cycles % 25 == 0:
                     yield ": keepalive " + "x" * 490 + "\n\n"
-                # Every 15s (75 cycles) emit a visible status so the user knows
-                # the model is still processing (prompt prefill is silent).
-                # Use status='working' so active=true; consecutive events merge
-                # into a single updating step on the frontend. A running tool
-                # shows its own timer, so the model is not the one being waited on.
+                # Every 15s (75 cycles) say the model is still processing (prompt
+                # prefill is silent). Stream readers such as the MCP server log it;
+                # the Agent UI drops it and times the wait itself. A running tool
+                # means the model is not the one being waited on.
                 if idle_cycles % 75 == 0 and not sse_handler.tool_running():
                     elapsed = int(_turn_clock() - last_event_at)
                     status_evt = json.dumps(
@@ -4568,11 +4696,18 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 backend_problem = await _empty_answer_backend_problem(
                     result_holder.get("model") or model_id
                 )
+            # Thinking, plans and errors are not tools that ran.
+            tool_steps = [
+                s for s in captured_steps if s.get("type") in ("tool", "policy_alert")
+            ]
             content, sse_type, keep_steps = _empty_answer_outcome(
                 turn_cancelled,
-                bool(captured_steps),
+                bool(tool_steps),
                 any(step.get("render") for step in captured_steps),
                 backend_problem,
+                turn_reported_error=any(
+                    s.get("type") == "error" for s in captured_steps
+                ),
             )
             steps_to_persist = (
                 captured_steps if (keep_steps and captured_steps) else None
@@ -4933,8 +5068,10 @@ def _settled_quietly(future) -> None:
 
 
 # Failures retrying can't fix until the file itself changes: RAG's pdf_status
-# values, plus "empty_file" for a 0-byte file of any type.
-PERMANENT_INDEX_FAILURES = frozenset({"corrupted", "encrypted", "empty", "empty_file"})
+# and xlsx_status values, plus "empty_file" for a file with nothing to index.
+PERMANENT_INDEX_FAILURES = frozenset(
+    {"corrupted", "encrypted", "empty", "empty_file", "unsupported_workbook"}
+)
 
 
 class UnreadableDocumentError(RuntimeError):
@@ -5020,7 +5157,9 @@ async def _index_document(filepath: Path, display_name: Optional[str] = None) ->
         if error:
             message = f"RAG indexing failed for {name}: {error}"
             kind = (
-                "empty_file" if result.get("empty_file") else result.get("pdf_status")
+                "empty_file"
+                if result.get("empty_file")
+                else result.get("pdf_status") or result.get("xlsx_status")
             )
             if kind in PERMANENT_INDEX_FAILURES:
                 raise UnreadableDocumentError(message, kind)

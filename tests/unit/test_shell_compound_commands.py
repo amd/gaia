@@ -586,3 +586,31 @@ def test_windows_never_hands_a_compound_line_to_cmd_exe_as_one_string(
     assert all(isinstance(args, str) for args, _ in calls)
     assert not any("&&" in args for args, _ in calls)
     assert [args for args, _ in calls] == ["ls", "cat notes.txt"]
+
+
+# ---------------------------------------------------------------------------
+# ~ means the home folder, as in a shell (#5700)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / "proj").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return home
+
+
+def test_cd_to_a_home_relative_folder_runs_the_line(home, notes):
+    result = _run("cd ~/proj && echo hi", notes)
+
+    assert result["status"] == "success", result
+    assert "hi" in result["stdout"]
+
+
+def test_a_home_relative_working_directory_is_found(home):
+    result = _shell(_Host())(command="echo hi", working_directory="~/proj")
+
+    assert result["status"] == "success", result
+    assert "hi" in result["stdout"]

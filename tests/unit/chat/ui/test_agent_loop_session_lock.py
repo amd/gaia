@@ -55,6 +55,8 @@ def env(monkeypatch, tmp_path):
     registry = MagicMock()
     registry.canonical_id.side_effect = lambda t: t
     registry.resolve_model.return_value = None
+    # An in-process install: the flagship's wheel is importable.
+    registry.get.return_value.is_sidecar = False
     monkeypatch.setattr(helpers, "_agent_registry", registry)
 
     initialized = tmp_path / ".gaia" / "chat" / "initialized"
@@ -72,7 +74,8 @@ def env(monkeypatch, tmp_path):
 def _make(agent_type="gaia"):
     db = ChatDatabase(":memory:")
     db.set_setting("agent_mode", "goal_driven")
-    session = db.create_session(model="M-GGUF", agent_type=agent_type)
+    session = db.create_session(model="M-GGUF", agent_type=agent_type, kind="scheduled")
+    db.set_setting(agent_loop_mod.GOALS_SESSION_SETTING, session["id"])
     agent = _FakeAgent("M-GGUF")
     helpers._store_agent(session["id"], "M-GGUF", [], agent, agent_type)
     loop = AgentLoop()
@@ -89,6 +92,48 @@ async def test_tick_reuses_gaia_agent_without_evicting_it(env):
     assert helpers._agent_cache[session["id"]]["agent"] is agent
     agent._mcp_manager.disconnect_all.assert_not_called()
     assert len(agent.calls) == 1
+
+
+async def test_tick_never_runs_in_or_locks_the_users_chat(env):
+    loop, goals_session, agent = _make("gaia")
+    chat = loop._db.create_session(model="M-GGUF", agent_type="gaia")
+    seen = {}
+
+    def _process_query(message):
+        seen["chat_locked"] = loop._app_state.session_locks.get(
+            chat["id"], asyncio.Lock()
+        ).locked()
+        return "ok"
+
+    agent.process_query = _process_query
+
+    await loop._run_step(AgentTrigger("user_message_followup", chat["id"]))
+
+    assert seen == {"chat_locked": False}
+    assert loop._db.get_messages(chat["id"]) == []
+
+
+async def test_a_private_chats_turn_sets_off_no_tick(env):
+    loop, _, agent = _make("gaia")
+    chat = loop._db.create_session(model="M-GGUF", agent_type="gaia", private=True)
+
+    directive = await loop._run_step(AgentTrigger("user_message_followup", chat["id"]))
+
+    assert directive.directive == "idle"
+    assert agent.calls == []
+
+
+async def test_goals_get_their_own_background_chat_once(env):
+    loop, _, _ = _make("gaia")
+    loop._db.set_setting(agent_loop_mod.GOALS_SESSION_SETTING, None)
+
+    first = loop._goals_session_id()
+    second = loop._goals_session_id()
+
+    assert first == second
+    session = loop._db.get_session(first)
+    assert session["title"] == agent_loop_mod.GOALS_SESSION_TITLE
+    assert session["kind"] == "scheduled"
 
 
 async def test_tick_skips_session_whose_lock_is_held(env):

@@ -30,6 +30,9 @@ interface ComposerProps {
 
 const MAX_INPUT_HEIGHT = 240;
 
+/** The most a message may carry; the backend refuses more (`ChatRequest.message` in ui/models.py). */
+export const MAX_MESSAGE_CHARS = 100_000;
+
 export function Composer({
     value, onChange, onSubmit, onStop, streaming = false, stopping = false, queueWhileStreaming = false, disabledReason, attachments,
     placeholder = 'Ask GAIA anything', autoFocus, inputRef, leftControls, rightControls,
@@ -39,7 +42,10 @@ export function Composer({
     const fileRef = useRef<HTMLInputElement>(null);
     const disabled = !!disabledReason;
     const hasContent = value.trim().length > 0 || attachments.hasUploaded;
-    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent;
+    // What is sent: the text plus a link for each attached file.
+    const sentLength = attachments.compose(value.trim()).length;
+    const tooLong = sentLength > MAX_MESSAGE_CHARS;
+    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong;
 
     const shownPlaceholder = disabledReason || placeholder;
 
@@ -120,6 +126,12 @@ export function Composer({
                 autoFocus={autoFocus}
                 aria-label="Message"
             />
+            {tooLong && (
+                <p className="composer-limit-error" role="alert">
+                    Too long to send: {sentLength.toLocaleString()} of {MAX_MESSAGE_CHARS.toLocaleString()} characters.
+                    {' '}Save it as a file and attach it with +, and GAIA can read all of it.
+                </p>
+            )}
             <div className="composer-row">
                 <div className="composer-row-left">
                     <button

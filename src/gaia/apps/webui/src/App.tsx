@@ -281,6 +281,11 @@ function App() {
                     if (fp === sessionFingerprint.current) return;
                     sessionFingerprint.current = fp;
                     setSessions(list);
+                    // Another window or the TUI switched models: re-read it, or the footer and picker go stale.
+                    const picked = useModelStore.getState().active?.model;
+                    if (picked && list.some((s) => s.effective_model && s.effective_model !== picked)) {
+                        void useModelStore.getState().refresh();
+                    }
                 })
                 .catch((err) => { if (initial) log.system.error('Could not load chats', err); });
         };
@@ -447,10 +452,11 @@ function App() {
                 `The chat was created, but its permission mode could not be set, so your message was not sent${
                     session.private ? '' : " — it is in the chat's box"}: ${modeError instanceof Error ? modeError.message : modeError}`,
             );
-            return;
+            return false;
         }
         store.resetDraftPermissionMode();
         setPendingPrompt(text);
+        return true;
     }, [addSession, setCurrentSession, setMessages, setPendingPrompt, loadAgents, loadDefaultPermissionMode]);
 
     const newChat = useCallback(() => {
@@ -594,8 +600,6 @@ function App() {
 
     const main = showMemoryDashboard ? (
         <Suspense fallback={<Loading />}><MemoryDashboard /></Suspense>
-    ) : showSchedules ? (
-        <Suspense fallback={<Loading />}><ScheduleManager /></Suspense>
     ) : currentSessionId ? (
         <ChatView key={currentSessionId} sessionId={currentSessionId} />
     ) : (
@@ -646,6 +650,7 @@ function App() {
                 {main}
             </div>
 
+            {showSchedules && <Suspense fallback={null}><ScheduleManager /></Suspense>}
             {showDocLibrary && <Suspense fallback={null}><DocumentLibrary /></Suspense>}
             {showFileBrowser && <Suspense fallback={null}><FileBrowser /></Suspense>}
             {showNotificationPanel && (

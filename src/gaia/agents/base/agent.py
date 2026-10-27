@@ -1914,6 +1914,31 @@ def parse_skill_manifest(path: Optional[Path]) -> "SkillSets":
     return parse_skill_sets(data, where=f" in {path}")
 
 
+def _with_resolved_target(prompt_args: Any, preflight: Any) -> Any:
+    """*prompt_args* with ``file_path`` as the absolute path the tool will write.
+
+    The tool's pre-flight carries ``target_of``, the same resolution the tool
+    body uses, so ``notes.txt`` is shown as the folder it actually lands in.
+    """
+    target_of = getattr(preflight, "target_of", None)
+    if (
+        not callable(target_of)
+        or not isinstance(prompt_args, dict)
+        or not isinstance(prompt_args.get("file_path"), str)
+    ):
+        return prompt_args
+    try:
+        # Relative to this process's cwd, as the tool body opens it at write time.
+        target = os.path.abspath(str(target_of(prompt_args)))
+    except (KeyError, TypeError, ValueError, OSError) as e:
+        # Malformed arguments: the tool body reports them; the prompt shows them as sent.
+        logger.debug("could not resolve the prompt's file_path: %s", e)
+        return prompt_args
+    if target == prompt_args["file_path"]:
+        return prompt_args
+    return {**prompt_args, "file_path": target}
+
+
 def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
     """The scratch folder when this call runs code that may sit in it, else "".
 
@@ -5320,6 +5345,22 @@ Do NOT wrap conversational replies in JSON.
         return schemas
 
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
+        """Decode a reply and reject tool arguments that cannot be executed."""
+        parsed = self._decode_llm_response(response)
+        calls = parsed.get("tool_calls") or (
+            [{"name": parsed["tool"], "tool_args": parsed.get("tool_args", {})}]
+            if parsed.get("tool")
+            else []
+        )
+        for call in calls:
+            if not isinstance(call["tool_args"], dict):
+                raise ValueError(
+                    f"Malformed tool_call arguments for '{call['name']}': expected "
+                    f"a JSON object, got {type(call['tool_args']).__name__}."
+                )
+        return parsed
+
+    def _decode_llm_response(self, response: str) -> Dict[str, Any]:
         """
         Parse the LLM response to extract tool calls or conversational answers.
 
@@ -6623,6 +6664,9 @@ Do NOT wrap conversational replies in JSON.
         # call runs. Display only: the tool runs with tool_args.
         shows = getattr(self, "confirmation_args_for_call", None)
         prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
+        prompt_args = _with_resolved_target(
+            prompt_args, (self._tools_registry.get(tool_name) or {}).get("preflight")
+        )
         # Scratch writes never ask, so code run from there is asked about on
         # every run — the marker keeps "always" (and any broader grant) off it.
         scratch = _scratch_reached_by(self, tool_name, prompt_args)
@@ -7056,7 +7100,10 @@ Do NOT wrap conversational replies in JSON.
         ).strip()
         if not response:
             raise _NotAnAnswer("the model returned an empty reply")
-        parsed = self._parse_llm_response(response)
+        try:
+            parsed = self._parse_llm_response(response)
+        except ValueError as exc:
+            raise _NotAnAnswer(str(exc)) from exc
         answer = parsed.get("answer")
         if not isinstance(answer, str):
             answer = ""

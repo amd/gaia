@@ -101,16 +101,31 @@ class ModelTokenCounter:
     would be measuring the wrong thing.
     """
 
-    def __init__(self, base_url: str, headers: Dict[str, str]) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        headers: Dict[str, str],
+        deadline: Optional[float] = None,
+    ) -> None:
         import httpx
 
         self._client = httpx.Client(timeout=10.0, headers=headers)
         self._url = f"{base_url}/tokenize"
+        #: ``time.monotonic()`` past which no further request is sent.
+        self._deadline = deadline
 
     def __call__(self, text: str) -> int:
         if not text:
             return 0
-        resp = self._client.post(self._url, json={"content": text})
+        extra: Dict[str, Any] = {}
+        if self._deadline is not None:
+            import time
+
+            left = self._deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError("the time to count tokens ran out")
+            extra["timeout"] = min(10.0, left)
+        resp = self._client.post(self._url, json={"content": text}, **extra)
         resp.raise_for_status()
         tokens = resp.json().get("tokens")
         if not isinstance(tokens, list):
@@ -123,12 +138,19 @@ class ModelTokenCounter:
         self._client.close()
 
 
-def measure_context(agent: Any, turns: list, model_id: Optional[str]) -> Dict[str, Any]:
+def measure_context(
+    agent: Any,
+    turns: list,
+    model_id: Optional[str],
+    estimate_reason: Optional[str] = None,
+    deadline: Optional[float] = None,
+) -> Dict[str, Any]:
     """``context_usage`` measured with the model's tokenizer where it can be.
 
     ``tokenizer.exact`` is False, with the reason, whenever the counts are the
-    shared estimate instead — a cloud model, another model loaded, or a
-    Lemonade that does not answer ``/tokenize``.
+    shared estimate instead — a cloud model, another model loaded, a Lemonade
+    that does not answer ``/tokenize``, or *estimate_reason* when the caller
+    has no time to ask it.
     """
     from gaia.agents.base.history import context_usage
 
@@ -136,6 +158,9 @@ def measure_context(agent: Any, turns: list, model_id: Optional[str]) -> Dict[st
         usage = context_usage(agent, turns)
         usage["tokenizer"] = {"exact": False, "reason": reason}
         return usage
+
+    if estimate_reason is not None:
+        return estimate(estimate_reason)
 
     if where_model_runs(model_id) not in ("local", None):
         usage = estimate("The cloud model's tokenizer is not available here.")
@@ -153,7 +178,7 @@ def measure_context(agent: Any, turns: list, model_id: Optional[str]) -> Dict[st
         return estimate(
             f"{model_id} is not loaded now, so its tokenizer cannot be asked."
         )
-    counter = ModelTokenCounter(base_url, headers)
+    counter = ModelTokenCounter(base_url, headers, deadline)
     try:
         usage = context_usage(agent, turns, count=counter)
     except Exception as exc:  # pylint: disable=broad-except
@@ -244,6 +269,26 @@ def context_state(agent: Any) -> Optional[Dict[str, Any]]:
             )
         out[key] = {f: part[f] for f in fields}
     return out
+
+
+def panel_context(
+    agent: Any,
+    turns: list,
+    model_id: Optional[str],
+    estimate_reason: Optional[str] = None,
+    deadline: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Everything the Context panel and the composer's meter show, in one payload.
+
+    Shared by the Agent UI's in-process path and the sidecar, which measures
+    its own agent and sends the result on ``/query``'s ``final`` event.
+    """
+    usage = measure_context(agent, turns, model_id, estimate_reason, deadline)
+    usage["categories"] = context_categories(usage)
+    usage["tool_loading"] = tools_by_load(agent)
+    usage["model"] = model_id
+    usage["context_state"] = context_state(agent)
+    return usage
 
 
 # ── Turn timing ────────────────────────────────────────────────────────────
