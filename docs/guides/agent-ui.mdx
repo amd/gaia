@@ -308,7 +308,7 @@ Pick the install path that fits you best:
 The app opens straight to an empty chat: a message box, the model it will use,
 and where that model runs.
 
-- **Sidebar:** New chat, search, **Memory**, **Scheduled tasks**, **Documents**,
+- **Sidebar:** search, New chat, **Memory**, **Scheduled tasks**, **Documents**,
   then your chats. Memory opens as a page; Scheduled tasks and Documents open as
   dialogs over your chat. Opening one of the three closes the other two.
   **Needs you** at the top holds chats waiting on a permission or a question;
@@ -316,8 +316,12 @@ and where that model runs.
   and older. A dot on each chat says whether it is running, waiting for you, done
   or failed, and a chat with a reply you haven't read shows in bold. Eval and
   scheduled runs are hidden behind **Show background runs** at the end of
-  the list. At the bottom: where answers are generated right now (the place,
-  such as Local or Fireworks AI, above the model's name; hover for the full text),
+  the list. To rename a chat, double-click it or click the pencil on its row;
+  Enter saves, Escape cancels. On a phone, each chat has one **⋯** button instead
+  of the pencil, pin and delete icons; it opens **Rename**, **Pin** and **Delete**,
+  and Delete asks for a second tap. At the bottom: where answers are generated
+  right now (the place, such as Local or Fireworks AI, above the model's name;
+  hover for the full text),
   notifications, mobile access and Settings. Collapse it with `Ctrl+B` (`⌘B` on macOS).
 - **Message box:** **+** attaches files (or drag them in), the shield picks the
   permission mode, the model chip picks the model, and Send turns into Stop
@@ -342,6 +346,10 @@ and where that model runs.
   mail account), then research, code and summaries, which work on a fresh
   install, and a check-in once its skill is installed. A task with a subject
   to fill in is typed into the message box; the others start straight away.
+  Click the folder under the message box to give the chat another folder it
+  may read and write from its first message, the same as **Add folder** in the
+  session panel. When the GAIA agent runs as its own process, it keeps its own
+  limits, so the folder shows as plain text instead.
 - **The session panel** on the right keeps the facts about this chat in view;
   see [The session panel](#the-session-panel).
 - **"Loading Qwen3.6-35B-A3B on your GPU… 12s"** under the message box means
@@ -651,7 +659,7 @@ much they use now.
 
 One window with General (appearance: Light, Dark, Match system; colors; the
 [desktop app's tray switches](#the-tray-icon); shortcuts),
-Model, Permissions, Skills (what GAIA can load, with **Use** to try one),
+Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, or your Claude Code skill folders, with **Use** to try one),
 Connectors, Memory, Notifications, Privacy and Advanced (model server and
 llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
 back).

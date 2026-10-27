@@ -475,7 +475,7 @@ export async function listSessions(): Promise<{ sessions: Session[]; total: numb
     return { sessions: [...byId.values()], total };
 }
 
-export async function createSession(data: Partial<Session> = {}): Promise<Session> {
+export async function createSession(data: Partial<Session> & { folders?: string[] } = {}): Promise<Session> {
     return apiFetch('POST', '/sessions', data);
 }
 
