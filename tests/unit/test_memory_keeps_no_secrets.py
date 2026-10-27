@@ -194,6 +194,12 @@ def test_the_conversation_log_keeps_no_secret(store):
         "PIN code for my Chase card is 123456",
         "My PIN code is 560001",
         "PIN code 560001",
+        # A capitalised name after "PIN code for/of" is as often a bank as a
+        # town, so a six-digit value there is masked too.
+        "PIN code for Chase is 123456",
+        "PIN code of HDFC Bank: 482193",
+        "PIN code for Wells Fargo 482193",
+        "PIN code of Bangalore is 560001",
     ),
 )
 def test_pin_variants_are_masked(text):
@@ -206,9 +212,6 @@ def test_pin_variants_are_masked(text):
     (
         "GPIO pin 1023",
         "Pin on page 123",
-        "PIN code of Bangalore is 560001",
-        "PIN code for Koramangala 560034",
-        "PIN code for White Field is 560034",
         "Pin code on page 123",
     ),
 )

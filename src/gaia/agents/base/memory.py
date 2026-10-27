@@ -3891,15 +3891,14 @@ class MemoryMixin(ProceduralMemoryMixin):
             r"\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b",
             # A PIN/passcode or card security code in a user-owned context.
             # Keep the PIN forms bounded: generic uses such as GPIO pins,
-            # page numbers, and postal-code phrases are ordinary data.
+            # and page numbers are ordinary data.
             r"\bpin(?:'s)?(?:\s+number)?\s+(?:for|on|at|of)(?:\s+\w+){1,8}?\s*"
             r"(?:is|was|to|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
             r"\bpin(?:'s)?(?:\s+number)?\s+(?:for|on|at|of)"
             r"(?!\s+page\b)(?:\s+\w+){1,8}?\s+\d{3,8}\b",
-            # Explicit PIN-code wording wins over postal-code ambiguity: a
-            # six-digit PIN is a credential and must not reach memory/logs.
-            r"\bpin\s+code\s*(?:(?:is|was|to|:|=|[-\u2013\u2014])\s*)?"
-            r"\d{3,8}\b",
+            # "PIN code" is also an Indian postal code. A six-digit PIN looks
+            # the same and is a credential, so both are masked.
+            r"\bpin\s+code\s*(?:(?:is|was|to|:|=|[-\u2013\u2014])\s*)?\d{3,8}\b",
             r"\bpin\s+code\s+(?:for|on|at|of)(?:\s+\w+){1,8}?\s{0,3}"
             r"(?:is|was|to|:|=|[-\u2013\u2014])\s{0,3}\d{3,8}\b",
             r"\bpin\s+code\s+(?:for|on|at|of)(?!\s+page\b)(?:\s+\w+){1,8}?\s+"
@@ -3919,17 +3918,6 @@ class MemoryMixin(ProceduralMemoryMixin):
             r"\b(?:ssn|social security(?: number)?)\b(?:\s{0,3}(?:is|was|:|=))?"
             r"\s{0,3}\d{3}[ -]?\d{2}[ -]?\d{4}\b",
         )
-    )
-
-    #: A six-digit PIN code that explicitly names a place.  Indian postal codes
-    #: are also called PIN codes; preserve those only when the wording clearly
-    #: identifies a proper-noun location, while ambiguous six-digit PINs remain
-    #: protected by the credential patterns above.
-    _PIN_CODE_POSTAL_CONTEXT: ClassVar[re.Pattern] = re.compile(
-        r"(?i:pin\s+code\s+(?:of|for))\s+"
-        r"(?P<context>[A-Z][A-Za-z-]*(?:\s+[A-Z][A-Za-z-]*){0,3})"
-        r"(?:\s+(?i:is|was|to)|\s*[:=\u2013\u2014-])?\s*"
-        r"(?P<value>\d{6})\b"
     )
 
     #: A run of 13+ digits, optionally grouped by spaces (of any width, but
@@ -4029,16 +4017,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         long conversation once per match.
         """
         spans = cls._card_spans(text)
-        postal_spans = {
-            match.span()
-            for match in cls._PIN_CODE_POSTAL_CONTEXT.finditer(text)
-        }
         for pattern in cls._CREDENTIAL_PATTERNS:
-            spans.extend(
-                match.span()
-                for match in pattern.finditer(text)
-                if match.span() not in postal_spans
-            )
+            spans.extend(match.span() for match in pattern.finditer(text))
         if not spans:
             return []
         spans.sort()
