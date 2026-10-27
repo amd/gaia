@@ -3894,7 +3894,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             # page numbers, and postal-code phrases are ordinary data.
             r"\bpin(?:'s)?(?:\s+number)?\s+(?:for|on|at|of)(?:\s+\w+){1,8}?\s*"
             r"(?:is|was|to|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
-            r"\bpin\s+(?:for|on|at|of)(?!\s+page\b)(?:\s+\w+){1,8}?\s+\d{3,8}\b",
+            r"\bpin(?:'s)?(?:\s+number)?\s+(?:for|on|at|of)"
+            r"(?!\s+page\b)(?:\s+\w+){1,8}?\s+\d{3,8}\b",
             r"\bpin\s+code\s*(?:(?:is|was|to|:|=|[-\u2013\u2014])\s*)?\d{3,5}\b",
             r"(?<!gpio )\bpin(?:'s)?(?!\s+code\b)(?:\s+number)?\s*"
             r"(?:is|was|to|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
@@ -3903,7 +3904,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             r"\bpin\s*(?:#|:|=|\(\s*)\s*\d{3,8}\b\s*\)?",
             r"\b\d{3,8}\s+is\s+(?:(?:my|your|their|the)\s+|user(?:'s)?\s+)?pin\b",
             r"\b(?:passcode|pass code|cvv2?|cvc|security code)\b"
-            r"(?:'s)?\s*(?:is|was|:|=|[-\u2013\u2014])?\s*\d{3,8}\b",
+            r"(?:'s)?(?:\s+(?:number|code))?"
+            r"(?:\s+(?:for|on|at|of)(?:\s+\w+){1,8}?)?"
+            r"\s*(?:is|was|to|:|=|[-\u2013\u2014])?\s*\d{3,8}\b",
             r"\b\d{3}-\d{2}-\d{4}\b",  # US social security number
             r"\b(?:ssn|social security(?: number)?)\b(?:\s{0,3}(?:is|was|:|=))?"
             r"\s{0,3}\d{3}[ -]?\d{2}[ -]?\d{4}\b",

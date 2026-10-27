@@ -165,6 +165,15 @@ def test_the_conversation_log_keeps_no_secret(store):
         "4821 is my PIN",
         "pin#4821",
         "PIN (4821)",
+        "PIN number on my card 4821",
+        "PIN number for Chase is 4821",
+        "CVV for my Visa is 123",
+        "CVV on my card: 123",
+        "cvc for amex 1234",
+        "security code on the back is 123",
+        "passcode for the alarm is 4821",
+        "Passcode number 4821",
+        "pass code is 4821",
     ),
 )
 def test_pin_variants_are_masked(text):
