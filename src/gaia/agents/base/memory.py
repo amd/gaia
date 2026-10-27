@@ -3901,7 +3901,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             r"(?:is|was|to|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
             r"(?<!gpio )\bpin(?:'s)?(?!\s+(?:code|on|at|for)\b)(?:\s+number)?\s+"
             r"\d{3,8}\b",
-            r"\bpin\s*(?:#|:|=|\(\s*)\s*\d{3,8}\b\s*\)?",
+            r"\bpin\s{0,3}(?:#|:|=|\()\s{0,3}\d{3,8}\b\s{0,3}\)?",
             r"\b\d{3,8}\s+is\s+(?:(?:my|your|their|the)\s+|user(?:'s)?\s+)?pin\b",
             # Bound optional whitespace so long padding cannot trigger repeated retries.
             r"\b(?:passcode|pass code|cvv2?|cvc|security code)(?:'s)?\b"

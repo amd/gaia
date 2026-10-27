@@ -107,6 +107,7 @@ LONG_INPUTS = {
     "cvc then spaces": "cvc" + " " * 20_000,
     "passcode then spaces": "passcode" + " " * 20_000,
     "security code then spaces": "security code" + " " * 20_000,
+    "pin parentheses then spaces": "pin (" + " " * 20_000,
     "spaced digits": "4 " * 50_000,
     "dotted digits": "1." * 50_000,
     "card-grouped digits": "4111 " * 20_000,
