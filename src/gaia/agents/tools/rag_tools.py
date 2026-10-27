@@ -333,6 +333,57 @@ def _ambiguous_file_error(requested: str, candidates: list) -> Dict[str, Any]:
     }
 
 
+def _chunks_have_pages(chunks: List[Dict[str, Any]]) -> bool:
+    """True when any chunk carries a page number (PDFs do; markdown and text don't)."""
+    return any("page" in chunk for chunk in chunks)
+
+
+def _documents_instruction(has_pages: bool) -> str:
+    """How query_documents asks the model to cite: the full path, plus pages if any."""
+    instruction = (
+        "Use the provided document chunks to answer the user's question.\n\n"
+        "CRITICAL CITATION REQUIREMENT:\n"
+        "When referencing a document, you MUST include its FULL ABSOLUTE FILE PATH "
+        "from the 'source_file' field of each chunk. This allows the user to click "
+        "and open the file directly.\n\n"
+    )
+    if has_pages:
+        instruction += (
+            "Format: 'According to <absolute_path> (page X):'\n"
+            "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
+            "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n\n"
+        )
+    else:
+        instruction += (
+            "Format: 'According to <absolute_path>:'\n"
+            "Example: 'According to C:\\Users\\john\\docs\\notes.md:'\n"
+            "These chunks have no page numbers, so cite none and don't mention pages.\n\n"
+        )
+    return instruction + (
+        "IMPORTANT: Always use the full path exactly as given in source_file. "
+        "Do NOT shorten it to just the filename."
+    )
+
+
+def _file_instruction(file_name: str, num_chunks: int, has_pages: bool) -> str:
+    """How query_specific_file asks the model to cite one file, with pages if any."""
+    instruction = (
+        f"Use these chunks from {file_name} to answer the question. Read through ALL "
+        f"{num_chunks} chunks completely before answering.\n\nCRITICAL CITATION REQUIREMENT:\n"
+    )
+    if not has_pages:
+        return instruction + (
+            f"Your answer MUST start with: 'According to {file_name}:'. These chunks have "
+            "no page numbers, so cite none and don't mention pages."
+        )
+    return instruction + (
+        f"Your answer MUST start with: 'According to {file_name}, page X:' where X is the "
+        "page number from the chunk's 'page' field.\n\n"
+        f"Example: If chunk has 'page': 2, say 'According to {file_name}, page 2:'\n"
+        f"If info from multiple pages, say 'According to {file_name}, pages 2 and 5:'"
+    )
+
+
 def extract_page_from_chunk(
     chunk_text, chunk_index=-1, all_chunks=None, chunk_to_file=None
 ):
@@ -801,17 +852,8 @@ class RAGToolsMixin:
                     "num_chunks": len(top_chunks),
                     "search_keys_used": search_keys,
                     "source_files": matched_source_files,
-                    "instruction": (
-                        "Use the provided document chunks to answer the user's question.\n\n"
-                        "CRITICAL CITATION REQUIREMENT:\n"
-                        "When referencing a document, you MUST include its FULL ABSOLUTE FILE PATH "
-                        "from the 'source_file' field of each chunk. This allows the user to click "
-                        "and open the file directly.\n\n"
-                        "Format: 'According to <absolute_path> (page X):'\n"
-                        "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
-                        "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n\n"
-                        "IMPORTANT: Always use the full path exactly as given in source_file. "
-                        "Do NOT shorten it to just the filename."
+                    "instruction": _documents_instruction(
+                        _chunks_have_pages(formatted_chunks)
                     ),
                 }
 
@@ -1307,7 +1349,11 @@ class RAGToolsMixin:
                     "file": str(target_file),
                     "source_files": [source_path],
                     "auto_indexed": auto_indexed,
-                    "instruction": f"Use these chunks from {Path(target_file).name} to answer the question. Read through ALL {len(top_chunks)} chunks completely before answering.\n\nCRITICAL CITATION REQUIREMENT:\nYour answer MUST start with: 'According to {Path(target_file).name}, page X:' where X is the page number from the chunk's 'page' field.\n\nExample: If chunk has 'page': 2, say 'According to {Path(target_file).name}, page 2:'\nIf info from multiple pages, say 'According to {Path(target_file).name}, pages 2 and 5:'",
+                    "instruction": _file_instruction(
+                        Path(target_file).name,
+                        len(top_chunks),
+                        _chunks_have_pages(formatted_chunks),
+                    ),
                 }
                 if save_warning:
                     result["warning"] = save_warning
