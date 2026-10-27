@@ -53,6 +53,7 @@ from gaia.llm.lemonade_launcher import (
     get_installed_version,
     resolve_lemonade,
 )
+from gaia.llm.local_only import guard_inference
 from gaia.llm.model_server_info import EMBEDDER_ON_CPU_WITH_ROCM, embedder_avoids_rocm
 from gaia.llm.retry import (
     HOSTED_REPLY_TIMEOUT_ENV,
@@ -4686,6 +4687,7 @@ class LemonadeClient:
         )
         return api_call()
 
+    @guard_inference()
     def chat_completions(
         self,
         model: str,
@@ -5410,6 +5412,7 @@ class LemonadeClient:
         finally:
             self._record_retries(state)
 
+    @guard_inference()
     def completions(
         self,
         model: str,
@@ -5657,6 +5660,7 @@ class LemonadeClient:
         finally:
             self._record_retries(state)
 
+    @guard_inference(default_model=lambda self: self.model or DEFAULT_EMBEDDING_MODEL)
     def embeddings(
         self,
         input_texts: Union[str, List[str]],
@@ -5747,6 +5751,7 @@ class LemonadeClient:
         "SDXL-Turbo": {"steps": 4, "cfg_scale": 1.0, "size": "512x512"},
     }
 
+    @guard_inference()
     def generate_image(
         self,
         prompt: str,
@@ -6641,6 +6646,7 @@ class LemonadeClient:
             self.log.error(f"Failed to ensure model downloaded: {e}")
             return False
 
+    @guard_inference()
     def responses(
         self,
         model: str,

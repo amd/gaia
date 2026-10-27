@@ -20,6 +20,7 @@ except ImportError:
 
 from gaia.env import load_env
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
+from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
 
 load_env()
@@ -115,6 +116,7 @@ class ClaudeClient:
             raise ValueError(error_msg)
         # Initialize Anthropic client with retry support
         # The SDK handles exponential backoff automatically
+        assert_provider_permitted("Anthropic Claude")
         self.client = anthropic.Anthropic(
             api_key=self.api_key,
             max_retries=max_retries,

@@ -1288,3 +1288,48 @@ def test_an_unreadable_lemonade_address_skips_the_gateway_check(
     reach["error"] = _offline()
     amd = _amd(client.get("/api/providers").json())
     assert amd["network"] == {"reachable": None, "detail": None}
+
+
+# ── Local only ─────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def local_only_on(tmp_path, monkeypatch):
+    from gaia.llm import local_only
+
+    monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+    local_only.set_policy("local_ai_only")
+
+
+@pytest.mark.parametrize("provider", ["fireworks", "amd"])
+def test_connect_is_refused_under_local_only_before_any_lemonade_call(
+    client, lemonade, keys, local_only_on, provider
+):
+    resp = client.post(f"/api/providers/{provider}/connect", json={"api_key": KEY})
+    assert resp.status_code == 409
+    assert "Local only is on" in resp.json()["detail"]
+    assert lemonade.calls == []  # no install, no cloud/auth
+    assert keys["remembered"] == []
+    assert KEY not in resp.text
+
+
+def test_selecting_a_cloud_model_is_refused_under_local_only(
+    client, lemonade, keys, db, local_only_on
+):
+    resp = client.post(
+        "/api/providers/select", json={"model": "fireworks.glm-5p3-flash"}
+    )
+    assert resp.status_code == 409
+    assert "Local only is on" in resp.json()["detail"]
+    assert "network_policy cloud_allowed" in resp.json()["detail"]
+    assert lemonade.calls == []
+    assert db.get_setting("custom_model") is None
+
+
+def test_selecting_a_local_model_still_works_under_local_only(
+    client, lemonade, keys, db, local_only_on
+):
+    lemonade.models = [_CUSTOM_LISTED]
+    resp = client.post("/api/providers/select", json={"model": _CUSTOM})
+    assert resp.status_code == 200, resp.json()
+    assert db.get_setting("custom_model") == _CUSTOM

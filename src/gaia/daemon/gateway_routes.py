@@ -79,9 +79,13 @@ def build_gateway_router(token: str) -> APIRouter:
         returned to the caller.
         """
         from gaia.llm.gateway import GatewayError, GatewayManager
+        from gaia.llm.local_only import CloudDisabledError
 
         try:
             return {"authenticated": GatewayManager().ensure_authenticated()}
+        except CloudDisabledError as e:
+            # Not transient: retrying won't help until the user changes it.
+            raise HTTPException(status_code=409, detail=str(e)) from e
         except GatewayError as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
 

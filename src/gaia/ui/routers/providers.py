@@ -27,6 +27,11 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from gaia.llm.local_only import (
+    SETTINGS_HINT,
+    cloud_blocked,
+    local_only_key_message,
+)
 from gaia.logger import get_logger
 
 from ..database import ChatDatabase
@@ -749,6 +754,10 @@ def connect_provider(
     _known(provider)
     if provider == LOCAL:
         raise HTTPException(status_code=422, detail="Local models need no connection.")
+    if cloud_blocked():
+        raise HTTPException(
+            status_code=409, detail=local_only_key_message(_NAMES[provider])
+        )
     key = (body.api_key or "").strip()
     if key and _via_tunnel(request):
         raise HTTPException(
@@ -977,6 +986,14 @@ def select_model(
     model_id = body.model.strip()
     if not model_id:
         raise HTTPException(status_code=422, detail="No model given.")
+    if provider_of(model_id) != LOCAL and cloud_blocked():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Can't switch to {model_label(model_id)}: Local only is on. "
+                f"{SETTINGS_HINT}"
+            ),
+        )
     from gaia.connectors.credential_wait import CredentialStoreWaiting
 
     try:

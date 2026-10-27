@@ -1661,6 +1661,39 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `lemonade_api_key_stored` | `false` | Set by `gaia lemonade connect` when your server's API key is in the OS credential store. The key is never written to this file |
 | `undo_retention_days` | `7` | Days to keep the copies that let a turn's file changes be undone — see [Undo a turn](/guides/agent-ui#undo-a-turn) |
 | `undo_max_mb` | `500` | Megabytes those copies may use; the oldest turns are removed first; the size limit never removes the newest |
+| `network_policy` | `cloud_allowed` | `local_ai_only` keeps every GAIA AI request on this PC — see [Local only](#local-only). Stored in `~/.gaia/policy.json`, not in `config.json` |
+
+### Local only
+
+```bash
+gaia config set network_policy local_ai_only   # no AI request reaches a cloud model
+gaia config get network_policy
+gaia config set network_policy cloud_allowed   # allow cloud models again
+```
+
+With `local_ai_only`, GAIA's Python side refuses every AI request to a model
+Lemonade doesn't list as running on this PC: Fireworks and AMD LLM Gateway models,
+Lemonade router collections, and any model id the catalog doesn't know. It also
+refuses the Anthropic Claude provider and the `gaia eval` Claude client. The
+refusal names the model and how to turn the setting off. GAIA stops handing stored
+cloud keys to Lemonade, and the Agent UI refuses to connect a cloud provider or
+switch to a cloud model.
+
+Not covered yet: the `gaia-tui` provider and gateway screens can still hand
+Lemonade a key
+(its chats are still refused, because they run through the Python agent), a
+bundled agent sidecar such as email runs its own copy of GAIA, and `gaia eval`
+judges that run through the `claude` command are not checked.
+
+It covers AI requests only. Web search, connectors and MCP servers keep working
+and keep their own permissions. Downloading a local model still works.
+
+The setting lives in `~/.gaia/policy.json` (move it with `GAIA_POLICY_FILE`), not in
+`config.json`, so a project config passed with `--config` can't relax it. If that file can't be read, GAIA treats it as
+`local_ai_only` until you fix or rewrite it. A key set in Lemonade's own
+environment (for example `LEMONADE_FIREWORKS_API_KEY`) is outside GAIA's
+control: GAIA's own requests are still refused, but a program talking to
+Lemonade directly could use it.
 
 ### Full access
 

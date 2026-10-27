@@ -32,6 +32,11 @@ from gaia.llm.lemonade_client import (
     lemonade_auth_headers,
     resolve_lemonade_api_key,
 )
+from gaia.llm.local_only import (
+    CloudDisabledError,
+    cloud_blocked,
+    local_only_key_message,
+)
 from gaia.llm.providers.fireworks import API_KEY_SECRET_NAME
 from gaia.logger import get_logger
 
@@ -54,6 +59,10 @@ _TIMEOUT = 60
 
 class CloudKeyError(Exception):
     """A key could not be kept or replayed, with what to do about it."""
+
+
+class CloudKeyBlockedError(CloudKeyError, CloudDisabledError):
+    """Local only is on, so no cloud key is handed to Lemonade."""
 
 
 def _check(provider: str) -> str:
@@ -140,6 +149,8 @@ def ensure_authenticated(
     from gaia.llm.lemonade_choice import is_users_server
 
     _check(provider)
+    if cloud_blocked():
+        raise CloudKeyBlockedError(local_only_key_message(provider))
     client = client or LemonadeClient(verbose=False)
     try:
         base_url = client.credential_base_url()

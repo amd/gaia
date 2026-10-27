@@ -42,6 +42,11 @@ from gaia.llm.lemonade_client import (
     resolve_lemonade_api_key,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
+from gaia.llm.local_only import (
+    CloudDisabledError,
+    cloud_blocked,
+    local_only_key_message,
+)
 from gaia.llm.retry import http_body_text
 from gaia.logger import get_logger
 from gaia.version import LEMONADE_GATEWAY_MIN_VERSION
@@ -156,6 +161,10 @@ class GatewayError(Exception):
 
     Messages name what failed, what to do about it, and where to look.
     """
+
+
+class GatewayBlockedError(GatewayError, CloudDisabledError):
+    """Local only is on, so no gateway token is handed to Lemonade."""
 
 
 @dataclass
@@ -670,6 +679,8 @@ class GatewayManager:
         if allow_insecure_http:
             payload["allow_insecure_http"] = True
         if api_key:
+            if cloud_blocked():
+                raise GatewayBlockedError(local_only_key_message("AMD LLM Gateway"))
             payload["api_key"] = api_key
 
         result = self._request(
@@ -737,6 +748,8 @@ class GatewayManager:
         is not it: callers use ``remember_token`` for the OS credential store,
         or ``LEMONADE_AMD_API_KEY`` in Lemonade's own environment.
         """
+        if cloud_blocked():
+            raise GatewayBlockedError(local_only_key_message("AMD LLM Gateway"))
         if not api_key or not api_key.strip():
             raise GatewayError(
                 "No token supplied. Pass one to `gaia gateway auth`, or set "
@@ -785,6 +798,8 @@ class GatewayManager:
         """
         from gaia.llm.lemonade_choice import is_users_server
 
+        if cloud_blocked():
+            raise GatewayBlockedError(local_only_key_message("AMD LLM Gateway"))
         status = self.status()
         if is_users_server(self.base_url) and not (
             status.authenticated and status.models_discovered

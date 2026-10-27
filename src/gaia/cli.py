@@ -6777,6 +6777,14 @@ def handle_config_command(args):
         for key in cfg.field_names():
             value = cfg.get(key)
             print(f"  {key} = {value if value is not None else '(unset)'}")
+        from gaia.llm import local_only
+
+        print(f"Policy file: {local_only.policy_path()}")
+        print(f"  {local_only.POLICY_KEY} = {local_only.effective_policy().value}")
+        return
+
+    if args.key == "network_policy":
+        _handle_network_policy(action, args.value if action == "set" else None)
         return
 
     if action == "get":
@@ -6805,6 +6813,24 @@ def handle_config_command(args):
         print(f"✅ Set {args.key} = {cfg.get(args.key)}")
         print(f"   Saved to {config_file}")
         return
+
+
+def _handle_network_policy(action, value) -> None:
+    """``gaia config get|set network_policy``: lives in policy.json, not config.json."""
+    from gaia.llm import local_only
+
+    if action == "get":
+        print(local_only.effective_policy().value)
+        return
+    try:
+        stored = local_only.set_policy(value)
+    except (ValueError, OSError) as e:
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"✅ Set network_policy = {stored.value}")
+    print(f"   Saved to {local_only.policy_path()}")
+    if stored is local_only.NetworkPolicy.LOCAL_AI_ONLY:
+        print("   No GAIA AI request will reach a cloud model.")
 
 
 #: Keys that pick which Lemonade GAIA uses; setting one probes and switches.

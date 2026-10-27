@@ -26,6 +26,7 @@ except ImportError:
     anthropic = None  # type: ignore[assignment]
 
 from ..base_client import LLMClient
+from ..local_only import assert_provider_permitted
 from .lemonade import _NATIVE_TC_KEY
 
 logger = logging.getLogger(__name__)
@@ -332,6 +333,7 @@ class ClaudeProvider(LLMClient):
         timeout: float = 300.0,
         **_kwargs,
     ):
+        assert_provider_permitted("Anthropic Claude")
         sdk = _require_anthropic()
 
         # The repo keeps ANTHROPIC_API_KEY in .env — same load as gaia.eval.claude.
@@ -893,6 +895,7 @@ class ClaudeProvider(LLMClient):
         if stream:
             return self._stream_chat(params, name_map, prefix_digest)
 
+        assert_provider_permitted("Anthropic Claude")
         start = time.monotonic()
         try:
             response = self._client.messages.create(**params)
@@ -954,6 +957,7 @@ class ClaudeProvider(LLMClient):
     def _stream_chat(
         self, params: dict, name_map: Dict[str, str], prefix_digest: str
     ) -> Iterator[str]:
+        assert_provider_permitted("Anthropic Claude")
         start = time.monotonic()
         try:
             events = self._client.messages.create(**params, stream=True)
