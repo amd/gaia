@@ -207,11 +207,12 @@ class TurnLedger:
                     url = hit.get("url") if isinstance(hit, dict) else None
                     if not _web_url(url):
                         continue
+                    title = hit.get("title")
                     hits.setdefault(
                         url,
                         {
                             "url": url,
-                            "title": hit.get("title"),
+                            "title": title if isinstance(title, str) else None,
                             "kind": "search_result",
                         },
                     )
