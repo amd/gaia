@@ -1558,6 +1558,8 @@ class _TaintProbeAgent:
     _resolve_tool_name = Agent._resolve_tool_name
     _policy_refusal = Agent._policy_refusal
     _tool_requires_confirmation = Agent._tool_requires_confirmation
+    _write_target_outside_scope = Agent._write_target_outside_scope
+    _read_validator = Agent._read_validator
     # __dict__ so the classmethod rebinds to this class's MRO rather than
     # staying bound to Agent.
     confirmation_hooks = Agent.__dict__["confirmation_hooks"]

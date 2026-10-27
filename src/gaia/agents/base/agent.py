@@ -6707,16 +6707,18 @@ Do NOT wrap conversational replies in JSON.
         outside = self._write_target_outside_scope(tool_name, prompt_args)
         if isinstance(outside, dict):
             return outside
-        auto_approves = getattr(
-            self.console, "auto_approve_confirmations_enabled", None
-        )
-        auto_accepts = getattr(self.console, "edit_is_auto_accepted", None)
-        if outside is not None and (
-            (callable(auto_approves) and auto_approves())
-            or (callable(auto_accepts) and auto_accepts(tool_name, prompt_args))
-            or not self._tool_requires_confirmation(tool_name, tool_args)
-        ):
-            outside = None
+        auto_approves = None
+        if outside is not None:
+            auto_approves = getattr(
+                self.console, "auto_approve_confirmations_enabled", None
+            )
+            auto_accepts = getattr(self.console, "edit_is_auto_accepted", None)
+            if (
+                (callable(auto_approves) and auto_approves())
+                or (callable(auto_accepts) and auto_accepts(tool_name, prompt_args))
+                or not self._tool_requires_confirmation(tool_name, tool_args)
+            ):
+                outside = None
         if outside is not None:
             # Shown where the write really lands: a link in scope can point out.
             if "file_path" in prompt_args:
