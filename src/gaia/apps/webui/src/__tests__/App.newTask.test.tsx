@@ -1,7 +1,8 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Pins what the shell sends when a chat starts, and when it shows first-run setup.
+// Pins what the shell sends when a chat starts, when it shows first-run setup,
+// and which sidebar destination is open.
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -392,5 +393,22 @@ describe('opening the app on a chat link', () => {
         await waitFor(() => expect(mocked.listSessions).toHaveBeenCalled());
         await waitFor(() => expect(window.location.hash).toBe(''));
         expect(useChatStore.getState().currentSessionId).toBeNull();
+    });
+});
+
+describe('sidebar destinations', () => {
+    it('opens Scheduled tasks over the chat, and Documents in its place', async () => {
+        mocked.listSchedules.mockResolvedValue({ schedules: [], total: 0 });
+        render(<App />);
+        await userEvent.click(await screen.findByRole('button', { name: 'Scheduled tasks' }));
+
+        expect(await screen.findByRole('dialog', { name: 'Scheduled tasks' })).toBeInTheDocument();
+        expect(screen.getByLabelText('Message')).toBeInTheDocument();
+
+        // The backdrop covers the sidebar for a pointer, not for a screen reader or voice control.
+        fireEvent.click(screen.getByRole('button', { name: 'Documents' }));
+
+        expect(await screen.findByRole('dialog', { name: 'Document library' })).toBeInTheDocument();
+        expect(screen.queryByRole('dialog', { name: 'Scheduled tasks' })).not.toBeInTheDocument();
     });
 });
