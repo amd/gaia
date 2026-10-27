@@ -114,6 +114,11 @@ _LEMONADE_ENSURE_TIMEOUT = (5.0, 80.0)
 # tests/unit/test_daemon_lemonade.py pins the margin.
 STOP_WAIT_TIMEOUT = 45.0
 
+# A daemon that served a Lemonade request this recently may be mid-turn.
+OUTDATED_BUSY_RECENT_S = 120.0
+# Outdated daemons already reported as kept running, so the notice shows once.
+_DEFERRED_NOTED: set = set()
+
 UPGRADE_CORE_GUIDANCE = (
     "Upgrade the installed GAIA core so it matches this app: "
     "`pip install --upgrade amd-gaia`, or re-run the installer from "
@@ -307,6 +312,20 @@ def start_or_attach(
                 stale = runs_replaced_install(inst)
                 if stale is None:
                     return inst
+                busy = outdated_daemon_busy(inst)
+                if busy is not None:
+                    if inst.pid in _DEFERRED_NOTED:
+                        return inst
+                    _DEFERRED_NOTED.add(inst.pid)
+                    logger.warning(
+                        "daemon: pid %s is out of date (%s), but %s, so it keeps "
+                        "running for now. It restarts on a later GAIA command "
+                        "once it is free, or run `gaia daemon restart`.",
+                        inst.pid,
+                        stale,
+                        busy,
+                    )
+                    return inst
                 _replace_outdated(inst, stale)
                 inst = None
         except DaemonHungError as e:
@@ -334,6 +353,50 @@ def start_or_attach(
         return _spawn_and_wait(timeout, on_progress, drop_env)
 
 
+def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
+    """Why stopping *inst* now could cut off work, or None when it is free.
+
+    Reads only routes older daemons serve too: their scheduled jobs, the front
+    ends registered with them, and when Lemonade last served a request.
+    """
+    import requests
+
+    headers = {"Authorization": f"{AUTH_SCHEME} {inst.token}"}
+    try:
+        status = requests.get(
+            f"{inst.base_url}{API_PREFIX}/status", headers=headers, timeout=5.0
+        )
+        clients = requests.get(
+            f"{inst.base_url}{API_PREFIX}/lemonade/clients",
+            headers=headers,
+            timeout=5.0,
+        )
+    except requests.exceptions.RequestException as e:
+        return f"GAIA could not check whether it is busy ({e})"
+    if status.status_code != 200:
+        return f"GAIA could not check whether it is busy ({_error_detail(status)})"
+    pending = (status.json().get("clock") or {}).get("pending_jobs") or 0
+    if pending:
+        return f"{pending} scheduled job(s) are waiting to run on it"
+    if clients.status_code == 404:
+        return None
+    if clients.status_code != 200:
+        return f"GAIA could not check whether it is busy ({_error_detail(clients)})"
+    snapshot = clients.json()
+    ours = {os.getpid(), os.getppid()}
+    users = [
+        c.get("name") or c.get("kind") or "a GAIA app"
+        for c in snapshot.get("clients") or []
+        if any(pid_alive(p) for p in c.get("pids") or [] if p not in ours)
+    ]
+    if users:
+        return f"{', '.join(users)} is still using it"
+    ago = snapshot.get("seconds_since_request")
+    if ago is not None and ago < OUTDATED_BUSY_RECENT_S:
+        return f"its model server answered a request {ago:.0f}s ago"
+    return None
+
+
 def _replace_outdated(inst: DaemonInstance, why: str) -> None:
     """Stop a daemon an update left running on the previous release's code."""
     logger.warning(
@@ -341,9 +404,14 @@ def _replace_outdated(inst: DaemonInstance, why: str) -> None:
         inst.pid,
         why,
     )
-    if not request_shutdown(inst) or not wait_until_gone(
-        inst, timeout=STOP_WAIT_TIMEOUT
-    ):
+    try:
+        accepted = request_shutdown(inst)
+    except DaemonError as e:
+        raise DaemonError(
+            f"the GAIA daemon (pid {inst.pid}) is out of date ({why}) and could "
+            f"not be asked to stop: {e} Run `gaia daemon restart`."
+        ) from e
+    if not accepted or not wait_until_gone(inst, timeout=STOP_WAIT_TIMEOUT):
         raise DaemonError(
             f"the GAIA daemon (pid {inst.pid}) is out of date ({why}) and did not "
             "stop when asked. Run `gaia daemon restart`. Where to look: `gaia "

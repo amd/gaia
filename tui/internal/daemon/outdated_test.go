@@ -86,15 +86,41 @@ func TestStartOrAttachRestartsAnOutOfDateDaemon(t *testing.T) {
 	}
 }
 
+func TestStartOrAttachKeepsABusyOutOfDateDaemon(t *testing.T) {
+	f := newFakeDaemon(t)
+	path := versionFile(t, "0.25.2")
+	f.writeInstance(func(i *Instance) { i.GaiaVersion, i.VersionFile = "0.25.1", path })
+
+	// The CLI found it busy and left the same daemon registered.
+	c := testClient(t, func(o *Options) { o.StartCommand = launcher(t, f.dir, "", "") })
+
+	got, err := c.StartOrAttach(context.Background())
+	if err != nil {
+		t.Fatalf("StartOrAttach: %v", err)
+	}
+	if got.GaiaVersion != "0.25.1" {
+		t.Errorf("attached to GAIA %q, want the busy 0.25.1 daemon kept", got.GaiaVersion)
+	}
+}
+
 func TestStartOrAttachSaysWhatToRunWhenTheRestartLeavesItOutOfDate(t *testing.T) {
 	f := newFakeDaemon(t)
 	path := versionFile(t, "0.25.2")
 	f.writeInstance(func(i *Instance) { i.GaiaVersion, i.VersionFile = "0.25.1", path })
 
-	// The launcher succeeds but leaves the old record in place.
-	c := testClient(t, func(o *Options) { o.StartCommand = launcher(t, f.dir, "", "") })
+	// A new daemon came up, but still on the old release.
+	restarted := &Instance{
+		PID: os.Getpid(), Port: f.port(), Token: "token-A", Host: DefaultHost,
+		APIVersion: "1.1", Service: ServiceID, StartedAt: 2.0,
+		GaiaVersion: "0.25.1", VersionFile: path,
+	}
+	payload, err := json.Marshal(restarted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := testClient(t, func(o *Options) { o.StartCommand = launcher(t, f.dir, string(payload), "") })
 
-	_, err := c.StartOrAttach(context.Background())
+	_, err = c.StartOrAttach(context.Background())
 	var se *StartError
 	if !asError(err, &se) || !strings.Contains(se.Reason, "gaia daemon restart") {
 		t.Fatalf("expected a StartError naming `gaia daemon restart`, got %v", err)

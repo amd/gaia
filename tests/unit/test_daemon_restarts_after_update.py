@@ -132,6 +132,8 @@ def running(monkeypatch, tmp_path):
         lambda inst: calls["shutdown"].append(inst.pid) or True,
     )
     monkeypatch.setattr(client, "wait_until_gone", lambda inst, timeout=0: True)
+    monkeypatch.setattr(client, "outdated_daemon_busy", lambda inst: state.get("busy"))
+    monkeypatch.setattr(client, "_DEFERRED_NOTED", set())
 
     def spawn(timeout, on_progress=None, drop_env=()):
         calls["spawned"] += 1
@@ -167,3 +169,115 @@ def test_an_out_of_date_daemon_that_will_not_stop_says_what_to_run(
     with pytest.raises(DaemonError, match="gaia daemon restart"):
         client.start_or_attach(timeout=1)
     assert calls["spawned"] == 0
+
+
+def test_a_busy_out_of_date_daemon_keeps_running_and_says_so_once(running, caplog):
+    state, calls, path = running
+    state["inst"] = _inst(gaia_version="0.25.1", version_file=str(path))
+    state["busy"] = "the GAIA terminal app is still using it"
+
+    with caplog.at_level("WARNING", logger="gaia.daemon.client"):
+        assert client.start_or_attach(timeout=1) is state["inst"]
+        assert client.start_or_attach(timeout=1) is state["inst"]
+
+    assert calls == {"shutdown": [], "spawned": 0}
+    notices = [
+        r.getMessage() for r in caplog.records if "keeps running" in r.getMessage()
+    ]
+    assert len(notices) == 1
+    assert "terminal app is still using it" in notices[0]
+    assert "gaia daemon restart" in notices[0]
+
+
+def test_a_daemon_that_cannot_be_asked_to_stop_says_what_to_run(running, monkeypatch):
+    state, calls, path = running
+    state["inst"] = _inst(gaia_version="0.25.1", version_file=str(path))
+
+    def unreachable(inst):
+        raise DaemonError("could not reach the daemon at http://127.0.0.1:5151.")
+
+    monkeypatch.setattr(client, "request_shutdown", unreachable)
+
+    with pytest.raises(DaemonError, match="gaia daemon restart"):
+        client.start_or_attach(timeout=1)
+    assert calls["spawned"] == 0
+
+
+class _Response:
+    def __init__(self, status_code, body=None):
+        self.status_code = status_code
+        self._body = body or {}
+        self.text = json.dumps(self._body)
+
+    def json(self):
+        return self._body
+
+
+@pytest.fixture
+def daemon_reports(monkeypatch):
+    """Answers the two routes outdated_daemon_busy reads."""
+    import requests
+
+    answers = {
+        "status": _Response(200, {"clock": {"pending_jobs": 0}}),
+        "clients": _Response(200, {"clients": [], "seconds_since_request": None}),
+    }
+
+    def get(url, **kwargs):
+        return answers["clients" if url.endswith("/lemonade/clients") else "status"]
+
+    monkeypatch.setattr(requests, "get", get)
+    monkeypatch.setattr(client, "pid_alive", lambda pid: pid != 999999)
+    return answers
+
+
+def test_an_idle_daemon_is_free_to_restart(daemon_reports):
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_a_waiting_scheduled_job_keeps_the_daemon(daemon_reports):
+    daemon_reports["status"] = _Response(200, {"clock": {"pending_jobs": 2}})
+    assert "2 scheduled job" in client.outdated_daemon_busy(_inst())
+
+
+def test_another_running_front_end_keeps_the_daemon(daemon_reports):
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [{"name": "gaia-tui", "pids": [4343]}]}
+    )
+    assert "gaia-tui is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_this_process_and_exited_front_ends_do_not_keep_it(daemon_reports):
+    daemon_reports["clients"] = _Response(
+        200,
+        {
+            "clients": [
+                {"name": "this", "pids": [os.getpid()]},
+                {"name": "parent", "pids": [os.getppid()]},
+                {"name": "gone", "pids": [999999]},
+            ]
+        },
+    )
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_a_model_request_just_now_keeps_the_daemon(daemon_reports):
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [], "seconds_since_request": 4.0}
+    )
+    assert "4s ago" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_daemon_without_the_clients_route_is_judged_by_its_jobs(daemon_reports):
+    daemon_reports["clients"] = _Response(404)
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_a_daemon_that_cannot_be_checked_is_kept(daemon_reports, monkeypatch):
+    import requests
+
+    def down(url, **kwargs):
+        raise requests.exceptions.ConnectionError("refused")
+
+    monkeypatch.setattr(requests, "get", down)
+    assert "could not check" in client.outdated_daemon_busy(_inst())

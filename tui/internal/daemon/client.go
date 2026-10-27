@@ -239,7 +239,7 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 
 // restartOutdated replaces a daemon an update left on the previous release.
 // The GAIA CLI's start stops it and starts the installed one under the start
-// lock; the TUI only waits for that and attaches to the result.
+// lock, or keeps it while it is busy; the TUI attaches to whichever runs.
 func (c *Client) restartOutdated(ctx context.Context, inst *Instance, why string) (*Instance, error) {
 	c.opts.Logf("daemon: %s is out of date (%s); restarting it", inst, why)
 	runCtx, cancel := context.WithTimeout(ctx, c.opts.StartTimeout)
@@ -264,6 +264,12 @@ func (c *Client) restartOutdated(ctx context.Context, inst *Instance, why string
 		return nil, err
 	}
 	if again := ReplacedInstall(fresh); again != "" {
+		if fresh.PID == inst.PID && fresh.StartedAt == inst.StartedAt {
+			// The CLI keeps a busy daemon running until its work is done.
+			c.opts.Logf("daemon: %s is out of date (%s) but busy; using it for now: %s",
+				fresh, again, strings.TrimSpace(out.String()))
+			return fresh, nil
+		}
 		return nil, &StartError{Reason: fmt.Sprintf(
 			"the daemon is still out of date after a restart (%s). Run `gaia daemon restart`", again)}
 	}
