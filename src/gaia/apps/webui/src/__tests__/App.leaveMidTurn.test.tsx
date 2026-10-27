@@ -38,7 +38,7 @@ beforeEach(() => {
     });
     mocked.checkSetup.mockResolvedValue({ ready: true, steps: [] });
     mocked.requestWarmUp.mockResolvedValue({ state: 'ready' });
-    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false } });
+    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
     mocked.getSetupPlan.mockRejectedValue(new Error('no plan'));
     mocked.getSystemStatus.mockResolvedValue({ lemonade_running: true, model_loaded: 'Gemma-4-E4B-it-GGUF' } as never);
     mocked.listAgents.mockResolvedValue({ agents: [], total: 0 });
