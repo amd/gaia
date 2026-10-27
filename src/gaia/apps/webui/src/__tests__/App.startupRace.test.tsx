@@ -58,7 +58,7 @@ beforeEach(() => {
     mocked.listAgents.mockImplementation(whenUp({ agents: [], total: 0 }));
     mocked.listSessions.mockImplementation(whenUp({ sessions: [session()], total: 1 }));
     mocked.listAllPermissions.mockImplementation(whenUp({ default_mode: 'ask' as const, sessions: [] }));
-    mocked.getStartScreen.mockImplementation(whenUp({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false } }));
+    mocked.getStartScreen.mockImplementation(whenUp({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } }));
     mocked.listDocuments.mockImplementation(whenUp({ documents: [] } as never));
     mocked.getActiveRuns.mockImplementation(whenUp({ session_ids: [], queued: [], awaiting_user: {} }));
     mocked.getTunnelStatus.mockImplementation(whenUp({ active: false } as never));
