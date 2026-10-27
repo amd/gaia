@@ -15,3 +15,12 @@ def test_image_generation_rule_follows_the_setting(enabled):
         prompt = agent._get_system_prompt()
     assert ("Always CALL `generate_image`" in prompt) is enabled
     assert ("Not available in this session" in prompt) is not enabled
+
+
+def test_a_slide_request_is_not_steered_to_image_generation():
+    """A one-slide framework came back as a Stable Diffusion picture."""
+    with chat_agent_build_context("full", enable_sd_tools=True) as agent:
+        prompt = agent._get_system_prompt()
+    rule = prompt[prompt.index("**IMAGE GENERATION:**") :].split("\n", 1)[0]
+    assert "first for a picture" in rule
+    assert "slide, deck, chart or document is a file, not a picture" in rule
