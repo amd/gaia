@@ -11,11 +11,13 @@
 
 import { describe, expect, it } from 'vitest';
 import indexCss from '../index.css?raw';
+import sidebarRaw from '../../components/Sidebar.css?raw';
 
 const LIGHTS_RIGHT = 16 + 54;
 const LIGHTS_BOTTOM = 16 + 14;
 
 const css = indexCss.replace(/\/\*[\s\S]*?\*\//g, '');
+const sidebarCss = sidebarRaw.replace(/\/\*[\s\S]*?\*\//g, '');
 
 function decls(selector: string, within = css): string {
     const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -40,6 +42,12 @@ describe('macOS window buttons with the sidebar collapsed', () => {
     it('the collapsed rail starts its icons below the buttons', () => {
         const [top] = px(decls(':root[data-titlebar="mac"] .sb.is-collapsed .sb-top'), 'padding');
         expect(top).toBeGreaterThan(LIGHTS_BOTTOM);
+    });
+
+    it('the chat title starts right of the buttons beside the collapsed rail', () => {
+        const [rail] = px(decls('.sb.is-collapsed', sidebarCss), 'width');
+        const [left] = px(decls(':root[data-titlebar="mac"] .app:has(.sb.is-collapsed) .task-header'), 'padding-left');
+        expect(rail + left).toBeGreaterThan(LIGHTS_RIGHT + 12);
     });
 
     it('the floating toggle starts right of the buttons', () => {

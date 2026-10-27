@@ -732,6 +732,10 @@ textarea:focus-visible {
 :root[data-titlebar="mac"] .sb.is-collapsed .sb-top {
     padding: 44px 10px 8px;
 }
+/* The 56px rail ends under the lights, so the chat title starts past them. */
+:root[data-titlebar="mac"] .app:has(.sb.is-collapsed) .task-header {
+    padding-left: 40px;
+}
 /* A closed drawer leaves the window's top-left to the lights: the toggle and
  * every top row start right of them. */
 @media (max-width: 768px) {

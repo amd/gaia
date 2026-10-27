@@ -38,7 +38,6 @@
 
 import { _electron } from '@playwright/test';
 import { createHash, randomBytes } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import { createRequire } from 'node:module';
@@ -252,22 +251,11 @@ async function measureOpenPane(page, fixtureUrl, run) {
     return Date.now() - started;
 }
 
+// Drawn from the app itself: a screen capture would also grab any window on top of it.
 async function windowShot(app, file) {
-    if (process.platform !== 'darwin') fail('shot uses macOS screencapture; capture the window with the OS tool on this platform.');
-    const b = await app.evaluate(({ BrowserWindow }) => {
-        const win = BrowserWindow.getAllWindows().find((w) => w.isVisible());
-        win.moveTop();
-        return win.getBounds();
-    });
     fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
-    try {
-        execFileSync('screencapture', ['-x', '-o', `-R${b.x},${b.y},${b.width},${b.height}`, path.resolve(file)], { stdio: 'pipe' });
-        return path.resolve(file);
-    } catch (err) {
-        // A locked or sleeping screen has no window to capture; build the same picture from the app.
-        await compositeShot(app, file);
-        return { file: path.resolve(file), composited: `screencapture failed (${String(err.stderr || err.message).trim()}); window and pane view composited from capturePage` };
-    }
+    await compositeShot(app, file);
+    return path.resolve(file);
 }
 
 /** The window's own page with each visible pane view painted over it at its bounds. */
