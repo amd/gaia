@@ -62,7 +62,7 @@ from gaia.agents.base.context_eviction import (
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import before_change, note_untracked
 from gaia.agents.base.memory import MemoryMixin
-from gaia.agents.base.model_features import features_for_model, withheld_tools
+from gaia.agents.base.model_features import features_for_model
 from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 
 # dynamic_tools_env_override is re-exported so callers importing it from
@@ -579,7 +579,8 @@ class ChatAgent(
 
         # Initialize scratchpad service (optional)
         self._scratchpad = None
-        if config.enable_scratchpad and self.model_features.scratchpad:
+        # Built whatever the model: a switch to a larger one offers it.
+        if config.enable_scratchpad:
             try:
                 from gaia.scratchpad.service import ScratchpadService
 
@@ -2250,7 +2251,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         # SD tools — generate_image, list_sd_models, get_generation_history
         # Only registered when explicitly enabled via config.enable_sd_tools=True.
         # Off by default to prevent image generation being called for document Q&A.
-        if self._offers_image_generation():
+        # Not gated on the model, so a switch to a larger one can offer them.
+        if getattr(self.config, "enable_sd_tools", False):
             from gaia.config import GAIA_CONFIG_DIR
 
             # Absolute, under the user's home. The mixin default is relative to
@@ -2828,8 +2830,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             }
             for _name in _chat_exclude:
                 self._instance_tools.pop(_name, None)
-        for _name in withheld_tools(self.model_features):
-            self._instance_tools.pop(_name, None)
+        self.apply_model_features(self.model_id)
 
     def _offers_image_generation(self) -> bool:
         """Image generation is on in the config and the model is offered it."""

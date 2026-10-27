@@ -625,7 +625,14 @@ def _snapshot_switch_state(agent: Any) -> _SwitchState:
         "cfg_claude_model": (
             getattr(cfg, "claude_model", None) if cfg is not None else None
         ),
+        "model_features": getattr(agent, "model_features", None),
+        "instance_tools": _copy_or_none(getattr(agent, "_instance_tools", None)),
+        "withheld_tools": _copy_or_none(getattr(agent, "_withheld_tool_entries", None)),
     }
+
+
+def _copy_or_none(mapping: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    return dict(mapping) if mapping is not None else None
 
 
 def _restore_switch_state(agent: Any, snapshot: _SwitchState) -> None:
@@ -641,6 +648,12 @@ def _restore_switch_state(agent: Any, snapshot: _SwitchState) -> None:
         cfg.use_claude = snapshot["cfg_use_claude"]
         cfg.model_id = snapshot["cfg_model_id"]
         cfg.claude_model = snapshot["cfg_claude_model"]
+    if snapshot["model_features"] is not None:
+        agent.model_features = snapshot["model_features"]
+    if snapshot["instance_tools"] is not None:
+        agent._instance_tools = snapshot["instance_tools"]
+    if snapshot["withheld_tools"] is not None:
+        agent._withheld_tool_entries = snapshot["withheld_tools"]
 
 
 def _apply_switch(
@@ -677,6 +690,9 @@ def _apply_switch(
                 cfg.model_id = model_id
             if claude_model is not None:
                 cfg.claude_model = claude_model
+        # The new model may be offered more features than the old one, or fewer.
+        if hasattr(agent, "apply_model_features"):
+            agent.apply_model_features(agent.model_id)
         # Gemma-family prompts carry an embedded-JSON tool-call envelope
         # Claude doesn't need (it speaks native tool_calls) — the cached
         # system prompt must be recomposed under the new backend or the next

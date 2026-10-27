@@ -2562,6 +2562,7 @@ Do NOT wrap conversational replies in JSON.
         # to prevent.
         self.model_id = model_id
         self.model_features = features_for_model(model_id)
+        self._withheld_tool_entries: Dict[str, Any] = {}
         # Claude always speaks native tool_calls, whatever model_id says — the
         # two tool-capability gates below read this alongside model_id.
         self._use_claude = use_claude
@@ -3430,6 +3431,23 @@ Do NOT wrap conversational replies in JSON.
         self._instance_tools = dict(_TOOL_REGISTRY)
         if hasattr(self, "_tool_overrides"):
             self._instance_tools.update(self._tool_overrides)
+
+    def apply_model_features(self, model_id: Optional[str]) -> None:
+        """Offer exactly the features *model_id* gets, both ways.
+
+        Withheld tools are kept aside rather than dropped, so a model switch
+        can give them back. Call ``rebuild_system_prompt()`` afterwards.
+        """
+        features = features_for_model(model_id)
+        if self._instance_tools is not None:
+            # getattr: tests build agents without running Agent.__init__.
+            self._instance_tools.update(getattr(self, "_withheld_tool_entries", {}))
+            self._withheld_tool_entries = {
+                name: self._instance_tools.pop(name)
+                for name in sorted(withheld_tools(features))
+                if name in self._instance_tools
+            }
+        self.model_features = features
 
     def _format_tools_for_prompt(self, filter_to: Optional[List[str]] = None) -> str:
         """Format the registered tools into a string for the prompt.
