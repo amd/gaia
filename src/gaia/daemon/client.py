@@ -353,6 +353,16 @@ def start_or_attach(
         return _spawn_and_wait(timeout, on_progress, drop_env)
 
 
+_JOBS_AT_WORK_SQL = (
+    "SELECT SUM(status = 'firing' AND claimed_at > :stale), "
+    "SUM(status = 'pending' AND fire_at <= :now) FROM daemon_jobs"
+)
+_JOBS_AT_WORK_SQL_OLD = (
+    "SELECT SUM(status = 'firing'), "
+    "SUM(status = 'pending' AND fire_at <= :now) FROM daemon_jobs"
+)
+
+
 def _scheduled_work() -> Optional[str]:
     """Scheduled jobs the daemon is running or is due to start, or None.
 
@@ -372,10 +382,15 @@ def _scheduled_work() -> Optional[str]:
         with closing(
             sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=2.0)
         ) as db:
+            columns = {row[1] for row in db.execute("PRAGMA table_info(daemon_jobs)")}
+            if not columns:
+                return None
+            # Stores before 0.25.1 have no heartbeat, so a firing row counts as is.
+            query = (
+                _JOBS_AT_WORK_SQL if "claimed_at" in columns else _JOBS_AT_WORK_SQL_OLD
+            )
             running, due = db.execute(
-                "SELECT SUM(status = 'firing' AND claimed_at > ?), "
-                "SUM(status = 'pending' AND fire_at <= ?) FROM daemon_jobs",
-                (now - DEFAULT_STALE_FIRING_SECONDS, now),
+                query, {"stale": now - DEFAULT_STALE_FIRING_SECONDS, "now": now}
             ).fetchone()
     except sqlite3.Error as e:
         return f"GAIA could not read its scheduled jobs at {path} ({e})"

@@ -316,3 +316,33 @@ def test_a_daemon_that_cannot_be_checked_is_kept(daemon_reports, monkeypatch):
 
     monkeypatch.setattr(requests, "get", down)
     assert "could not check" in client.outdated_daemon_busy(_inst())
+
+
+def _old_store(tmp_path, status, fire_at=None):
+    """A job store from before 0.25.1, which had no heartbeat column."""
+    import sqlite3
+
+    with sqlite3.connect(tmp_path / "scheduler.db") as db:
+        db.execute(
+            "CREATE TABLE daemon_jobs (job_id TEXT PRIMARY KEY, status TEXT, fire_at REAL)"
+        )
+        db.execute("INSERT INTO daemon_jobs VALUES ('j1', ?, ?)", (status, fire_at))
+
+
+def test_an_older_store_with_a_future_job_does_not_keep_it(daemon_reports, tmp_path):
+    import time as _time
+
+    _old_store(tmp_path, "pending", fire_at=_time.time() + 86400)
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_an_older_store_with_a_running_job_keeps_it(daemon_reports, tmp_path):
+    _old_store(tmp_path, "firing")
+    assert "running" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_store_without_the_jobs_table_does_not_keep_it(daemon_reports, tmp_path):
+    import sqlite3
+
+    sqlite3.connect(tmp_path / "scheduler.db").close()
+    assert client.outdated_daemon_busy(_inst()) is None
