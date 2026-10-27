@@ -257,6 +257,9 @@ With RAG enabled, `send()` and `send_stream()` raise `RAGContextError` instead o
 ```python
 from gaia.chat.sdk import AgentSDK, RAGContextError
 
+chat = AgentSDK()
+chat.enable_rag(documents=["guide.pdf"])
+
 try:
     response = chat.send("Summarize the guide")
 except RAGContextError as e:
