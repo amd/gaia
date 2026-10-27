@@ -43,6 +43,7 @@ def tools(tmp_path, monkeypatch):
             "read_file": _TOOL_REGISTRY["read_file"]["function"],
             "write_file": _TOOL_REGISTRY["write_file"]["function"],
             "edit_file": _TOOL_REGISTRY["edit_file"]["function"],
+            "registry": dict(_TOOL_REGISTRY),
         }
     finally:
         _TOOL_REGISTRY.clear()
@@ -84,3 +85,96 @@ def test_an_explicit_project_dir_still_overrides_the_workspace(tools):
     assert result["status"] == "success", result
     assert Path(result["file_path"]) == project / "notes.txt"
     assert not (tools["workspace"] / "notes.txt").exists()
+
+
+def _tool(tools, name):
+    return tools["registry"][name]["function"]
+
+
+@pytest.mark.parametrize(
+    "name, kwargs, file_name",
+    (
+        ("write_markdown_file", {"content": "# hi\n"}, "notes.md"),
+        ("write_python_file", {"content": "x = 1\n"}, "helper.py"),
+    ),
+)
+def test_every_create_tool_writes_into_the_chat_workspace(
+    tools, name, kwargs, file_name
+):
+    result = _tool(tools, name)(file_path=file_name, **kwargs)
+
+    assert result["status"] == "success", result
+    assert (tools["workspace"] / file_name).exists()
+    assert not (tools["sidecar"] / file_name).exists()
+
+
+def test_python_edits_and_diffs_use_the_workspace_file(tools):
+    original = "def f():\n    return 1\n"
+    target = tools["workspace"] / "mod.py"
+    target.write_text(original, encoding="utf-8")
+    # A same-named file in the sidecar cwd must never be the one touched.
+    decoy = tools["sidecar"] / "mod.py"
+    decoy.write_text(original, encoding="utf-8")
+    assert tools["read_file"](file_path="mod.py")["status"] == "success"
+
+    diff = _tool(tools, "generate_diff")(file_path="mod.py", new_content="x = 2\n")
+    assert diff["status"] == "success", diff
+
+    edited = _tool(tools, "edit_python_file")(
+        file_path="mod.py", old_content="return 1", new_content="return 2"
+    )
+    assert edited["status"] == "success", edited
+    assert "return 2" in target.read_text(encoding="utf-8")
+
+    replaced = _tool(tools, "replace_function")(
+        file_path="mod.py",
+        function_name="f",
+        new_implementation="def f():\n    return 3\n",
+    )
+    assert replaced["status"] == "success", replaced
+    assert "return 3" in target.read_text(encoding="utf-8")
+    assert decoy.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    "name",
+    (
+        "write_file",
+        "edit_file",
+        "write_markdown_file",
+        "write_python_file",
+        "edit_python_file",
+        "replace_function",
+    ),
+)
+def test_the_approval_prompt_names_the_workspace_path(tools, name):
+    target_of = tools["registry"][name]["preflight"].target_of
+
+    assert Path(target_of({"file_path": "notes.txt"})) == (
+        tools["workspace"] / "notes.txt"
+    )
+
+
+@pytest.mark.parametrize(
+    "name, kwargs",
+    (
+        ("write_file", {"content": "x"}),
+        ("write_markdown_file", {"content": "x"}),
+        ("write_python_file", {"content": "x = 1\n"}),
+    ),
+)
+def test_a_relative_path_cannot_climb_out_of_the_workspace(tools, name, kwargs):
+    result = _tool(tools, name)(file_path="../escape.py", **kwargs)
+
+    assert result["status"] == "error", result
+    assert not (tools["workspace"].parent / "escape.py").exists()
+
+
+def test_an_absolute_path_is_not_rebased_onto_the_workspace(tools):
+    inside = tools["workspace"] / "sub" / "abs.md"
+
+    result = _tool(tools, "write_markdown_file")(file_path=str(inside), content="x")
+
+    assert result["status"] == "success", result
+    assert inside.exists()
+    assert not (tools["workspace"] / "sub" / "sub").exists()

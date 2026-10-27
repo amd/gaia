@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **One very long turn no longer vanishes from the conversation.** A turn
+  bigger than the whole history budget, like a pasted log or a long document
+  read, was dropped from what the model saw next, answer included, so "now
+  shorten that" ran with no record of it. It is now kept: long tool results
+  become a short note naming the tool, and its longest messages are cut with
+  a note saying how much.
+
 ### For integrators: contract 2.22
 
 - **Relative file paths use the chat workspace.** A new `working_directory` field
@@ -13,12 +20,6 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `allowed_paths`. New and retained sessions use the same workspace for reads,
   writes, edits and approval prompts. Send it only after `/version` reports
   contract 2.22 or later.
-- **One very long turn no longer vanishes from the conversation.** A turn
-  bigger than the whole history budget, like a pasted log or a long document
-  read, was dropped from what the model saw next, answer included, so "now
-  shorten that" ran with no record of it. It is now kept: long tool results
-  become a short note naming the tool, and its longest messages are cut with
-  a note saying how much.
 
 ### For integrators: contract 2.21
 

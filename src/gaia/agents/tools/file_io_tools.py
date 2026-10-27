@@ -148,14 +148,6 @@ def _project_target_for(host: Any, args: Dict[str, Any]) -> Path:
     )
 
 
-def _project_target(args: Dict[str, Any]) -> Path:
-    return _resolve_target(args["file_path"], args.get("project_dir"))
-
-
-def _file_path_target(args: Dict[str, Any]) -> str:
-    return os.path.expanduser(args["file_path"])
-
-
 def _gaia_md_target(args: Dict[str, Any]) -> str:
     return os.path.join(args.get("project_root", "."), "GAIA.md")
 
@@ -684,7 +676,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _file_path_target, "overwriting"))
+        @tool(preflight=read_first_preflight(self, target_of, "overwriting"))
         def write_python_file(
             file_path: str,
             content: str,
@@ -707,7 +699,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with write operation results
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(target_of({"file_path": file_path}))
             try:
                 # Validate syntax if requested
                 if validate:
@@ -799,7 +791,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _file_path_target))
+        @tool(preflight=read_first_preflight(self, target_of))
         def edit_python_file(
             file_path: str,
             old_content: str,
@@ -828,7 +820,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with edit operation results
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(target_of({"file_path": file_path}))
             try:
                 # Security: validate write access.
                 # Report missing setup instead of writing without a check.
@@ -1081,7 +1073,7 @@ class FileIOToolsMixin:
                 Dictionary with diff information
             """
             path_validator = _require_path_validator(self)
-            file_path = os.path.expanduser(file_path)
+            file_path = str(target_of({"file_path": file_path}))
             try:
                 # A diff prints the original file, so it is a read.
                 is_allowed, reason = path_validator.validate_read(file_path)
@@ -1129,7 +1121,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _file_path_target, "overwriting"))
+        @tool(preflight=read_first_preflight(self, target_of, "overwriting"))
         def write_markdown_file(
             file_path: str, content: str, create_dirs: bool = True
         ) -> Dict[str, Any]:
@@ -1148,7 +1140,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with write operation results
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(target_of({"file_path": file_path}))
             try:
                 content_size = len(content.encode("utf-8"))
 
@@ -1635,7 +1627,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _file_path_target))
+        @tool(preflight=read_first_preflight(self, target_of))
         def replace_function(
             file_path: str,
             function_name: str,
@@ -1660,7 +1652,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with replacement result
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(target_of({"file_path": file_path}))
             try:
                 # Security: validate write access.
                 # Report missing setup instead of writing without a check.
