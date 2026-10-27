@@ -864,6 +864,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         context: str = "global",
         embedding_model: Optional[str] = None,
         incognito: bool = False,
+        session_id: Optional[str] = None,
     ) -> None:
         """Initialize the memory subsystem (v2 startup sequence).
 
@@ -889,6 +890,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                 loaded until memory is actually used — a turn with memory back
                 on, a ``recall``, or a dashboard reconcile/consolidate — so a
                 session that never uses memory never pays for it.
+            session_id: Id to file this session's conversation turns under.
+                The Agent UI passes its chat id so deleting the chat can
+                delete them. Defaults to a fresh random id.
 
         Does not raise when the embedding service is unreachable: it logs a
         warning and degrades to a memory-disabled session (``memory_store`` is
@@ -931,7 +935,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._recalled_skill_prompt = ""
             self._recalled_skills = []
             self._memory_post_init_pending = False
-            self._memory_session_id = str(uuid4())
+            self._memory_session_id = session_id or str(uuid4())
             self._reminders_surfaced = set()
             self._reminder_last_turn_at = None
             return
@@ -981,7 +985,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         self._reminder_last_turn_at: Optional[float] = None
 
         # Step 9, before the embedder: a degraded session still needs an id.
-        self._memory_session_id = str(uuid4())
+        self._memory_session_id = session_id or str(uuid4())
 
         self._memory_embedder_pending = False
         if incognito:

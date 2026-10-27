@@ -872,6 +872,22 @@ class TestConversations:
         assert results[0]["content"] == "First"
         assert results[-1]["content"] == "Third"
 
+    def test_delete_session_conversations_removes_only_that_session(self, store):
+        """A deleted chat's turns leave history and search; others and facts stay."""
+        store.store_turn("gone", "user", "pineapple question")
+        store.store_turn("gone", "assistant", "pineapple answer")
+        store.store_turn("kept", "user", "pineapple elsewhere")
+        store.store(category="fact", content="User likes pineapple")
+
+        assert store.delete_session_conversations("gone") == 2
+
+        assert store.get_history(session_id="gone") == []
+        assert [s["session_id"] for s in store.get_sessions()] == ["kept"]
+        hits = store.search_conversations("pineapple")
+        assert [h["session_id"] for h in hits] == ["kept"]
+        assert store.get_by_category("fact")[0]["content"] == "User likes pineapple"
+        assert store.delete_session_conversations("gone") == 0
+
 
 # ===========================================================================
 # 6. Tool History

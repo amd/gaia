@@ -4546,6 +4546,28 @@ class MemoryStore:
         logger.info("[MemoryStore] cleared conversations: %d rows", deleted)
         return {"conversations": deleted}
 
+    def delete_session_conversations(self, session_id: str) -> int:
+        """Delete every conversation turn of *session_id*; returns the count.
+
+        Knowledge learned from those turns is kept. The FTS index follows
+        through the delete trigger.
+        """
+        with self._locked():
+            try:
+                deleted = self._conn.execute(
+                    "DELETE FROM conversations WHERE session_id = ?", (session_id,)
+                ).rowcount
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        logger.info(
+            "[MemoryStore] deleted %d conversation turns of session %s",
+            deleted,
+            session_id,
+        )
+        return deleted
+
     def seed_bulk(self, items: List[Dict]) -> List[str]:
         """Bulk-insert knowledge rows, bypassing dedup.
 
