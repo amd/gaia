@@ -3906,7 +3906,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             # Bound optional whitespace so long padding cannot trigger repeated retries.
             r"\b(?:passcode|pass code|cvv2?|cvc|security code)(?:'s)?\b"
             r"(?:\s{1,3}(?:number|code)\b)?"
-            r"(?:\s{1,3}(?:for|on|at|of)(?:\s{1,3}\w+){1,8}?)?"
+            r"(?:\s{1,3}(?:for|on|at|of)(?:\s{1,3}\w+){1,3}?)?"
             r"(?:\s{0,3}(?:is|was|to|:|=|[-\u2013\u2014]))?\s{0,3}\d{3,8}\b",
             r"\b\d{3}-\d{2}-\d{4}\b",  # US social security number
             r"\b(?:ssn|social security(?: number)?)\b(?:\s{0,3}(?:is|was|:|=))?"
