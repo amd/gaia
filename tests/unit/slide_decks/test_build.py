@@ -739,3 +739,52 @@ def test_add_and_update_slides_keep_theme_and_numbering(out):
     from slidedeck.verify import verify_deck
 
     assert verify_deck(path, expected_slides=5, render=False)["status"] == "pass"
+
+
+def test_process_axis_draws_one_labelled_arrow_under_the_steps(out):
+    path = out()
+    r = build_deck(
+        {
+            "slides": [
+                {
+                    "type": "diagram",
+                    "diagram": "process",
+                    "title": "Support grows from one desk to a 24/7 team",
+                    "items": [
+                        {"title": "Help desk", "bullets": ["Email"]},
+                        {"title": "Live chat", "bullets": ["Chat"]},
+                        {"title": "24/7 team", "bullets": ["Phone"]},
+                    ],
+                    "x_axis": "More channels, staff and hours",
+                }
+            ]
+        },
+        path,
+    )
+    assert r["verify"]["status"] == "pass", r["verify"]["issues"]
+    shapes = {s.name: s for s in Presentation(path).slides[0].shapes}
+    arrow = shapes["Axis arrow"]
+    assert arrow.text_frame.text == "More channels, staff and hours"
+    assert arrow.top > shapes["Step 1 detail"].top
+
+
+def test_step_arrows_set_their_point_so_every_viewer_draws_the_same_shape(out):
+    """Keynote and Quick Look draw a homePlate with no adjustment as a wedge."""
+    path = out()
+    build_deck(
+        {
+            "slides": [
+                {
+                    "type": "diagram",
+                    "diagram": "process",
+                    "title": "Orders move in three steps",
+                    "items": ["Pick", "Pack", "Ship"],
+                }
+            ]
+        },
+        path,
+    )
+    shapes = {s.name: s for s in Presentation(path).slides[0].shapes}
+    for name in ("Step 1", "Step 2", "Step 3"):
+        assert shapes[name].adjustments[0] == pytest.approx(0.5)
+        assert b'name="adj"' in etree.tostring(shapes[name]._element)

@@ -342,3 +342,57 @@ def test_empty_markdown_is_an_error():
 def test_bad_slide_json_block_is_named():
     with pytest.raises(OutlineError, match="not valid JSON"):
         outline_from_markdown("## A\n```slide\n{oops}\n```\n")
+
+
+STAGES_MD = """## Ferry service grows from one route to a network
+Diagram: process
+### One route
+Harbour to island, hourly.
+- Commuters
+- Day trips
+### Two routes
+- Adds the north pier
+### Network
+- Four piers, shared tickets
+Note: Left to right: more boats, crews and piers.
+"""
+
+
+def test_headed_sections_with_a_diagram_line_become_a_process_diagram(out):
+    from slidedeck.build import build_deck
+
+    outline = outline_from_markdown(STAGES_MD)
+    (slide,) = outline["slides"]
+    assert slide["type"] == "diagram" and slide["diagram"] == "process"
+    assert [i["title"] for i in slide["items"]] == [
+        "One route",
+        "Two routes",
+        "Network",
+    ]
+    assert slide["items"][0]["text"] == "Harbour to island, hourly."
+    assert [b["text"] for b in slide["items"][0]["bullets"]] == [
+        "Commuters",
+        "Day trips",
+    ]
+    assert slide["footnote"].startswith("Left to right")
+    assert build_deck(outline, out())["slides"] == 1
+
+
+def test_three_headed_sections_are_cards_not_a_wall_of_bold_lines():
+    md = "## Three pilots ran this term\n### North\n- 40 pupils\n### South\n- 32 pupils\n### East\n- 28 pupils\n"
+    (slide,) = outline_from_markdown(md)["slides"]
+    assert slide["type"] == "diagram" and slide["diagram"] == "boxes"
+    assert len(slide["items"]) == 3
+
+
+def test_top_level_bullets_with_a_diagram_line_are_the_steps():
+    md = "## Orders move in three steps\nDiagram: process\n- Pick\n  - Scan the shelf tag\n- Pack\n- Ship\n"
+    (slide,) = outline_from_markdown(md)["slides"]
+    assert [i["title"] for i in slide["items"]] == ["Pick", "Pack", "Ship"]
+    assert slide["items"][0]["bullets"] == [{"text": "Scan the shelf tag", "level": 0}]
+
+
+def test_an_axis_line_names_what_grows_along_a_process():
+    md = "## Orders move in three steps\nDiagram: process\nAxis: More handling cost\n- Pick\n- Pack\n- Ship\n"
+    (slide,) = outline_from_markdown(md)["slides"]
+    assert slide["x_axis"] == "More handling cost"

@@ -2412,6 +2412,39 @@ class DeckBuilder:
     def _diagram_process(self, slide, s, box: Box):
         items = s["items"]
         n = len(items)
+        axis = s.get("x_axis")
+        if isinstance(axis, dict):
+            axis = axis.get("label") or axis.get("title") or ""
+        axis = _plain(str(axis or "")).strip()
+        if axis and n <= 6:
+            # What grows from the first step to the last, as one arrow under them.
+            arrow_h = Inches(0.55)
+            band = Box(box.x, box.y + box.h - arrow_h, box.w, arrow_h)
+            # A pentagon with its point set explicitly: Keynote and Quick Look
+            # misdraw arrow shapes left at their default adjustments.
+            shp = self.shape(
+                slide,
+                MSO_SHAPE.PENTAGON,
+                band,
+                "Axis arrow",
+                self.theme.primary,
+                round_adj=0.5,
+            )
+            self._write_group(
+                [
+                    (
+                        shp,
+                        [Para(axis, level=-1, bold=True)],
+                        [axis],
+                        [self.theme.text_on(self.theme.primary)],
+                    )
+                ],
+                16,
+                "process axis",
+                align=PP_ALIGN.CENTER,
+                anchor=MSO_ANCHOR.MIDDLE,
+            )
+            box = Box(box.x, box.y, box.w, box.h - arrow_h - self.unit)
         if n > 6:
             self.warn(
                 f"{n} process steps; 3-6 read at a glance (group the rest into phases)."
@@ -2442,7 +2475,7 @@ class DeckBuilder:
                 Box(x, y, sw, head_h),
                 f"Step {k + 1}",
                 paint,
-                round_adj=0.1 if style != "chevrons" else None,
+                round_adj=0.1 if style != "chevrons" else 0.5,
             )
             numbered = s.get("numbered", True) is not False and not re.match(
                 r"^\s*\d+[.)]", it["title"]

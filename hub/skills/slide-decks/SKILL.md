@@ -207,10 +207,24 @@ Quarter,West,East
 Q3 25,4.1,3.9
 Q3 26,5.6,4.1
 ```
+
+## Support grows from one desk to a 24/7 team
+Diagram: process
+### Help desk
+- Email tickets
+### Live chat
+- Chat, 8am-6pm
+### 24/7 team
+- Phone, chat and email
+Axis: More channels, staff and hours
 ````
 
 `# ` is the cover, each `## ` line is one slide titled with its takeaway, `-`
-lines are bullets, `Must show:` lists what has to be visible.
+lines are bullets, `Must show:` lists what has to be visible. Three or more
+`### ` headings on a slide are drawn as side-by-side boxes, each heading's
+bullets inside it. `Diagram: process` draws them as left-to-right stages
+(also `cycle`, `pyramid`, `stack`) and `Axis:` names what grows along them.
+Use this for stages, steps, levels or options instead of a wall of bullets.
 
 ## Hard rules
 
@@ -240,8 +254,9 @@ lines are bullets, `Must show:` lists what has to be visible.
 3. **Storyline.** One message per slide, answer first, end with next steps.
    For a standard deck call `list_blueprints`, then
    `outline_from_blueprint(name, slide_count=N)` and fill every TODO slot.
-4. **Build** with Markdown, or `build_deck` with JSON for diagrams, timelines
-   and combo charts. Big decks: 6-8 slides first, then `add_slide`.
+4. **Build** with Markdown, or `build_deck` with JSON for timelines, flows,
+   2x2 matrices and combo charts. Big decks: 6-8 slides first, then
+   `add_slide`.
 5. **Verify** with `verify_deck(path, expected_slides=N, required_items=[...])`.
    Fix every error, rebuild (or `update_slide`) and verify until `status` is
    `pass`.

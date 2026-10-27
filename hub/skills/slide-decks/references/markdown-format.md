@@ -12,6 +12,13 @@ into slides, builds them and checks them in one call.
   Contents whose body is a list becomes an agenda slide.
 - `-`, `*`, `+` and `1.` lists are bullets; indent 2+ spaces for a sub-bullet.
 - Exactly two `###` headings on a slide make a two-column slide.
+- Three or more `###` headings make a diagram: one box per heading, with the
+  heading's text and bullets inside it. A `Diagram: <kind>` line picks the
+  shape: `boxes` (the default), `process` (left-to-right stages), `cycle`,
+  `pyramid` or `stack`. With `Diagram:` and no `###` headings, each top-level
+  bullet is a box and its sub-bullets are the detail.
+- On a process, `Axis: More cost and effort` draws one arrow under the stages
+  naming what grows from left to right.
 - A pipe table is a table slide; `![alt](path)` an image slide; a slide that
   is only a `>` block is a quote slide.
 - `Source: ...` adds the source line, `Note: ...` a footnote, and `Notes:`

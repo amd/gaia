@@ -149,6 +149,7 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
     fence: Optional[List[str]] = None
     fence_lang = ""
     extra: Dict[str, Any] = {}
+    diagram = ""
     target = bullets
 
     def flush_table():
@@ -227,6 +228,14 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
         if m:
             slide["footnote"] = m.group(1).strip()
             continue
+        m = re.match(r"^(?:x[\s_-]*)?axis\s*:\s*(.+)$", s, re.I)
+        if m:
+            slide["x_axis"] = m.group(1).strip()
+            continue
+        m = re.match(r"^(?:diagram|layout)\s*:\s*([\w -]+)$", s, re.I)
+        if m:
+            diagram = m.group(1).strip().lower()
+            continue
         if s.startswith("### "):
             columns.append({"heading": s[4:].strip(), "bullets": []})
             target = columns[-1]["bullets"]
@@ -251,6 +260,10 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
                 else indent // 4 + (1 if indent % 4 >= 2 else 0)
             )
             target.append({"text": m.group(2).strip(), "level": min(level, 4)})
+            continue
+        if columns:
+            col = columns[-1]
+            col["text"] = f"{col['text']} {s}".strip() if col.get("text") else s
             continue
         text.append(s)
     flush_table()
@@ -299,6 +312,8 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
         if text:
             slide["caption"] = " ".join(text)
         return slide
+    if diagram or len(columns) >= 3:
+        return _diagram_slide(slide, diagram or "boxes", columns, bullets, text)
     if len(columns) == 2:
         slide["type"] = "two_column"
         slide["left"], slide["right"] = columns
@@ -315,8 +330,10 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
         else:
             slide["quote"] = q.strip(' "“”')
         return slide
-    for col in columns:  # one or 3+ "###" headings: keep them as bold lines
+    for col in columns:  # a single "###" heading: keep it as a bold line
         bullets.append({"text": col["heading"], "bold": True})
+        if col.get("text"):
+            bullets.append({"text": col["text"], "level": 1})
         bullets.extend(
             {"text": b["text"], "level": b["level"] + 1} for b in col["bullets"]
         )
@@ -338,6 +355,42 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
         slide["bullets"] = bullets
     if quote:
         slide.setdefault("text", []).append("“" + " ".join(quote) + "”")
+    return slide
+
+
+def _diagram_slide(
+    slide: Dict[str, Any],
+    kind: str,
+    columns: List[Dict[str, Any]],
+    bullets: List[Dict[str, Any]],
+    text: List[str],
+) -> Dict[str, Any]:
+    """A slide of ``###`` headings (or top-level bullets) drawn as a diagram.
+
+    Each heading, or each top-level bullet, is one box or step; the bullets
+    under it are its detail.
+    """
+    if columns:
+        items = [
+            {"title": c["heading"], "text": c.get("text", ""), "bullets": c["bullets"]}
+            for c in columns
+        ]
+        loose = bullets
+    else:
+        items, loose = [], []
+        for b in bullets:
+            if b.get("level", 0) == 0:
+                items.append({"title": b["text"], "bullets": []})
+            elif items:
+                items[-1]["bullets"].append(
+                    {"text": b["text"], "level": b["level"] - 1}
+                )
+    lines = [b["text"] for b in loose] + text
+    if lines:
+        slide["footnote"] = "; ".join(
+            x for x in (slide.get("footnote"), " ".join(lines)) if x
+        )
+    slide.update({"type": "diagram", "diagram": kind, "items": items})
     return slide
 
 
