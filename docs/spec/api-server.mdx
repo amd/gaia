@@ -724,9 +724,6 @@ def test_chat_completion_no_user_message():
 # Foreground
 gaia api start
 
-# Background
-gaia api start --background
-
 # Custom host/port (binding beyond loopback requires GAIA_API_KEY)
 GAIA_API_KEY=$(openssl rand -hex 32) gaia api start --host 0.0.0.0 --port 9090
 

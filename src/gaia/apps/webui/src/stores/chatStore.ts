@@ -259,6 +259,9 @@ interface ChatState {
     setPendingPrompt: (prompt: string | null) => void;
 }
 
+/** The sidebar's Memory, Scheduled tasks and Documents: opening one closes the others. */
+const NO_DESTINATION = { showMemoryDashboard: false, showSchedules: false, showDocLibrary: false };
+
 export const useChatStore = create<ChatState>((set, get) => ({
     agents: [],
     setAgents: (agents) => set({ agents }),
@@ -315,7 +318,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // results don't resurrect sessions the user already deleted.
             sessions: sessions.filter((s) => !state.pendingDeleteIds.includes(s.id)),
         })),
-    // Opening a chat leaves any full-page view (memory, schedules).
+    // Opening a chat leaves Memory and closes Scheduled tasks.
     setCurrentSession: (id) => set(id
         ? { currentSessionId: id, showMemoryDashboard: false, showSchedules: false }
         : { currentSessionId: id }),
@@ -516,14 +519,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     sidebarCollapsed: readPref('gaia-chat-sidebar-collapsed', 'false') === 'true',
     isLoadingMessages: false,
     pendingPrompt: null,
-    setShowDocLibrary: (show) => set({ showDocLibrary: show }),
+    setShowDocLibrary: (show) =>
+        set(show ? { ...NO_DESTINATION, showDocLibrary: true } : { showDocLibrary: false }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
     openSettings: (section = 'general') => set({ settingsSection: section }),
     closeSettings: () => set({ settingsSection: null }),
     setShowMemoryDashboard: (show) =>
-        set(show ? { showMemoryDashboard: true, showSchedules: false } : { showMemoryDashboard: false }),
+        set(show ? { ...NO_DESTINATION, showMemoryDashboard: true } : { showMemoryDashboard: false }),
     setShowSchedules: (show) =>
-        set(show ? { showSchedules: true, showMemoryDashboard: false } : { showSchedules: false }),
+        set(show ? { ...NO_DESTINATION, showSchedules: true } : { showSchedules: false }),
     setDraftPermissionMode: (mode) => set({ draftPermissionMode: mode, draftPermissionModeChosen: true }),
     setDefaultPermissionMode: (mode) =>
         set((state) => ({

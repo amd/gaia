@@ -11,7 +11,7 @@ interface StartCardsProps {
     disabled?: boolean;
 }
 
-/** Tasks to start from, each backed by an installed skill. */
+/** Tasks to start from, for what this PC is set up to do. */
 export function StartCards({ cards, onPick, disabled }: StartCardsProps) {
     if (cards.length === 0) return null;
     return (
