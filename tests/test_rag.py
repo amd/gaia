@@ -837,7 +837,8 @@ class TestChatIntegration:
 
         # Test message enhancement
         original_message = "What is AI?"
-        enhanced, metadata = chat._enhance_with_rag(original_message)
+        with patch("gaia.chat.sdk.resolve_ctx_size", return_value=32768):
+            enhanced, metadata = chat._enhance_with_rag(original_message)
 
         assert original_message in enhanced
         assert "Context" in enhanced

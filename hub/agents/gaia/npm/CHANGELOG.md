@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **One very long turn no longer vanishes from the conversation.** A turn
+  bigger than the whole history budget, like a pasted log or a long document
+  read, was dropped from what the model saw next, answer included, so "now
+  shorten that" ran with no record of it. It is now kept: long tool results
+  become a short note naming the tool, and its longest messages are cut with
+  a note saying how much.
+
 ### For integrators: contract 2.21
 
 - **`final` says how full the model's window is** (contract **2.21**,
@@ -37,6 +44,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exceed the window and fail the turn. The agent now keeps the newest whole
   turns that fit beside its prompt and streams a `status` event when older
   ones drop out of view.
+
+- **Homebrew tools are visible to the agent on a Mac.** An app opened from Finder
+  or the Dock starts with only the system folders on its search path, so the
+  agent could not run `gh`, `node` or anything else Homebrew installed, and its
+  prompt said they were "not installed". The agent now starts with the `PATH`
+  your login shell builds (only when opened that way: started from a terminal it
+  keeps the terminal's own `PATH`, so an activated virtualenv still wins), and a
+  tool it still cannot find is reported as not
+  reachable from its shell rather than missing from your machine. If your shell
+  startup is slow or fails, the agent logs a warning and keeps the old path.
+
 ### For integrators: contract 2.20
 
 - **A failed model request says which endpoint failed, worded for your
@@ -66,6 +84,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sent when the cancel lands is dropped.
 ### Fixed
 
+- **Secrets stay out of memory and the conversation log.** A bank PIN was saved
+  as a memory, because the filter knew passwords and API keys but not PINs. The
+  conversation log also kept the PIN, a password the agent had refused, a card
+  number and an SSN verbatim, where `search_past_conversations` read them back.
+  PINs, passcodes, card security codes, Luhn-valid card numbers and SSNs are now
+  refused as memories, and every credential-shaped span is replaced with
+  `[secret removed]` before a turn is logged.
+- **"How much free disk space do I have?" gets the right number, first try.**
+  On a Mac, GAIA said a nearly full disk had ~233 GB free: its system-info
+  tool reported only the share the system volume uses, so 97.8% used read as
+  5%. It now reports free space as macOS counts it, and says it answers
+  free-space questions, so GAIA no longer tries a shell command that is refused.
 - **Full access in the Agent UI asks before a gated shell command instead of
   refusing it.** With `/sessions/{id}/bypass` on, a command such as a delete or
   `git add` was refused outright, so a Full access chat could not run it at
@@ -140,6 +170,12 @@ Released with GAIA 0.25.1, and requires it. Integrators: the sidecar
 contract is now **2.18**; clients built for 2.17 keep working, and the new
 `/query` fields are refused with `422` by older binaries, so probe
 `/version` before sending them.
+
+### Linux
+
+- **The Linux agent runs on glibc 2.34 or newer.** The `linux-x64` agent is
+  now built against glibc 2.34 (#5545), so it starts on Ubuntu 22.04, Debian 12
+  and RHEL 9. Before, it needed glibc 2.38 and failed at launch on those.
 
 ### For integrators: contract 2.18
 

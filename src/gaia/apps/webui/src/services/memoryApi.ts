@@ -24,6 +24,8 @@ async function memFetch<T>(method: string, path: string, body?: unknown): Promis
         try { detail = JSON.parse(text).detail || text; } catch { /* noop */ }
         throw new Error(detail || `Memory API error (HTTP ${res.status})`);
     }
+    // A 204 has no body, whatever its content-type says.
+    if (res.status === 204) return undefined as T;
     const ct = res.headers.get('content-type') || '';
     if (!ct.includes('application/json')) return undefined as T;
     return res.json();
