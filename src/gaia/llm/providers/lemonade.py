@@ -26,6 +26,7 @@ from ..lemonade_client import (
     local_sampling_defaults,
     requested_thinking,
     resolve_ctx_size,
+    runs_on_npu,
 )
 from ..lemonade_launcher import describe_client_hint
 from ..surface_hints import TUI_MODEL_SWITCH_HINT, TUI_PROVIDER_AUTH_HINT
@@ -1010,10 +1011,13 @@ class LemonadeProvider(LLMClient):
                             time.perf_counter() + TOOL_CALL_PROGRESS_INTERVAL_S
                         )
                 content = delta.get("content")
-                if tool_calls and (content or choice.get("text")):
-                    # A tool call ends the reply. Text after it is the model
-                    # running past its own call (FastFlowLM does not stop Gemma
-                    # there): an invented tool result, then an answer from it.
+                if (
+                    tool_calls
+                    and (content or choice.get("text"))
+                    and runs_on_npu(self._last_model)
+                ):
+                    # FastFlowLM does not stop at a tool call: what follows is an
+                    # invented tool result, then an answer from it.
                     ran_past_call = True
                     finish_reason = finish_reason or "tool_calls"
                     break

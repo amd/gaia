@@ -520,9 +520,14 @@ def configured_setup_profile() -> str:
     The Agent UI and TUI check and re-run setup with it, so an NPU PC is never
     judged against, or moved back to, the GPU models.
     """
-    from gaia.config import GaiaConfig
+    from gaia.config import GaiaConfig, GaiaConfigError
 
-    return "npu" if GaiaConfig.load().profile == "npu" else DEFAULT_INIT_PROFILE
+    try:
+        profile = GaiaConfig.load().profile
+    except GaiaConfigError:
+        # `gaia init` reports and resets an unreadable config; don't block it here.
+        return DEFAULT_INIT_PROFILE
+    return "npu" if profile == "npu" else DEFAULT_INIT_PROFILE
 
 
 def with_chat_model(profile: str, model_ids, resolve_chat) -> list:

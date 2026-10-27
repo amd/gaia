@@ -179,3 +179,19 @@ def test_narration_before_the_call_still_streams():
     assert out[0] == "Checking the file."
     assert json.loads(out[-1])["content"] == "Checking the file."
     assert not stream.closed
+
+
+def test_gpu_stream_is_left_alone_after_a_call():
+    import time
+
+    provider = _provider()
+    provider._last_model = "Gemma-4-E4B-it-GGUF"
+    stream = _Stream(
+        [
+            _call_delta(),
+            {"choices": [{"delta": {"content": "Done."}, "finish_reason": None}]},
+            {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+        ]
+    )
+    list(provider._handle_stream(stream, time.perf_counter()))
+    assert not stream.closed

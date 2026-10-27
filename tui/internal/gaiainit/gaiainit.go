@@ -64,7 +64,6 @@ func ConfiguredProfile() string {
 	return Profile
 }
 
-
 // CheckTimeout bounds the readiness probe. It runs a fresh Python interpreter
 // plus one Lemonade health check, so a few seconds is normal -- but after a
 // reboot it also starts the daemon (up to 60s) and has it start GAIA's

@@ -340,3 +340,12 @@ def test_single_turn_flm_builds_are_not_chat_options():
 
     assert not _is_chat_model({"labels": ["vision", "single-turn", "chat"]})
     assert _is_chat_model({"labels": ["audio", "vision", "tool-calling", "chat"]})
+
+
+def test_corrupt_config_does_not_block_setup(tmp_path, monkeypatch):
+    """`gaia init` is what resets a corrupt config, so setup must still start."""
+    from gaia.installer.init_command import configured_setup_profile
+
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "config.json").write_text("not json", encoding="utf-8")
+    assert configured_setup_profile() == "gaia"
