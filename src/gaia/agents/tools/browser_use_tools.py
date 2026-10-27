@@ -25,10 +25,11 @@ import json
 import os
 import re
 from contextlib import contextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
-from gaia.agents.base.tool_grants import SITE_ARG
+from gaia.agents.base.tool_grants import DEV_SERVER_TOOL, SITE_ARG
 from gaia.browser.errors import BrowserError, PaneSignInByHand
 from gaia.browser.snapshot import is_pick_ref
 from gaia.logger import get_logger
@@ -157,6 +158,8 @@ class BrowserUseToolsMixin:
     _site_pending: Optional[Tuple[str, Optional[str]]] = None
     #: (tool, id(args), origin) worked out for the prompt, reused by the gate.
     _site_memo: Optional[Tuple[str, int, Optional[str]]] = None
+    #: (id(args), spec digest, already running) of the dev server the prompt showed.
+    _dev_pending: Optional[Tuple[int, str, bool]] = None
 
     # ------------------------------------------------------------------ internals
 
@@ -292,6 +295,8 @@ class BrowserUseToolsMixin:
         """
         parent = getattr(super(), "confirmation_args_for_call", None)
         shown = parent(tool_name, tool_args) if callable(parent) else tool_args
+        if tool_name == DEV_SERVER_TOOL:
+            return self._dev_server_prompt(tool_args) or shown
         if tool_name not in _PANE_SITE_TOOLS or not isinstance(tool_args, dict):
             return shown
         try:
@@ -506,6 +511,12 @@ class BrowserUseToolsMixin:
         Named as a hook rather than an override because ``Agent`` precedes the
         tool mixins in the MRO — see ``Agent.CONFIRMATION_HOOKS``.
         """
+        if tool_name == DEV_SERVER_TOOL:
+            pending = self._dev_pending
+            # Starting a server asks, unless that exact one already runs.
+            return (
+                pending is not None and pending[0] == id(tool_args) and not pending[2]
+            )
         try:
             pane = self._pane()
         except BrowserError as e:
@@ -602,6 +613,78 @@ class BrowserUseToolsMixin:
             console.auto_approve_confirmations_enabled()
             or console.call_is_granted(tool_name, shown)
         )
+
+    # ------------------------------------------------------------- dev servers
+
+    def _dev_allowed(self, folder: Path) -> bool:
+        """Whether ``folder`` is inside the folders this chat may use. No sandbox, no folder."""
+        from gaia.agents.tools.search_scope import path_validator_of
+
+        validator = path_validator_of(self)
+        return validator is not None and validator.is_path_allowed(
+            str(folder), prompt_user=False
+        )
+
+    def _dev_project(self, project: str) -> Path:
+        """The folder whose ``.gaia/launch.json`` a dev_server call reads."""
+        from gaia.agents.tools.search_scope import search_roots
+        from gaia.browser.dev_servers import (
+            LAUNCH_FILE,
+            LaunchConfigError,
+            find_projects,
+        )
+
+        if project:
+            return Path(project).expanduser()
+        roots = search_roots(self)
+        found = find_projects(roots)
+        if len(found) == 1:
+            return found[0]
+        if found:
+            raise LaunchConfigError(
+                f"More than one project has a {LAUNCH_FILE}: "
+                + ", ".join(str(f) for f in found)
+                + ". Pass project= with the one you mean."
+            )
+        raise LaunchConfigError(
+            f"No {LAUNCH_FILE} in the folders this chat uses ("
+            + ", ".join(str(r) for r in roots)
+            + f"). Pass project= with the project folder. If it has no {LAUNCH_FILE}, "
+            "write one there with write_file first."
+        )
+
+    def _dev_spec(self, name: str, project: str):
+        from gaia.browser.dev_servers import spec_named
+
+        return spec_named(self._dev_project(project), name, allowed=self._dev_allowed)
+
+    def _dev_server_prompt(self, tool_args) -> Optional[Dict[str, Any]]:
+        """What the prompt shows for ``dev_server(action="start")``: the exact command, folder and port.
+
+        Display and grant only. The tool body resolves the spec again and runs
+        it only when its digest is the one shown here, so an edit between the
+        prompt and the run is refused rather than run unseen.
+        """
+        from gaia.browser.dev_servers import LaunchConfigError
+
+        self._dev_pending = None
+        args = tool_args if isinstance(tool_args, dict) else {}
+        if args.get("action") != "start":
+            return None
+        try:
+            pane = self._pane()
+            if pane is None:
+                return None
+            spec = self._dev_spec(
+                str(args.get("name") or ""), str(args.get("project") or "")
+            )
+            running = any(_same_server(s, spec) for s in pane.dev_servers())
+        except (LaunchConfigError, BrowserError) as e:
+            # The tool body raises the same error before it runs anything.
+            logger.info("dev_server start not prompted: %s", e)
+            return None
+        self._dev_pending = (id(tool_args), spec.digest, running)
+        return spec.prompt_args()
 
     def cleanup_browser_use(self) -> None:
         """Close the browser. Safe to call when none was ever opened."""
@@ -912,6 +995,7 @@ class BrowserUseToolsMixin:
 
         if attached:
             self._register_pane_tools(tool, here, _fail, _answer, _seen)
+            self._register_dev_server_tool(tool, here, _fail, _seen)
 
     def _register_pane_tools(self, tool, registry, fail, answer, seen) -> None:
         """Tools only the browser pane can serve, on this agent alone."""
@@ -1166,6 +1250,142 @@ class BrowserUseToolsMixin:
             if snap is not None:
                 lines += ["", render(snap)]
             return "\n".join(lines)
+
+    def _register_dev_server_tool(self, tool, registry, fail, seen) -> None:
+        """dev_server, on this agent alone: only GAIA desktop runs dev servers."""
+        from gaia.browser.dev_servers import MAX_READY_TIMEOUT_S, describe, pick_running
+        from gaia.browser.snapshot import render
+
+        mixin = self
+
+        def _start(driver, name: str, project: str) -> str:
+            pending, mixin._dev_pending = mixin._dev_pending, None
+            spec = mixin._dev_spec(name, project)
+            if pending is None or pending[1] != spec.digest:
+                raise _Refused(
+                    "Error: not started. The server's command changed after the user "
+                    "approved it, or it was never approved. Call dev_server again and "
+                    "GAIA will ask the user."
+                )
+            res = driver.dev_server_ensure(spec.key, spec.to_wire())
+            snap = driver.goto(spec.url)
+            seen(snap)
+            how = (
+                "was already running"
+                if res["reused"]
+                else f"started in {res['ms'] / 1000:.1f} s"
+            )
+            return (
+                f'{driver.where}\nDev server "{spec.name}" (`{spec.command_line}`) {how} '
+                f"on port {spec.port}. The browser pane shows {spec.url}.\n\n{render(snap)}"
+            )
+
+        def _running(driver, name: str) -> Dict[str, Any]:
+            servers = driver.dev_servers()
+            server = pick_running(servers, name)
+            if server is None:
+                listed = ", ".join(s["name"] for s in servers) or "none"
+                raise _Refused(
+                    f"Error: no single dev server matches name={name!r}. GAIA's dev "
+                    f"servers: {listed}. Pass name= with one of them."
+                )
+            return server
+
+        def _logs(driver, name: str, errors_only: bool, contains: str) -> str:
+            server = _running(driver, name)
+            res = driver.dev_server_logs(
+                server["key"], errors_only=errors_only, pattern=contains, limit=40
+            )
+            lines = res.get("lines") or []
+            what = "error line(s)" if errors_only else "line(s)"
+            if contains:
+                what += f' containing "{contains}"'
+            head = f'Dev server "{server["name"]}" ({server["status"]}): {res.get("matched", 0)} {what}'
+            if not lines:
+                return f"{driver.where}\n{head}."
+            shown = (
+                f", the last {len(lines)}" if res.get("matched", 0) > len(lines) else ""
+            )
+            return f"{driver.where}\n{head}{shown}:\n" + "\n".join(
+                f"  {line}" for line in lines
+            )
+
+        def _run(
+            action: str, name: str, project: str, errors_only: bool, contains: str
+        ):
+            pane = mixin._pane()
+            if pane is None:
+                raise _Refused(
+                    "Error: dev servers run only in a chat open in GAIA desktop. "
+                    "Use run_shell_command instead."
+                )
+            # Results name the pane, failures included.
+            mixin._ensure_driver()
+            if action == "start":
+                return _start(pane, name, project)
+            if action == "logs":
+                return _logs(pane, name, errors_only, contains)
+            if action == "stop":
+                server = pane.dev_server_stop(_running(pane, name)["key"])
+                return f'{pane.where}\nStopped dev server "{server["name"]}"; port {server["port"]} is free.'
+            servers = pane.dev_servers()
+            if not servers:
+                return f"{pane.where}\nNo dev servers. Start one with dev_server(action='start')."
+            return f"{pane.where}\nDev servers:\n" + "\n".join(
+                f"  {describe(s)}" for s in servers
+            )
+
+        @tool(atomic=True, timeout=MAX_READY_TIMEOUT_S + 60, registry=registry)
+        def dev_server(
+            action: str,
+            name: str = "",
+            project: str = "",
+            errors_only: bool = False,
+            contains: str = "",
+        ) -> str:
+            """Run a project's dev server and show it in the browser pane; or list, stop, or read its logs.
+
+            Use this, not run_shell_command, to start any dev or web server:
+            it keeps running after the reply. Servers are defined in
+            <project>/.gaia/launch.json. If it is missing,
+            write it with write_file first, like:
+            {"version": "0.0.1", "configurations": [{"name": "web",
+            "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 5173}]}
+            Starting asks the user first. A server already running is reused.
+
+            Args:
+                action: 'start' (runs it and opens it in the pane), 'list',
+                        'logs', or 'stop'
+                name: The server's name in launch.json, like 'web'. Needed when
+                      it has more than one.
+                project: Folder holding .gaia/launch.json. Leave empty for the
+                         current project.
+                errors_only: For logs: only error lines
+                contains: For logs: only lines containing this text
+            """
+            from gaia.browser.dev_servers import LaunchConfigError
+
+            if action not in ("start", "list", "logs", "stop"):
+                return "Error: action must be 'start', 'list', 'logs' or 'stop'."
+            try:
+                return _run(action, name, project, errors_only, contains)
+            except LaunchConfigError as e:
+                return f"Error: {e}"
+            except Exception as e:  # noqa: BLE001 — returned to the model
+                logger.error("dev_server(%s, %s) failed: %s", action, name, e)
+                return fail(e)
+
+
+def _same_server(state: Dict[str, Any], spec) -> bool:
+    """Whether main already runs exactly this spec, so starting it runs nothing new."""
+    return (
+        state.get("key") == spec.key
+        and state.get("status") == "ready"
+        and state.get("argv") == list(spec.argv)
+        and state.get("cwd") == str(spec.cwd)
+        and state.get("port") == spec.port
+        and (state.get("env") or {}) == dict(spec.env)
+    )
 
 
 def _parse_batch(steps: Any) -> List[Tuple[str, Dict[str, Any]]]:

@@ -17,6 +17,7 @@ while the agent reads it is never handed to the model.
 from __future__ import annotations
 
 import base64
+import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Literal, Optional, Sequence, Tuple
@@ -305,6 +306,45 @@ class PaneDriver:
     def select_tab(self, tab_id: str) -> Dict[str, Any]:
         return self._call("tabs", {"op": "select", "tabId": tab_id})
 
+    # ------------------------------------------------------------ dev servers
+
+    def dev_servers(self) -> List[Dict[str, Any]]:
+        return self._dev("list")["servers"]
+
+    def dev_server_ensure(self, key: str, spec: Dict[str, Any]) -> Dict[str, Any]:
+        """Start ``spec``, or return it running; waits until its port answers."""
+        # Main bounds the wait by the spec's own timeout; this only must outlast it.
+        timeout = spec["readyTimeoutMs"] / 1000 + 30
+        # The backend's PATH is the login shell's (apply_login_path); main's may be launchd's.
+        body = {"key": key, "spec": spec, "searchPath": os.environ.get("PATH")}
+        return self._dev("ensure", body, timeout_s=timeout)
+
+    def dev_server_stop(self, key: str) -> Dict[str, Any]:
+        return self._dev("stop", {"key": key})["server"]
+
+    def dev_server_logs(
+        self, key: str, *, errors_only: bool, pattern: Optional[str], limit: int
+    ) -> Dict[str, Any]:
+        return self._dev(
+            "logs",
+            {
+                "key": key,
+                "errorsOnly": errors_only,
+                "pattern": pattern or None,
+                "limit": limit,
+            },
+        )
+
+    def _dev(
+        self, op: str, body: Optional[Dict[str, Any]] = None, *, timeout_s=None
+    ) -> Any:
+        if self._bridge.ops and "devServers" not in self._bridge.ops:
+            raise BrowserError(
+                "This GAIA desktop app is older than the agent and can't run dev "
+                "servers. Ask the user to update GAIA desktop."
+            )
+        return self._call("devServers", {"op": op, **(body or {})}, timeout_s=timeout_s)
+
     def storage_state(self) -> Dict[str, Any]:
         raise PaneSignInByHand()
 
@@ -342,9 +382,13 @@ class PaneDriver:
         if origin and not is_loopback_origin(origin) and origin not in self._allowed:
             raise PageOffScope(origin)
 
-    def _call(self, op: str, body: Dict[str, Any]) -> Any:
+    def _call(
+        self, op: str, body: Dict[str, Any], *, timeout_s: Optional[float] = None
+    ) -> Any:
         # Main checks it on every op: the user may have switched chats since attach.
-        return self._bridge.call(op, {"sessionId": self._session, **body})
+        return self._bridge.call(
+            op, {"sessionId": self._session, **body}, timeout_s=timeout_s
+        )
 
 
 __all__ = [

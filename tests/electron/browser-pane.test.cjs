@@ -452,11 +452,25 @@ describe("IPC", () => {
       userDataDir,
       downloadsDir: () => "/dl",
       blockedPorts: () => [BACKEND_PORT],
+      devServers,
     });
     const host = service.attach(window);
     const invoke = (channel, sender, ...args) => ipcMain._handlers.get(channel)({ sender }, ...args);
-    return { window, host, invoke };
+    return { window, host, invoke, service };
   }
+  const running = { key: "0123456789abcdef", name: "web", port: 41730, status: "ready" };
+  const devServers = { list: jest.fn(() => [running]), stop: jest.fn(() => Promise.resolve(running)) };
+
+  test("the state carries the app's dev servers, and Stop in the menu reaches the supervisor", async () => {
+    const { window, invoke, service } = startService();
+    expect((await invoke(CHANNELS.getState, window.webContents)).devServers).toEqual([running]);
+    window.webContents.send.mockClear();
+    service.publish();
+    expect(window.webContents.send).toHaveBeenLastCalledWith(CHANNELS.state, expect.objectContaining({ devServers: [running] }));
+    await invoke(CHANNELS.stopDevServer, window.webContents, running.key);
+    expect(devServers.stop).toHaveBeenCalledWith(running.key);
+    expect(() => invoke(CHANNELS.stopDevServer, { send: jest.fn() }, running.key)).toThrow(/Only the GAIA window/);
+  });
 
   test("the app window drives the pane and gets every change pushed", async () => {
     const { window, invoke } = startService();

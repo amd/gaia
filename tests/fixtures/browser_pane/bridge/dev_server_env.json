@@ -1,0 +1,23 @@
+{
+  "_doc": "Environment names a launch.json may set. gaia/browser/dev_servers.py and dev-servers.cjs must both equal this.",
+  "names": [
+    "BROWSER",
+    "CI",
+    "DEBUG",
+    "FORCE_COLOR",
+    "HOST",
+    "HOSTNAME",
+    "LOG_LEVEL",
+    "NODE_ENV",
+    "NO_COLOR",
+    "PORT",
+    "PYTHONUNBUFFERED",
+    "TZ"
+  ],
+  "prefixes": [
+    "VITE_",
+    "NEXT_PUBLIC_",
+    "REACT_APP_",
+    "PUBLIC_"
+  ]
+}

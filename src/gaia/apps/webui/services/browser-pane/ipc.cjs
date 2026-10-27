@@ -36,6 +36,7 @@ const CHANNELS = Object.freeze({
   setViewport: "pane:set-viewport",
   togglePicking: "pane:toggle-picking",
   picked: "pane:picked",
+  stopDevServer: "pane:stop-dev-server",
 });
 
 const HISTORY_ACTIONS = new Set(["back", "forward", "reload", "stop"]);
@@ -112,11 +113,14 @@ function parseViewportChoice(choice) {
  *   userDataDir: string,
  *   downloadsDir: () => string,
  *   blockedPorts: () => number[],
+ *   devServers: import("./dev-servers.cjs").DevServerSupervisor,
  * }} deps
  */
-function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downloadsDir, blockedPorts }) {
+function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downloadsDir, blockedPorts, devServers }) {
   /** @type {PaneHost | null} */
   let host = null;
+  /** The dev servers are app-wide, not the window's, so they join the state here. */
+  const withServers = (state) => ({ ...state, devServers: devServers.list() });
   const recentStore = fileRecentStore(path.join(userDataDir, "browser-pane-recent.json"));
 
   installSessionPolicy(session, {
@@ -140,7 +144,7 @@ function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downlo
     ipcMain.handle(channel, (event, ...args) => fn(requireHost(event), ...args));
   };
 
-  handle(CHANNELS.getState, (h) => h.state());
+  handle(CHANNELS.getState, (h) => withServers(h.state()));
   handle(CHANNELS.setVisible, (h, visible) => h.setVisible(visible === true));
   handle(CHANNELS.setOccluded, (h, occluded) => h.setOccluded(occluded === true));
   handle(CHANNELS.openTab, (h, url) => h.openTab(url === null ? null : requireString(url, "url")));
@@ -159,6 +163,9 @@ function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downlo
   handle(CHANNELS.setControl, (h, id, control) => h.setControl(requireString(id, "tab id"), control));
   handle(CHANNELS.togglePicking, (h) => h.togglePicking());
   handle(CHANNELS.setViewport, (h, id, choice) => h.setUserViewport(requireString(id, "tab id"), parseViewportChoice(choice)));
+  handle(CHANNELS.stopDevServer, async (_h, key) => {
+    await devServers.stop(requireString(key, "dev server key"));
+  });
 
   // Sent on every resize, so it is fire-and-forget; a throw here would reach the crash handler.
   ipcMain.on(CHANNELS.setBounds, (event, rect) => {
@@ -182,6 +189,10 @@ function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downlo
   return {
     /** The window's PaneHost, for the bridge; null while no window is open. */
     getHost: () => host,
+    /** Push the state again, e.g. when a dev server starts or stops. */
+    publish: () => {
+      if (host) host.publish();
+    },
     /** Give the pane to a (re)created app window. Tabs of a closed window close with it. */
     attach(window) {
       if (host) host.dispose();
@@ -193,7 +204,7 @@ function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downlo
         session,
         recentStore,
         blockedPorts,
-        publish: (state) => send(CHANNELS.state, state),
+        publish: (state) => send(CHANNELS.state, withServers(state)),
         onToggleRequest: () => send(CHANNELS.command, "toggle"),
         onShowRequest: () => send(CHANNELS.command, "show"),
         onPicked: (event) => send(CHANNELS.picked, event),

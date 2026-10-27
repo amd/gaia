@@ -24,7 +24,13 @@
  *   node scripts/qa-pane.mjs perf send [runs] [prompt] [settle s]
  *                                       (send to first reply token in a new chat, with and without one chip,
  *                                        interleaved; waits settle seconds for the new chat's warm-up first)
+ *        | crash                    (SIGKILL this kit's Electron process, as a crash would)
  *   GAIA_BIN=... node scripts/qa-pane.mjs perf launch [--app <webui dir>]
+ *   GAIA_BIN=... node scripts/qa-pane.mjs perf quit [runs]
+ *                                       (quit time with the fixture dev server running and with none, interleaved)
+ *
+ * launch --user-data <dir> reuses that user data dir and keeps it on quit, so a
+ * relaunch sees what the last run left (the dev-server ledger, for one).
  *
  * QA_PANE_DIR overrides where the control file lives (default: a temp dir
  * keyed on the app dir, so lanes in separate worktrees never collide).
@@ -122,7 +128,7 @@ function serveFixtures() {
 
 // ── App ────────────────────────────────────────────────────────────────
 
-async function launchApp(appDir) {
+async function launchApp(appDir, keepUserData = null) {
     const gaiaBin = process.env.GAIA_BIN;
     if (!gaiaBin) fail('GAIA_BIN is not set. The app only launches in dev QA mode, so it never touches the installed GAIA.');
     if (!fs.existsSync(gaiaBin)) fail(`GAIA_BIN points at ${gaiaBin}, which does not exist.`);
@@ -131,7 +137,8 @@ async function launchApp(appDir) {
     if (!fs.readFileSync(path.join(appDir, 'main.cjs'), 'utf8').includes('resolveDevQaMode(')) {
         fail(`${appDir}/main.cjs has no dev QA mode, so launching it would run the real installer. Add services/dev-qa-mode.cjs there first.`);
     }
-    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gaia-qa-pane-userdata-'));
+    const userDataDir = keepUserData ? path.resolve(keepUserData) : fs.mkdtempSync(path.join(os.tmpdir(), 'gaia-qa-pane-userdata-'));
+    fs.mkdirSync(userDataDir, { recursive: true });
     const electron = createRequire(path.join(appDir, 'package.json'))('electron');
     const started = Date.now();
     const app = await _electron.launch({
@@ -147,10 +154,11 @@ async function launchApp(appDir) {
     });
     const page = await app.firstWindow({ timeout: 120_000 });
     await page.locator(CHAT_READY).first().waitFor({ state: 'visible', timeout: 120_000 });
-    return { app, page, userDataDir, launchMs: Date.now() - started };
+    return { app, page, userDataDir, keepUserData: Boolean(keepUserData), launchMs: Date.now() - started };
 }
 
-async function closeApp({ app, userDataDir }) {
+/** Quit as closeApp does, and return how long the app took from the quit to its exit (ms). */
+async function closeApp({ app, userDataDir, keepUserData }) {
     // A plain quit asks about running work in a dialog nobody here answers; an OS shutdown
     // quits without asking and still stops the backend. main listens for it once startup ends.
     const deadline = Date.now() + 60_000;
@@ -159,8 +167,58 @@ async function closeApp({ app, userDataDir }) {
         await new Promise((r) => setTimeout(r, 200));
     }
     await app.evaluate(({ powerMonitor }) => powerMonitor.emit('shutdown'));
+    const exited = new Promise((resolve) => app.process().once('exit', resolve));
+    const started = Date.now();
     await app.close();
-    fs.rmSync(userDataDir, { recursive: true, force: true });
+    await exited;
+    const quitMs = Date.now() - started;
+    if (!keepUserData) fs.rmSync(userDataDir, { recursive: true, force: true });
+    return quitMs;
+}
+
+/** One call to the app's own bridge, as the agent makes it. */
+async function bridgeCall(app, userDataDir, op, body) {
+    const disc = JSON.parse(fs.readFileSync(path.join(userDataDir, 'run', 'browser-pane.json'), 'utf8'));
+    const sessionId = await app.evaluate(() => globalThis.qaPaneSession ?? null);
+    const res = await fetch(`http://127.0.0.1:${disc.port}/v1/${op}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${disc.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId, ...body }),
+    });
+    const out = await res.json();
+    if (!res.ok) throw new Error(`${op}: ${out.error.code}: ${out.error.message}`);
+    return out;
+}
+
+const DEVSERVER_APP = path.join(REPO, 'tests', 'fixtures', 'browser_pane', 'devserver');
+
+/** The fixture's "web" server, started through main's supervisor the way dev_server does. */
+async function startFixtureServer(app, userDataDir) {
+    const port = 41730;
+    const spec = { name: 'web', argv: ['node', 'server.js', '--port', String(port)], cwd: DEVSERVER_APP, port, env: {}, url: `http://localhost:${port}/`, readyTimeoutMs: 20000 };
+    // A fresh profile shows no chat yet, so name one the way the renderer does.
+    await app.evaluate(({ BrowserWindow, ipcMain }) => {
+        if (globalThis.qaPaneSession) return;
+        const win = BrowserWindow.getAllWindows().find((w) => w.isVisible());
+        ipcMain.emit('pane:set-active-session', { sender: win.webContents }, 'qa-perf-quit');
+    });
+    return bridgeCall(app, userDataDir, 'devServers', { op: 'ensure', key: 'f1f1f1f1f1f1f1f1', spec });
+}
+
+async function measureQuit(appDir, withServer) {
+    const launched = await launchApp(appDir);
+    let pid = null;
+    if (withServer) pid = (await startFixtureServer(launched.app, launched.userDataDir)).server.pid;
+    const quitMs = await closeApp(launched);
+    const survived = pid !== null && (() => {
+        try {
+            process.kill(pid, 0);
+            return true;
+        } catch {
+            return false;
+        }
+    })();
+    return { withServer, quitMs, serverSurvived: survived };
 }
 
 const paneState = (page) => page.evaluate(() => window.gaiaBrowserPane.getState());
@@ -202,8 +260,47 @@ async function windowShot(app, file) {
         return win.getBounds();
     });
     fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
-    execFileSync('screencapture', ['-x', '-o', `-R${b.x},${b.y},${b.width},${b.height}`, path.resolve(file)]);
-    return path.resolve(file);
+    try {
+        execFileSync('screencapture', ['-x', '-o', `-R${b.x},${b.y},${b.width},${b.height}`, path.resolve(file)], { stdio: 'pipe' });
+        return path.resolve(file);
+    } catch (err) {
+        // A locked or sleeping screen has no window to capture; build the same picture from the app.
+        await compositeShot(app, file);
+        return { file: path.resolve(file), composited: `screencapture failed (${String(err.stderr || err.message).trim()}); window and pane view composited from capturePage` };
+    }
+}
+
+/** The window's own page with each visible pane view painted over it at its bounds. */
+async function compositeShot(app, file) {
+    const parts = await app.evaluate(async ({ BrowserWindow, WebContentsView }) => {
+        const win = BrowserWindow.getAllWindows().find((w) => w.isVisible());
+        const views = [];
+        for (const v of win.contentView.children) {
+            if (!(v instanceof WebContentsView) || !v.getVisible()) continue;
+            views.push({ bounds: v.getBounds(), data: (await v.webContents.capturePage()).toDataURL() });
+        }
+        const base = (await win.webContents.capturePage()).toDataURL();
+        return { base, views, size: win.getContentBounds() };
+    });
+    const page = (await app.windows())[0];
+    const png = await page.evaluate(async ({ base, views, size }) => {
+        const load = (src) => new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = () => reject(new Error('could not decode a capture'));
+            img.src = src;
+        });
+        const b = await load(base);
+        const scale = b.width / size.width;
+        const canvas = document.createElement('canvas');
+        canvas.width = b.width;
+        canvas.height = b.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(b, 0, 0);
+        for (const v of views) ctx.drawImage(await load(v.data), v.bounds.x * scale, v.bounds.y * scale, v.bounds.width * scale, v.bounds.height * scale);
+        return canvas.toDataURL('image/png').split(',')[1];
+    }, parts);
+    fs.writeFileSync(path.resolve(file), Buffer.from(png, 'base64'));
 }
 
 /** Real input in the pane's visible page: what a user's own mouse or keyboard sends. */
@@ -366,7 +463,14 @@ function commands(ctx) {
         session: async () => ({
             sessionId: await app.evaluate(() => globalThis.qaPaneSession ?? null),
             discovery: path.join(ctx.userDataDir, 'run', 'browser-pane.json'),
+            userDataDir: ctx.userDataDir,
+            electronPid: app.process().pid,
         }),
+        crash: async () => {
+            const pid = app.process().pid;
+            setTimeout(() => process.kill(pid, 'SIGKILL'), 50);
+            return { killed: pid };
+        },
         drag: async (selector, dx) => {
             const box = await page.locator(selector).first().boundingBox();
             if (!box) throw new Error(`${selector} is not on screen`);
@@ -460,7 +564,7 @@ async function launch(flags) {
     const appDir = path.resolve(flags.app || path.resolve(HERE, '..'));
     const site = await serveFixtures();
     const fixtureUrl = `http://127.0.0.1:${site.address().port}/index.html`;
-    const launched = await launchApp(appDir);
+    const launched = await launchApp(appDir, flags['user-data'] || null);
     const ctx = { ...launched, fixtureUrl };
     const handlers = commands(ctx);
     const token = randomBytes(32).toString('hex');
@@ -496,7 +600,9 @@ async function launch(flags) {
         fs.rmSync(path.dirname(file), { recursive: true, force: true });
         control.close();
         site.close();
-        await closeApp(launched).catch((err) => console.error(`qa-pane: closing the app failed: ${err.message}`));
+        if (launched.app.process().exitCode === null && launched.app.process().signalCode === null) {
+            await closeApp(launched).catch((err) => console.error(`qa-pane: closing the app failed: ${err.message}`));
+        }
         process.exit(0);
     };
     process.on('SIGINT', ctx.shutdown);
@@ -534,6 +640,17 @@ async function main() {
         console.log(`perf launch ${launched.launchMs} ms`);
         return;
     }
+    if (cmd === 'perf' && rest[0] === 'quit') {
+        const appDir = path.resolve(flags.app || path.resolve(HERE, '..'));
+        const rows = [];
+        for (let i = 0; i < Number(rest[1] || 5); i += 1) {
+            rows.push(await measureQuit(appDir, false));
+            rows.push(await measureQuit(appDir, true));
+        }
+        const pick = (w) => rows.filter((r) => r.withServer === w).map((r) => r.quitMs);
+        console.log(JSON.stringify({ rows, medianNoServer: median(pick(false)), medianOneServer: median(pick(true)) }, null, 2));
+        return;
+    }
     if (cmd === 'perf' && (rest[0] === 'pick' || rest[0] === 'send')) {
         const out = await send(`perf-${rest[0]}`, rest.slice(1));
         console.log(JSON.stringify(out, null, 2));
@@ -544,7 +661,7 @@ async function main() {
         console.log(`perf open-pane ${ms} ms`);
         return;
     }
-    if (!cmd) fail('give a command: launch, state, session, shortcut, open, click, page-click, user-click, pick, page-key, chips, attach, drag, type, key, chat, reply, shot, perf, quit');
+    if (!cmd) fail('give a command: launch, state, session, crash, shortcut, open, click, page-click, user-click, pick, page-key, chips, attach, drag, type, key, chat, reply, shot, perf, quit');
     const result = await send(cmd, rest);
     console.log(typeof result === 'string' ? result : JSON.stringify(result, null, 2));
 }

@@ -105,7 +105,8 @@ describe("discovery file", () => {
     const main = fs.readFileSync(path.join(WEBUI, "main.cjs"), "utf8");
     expect(main).toMatch(/\[PANE_DISCOVERY_ENV\]: paneDiscoveryFile\(\)/);
     expect(main).toMatch(/paneBridge\.close\(\)/);
-    expect(main).toMatch(/blockedPorts: \(\) => \(paneBridge \? \[backendPort, paneBridge\.port\]/);
+    expect(main).toMatch(/const appPorts = \(\) => \(paneBridge \? \[backendPort, paneBridge\.port\]/);
+    expect(main).toMatch(/blockedPorts: appPorts,/);
   });
 });
 
@@ -185,7 +186,7 @@ describe("parsing", () => {
 
   test("every error code the code can send is in the contract and the shared list", () => {
     const sent = new Set();
-    for (const file of ["bridge-server.cjs", "pane-host.cjs", "input.cjs"]) {
+    for (const file of ["bridge-server.cjs", "pane-host.cjs", "input.cjs", "dev-servers.cjs"]) {
       const src = fs.readFileSync(path.join(PANE, file), "utf8");
       for (const m of src.matchAll(/new BridgeError\("([a-z_]+)"/g)) sent.add(m[1]);
       for (const m of src.matchAll(/^const bad = .*BridgeError\("([a-z_]+)"/gm)) sent.add(m[1]);

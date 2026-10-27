@@ -8,6 +8,7 @@ import { CLAIMS_ESCAPE } from '../../hooks/useEscapeToClose';
 import { log } from '../../utils/logger';
 import { formatShortcut } from '../../utils/platform';
 import { normalizeAddress } from './address';
+import { DevServersMenu } from './DevServersMenu';
 import type { GaiaBrowserPaneAPI, PaneState, TabState, ViewportChoice } from '../../../services/browser-pane/contract';
 
 export const TOGGLE_SHORTCUT = 'Mod+Shift+B';
@@ -141,6 +142,7 @@ export function BrowserToolbar({ pane, api, onClosePane, addressRef }: BrowserTo
                     <SquareCode size={15} />
                 </button>
                 <ResponsiveMenu api={api} tab={active} />
+                <DevServersMenu api={api} servers={pane.devServers} />
                 <PaneMenu api={api} tab={active} />
                 <button
                     type="button"

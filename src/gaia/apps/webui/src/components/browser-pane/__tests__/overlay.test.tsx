@@ -127,6 +127,7 @@ const PAGE: PaneState = {
     activeTabId: TAB,
     recent: [],
     picking: false,
+    devServers: [],
 };
 
 function paneApi(state: PaneState) {

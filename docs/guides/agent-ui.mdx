@@ -616,6 +616,8 @@ in the pane too. The browser pane isn't in the web version of the Agent UI.
 - **Responsive** shows the page at a phone, tablet or laptop size, at a width
   and height you type, turned sideways with **Rotate**, and in light or dark
   mode. **Fill pane** and **System** put it back.
+- **Dev servers** lists the [dev servers](#dev-servers) GAIA started, with
+  their status and port, **Open in pane** and **Stop**.
 - **More (⋯)** has **Make this tab private**, **Open in system browser**,
   which hands the page to your default browser, and **Clear browsing data**,
   which deletes the pane's cookies, site data, cache and recent pages. It never
@@ -699,6 +701,57 @@ each step happen.
 Only the chat open in the window uses the pane. A chat in the terminal, on your
 phone, or in another window keeps using GAIA's own headless browser, and each
 browser tool result says which browser answered.
+
+### Dev servers
+
+GAIA can start your project's dev server and show it in the pane. Ask "start
+the dev server and show me the home page", and GAIA runs the server, waits for
+its port to answer, and opens it in a pane tab. Servers are defined in
+`.gaia/launch.json` at the top of the project:
+
+```json
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5173,
+      "cwd": "apps/web",
+      "env": { "NODE_ENV": "development" },
+      "url": "/"
+    }
+  ]
+}
+```
+
+- **`runtimeExecutable` and `runtimeArgs`** are the command, run as is and
+  never through a shell. **`port`** is where it listens. **`cwd`** (optional)
+  is a folder inside the project. **`url`** (optional) is the page to open.
+  **`readyTimeoutSeconds`** (optional, up to 120) is how long to wait for the
+  port.
+- **`env`** may set only `NODE_ENV`, `PORT`, `HOST`, `HOSTNAME`, `DEBUG`,
+  `LOG_LEVEL`, `BROWSER`, `CI`, `FORCE_COLOR`, `NO_COLOR`, `TZ`,
+  `PYTHONUNBUFFERED`, and names starting `VITE_`, `NEXT_PUBLIC_`, `REACT_APP_`
+  or `PUBLIC_`. The server gets your `PATH`, home folder and locale from
+  GAIA's environment, and none of its keys or tokens.
+- **No file yet?** GAIA writes one for you, then asks before running it.
+- **Starting asks first** and shows the exact command, folder and port.
+  **Always allow** covers that exact command for this chat; if the command,
+  folder, port or `env` changes, GAIA asks again. Writing or editing the file
+  approves nothing. Asking for a server that is already running exactly as
+  written reuses it without asking.
+- **One at a time per name.** Asking again for a running server returns it; a
+  changed configuration restarts it. If the server exits before its port
+  answers, GAIA shows its last 30 log lines.
+- **Logs.** Each server's output goes to one log file of at most 1 MB in the
+  app's data folder. Ask "any errors in the dev server?" and GAIA reads the
+  error lines, or lines holding some text.
+- **The project and `cwd` must be in folders this chat may use.**
+- **Quitting GAIA stops every dev server.** If GAIA crashes, the next launch
+  stops the servers it left running, checking each process is still the one
+  it started.
 
 ## Undo a turn
 

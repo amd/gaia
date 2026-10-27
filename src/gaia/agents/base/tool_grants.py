@@ -37,6 +37,8 @@ it. Scoping keeps the affordance and takes away the blast radius.
 from __future__ import annotations
 
 import glob
+import hashlib
+import json
 import os
 import posixpath
 import re
@@ -243,6 +245,9 @@ SCRATCH_ARG = "_scratch_dir"
 #: prompt asks about.
 SITE_ARG = "_site"
 
+#: The tool that starts a project's dev server from ``.gaia/launch.json``.
+DEV_SERVER_TOOL = "dev_server"
+
 #: Tools whose every call is the same kind of action, so the family IS the
 #: tool. The label says how wide that is.
 _FAMILY_TOOLS = {
@@ -294,6 +299,8 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
         return GrantScope(keys=(tool_name,), label=_FAMILY_TOOLS[tool_name])
     if tool_name.startswith("browser_") and args.get(SITE_ARG):
         return _site_scope(str(args[SITE_ARG]))
+    if tool_name == DEV_SERVER_TOOL:
+        return _dev_server_scope(args)
     return None
 
 
@@ -668,6 +675,36 @@ def _site_scope(origin: str) -> GrantScope:
     )
 
 
+def launch_digest(command: str, folder: str, port: Any, env: Any) -> str:
+    """What a dev-server approval is keyed on: everything that decides what runs."""
+    payload = json.dumps(
+        {"command": command, "folder": folder, "port": port, "env": env or {}},
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _dev_server_scope(args: Dict[str, Any]) -> Optional[GrantScope]:
+    """One grant per exact command, folder, port and env, so an edit asks again.
+
+    "Always" is offered only where the shell rules would offer it for the same
+    line: a command whose name bounds nothing (``bash -c``) asks every time.
+    """
+    command = args.get("command")
+    folder = args.get("folder")
+    if args.get("action") != "start" or not isinstance(command, str) or not folder:
+        return None
+    if _shell_scope("run_shell_command", {"command": command}) is None:
+        return None
+    digest = launch_digest(command, str(folder), args.get("port"), args.get("env"))
+    where = os.path.basename(os.path.normpath(str(folder))) or str(folder)
+    return GrantScope(
+        keys=(f"{DEV_SERVER_TOOL}:{digest}",),
+        label=f"{command} in {where}",
+        subject=command,
+    )
+
+
 def _named_scope(
     tool_name: str, args: Dict[str, Any], names: Sequence[str]
 ) -> Optional[GrantScope]:
@@ -680,6 +717,7 @@ def _named_scope(
 
 
 __all__ = [
+    "DEV_SERVER_TOOL",
     "GrantScope",
     "PATH_ACCESS_PROMPT_TOOL",
     "PATH_TOOLS",
@@ -688,6 +726,7 @@ __all__ = [
     "SITE_ARG",
     "command_reaches_folder",
     "grant_scope",
+    "launch_digest",
     "is_inside_folder",
     "path_argument",
 ]

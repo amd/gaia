@@ -62,6 +62,44 @@ export interface PaneState {
   recent: RecentPage[];
   /** True while the user picks elements on the active tab (Cmd+Shift+S). */
   picking: boolean;
+  /** Dev servers GAIA started this run, for the toolbar's Dev servers menu. */
+  devServers: DevServerState[];
+}
+
+// ─── Dev servers ────────────────────────────────────────────────────────
+
+/** One launch.json configuration as Python resolved it (gaia/browser/dev_servers.py). Never a shell string. */
+export interface DevServerSpec {
+  name: string;
+  argv: string[];
+  /** Absolute; Python checked it is inside the chat's allowed folders. */
+  cwd: string;
+  port: number;
+  /** Only names in bridge/dev_server_env.json; the app's own environment passes through an allowlist too. */
+  env: Record<string, string>;
+  /** http://localhost:<port><path> */
+  url: string;
+  readyTimeoutMs: number;
+}
+
+/** starting until the port answers; failed when it exits first; exited when it ends later on its own. */
+export type DevServerStatus = "starting" | "ready" | "failed" | "exited" | "stopped";
+
+export interface DevServerState {
+  /** Python's handle: sha256 of cwd and name, 16 hex digits. */
+  key: string;
+  name: string;
+  argv: string[];
+  cwd: string;
+  port: number;
+  env: Record<string, string>;
+  url: string;
+  status: DevServerStatus;
+  /** null once it is no longer running. */
+  pid: number | null;
+  startedAt: number;
+  exitCode: number | null;
+  logFile: string;
 }
 
 /** The placeholder's rect in CSS pixels, from getBoundingClientRect. */
@@ -160,6 +198,8 @@ export interface GaiaBrowserPaneAPI {
   /** Select element (Cmd+Shift+S): starts picking on the active tab, or ends it. */
   togglePicking(): Promise<void>;
   onPicked(cb: (event: PickEvent) => void): () => void;
+  /** Stop in the Dev servers menu. */
+  stopDevServer(key: string): Promise<void>;
 }
 
 // ─── Bridge (the agent, in Python, to main) ─────────────────────────────
@@ -305,6 +345,19 @@ export interface BridgeOps {
     req: { sessionId: string; tabId: TabRef } & ViewportChoice;
     res: { tabId: TabId; applied: boolean; viewport: ViewportState | null };
   };
+  /** ensure is idempotent: the same spec returns the running server, a changed one restarts it. */
+  devServers: {
+    req:
+      | { sessionId: string; op: "list" }
+      | { sessionId: string; op: "ensure"; key: string; spec: DevServerSpec; searchPath: string | null }
+      | { sessionId: string; op: "stop"; key: string }
+      | { sessionId: string; op: "logs"; key: string; errorsOnly: boolean; pattern: string | null; limit: number };
+    res:
+      | { servers: DevServerState[] }
+      | { server: DevServerState; reused: boolean; ms: number }
+      | { server: DevServerState }
+      | { server: DevServerState; lines: string[]; matched: number; total: number };
+  };
 }
 
 export type BridgeOp = keyof BridgeOps;
@@ -328,7 +381,10 @@ export type BridgeErrorCode =
   | "timeout"
   | "user_active"
   | "private_tab"
-  | "not_actionable";
+  | "not_actionable"
+  | "dev_server_failed"
+  | "port_in_use"
+  | "no_such_server";
 
 export interface BridgeErrorReply {
   error: { code: BridgeErrorCode; message: string; data: Record<string, unknown> };

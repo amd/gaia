@@ -109,6 +109,7 @@ const { chromiumSwitches } = require("./services/chromium-switches.cjs");
 const { titleBarKind, titleBarOptions } = require("./services/window-frame.cjs");
 const { resolveDevQaMode } = require("./services/dev-qa-mode.cjs");
 const { createBrowserPaneService, PANE_PARTITION } = require("./services/browser-pane/ipc.cjs");
+const { DevServerSupervisor } = require("./services/browser-pane/dev-servers.cjs");
 const {
   DISCOVERY_ENV: PANE_DISCOVERY_ENV,
   createHandlers: createPaneBridgeHandlers,
@@ -265,6 +266,9 @@ let browserPane = null;
 
 /** @type {Awaited<ReturnType<typeof startPaneBridge>> | null} */
 let paneBridge = null;
+
+/** @type {DevServerSupervisor | null} */
+let devServers = null;
 
 /** Where the agent finds the pane's bridge; the backend is told through PANE_DISCOVERY_ENV. */
 function paneDiscoveryFile() {
@@ -791,6 +795,18 @@ function initializeServices() {
   // #2007: System metrics for the observability dashboard
   systemMetrics.registerIpcHandlers();
 
+  const appPorts = () => (paneBridge ? [backendPort, paneBridge.port] : [backendPort]);
+
+  // Dev servers the agent starts; ones a crash left running are stopped first.
+  devServers = new DevServerSupervisor({
+    dir: path.join(app.getPath("userData"), "dev-servers"),
+    blockedPorts: appPorts,
+    onChange: () => {
+      if (browserPane) browserPane.publish();
+    },
+  });
+  devServers.start();
+
   // A browser beside the chat; its pages can't reach GAIA's own backend.
   browserPane = createBrowserPaneService({
     ipcMain,
@@ -799,14 +815,15 @@ function initializeServices() {
     userDataDir: app.getPath("userData"),
     downloadsDir: () => app.getPath("downloads"),
     // GAIA's backend and the bridge: no pane page may reach either.
-    blockedPorts: () => (paneBridge ? [backendPort, paneBridge.port] : [backendPort]),
+    blockedPorts: appPorts,
+    devServers,
   });
   browserPane.attach(mainWindow);
 
   // The agent reaches the pane through this loopback bridge, in-process or from a sidecar.
   startPaneBridge({
     discoveryFile: paneDiscoveryFile(),
-    handlers: createPaneBridgeHandlers({ getHost: () => browserPane.getHost(), appVersion: app.getVersion() }),
+    handlers: createPaneBridgeHandlers({ getHost: () => browserPane.getHost(), devServers, appVersion: app.getVersion() }),
   })
     .then((bridge) => {
       paneBridge = bridge;
@@ -1448,14 +1465,23 @@ async function cleanup() {
     paneBridge = null;
   }
 
-  // The agents and the backend stop side by side: each waits out its own
-  // grace period, and in series they could overrun the quit's time limit.
-  await Promise.all([stopAgentsForQuit(), stopBackendForQuit()]);
+  // The agents, the backend and the dev servers stop side by side: each waits
+  // out its own grace period, and in series they could overrun the quit's time limit.
+  await Promise.all([stopAgentsForQuit(), stopBackendForQuit(), stopDevServersForQuit()]);
 
   // Destroy tray icon
   if (trayManager) {
     trayManager.destroy();
     trayManager = null;
+  }
+}
+
+async function stopDevServersForQuit() {
+  if (!devServers) return;
+  try {
+    await devServers.stopAll();
+  } catch (err) {
+    console.error(`[main] Stopping dev servers failed: ${err.message}. Any left running are stopped on the next launch.`);
   }
 }
 

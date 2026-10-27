@@ -11,6 +11,7 @@
     "screenshot",
     "logs",
     "act",
-    "viewport"
+    "viewport",
+    "devServers"
   ]
 }

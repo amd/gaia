@@ -164,6 +164,9 @@ ERROR_CODES = frozenset(
         "user_active",
         "private_tab",
         "not_actionable",
+        "dev_server_failed",
+        "port_in_use",
+        "no_such_server",
     }
 )
 
@@ -176,6 +179,8 @@ class PaneBridge:
     ) -> None:
         self._disc = disc
         self._timeout_s = timeout_s
+        #: The ops ``hello`` said this app serves; empty until it answers.
+        self.ops: frozenset = frozenset()
 
     def hello(self) -> Dict[str, Any]:
         """Raises PaneProtocolMismatch unless the app speaks :data:`PROTOCOL`."""
@@ -183,6 +188,7 @@ class PaneBridge:
         theirs = int(res.get("protocol", -1))
         if theirs != PROTOCOL:
             raise PaneProtocolMismatch(theirs, PROTOCOL)
+        self.ops = frozenset(res.get("ops") or ())
         return res
 
     def attach(self, session_id: str) -> Dict[str, Any]:

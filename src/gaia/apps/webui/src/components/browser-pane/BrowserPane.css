@@ -348,3 +348,68 @@
     color: var(--text-muted);
     font-size: var(--fs-caption);
 }
+
+/* ── Dev servers menu ──────────────────────────────────────────────── */
+
+.bp-devservers-empty {
+    margin: 0;
+    padding: 4px 8px 8px;
+    color: var(--text-secondary);
+    font-size: var(--fs-label);
+    line-height: 1.4;
+}
+
+.bp-devserver {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px;
+    border-radius: var(--radius-sm);
+}
+
+.bp-devserver + .bp-devserver {
+    border-top: 1px solid var(--border-light);
+}
+
+.bp-devserver-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: var(--fs-ui);
+}
+
+.bp-devserver-name {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.bp-devserver-status,
+.bp-devserver-port {
+    color: var(--text-secondary);
+    font-size: var(--fs-label);
+}
+
+.bp-devserver-status.is-failed,
+.bp-devserver-status.is-exited {
+    color: var(--danger);
+}
+
+.bp-devserver-cmd {
+    overflow: hidden;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bp-devserver-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.bp-devserver-actions .bp-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}

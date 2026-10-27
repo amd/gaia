@@ -403,6 +403,15 @@ FULL_BUNDLES = [
             "dark mode, switch tabs, and run several browser steps in one call."
         ),
     ),
+    # Pane-only as well: runs the project's dev server from .gaia/launch.json.
+    ToolBundle(
+        name="dev_server",
+        members=frozenset({"dev_server"}),
+        description=(
+            "Start, stop and read the logs of the project's dev server, and "
+            "preview it in the browser pane."
+        ),
+    ),
     ToolBundle(
         name="code_index",
         members=frozenset(
@@ -623,6 +632,7 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "browser_viewport",
         "browser_tabs",
         "browser_batch",
+        "dev_server",
         "remember",
         "recall",
         "update_memory",

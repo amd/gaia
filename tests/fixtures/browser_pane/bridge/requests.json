@@ -119,5 +119,42 @@
       "mobile": true
     },
     "colorScheme": "dark"
+  },
+  "devServers_list": {
+    "sessionId": "chat-1",
+    "op": "list"
+  },
+  "devServers_ensure": {
+    "sessionId": "chat-1",
+    "op": "ensure",
+    "key": "0123456789abcdef",
+    "spec": {
+      "name": "web",
+      "argv": [
+        "node",
+        "server.js"
+      ],
+      "cwd": "/Users/ada/projects/site",
+      "port": 4173,
+      "env": {
+        "NODE_ENV": "development"
+      },
+      "url": "http://localhost:4173/",
+      "readyTimeoutMs": 60000
+    },
+    "searchPath": "/opt/homebrew/bin:/usr/bin:/bin"
+  },
+  "devServers_stop": {
+    "sessionId": "chat-1",
+    "op": "stop",
+    "key": "0123456789abcdef"
+  },
+  "devServers_logs": {
+    "sessionId": "chat-1",
+    "op": "logs",
+    "key": "0123456789abcdef",
+    "errorsOnly": true,
+    "pattern": null,
+    "limit": 50
   }
 }

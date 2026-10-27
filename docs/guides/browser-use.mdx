@@ -62,6 +62,7 @@ Signing in is a hand-off, not something GAIA does for you:
 | `browser_viewport(preset, width, height, color_scheme)` | Show the page at a phone, tablet or desktop size, or in dark mode (browser pane only) | no |
 | `browser_tabs(switch_to)` | List the pane's tabs, or switch to one; private tabs are never listed (browser pane only) | no |
 | `browser_batch(steps)` | Run several of the steps above in one call (browser pane only) | each step as if run alone |
+| `dev_server(action, name, project, errors_only, contains)` | Start, list, stop or read the logs of a dev server from the project's [`.gaia/launch.json`](/guides/agent-ui#dev-servers); start shows it in the pane (browser pane only) | starting one, once per exact command |
 
 In GAIA desktop, a chat open in the window uses the [browser pane](/guides/agent-ui#gaia-uses-the-pane)
 instead of the headless browser, and asks before reading or acting on any site

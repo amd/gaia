@@ -20,6 +20,7 @@ const http = require("http");
 const path = require("path");
 const { BridgeError } = require("./bridge-error.cjs");
 const { KEYS } = require("./input.cjs");
+const { envNameAllowed } = require("./dev-servers.cjs");
 
 /** @typedef {import("./contract").BridgeDiscovery} BridgeDiscovery */
 /** @typedef {import("./contract").BridgeOp} BridgeOp */
@@ -34,6 +35,8 @@ const MAX_SHOT_WIDTH = 4096;
 const MAX_TYPED_CHARS = 10000;
 const VIEWPORT_MIN = 200;
 const VIEWPORT_MAX = 4000;
+const MAX_ARGV = 64;
+const MAX_READY_MS = 120000;
 
 const STATUS = {
   bad_request: 400,
@@ -133,6 +136,48 @@ function viewportSize(body) {
   return { width: int(v, "width", VIEWPORT_MIN, VIEWPORT_MAX), height: int(v, "height", VIEWPORT_MIN, VIEWPORT_MAX), mobile: bool(v, "mobile") };
 }
 
+const serverKey = (body) => {
+  const key = str(body, "key", { max: 16 });
+  if (!/^[0-9a-f]{16}$/.test(key)) throw bad('"key" must be 16 hex digits.');
+  return key;
+};
+
+/** A dev server as Python resolved it from launch.json: argv only, an absolute cwd, allowed env names. */
+function devServerSpec(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw bad('"spec" must be a dev server spec.');
+  const argv = value.argv;
+  if (!Array.isArray(argv) || argv.length === 0 || argv.length > MAX_ARGV || !argv.every((a) => typeof a === "string" && a !== "" && a.length <= 4096 && !a.includes("\0"))) {
+    throw bad(`"spec.argv" must be 1 to ${MAX_ARGV} non-empty strings.`);
+  }
+  const cwd = str(value, "cwd");
+  if (!path.isAbsolute(cwd)) throw bad('"spec.cwd" must be an absolute folder.');
+  const port = int(value, "port", 1024, 65535);
+  const env = value.env;
+  if (typeof env !== "object" || env === null || Array.isArray(env)) throw bad('"spec.env" must be an object.');
+  for (const [k, v] of Object.entries(env)) {
+    if (!envNameAllowed(k) || typeof v !== "string" || v.length > 4096) throw bad(`"spec.env" may not set ${JSON.stringify(k)}.`);
+  }
+  const url = str(value, "url");
+  let parsed = null;
+  try {
+    parsed = new URL(url);
+  } catch {
+    parsed = null;
+  }
+  if (!parsed || parsed.protocol !== "http:" || parsed.hostname !== "localhost" || Number(parsed.port) !== port) {
+    throw bad(`"spec.url" must be http://localhost:${port}/...`);
+  }
+  return {
+    name: str(value, "name", { max: 64 }),
+    argv: argv.slice(),
+    cwd,
+    port,
+    env: { ...env },
+    url,
+    readyTimeoutMs: int(value, "readyTimeoutMs", 1000, MAX_READY_MS),
+  };
+}
+
 /** One parser per op. A test asserts this table and the handler table have the same keys. */
 const PARSERS = {
   hello: () => ({}),
@@ -183,6 +228,22 @@ const PARSERS = {
     if (target === null && act.kind !== "press") throw bad(`A ${act.kind} needs a "target" element.`);
     return { sessionId: session(b), tabId: tabIdOrActive(b), action: act, target, allowedOrigins: origins(b) };
   },
+  devServers: (b) => {
+    const sessionId = session(b);
+    const op = oneOf(b, "op", ["ensure", "stop", "list", "logs"]);
+    if (op === "list") return { sessionId, op };
+    if (op === "stop") return { sessionId, op, key: serverKey(b) };
+    if (op === "ensure") {
+      const searchPath = b.searchPath;
+      if (searchPath !== null && (typeof searchPath !== "string" || searchPath.length > 32768)) {
+        throw bad('"searchPath" must be null or a PATH string of at most 32768 characters.');
+      }
+      return { sessionId, op, key: serverKey(b), spec: devServerSpec(b.spec), searchPath: searchPath || null };
+    }
+    const pattern = b.pattern;
+    if (pattern !== null && (typeof pattern !== "string" || pattern.length > 200)) throw bad('"pattern" must be null or text of at most 200 characters.');
+    return { sessionId, op, key: serverKey(b), errorsOnly: bool(b, "errorsOnly"), pattern: pattern || null, limit: int(b, "limit", 1, MAX_LOG_LIMIT) };
+  },
   viewport: (b) => ({
     sessionId: session(b),
     tabId: tabIdOrActive(b),
@@ -207,9 +268,13 @@ function parseRequest(op, body) {
 // ── Handlers ────────────────────────────────────────────────────────────
 
 /**
- * @param {{ getHost: () => import("./pane-host.cjs").PaneHost | null, appVersion: string }} deps
+ * @param {{
+ *   getHost: () => import("./pane-host.cjs").PaneHost | null,
+ *   devServers: import("./dev-servers.cjs").DevServerSupervisor,
+ *   appVersion: string,
+ * }} deps
  */
-function createHandlers({ getHost, appVersion }) {
+function createHandlers({ getHost, devServers, appVersion }) {
   // Every op after attach is checked again: the user may have switched chats since.
   const host = (sessionId) => {
     const h = getHost();
@@ -244,6 +309,13 @@ function createHandlers({ getHost, appVersion }) {
       ),
     act: async (req) => host(req.sessionId).agentAct(req.tabId, req.action, req.target, req.allowedOrigins),
     viewport: async (req) => host(req.sessionId).agentViewport(req.tabId, { size: req.size, colorScheme: req.colorScheme }),
+    devServers: async (req) => {
+      host(req.sessionId);
+      if (req.op === "list") return { servers: devServers.list() };
+      if (req.op === "stop") return { server: await devServers.stop(req.key) };
+      if (req.op === "logs") return devServers.logs(req.key, { errorsOnly: req.errorsOnly, pattern: req.pattern, limit: req.limit });
+      return devServers.ensure(req.key, req.spec, req.searchPath);
+    },
   };
 }
 

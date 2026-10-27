@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AgentStrip, BrowserToolbar, PickStrip } from '../BrowserToolbar';
-import type { GaiaBrowserPaneAPI, PaneState, TabId, TabState } from '../../../../services/browser-pane/contract';
+import type { DevServerState, GaiaBrowserPaneAPI, PaneState, TabId, TabState } from '../../../../services/browser-pane/contract';
 
 const id = (s: string) => s as TabId;
 
@@ -30,7 +30,7 @@ function tab(over: Partial<TabState> = {}): TabState {
 }
 
 function pane(tabs: TabState[], active = tabs[0].id): PaneState {
-    return { visible: true, occluded: false, tabs, activeTabId: active, recent: [], picking: false };
+    return { visible: true, occluded: false, tabs, activeTabId: active, recent: [], picking: false, devServers: [] };
 }
 
 function fakeApi(): GaiaBrowserPaneAPI {
@@ -55,6 +55,7 @@ function fakeApi(): GaiaBrowserPaneAPI {
         setViewport: ok(),
         togglePicking: ok(),
         onPicked: vi.fn(() => () => {}),
+        stopDevServer: ok(),
     } as unknown as GaiaBrowserPaneAPI;
 }
 
@@ -260,5 +261,52 @@ describe('Select element', () => {
         expect(screen.getByRole('status')).toHaveTextContent('Shift-click adds');
         await userEvent.click(screen.getByRole('button', { name: 'Done' }));
         expect(api.togglePicking).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('Dev servers', () => {
+    const server = (over: Partial<DevServerState> = {}): DevServerState => ({
+        key: '0123456789abcdef',
+        name: 'web',
+        argv: ['npm', 'run', 'dev'],
+        cwd: '/Users/ada/site',
+        port: 5173,
+        env: {},
+        url: 'http://localhost:5173/',
+        status: 'ready',
+        pid: 4242,
+        startedAt: 1,
+        exitCode: null,
+        logFile: '/tmp/web.log',
+        ...over,
+    });
+
+    it('lists each server with its status and port, opens it in the pane and stops it', async () => {
+        const { api } = renderToolbar({ ...pane([tab()]), devServers: [server()] });
+        const button = screen.getByRole('button', { name: 'Dev servers' });
+        expect(button).toHaveAttribute('title', 'Dev servers: 1 running');
+        await userEvent.click(button);
+        const row = screen.getByRole('group', { name: 'Dev server web' });
+        expect(row).toHaveTextContent('Running');
+        expect(row).toHaveTextContent(':5173');
+        expect(row).toHaveTextContent('npm run dev');
+        await userEvent.click(screen.getByRole('button', { name: 'Stop' }));
+        expect(api.stopDevServer).toHaveBeenCalledWith('0123456789abcdef');
+        await userEvent.click(screen.getByRole('button', { name: 'Open in pane' }));
+        expect(api.openTab).toHaveBeenCalledWith('http://localhost:5173/');
+    });
+
+    it('a stopped server can neither be opened nor stopped again', async () => {
+        renderToolbar({ ...pane([tab()]), devServers: [server({ status: 'stopped', pid: null })] });
+        await userEvent.click(screen.getByRole('button', { name: 'Dev servers' }));
+        expect(screen.getByRole('group', { name: 'Dev server web' })).toHaveTextContent('Stopped');
+        expect(screen.getByRole('button', { name: 'Open in pane' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
+    });
+
+    it('with none it says how to get one', async () => {
+        renderToolbar(pane([tab()]));
+        await userEvent.click(screen.getByRole('button', { name: 'Dev servers' }));
+        expect(screen.getByText(/reads .gaia\/launch.json/)).toBeInTheDocument();
     });
 });
