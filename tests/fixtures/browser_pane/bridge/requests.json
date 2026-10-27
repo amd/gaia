@@ -156,5 +156,49 @@
     "errorsOnly": true,
     "pattern": null,
     "limit": 50
+  },
+  "act_click_frame": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "action": {
+      "kind": "click"
+    },
+    "target": {
+      "frameId": "7:3",
+      "selector": "[data-gaia-ref=\"g1e2\"]"
+    },
+    "allowedOrigins": []
+  },
+  "screenshot_frame_ref": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "clip": {
+      "frameId": "7:3",
+      "selector": "[data-gaia-ref=\"g1e2\"]"
+    },
+    "maxWidth": 1280,
+    "allowedOrigins": []
+  },
+  "dialog_get": {
+    "sessionId": "chat-1",
+    "op": "get",
+    "tabId": null
+  },
+  "dialog_answer": {
+    "sessionId": "chat-1",
+    "op": "answer",
+    "tabId": null,
+    "accept": true,
+    "text": "Ada",
+    "allowedOrigins": []
+  },
+  "dialog_release": {
+    "sessionId": "chat-1",
+    "op": "release"
+  },
+  "script": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "expression": "localStorage.getItem('cartId')"
   }
 }

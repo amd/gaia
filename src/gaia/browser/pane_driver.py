@@ -26,6 +26,7 @@ from gaia.browser._pane_bridge import PaneBridge, is_loopback_origin, origin_of
 from gaia.browser.errors import (
     BrowserError,
     ElementNotFound,
+    PageDialogOpen,
     PageOffScope,
     PaneSignInByHand,
 )
@@ -78,6 +79,16 @@ VIEWPORT_PRESETS: Dict[str, Dict[str, Any]] = {
 
 
 @dataclass(frozen=True)
+class ScriptResult:
+    """What browser_eval's expression gave: JSON text, or the page's error."""
+
+    ok: bool
+    text: str
+    truncated: bool
+    url: str
+
+
+@dataclass(frozen=True)
 class Shot:
     png: bytes
     width: int
@@ -95,6 +106,9 @@ class PaneDriver:
         self._session = session_id
         self._generation = 0
         self._frames_by_ref: Dict[str, Any] = {}
+        self._frame_urls: Dict[Any, str] = {}
+        #: True once this turn used the pane, so it may have left a box open; the turn's end releases it.
+        self._touched = False
         self._cursors: Dict[str, int] = {"console": 0, "network": 0}
         self._allowed: Tuple[str, ...] = ()
 
@@ -161,6 +175,7 @@ class PaneDriver:
             for f in subframes
             if f["ok"] and isinstance(f.get("value"), dict)
         ]
+        self._frame_urls = {f["frameId"]: f["url"] for f in subframes}
         snap, self._frames_by_ref = merge_frames(main["value"], readable, gen)
         self._check_scope(snap.get("url") or "")
         return snap
@@ -216,6 +231,11 @@ class PaneDriver:
                 f"Could not read the picked element in the browser pane: {main['error']}"
             )
         return str(main["value"] or "")
+
+    def frame_origin(self, ref: str) -> Optional[str]:
+        """The origin of the frame ``ref`` is in, or None for the main frame or an unknown ref."""
+        key = self._frames_by_ref.get(ref)
+        return origin_of(self._frame_urls.get(key, "")) if key is not None else None
 
     def screenshot(self, ref: Optional[str] = None, *, max_width: int = 1280) -> Shot:
         """The visible part of the page, or one element of it."""
@@ -306,6 +326,46 @@ class PaneDriver:
     def select_tab(self, tab_id: str) -> Dict[str, Any]:
         return self._call("tabs", {"op": "select", "tabId": tab_id})
 
+    # ------------------------------------------------------------- page boxes
+
+    def dialog(self) -> Optional[Dict[str, Any]]:
+        """The box the page waits on, or None."""
+        self._require_op("dialog")
+        return self._call("dialog", {"op": "get", "tabId": None})["dialog"]
+
+    def answer_dialog(self, accept: bool, text: Optional[str]) -> Dict[str, Any]:
+        """OK or Cancel on the page's box; ``text`` answers a prompt. The reply names the next box, if any."""
+        self._require_op("dialog")
+        return self._call(
+            "dialog",
+            {
+                "op": "answer",
+                "tabId": None,
+                "accept": accept,
+                "text": text,
+                **self._scope(),
+            },
+        )
+
+    def release_dialogs(self) -> int:
+        """Dismiss the boxes this chat's own steps opened and left. Called when a turn ends."""
+        if not self._touched:
+            return 0
+        self._touched = False
+        if "dialog" not in self._bridge.ops:
+            return 0
+        return int(self._call("dialog", {"op": "release"})["dismissed"])
+
+    def run_script(self, expression: str) -> ScriptResult:
+        """browser_eval: the expression in the page's main world. Main refuses any page off loopback."""
+        self._require_op("script")
+        res = self._call("script", {"tabId": None, "expression": expression})
+        if res.get("dialog"):
+            raise PageDialogOpen(res["dialog"], done=True)
+        if res["ok"]:
+            return ScriptResult(True, res["json"], bool(res["truncated"]), res["url"])
+        return ScriptResult(False, res["error"], False, res["url"])
+
     # ------------------------------------------------------------ dev servers
 
     def dev_servers(self) -> List[Dict[str, Any]]:
@@ -338,11 +398,7 @@ class PaneDriver:
     def _dev(
         self, op: str, body: Optional[Dict[str, Any]] = None, *, timeout_s=None
     ) -> Any:
-        if self._bridge.ops and "devServers" not in self._bridge.ops:
-            raise BrowserError(
-                "This GAIA desktop app is older than the agent and can't run dev "
-                "servers. Ask the user to update GAIA desktop."
-            )
+        self._require_op("devServers")
         return self._call("devServers", {"op": op, **(body or {})}, timeout_s=timeout_s)
 
     def storage_state(self) -> Dict[str, Any]:
@@ -369,9 +425,20 @@ class PaneDriver:
         }
 
     def _act(self, action: Dict[str, Any], target: Optional[Dict[str, Any]]) -> Any:
-        return self._call(
+        res = self._call(
             "act", {"tabId": None, "action": action, "target": target, **self._scope()}
         )
+        # The step ran, and the page now waits on a box: nothing can be read until it is answered.
+        if res.get("dialog"):
+            raise PageDialogOpen(res["dialog"], done=True)
+        return res
+
+    def _require_op(self, op: str) -> None:
+        if self._bridge.ops and op not in self._bridge.ops:
+            raise BrowserError(
+                "This GAIA desktop app is older than the agent and can't do this "
+                "in the browser pane. Ask the user to update GAIA desktop."
+            )
 
     def _scope(self) -> Dict[str, List[str]]:
         return {"allowedOrigins": list(self._allowed)}
@@ -385,6 +452,7 @@ class PaneDriver:
     def _call(
         self, op: str, body: Dict[str, Any], *, timeout_s: Optional[float] = None
     ) -> Any:
+        self._touched = self._touched or body.get("op") != "release"
         # Main checks it on every op: the user may have switched chats since attach.
         return self._bridge.call(
             op, {"sessionId": self._session, **body}, timeout_s=timeout_s
@@ -397,5 +465,6 @@ __all__ = [
     "PANE_KEYS",
     "VIEWPORT_PRESETS",
     "PaneDriver",
+    "ScriptResult",
     "Shot",
 ]

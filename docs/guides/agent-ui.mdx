@@ -662,7 +662,7 @@ A pick lasts until the page reloads or navigates; after that, pick it again.
 ### GAIA uses the pane
 
 GAIA can open pages in the pane, read the one you're looking at, and click,
-type and press keys in it. Ask "what does this page say?", "any console errors
+type and press keys in it, inside its frames too. Ask "what does this page say?", "any console errors
 here?", "fill in this form" or "open localhost:5173 and check the settings
 page", and the pane opens if it was closed. Pages GAIA opens get their own tab;
 it never navigates away from a page you opened.
@@ -694,7 +694,20 @@ each step happen.
   the move is stopped, and if it moves on its own later, you still see it but
   GAIA is told only where it went.
 - **GAIA can take a picture of the page** and read its console messages and
-  network requests, which helps when a page you're building misbehaves.
+  network requests, which helps when a page you're building misbehaves. On a
+  page on this PC it can also run a short script to check what the page doesn't
+  show, such as its stored data or app state. It never runs scripts on any other
+  site.
+- **Boxes a page opens show above the page.** When a page shows an `alert`,
+  `confirm` or `prompt`, or asks before you leave it, a bar above the page shows
+  the message with **OK** and **Cancel** (**Leave** and **Stay**), and a field
+  for a prompt. The page waits until someone answers. GAIA can answer too; it
+  asks you first before pressing OK on another site's box or on one like
+  "Delete account?". If GAIA opened the box and its turn ends without an
+  answer, the box is cancelled, so the page is never left frozen. GAIA never
+  answers a box in a tab you paused or made private.
+- **Frames work like the page.** GAIA can read, click and type inside frames,
+  including ones from another site, and asks before acting on that site.
 - **GAIA never signs in or types a password.** It asks you to sign in
   yourself in the pane, and the pane keeps that sign-in.
 

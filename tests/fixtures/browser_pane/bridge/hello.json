@@ -12,6 +12,8 @@
     "logs",
     "act",
     "viewport",
+    "dialog",
+    "script",
     "devServers"
   ]
 }

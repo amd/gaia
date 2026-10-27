@@ -192,3 +192,42 @@ class PaneSignInByHand(BrowserError):
             "sign in to the site themselves in the pane, then tell you when they "
             "are done. The pane keeps that sign-in."
         )
+
+
+def describe_dialog(dialog: dict) -> str:
+    """One sentence naming a page box and how browser_dialog answers it, for the model."""
+    kind = dialog.get("type")
+    message = str(dialog.get("message") or "").strip()
+    quoted = f' "{message}"' if message else ""
+    if kind == "alert":
+        return f"The page shows a notice{quoted}. Close it with browser_dialog(accept=True)."
+    if kind == "prompt":
+        return (
+            f"The page asks for text{quoted}. Answer with "
+            "browser_dialog(accept=True, text='...'), or cancel with "
+            "browser_dialog(accept=False)."
+        )
+    if kind == "beforeunload":
+        return (
+            "The page asks before leaving it: changes there may not be saved. "
+            "Leave with browser_dialog(accept=True), or stay with "
+            "browser_dialog(accept=False)."
+        )
+    return (
+        f"The page asks{quoted}. Press OK with browser_dialog(accept=True), or "
+        "Cancel with browser_dialog(accept=False)."
+    )
+
+
+class PageDialogOpen(BrowserError):
+    """The pane's page is waiting on a box (alert, confirm, prompt, leave this page?).
+
+    ``done`` is True when the step itself ran and opened the box, False when
+    the box was already open and nothing was done.
+    """
+
+    def __init__(self, dialog: dict, *, done: bool) -> None:
+        self.dialog = dialog
+        self.done = done
+        lead = "" if done else "Nothing was done: a box is open on the page. "
+        super().__init__(lead + describe_dialog(dialog))

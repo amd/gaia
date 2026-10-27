@@ -28,6 +28,7 @@ from gaia.browser.errors import (
     BrowserError,
     NavigationBlocked,
     NavigationFailed,
+    PageDialogOpen,
     PageOffScope,
     PaneNavigationBlocked,
     PaneProtocolMismatch,
@@ -131,6 +132,8 @@ def _error_for(code: str, message: str, data: Dict[str, Any]) -> BrowserError:
         return PaneNavigationBlocked(
             str(data.get("url", "")), str(data.get("origin", ""))
         )
+    if code == "dialog_open" and isinstance(data.get("dialog"), dict):
+        return PageDialogOpen(data["dialog"], done=False)
     if code == "off_scope":
         return PageOffScope(str(data.get("origin", "")))
     if code == "navigation_failed":
@@ -164,6 +167,7 @@ ERROR_CODES = frozenset(
         "user_active",
         "private_tab",
         "not_actionable",
+        "dialog_open",
         "dev_server_failed",
         "port_in_use",
         "no_such_server",

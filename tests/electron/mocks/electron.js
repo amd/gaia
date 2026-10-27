@@ -269,10 +269,13 @@ class MockWebContents extends EventEmitter {
     dbg.attach = jest.fn();
     dbg.sendCommand = jest.fn(() => Promise.resolve({}));
     this.debugger = dbg;
+    // Electron's own handler for page boxes (lib/browser/api/web-contents.ts), which the pane replaces.
+    this.on('-run-dialog', jest.fn());
     this.mainFrame = {
       url: '',
       processId: 1,
       routingId: 1,
+      parent: null,
       framesInSubtree: [],
       executeJavaScript: jest.fn(() => Promise.resolve(null)),
     };

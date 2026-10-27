@@ -386,21 +386,28 @@ FULL_BUNDLES = [
     # apart so a pull-in of "browser_use" never brings them along.
     ToolBundle(
         name="browser_inspect",
-        members=frozenset({"browser_screenshot", "browser_logs"}),
+        members=frozenset({"browser_screenshot", "browser_logs", "browser_eval"}),
         description=(
-            "Look at the page in the browser pane: a picture of it, and its "
-            "console errors and network requests."
+            "Look at the page in the browser pane: a picture of it, its "
+            "console errors and network requests, and app state on localhost."
         ),
     ),
     # Also pane-only: keys, screen sizes, tabs, and several steps in one call.
     ToolBundle(
         name="browser_pane",
         members=frozenset(
-            {"browser_press", "browser_viewport", "browser_tabs", "browser_batch"}
+            {
+                "browser_press",
+                "browser_viewport",
+                "browser_tabs",
+                "browser_batch",
+                "browser_dialog",
+            }
         ),
         description=(
-            "Press keys like Escape, show the page at phone or tablet size or in "
-            "dark mode, switch tabs, and run several browser steps in one call."
+            "Press keys like Escape, answer a page's alert or confirm box, show "
+            "the page at phone or tablet size or in dark mode, switch tabs, and "
+            "run several browser steps in one call."
         ),
     ),
     # Pane-only as well: serves a folder of HTML, or runs .gaia/launch.json.
@@ -632,6 +639,8 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "browser_viewport",
         "browser_tabs",
         "browser_batch",
+        "browser_dialog",
+        "browser_eval",
         "dev_server",
         "remember",
         "recall",

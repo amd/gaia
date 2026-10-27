@@ -62,6 +62,8 @@ Signing in is a hand-off, not something GAIA does for you:
 | `browser_viewport(preset, width, height, color_scheme)` | Show the page at a phone, tablet or desktop size, or in dark mode (browser pane only) | no |
 | `browser_tabs(switch_to)` | List the pane's tabs, or switch to one; private tabs are never listed (browser pane only) | no |
 | `browser_batch(steps)` | Run several of the steps above in one call (browser pane only) | each step as if run alone |
+| `browser_dialog(accept, text)` | Answer the page's alert, confirm, prompt or "leave this page?" box: OK or Cancel, with text for a prompt (browser pane only) | OK on another site's box, or on one that names an action that can't be undone |
+| `browser_eval(expression)` | Run one JavaScript expression in the page and get its value as JSON, to check app state or storage the page doesn't show (browser pane only, pages on this PC only) | no; refused on any other site |
 | `dev_server(action, name, project, errors_only, contains)` | Serve a folder of HTML with no setup, or start, list, stop or read the logs of a dev server from the project's [`.gaia/launch.json`](/guides/agent-ui#dev-servers); start shows it in the pane (browser pane only) | starting one, once per exact command |
 
 In GAIA desktop, a chat open in the window uses the [browser pane](/guides/agent-ui#gaia-uses-the-pane)
@@ -70,9 +72,22 @@ that is not on this PC. Clicks and typing land in the pane as real input you
 can watch, and stop the moment you press **Pause** or click in the page
 yourself. A click on a control that can't be undone (Delete, Place order,
 Create account) asks every time, on this PC too. `browser_batch` stops before
-any step that would ask, so you approve that step on its own. `browser_login`
-is not used there: you sign in yourself in the pane, and GAIA never types into
-a password field.
+any step that would ask, so you approve that step on its own, and at any step
+that opens a box on the page. `browser_login` is not used there: you sign in
+yourself in the pane, and GAIA never types into a password field.
+
+When a page opens a box (`alert`, `confirm`, `prompt`, or "leave this page?"),
+the page waits until someone answers it. The step that opened it says so, and
+every other step reports the box instead of timing out. GAIA answers it with
+`browser_dialog`, or you answer it in the bar above the page. Pressing OK on a
+box asks first in the same cases as a click: on another site, and whenever the
+box names something that can't be undone, such as "Delete account?". Cancel
+never asks. A box GAIA's own step opened and left unanswered is cancelled when
+its turn ends.
+
+GAIA reads and acts inside frames too, including frames from another site, such
+as a payment or sign-in widget embedded in your app. Acting in a frame from a
+site other than this PC asks for that site, as opening it would.
 
 Elements are addressed by **ref** (`e1`, `e7`) from the last snapshot, never by
 screen coordinates:

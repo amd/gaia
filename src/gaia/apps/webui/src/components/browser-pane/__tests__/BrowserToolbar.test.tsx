@@ -25,6 +25,7 @@ function tab(over: Partial<TabState> = {}): TabState {
         agentActing: false,
         control: 'shared',
         viewport: null,
+        dialog: null,
         ...over,
     };
 }

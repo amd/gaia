@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pane fixture unsaved note</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>Unsaved note</h1>
+  <p>Type in the note, then try to leave: the page asks first.</p>
+  <label>Note <textarea id="note" rows="4"></textarea></label>
+  <p><a id="leave" href="second.html">Go to the second page</a></p>
+  <script>
+    document.getElementById("note").addEventListener("input", () => {
+      window.onbeforeunload = (e) => {
+        e.preventDefault();
+        e.returnValue = "";
+      };
+    });
+  </script>
+</body>
+</html>

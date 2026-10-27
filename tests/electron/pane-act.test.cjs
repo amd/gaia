@@ -125,7 +125,6 @@ describe("checks before input lands", () => {
     [{ fail: "hidden" }, "not_actionable", /not visible/],
     [{ fail: "disabled" }, "not_actionable", /disabled/],
     [{ fail: "covered", by: '"Accept cookies"' }, "not_actionable", /covered by "Accept cookies"/],
-    [{ fail: "frame" }, "unsupported", /frame/],
   ])("%j is refused as %s, and nothing is clicked", async (probe, code, message) => {
     const { host, wc, cdp } = makeHost();
     pageSays(wc, probe);
@@ -153,20 +152,129 @@ describe("checks before input lands", () => {
     expect(inputSent(cdp)).toEqual([]);
   });
 
-  test("an element in another site's frame is refused loudly", () => {
-    const { wc } = makeHost();
-    wc.mainFrame.framesInSubtree = [wc.mainFrame, { processId: 9, routingId: 3 }, { processId: 1, routingId: 4 }];
-    expect(() => frameFor(wc, "9:3")).toThrow(expect.objectContaining({ code: "unsupported" }));
-    expect(frameFor(wc, "1:4")).toEqual({ processId: 1, routingId: 4 });
-    expect(() => frameFor(wc, "7:7")).toThrow(expect.objectContaining({ code: "element_not_found" }));
-  });
-
   test("a page off the approved sites is not acted on", async () => {
     const { host, wc, cdp } = makeHost();
     wc._url = "https://example.org/";
     await expect(host.agentAct(null, { kind: "click" }, TARGET, [])).rejects.toMatchObject({ code: "off_scope" });
     expect(wc.mainFrame.executeJavaScript).not.toHaveBeenCalled();
     expect(inputSent(cdp)).toEqual([]);
+  });
+});
+
+/**
+ * A child frame on another site, `depth` levels below the main frame. Each
+ * frame answers the probe in its own viewport; each parent says where the
+ * child's content box starts in its own.
+ */
+function frameChain(wc, { depth = 1, probe = POINT, boxes = [], origin = "http://localhost:5000" } = {}) {
+  const main = wc.mainFrame;
+  const frames = [];
+  let parent = main;
+  for (let level = 0; level < depth; level += 1) {
+    const frame = {
+      processId: 9 + level,
+      routingId: 3,
+      url: `${origin}/frame-${level}.html`,
+      origin,
+      parent,
+      executeJavaScript: jest.fn(),
+    };
+    frames.push(frame);
+    parent = frame;
+  }
+  const answer = (frame, at) => (code) => {
+    if (code.includes("parent.length")) return Promise.resolve(0);
+    if (code.includes("contentWindow")) return Promise.resolve(boxes[at] ?? { left: 10, top: 20 });
+    if (code.includes("el.disabled")) return Promise.resolve(frame === frames[frames.length - 1] ? probe : { fail: "gone" });
+    if (code.includes("width: r.width")) return Promise.resolve({ x: 5, y: 6, width: 40, height: 10 });
+    if (code.includes("scrollX")) return Promise.resolve({ x: 0, y: 300 });
+    return Promise.resolve(true);
+  };
+  main.executeJavaScript.mockImplementation(answer(main, 0));
+  frames.forEach((f, i) => f.executeJavaScript.mockImplementation(answer(f, i + 1)));
+  main.framesInSubtree = [main, ...frames];
+  const leaf = frames[frames.length - 1];
+  return { leaf, target: { frameId: `${leaf.processId}:${leaf.routingId}`, selector: SEL } };
+}
+
+describe("elements inside frames", () => {
+  test("a click in a cross-site frame lands at the element's point plus the frame's offset in the page", async () => {
+    const { host, wc, cdp } = makeHost();
+    const { target } = frameChain(wc, { boxes: [{ left: 26, top: 433 }] });
+    await host.agentAct(null, { kind: "click" }, target, []);
+    expect(inputSent(cdp)[0]).toEqual(["Input.dispatchMouseEvent", { type: "mouseMoved", x: 120 + 26, y: 48 + 433 }]);
+    const asked = wc.mainFrame.executeJavaScript.mock.calls.map(([code]) => code).find((code) => code.includes("contentWindow"));
+    expect(asked).toContain("[0,120,48]");
+  });
+
+  test("each frame up the chain adds its own offset", async () => {
+    const { host, wc, cdp } = makeHost();
+    const { target } = frameChain(wc, { depth: 2, boxes: [{ left: 100, top: 200 }, { left: 7, top: 9 }] });
+    await host.agentAct(null, { kind: "click" }, target, []);
+    expect(inputSent(cdp)[0][1]).toMatchObject({ x: 120 + 7 + 100, y: 48 + 9 + 200 });
+  });
+
+  test("typing in a frame clicks into the field there, selects in that frame, and inserts the text", async () => {
+    const { host, wc, cdp } = makeHost();
+    const { leaf, target } = frameChain(wc, { probe: { ...POINT, tag: "input", type: "text" } });
+    await host.agentAct(null, { kind: "fill", text: "Ada", pressEnter: false }, target, []);
+    expect(inputSent(cdp).map(([m, p]) => `${m}:${p.type || p.text}`)).toEqual([
+      "Input.dispatchMouseEvent:mouseMoved",
+      "Input.dispatchMouseEvent:mousePressed",
+      "Input.dispatchMouseEvent:mouseReleased",
+      "Input.insertText:Ada",
+    ]);
+    expect(leaf.executeJavaScript.mock.calls.some(([code]) => code.includes("el.select()"))).toBe(true);
+  });
+
+  test.each([
+    [{ fail: "covered", by: '"Cookie banner"' }, "not_actionable", /covered by "Cookie banner"/],
+    [{ fail: "hidden" }, "not_actionable", /frame is not visible/],
+    [{ fail: "frame" }, "unsupported", /frame GAIA can't reach/],
+  ])("the parent answering %j refuses the click, and nothing is sent", async (box, code, message) => {
+    const { host, wc, cdp } = makeHost();
+    const { target } = frameChain(wc, { boxes: [box] });
+    await expect(host.agentAct(null, { kind: "click" }, target, [])).rejects.toMatchObject({ code, message: expect.stringMatching(message) });
+    expect(inputSent(cdp)).toEqual([]);
+  });
+
+  test("a frame that can't find itself in its parent is refused loudly", async () => {
+    const { host, wc, cdp } = makeHost();
+    const { leaf, target } = frameChain(wc);
+    const answer = leaf.executeJavaScript.getMockImplementation();
+    leaf.executeJavaScript.mockImplementation((code) => (code.includes("parent.length") ? Promise.resolve(-1) : answer(code)));
+    await expect(host.agentAct(null, { kind: "click" }, target, [])).rejects.toMatchObject({ code: "unsupported" });
+    expect(inputSent(cdp)).toEqual([]);
+  });
+
+  test("acting in a frame from a site that is not approved is refused before the page is touched", async () => {
+    const { host, wc, cdp } = makeHost();
+    const { leaf, target } = frameChain(wc, { origin: "https://pay.example" });
+    await expect(host.agentAct(null, { kind: "click" }, target, [])).rejects.toMatchObject({
+      code: "off_scope",
+      data: { origin: "https://pay.example" },
+    });
+    expect(leaf.executeJavaScript).not.toHaveBeenCalled();
+    expect(inputSent(cdp)).toEqual([]);
+    await expect(host.agentAct(null, { kind: "click" }, target, ["https://pay.example"])).resolves.toBeTruthy();
+    expect(inputSent(cdp)).toHaveLength(3);
+  });
+
+  test("a gone frame is element_not_found", () => {
+    const { wc } = makeHost();
+    expect(() => frameFor(wc, "7:7")).toThrow(expect.objectContaining({ code: "element_not_found" }));
+  });
+
+  test("a picture of an element in a frame clips at its place in the page", async () => {
+    const { host, wc, cdp } = makeHost();
+    const { target } = frameChain(wc, { boxes: [{ left: 26, top: 33 }] });
+    const { nativeImage } = require("electron");
+    const image = { getSize: () => ({ width: 40, height: 10 }), toPNG: () => Buffer.from("png") };
+    nativeImage.createFromBuffer = jest.fn(() => image);
+    cdp.screenshot.mockResolvedValue(Buffer.from("png"));
+    await expect(host.agentScreenshot(null, target, 1280, [])).resolves.toMatchObject({ width: 40, height: 10 });
+    // Box (5, 6, 40x10) in the frame, plus the frame's offset, plus the page's scroll of 300.
+    expect(cdp.screenshot).toHaveBeenCalledWith({ x: 5 + 26, y: 6 + 33 + 300, width: 40, height: 10 });
   });
 });
 

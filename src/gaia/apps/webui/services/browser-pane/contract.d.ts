@@ -26,6 +26,21 @@ export interface ViewportState extends ViewportChoice {
   source: "user" | "agent";
 }
 
+/** A box the page opened with alert(), confirm() or prompt(), or the pane's "leave this page?" for beforeunload. */
+export type PageDialogType = "alert" | "confirm" | "prompt" | "beforeunload";
+
+/** The box a tab's page is waiting on. The page is frozen until someone answers it. */
+export interface PageDialog {
+  type: PageDialogType;
+  message: string;
+  /** The prompt's starting text; "" for other boxes. */
+  defaultText: string;
+  /** The page or frame that opened it. */
+  url: string;
+  /** "agent" when it opened during the agent's op on this tab: dismissed when that agent's turn ends unanswered. */
+  openedBy: "agent" | "page";
+}
+
 export interface TabState {
   id: TabId;
   /** null while the tab shows the new tab page and has no page of its own. */
@@ -45,6 +60,8 @@ export interface TabState {
   control: TabControl;
   /** null when the page fills the pane at the system color scheme. */
   viewport: ViewportState | null;
+  /** The box the page waits on, or null. One at a time per tab. */
+  dialog: PageDialog | null;
 }
 
 export interface RecentPage {
@@ -200,6 +217,8 @@ export interface GaiaBrowserPaneAPI {
   onPicked(cb: (event: PickEvent) => void): () => void;
   /** Stop in the Dev servers menu. */
   stopDevServer(key: string): Promise<void>;
+  /** The user's answer to the box in the pane. text is the prompt's answer; null keeps its starting text. */
+  answerDialog(tabId: TabId, accept: boolean, text: string | null): Promise<void>;
 }
 
 // ─── Bridge (the agent, in Python, to main) ─────────────────────────────
@@ -252,7 +271,7 @@ export type ActAction =
   | { kind: "fill"; text: string; pressEnter: boolean }
   | { kind: "press"; key: AllowedKey };
 
-/** Built by Python from its snapshot ref table, never from model text. frameId null is the main frame. */
+/** Built by Python from its snapshot ref table, never from model text. frameId null is the main frame; any frame, cross-site too. */
 export interface ActTarget {
   frameId: string | null;
   selector: string;
@@ -338,7 +357,29 @@ export interface BridgeOps {
   /** Refused with user_active in a tab the user holds or touched in the last 4 s. A press may have no target: the focused element gets it. */
   act: {
     req: { sessionId: string; tabId: TabRef; action: ActAction; target: ActTarget | null; allowedOrigins: AllowedOrigins };
-    res: { tabId: TabId; url: string; title: string; adoptedTabId?: TabId };
+    res: { tabId: TabId; url: string; title: string; adoptedTabId?: TabId; dialog?: PageDialog };
+  };
+  /**
+   * The page's box. get reads it for the site gate; answer is refused with
+   * off_scope when accepting a non-alert box on a site not in allowedOrigins;
+   * release dismisses the boxes this chat's agent opened and left (turn end).
+   */
+  dialog: {
+    req:
+      | { sessionId: string; op: "get"; tabId: TabRef }
+      | { sessionId: string; op: "answer"; tabId: TabRef; accept: boolean; text: string | null; allowedOrigins: AllowedOrigins }
+      | { sessionId: string; op: "release" };
+    res:
+      | { tabId: TabId; dialog: PageDialog | null }
+      | { tabId: TabId; answered: PageDialog; url: string; title: string; dialog: PageDialog | null }
+      | { dismissed: number };
+  };
+  /** The model's expression in the page's main world (browser_eval). Refused with unsupported off loopback; page errors come back as ok false. */
+  script: {
+    req: { sessionId: string; tabId: TabRef; expression: string };
+    res:
+      | { tabId: TabId; url: string; ok: true; json: string; truncated: boolean }
+      | { tabId: TabId; url: string; ok: false; error: string; dialog?: PageDialog };
   };
   /** applied is false when the user picked the viewport; theirs stays. */
   viewport: {
@@ -382,6 +423,7 @@ export type BridgeErrorCode =
   | "user_active"
   | "private_tab"
   | "not_actionable"
+  | "dialog_open"
   | "dev_server_failed"
   | "port_in_use"
   | "no_such_server";

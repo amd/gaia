@@ -18,6 +18,7 @@ import { formatShortcut } from '../../utils/platform';
 import { log } from '../../utils/logger';
 import { usePickedElementsStore } from '../../stores/pickedElementsStore';
 import { AgentStrip, BrowserToolbar, PickStrip, TOGGLE_SHORTCUT } from './BrowserToolbar';
+import { PageDialogBar } from './PageDialogBar';
 import type { GaiaBrowserPaneAPI, PaneNotice, PaneState, TabState } from '../../../services/browser-pane/contract';
 import './BrowserPane.css';
 
@@ -145,6 +146,7 @@ function OpenPane({ api, pane }: { api: GaiaBrowserPaneAPI; pane: PaneState }) {
             />
             <BrowserToolbar pane={pane} api={api} onClosePane={() => setOpen(false)} addressRef={addressRef} />
             {pane.picking ? <PickStrip api={api} /> : <AgentStrip tab={active} api={api} />}
+            {active.dialog && <PageDialogBar tab={active} api={api} />}
             {active.notice && <NoticeBar notice={active.notice} />}
             <div ref={viewportRef} className="bp-viewport">
                 {frozen && <img className="bp-frozen" src={frozen} alt="" aria-hidden="true" />}

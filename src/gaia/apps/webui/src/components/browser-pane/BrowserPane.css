@@ -210,6 +210,45 @@
     background: var(--danger-dim);
 }
 
+.bp-dialog {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-light);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: var(--fs-label);
+    line-height: 1.4;
+}
+
+.bp-dialog-from {
+    color: var(--text-secondary);
+}
+
+.bp-dialog-message {
+    flex: 1 1 60%;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.bp-dialog-input {
+    flex: 1 1 100%;
+    padding: 3px 6px;
+    border: 1px solid var(--border-light);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.bp-dialog-actions {
+    display: flex;
+    gap: 6px;
+    margin-left: auto;
+}
+
 .bp-agent-strip {
     display: flex;
     align-items: center;

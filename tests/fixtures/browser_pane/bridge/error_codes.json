@@ -5,6 +5,7 @@
     "blocked_navigation",
     "blocked_url",
     "dev_server_failed",
+    "dialog_open",
     "element_not_found",
     "forbidden",
     "internal",

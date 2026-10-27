@@ -37,6 +37,7 @@ const CHANNELS = Object.freeze({
   togglePicking: "pane:toggle-picking",
   picked: "pane:picked",
   stopDevServer: "pane:stop-dev-server",
+  answerDialog: "pane:answer-dialog",
 });
 
 const HISTORY_ACTIONS = new Set(["back", "forward", "reload", "stop"]);
@@ -162,6 +163,11 @@ function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downlo
   handle(CHANNELS.openExternal, (h, id) => h.openExternal(requireString(id, "tab id")));
   handle(CHANNELS.setControl, (h, id, control) => h.setControl(requireString(id, "tab id"), control));
   handle(CHANNELS.togglePicking, (h) => h.togglePicking());
+  handle(CHANNELS.answerDialog, (h, id, accept, text) => {
+    if (typeof accept !== "boolean") throw new Error("accept must be true or false.");
+    if (text !== null && typeof text !== "string") throw new Error("text must be a string or null.");
+    h.userAnswerDialog(requireString(id, "tab id"), accept, text);
+  });
   handle(CHANNELS.setViewport, (h, id, choice) => h.setUserViewport(requireString(id, "tab id"), parseViewportChoice(choice)));
   handle(CHANNELS.stopDevServer, async (_h, key) => {
     await devServers.stop(requireString(key, "dev server key"));

@@ -123,6 +123,7 @@ contextBridge.exposeInMainWorld("gaiaBrowserPane", {
   togglePicking: () => ipcRenderer.invoke("pane:toggle-picking"),
   onPicked: (cb) => onEvent("pane:picked", cb),
   stopDevServer: (key) => ipcRenderer.invoke("pane:stop-dev-server", key),
+  answerDialog: (tabId, accept, text) => ipcRenderer.invoke("pane:answer-dialog", tabId, accept, text),
 });
 
 // ── Install progress (Phase A) ──────────────────────────────────────────

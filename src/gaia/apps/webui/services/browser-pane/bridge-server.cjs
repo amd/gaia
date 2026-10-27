@@ -33,6 +33,7 @@ const MAX_SCRIPT_CHARS = 512 * 1024;
 const MAX_LOG_LIMIT = 500;
 const MAX_SHOT_WIDTH = 4096;
 const MAX_TYPED_CHARS = 10000;
+const MAX_EXPRESSION_CHARS = 2000;
 const VIEWPORT_MIN = 200;
 const VIEWPORT_MAX = 4000;
 const MAX_ARGV = 64;
@@ -244,6 +245,16 @@ const PARSERS = {
     if (pattern !== null && (typeof pattern !== "string" || pattern.length > 200)) throw bad('"pattern" must be null or text of at most 200 characters.');
     return { sessionId, op, key: serverKey(b), errorsOnly: bool(b, "errorsOnly"), pattern: pattern || null, limit: int(b, "limit", 1, MAX_LOG_LIMIT) };
   },
+  dialog: (b) => {
+    const sessionId = session(b);
+    const op = oneOf(b, "op", ["get", "answer", "release"]);
+    if (op === "release") return { sessionId, op };
+    if (op === "get") return { sessionId, op, tabId: tabIdOrActive(b) };
+    const text = b.text;
+    if (text !== null && (typeof text !== "string" || text.length > MAX_TYPED_CHARS)) throw bad(`"text" must be null or text of at most ${MAX_TYPED_CHARS} characters.`);
+    return { sessionId, op, tabId: tabIdOrActive(b), accept: bool(b, "accept"), text, allowedOrigins: origins(b) };
+  },
+  script: (b) => ({ sessionId: session(b), tabId: tabIdOrActive(b), expression: str(b, "expression", { max: MAX_EXPRESSION_CHARS }) }),
   viewport: (b) => ({
     sessionId: session(b),
     tabId: tabIdOrActive(b),
@@ -308,6 +319,13 @@ function createHandlers({ getHost, devServers, appVersion }) {
         req.allowedOrigins
       ),
     act: async (req) => host(req.sessionId).agentAct(req.tabId, req.action, req.target, req.allowedOrigins),
+    dialog: async (req) => {
+      const h = host(req.sessionId);
+      if (req.op === "release") return h.releaseDialogs(req.sessionId);
+      if (req.op === "get") return h.agentDialog(req.tabId);
+      return h.agentAnswerDialog(req.tabId, req.accept, req.text, req.allowedOrigins);
+    },
+    script: async (req) => host(req.sessionId).agentScript(req.tabId, req.expression),
     viewport: async (req) => host(req.sessionId).agentViewport(req.tabId, { size: req.size, colorScheme: req.colorScheme }),
     devServers: async (req) => {
       host(req.sessionId);

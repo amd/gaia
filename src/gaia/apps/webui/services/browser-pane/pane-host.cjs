@@ -50,6 +50,18 @@ const ACT_LINGER_MS = 10000;
 const AGENT_ECHO_MS = 100;
 const USER_INPUT = new Set(["mouseDown", "rawKeyDown", "keyDown", "touchStart"]);
 const CONTROLS = new Set(["shared", "user", "private"]);
+// Electron answers a page's alert, confirm and prompt in this internal webContents
+// listener: a native box over the whole window, and prompt() always cancelled.
+// The pane replaces it so the user answers in the pane and the agent can answer too.
+// tests/electron/pane-dialogs.test.cjs pins the Electron versions this was read in.
+const RUN_DIALOG = "-run-dialog";
+const CANCEL_DIALOGS = "-cancel-dialogs";
+const LEAVE_MESSAGE = "Leave this page? Changes you made may not be saved.";
+// Accepting a "leave this page?" box for a navigation the page started allows the next leave this long.
+const LEAVE_ONCE_MS = 30000;
+const SCRIPT_TIMEOUT_MS = 5000;
+const MAX_SCRIPT_RESULT = 4000;
+const STOPPED_FOR_DIALOG = "A box opened on the page, so GAIA stopped this step there.";
 
 /** True when an agent op may read or land on `url`: loopback, or an origin the user approved. */
 function inScope(url, allowedOrigins) {
@@ -62,6 +74,48 @@ function inScope(url, allowedOrigins) {
   if (parsed.href === "about:blank") return true;
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
   return isApprovalFreeHost(parsed.hostname) || allowedOrigins.includes(parsed.origin);
+}
+
+/** True for a page on this computer (localhost, 127.x, ::1, *.localhost): the only pages browser_eval runs on. */
+function isLoopbackUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return (parsed.protocol === "http:" || parsed.protocol === "https:") && isApprovalFreeHost(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The page script browser_eval runs: the model's expression, awaited, as JSON
+ * capped at MAX_SCRIPT_RESULT characters. Elements, functions and cycles are
+ * written as short markers.
+ */
+function scriptSource(expression) {
+  const body = expression.trim().replace(/;+$/, "");
+  return `(async () => {
+  let value;
+  try {
+    value = await (
+${body}
+    );
+  } catch (e) {
+    return { error: (e && e.name ? e.name + ": " : "") + ((e && e.message) || String(e)) };
+  }
+  const seen = new WeakSet();
+  const json = JSON.stringify(value, (key, v) => {
+    if (typeof v === "bigint") return v.toString();
+    if (typeof v === "function") return "[function]";
+    if (typeof Node !== "undefined" && v instanceof Node) return "[" + (v.nodeName || "node").toLowerCase() + " element]";
+    if (typeof v === "object" && v !== null) {
+      if (seen.has(v)) return "[already shown]";
+      seen.add(v);
+    }
+    return v;
+  });
+  const text = json === undefined ? "undefined" : json;
+  return { text: text.slice(0, ${MAX_SCRIPT_RESULT}), truncated: text.length > ${MAX_SCRIPT_RESULT} };
+})()`;
 }
 
 function originOf(url) {
@@ -283,6 +337,7 @@ class PaneHost {
   /** Start loading an already-allowed URL; resolves when the page loads, rejects if it doesn't. */
   load(tab, url) {
     const view = this.ensureView(tab);
+    tab.leaving = () => this.load(tab, url);
     tab.state.notice = null;
     tab.state.url = url;
     const loading = view.webContents.loadURL(url);
@@ -298,11 +353,19 @@ class PaneHost {
     const tab = this.requireTab(id);
     if (!tab.view) throw new Error(`Tab ${id} has no page to ${action}; open a page in it first.`);
     const wc = tab.view.webContents;
+    if (action !== "stop") tab.leaving = () => this.historyLoad(tab, action);
     if (action === "back") wc.navigationHistory.goBack();
     else if (action === "forward") wc.navigationHistory.goForward();
     else if (action === "reload") wc.reload();
     else if (action === "stop") wc.stop();
     else throw new Error(`Unknown history action "${action}"; use back, forward, reload or stop.`);
+  }
+
+  /** Repeat a history step that "leave this page?" stopped, and wait for its load. */
+  historyLoad(tab, action) {
+    const done = this.nextLoad(tab.view.webContents);
+    this.history(tab.state.id, action);
+    return done;
   }
 
   /** @param {TabId} id */
@@ -425,7 +488,9 @@ class PaneHost {
 
   /** @param {string | null} sessionId */
   setActiveSession(sessionId) {
+    const before = this.activeSessionId;
     this.activeSessionId = sessionId;
+    if (before !== null && before !== sessionId) this.releaseDialogs(before);
   }
 
   /** @param {string} sessionId */
@@ -571,6 +636,7 @@ class PaneHost {
   async agentNavigate(id, to, allowedOrigins) {
     const tab = this.agentTab(id);
     this.requireAgentInput(tab);
+    this.requireNoDialog(tab);
     if (to === "back" || to === "forward" || to === "reload") {
       if (!tab.view) throw new BridgeError("no_page", "This tab has no page yet, so it has no history.");
       const wc = tab.view.webContents;
@@ -580,7 +646,8 @@ class PaneHost {
       await this.withAgent(tab, allowedOrigins, async () => {
         const done = this.nextLoad(wc);
         this.history(tab.state.id, to);
-        await done;
+        const went = await this.raceDialog(tab, done);
+        if (went.dialog) throw this.dialogError(went.dialog);
         await this.settle(wc);
       });
     } else {
@@ -600,9 +667,12 @@ class PaneHost {
 
   async agentLoad(tab, url) {
     try {
-      await withTimeout(this.load(tab, url), LOAD_TIMEOUT_MS, `Loading ${url}`);
+      const loaded = await this.raceDialog(tab, withTimeout(this.load(tab, url), LOAD_TIMEOUT_MS, `Loading ${url}`));
+      if (loaded.dialog) throw this.dialogError(loaded.dialog);
     } catch (err) {
       if (tab.scope && tab.scope.blocked) throw this.blockedError(tab.scope.blocked);
+      // "Leave this page?" stops the load first; the box is the answer, not the failed load.
+      if (tab.state.dialog) throw this.dialogError(tab.state.dialog);
       if (err instanceof BridgeError) throw err;
       throw new BridgeError("navigation_failed", err.message, { url });
     }
@@ -643,6 +713,7 @@ class PaneHost {
   async agentEvaluate(id, script, args, frames, allowedOrigins) {
     const tab = this.agentTab(id);
     const wc = this.requirePage(tab, allowedOrigins);
+    this.requireNoDialog(tab);
     return this.withAgent(tab, allowedOrigins, async () => {
       const main = wc.mainFrame;
       const targets = frames === "all" ? [main, ...main.framesInSubtree.filter((f) => f !== main)] : [main];
@@ -651,9 +722,11 @@ class PaneHost {
       for (const frame of targets) {
         const frameId = frame === main ? null : `${frame.processId}:${frame.routingId}`;
         try {
-          const value = await withTimeout(frame.executeJavaScript(code, false), EVAL_TIMEOUT_MS, "Reading the page");
-          results.push({ frameId, url: frame.url, ok: true, value });
+          const read = await this.raceDialog(tab, withTimeout(frame.executeJavaScript(code, false), EVAL_TIMEOUT_MS, "Reading the page"));
+          if (read.dialog) throw this.dialogError(read.dialog);
+          results.push({ frameId, url: frame.url, ok: true, value: read.value });
         } catch (err) {
+          if (err instanceof BridgeError && err.code === "dialog_open") throw err;
           results.push({ frameId, url: frame.url, ok: false, error: err.message });
         }
       }
@@ -674,20 +747,15 @@ class PaneHost {
   async agentScreenshot(id, clip, maxWidth, allowedOrigins) {
     const tab = this.agentTab(id);
     const wc = this.requirePage(tab, allowedOrigins);
+    this.requireNoDialog(tab);
     return this.withAgent(tab, allowedOrigins, async () => {
       let rect = null;
       if (clip) {
-        if (clip.frameId !== null) {
-          throw new BridgeError("unsupported", "A picture of an element inside a frame is not supported yet; take one of the whole page instead.");
-        }
-        rect = await wc.mainFrame.executeJavaScript(
-          `(() => { const el = document.querySelector(${JSON.stringify(clip.selector)}); if (!el) return null;
-            const r = el.getBoundingClientRect(); return { x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height }; })()`,
-          false
-        );
-        if (!rect || rect.width < 1 || rect.height < 1) {
-          throw new BridgeError("element_not_found", "That element is not on the page any more, or has no size. Call browser_snapshot() to get current refs.");
-        }
+        const ctx = input.context(tab.cdp);
+        const box = await input.elementBox(ctx, input.frameFor(wc, clip.frameId), clip.selector);
+        // The clip is in page coordinates: the box is in the viewport, so add how far the page scrolled.
+        const scrolled = await ctx.exec(wc.mainFrame, "({ x: scrollX, y: scrollY })");
+        rect = { ...box, x: box.x + scrolled.x, y: box.y + scrolled.y };
       }
       let image;
       try {
@@ -724,15 +792,25 @@ class PaneHost {
     const tab = this.agentTab(id);
     this.requireAgentInput(tab);
     const wc = this.requirePage(tab, allowedOrigins);
+    this.requireNoDialog(tab);
+    const frame = target ? input.frameFor(wc, target.frameId) : null;
+    // Input in a frame lands on that frame's site, which needs approval like a page on it.
+    if (frame && frame !== wc.mainFrame && !inScope(input.frameUrl(frame), allowedOrigins)) {
+      const origin = originOf(input.frameUrl(frame)) || frame.url;
+      throw new BridgeError("off_scope", `That element is in a frame from ${origin}, which this call was not approved to use.`, { origin });
+    }
     this.deps.onShowRequest();
     const before = this.activeTabId;
     return this.withAgent(
       tab,
       allowedOrigins,
       async () => {
+        const stop = { reason: null };
         tab.dispatching = true;
+        let done;
         try {
-          await withTimeout(input.perform({ wc, cdp: tab.cdp, action, target }), ACT_TIMEOUT_MS, "Acting on the page");
+          const acting = input.perform({ ctx: input.context(tab.cdp, stop), action, frame, selector: target && target.selector });
+          done = await this.raceDialog(tab, withTimeout(acting, ACT_TIMEOUT_MS, "Acting on the page"));
         } catch (err) {
           if (err instanceof BridgeError) throw err;
           throw new BridgeError("internal", `Could not act on the page: ${err.message}`);
@@ -740,13 +818,210 @@ class PaneHost {
           tab.dispatching = false;
           tab.agentEchoUntil = Date.now() + AGENT_ECHO_MS;
         }
-        await this.settle(wc);
+        // The page waits on the box, so the rest of this action must never land after it is answered.
+        if (done.dialog) stop.reason = STOPPED_FOR_DIALOG;
+        else await this.settle(wc);
         const reply = { tabId: tab.state.id, url: wc.getURL(), title: wc.getTitle() };
         if (this.activeTabId !== before) reply.adoptedTabId = this.activeTabId;
+        if (tab.state.dialog) reply.dialog = tab.state.dialog;
         return reply;
       },
       { acting: true }
     );
+  }
+
+  /**
+   * Run the model's JavaScript expression in the page's main world and
+   * return its value as JSON. Only on a page on this computer, and only in a
+   * tab the agent may act in; anything else is refused, never asked about.
+   *
+   * @param {TabId | null} id
+   * @param {string} expression
+   */
+  async agentScript(id, expression) {
+    const tab = this.agentTab(id);
+    this.requireAgentInput(tab);
+    const wc = tab.view && tab.view.webContents;
+    const url = (wc && wc.getURL()) || tab.state.url;
+    if (!wc || url === null) {
+      throw new BridgeError("no_page", "The browser pane shows a new tab page with no web page in it. Open one with browser_open(url).");
+    }
+    if (!isLoopbackUrl(url)) {
+      throw new BridgeError(
+        "unsupported",
+        `browser_eval runs only on the user's own app on this computer (localhost), and this page is on ${originOf(url) || url}. Read it with browser_snapshot instead.`
+      );
+    }
+    this.requireNoDialog(tab);
+    return this.withAgent(
+      tab,
+      [],
+      async () => {
+        const reply = { tabId: tab.state.id, url: wc.getURL() };
+        let ran;
+        try {
+          ran = await this.raceDialog(tab, withTimeout(wc.mainFrame.executeJavaScript(scriptSource(expression), false), SCRIPT_TIMEOUT_MS, "The script"));
+        } catch (err) {
+          return { ...reply, ok: false, error: err.message };
+        }
+        if (ran.dialog) return { ...reply, ok: false, error: STOPPED_FOR_DIALOG, dialog: ran.dialog };
+        if (ran.value.error !== undefined) return { ...reply, ok: false, error: ran.value.error };
+        return { ...reply, ok: true, json: ran.value.text, truncated: ran.value.truncated };
+      },
+      { acting: true }
+    );
+  }
+
+  // ── Page boxes (alert, confirm, prompt, "leave this page?") ───────────
+  //
+  // One box at most per tab, held in tab.state.dialog until someone answers
+  // it. The user answers in the pane; the agent answers with browser_dialog.
+  // A box the agent's own action opened is dismissed when its turn ends, so
+  // the page is never left waiting on nobody.
+
+  /** @param {any} tab */
+  requireNoDialog(tab) {
+    if (tab.state.dialog) throw this.dialogError(tab.state.dialog);
+  }
+
+  dialogError(dialog) {
+    return new BridgeError("dialog_open", `Nothing was done: the page is showing a ${dialog.type} box ("${dialog.message}"). Answer it first.`, { dialog });
+  }
+
+  /** Waits on `work`, or on a box opening in `tab`, whichever comes first. */
+  async raceDialog(tab, work) {
+    let opened;
+    const shown = new Promise((resolve) => {
+      opened = resolve;
+    });
+    tab.dialogWaiters.add(opened);
+    try {
+      const first = await Promise.race([work.then((value) => ({ value, dialog: null })), shown.then((dialog) => ({ value: undefined, dialog }))]);
+      // The page is waiting on the box, so `work` finishes only once it is answered.
+      if (first.dialog) work.catch(() => {});
+      return first;
+    } finally {
+      tab.dialogWaiters.delete(opened);
+    }
+  }
+
+  /**
+   * @param {any} tab
+   * @param {Omit<import("./contract").PageDialog, "openedBy">} dialog
+   * @param {((accept: boolean, text: string) => void) | { leave: (() => Promise<unknown>) | null }} answer
+   */
+  openDialog(tab, dialog, answer) {
+    const openedBy = tab.busy > 0 ? "agent" : "page";
+    tab.state.dialog = { ...dialog, openedBy };
+    tab.dialogAnswer = answer;
+    tab.dialogSession = openedBy === "agent" ? this.activeSessionId : null;
+    for (const notify of tab.dialogWaiters) notify(tab.state.dialog);
+    this.publish();
+  }
+
+  /** Forget the box: Chromium closed it (the page navigated or closed). */
+  dropDialog(tab) {
+    if (!tab.state.dialog) return;
+    tab.state.dialog = null;
+    tab.dialogAnswer = null;
+    tab.dialogSession = null;
+    this.publish();
+  }
+
+  /**
+   * Answer the tab's box. For "leave this page?", accepting repeats the
+   * navigation that was stopped, when the pane started it.
+   *
+   * @returns {{ dialog: import("./contract").PageDialog, leaving: Promise<unknown> | null }}
+   */
+  answerDialog(tab, accept, text) {
+    const dialog = tab.state.dialog;
+    if (!dialog) {
+      throw new BridgeError("not_actionable", "There is no box open on the page in the browser pane. Call browser_snapshot() to see the page.");
+    }
+    const answer = tab.dialogAnswer;
+    this.dropDialog(tab);
+    if (dialog.type !== "beforeunload") {
+      answer(accept, dialog.type === "prompt" && accept ? (text === null ? dialog.defaultText : text) : "");
+      return { dialog, leaving: null };
+    }
+    if (!accept) return { dialog, leaving: null };
+    tab.leaveOnceUntil = Date.now() + LEAVE_ONCE_MS;
+    return { dialog, leaving: answer.leave ? answer.leave() : null };
+  }
+
+  /** The user's answer from the pane: any tab, any box. */
+  userAnswerDialog(id, accept, text) {
+    const { leaving } = this.answerDialog(this.requireTab(id), accept, text);
+    if (leaving) leaving.catch((err) => console.warn(`[browser-pane] Leaving the page did not finish: ${err.message}`));
+  }
+
+  /** Python's site gate reads the box before an answer, to decide whether to ask the user. */
+  agentDialog(id) {
+    const tab = this.agentTab(id);
+    return { tabId: tab.state.id, dialog: tab.state.dialog };
+  }
+
+  /**
+   * The agent answers the box. Dismissing is always allowed; accepting a
+   * confirm, prompt or "leave this page?" needs the page's site approved.
+   *
+   * @param {TabId | null} id
+   * @param {boolean} accept
+   * @param {string | null} text
+   * @param {string[]} allowedOrigins
+   */
+  async agentAnswerDialog(id, accept, text, allowedOrigins) {
+    const tab = this.agentTab(id);
+    this.requireAgentInput(tab);
+    const pending = tab.state.dialog;
+    if (pending && accept && pending.type !== "alert" && !inScope(pending.url, allowedOrigins)) {
+      const origin = originOf(pending.url) || pending.url;
+      throw new BridgeError("off_scope", `The box is from ${origin}, which this call was not approved to answer.`, { origin });
+    }
+    return this.withAgent(
+      tab,
+      allowedOrigins,
+      async () => {
+        const { dialog, leaving } = this.answerDialog(tab, accept, text);
+        const wc = tab.view.webContents;
+        if (leaving) {
+          const left = await this.raceDialog(tab, withTimeout(leaving, LOAD_TIMEOUT_MS, "Leaving the page")).catch((err) => {
+            throw new BridgeError("navigation_failed", err.message, { url: wc.getURL() });
+          });
+          if (!left.dialog) await this.settle(wc);
+        } else {
+          // A page often opens a second box right after the first.
+          await this.settle(wc);
+        }
+        return { tabId: tab.state.id, answered: dialog, url: wc.getURL(), title: wc.getTitle(), dialog: tab.state.dialog };
+      },
+      { acting: true }
+    );
+  }
+
+  /** Dismiss the boxes this chat's agent opened and left, in tabs still shared with it. */
+  releaseDialogs(sessionId) {
+    let dismissed = 0;
+    for (const tab of this.tabs.values()) {
+      const d = tab.state.dialog;
+      if (!d || d.openedBy !== "agent" || tab.dialogSession !== sessionId || tab.state.control !== "shared") continue;
+      this.answerDialog(tab, false, null);
+      dismissed += 1;
+    }
+    return { dismissed };
+  }
+
+  /** Called by Electron when a page's beforeunload asks to stay; it must decide now. */
+  onPreventUnload(tab, event) {
+    const leave = tab.leaving;
+    tab.leaving = null;
+    if (Date.now() < tab.leaveOnceUntil) {
+      tab.leaveOnceUntil = 0;
+      event.preventDefault();
+      return;
+    }
+    this.openDialog(tab, { type: "beforeunload", message: LEAVE_MESSAGE, defaultText: "", url: tab.view.webContents.getURL() }, { leave });
   }
 
   /**
@@ -818,6 +1093,7 @@ class PaneHost {
         agentActing: false,
         control: "shared",
         viewport: null,
+        dialog: null,
       },
       cdp: null,
       busy: 0,
@@ -827,6 +1103,11 @@ class PaneHost {
       userInputAt: 0,
       dispatching: false,
       agentEchoUntil: 0,
+      dialogAnswer: null,
+      dialogSession: null,
+      dialogWaiters: new Set(),
+      leaving: null,
+      leaveOnceUntil: 0,
     });
     return id;
   }
@@ -916,6 +1197,20 @@ class PaneHost {
       },
     });
 
+    wc.removeAllListeners(RUN_DIALOG);
+    wc.on(RUN_DIALOG, (info, callback) => {
+      if (this.disposed || !this.tabs.has(s.id)) return callback(false, "");
+      // Chromium shows one box per page at a time; a second can only come from a frame racing the first.
+      if (s.dialog) return callback(false, "");
+      const url = (info.frame && info.frame.url) || wc.getURL();
+      this.openDialog(tab, { type: info.dialogType, message: String(info.messageText || ""), defaultText: String(info.defaultPromptText || ""), url }, callback);
+    });
+    wc.on(CANCEL_DIALOGS, () => {
+      if (s.dialog && s.dialog.type !== "beforeunload") this.dropDialog(tab);
+    });
+    wc.on("will-prevent-unload", (event) => {
+      if (!this.disposed && this.tabs.has(s.id)) this.onPreventUnload(tab, event);
+    });
     wc.on("did-start-loading", update(() => { s.loading = true; }));
     wc.on("did-stop-loading", update(() => {
       s.loading = false;
@@ -923,6 +1218,9 @@ class PaneHost {
     }));
     wc.on("did-start-navigation", update((details) => {
       if (!details.isMainFrame || details.isSameDocument) return;
+      // Started, so beforeunload already let it go: nothing left to repeat, and no box to keep.
+      tab.leaving = null;
+      if (s.dialog && s.dialog.type === "beforeunload") this.dropDialog(tab);
       if (this.picker && this.picker.tabId === s.id) this.stopPicking();
       s.notice = null;
       tab.cdp.onNavigationStarted();
@@ -947,6 +1245,7 @@ class PaneHost {
     }));
     wc.on("render-process-gone", update((_event, details) => {
       s.loading = false;
+      this.dropDialog(tab);
       s.notice = {
         kind: "load-failed",
         url: s.url || "",
@@ -1001,11 +1300,15 @@ class PaneHost {
 module.exports = {
   ACT_LINGER_MS,
   BridgeError,
+  CANCEL_DIALOGS,
+  LEAVE_MESSAGE,
+  RUN_DIALOG,
   DEVTOOLS_MODE,
   PANE_PARTITION,
   PaneHost,
   USER_PAUSE_MS,
   inScope,
+  isLoopbackUrl,
   isPickShortcut,
   isToggleShortcut,
   toViewBounds,

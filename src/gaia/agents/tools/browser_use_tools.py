@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.tool_grants import DEV_SERVER_TOOL, SITE_ARG
-from gaia.browser.errors import BrowserError, PaneSignInByHand
+from gaia.browser.errors import BrowserError, PageDialogOpen, PaneSignInByHand
 from gaia.browser.snapshot import is_pick_ref
 from gaia.logger import get_logger
 
@@ -108,8 +108,19 @@ _PANE_SITE_TOOLS = frozenset(
         "browser_click",
         "browser_type",
         "browser_press",
+        "browser_dialog",
     }
 )
+
+#: Pane tools that act on one element, which may sit in a frame from another site.
+_PANE_ELEMENT_TOOLS = frozenset({"browser_click", "browser_type", "browser_press"})
+
+#: Shown when the gate could not read the page's box; it then asks, as for an unknown click.
+_UNREAD_DIALOG = {
+    "type": "confirm",
+    "message": "a box on the page (it could not be read)",
+    "url": "",
+}
 
 #: What browser_batch may run, and the ones that change the page without reading it back.
 _BATCH_STEPS = (
@@ -144,6 +155,8 @@ class BrowserUseToolsMixin:
 
     #: Consulted by ``Agent._tool_requires_confirmation``.
     CONFIRMATION_HOOKS = ("browser_call_needs_confirmation",)
+    #: Run by ``Agent.process_query`` when a turn ends.
+    TURN_END_HOOKS = ("browser_end_turn",)
 
     _browser_driver = None  # PlaywrightDriver, lazily created
     _browser_headless: Optional[bool] = None
@@ -155,10 +168,12 @@ class BrowserUseToolsMixin:
     #: The pane serving this chat, or None for headless; read once (see _pane).
     _browser_route = None
     _browser_routed: bool = False
-    #: (tool, origin) the site gate just asked about; the tool body takes it.
-    _site_pending: Optional[Tuple[str, Optional[str]]] = None
-    #: (tool, id(args), origin) worked out for the prompt, reused by the gate.
-    _site_memo: Optional[Tuple[str, int, Optional[str]]] = None
+    #: (tool, origins) the site gate just asked about; the tool body takes them.
+    _site_pending: Optional[Tuple[str, Tuple[str, ...]]] = None
+    #: (tool, id(args), origins) worked out for the prompt, reused by the gate.
+    _site_memo: Optional[Tuple[str, int, Tuple[str, ...]]] = None
+    #: (id(args), box) the gate read for browser_dialog, so the prompt and the gate agree.
+    _dialog_memo: Optional[Tuple[int, Optional[dict]]] = None
     #: (id(args), spec, already running) of the dev server the prompt showed.
     _dev_pending: Optional[Tuple[int, "DevServerSpec", bool]] = None
 
@@ -253,21 +268,23 @@ class BrowserUseToolsMixin:
             yield driver
 
     def _take_site_approval(self, tool_name: str) -> List[str]:
-        """The origin this call's gate asked about, once. Only a running tool body takes it."""
+        """The origins this call's gate asked about, once. Only a running tool body takes them."""
         pending, self._site_pending = self._site_pending, None
-        if pending and pending[0] == tool_name and pending[1]:
-            return [pending[1]]
+        if pending and pending[0] == tool_name:
+            return list(pending[1])
         return []
 
     def _pane_site(
         self, pane, tool_name: str, tool_args: Optional[dict]
-    ) -> Optional[str]:
-        """The non-loopback origin this pane call would read, or None.
+    ) -> Tuple[str, ...]:
+        """The non-loopback origins this pane call would use, the one it acts on first.
 
-        ``browser_open`` reads the site it is asked to open; every other tool
-        reads whatever page the pane shows now, which the user may have
-        changed. A lookup failure returns None: no approval is recorded, so
-        main then refuses any page off loopback for this call.
+        ``browser_open`` reads the site it is asked to open; ``browser_dialog``
+        needs the box's site only to accept a confirm, prompt or "leave this
+        page?"; every other tool reads whatever page the pane shows now, which
+        the user may have changed, and a click or typing in a frame also acts
+        on that frame's site. A lookup failure gives none: no approval is
+        recorded, so main then refuses anything off loopback for this call.
         """
         from gaia.browser._pane_bridge import is_loopback_origin, origin_of
 
@@ -277,16 +294,37 @@ class BrowserUseToolsMixin:
         if memo is not None and memo[:2] == (tool_name, id(tool_args)):
             return memo[2]
         if tool_name == "browser_open":
-            origin = origin_of(str(args.get("url") or ""))
+            origins = [origin_of(str(args.get("url") or ""))]
+        elif tool_name == "browser_dialog":
+            box = self._gate_dialog(pane, tool_args)
+            accepts = _truthy(args.get("accept", True))
+            needs_site = box is not None and accepts and box.get("type") != "alert"
+            origins = [origin_of(str(box.get("url") or ""))] if needs_site else []
         else:
             try:
-                origin = pane.current_origin()
+                origins = [pane.current_origin()]
             except BrowserError as e:
                 logger.warning("Could not read the pane's page origin: %s", e)
-                return None
-        if not origin or is_loopback_origin(origin):
-            return None
-        return origin
+                return ()
+            ref = str(args.get("ref") or "")
+            if tool_name in _PANE_ELEMENT_TOOLS and ref:
+                origins.insert(0, pane.frame_origin(ref))
+        return tuple(
+            dict.fromkeys(o for o in origins if o and not is_loopback_origin(o))
+        )
+
+    def _gate_dialog(self, pane, tool_args) -> Optional[dict]:
+        """The box browser_dialog would answer, read once per call; unreadable reads as an unknown confirm."""
+        memo = self._dialog_memo
+        if memo is not None and memo[0] == id(tool_args):
+            return memo[1]
+        try:
+            box = pane.dialog()
+        except BrowserError as e:
+            logger.warning("Could not read the box on the pane's page: %s", e)
+            box = _UNREAD_DIALOG
+        self._dialog_memo = (id(tool_args), box)
+        return box
 
     def confirmation_args_for_call(self, tool_name: str, tool_args):
         """The prompt's arguments, plus the site a pane call would read (``SITE_ARG``).
@@ -306,16 +344,23 @@ class BrowserUseToolsMixin:
             return shown  # the tool body raises this before reading anything
         if pane is None:
             return shown
-        origin = self._pane_site(pane, tool_name, tool_args)
-        self._site_memo = (tool_name, id(tool_args), origin)
-        if origin:
-            shown = {**shown, SITE_ARG: origin}
-        label = self._irreversible_click_label(tool_name, tool_args)
+        # A box read for an earlier call must never answer for this one.
+        self._dialog_memo = None
+        origins = self._pane_site(pane, tool_name, tool_args)
+        self._site_memo = (tool_name, id(tool_args), origins)
+        if origins:
+            shown = {**shown, SITE_ARG: origins[0]}
+        label = self._irreversible_label(tool_name, tool_args)
         if label:
+            what = (
+                "presses OK on the page's box"
+                if tool_name == "browser_dialog"
+                else "clicks"
+            )
             # A one-time prompt: a site grant must never cover a click like this.
             shown = {
                 **shown,
-                RISK_NOTE_ARG: f'This clicks "{label}" on the page, which may not be undoable.',
+                RISK_NOTE_ARG: f'This {what} "{label}", which may not be undoable.',
             }
         return shown
 
@@ -455,10 +500,22 @@ class BrowserUseToolsMixin:
         """Accessible name of ``ref`` from the last snapshot, or ""."""
         return (getattr(self, "_browser_last_elements", None) or {}).get(ref, "")
 
-    def _irreversible_click_label(
-        self, tool_name: str, tool_args: Optional[dict]
-    ) -> str:
-        """The label of the control a click would press, when that label names an irreversible action."""
+    def _irreversible_label(self, tool_name: str, tool_args: Optional[dict]) -> str:
+        """What a click or a box's OK would press, when its words name an irreversible action."""
+        if tool_name == "browser_dialog":
+            args = tool_args if isinstance(tool_args, dict) else {}
+            if not _truthy(args.get("accept", True)):
+                return ""
+            pane = self._pane()
+            box = self._gate_dialog(pane, tool_args) if pane is not None else None
+            if box is None or box.get("type") == "alert":
+                return ""
+            message = str(box.get("message") or "")
+            return (
+                message
+                if box is _UNREAD_DIALOG or self._looks_irreversible(message)
+                else ""
+            )
         if tool_name != "browser_click":
             return ""
         ref = str((tool_args or {}).get("ref") or "")
@@ -585,11 +642,11 @@ class BrowserUseToolsMixin:
         """
         if tool_name not in _PANE_SITE_TOOLS:
             return False
-        origin = self._pane_site(pane, tool_name, tool_args)
-        self._site_pending = (tool_name, origin)
-        return origin is not None or bool(
-            self._irreversible_click_label(tool_name, tool_args)
-        )
+        origins = self._pane_site(pane, tool_name, tool_args)
+        self._site_pending = (tool_name, origins)
+        risky = bool(self._irreversible_label(tool_name, tool_args))
+        self._dialog_memo = None
+        return bool(origins) or risky
 
     def _step_would_ask(self, tool_name: str, tool_args: dict) -> bool:
         """Whether running this call on its own would put a prompt in front of the user.
@@ -700,6 +757,24 @@ class BrowserUseToolsMixin:
             return None
         self._dev_pending = (id(tool_args), spec, running)
         return spec.prompt_args()
+
+    def browser_end_turn(self) -> None:
+        """Dismiss the boxes this turn's own pane steps opened and never answered.
+
+        A page waiting on a box is frozen, for the user too, so the agent never
+        leaves one behind. A box the page opened by itself, or one in a tab the
+        user holds, is left for the user.
+        """
+        from gaia.browser.pane_driver import PaneDriver
+
+        driver = self._browser_driver
+        if not isinstance(driver, PaneDriver):
+            return
+        dismissed = driver.release_dialogs()
+        if dismissed:
+            logger.info(
+                "Dismissed %d box(es) left open on browser pane pages", dismissed
+            )
 
     def cleanup_browser_use(self) -> None:
         """Close the browser. Safe to call when none was ever opened."""
@@ -868,7 +943,12 @@ class BrowserUseToolsMixin:
 
         def _click(ref: str) -> str:
             with mixin._reading("browser_click") as driver:
-                snap = driver.click(ref)
+                try:
+                    snap = driver.click(ref)
+                except PageDialogOpen as e:
+                    if not e.done:
+                        raise
+                    return f"{driver.where}\nClicked {ref}. {e}"
             _seen(snap)
             return f"{driver.where}\nClicked {ref}.\n\n" + render(snap)
 
@@ -884,7 +964,12 @@ class BrowserUseToolsMixin:
 
         def _type(ref: str, text: str, press_enter: bool = False) -> str:
             with mixin._reading("browser_type") as driver:
-                snap = driver.type_text(ref, text, press_enter=press_enter)
+                try:
+                    snap = driver.type_text(ref, text, press_enter=press_enter)
+                except PageDialogOpen as e:
+                    if not e.done:
+                        raise
+                    return f"{driver.where}\nTyped into {ref}. {e}"
             _seen(snap)
             suffix = " and pressed Enter" if press_enter else ""
             return f"{driver.where}\nTyped into {ref}{suffix}.\n\n" + render(snap)
@@ -1098,10 +1183,15 @@ class BrowserUseToolsMixin:
             return f"{driver.where}\n" + _render_logs(kind, res, errors_only, contains)
 
         def _press(key: str, ref: str = "") -> str:
-            with mixin._reading("browser_press") as driver:
-                snap = driver.press(key, ref or None)
-            seen(snap)
             on = f" on {ref}" if ref else ""
+            with mixin._reading("browser_press") as driver:
+                try:
+                    snap = driver.press(key, ref or None)
+                except PageDialogOpen as e:
+                    if not e.done:
+                        raise
+                    return f"{driver.where}\nPressed {key}{on}. {e}"
+            seen(snap)
             return f"{driver.where}\nPressed {key}{on}.\n\n" + render(snap)
 
         @tool(atomic=True, registry=registry)
@@ -1174,17 +1264,76 @@ class BrowserUseToolsMixin:
 
             return answer("browser_tabs", _list)
 
+        def _dialog(accept: bool, text: str) -> str:
+            with mixin._reading("browser_dialog") as driver:
+                res = driver.answer_dialog(accept, text or None)
+                box = res["answered"]
+                lines = [driver.where, _answered_line(box, accept, text)]
+                if res.get("dialog"):
+                    from gaia.browser.errors import describe_dialog
+
+                    lines.append(describe_dialog(res["dialog"]))
+                    return "\n".join(lines)
+                snap = driver.snapshot()
+            seen(snap)
+            return "\n".join(lines) + "\n\n" + render(snap)
+
+        @tool(atomic=True, registry=registry)
+        def browser_dialog(accept: bool = True, text: str = "") -> str:
+            """Answer the box a page in the browser pane is showing (alert, confirm, prompt, or "leave this page?").
+
+            While a box is open the page is frozen and other browser tools say
+            so. Answer it, then go on.
+
+            Args:
+                accept: True presses OK (or Leave); False presses Cancel (or Stay)
+                text: For a prompt box only: the text to answer with
+            """
+            return answer("browser_dialog", _dialog, _truthy(accept), str(text or ""))
+
+        def _eval(expression: str) -> str:
+            driver = mixin._ensure_driver()
+            res = driver.run_script(expression)
+            if not res.ok:
+                return f"{driver.where}\nThe script failed: {res.text}"
+            cut = " (cut short)" if res.truncated else ""
+            return f"{driver.where}\nValue on {res.url}{cut}:\n{res.text}"
+
+        @tool(atomic=True, registry=registry)
+        def browser_eval(expression: str) -> str:
+            """Run a short JavaScript expression in the browser pane's page and get its value as JSON.
+
+            Only for the user's own app on localhost. Use it to check what the
+            page does not show: localStorage, app state, a computed style. To
+            read the page's text or buttons, use browser_snapshot instead.
+
+            Args:
+                expression: One JavaScript expression, like
+                    localStorage.getItem('cart') or document.title
+            """
+            if not (expression or "").strip():
+                return "Error: give a JavaScript expression to run."
+            return answer("browser_eval", _eval, expression)
+
         def _act_step(driver, name: str, args: Dict[str, Any]) -> str:
             ref = str(args.get("ref") or "")
             if name == "browser_click":
                 driver.click(ref, read=False)
+            elif name == "browser_type":
+                enter = bool(args.get("press_enter"))
+                driver.type_text(ref, str(args["text"]), press_enter=enter, read=False)
+            else:
+                driver.press(str(args["key"]), ref or None, read=False)
+            return _act_line(name, args)
+
+        def _act_line(name: str, args: Dict[str, Any]) -> str:
+            ref = str(args.get("ref") or "")
+            if name == "browser_click":
                 label = mixin._element_label(ref)
                 return f'Clicked {ref} ("{label}").' if label else f"Clicked {ref}."
             if name == "browser_type":
                 enter = bool(args.get("press_enter"))
-                driver.type_text(ref, str(args["text"]), press_enter=enter, read=False)
                 return f"Typed into {ref}" + (" and pressed Enter." if enter else ".")
-            driver.press(str(args["key"]), ref or None, read=False)
             return f"Pressed {args['key']}" + (f" on {ref}." if ref else ".")
 
         def _read_step(driver, name: str, args: Dict[str, Any]):
@@ -1215,7 +1364,9 @@ class BrowserUseToolsMixin:
             browser_open, browser_click, browser_type, browser_press,
             browser_back, browser_snapshot and browser_screenshot. The batch
             stops at the first step that fails, and before any step that needs
-            the user's approval: call that step on its own and GAIA asks.
+            the user's approval: call that step on its own and GAIA asks. It
+            also stops at a step that opens a box on the page (answer it with
+            browser_dialog).
 
             Args:
                 steps: Steps in order, each a tool name and its arguments, e.g.
@@ -1251,6 +1402,15 @@ class BrowserUseToolsMixin:
                             unread = True
                             continue
                         line, read = _read_step(driver, name, args)
+                except PageDialogOpen as e:
+                    # The page waits on the box, so nothing after it can run or be read.
+                    if e.done:
+                        done.append(f"{n}. {_act_line(name, args)}")
+                        stop = f"Step {n} ({name}) opened a box on the page, so the batch stopped. {e}"
+                    else:
+                        stop = f"Stopped at step {n} ({name}). {e}"
+                    unread = False
+                    break
                 except Exception as e:  # noqa: BLE001 — reported in the result
                     logger.error("browser_batch step %d (%s) failed: %s", n, name, e)
                     stop = f"Step {n} ({name}) failed, so the batch stopped: {e}"
@@ -1401,6 +1561,27 @@ class BrowserUseToolsMixin:
             except Exception as e:  # noqa: BLE001 — returned to the model
                 logger.error("dev_server(%s, %s) failed: %s", action, name, e)
                 return fail(e)
+
+
+def _answered_line(box: Dict[str, Any], accept: bool, text: str) -> str:
+    """What browser_dialog did, for the model."""
+    kind = box.get("type")
+    message = str(box.get("message") or "").strip()
+    if kind == "beforeunload":
+        return "Left the page." if accept else "Stayed on the page."
+    if kind == "alert":
+        return f'Closed the notice "{message}".'
+    if kind == "prompt" and accept:
+        answer = text or box.get("defaultText") or ""
+        return f'Answered "{answer}" to "{message}".'
+    return f'Pressed {"OK" if accept else "Cancel"} on "{message}".'
+
+
+def _truthy(value: Any) -> bool:
+    """A model's yes: True, or text like "true" or "yes"."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1", "ok")
+    return bool(value)
 
 
 def _same_server(state: Dict[str, Any], spec) -> bool:
