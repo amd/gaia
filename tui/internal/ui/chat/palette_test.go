@@ -371,6 +371,12 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 	if !known["/model"] {
 		t.Error("paletteCommands does not offer /model")
 	}
+	// /update takes a version argument and is dispatched the same way
+	// (isUpdateCommand, updatecmd.go).
+	seen["/update"] = true
+	if !known["/update"] {
+		t.Error("paletteCommands does not offer /update")
+	}
 
 	// The other direction: an entry nobody dispatches is a stale row that
 	// will mislead exactly the discoverability this feature exists for.
