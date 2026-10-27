@@ -309,17 +309,25 @@ The app opens straight to an empty chat: a message box, the model it will use,
 and where that model runs.
 
 - **Sidebar:** New chat, search, **Memory**, **Scheduled tasks**, **Documents**,
-  then your chats. **Needs you** at the top holds chats waiting on a permission
-  or a question; **Pinned** comes next, then Today, Yesterday, Previous 7 days
+  then your chats. Memory opens as a page; Scheduled tasks and Documents open as
+  dialogs over your chat. Opening one of the three closes the other two.
+  **Needs you** at the top holds chats waiting on a permission or a question;
+  **Pinned** comes next, then Today, Yesterday, Previous 7 days
   and older. A dot on each chat says whether it is running, waiting for you, done
   or failed, and a chat with a reply you haven't read shows in bold. Eval and
   scheduled runs are hidden behind **Show background runs** at the end of
-  the list. At the bottom: where answers are generated right now (for example
-  `Local · Gemma-4-E4B-it-GGUF` or `Fireworks AI · glm-5p3-flash`),
+  the list. At the bottom: where answers are generated right now (the place,
+  such as Local or Fireworks AI, above the model's name; hover for the full text),
   notifications, mobile access and Settings. Collapse it with `Ctrl+B` (`⌘B` on macOS).
 - **Message box:** **+** attaches files (or drag them in), the shield picks the
   permission mode, the model chip picks the model, and Send turns into Stop
   while GAIA is working.
+- **Private chat:** the eye button in a chat's header. An open eye means the
+  chat is remembered as usual, and a click makes it private. While the chat is
+  private the button is filled and shows a crossed-out eye, the same eye that
+  marks the chat in the sidebar, and a click turns private off. A private chat
+  isn't saved to memory. To keep a new chat's first message out too, turn on
+  **Private** next to the message box before you send it.
 - **Tool steps** show as one quiet line ("3 steps · 1 tool") you can open for
   the detail. "Steps" is the agent's own count, the same figure the TUI and
   evals report.
@@ -659,7 +667,7 @@ largest window that fits; **Automatic** is GAIA's choice, and a size you pick
 is kept for that model.
 
 The model chip in the composer opens the same list. While GAIA is answering,
-a model you pick there applies to your next message. The **Local · model** pill
+a model you pick there applies to your next message. The model pill
 at the bottom of the sidebar shows whether the model is loaded, warming up or
 stopped, where it runs, memory in use and free, and its context window, with a
 **Restart** button. On a Lemonade you run yourself, GAIA asks before Restart

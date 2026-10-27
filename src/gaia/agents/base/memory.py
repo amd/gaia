@@ -600,6 +600,24 @@ _MEMORY_TOOLS = frozenset(
 #: Guards the one-time creation of each instance's extraction bookkeeping.
 _EXTRACTION_STATE_LOCK = threading.Lock()
 
+
+class _UserTurns:
+    """User turns running in this process, across every agent.
+
+    Each chat session has its own agent, and all of them share the one local
+    model, so a turn in any session must hold back every session's extraction —
+    not only its own, or a new chat waits behind the previous chat's. Agents on
+    a cloud provider are held back too; only the timing changes for them.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.in_flight = 0
+        self.last_end = float("-inf")
+
+
+_USER_TURNS = _UserTurns()
+
 #: Guards each instance's per-session write-failure counts.
 _WRITE_FAILURE_LOCK = threading.Lock()
 
@@ -660,6 +678,12 @@ _EXTRACTION_AGENTS: "weakref.WeakValueDictionary[int, Any]" = (
 )
 
 
+def _extraction_agents() -> List[Any]:
+    """The live agents that have started an extraction worker."""
+    with _EXTRACTION_STATE_LOCK:
+        return list(_EXTRACTION_AGENTS.values())
+
+
 @atexit.register
 def _drain_extraction_at_exit() -> None:
     """Flush jobs still held for the idle window before the interpreter exits.
@@ -667,10 +691,8 @@ def _drain_extraction_at_exit() -> None:
     The worker is a daemon thread, so a long-lived host (Agent UI, sidecar) that
     shuts down without draining would otherwise drop them without a word.
     """
-    with _EXTRACTION_STATE_LOCK:
-        agents = list(_EXTRACTION_AGENTS.values())
     deadline = time.monotonic() + EXTRACTION_EXIT_WAIT_S
-    for agent in agents:
+    for agent in _extraction_agents():
         drain_memory_extraction(agent, max(0.0, deadline - time.monotonic()))
 
 
@@ -3867,8 +3889,109 @@ class MemoryMixin(ProceduralMemoryMixin):
             # generic dash/underscore-joined high-entropy-looking token, e.g.
             # HALIBUT-4417-ZULU: 2+ alnum groups with at least one numeric group.
             r"\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b",
+            # a PIN, passcode or card security code next to its digits, also
+            # worded as a memory model writes it: "PIN for Chase is 4821".
+            # Whitespace is bounded so the optional parts can't trade it back
+            # and forth on a long run of spaces.
+            r"\b(?:pin|passcode|pass code|cvv2?|cvc|security code)(?:'s)?\b"
+            r"(?:\s{1,3}(?:number|code)\b)?"
+            r"(?:\s{1,3}(?:for|on|at|of)(?:\s{1,3}\w+){1,3}?)?"
+            r"(?:\s{0,3}(?:is|was|:|=|to|[-\u2013\u2014]))?\s{0,3}\d{3,8}\b",
+            r"\b\d{3}-\d{2}-\d{4}\b",  # US social security number
+            r"\b(?:ssn|social security(?: number)?)\b(?:\s{0,3}(?:is|was|:|=))?"
+            r"\s{0,3}\d{3}[ -]?\d{2}[ -]?\d{4}\b",
         )
     )
+
+    #: A run of 13+ digits, optionally grouped by spaces, dashes or dots. A card
+    #: number is a 13-19-digit stretch of it that has a card network's prefix
+    #: and length and passes the Luhn check, so a tracking number, a timestamp
+    #: or a 15-digit IMEI is not one.
+    _CARD_NUMBER: ClassVar[re.Pattern] = re.compile(
+        r"(?<!\d)\d(?:[\s.\u2010-\u2015-]{0,2}\d){12,}(?!\d)"
+    )
+    #: Visa, Mastercard, Amex, Discover, JCB, Diners Club, UnionPay, by length.
+    _CARD_PREFIX: ClassVar[re.Pattern] = re.compile(
+        r"4\d{12}(?:\d{3}){0,2}|(?:5[1-5]|2[2-7])\d{14}|3[47]\d{13}"
+        r"|6011\d{12,15}|64[4-9]\d{13,16}|(?:65|35|62)\d{14,17}"
+        r"|(?:30[0-5]|36|38)\d{11,16}"
+    )
+
+    #: How a card number is written in groups: unbroken, 4-4-4-4(-3), 4-4-5 for
+    #: a 13-digit Visa, Amex and Diners Club 4-6-5 and 4-6-4, UnionPay 6-13.
+    _CARD_GROUPINGS: ClassVar[frozenset] = frozenset(
+        {(k,) for k in range(13, 20)}
+        | {(4, 4, 4, 4), (4, 4, 4, 4, 3), (4, 4, 5), (4, 6, 5), (4, 6, 4), (6, 13)}
+    )
+    _CARD_GROUPING_PREFIXES: ClassVar[frozenset] = frozenset(
+        g[:k] for g in _CARD_GROUPINGS for k in range(1, len(g) + 1)
+    )
+
+    @classmethod
+    def _card_spans(cls, text: str) -> List[tuple]:
+        spans = []
+        for m in cls._CARD_NUMBER.finditer(text):
+            run = m.group()
+            pos = [i for i, c in enumerate(run) if c.isdigit()]
+            # Full-width and other script digits are the same card number.
+            values = [int(run[i]) for i in pos]
+            digits = "".join(map(str, values))
+            n = len(digits)
+            # Luhn sums by index parity, plain and doubled, so any window's
+            # checksum is a few subtractions rather than a pass over its digits.
+            plain = [[0] * (n + 1), [0] * (n + 1)]
+            doubled = [[0] * (n + 1), [0] * (n + 1)]
+            for k, d in enumerate(values):
+                for parity in (0, 1):
+                    on = k % 2 == parity
+                    plain[parity][k + 1] = plain[parity][k] + (d if on else 0)
+                    doubled[parity][k + 1] = doubled[parity][k] + (
+                        (d * 2 - 9 if d > 4 else d * 2) if on else 0
+                    )
+            # A card inside a longer run starts and ends at a separator and is
+            # grouped like one, so "4111 1111 1111 1111 12/29" is found but an
+            # IMEI or two phone numbers side by side are not read as a card.
+            edges = [0] + [k for k in range(1, n) if pos[k] != pos[k - 1] + 1] + [n]
+            resume = 0
+            for i, start in enumerate(edges[:-1]):
+                if start < resume:
+                    continue
+                ends = []
+                groups: tuple = ()
+                for j in range(i + 1, len(edges)):
+                    groups += (edges[j] - edges[j - 1],)
+                    if groups not in cls._CARD_GROUPING_PREFIXES:
+                        break
+                    if groups in cls._CARD_GROUPINGS:
+                        ends.append(edges[j])
+                for end in reversed(ends):
+                    last = (end - 1) % 2
+                    checksum = (
+                        plain[last][end]
+                        - plain[last][start]
+                        + doubled[1 - last][end]
+                        - doubled[1 - last][start]
+                    )
+                    if checksum % 10 == 0 and cls._CARD_PREFIX.fullmatch(
+                        digits[start:end]
+                    ):
+                        spans.append(
+                            (m.start() + pos[start], m.start() + pos[end - 1] + 1)
+                        )
+                        resume = end
+                        break
+        return spans
+
+    @classmethod
+    def _mask_credentials(cls, text: str) -> str:
+        """*text* with every credential-shaped span replaced, for the conversation log."""
+        if not text:
+            return text
+        for start, end in reversed(cls._card_spans(text)):
+            text = text[:start] + "[secret removed]" + text[end:]
+        for pattern in cls._CREDENTIAL_PATTERNS:
+            text = pattern.sub("[secret removed]", text)
+        return text
 
     @classmethod
     def _looks_like_credential(cls, text: str) -> bool:
@@ -3882,7 +4005,9 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         if not text:
             return False
-        return any(p.search(text) for p in cls._CREDENTIAL_PATTERNS)
+        return any(p.search(text) for p in cls._CREDENTIAL_PATTERNS) or bool(
+            cls._card_spans(text)
+        )
 
     #: Argument keys naming what a call acted on, in priority order. A shell
     #: command is keyed by its binary, so ``pytest -q`` working again retires
@@ -4349,13 +4474,14 @@ class MemoryMixin(ProceduralMemoryMixin):
                     MAX_EXTRACTION_TURN_LENGTH,
                 )
             else:
+                # A secret refused as a memory must not sit in the searchable log.
                 self._memory_store.store_turn(
-                    session_id, "user", clean_input, context=ctx
+                    session_id, "user", self._mask_credentials(clean_input), context=ctx
                 )
                 self._memory_store.store_turn(
                     session_id,
                     "assistant",
-                    response,
+                    self._mask_credentials(response),
                     context=ctx,
                     preserve_full=preserve_full,
                 )
@@ -4410,8 +4536,6 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._extraction_thread: Optional[threading.Thread] = None
             self._extraction_queue: Deque[_ExtractionJob] = deque()
             self._extraction_wake = threading.Condition(self._extraction_lock)
-            self._turns_in_flight = 0
-            self._last_turn_end = float("-inf")
             self._extraction_flush = False
             self._extraction_running = False
             self._extraction_cancel = threading.Event()
@@ -4426,25 +4550,30 @@ class MemoryMixin(ProceduralMemoryMixin):
             return self._extraction_cancel
 
     def _note_user_turn_started(self) -> None:
-        """Hold back queued extraction, and stop a running one, while a user turn runs.
+        """Hold back queued extraction, and stop a running one, in every agent.
 
         The local backend serves one request at a time, so a running
-        extraction would make the user's first model call wait behind it. A
-        flush is left alone: its caller is exiting and wants the memories saved.
+        extraction would make the user's first model call wait behind it,
+        whichever chat it belongs to. A flush is left alone: its caller is
+        exiting and wants the memories saved.
         """
         self._ensure_extraction_state()
-        with self._extraction_lock:
-            self._turns_in_flight += 1
-            if self._extraction_running and not self._extraction_flush:
-                self._extraction_cancel.set()
+        with _USER_TURNS.lock:
+            _USER_TURNS.in_flight += 1
+        for agent in _extraction_agents():
+            with agent._extraction_lock:
+                if agent._extraction_running and not agent._extraction_flush:
+                    agent._extraction_cancel.set()
 
     def _note_user_turn_finished(self) -> None:
-        """Start the idle clock that queued extraction waits out."""
+        """Start the idle clock that every agent's queued extraction waits out."""
         self._ensure_extraction_state()
-        with self._extraction_lock:
-            self._turns_in_flight = max(0, self._turns_in_flight - 1)
-            self._last_turn_end = time.monotonic()
-            self._extraction_wake.notify_all()
+        with _USER_TURNS.lock:
+            _USER_TURNS.in_flight = max(0, _USER_TURNS.in_flight - 1)
+            _USER_TURNS.last_end = time.monotonic()
+        for agent in _extraction_agents():
+            with agent._extraction_lock:
+                agent._extraction_wake.notify_all()
 
     def _wait_for_extraction_turn(self) -> None:
         """Block (lock held) until no user turn ran for ``EXTRACTION_IDLE_S``.
@@ -4458,10 +4587,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             not self._extraction_flush
             and len(self._extraction_queue) < EXTRACTION_QUEUE_MAX
         ):
-            if self._turns_in_flight > 0:
+            with _USER_TURNS.lock:
+                in_flight, last_end = _USER_TURNS.in_flight, _USER_TURNS.last_end
+            if in_flight > 0:
                 remaining = None
             else:
-                remaining = EXTRACTION_IDLE_S - (time.monotonic() - self._last_turn_end)
+                remaining = EXTRACTION_IDLE_S - (time.monotonic() - last_end)
                 if remaining <= 0:
                     break
             if not deferred:
