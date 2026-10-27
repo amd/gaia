@@ -135,6 +135,10 @@ failure anywhere: it is a 404 on a user's first run.
 | `linux-arm64`  |  **no**   |  yes  |
 | `win32-arm64`  |  **no**   |  yes  |
 
+The `linux-x64` sidecar is built on a glibc 2.34 floor (#5545), so it needs
+glibc 2.34 or newer at run time (Ubuntu 22.04, Debian 12, RHEL 9 or later).
+On an older distro it fails at launch.
+
 `terminal-hub` publishes all six. The sidecar is a PyInstaller freeze, produced on
 the platform it targets, and there is no arm64 Linux or arm64 Windows freeze.
 Resolving `sidecar` on those two keys raises `PlatformError` naming the platform
@@ -254,7 +258,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.20"`                  |
+| Contract version   | `API_VERSION = "2.21"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -271,7 +275,7 @@ the header.
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
 | `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
-| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Run gated tools without asking, for one session (≥ 2.14) |
+| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
 #### `/query` request body
@@ -292,7 +296,9 @@ optional.
 `context` is the transcript you push. It replaces the agent's history for the
 turn. If it doesn't fit beside the agent's prompt and tools in the model's
 window, the agent drops the oldest whole turns until it does, and streams a
-`status` event saying older messages are out of the model's view.
+`status` event saying older messages are out of the model's view. A single turn
+bigger than the whole budget is kept, not dropped: its longest messages are cut
+with a note saying how many characters are missing, so its answer stays in view.
 
 `documents` (contract ≥ 2.16) carries the absolute paths of the files the user
 attached to the conversation. Send the whole set on every turn. Before the turn
@@ -367,8 +373,10 @@ shortens long code, so show `args` when the user should read all of it; a
 policy client matches its rules on `args` and should not auto-approve a call
 with `args_truncated`. The agent never adds a key to `args`. What it adds to
 its own prompt is in `prompt_context`: `working_directory` (where a shell call
-runs, when the model's arguments don't say it) and `risk_note` (why the
-agent's checks don't cover the call, which is then approved once). A prompt
+runs, when the model's arguments don't say it), `risk_note` (why the
+agent's checks don't cover the call, which is then approved once) and
+`file_path` (the absolute path a write lands at, when the model gave a relative
+one). A prompt
 the agent raises on its own, such as `allow_path_access`, has the path it asks
 about in `args`.
 
@@ -397,6 +405,18 @@ empty `final` and sends no `token` after the cancel, so a host keeps the text
 the `token` events already delivered. Answer text the model produced but the
 stream had not yet sent when the cancel landed is discarded with the
 half-written tail.
+
+`final` carries `context` (contract ≥ 2.21): what the next model call holds
+if the caller pushes this turn back as history — the same payload the Agent
+UI's Context panel shows. `window` is the model's context window in tokens,
+`used` the tokens taken, and `system`, `tools`, `documents`, `history` split it
+by kind; `categories` lists the panel's rows (their tokens add up to `used`),
+`tool_loading` which tools ride every request, and `tokenizer.exact` whether
+the counts came from the loaded model's own tokenizer or the shared estimate.
+A turn that was stopped or ended on a model failure carries no `context`; a
+measurement that failed carries `context_error`, one sentence saying why, and
+the answer still stands. Older binaries send neither, so read `context` only
+when `/version` reports 2.21 or later.
 
 ### 5.2 `session_id` and agent retention
 

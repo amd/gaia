@@ -28,7 +28,9 @@ from gaia.ui.email_sidecar import relay
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
+    SIDECAR_AGENT_IDS,
     memory_supported,
+    profile_for,
     surface_supported,
 )
 from gaia.ui.models import ChatRequest
@@ -284,6 +286,65 @@ def test_the_relay_puts_gaias_context_back_on_the_ui_prompt():
     }
 
 
+def test_a_resolved_write_path_is_context_not_an_argument():
+    """rc11: a relayed "Allow writing file?" still named a bare shop2.txt."""
+    event = _permission(
+        "write_file",
+        {"file_path": "/Users/you/shop2.txt", "content": "milk"},
+        call_args={"file_path": "shop2.txt", "content": "milk"},
+    )
+    assert event["args"] == {"file_path": "shop2.txt", "content": "milk"}
+    assert event["prompt_context"] == {"file_path": "/Users/you/shop2.txt"}
+
+    same = _permission(
+        "write_file",
+        {"file_path": "/Users/you/a.txt", "content": "x"},
+        call_args={"file_path": "/Users/you/a.txt", "content": "x"},
+    )
+    assert "prompt_context" not in same
+
+
+def test_the_relay_shows_the_ui_prompt_where_a_write_lands():
+    handler = SSEOutputHandler()
+    handler.set_relay_confirmation = lambda _cid: None
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "needs_confirmation",
+            "action": "write_file",
+            "summary": "shop2.txt",
+            "confirm_id": "c-2",
+            "args": {"file_path": "shop2.txt", "content": "milk"},
+            "prompt_context": {"file_path": "/Users/you/shop2.txt"},
+        },
+        GAIA_PROFILE,
+        answers_confirmations=True,
+    )
+    (prompt,) = _drain(handler)
+    assert prompt["args"] == {"file_path": "/Users/you/shop2.txt", "content": "milk"}
+
+
+def test_a_relative_write_reaches_the_ui_prompt_as_its_full_path():
+    """End to end: the agent's prompt, the sidecar wire, then the UI relay."""
+    agent_side = SSEOutputHandler()
+    agent_side.note_call_args("write_file", {"file_path": "shop2.txt", "content": "m"})
+    agent_side.confirm_tool_execution(
+        "write_file",
+        {"file_path": "/Users/you/shop2.txt", "content": "m"},
+        timeout=0.01,
+    )
+    [prompt] = [e for e in _drain(agent_side) if e["type"] == "permission_request"]
+    [wire] = CanonicalTranslator("r1", agent_id="gaia").translate(prompt)
+    wire["confirm_id"] = "c-3"
+
+    ui_side = SSEOutputHandler()
+    ui_side.set_relay_confirmation = lambda _cid: None
+    relay._dispatch_one(ui_side, wire, GAIA_PROFILE, answers_confirmations=True)
+    (shown,) = _drain(ui_side)
+    assert wire["args"]["file_path"] == "shop2.txt"
+    assert shown["args"]["file_path"] == "/Users/you/shop2.txt"
+
+
 # ── memory mode ────────────────────────────────────────────────────────────
 
 
@@ -355,10 +416,10 @@ class _Handler:
         self.events.append(event)
 
 
-def _dispatch(monkeypatch, api_version, memory):
+def _dispatch(monkeypatch, api_version, memory, agent_type="gaia", proxy=None):
     handle = SimpleNamespace(
         api_version=api_version,
-        proxy=lambda: SimpleNamespace(init=lambda: (200, {})),
+        proxy=lambda: proxy or SimpleNamespace(init=lambda: (200, {})),
     )
     monkeypatch.setattr(
         daemon_client_module, "acquire_handle", lambda _agent_id: handle
@@ -369,10 +430,10 @@ def _dispatch(monkeypatch, api_version, memory):
     handler = _Handler()
     helpers._dispatch_sidecar_query(
         handler,
-        ChatRequest(session_id="s1", message="hi", agent_type="gaia"),
+        ChatRequest(session_id="s1", message="hi", agent_type=agent_type),
         [],
         "m",
-        "gaia",
+        agent_type,
         memory=memory,
     )
     return handler.events, calls
@@ -398,6 +459,42 @@ def test_a_memory_on_turn_still_runs_on_an_older_agent(monkeypatch):
 def test_a_current_agent_is_told_the_mode(monkeypatch):
     _events, calls = _dispatch(monkeypatch, "2.18", "private")
     assert calls[0]["memory"] == "private"
+
+
+def test_every_profile_without_a_memory_floor_explains_the_refusal():
+    for agent_id in SIDECAR_AGENT_IDS:
+        profile = profile_for(agent_id)
+        if profile.min_memory_api_version is None:
+            assert profile.memory_upgrade_message.strip(), agent_id
+
+
+@pytest.mark.parametrize("version", ["2.4", "2.18", "9.9"])
+@pytest.mark.parametrize("memory", ["private", "off"])
+def test_email_refuses_private_turns_before_init_or_query(monkeypatch, version, memory):
+    init_calls = []
+    proxy = SimpleNamespace(init=lambda: (init_calls.append(True) or (200, {})))
+    events, calls = _dispatch(monkeypatch, version, memory, "email", proxy)
+
+    assert init_calls == []
+    assert calls == []
+    assert len(events) == 1 and events[0]["type"] == "agent_error"
+    message = events[0]["content"]
+    assert "email agent" in message
+    assert "private" in message and "memory" in message
+    assert "not sent" in message
+
+
+@pytest.mark.parametrize("version", ["2.4", "2.18", "9.9"])
+def test_email_with_memory_on_still_runs_without_an_unsupported_field(
+    monkeypatch, version
+):
+    init_calls = []
+    proxy = SimpleNamespace(init=lambda: (init_calls.append(True) or (200, {})))
+    events, calls = _dispatch(monkeypatch, version, "on", "email", proxy)
+
+    assert init_calls == [True]
+    assert len(calls) == 1 and calls[0]["memory"] is None
+    assert not [event for event in events if event["type"] == "agent_error"]
 
 
 # ── provider-error wording (#5295) ─────────────────────────────────────────

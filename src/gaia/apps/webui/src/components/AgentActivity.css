@@ -79,20 +79,6 @@
     flex-shrink: 0;
 }
 
-/* What GAIA is waiting on right now, with a timer. */
-.agent-summary-live {
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
-}
-.agent-summary-live::before {
-    content: "\00b7";
-    margin-right: 6px;
-    color: var(--text-muted);
-}
-
 .agent-icon-done { color: var(--text-muted); }
 .agent-icon-error { color: var(--danger); }
 .agent-activity.has-policy-alerts .agent-icon-done { color: var(--accent-yellow); }

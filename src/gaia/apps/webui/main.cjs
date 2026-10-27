@@ -106,6 +106,7 @@ const { createStartupDeepLinkQueue } = require("./services/deep-link-queue.cjs")
 const { installWindowKeys } = require("./services/window-keys.cjs");
 const { installQuitCleanup } = require("./services/quit-cleanup.cjs");
 const { chromiumSwitches } = require("./services/chromium-switches.cjs");
+const { titleBarKind, titleBarOptions } = require("./services/window-frame.cjs");
 
 // No ozone switch: Electron 38+ already picks Wayland or X11, and users override with --ozone-platform=x11.
 for (const [name, value] of chromiumSwitches({ platform: process.platform, env: process.env })) {
@@ -523,24 +524,10 @@ function reportBlockedLink(url) {
     );
 }
 
-// No system title bar: the app's own top row is the window's top edge, and
-// the native window controls are drawn into it (traffic lights on macOS).
-// Keep the height in sync with --titlebar-h in src/styles/index.css. The
-// renderer sends its canvas and text colors once it paints; until then the
-// controls use the dark canvas, like the window background.
-const TITLE_BAR_HEIGHT = 48;
-const TITLE_BAR_INITIAL = { color: "#1A1917", symbolColor: "#EFECE6" };
-const IS_MAC = process.platform === "darwin";
+// Windows and macOS draw the native controls into the app's own top row; Linux
+// keeps the system frame (services/window-frame.cjs).
+const TITLE_BAR_KIND = titleBarKind(process.platform);
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
-
-function titleBarOptions() {
-  return IS_MAC
-    ? { titleBarStyle: "hidden", trafficLightPosition: { x: 16, y: 16 } }
-    : {
-        titleBarStyle: "hidden",
-        titleBarOverlay: { ...TITLE_BAR_INITIAL, height: TITLE_BAR_HEIGHT },
-      };
-}
 
 // The renderer sends its canvas and text colors so the controls match the theme.
 ipcMain.handle("window:set-titlebar-colors", (_event, colors) => {
@@ -548,7 +535,7 @@ ipcMain.handle("window:set-titlebar-colors", (_event, colors) => {
   if (!HEX_COLOR.test(color) || !HEX_COLOR.test(symbolColor)) {
     throw new Error(`Title bar colors must be #rrggbb, got ${JSON.stringify(colors)}`);
   }
-  if (!IS_MAC && mainWindow && !mainWindow.isDestroyed()) {
+  if (TITLE_BAR_KIND === "overlay" && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.setTitleBarOverlay({ color, symbolColor });
   }
   return true;
@@ -567,7 +554,7 @@ function titleDownloadSaveDialogs() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    ...titleBarOptions(),
+    ...titleBarOptions(process.platform),
     width: windowConfig.width,
     height: windowConfig.height,
     minWidth: windowConfig.minWidth,

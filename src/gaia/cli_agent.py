@@ -1118,9 +1118,7 @@ def _instantiate_agent(pkg_dir: Path, parsed):
 
 
 def _starters_from_init(pkg_dir: Path, module_name: str) -> List[str]:
-    # Best-effort: if the manifest omits conversation_starters we try the
-    # package's build_registration(). Any failure here just yields [], and the
-    # caller raises a loud "no conversation_starters" error — no silent success.
+    # Raise load failures so they aren't misreported as missing starters.
     import importlib
 
     try:
@@ -1130,8 +1128,11 @@ def _starters_from_init(pkg_dir: Path, module_name: str) -> List[str]:
         if reg is None:
             return []
         return list(reg().conversation_starters or [])
-    except Exception:  # pylint: disable=broad-exception-caught
-        return []
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        raise AgentWorkflowError(
+            f"could not load {module_name}: {exc}. Fix the package so it imports "
+            f"and build_registration() runs, then re-run 'gaia agent test --live'."
+        ) from exc
 
 
 def _nonempty_response(result) -> bool:

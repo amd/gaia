@@ -126,11 +126,6 @@ function getToolMeta(toolName?: string, mcp?: McpIdentity): ToolMeta {
         : DEFAULT_TOOL_META;
 }
 
-/** What the live line says while a tool runs: the step row's own wording, never the raw tool id. */
-export function toolActiveLabel(toolName?: string, mcp?: McpIdentity): string {
-    return getToolMeta(toolName, mcp).activeLabel;
-}
-
 /** The fallback line for a tool row that arrived without a narration (older saved turns). */
 function toolFallbackLabel(step: AgentStep): string {
     const meta = getToolMeta(step.tool, step);
@@ -142,7 +137,7 @@ function toolFallbackLabel(step: AgentStep): string {
         : unfinished ? `${meta.activeLabel} didn't finish` : meta.label;
 }
 
-/** The one plain line a tool row shows by default. */
+/** The one plain line a tool row shows by default, and the live line while it runs. */
 export function toolRowText(step: AgentStep): string {
     // Narration can only humanize the prefixed tool id; the connector's own name says more.
     if (step.mcpServerLabel) return toolFallbackLabel(step);
@@ -308,7 +303,7 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
     return result;
 }
 
-/** What a turn blocked on the user says, in the message header and its activity row. */
+/** What a turn blocked on the user says, in the message header and its held tool row. */
 export const WAITING_ON_USER_LABEL = 'Waiting for you';
 
 /** `8` -> "8s", `125` -> "2m 05s". */
@@ -431,20 +426,10 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
     const stepCount = agentStepCount && agentStepCount > 0 && !steps.some(isBackgroundStep)
         ? agentStepCount
         : rowCount || displaySteps.length;
-    const runningTool = isActive ? [...displaySteps].reverse().find((s) => s.type === 'tool' && s.active) : undefined;
-    const lastStep = steps[steps.length - 1];
     const summaryText = hasPolicyAlerts
         ? `Blocked by policy \u00b7 ${policySteps.length} alert${policySteps.length !== 1 ? 's' : ''}`
         : `${stepCount} step${stepCount !== 1 ? 's' : ''}`
             + (toolCallCount > 0 ? ` \u00b7 ${toolCallCount} tool${toolCallCount !== 1 ? 's' : ''}` : '');
-    // What GAIA is waiting on right now, and for how long. A turn blocked on the user isn't running anything.
-    const liveText = isActive && awaitingUser
-        ? WAITING_ON_USER_LABEL
-        : runningTool
-            ? `${toolRowText(runningTool)} \u00b7 ${formatElapsed((now - runningTool.timestamp) / 1000)}`
-            : isActive && lastStep
-                ? `Waiting on the model \u00b7 ${formatElapsed((now - lastStep.timestamp) / 1000)}`
-                : '';
 
     return (
         <div className={`agent-activity ${variant} ${isActive ? 'active' : 'done'} ${hasErrors ? 'has-errors' : ''} ${hasPolicyAlerts ? 'has-policy-alerts' : ''}`}>
@@ -464,7 +449,6 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
                         <Zap size={14} className="agent-icon-done" />
                     )}
                     <span className="agent-summary-text">{summaryText}</span>
-                    {liveText && <span className="agent-summary-live">{liveText}</span>}
                 </div>
                 <div className="agent-summary-right">
                     {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -495,6 +479,7 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
                                         step={step}
                                         isExpanded={expandedTools.has(step.id)}
                                         now={now}
+                                        awaitingUser={isActive && awaitingUser}
                                         onToggle={() => toggleTool(step.id)}
                                     />
                                 );
@@ -694,15 +679,21 @@ interface FlowToolCardProps {
     onToggle: () => void;
     /** Wall-clock ms, for a running call's timer. */
     now: number;
+    /** The turn is waiting on the user (an approval or a question). */
+    awaitingUser?: boolean;
 }
 
-function FlowToolCard({ step, isExpanded, onToggle, now }: FlowToolCardProps) {
+function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }: FlowToolCardProps) {
     const Icon = getToolMeta(step.tool, step).icon;
-    const line = toolRowText(step);
+    // A call held for the user's answer hasn't started, so it neither runs nor times.
+    const waiting = !!step.active && awaitingUser;
+    const line = waiting ? WAITING_ON_USER_LABEL : toolRowText(step);
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
     const failure = step.success === false && step.result ? step.result : '';
-    const timing = step.active
+    const timing = waiting
+        ? ''
+        : step.active
         ? formatElapsed((now - step.timestamp) / 1000)
         : step.latencyMs != null ? formatToolLatency(step.latencyMs) : '';
 
@@ -712,10 +703,16 @@ function FlowToolCard({ step, isExpanded, onToggle, now }: FlowToolCardProps) {
                 className="flow-tool-header"
                 onClick={onToggle}
                 aria-expanded={isExpanded}
-                title={step.narration && step.narration !== line ? step.narration : undefined}
+                title={
+                    waiting
+                        ? toolRowText(step)
+                        : step.narration && step.narration !== line ? step.narration : undefined
+                }
             >
                 <div className="flow-tool-left">
-                    {step.active ? (
+                    {waiting ? (
+                        <Icon size={13} className="flow-tool-icon" />
+                    ) : step.active ? (
                         <Loader2 size={13} className="flow-tool-spinner" />
                     ) : step.success === false ? (
                         <AlertCircle size={13} style={{ color: 'var(--danger)' }} />
