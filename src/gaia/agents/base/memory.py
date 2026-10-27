@@ -4789,7 +4789,7 @@ class MemoryMixin(ProceduralMemoryMixin):
     # ------------------------------------------------------------------
 
     def register_memory_tools(self) -> None:
-        """Register the 5 memory tools with the agent's tool registry.
+        """Register the 6 memory tools with the agent's tool registry.
 
         Call this from _register_tools() in your agent subclass.
 

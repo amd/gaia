@@ -267,7 +267,7 @@ def mixin_host(tmp_db_path):
 
 @pytest.fixture
 def mixin_with_tools(mixin_host):
-    """MemoryMixin host with all 5 memory tools registered."""
+    """MemoryMixin host with all 6 memory tools registered."""
     from gaia.agents.base.tools import _TOOL_REGISTRY
 
     mixin_host.register_memory_tools()
@@ -278,6 +278,7 @@ def mixin_with_tools(mixin_host):
         "recall",
         "update_memory",
         "forget",
+        "forget_everything",
         "search_past_conversations",
     }
     for name in memory_tool_names:
@@ -821,18 +822,19 @@ class TestSystemPrompt:
 
 
 class TestToolRegistration:
-    """Tests for register_memory_tools() — 5 tools."""
+    """Tests for register_memory_tools() — 6 tools."""
 
     EXPECTED_TOOLS = [
         "remember",
         "recall",
         "update_memory",
         "forget",
+        "forget_everything",
         "search_past_conversations",
     ]
 
-    def test_registers_all_5_tools(self, mixin_with_tools):
-        """register_memory_tools() registers all 5 expected tools."""
+    def test_registers_all_6_tools(self, mixin_with_tools):
+        """register_memory_tools() registers all 6 expected tools."""
         registered = mixin_with_tools._registered_tools
         for tool_name in self.EXPECTED_TOOLS:
             assert tool_name in registered, (
@@ -840,11 +842,11 @@ class TestToolRegistration:
                 f"Available: {list(registered.keys())}"
             )
 
-    def test_registers_exactly_5_memory_tools(self, mixin_with_tools):
-        """Exactly 5 memory tools are registered (not 8 like gaia6)."""
+    def test_registers_exactly_6_memory_tools(self, mixin_with_tools):
+        """Exactly 6 memory tools are registered (not 8 like gaia6)."""
         registered = mixin_with_tools._registered_tools
         memory_tools = [name for name in registered if name in self.EXPECTED_TOOLS]
-        assert len(memory_tools) == 5
+        assert len(memory_tools) == 6
 
     def test_tool_functions_are_callable(self, mixin_with_tools):
         """All registered tools have callable functions."""
