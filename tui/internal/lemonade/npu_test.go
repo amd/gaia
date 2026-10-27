@@ -3,7 +3,14 @@
 
 package lemonade
 
-import "testing"
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 // Lemonade /system-info bodies for the two NPU target PCs, plus one without.
 const (
@@ -136,4 +143,26 @@ func TestNPUModelIsListedWithTheOtherModelsNotRecommended(t *testing.T) {
 		}
 	}
 	t.Fatal("Gemma NPU missing")
+}
+
+// The switch check must agree with the picker: an omni NPU model is chat.
+func TestDownloadedOmniNPUModelIsALocalChatModel(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":[`+
+			`{"id":"gemma4-it-e4b-FLM","recipe":"flm","downloaded":true,"labels":["audio","vision","tool-calling","chat"]},`+
+			`{"id":"Whisper-Large-v3-Turbo","recipe":"whispercpp","downloaded":true,"labels":["audio","transcription"]},`+
+			`{"id":"user.custom-GGUF","recipe":"llamacpp","downloaded":true}]}`)
+	}))
+	defer s.Close()
+	models, err := New(s.URL+"/v1").Models(context.Background(), "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, m := range models {
+		ids = append(ids, m.ID)
+	}
+	if strings.Join(ids, ",") != "gemma4-it-e4b-FLM,user.custom-GGUF" {
+		t.Fatalf("local chat models = %v", ids)
+	}
 }
