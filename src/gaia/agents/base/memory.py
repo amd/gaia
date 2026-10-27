@@ -606,7 +606,8 @@ class _UserTurns:
 
     Each chat session has its own agent, and all of them share the one local
     model, so a turn in any session must hold back every session's extraction —
-    not only its own, or a new chat waits behind the previous chat's.
+    not only its own, or a new chat waits behind the previous chat's. Agents on
+    a cloud provider are held back too; only the timing changes for them.
     """
 
     def __init__(self) -> None:

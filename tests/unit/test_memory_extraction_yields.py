@@ -207,18 +207,104 @@ def test_a_turn_in_another_chat_stops_and_holds_a_running_extraction(tmp_path):
 
         started = time.monotonic()
         new_chat._note_user_turn_started()
-        assert first_call_ended.wait(2), "the other chat's extraction kept the model"
-        assert time.monotonic() - started < 1.0
-        time.sleep(0.3)
-        assert len(calls) == 1, "the extraction reran during the new chat's turn"
-
-        new_chat._note_user_turn_finished()
+        try:
+            assert first_call_ended.wait(2), "the other chat kept the model"
+            assert time.monotonic() - started < 1.0
+            time.sleep(0.3)
+            assert len(calls) == 1, "the extraction reran during the new chat's turn"
+        finally:
+            new_chat._note_user_turn_finished()
         assert previous_chat.wait_for_memory_extraction(timeout=5)
         assert len(calls) == 2
         assert _stored(previous_chat._memory_store) == [FACT]
     finally:
         previous_chat._memory_store.close()
         new_chat._memory_store.close()
+
+
+def test_one_chat_ending_does_not_release_while_another_chat_runs(tmp_path):
+    """Overlapping turns in two chats: the extraction waits for both to end."""
+    ran = threading.Event()
+    chat = MagicMock()
+    chat.send_messages.side_effect = lambda *a, **k: (
+        ran.set(),
+        MagicMock(text=json.dumps(OPS), finish_reason="stop"),
+    )[-1]
+    previous = _Host(MemoryStore(db_path=tmp_path / "previous.db"), chat)
+    first = _Host(MemoryStore(db_path=tmp_path / "first.db"), MagicMock())
+    second = _Host(MemoryStore(db_path=tmp_path / "second.db"), MagicMock())
+    try:
+        first._note_user_turn_started()
+        second._note_user_turn_started()
+        try:
+            previous._after_process_query(
+                "Please remember that my favourite colour is teal", "Noted."
+            )
+            first._note_user_turn_finished()
+            assert not ran.wait(0.5), "ran while the second chat's turn was running"
+        finally:
+            second._note_user_turn_finished()
+        assert previous.wait_for_memory_extraction(timeout=5)
+        assert _stored(previous._memory_store) == [FACT]
+    finally:
+        for host in (previous, first, second):
+            host._memory_store.close()
+
+
+def test_turns_racing_across_chats_leave_no_turn_counted_and_lose_no_memory(
+    tmp_path,
+):
+    """Turns starting and ending in many chats at once, while an extraction runs."""
+    chat = MagicMock()
+
+    def send_messages(messages, cancel=None, **kwargs):
+        for _ in range(4):
+            if cancel is not None and cancel.is_set():
+                raise LLMCallCancelled("cancelled mid-reply")
+            time.sleep(0.005)
+        return MagicMock(text=json.dumps(OPS), finish_reason="stop")
+
+    chat.send_messages.side_effect = send_messages
+    previous = _Host(MemoryStore(db_path=tmp_path / "previous.db"), chat)
+    chats = [
+        _Host(MemoryStore(db_path=tmp_path / f"chat{i}.db"), MagicMock())
+        for i in range(6)
+    ]
+    errors: List[BaseException] = []
+
+    def churn(host):
+        try:
+            for _ in range(50):
+                host._note_user_turn_started()
+                try:
+                    time.sleep(0.001)
+                finally:
+                    host._note_user_turn_finished()
+        except BaseException as e:  # surfaced by the assert below
+            errors.append(e)
+
+    try:
+        previous._after_process_query(
+            "Please remember that my favourite colour is teal", "Noted."
+        )
+        threads = [threading.Thread(target=churn, args=(h,)) for h in chats]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(30)
+        assert not errors
+        assert memory_mod._USER_TURNS.in_flight == 0
+        assert previous.wait_for_memory_extraction(timeout=10)
+        assert _stored(previous._memory_store) == [FACT]
+    finally:
+        for host in [previous, *chats]:
+            host._memory_store.close()
+
+
+def test_each_test_starts_with_no_user_turn_and_a_cold_idle_clock():
+    """The turn count is process-wide, so one test's turn must not hold the next's."""
+    assert memory_mod._USER_TURNS.in_flight == 0
+    assert memory_mod._USER_TURNS.last_end == float("-inf")
 
 
 def test_a_flush_is_not_cancelled_by_a_new_turn(store):
