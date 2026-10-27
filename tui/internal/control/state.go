@@ -363,6 +363,9 @@ type Recorder struct {
 	state *State
 }
 
+// Unwrap returns the model being recorded.
+func (r Recorder) Unwrap() tea.Model { return r.inner }
+
 // NewRecorder wraps inner, publishing its frames and snapshots into state.
 //
 // The snapshot is seeded here rather than at Init so /status answers with the
