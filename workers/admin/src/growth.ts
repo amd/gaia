@@ -231,6 +231,8 @@ export interface DownloadWindow {
   growth: number | null;
   /** Last day counted: registries publish a day or two late, so both windows end there. */
   through: string | null;
+  /** First day of data from this source. */
+  first: string | null;
 }
 
 /**
@@ -248,7 +250,7 @@ export function downloadWindows(
   for (const s of SOURCES) {
     const have = days.filter((d) => d[s] != null);
     if (!have.length) {
-      out[s] = { total: 0, previous: null, growth: null, through: null };
+      out[s] = { total: 0, previous: null, growth: null, through: null, first: null };
       continue;
     }
     const first = firsts[s] ?? have[0]!.day;
@@ -259,7 +261,7 @@ export function downloadWindows(
     const sum = (a: string, b: string) => have.reduce((n, d) => (d.day >= a && d.day < b ? n + d[s]! : n), 0);
     const total = sum(start, end);
     const previous = first <= prevStart ? sum(prevStart, start) : null;
-    out[s] = { total, previous, growth: previous ? total / previous - 1 : null, through: addDays(end, -1) };
+    out[s] = { total, previous, growth: previous ? total / previous - 1 : null, through: addDays(end, -1), first };
   }
   return out;
 }

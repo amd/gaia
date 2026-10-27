@@ -84,6 +84,16 @@ describe("/api/momentum", () => {
   });
 });
 
+describe("windows end at the last collection", () => {
+  it("counts the last N days up to when the data was collected, not up to now", async () => {
+    const db = memoryD1();
+    // Collected 2 days ago; a PR merged 8 days ago is inside "the last 7 days" of that data, though not of the 7 days before now.
+    await put(db, "collect_log", ["finished_at", "source", "ok", "detail"], [[iso(2), "issues", 1, "ok"], [iso(2), "commits", 1, "ok"]]);
+    await put(db, "items", ["number", "kind", "created_at", "closed_at", "merged_at", "assoc", "author"], [[1, "pr", iso(8.5), iso(8), iso(8), "NONE", "carol"]]);
+    expect((await get(db, "/api/momentum", "range=7")).summary.prsMerged).toBe(1);
+  });
+});
+
 describe("/api/momentum core and outside split", () => {
   it("splits people's PRs by core team and outside, ignores the people filter, and counts open bot issues", async () => {
     const db = memoryD1();
@@ -115,7 +125,8 @@ describe("/api/growth", () => {
     expect(g).toMatchObject({ from: day(6), days: 7 });
     expect(g.current).toMatchObject({ stars: 10, starGrowth: 10 / 1100, prsMerged: 2, externalShare: 0.5, active: 2, newContributors: 2 });
     expect(g.previous).toMatchObject({ stars: 1100, starGrowth: null, active: 0 });
-    expect(g.periods[0].start >= day(13)).toBe(true);
+    // Periods reach back before the range (here to the first data, 10 days ago), for the page's momentum baseline.
+    expect(g.periods[0].start <= day(10)).toBe(true);
     const all = await get(db, "/api/growth", "range=all");
     expect(all).toMatchObject({ from: day(10), days: 11, previous: null, gran: "month" });
     expect((await get(db, "/api/growth", "range=1")).days).toBe(2);

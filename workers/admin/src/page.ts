@@ -306,9 +306,9 @@ function load(jobs,render){var g=++GEN,got={},errs=[];
 function syncShell(){document.querySelectorAll('[data-range]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.range===S.range));});
   document.querySelectorAll('[data-gran]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.gran===S.gran));});el('labels').setAttribute('aria-pressed',String(S.labels));}
 function drawStatus(){var o=D.status;if(!o||!o.log.length){el('status').innerHTML='No data collected yet.';el('fresh').textContent='';return;}
-  var latest={};o.log.forEach(function(l){if(!latest[l.source])latest[l.source]=l;});var srcs=Object.keys(latest),bad=srcs.filter(function(k){return !latest[k].ok;}),last=o.log[0];
+  var latest={};o.log.forEach(function(l){if(!latest[l.source])latest[l.source]=l;});var srcs=Object.keys(latest),bad=srcs.filter(function(k){return !latest[k].ok;}),behind=srcs.filter(function(k){return latest[k].ok&&/left for the next collection/.test(latest[k].detail);}),last=o.log[0];
   el('fresh').textContent='Updated '+last.finished_at.slice(5,16).replace('T',' ')+' UTC';
-  el('status').innerHTML='<details><summary>'+(bad.length?'<span class="bad">'+bad.length+' of '+srcs.length+' data sources failed on their last run</span>':'<span class="good">All '+srcs.length+' data sources ok</span>')+' · last collected '+esc(last.finished_at.replace('T',' ').slice(0,16))+' UTC'+info('collection')+'</summary>'
+  el('status').innerHTML='<details><summary>'+(bad.length?'<span class="bad">'+bad.length+' of '+srcs.length+' data sources failed on their last run</span>':behind.length?'<span class="warnc">'+behind.join(', ')+' still catching up; the rest ok</span>':'<span class="good">All '+srcs.length+' data sources ok</span>')+' · last collected '+esc(last.finished_at.replace('T',' ').slice(0,16))+' UTC'+info('collection')+'</summary>'
    +'<div class="scroll" style="padding:8px 0 0"><table><tr><th>When (UTC)</th><th>Source</th><th>Result</th></tr>'+o.log.map(function(l){return '<tr><td>'+esc(l.finished_at.replace('T',' ').slice(0,16))+'</td><td>'+esc(l.source)+'</td><td class="'+(l.ok?'':'bad')+'" style="white-space:normal">'+(l.ok?'':'Failed: ')+esc(l.detail)+'</td></tr>';}).join('')+'</table></div></details>';}
 var rz;window.addEventListener('resize',function(){clearTimeout(rz);rz=setTimeout(function(){Object.keys(SPECS).forEach(function(id){draw(id);});if(DRAW.rel)DRAW.rel();},150);});
 function boot(jobs,render){
@@ -321,13 +321,13 @@ function boot(jobs,render){
 
 export const INFO_COMMON = String.raw`
 'collection':['Data collection','A collector runs every night at 03:17 UTC and stores a snapshot in this dashboard’s own database. Each data source is logged; if one fails, its charts keep the last good data and the failure shows here instead of zeros.'],
-'range':['Time range','Developer and CI headline numbers count the selected window by timestamp; numbers built from daily data (stars, package downloads) count whole calendar days. Charts show the whole days, weeks or months that overlap it. Group by Auto picks days for short ranges, weeks for up to a year and months beyond.'],
+'range':['Time range','Developer and CI headline numbers count the selected window by timestamp, up to the last data collection; numbers built from daily data (stars, package downloads) count whole calendar days. Charts show the whole days, weeks or months that overlap it. Group by Auto picks days for short ranges, weeks for up to a year and months beyond.'],
 `;
 
 const USERS_JS = String.raw`
 var INFO={` + INFO_COMMON + String.raw`
 'installs':['Installs to date','Downloads of installer and app files (.exe, .msi, .deb, .AppImage, .rpm, .dmg, .pkg, .whl and similar) attached to GitHub releases, across every release and release candidate. Read from the GitHub Releases API. GitHub counts every download, including automation and repeat downloads, so this is an upper bound on people.'],
-'polls':['Not counted as installs','Older desktop apps (v0.17 to v0.22) check GitHub for updates by downloading latest.yml every time they start, and GitHub counts that as a download. Current versions check hub.amd-gaia.ai instead, so this number is mostly old installs still in use.'],
+'polls':['Not counted as installs','Files that are not installs: update feeds (latest*.yml), .blockmap update data, checksums and signatures. Most are update checks: desktop apps v0.17 to v0.22 download latest.yml from GitHub every time they start, so this number is mostly old installs still in use.'],
 'stars':['Stars added','Stars added in the selected days, against the same number of days just before. Green: at least 90% of the earlier pace. Amber: 60 to 90%. Red: below 60%. The total is GitHub’s own count.'],
 'pkg':['Package downloads','PyPI (pypistats.org, mirrors excluded) plus npm, over the selected days up to the newest day PyPI has published, against the same number of days just before. Includes CI and automated installs, so treat it as reach rather than users. Green: flat or up, or down less than 10%. Amber: down 10 to 30%. Red: down more than 30%.'],
 'latest':['Latest release','The newest final release and its installs so far. Its installs keep growing for a few weeks after it ships. Coloured by days since it shipped, for a monthly release cadence. Green: within 35 days. Amber: 35 to 60. Red: more than 60.'],
@@ -356,17 +356,14 @@ function drawOverview(){var d=D.downloads,t=D.traction,h='';
   var all=0,ins=0,byOs={};d.releases.forEach(function(r){all+=r.install+r.meta;ins+=r.install;OS.forEach(function(k){byOs[k]=(byOs[k]||0)+(r.byOs[k]||0);});});
   var fin=d.releases.filter(function(r){return r.main&&!r.rc;}),last=fin[fin.length-1],ks=OS.filter(function(k){return byOs[k]>0;});
   h+='<div class="hero"><div class="card big"><div class="kl">Installs to date'+info('installs')+'</div><div class="bigval num">'+fmt(ins)+'</div>'
-   +'<div class="ks">Plus '+fmt(all-ins)+' update checks from older desktop apps, not counted.'+info('polls')+'</div>'
+   +'<div class="ks">Plus '+fmt(all-ins)+' update feeds, checksums and signatures, not counted.'+info('polls')+'</div>'
    +'<div class="kl" style="margin-top:16px">By OS, all releases</div><div class="bar2" style="margin-top:8px">'+ks.map(function(k){return '<span style="width:'+(byOs[k]/ins*100)+'%;background:'+COL[k]+'"></span>';}).join('')+'</div>'
    +'<div class="ks">'+ks.map(function(k){return '<span style="margin-right:14px;white-space:nowrap"><i style="display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;background:'+COL[k]+'"></i>'+k+' '+Math.round(byOs[k]/ins*100)+'%</span>';}).join('')+'</div></div><div class="grid4">';
   var n=S.range==='all'?null:Math.max(2,Number(S.range)),from=sinceDay(),to=today();
-  if(t&&t.stars.length){var cur=sumDays(t.stars,'added',from,to),prev=n?sumDays(t.stars,'added',shift(from,-n),shift(from,-1)):null,rr=prev?cur/prev:null,lv=n?level(rr,TREND):'';
-    h+=kpi('stars','Stars added','+'+fmt(cur),fmt(t.starsHeadline!=null?t.starsHeadline:t.stars[t.stars.length-1].total)+' total · '+dayText()+(prev!=null?' · '+fmt(prev)+' the '+n+' days before':''),lv,
-      prev!=null?'+'+fmt(cur)+' stars against +'+fmt(prev)+' in the previous '+n+' days ('+Math.round((rr||0)*100)+'% of that pace)':'');}
-  else h+=kpi('stars','Stars added','—','collecting…','');
   if(t&&t.packages.length){var lastDay=t.packages.filter(function(r){return r.pypi!=null;}).map(function(r){return r.day;}).pop()||to,
       pf=n?shift(lastDay,-(n-1)):'0000',cur2=sumDays(t.packages,'pypi',pf,lastDay)+sumDays(t.packages,'npm',pf,lastDay),
-      prev2=n?sumDays(t.packages,'pypi',shift(pf,-n),shift(pf,-1))+sumDays(t.packages,'npm',shift(pf,-n),shift(pf,-1)):null,r2=prev2?cur2/prev2:null;
+      firstPy=t.packages.filter(function(r){return r.pypi!=null;}).map(function(r){return r.day;})[0],
+      prev2=n&&firstPy&&firstPy<=shift(pf,-n)?sumDays(t.packages,'pypi',shift(pf,-n),shift(pf,-1))+sumDays(t.packages,'npm',shift(pf,-n),shift(pf,-1)):null,r2=prev2?cur2/prev2:null;
     h+=kpi('pkg','Package downloads',fmt(cur2),(n?n+' days':'all time')+' to '+shortLab(lastDay,'day')+(prev2!=null?' · '+fmt(prev2)+' the '+n+' days before':''),n?level(r2,DL_TREND):'',
       prev2!=null?fmt(cur2)+' downloads against '+fmt(prev2)+' in the previous '+n+' days':'');}
   else h+=kpi('pkg','Package downloads','—','collecting…','');
@@ -464,7 +461,7 @@ var INFO={` + INFO_COMMON + String.raw`
 'k-prs':['Open pull requests','PRs open now, and how many have waited more than 14 days. Green: 10% or fewer are that old. Amber: up to 25%. Red: more than 25%, which means review is not keeping up.'],
 'k-commits':['Commits','Commits on the default branch in the window, and the people who made them (by GitHub login), against the window before. Green: at least 75% as many active contributors as before. Amber: 50 to 75%. Red: below 50%.'],
 'k-ttm':['Time to merge','Median and 90th-percentile time from a PR opening to merging, for PRs merged in the window. Bands from LinearB’s 2026 benchmarks (8.1 million PRs): elite under 25 hours, good up to 72. Green: median under 25 hours and P90 under 3 days. Amber: median up to 3 days, P90 up to 161 hours. Red: slower.'],
-'k-ttc':['Time to close','Median and 90th-percentile time from an issue opening to closing, for issues closed in the window. No published benchmark exists, so these are a proposed default; a clean-up of old issues raises it for a while. Green: median within 14 days and P90 within 90. Amber: median up to 30 days. Red: median over 30 days or P90 over 180.'],
+'k-ttc':['Time to close','Median and 90th-percentile time from an issue opening to closing, for issues closed in the window. No published benchmark exists, so these are a proposed default; a clean-up of old issues raises it for a while. Green: median within 14 days and P90 within 90. Amber: median up to 30 days or P90 up to 180. Red: median over 30 days or P90 over 180.'],
 'issues':['Issues opened and closed','Per period. When closed bars are taller than opened, the backlog shrank. Click a legend entry to hide or show it.'],
 'backlog':['Open issues','Issues open at the end of each period (opened so far minus closed so far). Pull requests are excluded.'],
 'ttm-h':['How long PRs take to merge','Each bar counts PRs merged in the selected window that took that long from opened to merged. A long tail to the right means some work waits a long time for review.'],
@@ -474,7 +471,7 @@ var INFO={` + INFO_COMMON + String.raw`
 'commits':['Commits','Commits on the default branch per period, by author date, including merge commits. Follows the people filter.'],
 'people':['Contributors','Active is the number of people who committed in the 28 days up to that point. New is people making their first commit to the project. Follows the people filter.'],
 'loc':['Lines of code changed','Lines added and deleted on the default branch per period, from GitHub’s code-frequency statistics (weeks start on Sunday on GitHub; shown from the following Monday). With people hidden, it sums GitHub’s per-contributor statistics instead, which cover the top 100 contributors. Lockfiles and generated files count too, so read spikes with care.'],
-'split':['Core team and outside contributors','The same pull-request numbers for the core team (maintainer accounts plus organisation members and collaborators) and for everyone else, bots left out. Ignores the people filter above. Merge time uses LinearB’s bands, as above. The outside row is also compared with the core team’s: outside PRs need more review, so some gap is normal. Green: outside median within 2 times the core team’s. Amber: 2 to 4 times. Red: more.'],
+'split':['Core team and outside contributors','The same pull-request numbers for the core team (maintainer accounts plus organisation members and collaborators) and for everyone else, bots left out. Ignores the people filter above. Merge time uses LinearB’s bands, as above. Wait vs core shows how much longer outside PRs take, for context only: core PRs are often self-merged within the hour, so the ratio is large even when outside PRs merge quickly.'],
 'who':['Contributors in the range','Everyone who committed, opened a PR or opened an issue in the selected window. Lines come from GitHub’s weekly statistics, so they cover whole weeks. Untick a person, or use the buttons, to leave them out of every number on this page.'],
 'community':['Stars and forks','Rebuilt from GitHub’s dated stargazer and fork lists, so the full history is available. Total is the running count; New is how many were added in each period.']};
 var MINE=__MAINTAINERS__;
@@ -499,16 +496,16 @@ function drawKpis(){var m=D.momentum;if(!m){el('ov').innerHTML='';return;}var s=
   var stale=s.openPrs?s.staleOpenPrs/s.openPrs:null;
   h+=kpi('k-prs','Open PRs',fmt(s.openPrs),fmt(s.staleOpenPrs)+' open more than 14 days',level(stale,{good:.1,warn:.25,higher:false}),stale==null?'':Math.round(stale*100)+'% of open PRs are older than 14 days');
   var ac=p&&p.contributors?s.contributors/p.contributors:null;
-  h+=kpi('k-commits','Commits',fmt(s.commits),fmt(s.contributors)+' contributors'+(p?' (were '+fmt(p.contributors)+')':'')+' · '+rt,level(ac,{good:.75,warn:.5}),ac==null?'':fmt(s.contributors)+' active contributors against '+fmt(p.contributors)+' in the window before');
+  h+=kpi('k-commits','Commits',fmt(s.commits),fmt(s.contributors)+' commit authors'+(p?' (were '+fmt(p.contributors)+')':'')+' · '+rt,level(ac,{good:.75,warn:.5}),ac==null?'':fmt(s.contributors)+' commit authors against '+fmt(p.contributors)+' in the window before');
   var lm=worst(level(s.medianDaysToMerge,MERGE_MED),level(s.p90DaysToMerge,MERGE_P90));
   h+=kpi('k-ttm','Time to merge',ddur(s.medianDaysToMerge),'P90 '+ddur(s.p90DaysToMerge)+' · '+fmt(s.prsMerged)+' merged PRs',lm,'median '+ddur(s.medianDaysToMerge)+', 90th percentile '+ddur(s.p90DaysToMerge));
-  h+=kpi('k-ttc','Time to close',ddur(s.medianDaysToClose),'P90 '+ddur(s.p90DaysToClose)+' · '+fmt(s.issuesClosed)+' closed issues',worst(level(s.medianDaysToClose,{good:14,warn:30,higher:false}),level(s.p90DaysToClose,{good:90,warn:180,higher:false})==='bad'?'bad':''),'median '+ddur(s.medianDaysToClose)+', P90 '+ddur(s.p90DaysToClose)+' (healthy: median within 14 days)');
+  h+=kpi('k-ttc','Time to close',ddur(s.medianDaysToClose),'P90 '+ddur(s.p90DaysToClose)+' · '+fmt(s.issuesClosed)+' closed issues',worst(level(s.medianDaysToClose,{good:14,warn:30,higher:false}),level(s.p90DaysToClose,{good:90,warn:180,higher:false})),'median '+ddur(s.medianDaysToClose)+', P90 '+ddur(s.p90DaysToClose)+' (healthy: median within 14 days)');
   el('ov').innerHTML='<div class="strip">'+h+'</div>';drawSplit();}
 function drawSplit(){var m=D.momentum,box=el('split');if(!box)return;if(!m||!m.split){box.innerHTML='';return;}var x=m.split;
   var row=function(name,c,pv,ratio){var mp=pv?pace(c.prsMerged,pv.prsMerged):null;
-    return '<tr><td>'+name+'</td><td class="n">'+(wk(c.prsMerged)?fmt(Math.round(c.prsMerged*7/Number(S.range))):fmt(c.prsMerged))+'</td><td'+cellLv(mp,PACE)+'>'+(mp==null?'—':(mp>=0?'+':'')+Math.round(mp*100)+'%')+'</td><td'+cellLv(c.medianDaysToMerge,MERGE_MED)+'>'+ddur(c.medianDaysToMerge)+'</td><td'+cellLv(c.p90DaysToMerge,MERGE_P90)+'>'+ddur(c.p90DaysToMerge)+'</td><td'+cellLv(ratio,{good:2,warn:4,higher:false})+'>'+(ratio==null?'—':ratio.toFixed(1)+'×')+'</td><td class="n">'+fmt(c.openPrs)+'</td><td class="n">'+fmt(c.issuesOpened)+'</td><td class="n">'+fmt(c.openIssues)+'</td></tr>';};
+    return '<tr><td>'+name+'</td><td class="n">'+(wk(c.prsMerged)?fmt(Math.round(c.prsMerged*7/Number(S.range))):fmt(c.prsMerged))+'</td><td'+cellLv(mp,PACE)+'>'+(mp==null?'—':(mp>=0?'+':'')+Math.round(mp*100)+'%')+'</td><td'+cellLv(c.medianDaysToMerge,MERGE_MED)+'>'+ddur(c.medianDaysToMerge)+'</td><td'+cellLv(c.p90DaysToMerge,MERGE_P90)+'>'+ddur(c.p90DaysToMerge)+'</td><td class="n">'+(ratio==null?'—':ratio.toFixed(1)+'×')+'</td><td class="n">'+fmt(c.openPrs)+'</td><td class="n">'+fmt(c.issuesOpened)+'</td><td class="n">'+fmt(c.openIssues)+'</td></tr>';};
   var ratio=x.core.medianDaysToMerge&&x.outside.medianDaysToMerge!=null?x.outside.medianDaysToMerge/x.core.medianDaysToMerge:null,per=wk(1)?'a week':'in the range';
-  if(ratio!=null){var rl=level(ratio,{good:2,warn:4,higher:false});if(rl==='warn'||rl==='bad')ATTN.push({key:'split',label:'Outside PRs wait',value:ratio.toFixed(1)+'× longer',lv:rl,why:'outside contributors’ PRs take '+ratio.toFixed(1)+' times as long to merge as the core team’s'});}
+  var ol=level(x.outside.medianDaysToMerge,MERGE_MED);if(ol==='warn'||ol==='bad')ATTN.push({key:'split',label:'Outside PRs merge in',value:ddur(x.outside.medianDaysToMerge),lv:ol,why:'outside contributors’ PRs take a median '+ddur(x.outside.medianDaysToMerge)+' to merge'});
   box.innerHTML='<div class="scroll" style="max-height:none"><table><tr><th>Who</th><th class="n">PRs merged '+per+'</th><th class="n">Pace vs before</th><th class="n">Merge median</th><th class="n">Merge P90</th><th class="n">Wait vs core</th><th class="n">Open PRs</th><th class="n">Issues opened</th><th class="n">Open issues</th></tr>'
     +row('Core team',x.core,x.corePrevious,null)+row('Outside contributors',x.outside,x.outsidePrevious,ratio)+'</table></div>';}
 function drawPeople(){var m=D.momentum;
@@ -570,7 +567,7 @@ const CI_JS = String.raw`
 var INFO={` + INFO_COMMON + String.raw`
 'k-pass':['Pass rate on main','Share of finished push and nightly runs on main that succeeded in the selected window. Issue- and comment-triggered automation, manual dispatches, and cancelled or skipped runs are left out. CircleCI’s 2025 State of Software Delivery sets 90% as the benchmark for the default branch (the observed average is 82%). Green: 90% or better. Amber: 80 to 90%. Red: below 80%.'],
 'k-runs':['Runs','Finished push and nightly runs on main in the window that either passed or failed.'],
-'k-below':['Workflows below 90%','Workflows on main whose pass rate in the window is under 90%. Green: none. Amber: up to 3. Red: more than 3.'],
+'k-below':['Workflows below 90%','Workflows on main whose pass rate in the window is under 90%, counting only those with at least 5 passed or failed runs, so one failure in two runs does not count. Green: none. Amber: up to 3. Red: more than 3.'],
 'k-flaky':['Flaky commits','Commits where at least one workflow failed and a later run passed, counted once per commit. A failure fixed by re-running the same run cannot be seen, because GitHub replaces the earlier attempt. Green: at most 2% of commits. Amber: up to 5%. Red: more.'],
 'k-tests':['Unit tests','Tests in the latest main-branch Unit Tests run and the change across the window. Green: none failing and the count not shrinking. Amber: the count went down. Red: tests failing on main.'],
 'k-time':['CI time','Wall-clock time of every finished run in the window, all branches and triggers, against the window before (shown only once that earlier window is fully collected). Runs that took more than 6 hours almost always sat waiting for approval or a runner, so they are counted separately, not added. Green: up at most 10%. Amber: up to 30%. Red: up more than 30%.'],
@@ -584,10 +581,9 @@ var OC={success:'var(--good)',failure:'var(--bad)',cancelled:'var(--neutral)',ot
 var WC=['var(--s1)','var(--s2)','var(--s3)','var(--s4)','var(--s5)','#7a6ee0','#2aa7b8','#b5651d'];
 function covText(ci){var f=ci.coverage.first.slice(0,10);return f>sinceDay()?'since '+longLab(f,'day')+' (earliest collected)':rangeText();}
 function drawKpis(){var ci=D.ci,t=D.tests,ct=D.citime,h='';if(!ci||!ci.coverage||!ci.coverage.first){el('ov').innerHTML='<div class="card empty">No workflow runs collected yet.</div>';return;}
-  var w=ci.main.workflows,ok=0,tot=0,fl=0,below=0,shas=0;w.forEach(function(x){ok+=x.passed;tot+=x.passed+x.failed;fl+=x.flaky;if(x.passRate!=null&&x.passRate<.9)below++;});
+  var w=ci.main.workflows,ok=0,tot=0,fl=0,below=0,shas=0;w.forEach(function(x){ok+=x.passed;tot+=x.passed+x.failed;fl+=x.flaky;if(x.passRate!=null&&x.passed+x.failed>=5&&x.passRate<.9)below++;});
   var pr=tot?ok/tot:null;
-  h+=kpi('k-pass','Pass rate on main',pct(pr),covText(ci),level(pr,{good:.9,warn:.8}),pct(pr)+' of push and nightly runs passed');
-  h+=kpi('k-runs','Runs',fmt(tot),fmt(ok)+' passed · '+fmt(tot-ok)+' failed','');
+  h+=kpi('k-pass','Pass rate on main',pct(pr),fmt(ok)+' of '+fmt(tot)+' runs passed · '+covText(ci),level(pr,{good:.9,warn:.8}),pct(pr)+' of push and nightly runs passed');
   h+=kpi('k-below','Workflows below 90%',fmt(below),'of '+w.length+' that ran on main',level(below,{good:0,warn:3,higher:false}),below+' workflows pass less than 90% of the time');
   var fc=ci.main.flakyCommits,fr=ci.main.commits?fc/ci.main.commits:null;
   h+=kpi('k-flaky','Flaky commits',fmt(fc),(fr==null?'':pct(fr,1)+' of '+fmt(ci.main.commits)+' commits · ')+'failed, then passed',level(fr,{good:.02,warn:.05,higher:false}),fc+' commits had a workflow fail and then pass');
@@ -612,7 +608,7 @@ function drawOutcomes(){var t=D.citrend;
   else if(P.om==='share')chart('outcomes',{keys:K,gran:x.g,type:'area',ymax:1,yfmt:function(v){return Math.round(v*100)+'%';},title:'Share of outcomes',cover:cover,
     series:se.map(function(s){return {name:s.name,color:s.color,vals:s.vals.map(function(v,i){return b[i].total?(v||0)/b[i].total:null;}),fmt:function(v){return pct(v);}};})});
   else{var prr=b.map(function(r){var d=(r.success||0)+(r.failure||0);return d?r.success/d:null;}),vv=prr.filter(function(v){return v!=null;}),lo=Math.max(0,Math.floor(((vv.length?Math.min.apply(null,vv):1)-.05)*20)/20);
-    chart('outcomes',{keys:K,gran:x.g,type:'line',ymin:lo,ymax:1,yfmt:function(v){return Math.round(v*100)+'%';},title:'Pass rate',cover:cover,target:.95,targetLabel:'95% healthy',
+    chart('outcomes',{keys:K,gran:x.g,type:'line',ymin:lo,ymax:1,yfmt:function(v){return Math.round(v*100)+'%';},title:'Pass rate',cover:cover,target:.9,targetLabel:'90% healthy',
       series:[{name:'Pass rate',color:OC.success,vals:prr,fmt:function(v){return pct(v);}}],note:'Fail rate is 100% minus the pass rate.'});}}
 function drawTests(){var t=D.tests;
   document.querySelectorAll('[data-tm]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.tm===P.tm));});
@@ -645,9 +641,9 @@ function drawTable(){var ci=D.ci,box=el('wtable');if(!ci||!ci.coverage||!ci.cove
   var w=ci.main.workflows,rows=P.allWf?w:w.slice(0,10);
   if(!w.length){box.innerHTML='<div class="empty">No push or nightly runs on main in this range.</div>';return;}
   function st(p){if(p==null)return '<span class="st"><span class="dot" style="background:var(--mute)"></span>no result</span>';if(p>=.9)return '<span class="st good"><span class="dot" style="background:var(--good)"></span>healthy</span>';if(p>=.8)return '<span class="st warnc"><span class="dot" style="background:var(--warn)"></span>watch</span>';return '<span class="st bad"><span class="dot" style="background:var(--bad)"></span>failing</span>';}
-  var h='<div class="scroll" style="max-height:none"><table><tr><th>Workflow</th><th>Status</th><th class="n">Pass rate</th><th class="n">Runs</th><th class="n">Failed</th><th class="n">Flaky</th><th class="n">Runtime median</th><th class="n">Runtime P90</th><th class="n">Total time</th><th class="n">Waiting</th></tr>';
+  var h='<div class="scroll" style="max-height:none"><table><tr><th>Workflow</th><th>Status</th><th class="n">Pass rate</th><th class="n">Runs</th><th class="n">Failed</th><th class="n">Flaky</th><th class="n">Runtime median</th><th class="n">Runtime P90</th></tr>';
   rows.forEach(function(x){var c=x.passRate==null?'var(--mute)':x.passRate>=.9?'var(--good)':x.passRate>=.8?'var(--warn)':'var(--bad)';
-    h+='<tr><td class="trunc" title="'+esc(x.workflow)+'">'+esc(x.workflow)+'</td><td>'+st(x.passRate)+'</td><td class="n"><span class="pb"><i style="width:'+(x.passRate==null?0:x.passRate*100)+'%;background:'+c+'"></i></span>'+pct(x.passRate)+'</td><td class="n">'+fmt(x.passed+x.failed)+'</td><td class="n">'+x.failed+'</td><td class="n">'+x.flaky+'</td><td'+cellLv(x.p50==null?null:x.p50/60,{good:10,warn:20,higher:false})+'>'+dur(x.p50)+'</td><td class="n">'+dur(x.p90)+'</td><td class="n">'+(x.totalSeconds?(x.totalSeconds/3600).toFixed(1)+' h':'—')+'</td><td class="n">'+(x.longRuns||'')+'</td></tr>';});
+    h+='<tr><td class="trunc" title="'+esc(x.workflow)+'">'+esc(x.workflow)+'</td><td>'+st(x.passRate)+'</td><td class="n"><span class="pb"><i style="width:'+(x.passRate==null?0:x.passRate*100)+'%;background:'+c+'"></i></span>'+pct(x.passRate)+'</td><td class="n">'+fmt(x.passed+x.failed)+'</td><td class="n">'+x.failed+'</td><td class="n">'+x.flaky+'</td><td'+cellLv(x.p50==null?null:x.p50/60,{good:10,warn:20,higher:false})+'>'+dur(x.p50)+'</td><td class="n">'+dur(x.p90)+'</td></tr>';});
   box.innerHTML=h+'</table></div>'+(w.length>10?'<button class="more" id="more">'+(P.allWf?'Show fewer':'Show all '+w.length+' workflows')+'</button>':'');
   var mb=el('more');if(mb)mb.addEventListener('click',function(){P.allWf=!P.allWf;drawTable();});}
 function render(){ATTN=[];setUrl({om:P.om!=='count'?P.om:'',wf:P.wf,br:P.br!=='main'?P.br:'',tm:P.tm!=='total'?P.tm:'',ctm:P.ctm!=='hours'?P.ctm:''});syncShell();drawKpis();drawOutcomes();drawTests();drawTime();drawTable();drawAttention();drawStatus();}
@@ -728,7 +724,7 @@ ${card("packages", "Package downloads", "PyPI and npm, from the registries.")}
   return shell(
     "users",
     "Users",
-    "Who is getting GAIA. Public data only: GitHub release downloads, PyPI and npm. Stars and forks are on the Developers page.",
+    "Who is getting GAIA. Public data only: GitHub release downloads, PyPI and npm. Stars and forks are on the Developers and Growth pages.",
     body,
     USERS_JS,
   );

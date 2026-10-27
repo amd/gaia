@@ -61,8 +61,6 @@ const isBuildOnMain = (r: { branch: string | null; event: string }) => r.branch 
 /** Runs longer than this are treated as having waited (for approval or a runner), not as CI work. */
 export const LONG_RUN_S = 6 * 3600;
 
-const sinceIso = (days: number): string => new Date(Date.now() - days * 86_400_000).toISOString();
-const sinceDay = (days: number): string => sinceIso(days).slice(0, 10);
 
 export async function handleApi(db: D1Database, path: string, url: URL): Promise<Response> {
   let days: number;
@@ -74,6 +72,18 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
   const all = async <T>(sql: string, ...args: unknown[]): Promise<T[]> =>
     (await db.prepare(sql).bind(...args).all<T>()).results;
   const today = new Date().toISOString().slice(0, 10);
+  // Windows end where the data does: at the last successful collection of the sources an endpoint
+  // reads, not at "now", or a window that runs past the data reads low against a full earlier one.
+  const collectedAt = async (...sources: string[]): Promise<number | null> => {
+    const r = await db
+      .prepare(`SELECT MIN(t) AS t FROM (SELECT MAX(finished_at) AS t FROM collect_log WHERE ok = 1 AND source IN (${sources.map(() => "?").join(", ")}) GROUP BY source)`)
+      .bind(...sources)
+      .first<{ t: string | null }>();
+    return r?.t ? Date.parse(r.t) : null;
+  };
+  let base = Date.now();
+  const sinceIso = (d: number): string => new Date(base - d * 86_400_000).toISOString();
+  const sinceDay = (d: number): string => sinceIso(d).slice(0, 10);
 
   if (path === "/api/downloads") {
     const latest = await db.prepare("SELECT MAX(day) AS day FROM asset_snapshots").first<{ day: string | null }>();
@@ -119,7 +129,9 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
     const items = await all<ItemRow>("SELECT kind, created_at, closed_at, merged_at, assoc, author FROM items WHERE kind = 'pr'");
     const commits = await all<CommitRow>("SELECT day, at, author FROM commits");
     const shift = (day: string, n: number) => new Date(Date.parse(day) + n * 86_400_000).toISOString().slice(0, 10);
-    const end = shift(today, 1);
+    // Whole days through the last one fully collected: a collection on day D covers the days before it.
+    const asOf = await collectedAt("issues", "commits", "stars");
+    const end = asOf ? new Date(asOf).toISOString().slice(0, 10) : shift(today, 1);
     const allTime = days >= 36500;
     const first = [stars[0]?.day, forks[0]?.day, commits.map((c) => c.day).sort()[0]].filter(Boolean).sort()[0] ?? today;
     // Whole calendar days ending today, as the page's charts count them.
@@ -130,13 +142,15 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
     // These are complete dated lists from GitHub, so the window before is always known (zero before the project began).
     const previous = allTime ? null : growthWindow(stars, forks, items, commits, maintainers, prevFrom, from);
     const gran = !allTime && days <= 90 ? "week" : "month";
+    // Periods start four before the range, so the page can compare the first ones with a recent pace.
+    const baseFrom = shift(from, gran === "week" ? -28 : -124);
     // Daily downloads: GitHub installs from consecutive snapshots, registries as reported.
     const hist = await all<{ day: string; tag: string; asset: string; downloads: number }>(
       "SELECT day, tag, asset, downloads FROM asset_snapshots WHERE day >= ?",
       // A week of slack: registries report late, so their windows end, and start, a few days early.
-      allTime ? "0000" : shift(prevFrom, -8),
+      allTime ? "0000" : shift(prevFrom < baseFrom ? prevFrom : baseFrom, -8),
     );
-    const pkgs = await all<{ source: string; day: string; downloads: number }>("SELECT source, day, downloads FROM package_daily WHERE day >= ?", allTime ? "0000" : shift(prevFrom, -7));
+    const pkgs = await all<{ source: string; day: string; downloads: number }>("SELECT source, day, downloads FROM package_daily WHERE day >= ?", allTime ? "0000" : shift(prevFrom < baseFrom ? prevFrom : baseFrom, -7));
     const firsts = Object.fromEntries(
       (await all<{ source: string; day: string }>("SELECT source, MIN(day) AS day FROM package_daily GROUP BY source UNION ALL SELECT 'installs', MIN(day) FROM asset_snapshots")).map((r) => [r.source, r.day]),
     );
@@ -155,9 +169,9 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
       previous: previous && { ...previous, starRate30: per30(previous.starGrowth, span), forkRate30: per30(previous.forkGrowth, span) },
       // People whose first PR was 90 to 180 days ago, so every one has had the full 90 days.
       newcomers: newcomerRetention(activity(items, []), shift(today, -2 * RETURN_DAYS), shift(today, -RETURN_DAYS), today),
-      periods: growthPeriods(stars, forks, items, commits, maintainers, gran, today, from),
+      periods: growthPeriods(stars, forks, items, commits, maintainers, gran, today, allTime ? from : baseFrom),
       downloads: allTime ? null : downloadWindows(dlDays, span, end, firsts),
-      downloadPeriods: downloadPeriods(dlDays, gran, from, today),
+      downloadPeriods: downloadPeriods(dlDays, gran, allTime ? from : baseFrom, today),
     });
   }
 
@@ -171,6 +185,8 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
     );
     const items = allItems.filter((i) => keep(i.author));
     const commits = allCommits.filter((c) => keep(c.author));
+    base = (await collectedAt("issues", "commits")) ?? base;
+    const until = new Date(base).toISOString();
     const since = sinceIso(days);
     const prevSince = new Date(Date.parse(since) - days * 86_400_000).toISOString();
     const firstCommitBy = new Map<string, string>();
@@ -193,8 +209,8 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
     const brief = (s: RangeSummary) => ({ prsOpened: s.prsOpened, prsMerged: s.prsMerged, issuesOpened: s.issuesOpened, medianDaysToMerge: s.medianDaysToMerge, p90DaysToMerge: s.p90DaysToMerge, openIssues: s.openIssues, openPrs: s.openPrs });
     const allTimeRange = days >= 36500;
     const split = {
-      core: brief(rangeSummary(core, [], since)),
-      outside: brief(rangeSummary(outside, [], since)),
+      core: brief(rangeSummary(core, [], since, until)),
+      outside: brief(rangeSummary(outside, [], since, until)),
       corePrevious: allTimeRange ? null : brief(rangeSummary(core, [], prevSince, since)),
       outsidePrevious: allTimeRange ? null : brief(rangeSummary(outside, [], prevSince, since)),
     };
@@ -202,7 +218,7 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
       split,
       botOpenIssues: allItems.filter((i) => i.kind === "issue" && !i.closed_at && isBot(i.author)).length,
       daily: momentumDaily(items, commits, today),
-      summary: rangeSummary(items, commits, since),
+      summary: rangeSummary(items, commits, since, until),
       // The equal-length window before this one, for trend colours; "all" has none.
       previous: days >= 36500 ? null : { ...rangeSummary(items, commits, prevSince, since), mergeDurations: [], closeDurations: [] },
       contributors: contributors(allItems, allCommits, weekly, since, firstCommitBy),
@@ -214,6 +230,7 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
 
 
   if (path === "/api/ci") {
+    base = (await collectedAt("runs")) ?? base;
     const runs = await all<RunRow>(
       "SELECT id, workflow, branch, event, status, conclusion, head_sha, run_attempt, created_at, duration_s FROM workflow_runs WHERE created_at >= ?",
       sinceIso(days),
@@ -225,6 +242,7 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
   }
 
   if (path === "/api/ci-trend") {
+    base = (await collectedAt("runs")) ?? base;
     const branch = url.searchParams.get("branch") === "all" ? null : "main";
     const workflow = url.searchParams.get("workflow") || null;
     // Days; the page groups them into weeks or months itself.
@@ -259,6 +277,7 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
   }
 
   if (path === "/api/ci-time") {
+    base = (await collectedAt("runs")) ?? base;
     // Wall-clock time of finished runs, all branches and triggers. Runs that took longer than
     // LONG_RUN_S almost always sat waiting for approval or a runner, so they are counted apart.
     const rows = await all<{ day: string; workflow: string; seconds: number; runs: number }>(

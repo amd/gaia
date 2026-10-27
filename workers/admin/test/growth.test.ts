@@ -122,14 +122,14 @@ describe("downloadWindows", () => {
     // PyPI reported through Jan 28: the 7-day windows are Jan 22–28 and Jan 15–21.
     const d = days("2026-01-01", 28, (i) => ({ pypi: i < 21 ? 10 : 20 }));
     const w = downloadWindows(d, 7, "2026-01-31");
-    expect(w.pypi).toEqual({ total: 140, previous: 70, growth: 1, through: "2026-01-28" });
+    expect(w.pypi).toEqual({ total: 140, previous: 70, growth: 1, through: "2026-01-28", first: "2026-01-01" });
   });
 
   it("gives no comparison until the source covers the whole earlier window", () => {
     const d = days("2026-01-20", 9, () => ({ installs: 5 }));
     expect(downloadWindows(d, 7, "2026-01-29").installs).toMatchObject({ total: 35, previous: null, growth: null });
     expect(downloadWindows(d, 7, "2026-01-29", { installs: "2026-01-01" }).installs.previous).toBe(10);
-    expect(downloadWindows([], 7, "2026-01-29").npm).toEqual({ total: 0, previous: null, growth: null, through: null });
+    expect(downloadWindows([], 7, "2026-01-29").npm).toEqual({ total: 0, previous: null, growth: null, through: null, first: null });
   });
 });
 

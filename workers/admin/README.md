@@ -206,8 +206,10 @@ shows the last result of each source.
   GitHub on every start; current versions check `hub.amd-gaia.ai/updates` instead.
 - Files the classifier does not recognise show as **Unclassified**, not guessed. Add
   a rule in `src/classify.ts` and a case in `test/classify.test.ts`.
-- Developer and CI headline numbers count the selected window by exact timestamp; numbers
-  built from daily data (stars, package downloads) count whole calendar days. Charts span
+- Developer and CI headline numbers count the selected window by exact timestamp, ending at
+  the last successful collection of their data (not at "now", which would read low against
+  a full earlier window); numbers built from daily data (stars, package downloads) count
+  whole calendar days through the last one fully collected. Charts span
   the whole range in whole days, weeks (Monday start, UTC) or months, and say where
   collection began when the range reaches further back.
 - "Pass rate on main" counts push and nightly runs only: issue- and comment-triggered
