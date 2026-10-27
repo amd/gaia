@@ -125,9 +125,14 @@ describe("ciStats", () => {
     expect(out).toMatchObject({ flakyCommits: 1, commits: 1 });
   });
 
-  it("counts a pass on a re-run attempt as flaky, since the re-run replaced the failure", () => {
+  it("does not call a pass on a re-run attempt flaky by itself (the earlier attempt may have been cancelled)", () => {
     const { workflows } = ciStats([run({ head_sha: "r", run_attempt: 2 }), run({ head_sha: "s", run_attempt: 1 })]);
-    expect(workflows[0]!.flaky).toBe(1);
+    expect(workflows[0]!.flaky).toBe(0);
+  });
+
+  it("leaves runs that waited longer than the limit out of runtimes and totals, and counts them", () => {
+    const { workflows } = ciStats([run({ duration_s: 100, head_sha: "1" }), run({ duration_s: 200, head_sha: "2" }), run({ duration_s: 448714, head_sha: "3" })]);
+    expect(workflows[0]).toMatchObject({ p90: 200, totalSeconds: 300, longRuns: 1 });
   });
 
   it("counts a commit as flaky when it both failed and passed", () => {

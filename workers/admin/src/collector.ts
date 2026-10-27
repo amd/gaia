@@ -85,26 +85,32 @@ export async function getJson<T>(f: Fetcher, url: string, init?: RequestInit): P
   return (await res.json()) as T;
 }
 
-export async function batchRun(db: D1Database, stmts: D1PreparedStatement[]): Promise<void> {
-  for (let i = 0; i < stmts.length; i += 90) await db.batch(stmts.slice(i, i + 90));
-}
-
-// D1 allows at most 100 bound parameters per statement.
-const MAX_PARAMS = 99;
+// One JSON value per statement, kept well under D1's 2 MB limit for a bound value.
+const MAX_JSON_BYTES = 1_000_000;
 
 /**
- * Multi-row INSERT statements, packed up to D1's parameter limit. One statement
- * per ~10 rows instead of one per row keeps a nightly run far below D1's
- * per-invocation query limit.
+ * Bulk INSERT: rows are bound as one JSON array and expanded with json_each, so
+ * thousands of rows cost one statement. That keeps a nightly run to a few dozen
+ * statements, far below D1's per-invocation query limit.
  */
 export function insertMany(db: D1Database, table: string, cols: string[], rows: unknown[][], verb = "INSERT OR REPLACE"): D1PreparedStatement[] {
-  const per = Math.max(1, Math.floor(MAX_PARAMS / cols.length));
+  const select = cols.map((_, i) => `json_extract(value, '$[${i}]')`).join(", ");
+  const sql = `${verb} INTO ${table} (${cols.join(", ")}) SELECT ${select} FROM json_each(?)`;
   const out: D1PreparedStatement[] = [];
-  for (let i = 0; i < rows.length; i += per) {
-    const chunk = rows.slice(i, i + per);
-    const ph = `(${cols.map(() => "?").join(", ")})`;
-    out.push(db.prepare(`${verb} INTO ${table} (${cols.join(", ")}) VALUES ${chunk.map(() => ph).join(", ")}`).bind(...chunk.flat()));
+  let chunk: string[] = [];
+  let size = 2;
+  const flush = () => {
+    if (chunk.length) out.push(db.prepare(sql).bind(`[${chunk.join(",")}]`));
+    chunk = [];
+    size = 2;
+  };
+  for (const r of rows) {
+    const j = JSON.stringify(r);
+    if (size + j.length + 1 > MAX_JSON_BYTES) flush();
+    chunk.push(j);
+    size += j.length + 1;
   }
+  flush();
   return out;
 }
 

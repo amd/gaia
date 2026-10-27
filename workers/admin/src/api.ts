@@ -55,6 +55,9 @@ const BUILD_EVENTS = ["push", "schedule"];
 const BUILD_EVENTS_SQL = `(${BUILD_EVENTS.map((e) => `'${e}'`).join(", ")})`;
 const isBuildOnMain = (r: { branch: string | null; event: string }) => r.branch === "main" && BUILD_EVENTS.includes(r.event);
 
+/** Runs longer than this are treated as having waited (for approval or a runner), not as CI work. */
+export const LONG_RUN_S = 6 * 3600;
+
 const sinceIso = (days: number): string => new Date(Date.now() - days * 86_400_000).toISOString();
 const sinceDay = (days: number): string => sinceIso(days).slice(0, 10);
 
@@ -76,7 +79,8 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
     const assets = await all<AssetRow>("SELECT tag, asset, downloads FROM asset_snapshots WHERE day = ?", latest.day);
     const hist = await all<{ day: string; tag: string; asset: string; downloads: number }>(
       "SELECT day, tag, asset, downloads FROM asset_snapshots WHERE day >= ?",
-      sinceDay(days + 1),
+      // From the start of the first whole week or month the page will show, plus the day before it.
+      sinceDay(days + 32),
     );
     const firstDay = (await db.prepare("SELECT MIN(day) AS day FROM asset_snapshots").first<{ day: string }>())?.day;
     const { points, negativeDays } = dailyDeltas(hist);
@@ -133,7 +137,7 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
       daily: momentumDaily(items, commits, today),
       summary: rangeSummary(items, commits, since),
       // The equal-length window before this one, for trend colours; "all" has none.
-      previous: days >= 36500 ? null : rangeSummary(items, commits, prevSince, since),
+      previous: days >= 36500 ? null : { ...rangeSummary(items, commits, prevSince, since), mergeDurations: [], closeDurations: [] },
       contributors: contributors(allItems, allCommits, weekly, since, firstCommitBy),
       loc,
       locFiltered: filtered,
@@ -187,25 +191,30 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
   }
 
   if (path === "/api/ci-time") {
-    // Wall-clock time of every finished run, all branches and triggers: where CI time goes.
+    // Wall-clock time of finished runs, all branches and triggers. Runs that took longer than
+    // LONG_RUN_S almost always sat waiting for approval or a runner, so they are counted apart.
     const rows = await all<{ day: string; workflow: string; seconds: number; runs: number }>(
       `SELECT substr(created_at,1,10) AS day, workflow, SUM(duration_s) AS seconds, COUNT(*) AS runs
-       FROM workflow_runs WHERE created_at >= ? AND duration_s IS NOT NULL GROUP BY day, workflow`,
+       FROM workflow_runs WHERE created_at >= ? AND duration_s IS NOT NULL AND duration_s <= ${LONG_RUN_S} GROUP BY day, workflow`,
       sinceDay(days + 31),
     );
-    const prevRows = days >= 36500 ? [] : await all<{ workflow: string; seconds: number; runs: number }>(
-      `SELECT workflow, SUM(duration_s) AS seconds, COUNT(*) AS runs FROM workflow_runs
-       WHERE created_at >= ? AND created_at < ? AND duration_s IS NOT NULL GROUP BY workflow`,
-      sinceIso(days * 2),
-      sinceIso(days),
-    );
-    // Totals for exactly the selected window, by timestamp, so they compare like for like with `previous`.
-    const current = await all<{ workflow: string; seconds: number; runs: number }>(
-      `SELECT workflow, SUM(duration_s) AS seconds, COUNT(*) AS runs FROM workflow_runs
-       WHERE created_at >= ? AND duration_s IS NOT NULL GROUP BY workflow`,
-      sinceIso(days),
-    );
-    return json({ rows, current, previous: prevRows });
+    const totals = (from: string, to: string) =>
+      all<{ workflow: string; seconds: number; runs: number; long: number }>(
+        `SELECT workflow, SUM(CASE WHEN duration_s <= ${LONG_RUN_S} THEN duration_s ELSE 0 END) AS seconds,
+           SUM(duration_s <= ${LONG_RUN_S}) AS runs, SUM(duration_s > ${LONG_RUN_S}) AS long
+         FROM workflow_runs WHERE created_at >= ? AND created_at < ? AND duration_s IS NOT NULL GROUP BY workflow`,
+        from,
+        to,
+      );
+    const first = (await db.prepare("SELECT MIN(created_at) AS first FROM workflow_runs").first<{ first: string | null }>())?.first;
+    // Compare only against a window that collection fully covers; a half-empty one would show false growth.
+    const covered = days < 36500 && !!first && first <= sinceIso(days * 2);
+    return json({
+      rows,
+      current: await totals(sinceIso(days), "9999"),
+      previous: covered ? await totals(sinceIso(days * 2), sinceIso(days)) : null,
+      longRunSeconds: LONG_RUN_S,
+    });
   }
 
   if (path === "/api/tests") {
@@ -230,6 +239,7 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
     );
     const comparable = (r: EvalRunRow & { scen: number; tasks: number }) =>
       r.scen + r.tasks > 0 &&
+      r.conclusion !== "cancelled" &&
       (f.suite === "swebench") === isSweBench(r) &&
       matchesTrigger(runKind(r), f.trig) &&
       (!f.tier || tierLabel(r, r.scen || r.tasks) === f.tier) &&

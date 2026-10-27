@@ -129,6 +129,8 @@ export interface WorkflowStats {
   p50: number | null;
   p90: number | null;
   totalSeconds: number;
+  /** Runs that took longer than the long-run limit (waiting for approval or a runner); left out of the times. */
+  longRuns: number;
   flaky: number;
 }
 
@@ -143,7 +145,7 @@ export function percentile(sorted: number[], p: number): number | null {
  * skipped runs say nothing about health. A commit is flaky for a workflow when
  * that workflow failed on it and a later run (or re-run attempt) passed.
  */
-export function ciStats(runs: RunRow[]): {
+export function ciStats(runs: RunRow[], longRunS = 6 * 3600): {
   workflows: WorkflowStats[];
   /** Distinct commits with a decided run, the denominator for the flaky rate. */
   commits: number;
@@ -162,7 +164,7 @@ export function ciStats(runs: RunRow[]): {
     const decided = list.filter((r) => r.conclusion === "success" || r.conclusion === "failure");
     const passed = decided.filter((r) => r.conclusion === "success").length;
     const durations = list
-      .filter((r) => r.conclusion === "success" && r.duration_s !== null)
+      .filter((r) => r.conclusion === "success" && r.duration_s !== null && r.duration_s <= longRunS)
       .map((r) => r.duration_s as number)
       .sort((a, b) => a - b);
     const bySha = new Map<string, RunRow[]>();
@@ -171,10 +173,9 @@ export function ciStats(runs: RunRow[]): {
     for (const [sha, rs] of bySha) {
       rs.sort((x, y) => x.created_at.localeCompare(y.created_at) || x.run_attempt - y.run_attempt);
       const firstFail = rs.findIndex((r) => r.conclusion === "failure");
-      // A re-run keeps its run id, so a pass on attempt 2+ is itself the trace of a failure it replaced.
-      const isFlaky =
-        rs.some((r) => r.conclusion === "success" && r.run_attempt > 1) ||
-        (firstFail >= 0 && rs.slice(firstFail + 1).some((r) => r.conclusion === "success"));
+      // Only a failure followed by a pass on a later run counts. A re-run keeps its run id and GitHub
+      // replaces the earlier attempt, so a failure fixed by re-running the same run is not visible here.
+      const isFlaky = firstFail >= 0 && rs.slice(firstFail + 1).some((r) => r.conclusion === "success");
       if (isFlaky) {
         flaky++;
         flakyShas.add(sha);
@@ -188,7 +189,8 @@ export function ciStats(runs: RunRow[]): {
       passRate: decided.length ? passed / decided.length : null,
       p50: percentile(durations, 50),
       p90: percentile(durations, 90),
-      totalSeconds: list.reduce((a, r) => a + (r.duration_s ?? 0), 0),
+      totalSeconds: list.reduce((a, r) => a + (r.duration_s != null && r.duration_s <= longRunS ? r.duration_s : 0), 0),
+      longRuns: list.filter((r) => r.duration_s != null && r.duration_s > longRunS).length,
       flaky,
     });
   }

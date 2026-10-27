@@ -177,13 +177,22 @@ interface GhRun {
   conclusion: string | null;
   html_url: string;
   name: string;
+  run_attempt: number;
 }
+
+/** New or changed runs downloaded per invocation; the rest wait for the next run (artifacts last 14 days). */
+const MAX_RUNS_PER_INVOCATION = 40;
 
 export async function collectEvals(env: CollectEnv, f: Fetcher, days: number, today: Date, refresh = false): Promise<string> {
   const since = new Date(today.getTime() - days * 86_400_000).toISOString().slice(0, 10);
-  const known = new Set(
-    (await env.DB.prepare("SELECT run_id FROM eval_runs").all<{ run_id: number }>()).results.map((r) => r.run_id),
+  // Stored attempt per run: a re-run of failed lanes keeps the run id but bumps the attempt.
+  const known = new Map(
+    (await env.DB.prepare("SELECT run_id, run_attempt FROM eval_runs").all<{ run_id: number; run_attempt: number }>()).results.map((r) => [
+      r.run_id,
+      r.run_attempt,
+    ]),
   );
+  let deferred = 0;
   let runsRead = 0;
   let scenarios = 0;
   let noArtifacts = 0;
@@ -195,9 +204,14 @@ export async function collectEvals(env: CollectEnv, f: Fetcher, days: number, to
       const res = await getJson<{ workflow_runs: GhRun[] }>(f, url, { headers: ghHeaders(env) });
       runs.push(...res.workflow_runs);
       if (res.workflow_runs.length < 100) break;
+      if (page === 10) throw new Error(`More than 1,000 finished runs of ${wf} since ${since}; the listing would be cut off.`);
     }
     for (const run of runs) {
-      if (run.conclusion === "skipped" || (known.has(run.id) && !refresh)) continue;
+      if (run.conclusion === "skipped" || (known.get(run.id) === run.run_attempt && !refresh)) continue;
+      if (runsRead + noArtifacts >= MAX_RUNS_PER_INVOCATION) {
+        deferred++;
+        continue;
+      }
       try {
       const arts = await getJson<{ artifacts: { id: number; name: string; size_in_bytes: number; expired: boolean }[] }>(
         f,
@@ -226,8 +240,8 @@ export async function collectEvals(env: CollectEnv, f: Fetcher, days: number, to
       if (rows.length === 0) {
         // Remembered as having no scorecards, so it is not downloaded again every night.
         await env.DB.prepare(
-          "INSERT OR REPLACE INTO eval_runs (run_id, workflow, event, ref, is_tag, sha, created_at, conclusion, tier, agent_model, judge_model, minutes, lanes, html_url, collected_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, NULL, NULL, NULL, NULL, 0, ?, ?)",
-        ).bind(run.id, run.name, run.event, run.head_branch, run.head_sha, run.created_at, run.conclusion, run.html_url, new Date().toISOString()).run();
+          "INSERT OR REPLACE INTO eval_runs (run_id, workflow, event, ref, is_tag, sha, created_at, conclusion, tier, agent_model, judge_model, minutes, lanes, html_url, collected_at, run_attempt) VALUES (?, ?, ?, ?, 0, ?, ?, ?, NULL, NULL, NULL, NULL, 0, ?, ?, ?)",
+        ).bind(run.id, run.name, run.event, run.head_branch, run.head_sha, run.created_at, run.conclusion, run.html_url, new Date().toISOString(), run.run_attempt).run();
         noArtifacts++;
         continue;
       }
@@ -245,10 +259,10 @@ export async function collectEvals(env: CollectEnv, f: Fetcher, days: number, to
           ["run_id", "category", "scenario_id", "lane", "status", "score", "elapsed_s", "cost_usd", "tps", "ttft_s", "input_tokens", "output_tokens", "tool_calls", "turns", "root_cause", "kind"],
           rows.map((r) => [run.id, r.category, r.scenario_id, r.lane, r.status, r.score, r.elapsed_s, r.cost_usd, r.tps, r.ttft_s, r.input_tokens, r.output_tokens, r.tool_calls, r.turns, r.root_cause, r.kind])),
         env.DB.prepare(
-          "INSERT OR REPLACE INTO eval_runs (run_id, workflow, event, ref, is_tag, sha, created_at, conclusion, tier, agent_model, judge_model, minutes, lanes, html_url, collected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "INSERT OR REPLACE INTO eval_runs (run_id, workflow, event, ref, is_tag, sha, created_at, conclusion, tier, agent_model, judge_model, minutes, lanes, html_url, collected_at, run_attempt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ).bind(
           run.id, run.name, run.event, ref, isTag ? 1 : 0, run.head_sha, run.created_at, run.conclusion, tier,
-          pick("agentModel"), pick("judgeModel"), minutes, parsed.length, run.html_url, new Date().toISOString(),
+          pick("agentModel"), pick("judgeModel"), minutes, parsed.length, run.html_url, new Date().toISOString(), run.run_attempt,
         ),
       ]);
       runsRead++;
@@ -259,7 +273,10 @@ export async function collectEvals(env: CollectEnv, f: Fetcher, days: number, to
       }
     }
   }
-  const summary = `${runsRead} eval runs, ${scenarios} scenario results${noArtifacts ? `; ${noArtifacts} finished runs had no scorecards` : ""}`;
+  const summary =
+    `${runsRead} eval runs, ${scenarios} scenario results` +
+    (noArtifacts ? `; ${noArtifacts} finished runs had no scorecards` : "") +
+    (deferred ? `; ${deferred} more runs left for the next collection (at most ${MAX_RUNS_PER_INVOCATION} per run)` : "");
   if (failures.length) throw new Error(`${summary}; ${failures.length} run(s) could not be read: ${failures.join(" | ")}`);
   return summary;
 }

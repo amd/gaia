@@ -275,3 +275,74 @@ describe("filters", () => {
     expect(onlyX).toMatchObject({ scenarios: 1, passRate: 1 });
   });
 });
+
+describe("collectEvals against real SQLite", () => {
+  const evalEnv = (db: D1Database) => ({ DB: db, GITHUB_REPO: "amd/gaia", NPM_PACKAGE: "x", PYPI_PACKAGE: "y" });
+  const ghRun = (id: number, attempt = 1, conclusion = "success") => ({
+    id, event: "schedule", head_branch: "main", head_sha: "abc" + id, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    status: "completed", conclusion, html_url: "u", name: "Agent Eval — flagship", run_attempt: attempt,
+  });
+  async function github(runs: Record<string, ReturnType<typeof ghRun>[]>, zips: Record<number, Uint8Array | "gone">, calls: string[]) {
+    return async (url: string) => {
+      calls.push(url);
+      const wf = Object.keys(runs).find((w) => url.includes(`/workflows/${w}/runs`));
+      if (url.includes("/actions/workflows/")) return new Response(JSON.stringify({ workflow_runs: wf ? runs[wf] : [] }));
+      const art = url.match(/runs\/(\d+)\/artifacts/);
+      if (art) {
+        const z = zips[Number(art[1])];
+        return new Response(JSON.stringify({ artifacts: z === undefined ? [] : [{ id: Number(art[1]), name: "eval-lane", size_in_bytes: 100, expired: z === "gone" }] }));
+      }
+      const dl = url.match(/artifacts\/(\d+)\/zip/);
+      if (dl) return new Response(zips[Number(dl[1])] as Uint8Array);
+      return new Response("not found", { status: 404 });
+    };
+  }
+  const zipWith = (status: string) =>
+    makeZip({ "lane-status.json": JSON.stringify({ lane: "l1", tier: "smoke" }), "cat/scorecard.json": JSON.stringify({ scenarios: [scenario({ status })] }) });
+
+  it("re-reads a run when GitHub reports a newer attempt, and skips it otherwise", async () => {
+    const { memoryD1 } = await import("./d1");
+    const { collectEvals } = await import("../src/evals");
+    const db = memoryD1();
+    const calls: string[] = [];
+    await collectEvals(evalEnv(db), await github({ "eval_flagship.yml": [ghRun(1, 1)] }, { 1: await zipWith("FAIL") }, calls), 14, new Date());
+    expect((await db.prepare("SELECT status FROM eval_scenarios").first())).toEqual({ status: "FAIL" });
+    calls.length = 0;
+    await collectEvals(evalEnv(db), await github({ "eval_flagship.yml": [ghRun(1, 1)] }, { 1: await zipWith("FAIL") }, calls), 14, new Date());
+    expect(calls.some((c) => c.includes("/artifacts"))).toBe(false);
+    await collectEvals(evalEnv(db), await github({ "eval_flagship.yml": [ghRun(1, 2)] }, { 1: await zipWith("PASS") }, calls), 14, new Date());
+    expect((await db.prepare("SELECT e.status, r.run_attempt FROM eval_scenarios e JOIN eval_runs r USING(run_id)").first())).toEqual({ status: "PASS", run_attempt: 2 });
+  });
+
+  it("keeps going past an unreadable run, stores the readable ones, and reports the failure", async () => {
+    const { memoryD1 } = await import("./d1");
+    const { collectEvals } = await import("../src/evals");
+    const db = memoryD1();
+    const runs = { "eval_flagship.yml": [ghRun(1), ghRun(2)] };
+    await expect(collectEvals(evalEnv(db), await github(runs, { 1: "gone", 2: await zipWith("PASS") }, []), 14, new Date())).rejects.toThrow(/1 run\(s\) could not be read/);
+    expect((await db.prepare("SELECT run_id FROM eval_runs").all()).results).toEqual([{ run_id: 2 }]);
+  });
+
+  it("remembers a run with no scorecards so it is not fetched again", async () => {
+    const { memoryD1 } = await import("./d1");
+    const { collectEvals } = await import("../src/evals");
+    const db = memoryD1();
+    const calls: string[] = [];
+    await collectEvals(evalEnv(db), await github({ "eval_flagship.yml": [ghRun(3)] }, {}, calls), 14, new Date());
+    calls.length = 0;
+    await collectEvals(evalEnv(db), await github({ "eval_flagship.yml": [ghRun(3)] }, {}, calls), 14, new Date());
+    expect(calls.some((c) => c.includes("/runs/3/artifacts"))).toBe(false);
+  });
+});
+
+describe("cancelled eval runs", () => {
+  it("are left out of the run summaries, since they only measured the lanes that finished", () => {
+    const out = summarizeRuns([run(1, "2026-10-01T00:00:00Z", { conclusion: "cancelled" }), run(2, "2026-10-02T00:00:00Z")], [row(1, "a", "PASS"), row(2, "a", "FAIL")]);
+    expect(out.map((r) => r.run_id)).toEqual([2]);
+  });
+
+  it("cost per scenario counts only scenarios that report a cost", () => {
+    const [s] = summarizeRuns([run(1, "2026-10-01T00:00:00Z")], [row(1, "a", "PASS", { cost_usd: 0.4 }), row(1, "b", "PASS", { cost_usd: null })]);
+    expect(s!.costPerAttempted).toBeCloseTo(0.4);
+  });
+});

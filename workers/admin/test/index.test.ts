@@ -57,3 +57,9 @@ describe("maintainer accounts", () => {
     expect(parseMaintainers("dependabot[bot]")).toEqual(["dependabot[bot]"]);
   });
 });
+
+describe("collect origin check", () => {
+  it("answers 403, not 500, for Origin: null", async () => {
+    expect((await post({ "x-admin-action": "collect", origin: "null" })).status).toBe(403);
+  });
+});

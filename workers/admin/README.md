@@ -207,8 +207,16 @@ shows the last result of each source.
   automation and manual dispatches on `main` are not build health.
 - Writes that must be all-or-nothing (a day's release snapshot, a day of workflow runs,
   an eval run, the star, fork and line-count histories) are single D1 batches, which run as
-  one transaction. Rows are packed into multi-row inserts (about ten rows per statement),
-  which keeps a nightly run to a few hundred statements.
+  one transaction. Rows are bound as one JSON array per statement and expanded with
+  `json_each`, so thousands of rows cost one statement and a nightly run stays at a few
+  dozen statements. Tests run this SQL against real SQLite (`test/d1.ts`).
+- Workflow runs that took longer than 6 hours almost always sat waiting for approval or a
+  runner. They are counted separately ("waiting") and left out of CI time and runtimes.
+- Cancelled eval runs are stored but left out of pass rates: they only measured the lanes
+  that finished. A re-run of failed lanes keeps the run id; the collector re-reads it when
+  GitHub reports a newer attempt.
+- Each collection downloads at most 40 new or changed eval runs; the rest wait for the next
+  night (artifacts last 14 days, so the nightly job catches up well within that).
 - Unit-test counts are read from the pytest summary line in the main-branch
   `Unit Tests` job log (the workflow uploads no JUnit file). Change `TEST_WORKFLOW`
   in `wrangler.toml` to follow a different workflow.

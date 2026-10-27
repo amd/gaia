@@ -39,7 +39,15 @@ export default {
     if (path === "/api/collect" && req.method === "POST") {
       // Must be a deliberate call (curl or a script), never a cross-site form riding a signed-in browser.
       const origin = req.headers.get("origin");
-      if (req.headers.get("x-admin-action") !== "collect" || (origin && new URL(origin).host !== url.host)) {
+      const sameSite = (() => {
+        if (!origin) return true;
+        try {
+          return new URL(origin).host === url.host;
+        } catch {
+          return false; // "null" (sandboxed frames, file:) or anything unparseable is not this site
+        }
+      })();
+      if (req.headers.get("x-admin-action") !== "collect" || !sameSite) {
         return text("Refused: send the header 'x-admin-action: collect' from the same site (see README).", 403);
       }
       const days = Number(url.searchParams.get("days") ?? "3");

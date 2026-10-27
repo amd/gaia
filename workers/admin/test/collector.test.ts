@@ -9,15 +9,16 @@ interface Stmt {
   args: unknown[];
 }
 
-/** Records statements; a multi-row INSERT is recorded as one entry per row so assertions read per row. */
+/** Records statements; a bulk json_each INSERT is recorded as one entry per row so assertions read per row. */
 function fakeDb(): { db: D1Database; stmts: Stmt[]; batches: number[] } {
   const stmts: Stmt[] = [];
   const batches: number[] = [];
   const record = (sql: string, args: unknown[]) => {
-    const groups = sql.match(/VALUES (\([?, ]+\))(, \([?, ]+\))*$/);
-    const per = groups ? (groups[1]!.match(/\?/g) ?? []).length : 0;
-    if (!groups || per === 0 || args.length <= per) return void stmts.push({ sql, args });
-    for (let i = 0; i < args.length; i += per) stmts.push({ sql, args: args.slice(i, i + per) });
+    if (/FROM json_each\(\?\)$/.test(sql)) {
+      for (const row of JSON.parse(args[0] as string) as unknown[][]) stmts.push({ sql, args: row });
+      return;
+    }
+    stmts.push({ sql, args });
   };
   const make = (sql: string, args: unknown[] = []) => ({
     sql,
@@ -50,14 +51,28 @@ describe("collectReleases atomicity", () => {
 });
 
 describe("insertMany", () => {
-  it("packs rows into statements under D1's 100-parameter limit, keeping every value in order", () => {
+  it("binds rows as one JSON array per statement, keeping every value and its type", () => {
     const { db } = fakeDb();
-    const rows = Array.from({ length: 25 }, (_, i) => [i, `t${i}`, i * 2, null]);
+    const rows = Array.from({ length: 2500 }, (_, i) => [i, `t${i}`, i * 2, null]);
     const stmts = insertMany(db, "x", ["a", "b", "c", "d"], rows) as unknown as { sql: string; args: unknown[] }[];
-    expect(stmts).toHaveLength(2);
-    expect(stmts.every((s) => s.args.length <= 99)).toBe(true);
-    expect(stmts.flatMap((s) => s.args)).toEqual(rows.flat());
-    expect(stmts[0]!.sql).toMatch(/^INSERT OR REPLACE INTO x \(a, b, c, d\) VALUES \(\?, \?, \?, \?\)(, \(\?, \?, \?, \?\)){23}$/);
+    expect(stmts).toHaveLength(1);
+    expect(stmts[0]!.args).toHaveLength(1);
+    expect(JSON.parse(stmts[0]!.args[0] as string)).toEqual(rows);
+    expect(stmts[0]!.sql).toBe(
+      "INSERT OR REPLACE INTO x (a, b, c, d) SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'), json_extract(value, '$[3]') FROM json_each(?)",
+    );
+  });
+
+  it("splits into more statements only when one JSON value would get too large", () => {
+    const { db } = fakeDb();
+    const big = "x".repeat(10_000);
+    const stmts = insertMany(db, "x", ["a"], Array.from({ length: 250 }, () => [big]));
+    expect(stmts.length).toBe(3);
+  });
+
+  it("writes nothing for no rows", () => {
+    const { db } = fakeDb();
+    expect(insertMany(db, "x", ["a"], [])).toEqual([]);
   });
 });
 

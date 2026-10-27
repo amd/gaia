@@ -153,9 +153,21 @@ export async function collectCodeStats(env: CollectEnv, f: Fetcher): Promise<str
   const freq = await githubStats<[number, number, number][]>(env, f, "code_frequency");
   const people = await githubStats<{ author: { login: string } | null; weeks: { w: number; a: number; d: number; c: number }[] }[]>(env, f, "contributors");
   if (!Array.isArray(freq) || !Array.isArray(people)) throw new Error("GitHub statistics response was not a list.");
-  const perPerson = people.flatMap((p) =>
-    p.weeks.filter((w) => w.a || w.d || w.c).map((w) => [p.author?.login ?? "(unknown)", statWeek(w.w), w.c, w.a, w.d]),
-  );
+  // Summed per (person, week): GitHub lists every deleted account separately, all as "(deleted account)".
+  const sums = new Map<string, [string, string, number, number, number]>();
+  for (const p of people) {
+    const who = p.author?.login ?? "(deleted account)";
+    for (const w of p.weeks) {
+      if (!(w.a || w.d || w.c)) continue;
+      const k = `${who}|${statWeek(w.w)}`;
+      const cur = sums.get(k) ?? [who, statWeek(w.w), 0, 0, 0];
+      cur[2] += w.c;
+      cur[3] += w.a;
+      cur[4] += w.d;
+      sums.set(k, cur);
+    }
+  }
+  const perPerson = [...sums.values()];
   await writeAtomic(env.DB, [
     env.DB.prepare("DELETE FROM loc_weekly"),
     env.DB.prepare("DELETE FROM contributor_weekly"),

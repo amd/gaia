@@ -183,7 +183,8 @@ export function summarizeRuns(runs: EvalRunRow[], rows: EvalScenarioRow[], categ
         judgedPassRate: passed + failed ? passed / (passed + failed) : null,
         avgScore: avg(s.map((x) => x.score)),
         costUsd: cost,
-        costPerAttempted: cost != null && attempted ? cost / attempted : null,
+        // Over the scenarios that report a cost: dividing by every attempted one would understate it.
+        costPerAttempted: cost != null ? cost / s.filter((x) => x.cost_usd != null).length : null,
         avgTps: avg(s.map((x) => x.tps)),
         avgTtft: avg(s.map((x) => x.ttft_s)),
         medianSeconds: median(s.map((x) => x.elapsed_s).filter((x): x is number => x != null)),
@@ -193,7 +194,8 @@ export function summarizeRuns(runs: EvalRunRow[], rows: EvalScenarioRow[], categ
         tasksPassed: tasks.filter((x) => x.status === "PASS").length,
       };
     })
-    .filter((r) => r.scenarios > 0)
+    // A cancelled run measured only the lanes that finished before it stopped, so its pass rate is not comparable.
+    .filter((r) => r.scenarios > 0 && r.conclusion !== "cancelled")
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
 

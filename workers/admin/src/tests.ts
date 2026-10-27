@@ -9,7 +9,7 @@
  * counted once per Python version.
  */
 
-import { batchRun, ghHeaders, githubDownload, type CollectEnv, type Fetcher, utcDay } from "./collector";
+import { ghHeaders, githubDownload, insertMany, writeAtomic, type CollectEnv, type Fetcher, utcDay } from "./collector";
 
 export interface TestCounts {
   passed: number;
@@ -89,39 +89,47 @@ export async function collectTests(
       .bind(workflow, start, end)
       .all<{ id: number; created_at: string }>()
   ).results;
-  const have = new Set(
-    (await env.DB.prepare("SELECT day FROM test_results WHERE day BETWEEN ? AND ?").bind(start, end).all<{ day: string }>()).results.map(
-      (r) => r.day,
-    ),
+  // The run each stored day came from: a day is re-read whenever a later run has finished since.
+  const have = new Map(
+    (
+      await env.DB.prepare("SELECT day, run_id FROM test_results WHERE day BETWEEN ? AND ?")
+        .bind(start, end)
+        .all<{ day: string; run_id: number }>()
+    ).results.map((r) => [r.day, r.run_id]),
   );
-  const stmts: D1PreparedStatement[] = [];
+  const rowsOut: unknown[][] = [];
+  const failures: string[] = [];
   let read = 0;
   let missing = 0;
   for (const { id, day } of latestRunPerDay(rows)) {
-    if (have.has(day) && day !== end && !refresh) continue;
-    const jobs = await (async () => {
+    if (have.get(day) === id && !refresh) continue;
+    try {
       const url = `https://api.github.com/repos/${env.GITHUB_REPO}/actions/runs/${id}/jobs?per_page=100`;
       const res = await f(url, { headers: ghHeaders(env) });
       if (!res.ok) throw new Error(`GET ${url} returned HTTP ${res.status}.`);
-      return ((await res.json()) as { jobs: { id: number; conclusion: string | null }[] }).jobs;
-    })();
-    let best: TestCounts | null = null;
-    for (const j of jobs) {
-      if (j.conclusion !== "success" && j.conclusion !== "failure") continue;
-      const counts = parsePytestSummary(await jobLog(env, f, j.id));
-      if (counts && (!best || counts.total > best.total)) best = counts;
+      const jobs = ((await res.json()) as { jobs: { id: number; conclusion: string | null }[] }).jobs;
+      let best: TestCounts | null = null;
+      for (const j of jobs) {
+        if (j.conclusion !== "success" && j.conclusion !== "failure") continue;
+        const counts = parsePytestSummary(await jobLog(env, f, j.id));
+        if (counts && (!best || counts.total > best.total)) best = counts;
+      }
+      if (!best) {
+        missing++;
+        continue;
+      }
+      read++;
+      rowsOut.push([day, id, workflow, best.passed, best.failed, best.skipped, best.errors, best.total, jobs.length, new Date().toISOString()]);
+    } catch (e) {
+      // One unreadable day (for example a log past GitHub's retention) must not discard the others.
+      failures.push(`${day}: ${(e as Error).message}`);
     }
-    if (!best) {
-      missing++;
-      continue;
-    }
-    read++;
-    stmts.push(
-      env.DB.prepare(
-        "INSERT OR REPLACE INTO test_results (day, run_id, workflow, passed, failed, skipped, errors, total, jobs, collected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      ).bind(day, id, workflow, best.passed, best.failed, best.skipped, best.errors, best.total, jobs.length, new Date().toISOString()),
-    );
   }
-  await batchRun(env.DB, stmts);
-  return `${read} days of test counts from "${workflow}"${missing ? `, ${missing} run(s) had no pytest summary line` : ""}`;
+  await writeAtomic(
+    env.DB,
+    insertMany(env.DB, "test_results", ["day", "run_id", "workflow", "passed", "failed", "skipped", "errors", "total", "jobs", "collected_at"], rowsOut),
+  );
+  const summary = `${read} days of test counts from "${workflow}"${missing ? `, ${missing} run(s) had no pytest summary line` : ""}`;
+  if (failures.length) throw new Error(`${summary}; ${failures.length} day(s) could not be read: ${failures.join(" | ")}`);
+  return summary;
 }

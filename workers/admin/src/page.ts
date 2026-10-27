@@ -143,7 +143,9 @@ footer summary{cursor:pointer;display:flex;align-items:center;gap:4px}
 
 const CORE_JS = String.raw`
 var qs=new URLSearchParams(location.search);
-var S={range:qs.get('range')||'30',gran:qs.get('gran')||'auto',labels:qs.get('labels')==='1'};
+var RANGES=['1','7','30','90','365','all'],GRANS=['auto','day','week','month'];
+function pick(v,ok,d){return ok.indexOf(v)>=0?v:d;}
+var S={range:pick(qs.get('range'),RANGES,'30'),gran:pick(qs.get('gran'),GRANS,'auto'),labels:qs.get('labels')==='1'};
 var D={},Z={},SPECS={},DRAW={},HID={},ATTN=[];
 var MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 var RANGE_TEXT={'1':'last 24 hours','7':'last 7 days','30':'last 30 days','90':'last 90 days','365':'last 12 months','all':'all time'};
@@ -154,14 +156,12 @@ function dur(s){if(s==null)return '—';if(s<90)return s+'s';if(s<5400)return Ma
 function ddur(d){if(d==null)return '—';if(d<1/24)return Math.max(1,Math.round(d*1440))+' min';if(d<1)return (d*24).toFixed(d<5/24?1:0)+' h';return d.toFixed(d<10?1:0)+' days';}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function el(id){return document.getElementById(id);}
-function sumk(a,k){return a.reduce(function(s,x){return s+(x[k]||0);},0);}
 function rangeText(){return RANGE_TEXT[S.range]||('last '+S.range+' days');}
 /* Daily data: the last N calendar days, today included (24h covers yesterday and today, since days are whole). */
 function sinceDay(){if(S.range==='all')return '0000-00-00';var n=Math.max(2,Number(S.range));return new Date(Date.now()-(n-1)*864e5).toISOString().slice(0,10);}
 function today(){return new Date().toISOString().slice(0,10);}
 function dayText(){return S.range==='1'?'since yesterday':S.range==='all'?'all time':'last '+S.range+' days';}
 function sinceMs(){return S.range==='all'?0:Date.now()-Number(S.range)*864e5;}
-function inRange(rows){var s=sinceDay();return rows.filter(function(r){return r.day>=s;});}
 function weekKey(d){var t=Date.parse(d+'T00:00:00Z'),w=(new Date(t).getUTCDay()+6)%7;return new Date(t-w*864e5).toISOString().slice(0,10);}
 function granFor(n){if(S.gran!=='auto')return S.gran;return n<=45?'day':n<=400?'week':'month';}
 /* Group daily rows into day/week/month buckets. how: {field:'sum'|'last'}; a bucket whose values are all null stays null. */
@@ -178,13 +178,14 @@ var tip=el('tip'),pinned=null;
 function showTip(e,h){tip.innerHTML=h;tip.style.display='block';var w=tip.offsetWidth,hh=tip.offsetHeight,x=e.clientX+14,y=e.clientY+14;
   if(x+w>innerWidth-8)x=e.clientX-w-14;if(y+hh>innerHeight-8)y=e.clientY-hh-14;tip.style.left=Math.max(8,x)+'px';tip.style.top=Math.max(8,y)+'px';}
 function hideTip(){tip.style.display='none';}
-var GLYPH='<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="7.3" y="7" width="1.4" height="4.6" rx=".7" fill="currentColor"/><circle cx="8" cy="4.9" r=".9" fill="currentColor"/></svg>';
-function info(k){return '<button type="button" class="info" data-info="'+k+'" aria-label="About this">'+GLYPH+'</button>';}
+var GLYPH='__GLYPH__';
+function info(k){return '<button type="button" class="info" data-info="'+k+'" aria-label="About: '+esc(INFO[k]?INFO[k][0]:k)+'">'+GLYPH+'</button>';}
 function showInfo(b){var t=INFO[b.getAttribute('data-info')];if(!t)return;tip.innerHTML='<span class="it">'+esc(t[0])+'</span>'+esc(t[1]);tip.style.display='block';
   var r=b.getBoundingClientRect(),w=tip.offsetWidth,hh=tip.offsetHeight,y=r.bottom+8;if(y+hh>innerHeight-8)y=r.top-hh-8;tip.style.left=Math.max(8,Math.min(r.left-10,innerWidth-w-8))+'px';tip.style.top=Math.max(8,y)+'px';}
 document.addEventListener('mouseover',function(e){var b=e.target.closest&&e.target.closest('.info');if(b&&!pinned)showInfo(b);});
 document.addEventListener('mouseout',function(e){var b=e.target.closest&&e.target.closest('.info');if(b&&!pinned)hideTip();});
 document.addEventListener('focusin',function(e){var b=e.target.closest&&e.target.closest('.info');if(b)showInfo(b);});
+document.addEventListener('focusout',function(e){var b=e.target.closest&&e.target.closest('.info');if(b&&pinned!==b)hideTip();});
 document.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('.info');if(b){e.preventDefault();e.stopPropagation();if(pinned===b){pinned=null;hideTip();}else{pinned=b;showInfo(b);}}else if(pinned){pinned=null;hideTip();}},true);
 document.addEventListener('keydown',function(e){if(e.key==='Escape'){pinned=null;hideTip();}});
 
@@ -192,7 +193,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){pinned=null
 function markClipped(root){(root||document).querySelectorAll('td.trunc').forEach(function(td){if(td.classList.contains('wide'))return;td.classList.toggle('clipped',td.scrollWidth>td.clientWidth+1);if(td.classList.contains('clipped')&&!td.title)td.title=td.textContent;});}
 document.addEventListener('click',function(e){var td=e.target.closest&&e.target.closest('td.trunc');if(!td||e.target.closest('a'))return;if(!td.classList.contains('clipped')&&!td.classList.contains('wide'))return;
   var col=td.cellIndex,on=!td.classList.contains('wide');td.closest('table').querySelectorAll('tr').forEach(function(tr){var c=tr.cells[col];if(c&&c.classList.contains('trunc'))c.classList.toggle('wide',on);});e.stopPropagation();markClipped(td.closest('table'));});
-new MutationObserver(function(){clearTimeout(markClipped.t);markClipped.t=setTimeout(function(){markClipped();},60);}).observe(document.body,{childList:true,subtree:true});
+new MutationObserver(function(){clearTimeout(markClipped.t);markClipped.t=setTimeout(function(){markClipped();},60);}).observe(document.querySelector('main'),{childList:true,subtree:true});
 document.addEventListener('toggle',function(){markClipped();},true);
 function tableView(head,rows){return '<details class="tv"><summary>Table view</summary><div class="scroll"><table><tr>'+head.map(function(h,i){return '<th'+(i?' class="n"':'')+'>'+esc(h)+'</th>';}).join('')+'</tr>'+rows.map(function(r){return '<tr>'+r.map(function(c,i){return '<td'+(i?' class="n"':'')+'>'+c+'</td>';}).join('')+'</tr>';}).join('')+'</table></div></details>';}
 /* Place value labels without overlap: largest values first, skip any that would collide. */
@@ -201,16 +202,18 @@ function placeLabels(cands,minX,maxX){var placed=[],out='';cands.sort(function(a
 function svgPoint(svg,e){var p=svg.createSVGPoint();p.x=e.clientX;p.y=e.clientY;return p.matrixTransform(svg.getScreenCTM().inverse());}
 /* Drag-to-zoom: onZoom(p0,p1) receives the selected x span in svg pixels. */
 function enableZoom(svg,L,R,T,B,W,H,onZoom){var start=null,rect=null;
-  svg.addEventListener('mousedown',function(e){if(e.button!==0)return;var p=svgPoint(svg,e);if(p.x<L||p.x>W-R)return;start=p.x;rect=document.createElementNS('http://www.w3.org/2000/svg','rect');rect.setAttribute('class','sel');rect.setAttribute('y',T);rect.setAttribute('height',H-T-B);rect.setAttribute('x',start);rect.setAttribute('width',0);svg.appendChild(rect);e.preventDefault();});
+  svg.addEventListener('mousedown',function(e){if(e.button!==0)return;var p=svgPoint(svg,e);if(p.x<L||p.x>W-R)return;start=p.x;rect=document.createElementNS('http://www.w3.org/2000/svg','rect');rect.setAttribute('class','sel');rect.setAttribute('y',T);rect.setAttribute('height',H-T-B);rect.setAttribute('x',start);rect.setAttribute('width',0);svg.appendChild(rect);window.addEventListener('mouseup',up);e.preventDefault();});
   svg.addEventListener('mousemove',function(e){if(start==null)return;var x=Math.max(L,Math.min(W-R,svgPoint(svg,e).x));rect.setAttribute('x',Math.min(start,x));rect.setAttribute('width',Math.abs(x-start));});
   var up=function(e){if(start==null)return;var x=Math.max(L,Math.min(W-R,svgPoint(svg,e).x)),a=Math.min(start,x),b=Math.max(start,x);start=null;if(rect)rect.remove();rect=null;window.removeEventListener('mouseup',up);if(b-a>8)onZoom(a,b);};
-  svg.addEventListener('mousedown',function(){window.addEventListener('mouseup',up);});}
+}
 function zoomBar(id,zoomed){return '<div class="zoom">'+(zoomed?'<button type="button" data-unzoom="'+id+'">Reset zoom</button>':'<span>Drag to zoom</span>')+'</div>';}
 document.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('[data-unzoom]');if(b){var id=b.getAttribute('data-unzoom');delete Z[id];(DRAW[id]||function(){draw(id);})();}});
 
 /* Generic time or category chart.
    spec: {keys, gran?, cats?, catName?, series:[{name,color,vals,fmt?}], type:'bar'|'line'|'area', stacked?, ymin?, ymax?, yfmt?, h?, empty?, note?, title} */
-function chart(id,spec){SPECS[id]=spec;draw(id);}
+function chart(id,spec){SPECS[id]=spec;var h=HID[id];if(h){var names={};spec.series.forEach(function(x){names[x.name]=1;});Object.keys(h).forEach(function(k){if(!names[k])delete h[k];});if(spec.series.every(function(x){return h[x.name];}))delete HID[id];}draw(id);}
+/* Show a message instead of a chart, and forget the old chart so a resize cannot bring it back. */
+function emptyBox(id,msg){delete SPECS[id];var b=el(id);if(b)b.innerHTML='<div class="empty">'+msg+'</div>';}
 function draw(id){
   var spec=SPECS[id],box=el(id);if(!box||!spec)return;
   var all=spec.keys.length;if(!all){box.innerHTML='<div class="empty">'+esc(spec.empty||'No data for this range yet.')+'</div>';return;}
@@ -233,10 +236,11 @@ function draw(id){
       var d='M'+X(0).toFixed(1)+','+Y(top[0]).toFixed(1);for(k=1;k<n;k++)d+=' L'+X(k).toFixed(1)+','+Y(top[k]).toFixed(1);for(k=n-1;k>=0;k--)d+=' L'+X(k).toFixed(1)+','+Y(bot[k]).toFixed(1);
       s+='<path d="'+d+' Z" fill="'+se.color+'" fill-opacity=".75" stroke="'+se.color+'" stroke-width="1.2" stroke-linejoin="round"/>';});
   }else if(spec.type==='line'){
-    S2.forEach(function(se,si){var d='',pen=false;for(var k=0;k<n;k++){var v=se.vals[k];if(v==null){pen=false;continue;}d+=(pen?'L':'M')+X(k).toFixed(1)+','+Y(v).toFixed(1)+' ';pen=true;}
+    S2.forEach(function(se,si){var d='',pen=false;for(var k=0;k<n;k++){var v=se.vals[k];if(v==null){if(!spec.connect)pen=false;continue;}d+=(pen?'L':'M')+X(k).toFixed(1)+','+Y(v).toFixed(1)+' ';pen=true;}
       s+='<path fill="none" stroke="'+se.color+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" d="'+d+'"/>';
-      if(n<=60)for(var q=0;q<n;q++){if(se.vals[q]!=null)s+='<circle cx="'+X(q).toFixed(1)+'" cy="'+Y(se.vals[q]).toFixed(1)+'" r="3" fill="'+se.color+'" stroke="var(--bg)" stroke-width="1.5"/>';}
-      if(S.labels&&si===0)for(q=0;q<n;q++){if(se.vals[q]!=null)labels.push({x:X(q),y:Y(se.vals[q])-8,v:se.vals[q],text:(se.fmt||yfmt)(se.vals[q])});}});
+      for(var q=0;q<n;q++){if(se.vals[q]==null)continue;var lone=!spec.connect&&(q===0||se.vals[q-1]==null)&&(q===n-1||se.vals[q+1]==null);
+        if(n<=60||lone||spec.connect)s+='<circle cx="'+X(q).toFixed(1)+'" cy="'+Y(se.vals[q]).toFixed(1)+'" r="3" fill="'+se.color+'" stroke="var(--bg)" stroke-width="1.5"/>';}
+      if(S.labels)for(q=0;q<n;q++){if(se.vals[q]!=null)labels.push({x:X(q),y:Y(se.vals[q])-8,v:se.vals[q],text:(se.fmt||yfmt)(se.vals[q])});}});
   }else{
     var gs=stacked?1:S2.length,gw=Math.max(2,Math.min(34,cw*.76)),bw=gw/gs;
     for(var c=0;c<n;c++){var ac=0;S2.forEach(function(se,si){var v=se.vals[c];if(v==null||v<=0)return;
@@ -258,7 +262,7 @@ function draw(id){
   var svg=box.querySelector('svg.c'),hits=svg.querySelectorAll('.hit');
   hits.forEach(function(r){r.addEventListener('mousemove',function(e){hits.forEach(function(h){h.classList.remove('on');});r.classList.add('on');var k=Number(r.getAttribute('data-i'));
     var h='<span class="it">'+esc(lng(k))+'</span>',tot=0;S2.forEach(function(se){var v=se.vals[k];if(v!=null)tot+=v;h+='<span style="color:'+se.color+'">■</span> '+esc(se.name)+': <b class="num">'+(v==null?'—':(se.fmt||fmt)(v))+'</b><br>';});
-    if(stacked&&S2.length>1&&!spec.ymax)h+='Total: <b class="num">'+fmt(Math.round(tot*1000)/1000)+'</b>';showTip(e,h);});
+    if(stacked&&S2.length>1&&!spec.ymax)h+='Total: <b class="num">'+(spec.totalFmt||yfmt)(tot)+'</b>';showTip(e,h);});
     r.addEventListener('mouseleave',function(){r.classList.remove('on');hideTip();});});
   if(spec.onClick)hits.forEach(function(r){r.style.cursor='pointer';r.addEventListener('click',function(){spec.onClick(a+Number(r.getAttribute('data-i')));});});
   svg.addEventListener('dblclick',function(){delete Z[id];draw(id);});
@@ -292,8 +296,11 @@ function drawAttention(){var box=el('attn');if(!box)return;
 function setUrl(extra){var p=new URLSearchParams();p.set('range',S.range);if(S.gran!=='auto')p.set('gran',S.gran);if(S.labels)p.set('labels','1');
   Object.keys(extra||{}).forEach(function(k){if(extra[k])p.set(k,extra[k]);});history.replaceState(null,'','?'+p.toString());}
 function api(path){return fetch('/admin'+path+(path.indexOf('?')<0?'?':'&')+'range='+S.range).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j;});});}
-function load(jobs,render){el('errors').innerHTML='';Z={};
-  return Promise.all(jobs.map(function(j){return api(j[1]).then(function(r){D[j[0]]=r;}).catch(function(e){D[j[0]]=null;el('errors').insertAdjacentHTML('beforeend','<div class="banner">Could not load '+esc(j[0])+': '+esc(e.message)+'</div>');});})).then(render);}
+/* Only the newest request may update the page: a slow older response is dropped, never shown under newer labels. */
+var GEN=0;
+function load(jobs,render){var g=++GEN,got={},errs=[];
+  return Promise.all(jobs.map(function(j){return api(j[1]).then(function(r){got[j[0]]=r;}).catch(function(e){got[j[0]]=null;errs.push('<div class="banner">Could not load '+esc(j[0])+': '+esc(e.message)+'</div>');});}))
+    .then(function(){if(g!==GEN)return;Object.keys(got).forEach(function(k){D[k]=got[k];});Z={};el('errors').innerHTML=errs.join('');render();});}
 function syncShell(){document.querySelectorAll('[data-range]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.range===S.range));});
   document.querySelectorAll('[data-gran]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.gran===S.gran));});el('labels').setAttribute('aria-pressed',String(S.labels));}
 function drawStatus(){var o=D.status;if(!o||!o.log.length){el('status').innerHTML='No data collected yet.';el('fresh').textContent='';return;}
@@ -303,7 +310,7 @@ function drawStatus(){var o=D.status;if(!o||!o.log.length){el('status').innerHTM
    +'<div class="scroll" style="padding:8px 0 0"><table><tr><th>When (UTC)</th><th>Source</th><th>Result</th></tr>'+o.log.map(function(l){return '<tr><td>'+esc(l.finished_at.replace('T',' ').slice(0,16))+'</td><td>'+esc(l.source)+'</td><td class="'+(l.ok?'':'bad')+'" style="white-space:normal">'+(l.ok?'':'Failed: ')+esc(l.detail)+'</td></tr>';}).join('')+'</table></div></details>';}
 var rz;window.addEventListener('resize',function(){clearTimeout(rz);rz=setTimeout(function(){Object.keys(SPECS).forEach(function(id){draw(id);});if(DRAW.rel)DRAW.rel();},150);});
 function boot(jobs,render){
-  document.querySelectorAll('[data-range]').forEach(function(b){b.addEventListener('click',function(){S.range=b.dataset.range;load(jobs(),render);});});
+  document.querySelectorAll('[data-range]').forEach(function(b){b.addEventListener('click',function(){S.range=b.dataset.range;syncShell();load(jobs(),render);});});
   document.querySelectorAll('[data-gran]').forEach(function(b){b.addEventListener('click',function(){S.gran=b.dataset.gran;Z={};render();});});
   el('labels').addEventListener('click',function(){S.labels=!S.labels;render();});
   el('theme').addEventListener('click',function(){var t=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=t;try{localStorage.setItem('gaia-admin-theme',t);}catch(e){}});
@@ -312,7 +319,7 @@ function boot(jobs,render){
 
 export const INFO_COMMON = String.raw`
 'collection':['Data collection','A collector runs every night at 03:17 UTC and stores a snapshot in this dashboard’s own database. Each data source is logged; if one fails, its charts keep the last good data and the failure shows here instead of zeros.'],
-'range':['Time range','Headline numbers count exactly the selected window by timestamp. Charts show the whole days, weeks or months that overlap it. Group by Auto picks days for short ranges, weeks for up to a year and months beyond.'],
+'range':['Time range','Developer and CI headline numbers count the selected window by timestamp; numbers built from daily data (stars, package downloads) count whole calendar days. Charts show the whole days, weeks or months that overlap it. Group by Auto picks days for short ranges, weeks for up to a year and months beyond.'],
 `;
 
 const USERS_JS = String.raw`
@@ -320,7 +327,7 @@ var INFO={` + INFO_COMMON + String.raw`
 'installs':['Installs to date','Downloads of installer and app files (.exe, .msi, .deb, .AppImage, .rpm, .dmg, .pkg, .whl and similar) attached to GitHub releases, across every release and release candidate. Read from the GitHub Releases API. GitHub counts every download, including automation and repeat downloads, so this is an upper bound on people.'],
 'polls':['Not counted as installs','Older desktop apps (v0.17 to v0.22) check GitHub for updates by downloading latest.yml every time they start, and GitHub counts that as a download. Current versions check hub.amd-gaia.ai instead, so this number is mostly old installs still in use.'],
 'stars':['Stars added','Stars added in the selected days, against the same number of days just before. Green: at least 90% of the earlier pace. Amber: 60 to 90%. Red: below 60%. The total is GitHub’s own count.'],
-'pkg':['Package downloads','PyPI (pypistats.org, mirrors excluded) plus npm, over the selected days, against the same number of days just before (same colours as stars). Includes CI and automated installs, so treat it as reach rather than users. Registries publish a day late, so the newest day is not counted yet.'],
+'pkg':['Package downloads','PyPI (pypistats.org, mirrors excluded) plus npm, over the selected days up to the newest day PyPI has published, against the same number of days just before (same colours as stars). Includes CI and automated installs, so treat it as reach rather than users.'],
 'latest':['Latest release','The newest final release and its installs so far. Its installs keep growing for a few weeks after it ships.'],
 'rels':['Releases','Final releases and release candidates published in the selected range, on the main product line (agent packages excluded).'],
 'per-release':['Downloads per release','One bar per release or release candidate at its publish date; its height is every download it has had so far, so older releases have had longer to accumulate. Files are grouped by OS and product from their names; unknown files show as Unclassified. Click a legend entry to hide or show it.'],
@@ -355,7 +362,7 @@ function drawOverview(){var d=D.downloads,t=D.traction,h='';
     h+=kpi('stars','Stars added','+'+fmt(cur),fmt(t.starsHeadline!=null?t.starsHeadline:t.stars[t.stars.length-1].total)+' total · '+dayText()+(prev!=null?' · '+fmt(prev)+' the '+n+' days before':''),lv,
       prev!=null?'+'+fmt(cur)+' stars against +'+fmt(prev)+' in the previous '+n+' days ('+Math.round((rr||0)*100)+'% of that pace)':'');}
   else h+=kpi('stars','Stars added','—','collecting…','');
-  if(t&&t.packages.length){var lastDay=t.packages.filter(function(r){return r.pypi!=null||r.npm!=null;}).map(function(r){return r.day;}).pop()||to,
+  if(t&&t.packages.length){var lastDay=t.packages.filter(function(r){return r.pypi!=null;}).map(function(r){return r.day;}).pop()||to,
       pf=n?shift(lastDay,-(n-1)):'0000',cur2=sumDays(t.packages,'pypi',pf,lastDay)+sumDays(t.packages,'npm',pf,lastDay),
       prev2=n?sumDays(t.packages,'pypi',shift(pf,-n),shift(pf,-1))+sumDays(t.packages,'npm',shift(pf,-n),shift(pf,-1)):null,r2=prev2?cur2/prev2:null;
     h+=kpi('pkg','Package downloads',fmt(cur2),(n?n+' days':'all time')+' to '+shortLab(lastDay,'day')+(prev2!=null?' · '+fmt(prev2)+' the '+n+' days before':''),n?level(r2,TREND):'',
@@ -401,8 +408,9 @@ function drawReleases(){var d=D.downloads,box=el('rel');
     if(S.labels)labels.push({x:x+bw/2,y:Y(row.tot)-6,v:row.tot,text:row.r.tag+' · '+cmp(row.tot)});});
   s+=placeLabels(labels,L-30,W-R+30);
   var order=OS.concat(PROD,['Release','Release candidate','Update checks']),keys=Object.keys(used).sort(function(a,b){return order.indexOf(a)-order.indexOf(b);});
-  box.innerHTML=zoomBar('rel',!!z)+'<div class="legend">'+(keys.length>1?keys.map(function(k){return '<span role="button" tabindex="0" data-leg="'+esc(k)+'" title="Click to '+(hid[k]?'show':'hide')+' '+esc(k)+'"'+(hid[k]?' class="off"':'')+'><i style="background:'+COL[k]+'"></i>'+esc(k)+'</span>';}).join(''):'')+'</div><svg class="c" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Downloads per release">'+s+'</svg>';
-  box.querySelectorAll('[data-leg]').forEach(function(sp){sp.addEventListener('click',function(){var nm=sp.getAttribute('data-leg'),h=HID.rel||(HID.rel={});if(h[nm])delete h[nm];else if(keys.filter(function(k){return !h[k];}).length>1)h[nm]=1;drawReleases();});});
+  box.innerHTML=zoomBar('rel',!!z)+'<div class="legend">'+(keys.length>1?keys.map(function(k){return '<span role="button" tabindex="0" aria-pressed="'+!hid[k]+'" data-leg="'+esc(k)+'" title="Click to '+(hid[k]?'show':'hide')+' '+esc(k)+'"'+(hid[k]?' class="off"':'')+'><i style="background:'+COL[k]+'"></i>'+esc(k)+'</span>';}).join(''):'')+'</div><svg class="c" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Downloads per release">'+s+'</svg>';
+  box.querySelectorAll('[data-leg]').forEach(function(sp){var tg=function(){var nm=sp.getAttribute('data-leg'),h=HID.rel||(HID.rel={});if(h[nm])delete h[nm];else if(keys.filter(function(k){return !h[k];}).length>1)h[nm]=1;drawReleases();};
+    sp.addEventListener('click',tg);sp.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();tg();}});});
   var svg=box.querySelector('svg.c'),hits=svg.querySelectorAll('.hit');
   hits.forEach(function(r){r.addEventListener('mousemove',function(e){var row=rows[Number(r.getAttribute('data-i'))];
     var h='<span class="it">'+esc(row.r.tag)+(row.r.rc?' · release candidate':'')+'</span>Published '+longLab(row.r.publishedAt.slice(0,10),'day')+'<br><b class="num">'+fmt(row.tot)+'</b> downloads<br>';
@@ -425,15 +433,15 @@ function drawByDate(){var d=D.downloads;if(!d||d.empty)return;
   chart('by-date',{keys:K,gran:x.g,type:'bar',stacked:true,title:'Installs by release date',h:220,series:se,empty:'No releases in this range.'});}
 
 function drawDaily(){var d=D.downloads;if(!d||d.empty)return;
-  if((d.daily||[]).length<1){el('daily').innerHTML='<div class="empty">First day of counts arrives after tomorrow’s snapshot (collection began '+esc(longLab(d.firstSnapshotDay,'day'))+').</div>';return;}
+  if((d.daily||[]).length<1){emptyBox('daily','First day of counts arrives after tomorrow’s snapshot (collection began '+esc(longLab(d.firstSnapshotDay,'day'))+').');return;}
   var x=series(d.daily,{install:'sum',meta:'sum'});
   var se=[{name:'Installs',color:'var(--s1)',vals:x.b.map(function(r){return r.install;})}];if(!P.install)se.push({name:'Update checks',color:'var(--mute)',vals:x.b.map(function(r){return r.meta;})});
   chart('daily',{keys:x.b.map(function(r){return r.key;}),gran:x.g,series:se,type:'bar',stacked:true,title:'Downloads per day',h:200,cover:coverNote(x,'daily counts'),
     note:d.negativeDays.length?'Counts fell on '+d.negativeDays.map(esc).join(', ')+' because a file or release was deleted; those days leave the drop out.':''});}
 
-function drawPackages(){var t=D.traction;if(!t||!t.packages.length){el('packages').innerHTML='<div class="empty">No package history collected yet.</div>';return;}
+function drawPackages(){var t=D.traction;if(!t||!t.packages.length){emptyBox('packages','No package history collected yet.');return;}
   var p=series(t.packages,{pypi:'sum',npm:'sum'});
-  chart('packages',{keys:p.b.map(function(r){return r.key;}),gran:p.g,type:'bar',stacked:true,title:'Package downloads',h:220,cover:coverNote(p,'registry data'),
+  chart('packages',{keys:p.b.map(function(r){return r.key;}),gran:p.g,type:'bar',stacked:true,title:'Package downloads',h:220,cover:p.first&&p.first>p.start?'No data before '+longLab(p.first,'day')+': the registries keep about 180 days (PyPI) to a year (npm).':'',
     series:[{name:'PyPI',color:'var(--s1)',vals:p.b.map(function(r){return r.pypi;})},{name:'npm',color:'var(--s2)',vals:p.b.map(function(r){return r.npm;})}],empty:'No package downloads in this range yet.'});}
 
 function render(){ATTN=[];setUrl({mode:P.mode!=='os'?P.mode:'',install:P.install?'':'0',rc:P.rc?'':'0'});
@@ -447,11 +455,11 @@ boot(function(){return [['downloads','/api/downloads'],['traction','/api/tractio
 const DEV_JS = String.raw`
 var INFO={` + INFO_COMMON + String.raw`
 'k-merged':['Pull requests merged','PRs merged in the selected window, by merge time, against PRs opened in it. Green: at least 80% as many merged as opened. Amber: 60 to 80%. Red: below 60% (work is piling up).'],
-'k-closed':['Issue closure ratio','Issues closed against issues opened in the window (the CHAOSS change-request closure ratio). Green: closing at least as many as arrive. Amber: 80 to 100%. Red: below 80%, so the backlog grows.'],
+'k-closed':['Issues closed','Issues closed against issues opened in the window (a closure ratio, as CHAOSS uses for change requests). Green: closing at least as many as arrive. Amber: 80 to 100%. Red: below 80%, so the backlog grows.'],
 'k-open':['Open issues','Issues open now, and how the backlog changed over the window. Green: shrinking or flat. Amber: grew up to 10%. Red: grew more than 10%.'],
-'k-prs':['Open pull requests','PRs open now, and how many have waited more than 14 days. Green: under 10% are that old. Amber: 10 to 25%. Red: over 25%, which means review is not keeping up.'],
+'k-prs':['Open pull requests','PRs open now, and how many have waited more than 14 days. Green: 10% or fewer are that old. Amber: up to 25%. Red: more than 25%, which means review is not keeping up.'],
 'k-commits':['Commits','Commits on the default branch in the window, and the people who made them (by GitHub login), against the window before. Green: at least 75% as many active contributors as before. Amber: 50 to 75%. Red: below 50%.'],
-'k-ttm':['Time to merge','Median and 90th-percentile time from a PR opening to merging, for PRs merged in the window. Green: median within a day and P90 within a week. Amber: median within 3 days and P90 within 2 weeks. Red: slower. Based on LinearB’s 2026 cycle-time tiers (elite under 25 hours, good 25 to 72 hours, measured at the 75th percentile).'],
+'k-ttm':['Time to merge','Median and 90th-percentile time from a PR opening to merging, for PRs merged in the window. Green: median within a day and P90 within a week. Amber: median within 3 days and P90 within 2 weeks. Red: slower. Industry benchmarks (LinearB, 2026) put fast teams under a day from first commit to merge and good ones under three days.'],
 'k-ttc':['Time to close','Median and 90th-percentile time from an issue opening to closing, for issues closed in the window. Green: median within a week. Amber: within 30 days. Red: longer. CHAOSS sets no fixed number; these follow its advice to pick a benchmark for your community and track the median.'],
 'issues':['Issues opened and closed','Per period. When closed bars are taller than opened, the backlog shrank. Click a legend entry to hide or show it.'],
 'backlog':['Open issues','Issues open at the end of each period (opened so far minus closed so far). Pull requests are excluded.'],
@@ -506,7 +514,7 @@ function drawPeople(){var m=D.momentum;
   el('who').querySelectorAll('[data-person]').forEach(function(cb){cb.onchange=function(){var x=cb.getAttribute('data-person');P.exclude=cb.checked?P.exclude.filter(function(y){return y.toLowerCase()!==x.toLowerCase();}):P.exclude.concat([x]);savePeople();reload();};});}
 function drawCharts(){var m=D.momentum;
   document.querySelectorAll('[data-pm]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.pm===P.pm));});
-  if(!m||!m.daily.length){['issues','backlog','prs','pr-backlog','commits','people','ttm-h','ttc-h','loc'].forEach(function(i){el(i).innerHTML='<div class="empty">No history collected yet.</div>';});return;}
+  if(!m||!m.daily.length){['issues','backlog','prs','pr-backlog','commits','people','ttm-h','ttc-h','loc'].forEach(function(i){emptyBox(i,'No history collected yet.');});return;}
   var x=series(m.daily,{issuesOpened:'sum',issuesClosed:'sum',openIssues:'last',openPrs:'last',prsOpened:'sum',prsMerged:'sum',commits:'sum',activeContributors28d:'last',newContributors:'sum'});
   var K=x.b.map(function(r){return r.key;}),col=function(f){return x.b.map(function(r){return r[f];});},minOf=function(a){var v=a.filter(function(z){return z!=null;});return v.length?Math.min.apply(null,v):0;};
   chart('issues',{keys:K,gran:x.g,type:'bar',title:'Issues opened and closed',h:210,series:[{name:'Opened',color:'var(--s2)',vals:col('issuesOpened')},{name:'Closed',color:'var(--s3)',vals:col('issuesClosed')}]});
@@ -520,14 +528,14 @@ function drawCharts(){var m=D.momentum;
   if(P.pm==='active')chart('people',{keys:K,gran:x.g,type:'line',title:'Active contributors',h:210,ymin:0,series:[{name:'Active in the last 28 days',color:'var(--s3)',vals:col('activeContributors28d')}]});
   else chart('people',{keys:K,gran:x.g,type:'bar',title:'New contributors',h:210,series:[{name:'First-time committers',color:'var(--s5)',vals:col('newContributors')}]});
   var loc=(m.loc||[]).map(function(w){return {day:w.week,additions:w.additions,deletions:w.deletions};}),lx=series(loc,{additions:'sum',deletions:'sum'});
-  if(lx.g==='day'){lx=(function(){var g='week',start=bucketStart(S.range==='all'?(loc[0]?loc[0].day:today()):sinceDay(),g),rows=loc.filter(function(r){return r.day>=start;});return {g:g,b:bucket(rows,{additions:'sum',deletions:'sum'},g),first:loc[0]?loc[0].day:null,start:start};})();}
+  var weeklyOnly=lx.g==='day';if(weeklyOnly){lx=(function(){var g='week',start=bucketStart(S.range==='all'?(loc[0]?loc[0].day:today()):sinceDay(),g),rows=loc.filter(function(r){return r.day>=start;});return {g:g,b:bucket(rows,{additions:'sum',deletions:'sum'},g),first:loc[0]?loc[0].day:null,start:start};})();}
   chart('loc',{keys:lx.b.map(function(r){return r.key;}),gran:lx.g,type:'bar',title:'Lines changed',h:230,yfmt:cmp,
     series:[{name:'Added',color:'var(--good)',vals:lx.b.map(function(r){return r.additions;}),fmt:function(v){return '+'+fmt(v);}},{name:'Deleted',color:'var(--bad)',vals:lx.b.map(function(r){return r.deletions;}),fmt:function(v){return '−'+fmt(v);}}],
-    note:m.locFiltered?'Hidden people left out (from GitHub’s per-contributor statistics).':'',empty:'GitHub has not computed line statistics yet; they arrive with the next collection.'});}
+    note:[weeklyOnly?'GitHub reports lines per week, so this chart is weekly even with Group by Day.':'',m.locFiltered?'Hidden people left out (from GitHub’s per-contributor statistics).':''].filter(Boolean).join(' '),empty:'GitHub has not computed line statistics yet; they arrive with the next collection.'});}
 function drawCommunity(){var t=D.traction;
   document.querySelectorAll('[data-comm]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.comm===P.comm));});
   document.querySelectorAll('[data-cmode]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.cmode===P.cmode));});
-  if(!t||!t.stars.length){el('community').innerHTML='<div class="empty">No history collected yet.</div>';return;}
+  if(!t||!t.stars.length){emptyBox('community','No history collected yet.');return;}
   var src=P.comm==='stars'?t.stars:t.forks,name=P.comm==='stars'?'Stars':'Forks',c=P.comm==='stars'?'var(--s1)':'var(--s3)';
   var x=series(src,{added:'sum',total:'last'}),K=x.b.map(function(r){return r.key;});
   var hl=P.comm==='forks'?t.forksHeadline:t.starsHeadline,last=src.length?src[src.length-1].total:null,note=hl!=null&&last!=null&&hl!==last?'GitHub’s own count is '+fmt(hl)+'; its dated list returns '+fmt(last)+'. The chart follows the dated list because it carries the history.':'';
@@ -548,15 +556,15 @@ var INFO={` + INFO_COMMON + String.raw`
 'k-pass':['Pass rate on main','Share of finished push and nightly runs on main that succeeded in the selected window. Issue- and comment-triggered automation, manual dispatches, and cancelled or skipped runs are left out. Green: 95% or better. Amber: 85 to 95%. Red: below 85%.'],
 'k-runs':['Runs','Finished push and nightly runs on main in the window that either passed or failed.'],
 'k-below':['Workflows below 90%','Workflows on main whose pass rate in the window is under 90%. Green: none. Amber: up to 3. Red: more than 3.'],
-'k-flaky':['Flaky commits','Commits where at least one workflow failed and then passed, including a pass on a re-run, counted once per commit. Green: at most 2% of commits. Amber: up to 5%. Red: more.'],
+'k-flaky':['Flaky commits','Commits where at least one workflow failed and a later run passed, counted once per commit. A failure fixed by re-running the same run cannot be seen, because GitHub replaces the earlier attempt. Green: at most 2% of commits. Amber: up to 5%. Red: more.'],
 'k-tests':['Unit tests','Tests in the latest main-branch Unit Tests run and the change across the window. Green: none failing and the count not shrinking. Amber: the count went down. Red: tests failing on main.'],
-'k-time':['CI time','Wall-clock time of every finished run in the window, all branches and triggers, against the window before. Green: up at most 10%. Amber: up to 30%. Red: up more than 30%.'],
+'k-time':['CI time','Wall-clock time of every finished run in the window, all branches and triggers, against the window before (shown only once that earlier window is fully collected). Runs that took more than 6 hours almost always sat waiting for approval or a runner, so they are counted separately, not added. Green: up at most 10%. Amber: up to 30%. Red: up more than 30%.'],
 'outcomes':['Workflow runs','Every GitHub Actions run, grouped by when it started. Counts stacks the outcomes; Share shows each outcome’s percentage; Pass rate shows passed against failed with cancelled and skipped left out. With main selected, only push and nightly runs count. Click a legend entry to hide or show it.'],
 'tests':['Unit tests','Read from the pytest summary line (for example “1234 passed, 5 skipped in 312s”) of the latest main-branch Unit Tests run each day, so it covers the unit suite only. If a run has several jobs, the one with the most tests is used. Days without a readable summary are left out, not shown as zero.'],
-'time':['Where CI time goes','Wall-clock time of finished runs per period, split by workflow (the largest eight, the rest grouped as Other). This is run duration from start to finish, not billed runner minutes: a run with parallel jobs counts once. Click a legend entry to hide a workflow.'],
-'time-table':['CI time by workflow','Total and per-run time in the window, and the change against the window before. Median and P90 are per run.'],
-'table':['Workflow health','Each workflow’s push and nightly runs on main in the window. Flaky counts commits where it both failed and passed. Runtime median and P90 are over successful runs.']};
-var P={om:qs.get('om')||'count',wf:qs.get('wf')||'',br:qs.get('br')||'main',tm:qs.get('tm')||'total',ctm:qs.get('ctm')||'hours',allWf:false};
+'time':['Where CI time goes','Wall-clock time of finished runs per period, split by workflow (the largest eight, the rest grouped as Other). This is run duration from start to finish, not billed runner minutes: a run with parallel jobs counts once. Runs over 6 hours are left out as waiting time. Click a legend entry to hide a workflow.'],
+'time-table':['CI time by workflow','Total and average time per run in the window, and the change against the window before. Waiting counts runs over 6 hours, which are left out of the times.'],
+'table':['Workflow health','Each workflow’s push and nightly runs on main in the window. Runs counts those that passed or failed (cancelled and skipped left out). Flaky counts commits where it failed and a later run passed. Runtime median and P90 are over successful runs, leaving out runs over 6 hours (waiting time).']};
+var P={om:pick(qs.get('om'),['count','share','rate'],'count'),wf:qs.get('wf')||'',br:pick(qs.get('br'),['main','all'],'main'),tm:pick(qs.get('tm'),['total','outcome','rate'],'total'),ctm:pick(qs.get('ctm'),['hours','share'],'hours'),allWf:false,allTime:false};
 var OC={success:'var(--good)',failure:'var(--bad)',cancelled:'var(--neutral)',other:'var(--s4)'};
 var WC=['var(--s1)','var(--s2)','var(--s3)','var(--s4)','var(--s5)','#7a6ee0','#2aa7b8','#b5651d'];
 function covText(ci){var f=ci.coverage.first.slice(0,10);return f>sinceDay()?'since '+longLab(f,'day')+' (earliest collected)':rangeText();}
@@ -571,14 +579,14 @@ function drawKpis(){var ci=D.ci,t=D.tests,ct=D.citime,h='';if(!ci||!ci.coverage|
   var tr=t&&t.rows.length?t.rows:null,tl=tr?tr[tr.length-1]:null,tf=tr?tr[0]:null;
   var tlv=!tl?'':tl.failed+tl.errors>0?'bad':tl.total<tf.total?'warn':'good';
   h+=kpi('k-tests','Unit tests',tl?fmt(tl.total):'—',tl?(tr.length>1?(tl.total-tf.total>=0?'+':'')+fmt(tl.total-tf.total)+' since '+shortLab(tf.day,'day'):'latest run '+esc(tl.day))+(tl.failed+tl.errors?' · '+fmt(tl.failed+tl.errors)+' failing':''):'not collected yet',tlv,tl?(tl.failed+tl.errors?fmt(tl.failed+tl.errors)+' unit tests failing on main':tl.total<tf.total?'the unit-test count went down':''):'');
-  if(ct){var cs=0,ps=0;ct.current.forEach(function(r){cs+=r.seconds;});ct.previous.forEach(function(r){ps+=r.seconds;});var g=ps?(cs-ps)/ps:null;
-    h+=kpi('k-time','CI time',fmt(Math.round(cs/3600))+' h',(g==null?'':(g>=0?'+':'')+Math.round(g*100)+'% vs the window before · ')+'all runs',level(g,{good:.1,warn:.3,higher:false}),g==null?'':'CI time '+(g>=0?'up ':'down ')+Math.abs(Math.round(g*100))+'% against the window before');}
+  if(ct){var cs=0,ps=0,lr=0;ct.current.forEach(function(r){cs+=r.seconds;lr+=r.long;});(ct.previous||[]).forEach(function(r){ps+=r.seconds;});var g=ct.previous&&ps?(cs-ps)/ps:null;
+    h+=kpi('k-time','CI time',fmt(Math.round(cs/3600))+' h',(g==null?'':(g>=0?'+':'')+Math.round(g*100)+'% vs the window before · ')+'all runs'+(lr?' · '+fmt(lr)+' waiting runs left out':''),level(g,{good:.1,warn:.3,higher:false}),g==null?'':'CI time '+(g>=0?'up ':'down ')+Math.abs(Math.round(g*100))+'% against the window before');}
   el('ov').innerHTML='<div class="strip">'+h+'</div>';}
 function drawOutcomes(){var t=D.citrend;
   document.querySelectorAll('[data-om]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.om===P.om));});
-  var sel=el('wf');if(t&&sel.options.length<=1){t.workflows.forEach(function(w){var o=document.createElement('option');o.value=w;o.textContent=w.length>46?w.slice(0,45)+'…':w;o.title=w;sel.appendChild(o);});}
+  var sel=el('wf'),key=t?t.workflows.join('\n'):'';if(t&&sel.getAttribute('data-opts')!==key){sel.length=1;t.workflows.forEach(function(w){var o=document.createElement('option');o.value=w;o.textContent=w.length>46?w.slice(0,45)+'…':w;o.title=w;sel.appendChild(o);});sel.setAttribute('data-opts',key);if(P.wf&&t.workflows.indexOf(P.wf)<0)P.wf='';}
   sel.value=P.wf;el('br').value=P.br;
-  if(!t){el('outcomes').innerHTML='';return;}
+  if(!t){emptyBox('outcomes','Could not load workflow runs.');return;}
   var rows=t.rows.map(function(r){return {day:r.period,success:r.success,failure:r.failure,cancelled:r.cancelled,other:r.other,total:r.total};});
   var x=series(rows,{success:'sum',failure:'sum',cancelled:'sum',other:'sum',total:'sum'}),b=x.b,K=b.map(function(r){return r.key;}),col=function(f){return b.map(function(r){return r[f];});};
   var se=[{name:'Passed',color:OC.success,vals:col('success')},{name:'Failed',color:OC.failure,vals:col('failure')},{name:'Cancelled',color:OC.cancelled,vals:col('cancelled')},{name:'Skipped or other',color:OC.other,vals:col('other')}];
@@ -591,7 +599,7 @@ function drawOutcomes(){var t=D.citrend;
       series:[{name:'Pass rate',color:OC.success,vals:prr,fmt:function(v){return pct(v);}}],note:'Fail rate is 100% minus the pass rate.'});}}
 function drawTests(){var t=D.tests;
   document.querySelectorAll('[data-tm]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.tm===P.tm));});
-  if(!t||!t.rows.length){el('tests').innerHTML='<div class="empty">No test counts in this range. They come from the pytest summary in each day’s main-branch Unit Tests log.</div>';return;}
+  if(!t||!t.rows.length){emptyBox('tests','No test counts in this range. They come from the pytest summary in each day’s main-branch Unit Tests log.');return;}
   var x=series(t.rows,{passed:'last',failed:'last',errors:'last',skipped:'last',total:'last'}),b=x.b,K=b.map(function(r){return r.key;}),col=function(f){return b.map(function(r){return r[f];});},cover=coverNote(x,'test counts');
   if(P.tm==='total'){var tt=col('total'),v=tt.filter(function(z){return z!=null;});chart('tests',{keys:K,gran:x.g,type:'line',title:'Number of tests',cover:cover,ymin:v.length?Math.max(0,Math.floor(Math.min.apply(null,v)*.95)):0,series:[{name:'Tests',color:'var(--s1)',vals:tt}]});}
   else if(P.tm==='outcome')chart('tests',{keys:K,gran:x.g,type:'bar',stacked:true,title:'Test outcomes',cover:cover,series:[{name:'Passed',color:OC.success,vals:col('passed')},{name:'Failed',color:OC.failure,vals:col('failed')},{name:'Errors',color:'var(--s2)',vals:col('errors')},{name:'Skipped',color:OC.cancelled,vals:col('skipped')}]});
@@ -599,8 +607,8 @@ function drawTests(){var t=D.tests;
     chart('tests',{keys:K,gran:x.g,type:'line',ymin:lo,ymax:1,yfmt:function(v){return (v*100).toFixed(1)+'%';},title:'Test pass rate',cover:cover,series:[{name:'Pass rate (skipped excluded)',color:OC.success,vals:rt,fmt:function(v){return pct(v,2);}}]});}}
 function drawTime(){var ct=D.citime;
   document.querySelectorAll('[data-ctm]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.ctm===P.ctm));});
-  if(!ct||!ct.rows.length){el('time').innerHTML='<div class="empty">No finished runs in this range.</div>';el('time-table').innerHTML='';return;}
-  var tot={},runs={};ct.current.forEach(function(r){tot[r.workflow]=r.seconds;runs[r.workflow]=r.runs;});
+  if(!ct||!ct.rows.length){emptyBox('time','No finished runs in this range.');el('time-table').innerHTML='';return;}
+  var tot={},runs={},waits={};ct.current.forEach(function(r){tot[r.workflow]=r.seconds;runs[r.workflow]=r.runs;waits[r.workflow]=r.long;});
   var names=Object.keys(tot).sort(function(a,b){return tot[b]-tot[a];}),top=names.slice(0,8),isTop={};top.forEach(function(n){isTop[n]=1;});
   var byDay={};ct.rows.forEach(function(r){var d=byDay[r.day]||(byDay[r.day]={day:r.day});var k=isTop[r.workflow]?r.workflow:'Other';d[k]=(d[k]||0)+r.seconds/3600;});
   var how={};top.concat(['Other']).forEach(function(n){how[n]='sum';});
@@ -610,29 +618,29 @@ function drawTime(){var ct=D.citime;
   if(P.ctm==='share'){var sums=x.b.map(function(r,i){return se.reduce(function(a,s){return a+(s.vals[i]||0);},0);});
     se=se.map(function(s){return {name:s.name,color:s.color,vals:s.vals.map(function(v,i){return sums[i]?(v||0)/sums[i]:null;}),fmt:function(v){return pct(v);}};});
     chart('time',{keys:K,gran:x.g,type:'area',ymax:1,yfmt:function(v){return Math.round(v*100)+'%';},title:'Share of CI time',series:se,cover:coverNote(x,'runs')});}
-  else chart('time',{keys:K,gran:x.g,type:'bar',stacked:true,title:'CI time',yfmt:function(v){return cmp(v)+' h';},series:se,cover:coverNote(x,'runs')});
-  var prev={};ct.previous.forEach(function(r){prev[r.workflow]=r.seconds;});var all=names.reduce(function(a,n){return a+tot[n];},0);
+  else chart('time',{keys:K,gran:x.g,type:'bar',stacked:true,title:'CI time',yfmt:function(v){return cmp(v)+' h';},totalFmt:function(v){return v.toFixed(1)+' h';},series:se,cover:coverNote(x,'runs')});
+  var prev={};(ct.previous||[]).forEach(function(r){prev[r.workflow]=r.seconds;});var all=names.reduce(function(a,n){return a+tot[n];},0);
   var rowsH=names.slice(0,P.allTime?names.length:12).map(function(n){var p=prev[n],g=p?(tot[n]-p)/p:null,lv=level(g,{good:.1,warn:.3,higher:false});
-    return '<tr><td class="trunc" style="max-width:340px">'+esc(n)+'</td><td class="n">'+(tot[n]/3600).toFixed(1)+' h</td><td class="n"><span class="pb"><i style="width:'+(tot[n]/all*100)+'%;background:var(--s1)"></i></span>'+pct(tot[n]/all,0)+'</td><td class="n">'+fmt(runs[n])+'</td><td class="n">'+dur(Math.round(tot[n]/runs[n]))+'</td><td class="n '+(lv==='bad'?'bad':lv==='warn'?'warnc':lv==='good'?'good':'')+'">'+(g==null?'new':(g>=0?'+':'')+Math.round(g*100)+'%')+'</td></tr>';}).join('');
-  el('time-table').innerHTML='<div class="scroll" style="max-height:none"><table><tr><th>Workflow</th><th class="n">Total</th><th class="n">Share</th><th class="n">Runs</th><th class="n">Avg per run</th><th class="n">vs before</th></tr>'+rowsH+'</table></div>'+(names.length>12?'<button class="more" id="more-time">'+(P.allTime?'Show fewer':'Show all '+names.length+' workflows')+'</button>':'');
+    return '<tr><td class="trunc" style="max-width:340px">'+esc(n)+'</td><td class="n">'+(tot[n]/3600).toFixed(1)+' h</td><td class="n"><span class="pb"><i style="width:'+(all?tot[n]/all*100:0)+'%;background:var(--s1)"></i></span>'+(all?pct(tot[n]/all,0):'—')+'</td><td class="n">'+fmt(runs[n])+'</td><td class="n">'+(runs[n]?dur(Math.round(tot[n]/runs[n])):'—')+'</td><td class="n">'+(waits[n]||'')+'</td><td class="n '+(lv==='bad'?'bad':lv==='warn'?'warnc':lv==='good'?'good':'')+'">'+(!ct.previous?'—':g==null?'new':(g>=0?'+':'')+Math.round(g*100)+'%')+'</td></tr>';}).join('');
+  el('time-table').innerHTML='<div class="scroll" style="max-height:none"><table><tr><th>Workflow</th><th class="n">Total</th><th class="n">Share</th><th class="n">Runs</th><th class="n">Avg per run</th><th class="n">Waiting</th><th class="n">vs before</th></tr>'+rowsH+'</table></div>'+(names.length>12?'<button class="more" id="more-time">'+(P.allTime?'Show fewer':'Show all '+names.length+' workflows')+'</button>':'');
   var mt=el('more-time');if(mt)mt.onclick=function(){P.allTime=!P.allTime;drawTime();};}
 function drawTable(){var ci=D.ci,box=el('wtable');if(!ci||!ci.coverage||!ci.coverage.first){box.innerHTML='<div class="empty">No workflow runs collected yet.</div>';return;}
   var w=ci.main.workflows,rows=P.allWf?w:w.slice(0,10);
   if(!w.length){box.innerHTML='<div class="empty">No push or nightly runs on main in this range.</div>';return;}
   function st(p){if(p==null)return '<span class="st"><span class="dot" style="background:var(--mute)"></span>no result</span>';if(p>=.95)return '<span class="st good"><span class="dot" style="background:var(--good)"></span>healthy</span>';if(p>=.85)return '<span class="st warnc"><span class="dot" style="background:var(--warn)"></span>watch</span>';return '<span class="st bad"><span class="dot" style="background:var(--bad)"></span>failing</span>';}
-  var h='<div class="scroll" style="max-height:none"><table><tr><th>Workflow</th><th>Status</th><th class="n">Pass rate</th><th class="n">Runs</th><th class="n">Failed</th><th class="n">Flaky</th><th class="n">Runtime median</th><th class="n">Runtime P90</th><th class="n">Total time</th></tr>';
+  var h='<div class="scroll" style="max-height:none"><table><tr><th>Workflow</th><th>Status</th><th class="n">Pass rate</th><th class="n">Runs</th><th class="n">Failed</th><th class="n">Flaky</th><th class="n">Runtime median</th><th class="n">Runtime P90</th><th class="n">Total time</th><th class="n">Waiting</th></tr>';
   rows.forEach(function(x){var c=x.passRate==null?'var(--mute)':x.passRate>=.95?'var(--good)':x.passRate>=.85?'var(--warn)':'var(--bad)';
-    h+='<tr><td class="trunc" title="'+esc(x.workflow)+'">'+esc(x.workflow)+'</td><td>'+st(x.passRate)+'</td><td class="n"><span class="pb"><i style="width:'+(x.passRate==null?0:x.passRate*100)+'%;background:'+c+'"></i></span>'+pct(x.passRate)+'</td><td class="n">'+x.runs+'</td><td class="n">'+x.failed+'</td><td class="n">'+x.flaky+'</td><td class="n">'+dur(x.p50)+'</td><td class="n">'+dur(x.p90)+'</td><td class="n">'+(x.totalSeconds?(x.totalSeconds/3600).toFixed(1)+' h':'—')+'</td></tr>';});
+    h+='<tr><td class="trunc" title="'+esc(x.workflow)+'">'+esc(x.workflow)+'</td><td>'+st(x.passRate)+'</td><td class="n"><span class="pb"><i style="width:'+(x.passRate==null?0:x.passRate*100)+'%;background:'+c+'"></i></span>'+pct(x.passRate)+'</td><td class="n">'+fmt(x.passed+x.failed)+'</td><td class="n">'+x.failed+'</td><td class="n">'+x.flaky+'</td><td class="n">'+dur(x.p50)+'</td><td class="n">'+dur(x.p90)+'</td><td class="n">'+(x.totalSeconds?(x.totalSeconds/3600).toFixed(1)+' h':'—')+'</td><td class="n">'+(x.longRuns||'')+'</td></tr>';});
   box.innerHTML=h+'</table></div>'+(w.length>10?'<button class="more" id="more">'+(P.allWf?'Show fewer':'Show all '+w.length+' workflows')+'</button>':'');
   var mb=el('more');if(mb)mb.addEventListener('click',function(){P.allWf=!P.allWf;drawTable();});}
 function render(){ATTN=[];setUrl({om:P.om!=='count'?P.om:'',wf:P.wf,br:P.br!=='main'?P.br:'',tm:P.tm!=='total'?P.tm:'',ctm:P.ctm!=='hours'?P.ctm:''});syncShell();drawKpis();drawOutcomes();drawTests();drawTime();drawTable();drawAttention();drawStatus();}
-function jobs(){return [['ci','/api/ci'],['tests','/api/tests'],['status','/api/status'],['citime','/api/ci-time'],['citrend','/api/ci-trend?branch='+P.br+'&workflow='+encodeURIComponent(P.wf)]];}
-function reloadTrend(){api(jobs()[4][1]).then(function(r){D.citrend=r;delete Z.outcomes;render();}).catch(function(e){el('errors').innerHTML='<div class="banner">Could not load workflow runs: '+esc(e.message)+'</div>';});}
+function jobs(){return [['ci','/api/ci'],['tests','/api/tests'],['status','/api/status'],['citime','/api/ci-time'],['citrend','/api/ci-trend?branch='+encodeURIComponent(P.br)+'&workflow='+encodeURIComponent(P.wf)]];}
+function reloadTrend(){var g=++GEN;api(jobs()[4][1]).then(function(r){if(g!==GEN)return;D.citrend=r;delete Z.outcomes;render();}).catch(function(e){if(g!==GEN)return;el('errors').innerHTML='<div class="banner">Could not load workflow runs: '+esc(e.message)+'</div>';});}
 document.querySelectorAll('[data-om]').forEach(function(b){b.addEventListener('click',function(){P.om=b.dataset.om;render();});});
 document.querySelectorAll('[data-tm]').forEach(function(b){b.addEventListener('click',function(){P.tm=b.dataset.tm;delete Z.tests;render();});});
 document.querySelectorAll('[data-ctm]').forEach(function(b){b.addEventListener('click',function(){P.ctm=b.dataset.ctm;delete Z.time;render();});});
 el('wf').addEventListener('change',function(e){P.wf=e.target.value;reloadTrend();});
-el('br').addEventListener('change',function(e){P.br=e.target.value;el('wf').length=1;P.wf='';reloadTrend();});
+el('br').addEventListener('change',function(e){P.br=e.target.value;P.wf='';reloadTrend();});
 boot(jobs,render);
 `;
 
@@ -678,7 +686,7 @@ ${active === "evals" ? "" : `<div class="ctl"><span>Group by</span>${seg("gran",
 </div></div>
 <main><h1>${title}</h1><p class="lede">${lede}</p><div id="errors"></div><div id="attn"></div>${body}
 <footer id="status">Loading&hellip;</footer>
-</main><div id="tip" role="tooltip"></div><script>${CORE_JS}${js}</script></body></html>`;
+</main><div id="tip" role="tooltip"></div><script>${CORE_JS.replace("__GLYPH__", GLYPH)}${js}</script></body></html>`;
 }
 
 export function renderUsersPage(): string {

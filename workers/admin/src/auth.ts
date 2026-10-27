@@ -95,7 +95,12 @@ export async function authenticate(
 
   const header = b64urlToJson<{ kid?: string; alg?: string }>(h);
   if (header.alg !== "RS256") throw new AuthError("Unexpected Access token algorithm.", 401);
-  const jwk = (await getJwks(env.ACCESS_TEAM_DOMAIN)).find((k) => k.kid === header.kid);
+  let jwk = (await getJwks(env.ACCESS_TEAM_DOMAIN)).find((k) => k.kid === header.kid);
+  if (!jwk && getJwks === defaultJwks) {
+    // Access rotated its keys since they were cached: fetch them once more before refusing.
+    jwksCache = null;
+    jwk = (await getJwks(env.ACCESS_TEAM_DOMAIN)).find((k) => k.kid === header.kid);
+  }
   if (!jwk) throw new AuthError("Access token signed by an unknown key.", 401);
 
   const key = await crypto.subtle.importKey(
