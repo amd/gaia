@@ -2201,7 +2201,7 @@ def _dispatch_sidecar_query(
 
     *memory* is the chat's memory mode (:func:`_memory_mode`). Likewise, a
     private or memory-off turn is stopped rather than sent to a sidecar that
-    keeps memory but is too old to be told not to save.
+    keeps memory but cannot be told not to save.
 
     *recording* is the turn's undo recording. A sidecar that takes it records
     its own file changes under a turn of this chat, which is where Changes,
@@ -2281,21 +2281,19 @@ def _dispatch_sidecar_query(
             return
 
     relayed_memory = None
-    if profile.min_memory_api_version is not None:
-        if memory_supported(profile, handle.api_version):
-            relayed_memory = memory
-        elif memory != "on":
-            logger.warning(
-                "%s agent at contract %s can't take memory=%s (needs %s)",
-                agent_type,
-                handle.api_version,
-                memory,
-                profile.min_memory_api_version,
-            )
-            sse_handler._emit(
-                {"type": "agent_error", "content": profile.memory_upgrade_message}
-            )
-            return
+    if memory_supported(profile, handle.api_version):
+        relayed_memory = memory
+    elif memory != "on":
+        logger.warning(
+            "%s agent at contract %s can't take memory=%s",
+            agent_type,
+            handle.api_version,
+            memory,
+        )
+        sse_handler._emit(
+            {"type": "agent_error", "content": profile.memory_upgrade_message}
+        )
+        return
 
     proxy = handle.proxy()
 
