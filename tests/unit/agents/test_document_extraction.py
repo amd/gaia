@@ -288,9 +288,24 @@ def test_safe_snapshot_rejects_nonregular_file_without_waiting(tmp_path, monkeyp
         # Windows has no mkfifo; exercise the same descriptor rejection
         # without requiring an OS-specific named-pipe service or a skipped test.
         path.write_text("placeholder")
-        monkeypatch.setattr(
-            os, "fstat", lambda fd: SimpleNamespace(st_mode=stat.S_IFIFO)
-        )
+        # Fake only the pipe's descriptor: a global fake breaks any other
+        # fstat caller (e.g. a fixture teardown) that runs while it's patched.
+        real_open, real_fstat, pipe_fds = os.open, os.fstat, set()
+
+        def fake_open(name, flags, *args, **kwargs):
+            fd = real_open(name, flags, *args, **kwargs)
+            if os.path.realpath(name) == os.path.realpath(path):
+                pipe_fds.add(fd)
+            return fd
+
+        def fake_fstat(fd):
+            if fd in pipe_fds:
+                pipe_fds.discard(fd)
+                return SimpleNamespace(st_mode=stat.S_IFIFO)
+            return real_fstat(fd)
+
+        monkeypatch.setattr(os, "open", fake_open)
+        monkeypatch.setattr(os, "fstat", fake_fstat)
     with pytest.raises(ValueError, match="regular text file"):
         read_snapshot(str(path), PathValidator(allowed_paths=[str(tmp_path)]))
 
