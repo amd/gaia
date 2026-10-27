@@ -611,6 +611,9 @@ class SSEOutputHandler(OutputHandler):
         self._relay_confirm_id = None
         # A relayed needs_input question the sidecar run is parked on.
         self._relay_question_id: Optional[str] = None
+        # What the sidecar measured fills its context, from its ``final`` event.
+        self.relay_context: Optional[Dict[str, Any]] = None
+        self.relay_context_error: Optional[str] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None

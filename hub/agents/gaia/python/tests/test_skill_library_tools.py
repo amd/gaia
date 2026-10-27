@@ -72,6 +72,7 @@ def _skill_markdown(
     permissions: tuple[str, ...] = (),
     tools_required: tuple[str, ...] = (),
     declared_tools: tuple[str, ...] = (),
+    pairs_with: tuple[str, ...] = (),
 ) -> str:
     """Author one SKILL.md as text."""
     lines = ["---", f"name: {name}", f"description: {description}"]
@@ -92,6 +93,9 @@ def _skill_markdown(
         for name_ in declared_tools:
             metadata.append(f"      - name: {name_}")
             metadata.append(f"        description: Tool {name_} provided by {name}.")
+    if pairs_with:
+        metadata.append("    pairs_with:")
+        metadata.extend(f"      - {p}" for p in pairs_with)
     if metadata:
         lines += ["metadata:", "  gaia:", *metadata]
     lines += ["---", "", f"# {name}", "", marker, ""]
@@ -129,6 +133,8 @@ def library(tmp_path_factory):
             description="Take structured notes from a conversation.",
             marker=NOTE_TAKER_MARKER,
             version="1.0.0",
+            # One installed companion, one that is not: the second is ignored.
+            pairs_with=("needs-tools", "not-installed-here"),
         ),
     )
     _write_skill(
@@ -415,6 +421,35 @@ def test_loading_twice_is_idempotent(session):
 
     assert second["already_loaded"] is True
     assert session.agent.system_prompt.count(NOTE_TAKER_MARKER) == 1
+
+
+def test_load_names_companions_that_are_not_loaded_yet(session):
+    """A model that loaded one skill of a pair is told the other exists."""
+    result = call(session, "load_skill", name="note-taker")
+
+    assert result["companion_skills"] == ["needs-tools"]
+    assert "needs-tools" in result["companion_hint"]
+    assert "not-installed-here" not in result["companion_hint"]
+
+
+def test_pairing_declared_on_one_side_shows_on_both(session):
+    result = call(session, "load_skill", name="needs-tools")
+
+    assert result["companion_skills"] == ["note-taker"]
+
+
+def test_no_companion_hint_once_the_companion_is_loaded(session):
+    call(session, "load_skill", name="needs-tools")
+    result = call(session, "load_skill", name="note-taker")
+
+    assert "companion_skills" not in result
+    assert "companion_hint" not in result
+
+
+def test_a_skill_without_pairs_gets_no_companion_hint(session):
+    result = call(session, "load_skill", name="needs-pytest")
+
+    assert "companion_skills" not in result
 
 
 def test_unload_names_what_is_loaded_when_the_skill_is_not(session):

@@ -230,3 +230,33 @@ func TestLegacyParserStillIndependent(t *testing.T) {
 		t.Error("legacy `answer` must read as unsupported on the canonical parser")
 	}
 }
+
+// #5739: a crash frame from the daemon must not tell the user to POST to its API.
+func TestDaemonRelayCrashFrameReadsPlainly(t *testing.T) {
+	raw := []byte(`{"type":"error","source":"daemon_relay","detail":"agent 'gaia' stream ended unexpectedly without a terminal event — re-ensure it (POST /daemon/v1/agents/gaia/ensure), and retry."}`)
+
+	got, ok := ParseCanonicalEvent(raw).(CanonicalErrorEvent)
+
+	if !ok {
+		t.Fatalf("want CanonicalErrorEvent, got %T", ParseCanonicalEvent(raw))
+	}
+	if got.Detail != AgentStoppedDetail {
+		t.Fatalf("detail = %q, want the plain message", got.Detail)
+	}
+	if !strings.Contains(got.RawDetail, "/daemon/v1/agents/gaia/ensure") {
+		t.Fatalf("raw detail = %q, want the daemon text kept for the log", got.RawDetail)
+	}
+	if got.Source != DaemonRelaySource {
+		t.Fatalf("source = %q, want it kept", got.Source)
+	}
+}
+
+func TestAnAgentsOwnErrorIsShownVerbatim(t *testing.T) {
+	raw := []byte(`{"type":"error","detail":"Lemonade isn't reachable at 127.0.0.1:13305.","status":502}`)
+
+	got := ParseCanonicalEvent(raw).(CanonicalErrorEvent)
+
+	if got.Detail != "Lemonade isn't reachable at 127.0.0.1:13305." {
+		t.Fatalf("detail = %q, want it verbatim", got.Detail)
+	}
+}

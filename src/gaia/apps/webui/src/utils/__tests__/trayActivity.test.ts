@@ -28,6 +28,7 @@ function input(overrides: Partial<TrayActivityInput> = {}): TrayActivityInput {
             session('c', 'Old', '2026-10-01T09:00:00'),
         ],
         runningSessionIds: [],
+        awaitingBySession: {},
         currentSessionId: null,
         isStreaming: false,
         awaitingUser: false,
@@ -77,6 +78,27 @@ describe('buildTrayActivity', () => {
     it('a chat waiting for approval is listed once', () => {
         const a = buildTrayActivity(input({
             currentSessionId: 'a', isStreaming: true, awaitingUser: true, notifications: [approval('a')],
+        }));
+        expect(a.needsYou).toEqual([{ id: 'a', title: 'Trip plan', reason: 'approval' }]);
+    });
+
+    it('a chat waiting on a prompt from another window needs you (#5740)', () => {
+        // The prompt went to a browser tab or the phone, so this window has no notification for it.
+        const a = buildTrayActivity(input({
+            runningSessionIds: ['a', 'b'],
+            awaitingBySession: { a: 'permission', b: 'question' },
+        }));
+        expect(a.needsYou).toEqual([
+            { id: 'a', title: 'Trip plan', reason: 'approval' },
+            { id: 'b', title: 'Budget', reason: 'answer' },
+        ]);
+    });
+
+    it('a prompt known both ways is listed once', () => {
+        const a = buildTrayActivity(input({
+            runningSessionIds: ['a'],
+            notifications: [approval('a')],
+            awaitingBySession: { a: 'permission' },
         }));
         expect(a.needsYou).toEqual([{ id: 'a', title: 'Trip plan', reason: 'approval' }]);
     });

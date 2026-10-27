@@ -443,6 +443,9 @@ which part (`llm`, `tools`, or `overhead`) dominated it.
 
 The agent automatically handles:
 - Invalid JSON responses (with repair attempts)
+- Direct JSON and native tool calls whose arguments are not JSON objects (the
+  call is not run; the model receives the tool name and argument type and can
+  retry with an object)
 - Tool execution failures (with retry logic)
 - Missing required fields (prompts LLM for correction)
 - Max steps exceeded (graceful termination)
