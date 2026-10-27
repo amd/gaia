@@ -494,10 +494,46 @@ def test_home_folder_refusal_names_no_folder_nobody_can_approve(layout, home):
 
 
 def test_home_folder_refusal_skips_a_folder_linked_to_a_whole_drive(layout, home):
-    (home / "Desktop").symlink_to(Path(home.anchor))
+    try:
+        (home / "Desktop").symlink_to(Path(home.anchor), target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"cannot create a symlink here: {exc}")
     agent = _BrowseAgent(layout["scope"], _RecordingConsole(True))
 
     refused = _browse(agent, home)
 
     assert "Movies" in refused
     assert "Desktop" not in refused
+
+
+def test_home_folder_refusal_names_no_folder_when_nobody_can_approve(layout, home):
+    validator = PathValidator(allowed_paths=[str(layout["scope"])])
+    validator.set_access_prompt(None)
+
+    with patch.object(PathValidator, "_can_prompt", return_value=False):
+        refused = validator.access_denied_message(str(home))
+
+    assert "too broad" in refused
+    assert "Movies" not in refused
+
+
+def test_refusal_of_a_path_outside_home_names_no_home_folder(layout, home):
+    systemp = layout["scope"].parent / "systemp"
+    systemp.mkdir()
+    agent = _BrowseAgent(layout["scope"], _RecordingConsole(True))
+
+    refused = _browse(agent, systemp)
+
+    assert "Access denied" in refused
+    assert "Movies" not in refused
+
+
+def test_the_hint_never_makes_the_home_folder_itself_askable(layout, home):
+    console = _RecordingConsole(True)
+    agent = _BrowseAgent(layout["scope"], console)
+
+    _browse(agent, home)
+    again = _browse(agent, home)
+
+    assert "too broad" in again
+    assert console.calls == []
