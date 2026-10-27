@@ -35,6 +35,7 @@ from gaia_agent_chat.tool_bundles import (
 )
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
 from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
 
 #: Ceiling on bundle size. A pull-in must never be able to exhaust the dynamic
@@ -61,10 +62,13 @@ def flagship_registry():
     Memory is forced off during construction (no embedder in CI) and the store
     is then faked so ``register_memory_tools`` runs — the same pinning
     ``test_gaia_agent.py`` uses, for the same reason: an environment-dependent
-    count made the drift guard pass locally and fail in CI.
+    count made the drift guard pass locally and fail in CI. The chat is
+    pinned open in GAIA desktop's browser pane for the same reason: that is
+    the one state where every browser tool registers, Playwright or not.
     """
     with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
+        mp.setattr(BrowserUseToolsMixin, "_pane_at_startup", lambda self: (True, True))
         # Opt-in (GAIA_DYNAMIC_TOOLS=1 / the UI toggle), and the bundles must
         # still cover the registry whenever someone turns it on.
         # On gpt-oss, the one model family that also registers set_reasoning_effort.

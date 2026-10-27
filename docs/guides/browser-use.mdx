@@ -54,6 +54,15 @@ Signing in is a hand-off, not something GAIA does for you:
 | `browser_type(ref, text, press_enter)` | Fill a field or pick an option | only when signed in |
 | `browser_login(url)` | Hand over for sign-in, then save the session | always |
 | `browser_sessions()` | List sites with a saved sign-in | no |
+| `browser_back()` | Go back a page | no |
+| `browser_find(text)` | Search the whole page for text | no |
+| `browser_screenshot(ref)` | Picture of the page or one element ([browser pane](/guides/agent-ui#gaia-reads-the-pane) only) | other sites |
+| `browser_logs(kind, errors_only, contains, new_only)` | Console messages or network requests ([browser pane](/guides/agent-ui#gaia-reads-the-pane) only) | other sites |
+
+In GAIA desktop, a chat open in the window uses the [browser pane](/guides/agent-ui#gaia-reads-the-pane)
+instead of the headless browser, and asks before reading any site that is not
+on this PC. There, clicking, typing and `browser_login` are not available yet;
+you sign in yourself in the pane.
 
 Elements are addressed by **ref** (`e1`, `e7`) from the last snapshot, never by
 screen coordinates:

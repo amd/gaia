@@ -382,6 +382,16 @@ FULL_BUNDLES = [
             "text a snapshot did not show."
         ),
     ),
+    # Registered only on a chat open in GAIA desktop's browser pane, and kept
+    # apart so a pull-in of "browser_use" never brings them along.
+    ToolBundle(
+        name="browser_inspect",
+        members=frozenset({"browser_screenshot", "browser_logs"}),
+        description=(
+            "Look at the page in the browser pane: a picture of it, and its "
+            "console errors and network requests."
+        ),
+    ),
     ToolBundle(
         name="code_index",
         members=frozenset(
@@ -595,6 +605,9 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "browser_sessions",
         "browser_back",
         "browser_find",
+        # Browser pane: registered only for a chat open in GAIA desktop.
+        "browser_screenshot",
+        "browser_logs",
         "remember",
         "recall",
         "update_memory",

@@ -629,9 +629,30 @@ asks. Downloads always ask where to save. Only http and https pages open:
 is GAIA's own local service. While a dialog or menu is open over the pane, the
 page shows as a still picture and comes back live when you close it.
 
-GAIA can't see or use the browser pane yet. The agent's browser tools still run
-their own headless browser; driving the pane is planned
-([Browser Use, Phase 3](/plans/browser-use)).
+### GAIA reads the pane
+
+GAIA can open pages in the pane and read the one you're looking at. Ask "what
+does this page say?", "any console errors here?" or "open localhost:5173 and
+check the settings page", and the pane opens if it was closed. While GAIA reads
+a page, a strip above it says **GAIA is reading this page**. Pages GAIA opens
+get their own tab; it never navigates away from a page you opened.
+
+- **Pages on this PC need no approval.** `localhost`, `*.localhost`,
+  `127.0.0.1` and `[::1]` are read straight away, so local dev servers just work.
+- **Any other site asks first,** with **Allow once**, **Always allow** (pages
+  on that site, for this chat) or **Deny**. GAIA never reads a site you
+  haven't approved: if a page moves to another site while GAIA is reading it,
+  the move is stopped, and if it moves on its own later, you still see it but
+  GAIA is told only where it went.
+- **GAIA can take a picture of the page** and read its console messages and
+  network requests, which helps when a page you're building misbehaves.
+- **GAIA can't click, type or sign in in the pane yet.** It tells you what to do
+  instead. To use a site that needs an account, sign in yourself in the pane;
+  the pane keeps that sign-in.
+
+Only the chat open in the window uses the pane. A chat in the terminal, on your
+phone, or in another window keeps using GAIA's own headless browser, and each
+browser tool result says which browser answered.
 
 ## Undo a turn
 

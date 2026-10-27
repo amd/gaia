@@ -47,6 +47,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
+from gaia.agents.base.tool_grants import SITE_ARG
 from gaia.logger import get_logger
 from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
@@ -225,6 +226,8 @@ def _dispatch_one(
                     args["working_directory"] = str(context["working_directory"])
                 if context.get("risk_note"):
                     args[RISK_NOTE_ARG] = str(context["risk_note"])
+                if context.get("site"):
+                    args[SITE_ARG] = str(context["site"])
                 if context.get("file_path"):
                     args["file_path"] = str(context["file_path"])
             if args:

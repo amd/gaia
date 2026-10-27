@@ -230,6 +230,24 @@ uv run python -m gaia.ui.server --debug
 cd src/gaia/apps/webui && npm run dev
 ```
 
+**Dev QA mode.** To run the built desktop app against this checkout's backend
+without touching an installed GAIA, set `GAIA_BIN` to a `gaia` executable in an
+unpackaged build. The app then skips the installer, the pidfile and the
+`gaia://` registration, and writes the browser pane's discovery file under its
+own user data dir instead of `~/.gaia/run/`. The QA kit does this for you with a
+throwaway user data dir, and serves the browser pane fixture site:
+
+```bash
+uv venv ../gaia-qa-venv && uv pip install --python ../gaia-qa-venv/bin/python \
+  -e ".[dev,ui]" -e hub/agents/chat/python -e hub/agents/gaia/python
+cd src/gaia/apps/webui && npm run build && cd -
+GAIA_BIN=../gaia-qa-venv/bin/gaia node src/gaia/apps/webui/scripts/qa-pane.mjs launch
+node src/gaia/apps/webui/scripts/qa-pane.mjs chat "What is the title of the page open in the browser pane?"
+```
+
+Run `qa-pane.mjs` with no command for the rest (`state`, `open`, `shot`, `quit`, ...).
+The backend still reads and writes the usual `~/.gaia` (chat history, logs).
+
 **Changed a backend pydantic model?** Regenerate the frontend's API types, or CI fails:
 
 ```bash

@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "unauthorized",
+    "message": "Missing or wrong bridge token.",
+    "data": {}
+  }
+}

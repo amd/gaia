@@ -210,6 +210,15 @@
     background: var(--danger-dim);
 }
 
+.bp-agent-strip {
+    padding: 4px 12px;
+    border-bottom: 1px solid var(--border-light);
+    background: var(--accent-dim);
+    color: var(--text-secondary);
+    font-size: var(--fs-label);
+    line-height: 1.4;
+}
+
 .bp-viewport {
     position: relative;
     flex: 1;

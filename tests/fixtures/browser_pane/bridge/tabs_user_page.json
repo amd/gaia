@@ -1,0 +1,12 @@
+{
+  "tabs": [
+    {
+      "id": "tab-1",
+      "url": "http://127.0.0.1:5000/index.html",
+      "title": "Pane fixture home",
+      "active": true,
+      "openedBy": null
+    }
+  ],
+  "activeTabId": "tab-1"
+}

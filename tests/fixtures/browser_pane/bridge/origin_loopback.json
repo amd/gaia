@@ -1,0 +1,6 @@
+{
+  "tabId": "tab-1",
+  "url": "http://127.0.0.1:5000/index.html",
+  "origin": "http://127.0.0.1:5000",
+  "hasCookies": false
+}

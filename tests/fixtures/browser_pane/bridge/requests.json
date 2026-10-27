@@ -1,0 +1,77 @@
+{
+  "_doc": "One valid body per op, exactly as PaneDriver sends it. bridge-server.cjs must parse each; the Python tests assert PaneDriver's bodies have these keys. Every op but hello and attach carries sessionId.",
+  "hello": {},
+  "attach": {
+    "sessionId": "chat-1"
+  },
+  "tabs_list": {
+    "sessionId": "chat-1",
+    "op": "list"
+  },
+  "tabs_open": {
+    "sessionId": "chat-1",
+    "op": "open",
+    "url": "https://example.com/",
+    "allowedOrigins": [
+      "https://example.com"
+    ]
+  },
+  "tabs_select": {
+    "sessionId": "chat-1",
+    "op": "select",
+    "tabId": "tab-2"
+  },
+  "navigate": {
+    "sessionId": "chat-1",
+    "tabId": "tab-1",
+    "to": "http://127.0.0.1:5000/form.html",
+    "allowedOrigins": []
+  },
+  "navigate_back": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "to": "back",
+    "allowedOrigins": []
+  },
+  "evaluate": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "script": "(args) => document.title",
+    "args": {
+      "gen": 1
+    },
+    "frames": "all",
+    "allowedOrigins": []
+  },
+  "origin": {
+    "sessionId": "chat-1",
+    "tabId": null
+  },
+  "screenshot": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "clip": null,
+    "maxWidth": 1280,
+    "allowedOrigins": []
+  },
+  "screenshot_ref": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "clip": {
+      "frameId": null,
+      "selector": "[data-gaia-ref=\"g1e2\"]"
+    },
+    "maxWidth": 1280,
+    "allowedOrigins": []
+  },
+  "logs": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "kind": "console",
+    "afterSeq": 0,
+    "errorsOnly": true,
+    "pattern": null,
+    "limit": 50,
+    "allowedOrigins": []
+  }
+}

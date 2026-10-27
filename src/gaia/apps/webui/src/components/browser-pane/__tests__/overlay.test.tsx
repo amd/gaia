@@ -17,6 +17,7 @@ import { Popover } from '../../Popover';
 import { BrowserPane } from '../BrowserPane';
 import { useBrowserPaneStore } from '../../../stores/browserPaneStore';
 import { useSessionPanelStore } from '../../../stores/sessionPanelStore';
+import { useChatStore } from '../../../stores/chatStore';
 import type { GaiaBrowserPaneAPI, PaneState, TabId } from '../../../../services/browser-pane/contract';
 
 beforeAll(() => {
@@ -121,6 +122,7 @@ const PAGE: PaneState = {
     tabs: [{
         id: TAB, url: 'https://example.com/', title: 'Example', loading: false,
         canGoBack: false, canGoForward: false, devToolsOpen: false, notice: null,
+        openedBy: null, agentBusy: false,
     }],
     activeTabId: TAB,
     recent: [],
@@ -128,19 +130,24 @@ const PAGE: PaneState = {
 
 function paneApi(state: PaneState) {
     let push: (s: PaneState) => void = () => {};
-    let command: (c: 'toggle') => void = () => {};
+    let command: (c: 'toggle' | 'show') => void = () => {};
     const api = {
         getState: vi.fn(() => Promise.resolve(state)),
         onState: vi.fn((cb: (s: PaneState) => void) => { push = cb; return () => {}; }),
-        onCommand: vi.fn((cb: (c: 'toggle') => void) => { command = cb; return () => {}; }),
+        onCommand: vi.fn((cb: (c: 'toggle' | 'show') => void) => { command = cb; return () => {}; }),
         setBounds: vi.fn(),
         setVisible: vi.fn(() => Promise.resolve()),
         setOccluded: vi.fn((occluded: boolean) => Promise.resolve(occluded ? 'data:image/png;base64,still' : null)),
         openTab: vi.fn(), closeTab: vi.fn(), selectTab: vi.fn(),
         navigate: vi.fn(() => Promise.resolve()), history: vi.fn(), toggleDevTools: vi.fn(),
-        clearBrowsingData: vi.fn(), openExternal: vi.fn(),
+        clearBrowsingData: vi.fn(), openExternal: vi.fn(), setActiveSession: vi.fn(),
     };
-    return { api: api as unknown as GaiaBrowserPaneAPI, raw: api, push: (s: PaneState) => push(s), command: () => command('toggle') };
+    return {
+        api: api as unknown as GaiaBrowserPaneAPI,
+        raw: api,
+        push: (s: PaneState) => push(s),
+        command: (c: 'toggle' | 'show' = 'toggle') => command(c),
+    };
 }
 
 describe('BrowserPane', () => {
@@ -188,6 +195,29 @@ describe('BrowserPane', () => {
         expect(screen.getByRole('textbox', { name: 'Address' })).toHaveFocus();
         await userEvent.click(recent);
         expect(raw.navigate).toHaveBeenCalledWith(TAB, 'http://localhost:5173/');
+    });
+
+    it('tells main which chat the window shows, and again when it changes', () => {
+        act(() => useChatStore.setState({ currentSessionId: 'chat-a' }));
+        const { api, raw } = paneApi(PAGE);
+        render(<BrowserPane api={api} />);
+        expect(raw.setActiveSession).toHaveBeenLastCalledWith('chat-a');
+        act(() => useChatStore.setState({ currentSessionId: 'chat-b' }));
+        expect(raw.setActiveSession).toHaveBeenLastCalledWith('chat-b');
+        act(() => useChatStore.setState({ currentSessionId: null }));
+        expect(raw.setActiveSession).toHaveBeenLastCalledWith(null);
+    });
+
+    it('opens when the agent opens a page, and says so while it reads', async () => {
+        const { api, push, command } = paneApi(PAGE);
+        render(<BrowserPane api={api} />);
+        act(() => command('show'));
+        await screen.findByRole('complementary', { name: 'Browser pane' });
+        expect(screen.queryByText('GAIA is reading this page')).toBeNull();
+        act(() => push({ ...PAGE, tabs: [{ ...PAGE.tabs[0], agentBusy: true }] }));
+        expect(await screen.findByText('GAIA is reading this page')).toBeInTheDocument();
+        act(() => push(PAGE));
+        await waitFor(() => expect(screen.queryByText('GAIA is reading this page')).toBeNull());
     });
 
     it('shares the right side with the session panel: opening one closes the other', () => {

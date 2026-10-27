@@ -29,6 +29,21 @@ function isLoopbackHost(hostname) {
   );
 }
 
+/**
+ * Hosts an agent may read in the pane with no approval: localhost,
+ * *.localhost, 127.0.0.0/8 and [::1]. Python's is_loopback_origin is the
+ * same rule; both are tested against tests/fixtures/browser_pane/bridge/loopback.json.
+ */
+function isApprovalFreeHost(hostname) {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "[::1]" ||
+    /^127\.(25[0-5]|2[0-4]\d|1?\d?\d)\.(25[0-5]|2[0-4]\d|1?\d?\d)\.(25[0-5]|2[0-4]\d|1?\d?\d)$/.test(host)
+  );
+}
+
 function portOf(url) {
   if (url.port) return Number(url.port);
   return url.protocol === "https:" || url.protocol === "wss:" ? 443 : 80;
@@ -129,9 +144,10 @@ function originOf(rawUrl) {
  *   blockedPorts: () => number[],
  *   openTab: (url: string) => void,
  *   onBlocked: (url: string, message: string) => void,
+ *   stopsAgent?: (url: string) => boolean,
  * }} deps
  */
-function attachTabPolicy(webContents, { blockedPorts, openTab, onBlocked }) {
+function attachTabPolicy(webContents, { blockedPorts, openTab, onBlocked, stopsAgent = () => false }) {
   webContents.setWindowOpenHandler(({ url }) => {
     const verdict = classifyNavigation(url, { blockedPorts: blockedPorts() });
     if (verdict.allowed) openTab(url);
@@ -140,9 +156,12 @@ function attachTabPolicy(webContents, { blockedPorts, openTab, onBlocked }) {
   });
   const guard = (event, url) => {
     const verdict = classifyNavigation(url, { blockedPorts: blockedPorts() });
-    if (verdict.allowed) return;
-    event.preventDefault();
-    onBlocked(url, verdict.message);
+    if (!verdict.allowed) {
+      event.preventDefault();
+      onBlocked(url, verdict.message);
+    } else if (stopsAgent(url)) {
+      event.preventDefault();
+    }
   };
   webContents.on("will-navigate", (event) => guard(event, event.url));
   webContents.on("will-redirect", (event) => guard(event, event.url));
@@ -153,6 +172,7 @@ module.exports = {
   attachTabPolicy,
   classifyNavigation,
   installSessionPolicy,
+  isApprovalFreeHost,
   isAppServiceUrl,
   isLoopbackHost,
   isPermissionAllowed,

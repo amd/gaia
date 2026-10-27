@@ -1,0 +1,12 @@
+{
+  "tabs": [
+    {
+      "id": "tab-1",
+      "url": null,
+      "title": "New tab",
+      "active": true,
+      "openedBy": null
+    }
+  ],
+  "activeTabId": "tab-1"
+}

@@ -69,7 +69,7 @@ sections below still describe the plan rather than the code.
 |---|---|---|
 | Nine tools, incl. `browser_select`, `browser_scroll`, `browser_back`, `browser_screenshot` | **Six** — select folded into `browser_type`, scroll dropped (Playwright auto-scrolls on click), back and screenshot deferred | Bundles cap at six members, and each tool schema is a permanent prompt cost |
 | Browser runs as a supervised daemon sidecar (D7) | **In-process**, owned by the agent, torn down on cleanup | The sidecar registry is spec-and-health-endpoint driven for agent packages, not a generic process supervisor; `MAX_LIVE_SIDECARS` is 3 with two already claimed |
-| A `BrowserDriver` protocol behind which Playwright sits | **`PlaywrightDriver` used directly** | No second implementation yet; the protocol buys nothing until Phase 3 |
+| A `BrowserDriver` protocol behind which Playwright sits | **`BrowserDriver` in `gaia/browser/base.py`, landed with Phase 3** | It waited for a second implementation; `PaneDriver` is that |
 
 Phase 2's origin-scoped skill grants (`browser:interact:<domain>`) did not land
 either. What did land is the confirmation gate: acting inside a session the
@@ -204,9 +204,11 @@ Mitigations, all of which reuse existing machinery rather than inventing a paral
     **Exit:** user logs into a real site once; a later run restores the session unattended; a state-changing click prompts for confirmation and denies cleanly when refused.
   </Step>
   <Step title="Phase 3 — native CDP driver">
-    **In progress.** The desktop app's [browser pane](/guides/agent-ui#browser-pane) has landed: a user-driven browser beside the chat whose tabs Electron main owns. Letting the agent read and act in it comes next.
+    **In progress.** The desktop app's [browser pane](/guides/agent-ui#browser-pane) has landed, and the agent can now read it: a chat open in the desktop window opens and reads pages in the pane, takes pictures of them, and reads their console and network logs. Clicking and typing in the pane come next.
 
-    Swap Playwright for the aiohttp CDP driver against Electron's Chromium, behind the same interface. Playwright stays supported for CI and non-desktop installs.
+    How it is built differs from the plan below. The agent reaches the pane through a loopback bridge in Electron main (`services/browser-pane/bridge-server.cjs`, a bearer token in a 0600 discovery file), not a CDP WebSocket from Python: main owns the one `webContents.debugger` attachment per tab, and Python sends its own snapshot script through the bridge's `evaluate` op, so there is still one snapshot implementation. `PaneDriver` and `PlaywrightDriver` both satisfy `BrowserDriver`, and `_ensure_driver` picks one by a single rule: the desktop app is running and this chat is the one open in its window means the pane, otherwise headless Playwright. A desktop app that does not answer is an error, never a quiet switch to headless. Outside loopback every pane read asks first, with an "always" grant scoped to the site.
+
+    Playwright stays supported for the terminal UI, the CLI, the web build and CI.
 
     **Exit:** Phase 1 and 2 suites pass unmodified against both drivers; desktop install adds no browser download.
   </Step>

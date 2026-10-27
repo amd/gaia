@@ -72,7 +72,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG, plain_risk_note
-from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, SCRATCH_ARG
+from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, SCRATCH_ARG, SITE_ARG
 from gaia.ui.event_narration import (
     DEBUG_CHANNEL,
     derive_narration,
@@ -560,6 +560,8 @@ class CanonicalTranslator:
             prompt_context["working_directory"] = str(folder)
         if args.get(RISK_NOTE_ARG):
             prompt_context["risk_note"] = str(args[RISK_NOTE_ARG])
+        if args.get(SITE_ARG):
+            prompt_context["site"] = str(args[SITE_ARG])
         # Where a relative write really lands; the model's own spelling stays in args.
         shown_path = args.get("file_path")
         if isinstance(shown_path, str) and shown_path != call_args.get("file_path"):
@@ -751,7 +753,7 @@ PROMPT_ARG_VALUE_CHARS = 64_000
 
 
 #: Keys GAIA writes into a prompt's arguments; the agent refuses them from a model.
-PROMPT_ONLY_ARGS = frozenset({RISK_NOTE_ARG, SCRATCH_ARG})
+PROMPT_ONLY_ARGS = frozenset({RISK_NOTE_ARG, SCRATCH_ARG, SITE_ARG})
 
 
 def _model_call_args(event: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:

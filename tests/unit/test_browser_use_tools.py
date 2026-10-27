@@ -522,3 +522,203 @@ def test_an_unknown_ref_falls_through_to_session_rules():
     a = _Agent()
     a._browser_last_elements = {}
     assert a.browser_call_needs_confirmation("browser_click", {"ref": "g1e9"}) is False
+
+
+# ------------------------------------------------- the site gate (browser pane)
+#
+# Driven end to end: a real Agent with the Agent UI's SSE console, its prompts
+# answered the way the UI answers them, and a recorded loopback bridge, so the
+# tests see what the user is asked and what main is allowed to read.
+
+import queue as _queue  # noqa: E402
+import threading as _threading  # noqa: E402
+import time as _time  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+from gaia.agents.base.agent import Agent  # noqa: E402
+from gaia.agents.base.tool_grants import SITE_ARG, grant_scope  # noqa: E402
+from gaia.browser import driver as _browser_driver  # noqa: E402
+from gaia.browser._pane_bridge import DISCOVERY_ENV  # noqa: E402
+from gaia.ui.sse_handler import SSEOutputHandler  # noqa: E402
+
+from .browser_pane_fake import FakeBridge  # noqa: E402
+from .browser_pane_fake import fixture as _bridge_fixture  # noqa: E402
+
+
+class _PaneProbe(Agent, BrowserUseToolsMixin):
+    def __init__(self, **kwargs):
+        self.config = SimpleNamespace(ui_session_id="chat-1")
+        super().__init__(**kwargs)
+
+    def _get_system_prompt(self):
+        return "probe"
+
+    def _register_tools(self):
+        self.register_browser_use_tools()
+
+    def _create_console(self):
+        return self._console_override
+
+
+@pytest.fixture
+def pane(tmp_path, monkeypatch):
+    """A chat attached to a recorded desktop pane, with no Playwright installed."""
+    from gaia.agents.base import tools as tools_mod
+
+    saved = dict(tools_mod._TOOL_REGISTRY)
+    bridge = FakeBridge()
+    monkeypatch.setenv(
+        DISCOVERY_ENV, str(bridge.write_discovery(tmp_path / "pane.json"))
+    )
+    monkeypatch.setattr(_browser_driver, "installed", lambda: False)
+    handler = SSEOutputHandler()
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        _PaneProbe._console_override = handler
+        agent = _PaneProbe(silent_mode=True, skip_lemonade=True)
+    yield agent, handler, bridge
+    bridge.close()
+    tools_mod._TOOL_REGISTRY.clear()
+    tools_mod._TOOL_REGISTRY.update(saved)
+
+
+def _drive(agent, handler, tool_name, args, answer=(False, False)):
+    """Run one call; answer its prompt with ``(approved, always)``; return (result, prompts)."""
+    outcome = {}
+    worker = _threading.Thread(
+        target=lambda: outcome.update(result=agent._execute_tool(tool_name, args)),
+        daemon=True,
+    )
+    worker.start()
+    prompts = []
+    deadline = _time.monotonic() + 20
+    while _time.monotonic() < deadline:
+        try:
+            event = handler.event_queue.get(timeout=0.05)
+        except _queue.Empty:
+            if not worker.is_alive():
+                break
+            continue
+        if event.get("type") == "permission_request":
+            prompts.append(event)
+            approved, always = answer
+            handler.resolve_tool_confirmation(
+                approved=approved, always=always, confirm_id=event["confirm_id"]
+            )
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    return outcome["result"], prompts
+
+
+@pytest.mark.allow_network
+def test_loopback_pages_need_no_approval(pane):
+    agent, handler, bridge = pane
+    result, prompts = _drive(
+        agent, handler, "browser_open", {"url": "http://127.0.0.1:5000/form.html"}
+    )
+    assert prompts == []
+    assert result.startswith("(in the browser pane)")
+    assert bridge.last("evaluate")["body"]["allowedOrigins"] == []
+
+
+@pytest.mark.allow_network
+def test_another_site_asks_first_and_a_no_reads_nothing(pane):
+    agent, handler, bridge = pane
+    result, [prompt] = _drive(
+        agent, handler, "browser_open", {"url": "https://example.com/"}
+    )
+    assert prompt["args"][SITE_ARG] == "https://example.com"
+    assert prompt["always_scope"] == "pages on example.com"
+    assert result["status"] == "denied"
+    assert not [r for r in bridge.requests if r["body"].get("op") == "open"]
+    assert "evaluate" not in bridge.ops()
+
+
+@pytest.mark.allow_network
+def test_allow_once_reads_that_site_for_that_call_only(pane):
+    agent, handler, bridge = pane
+    _drive(
+        agent,
+        handler,
+        "browser_open",
+        {"url": "https://example.com/"},
+        answer=(True, False),
+    )
+    opened = [r["body"] for r in bridge.requests if r["body"].get("op") == "open"][-1]
+    assert opened["allowedOrigins"] == ["https://example.com"]
+    assert bridge.last("evaluate")["body"]["allowedOrigins"] == ["https://example.com"]
+
+    bridge.replies["origin"] = _bridge_fixture("origin_remote.json")
+    _, prompts = _drive(agent, handler, "browser_snapshot", {})
+    assert [p["args"][SITE_ARG] for p in prompts] == ["https://example.com"]
+
+
+@pytest.mark.allow_network
+def test_always_covers_every_pane_tool_on_that_site(pane):
+    agent, handler, bridge = pane
+    _drive(
+        agent,
+        handler,
+        "browser_open",
+        {"url": "https://example.com/"},
+        answer=(True, True),
+    )
+    bridge.replies["origin"] = _bridge_fixture("origin_remote.json")
+    result, prompts = _drive(agent, handler, "browser_find", {"text": "Price"})
+    assert prompts == []
+    assert result.startswith("(in the browser pane)")
+    assert bridge.last("evaluate")["body"]["allowedOrigins"] == ["https://example.com"]
+
+
+@pytest.mark.allow_network
+def test_a_page_the_user_moved_off_loopback_is_asked_about(pane):
+    agent, handler, bridge = pane
+    bridge.replies["origin"] = _bridge_fixture("origin_remote.json")
+    _, prompts = _drive(agent, handler, "browser_snapshot", {})
+    assert len(prompts) == 1 and prompts[0]["args"][SITE_ARG] == "https://example.com"
+
+
+@pytest.mark.allow_network
+def test_the_model_cannot_name_its_own_site(pane):
+    agent, handler, bridge = pane
+    result, prompts = _drive(
+        agent, handler, "browser_snapshot", {SITE_ARG: "http://127.0.0.1:1"}
+    )
+    assert prompts == []
+    assert "Unexpected argument" in result["error"]
+    assert "evaluate" not in bridge.ops()
+
+
+def test_headless_browsing_offers_no_site_grant():
+    """Unchanged: a headless call carries no SITE_ARG, so "always" is never offered."""
+    assert grant_scope("browser_open", {"url": "https://example.com/"}) is None
+    assert grant_scope("browser_snapshot", {SITE_ARG: "https://example.com"}).key == (
+        "browser_site:https://example.com"
+    )
+
+
+def test_the_internet_switch_still_covers_the_new_tools():
+    from gaia.agents.base.offline import offline_refusal
+
+    for name in ("browser_screenshot", "browser_logs"):
+        assert offline_refusal(name, {})["error_type"] == "internet_off"
+    assert offline_refusal("browser_open", {"url": "http://localhost:5173/"}) is None
+
+
+@pytest.mark.allow_network
+def test_the_agent_can_look_at_its_own_screenshot_without_asking(
+    pane, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from gaia.security import PathValidator
+
+    agent, handler, _bridge = pane
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia"))
+    agent.path_validator = PathValidator(allowed_paths=[str(tmp_path / "work")])
+    result, prompts = _drive(agent, handler, "browser_screenshot", {})
+    assert prompts == [] and result["status"] == "success"
+    shot = result["image_path"]
+    assert agent.path_validator.validate_read(shot, prompt_user=False)[0]
+    neighbour = Path(shot).with_name("someone_else.png")
+    neighbour.write_bytes(b"x")
+    assert not agent.path_validator.validate_read(str(neighbour), prompt_user=False)[0]

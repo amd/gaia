@@ -262,6 +262,20 @@ class MockWebContents extends EventEmitter {
     this.closeDevTools = jest.fn(() => { this._devTools = false; });
     this.isDevToolsOpened = jest.fn(() => this._devTools);
     this.capturePage = jest.fn(() => Promise.resolve({ toDataURL: () => 'data:image/png;base64,frame' }));
+    this.isLoading = jest.fn(() => false);
+    // webContents.debugger: attach, sendCommand, and 'message' events a test can emit.
+    const dbg = new EventEmitter();
+    dbg.attach = jest.fn();
+    dbg.sendCommand = jest.fn(() => Promise.resolve({}));
+    this.debugger = dbg;
+    this.mainFrame = {
+      url: '',
+      processId: 1,
+      routingId: 1,
+      framesInSubtree: [],
+      executeJavaScript: jest.fn(() => Promise.resolve(null)),
+    };
+    this.mainFrame.framesInSubtree = [this.mainFrame];
   }
 }
 

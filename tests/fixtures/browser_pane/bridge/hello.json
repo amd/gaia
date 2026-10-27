@@ -1,0 +1,14 @@
+{
+  "protocol": 1,
+  "appVersion": "0.25.2",
+  "ops": [
+    "hello",
+    "attach",
+    "tabs",
+    "navigate",
+    "evaluate",
+    "origin",
+    "screenshot",
+    "logs"
+  ]
+}

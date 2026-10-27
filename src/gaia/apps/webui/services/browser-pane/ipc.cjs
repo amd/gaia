@@ -31,6 +31,7 @@ const CHANNELS = Object.freeze({
   toggleDevTools: "pane:toggle-devtools",
   clearData: "pane:clear-data",
   openExternal: "pane:open-external",
+  setActiveSession: "pane:set-active-session",
 });
 
 const HISTORY_ACTIONS = new Set(["back", "forward", "reload", "stop"]);
@@ -147,7 +148,18 @@ function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downlo
     host.setBounds(parsed);
   });
 
+  ipcMain.on(CHANNELS.setActiveSession, (event, sessionId) => {
+    const valid = sessionId === null || (typeof sessionId === "string" && sessionId !== "" && sessionId.length <= 200);
+    if (!host || event.sender !== host.window.webContents || !valid) {
+      console.error(`[browser-pane] Ignored active session ${JSON.stringify(sessionId)} from an unexpected sender or shape`);
+      return;
+    }
+    host.setActiveSession(sessionId);
+  });
+
   return {
+    /** The window's PaneHost, for the bridge; null while no window is open. */
+    getHost: () => host,
     /** Give the pane to a (re)created app window. Tabs of a closed window close with it. */
     attach(window) {
       if (host) host.dispose();
@@ -161,6 +173,7 @@ function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downlo
         blockedPorts,
         publish: (state) => send(CHANNELS.state, state),
         onToggleRequest: () => send(CHANNELS.command, "toggle"),
+        onShowRequest: () => send(CHANNELS.command, "show"),
         openExternal: (url) => {
           shell.openExternal(url).catch((err) =>
             console.error(`[browser-pane] Could not open ${url} in the system browser: ${err.message}`)

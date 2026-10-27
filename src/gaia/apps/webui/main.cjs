@@ -109,6 +109,12 @@ const { chromiumSwitches } = require("./services/chromium-switches.cjs");
 const { titleBarKind, titleBarOptions } = require("./services/window-frame.cjs");
 const { resolveDevQaMode } = require("./services/dev-qa-mode.cjs");
 const { createBrowserPaneService, PANE_PARTITION } = require("./services/browser-pane/ipc.cjs");
+const {
+  DISCOVERY_ENV: PANE_DISCOVERY_ENV,
+  createHandlers: createPaneBridgeHandlers,
+  discoveryPath: paneDiscoveryPath,
+  startBridge: startPaneBridge,
+} = require("./services/browser-pane/bridge-server.cjs");
 
 // No ozone switch: Electron 38+ already picks Wayland or X11, and users override with --ozone-platform=x11.
 for (const [name, value] of chromiumSwitches({ platform: process.platform, env: process.env })) {
@@ -257,6 +263,14 @@ let keepAwake = null;
 /** @type {ReturnType<typeof createBrowserPaneService> | null} */
 let browserPane = null;
 
+/** @type {Awaited<ReturnType<typeof startPaneBridge>> | null} */
+let paneBridge = null;
+
+/** Where the agent finds the pane's bridge; the backend is told through PANE_DISCOVERY_ENV. */
+function paneDiscoveryFile() {
+  return paneDiscoveryPath({ devQa: Boolean(devQa), userDataDir: app.getPath("userData"), gaiaDir: _GAIA_DIR });
+}
+
 /** @type {PortManager} */
 const portManager = new PortManager({
   logger: { log: console.log.bind(console), error: console.error.bind(console) },
@@ -372,7 +386,8 @@ async function startBackend() {
       stdio: ["ignore", "pipe", "pipe"],
       // GAIA_APP_PID: GAIA's daemon unloads its models once this app exits
       // and no other GAIA client is using them.
-      env: { ...process.env, GAIA_APP_PID: String(process.pid) },
+      // GAIA_BROWSER_PANE_DISCOVERY: the agent finds this app's browser pane, never another app's.
+      env: { ...process.env, GAIA_APP_PID: String(process.pid), [PANE_DISCOVERY_ENV]: paneDiscoveryFile() },
       detached: false,
       windowsHide: true, // Prevent console window flash on Windows
     }
@@ -783,9 +798,22 @@ function initializeServices() {
     shell,
     userDataDir: app.getPath("userData"),
     downloadsDir: () => app.getPath("downloads"),
-    blockedPorts: () => [backendPort],
+    // GAIA's backend and the bridge: no pane page may reach either.
+    blockedPorts: () => (paneBridge ? [backendPort, paneBridge.port] : [backendPort]),
   });
   browserPane.attach(mainWindow);
+
+  // The agent reaches the pane through this loopback bridge, in-process or from a sidecar.
+  startPaneBridge({
+    discoveryFile: paneDiscoveryFile(),
+    handlers: createPaneBridgeHandlers({ getHost: () => browserPane.getHost(), appVersion: app.getVersion() }),
+  })
+    .then((bridge) => {
+      paneBridge = bridge;
+    })
+    .catch((err) => {
+      console.error(`[main] The browser pane bridge did not start, so the agent can't use the pane: ${err.message}`);
+    });
 
   console.log("[main] Services initialized");
 }
@@ -1413,6 +1441,11 @@ async function cleanup() {
   if (keepAwake) {
     keepAwake.destroy();
     keepAwake = null;
+  }
+
+  if (paneBridge) {
+    await paneBridge.close().catch((err) => console.error(`[main] Closing the browser pane bridge failed: ${err.message}`));
+    paneBridge = null;
   }
 
   // The agents and the backend stop side by side: each waits out its own

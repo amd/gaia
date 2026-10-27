@@ -3231,8 +3231,12 @@ class ShellToolsMixin:
         A call the pre-flight left for a person (:meth:`_a_person_answers`)
         carries ``NEEDS_PERSON_ARG``, so pre-approval does not answer it.
 
-        Duck-typed, like :meth:`skill_grant_covers_call`.
+        Duck-typed, like :meth:`skill_grant_covers_call`. Another tool's call
+        goes on up the MRO, so a later mixin can add its own fields.
         """
+        if tool_name != _POLICY_GATED_SHELL_TOOL:
+            parent = getattr(super(), "confirmation_args_for_call", None)
+            return parent(tool_name, tool_args) if callable(parent) else tool_args
         shown = self._shown_args(tool_name, tool_args)
         if (
             tool_name == _POLICY_GATED_SHELL_TOOL

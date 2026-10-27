@@ -117,6 +117,7 @@ contextBridge.exposeInMainWorld("gaiaBrowserPane", {
   toggleDevTools: (tabId) => ipcRenderer.invoke("pane:toggle-devtools", tabId),
   clearBrowsingData: () => ipcRenderer.invoke("pane:clear-data"),
   openExternal: (tabId) => ipcRenderer.invoke("pane:open-external", tabId),
+  setActiveSession: (sessionId) => ipcRenderer.send("pane:set-active-session", sessionId),
 });
 
 // ── Install progress (Phase A) ──────────────────────────────────────────

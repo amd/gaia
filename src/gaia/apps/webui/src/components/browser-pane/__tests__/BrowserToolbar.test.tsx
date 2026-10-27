@@ -20,6 +20,8 @@ function tab(over: Partial<TabState> = {}): TabState {
         canGoForward: false,
         devToolsOpen: false,
         notice: null,
+        openedBy: null,
+        agentBusy: false,
         ...over,
     };
 }
@@ -45,6 +47,7 @@ function fakeApi(): GaiaBrowserPaneAPI {
         toggleDevTools: ok(),
         clearBrowsingData: ok(),
         openExternal: ok(),
+        setActiveSession: vi.fn(),
     } as unknown as GaiaBrowserPaneAPI;
 }
 

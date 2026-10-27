@@ -1,0 +1,57 @@
+{
+  "_doc": "Origins the pane reads with no approval. navigation-policy.cjs isApprovalFreeHost and _pane_bridge.is_loopback_origin both test against this list.",
+  "cases": [
+    [
+      "http://localhost:5173",
+      true
+    ],
+    [
+      "http://LOCALHOST:3000",
+      true
+    ],
+    [
+      "http://app.localhost:8080",
+      true
+    ],
+    [
+      "http://127.0.0.1:9000",
+      true
+    ],
+    [
+      "http://127.255.10.2",
+      true
+    ],
+    [
+      "http://[::1]:4000",
+      true
+    ],
+    [
+      "https://example.com",
+      false
+    ],
+    [
+      "http://localhost.example.com",
+      false
+    ],
+    [
+      "http://127.0.0.1.nip.io",
+      false
+    ],
+    [
+      "http://0.0.0.0:3000",
+      false
+    ],
+    [
+      "http://192.168.1.10",
+      false
+    ],
+    [
+      "http://10.0.0.1",
+      false
+    ],
+    [
+      "http://[::]:80",
+      false
+    ]
+  ]
+}

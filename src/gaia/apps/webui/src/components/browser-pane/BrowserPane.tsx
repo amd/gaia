@@ -11,6 +11,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Globe } from 'lucide-react';
 import { useBrowserPaneStore, browserPaneApi, connectBrowserPane, clampPaneWidth, PANE_DEFAULT_WIDTH, PANE_MAX_WIDTH, PANE_MIN_WIDTH } from '../../stores/browserPaneStore';
+import { useChatStore } from '../../stores/chatStore';
 import { useAppOverlayOpen } from '../../hooks/useAppOverlayOpen';
 import { useDockedResize } from '../../hooks/useDockedResize';
 import { formatShortcut } from '../../utils/platform';
@@ -30,6 +31,14 @@ export function BrowserPane({ api }: { api: GaiaBrowserPaneAPI }) {
 
     useEffect(() => connectBrowserPane(api), [api]);
 
+    // Only the chat this window shows may use the pane, so main is told which one that is.
+    useEffect(() => {
+        api.setActiveSession(useChatStore.getState().currentSessionId);
+        return useChatStore.subscribe((now, before) => {
+            if (now.currentSessionId !== before.currentSessionId) api.setActiveSession(now.currentSessionId);
+        });
+    }, [api]);
+
     // The shortcut works from the app and, through main, from inside a pane page.
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
@@ -40,6 +49,7 @@ export function BrowserPane({ api }: { api: GaiaBrowserPaneAPI }) {
         window.addEventListener('keydown', onKey);
         const off = api.onCommand((command) => {
             if (command === 'toggle') useBrowserPaneStore.getState().toggle();
+            else if (command === 'show') useBrowserPaneStore.getState().setOpen(true);
         });
         return () => {
             window.removeEventListener('keydown', onKey);
@@ -126,6 +136,11 @@ function OpenPane({ api, pane }: { api: GaiaBrowserPaneAPI; pane: PaneState }) {
                 {...resize.separatorProps}
             />
             <BrowserToolbar pane={pane} api={api} onClosePane={() => setOpen(false)} addressRef={addressRef} />
+            {active.agentBusy && (
+                <div className="bp-agent-strip" role="status">
+                    GAIA is reading this page
+                </div>
+            )}
             {active.notice && <NoticeBar notice={active.notice} />}
             <div ref={viewportRef} className="bp-viewport">
                 {frozen && <img className="bp-frozen" src={frozen} alt="" aria-hidden="true" />}

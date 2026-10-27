@@ -89,3 +89,22 @@ def test_the_browser_mixin_gates_on_any_agent_that_composes_it():
 
     host = _host(BrowserUseToolsMixin)
     assert host._tool_requires_confirmation("browser_login") is True
+
+
+def test_the_browser_mixin_adds_its_site_to_a_prompt_without_hiding_others():
+    """Prompt arguments are cooperative: the shell mixin passes other tools up the MRO."""
+    from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
+    from gaia.agents.tools.shell_tools import ShellToolsMixin
+
+    class _Pane:
+        def current_origin(self):
+            return "https://example.com"
+
+    host = _host(ShellToolsMixin, BrowserUseToolsMixin)
+    host._browser_routed, host._browser_route = True, _Pane()
+    args = {}
+    assert host.confirmation_args_for_call("browser_snapshot", args) == {
+        "_site": "https://example.com"
+    }
+    assert host._tool_requires_confirmation("browser_snapshot", args) is True
+    assert host.confirmation_args_for_call("browser_sessions", {}) == {}

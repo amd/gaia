@@ -238,6 +238,11 @@ _UNGRANTABLE_TOOLS = frozenset({"capture_skill", PATH_ACCESS_PROMPT_TOOL})
 #: in its own scratch folder. Such a call is never offered "always".
 SCRATCH_ARG = "_scratch_dir"
 
+#: Prompt argument set by the browser mixin (never the model): the site a
+#: browser-pane call would read. Present only when that site is what the
+#: prompt asks about.
+SITE_ARG = "_site"
+
 #: Tools whose every call is the same kind of action, so the family IS the
 #: tool. The label says how wide that is.
 _FAMILY_TOOLS = {
@@ -287,6 +292,8 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
         return _named_scope(tool_name, args, _SKILL_ARG_NAMES)
     if tool_name in _FAMILY_TOOLS:
         return GrantScope(keys=(tool_name,), label=_FAMILY_TOOLS[tool_name])
+    if tool_name.startswith("browser_") and args.get(SITE_ARG):
+        return _site_scope(str(args[SITE_ARG]))
     return None
 
 
@@ -649,6 +656,18 @@ def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     )
 
 
+def _site_scope(origin: str) -> GrantScope:
+    """One grant per site, shared by every browser-pane tool.
+
+    "Always" on opening a page covers reading it again with any tool, which is
+    what the prompt promises: GAIA may read pages on this site.
+    """
+    host = origin.split("://", 1)[-1]
+    return GrantScope(
+        keys=(f"browser_site:{origin}",), label=f"pages on {host}", subject=host
+    )
+
+
 def _named_scope(
     tool_name: str, args: Dict[str, Any], names: Sequence[str]
 ) -> Optional[GrantScope]:
@@ -666,6 +685,7 @@ __all__ = [
     "PATH_TOOLS",
     "RISK_NOTE_ARG",
     "SCRATCH_ARG",
+    "SITE_ARG",
     "command_reaches_folder",
     "grant_scope",
     "is_inside_folder",

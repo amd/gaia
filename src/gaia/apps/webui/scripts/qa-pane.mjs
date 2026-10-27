@@ -12,7 +12,7 @@
  *   node scripts/qa-pane.mjs state | shortcut | open <url> | click <selector>
  *        | page-click <selector>   (inside the pane's visible page)
  *        | drag <selector> <dx>     (e.g. drag .bp-resize -400 widens the pane)
- *        | type <text> | key <key> | chat <text> | shot <file.png> | quit
+ *        | type <text> | key <key> | chat <text> | reply [seconds] | shot <file.png> | quit
  *   node scripts/qa-pane.mjs perf open-pane      (against the running app)
  *   GAIA_BIN=... node scripts/qa-pane.mjs perf launch [--app <webui dir>]
  *
@@ -213,6 +213,21 @@ function commands(ctx) {
             await box.fill(text);
             await box.press('Enter');
             return 'sent';
+        },
+        reply: async (seconds = '180') => {
+            const stop = page.locator('[aria-label="Stop"]');
+            const prompt = page.locator('.perm-card');
+            const deadline = Date.now() + Number(seconds) * 1000;
+            await stop.first().waitFor({ timeout: 10000 }).catch(() => {});
+            while (Date.now() < deadline) {
+                if (await prompt.count()) return { waiting: 'approval', prompt: (await prompt.first().innerText()).slice(0, 600) };
+                if (!(await stop.count())) {
+                    const last = page.locator('[data-role="assistant"]').last();
+                    return { reply: (await last.innerText()).slice(0, 2000) };
+                }
+                await page.waitForTimeout(500);
+            }
+            throw new Error(`No reply within ${seconds} s`);
         },
         shot: (file) => windowShot(app, file),
         'perf-open-pane': async () => {

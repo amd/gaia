@@ -1,0 +1,20 @@
+{
+  "_doc": "Every BridgeErrorCode. contract.d.ts and _pane_bridge.ERROR_CODES must both equal this list.",
+  "codes": [
+    "bad_request",
+    "blocked_navigation",
+    "blocked_url",
+    "element_not_found",
+    "forbidden",
+    "internal",
+    "navigation_failed",
+    "no_page",
+    "no_such_tab",
+    "not_in_desktop",
+    "off_scope",
+    "timeout",
+    "unauthorized",
+    "unknown_op",
+    "unsupported"
+  ]
+}
