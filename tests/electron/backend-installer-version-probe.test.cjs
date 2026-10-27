@@ -18,7 +18,8 @@ const installerPath = path.resolve(
 const READY = { state: "ready", version: "0.25.2-rc.3", init: "done" };
 
 // `sitePackages` maps a site-packages dir to the entries in it.
-function loadInstaller({ platform = "darwin", sitePackages = {}, venvLibs = ["python3.12"] } = {}) {
+// `missing` lists paths that read as absent even though they sit under the venv.
+function loadInstaller({ platform = "darwin", sitePackages = {}, venvLibs = ["python3.12"], missing = [] } = {}) {
   const posix = platform !== "win32";
   const p = posix ? path.posix : path.win32;
   const home = posix ? "/fixture" : "C:\\fixture";
@@ -38,7 +39,9 @@ function loadInstaller({ platform = "darwin", sitePackages = {}, venvLibs = ["py
   const spawnSync = jest.fn(() => ({ status: null, signal: "SIGTERM", stdout: "", error: new Error("spawnSync ETIMEDOUT") }));
   const fakeFs = {
     ...fs,
-    existsSync: (file) => String(file).includes("venv") || files.has(String(file)) || dirs.has(String(file)),
+    existsSync: (file) =>
+      !missing.includes(String(file)) &&
+      (String(file).includes("venv") || files.has(String(file)) || dirs.has(String(file))),
     readFileSync: (file, enc) =>
       files.has(String(file)) ? files.get(String(file)) : fs.readFileSync(file, enc),
     readdirSync: (dir) => {
@@ -122,5 +125,41 @@ describe("the installed backend version on a busy PC", () => {
     const { installer, venv } = loadInstaller({ sitePackages: { [macSite]: ["fastapi"] } });
 
     expect(installer.getInstalledVersion(path.posix.join(venv, "bin", "gaia"))).toBeNull();
+  });
+
+  test("a venv whose Python is gone reinstalls even though the package record is still there", async () => {
+    const { installer, spawn } = loadInstaller({
+      sitePackages: { [macSite]: ["amd_gaia-0.25.2rc3.dist-info"] },
+      missing: ["/fixture/.gaia/venv/bin/python"],
+    });
+
+    await installer.ensureBackend({ version: "0.25.2-rc.3", isPackaged: false });
+
+    expect(pipRuns(spawn).length).toBeGreaterThan(0);
+  });
+
+  test("a Windows venv without python.exe reads as not installed", () => {
+    const { installer, venv } = loadInstaller({
+      platform: "win32",
+      sitePackages: { "C:\\fixture\\.gaia\\venv\\Lib\\site-packages": ["amd_gaia-0.25.2.dist-info"] },
+      missing: ["C:\\fixture\\.gaia\\venv\\Scripts\\python.exe"],
+    });
+
+    expect(installer.getInstalledVersion(path.win32.join(venv, "Scripts", "gaia.exe"))).toBeNull();
+  });
+
+  test("two package records read as not installed", () => {
+    const { installer, venv } = loadInstaller({
+      sitePackages: { [macSite]: ["amd_gaia-0.25.1.dist-info", "amd_gaia-0.25.2.dist-info"] },
+    });
+
+    expect(installer.getInstalledVersion(path.posix.join(venv, "bin", "gaia"))).toBeNull();
+  });
+
+  test("a gaia found on PATH still asks the binary itself", () => {
+    const { installer, spawnSync } = loadInstaller({ sitePackages: { [macSite]: ["amd_gaia-0.25.2.dist-info"] } });
+
+    expect(installer.getInstalledVersion("/usr/local/bin/gaia")).toBeNull();
+    expect(spawnSync).toHaveBeenCalledWith("/usr/local/bin/gaia", ["--version"], expect.anything());
   });
 });

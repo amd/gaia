@@ -1986,7 +1986,14 @@ async function installBackend(opts = {}) {
  * `gaia --version`, which starts Python and can take 20 s+ on a busy PC.
  */
 function getInstalledVersion(gaiaBin) {
-  if (gaiaBin === GAIA_BIN) return venvPackageVersion();
+  if (gaiaBin === GAIA_BIN) {
+    // existsSync follows the venv's python symlink, so a removed base interpreter reads as missing.
+    if (!fs.existsSync(GAIA_PYTHON_BIN)) {
+      log(`${GAIA_PYTHON_BIN} is missing or broken — treating the backend as not installed`);
+      return null;
+    }
+    return venvPackageVersion();
+  }
   try {
     const result = spawnSync(gaiaBin, ["--version"], {
       stdio: ["ignore", "pipe", "pipe"],
