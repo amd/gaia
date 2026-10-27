@@ -280,11 +280,13 @@ class _Http:
     def __init__(self, status_code=200, error=None):
         self.headers: dict = {}
         self.posts: list = []
+        self.timeouts: list = []
         self._status_code = status_code
         self._error = error
 
     def post(self, url, json=None, timeout=None):
         self.posts.append((url, json))
+        self.timeouts.append(timeout)
         if self._error is not None:
             raise self._error
         if self._status_code >= 400:
@@ -333,6 +335,19 @@ def test_a_running_flagship_turn_is_told_the_switch(relayed_db, running_relays, 
     ]
 
 
+def test_a_hung_sidecar_cannot_hold_the_switch_for_the_general_timeout(
+    relayed_db, running_relays
+):
+    session = relayed_db.create_session(agent_type="gaia")
+    http = _running_relay(session["id"])
+    handler = helpers._active_sse_handlers[session["id"]]
+    assert handler.active_relay_proxy.timeout > 60
+
+    session_environment.set_internet(relayed_db, session["id"], False)
+
+    assert http.timeouts and all(t is not None and t <= 10 for t in http.timeouts)
+
+
 def test_with_no_turn_running_the_switch_waits_for_the_next_one(
     relayed_db, running_relays, monkeypatch
 ):
@@ -363,6 +378,7 @@ def test_a_running_turn_that_never_took_the_switch_is_not_sent_it(
         pytest.param(
             _Http(error=requests.ConnectionError("refused")), id="sidecar-gone"
         ),
+        pytest.param(_Http(error=requests.Timeout("hung")), id="sidecar-hung"),
     ],
 )
 def test_a_running_turn_that_cannot_be_told_offline_is_stopped(
