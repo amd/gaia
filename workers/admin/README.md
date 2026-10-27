@@ -3,10 +3,11 @@
 The GAIA admin dashboard at `amd-gaia.ai/admin`, in five pages:
 
 - **Users** (`/admin`): installs per release by OS and product, installs over time, PyPI and npm.
-- **Growth** (`/admin/growth`): how fast stars, forks and contributors grow, newcomers,
-  retention, the share of merged PRs from outside the core team, and bus factor, each
-  scored against a target and set beside Hermes Agent and other fast-growing AI-agent
-  projects (`TARGETS` and `BENCHMARKS` in `src/growthpage.ts`).
+- **Growth** (`/admin/growth`): how fast stars, forks, contributors and downloads grow,
+  newcomers, retention, the share of merged PRs from outside the core team, and bus factor.
+  Each is scored against a target set a little above GAIA's own recent median, and set
+  beside Hermes Agent and other fast-growing AI-agent projects for context (`TARGETS` and
+  `BENCHMARKS` in `src/growthpage.ts`).
 - **Developers** (`/admin/developers`): issues, pull requests, time to merge and close (median
   and P90), commits, lines of code, contributors (with a filter to hide chosen people or
   bots), stars and forks.

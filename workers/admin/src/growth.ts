@@ -213,3 +213,70 @@ export function per30(growth: number | null, days: number): number | null {
   if (growth == null || days <= 0) return null;
   return Math.pow(1 + growth, 30 / days) - 1;
 }
+
+export interface DownloadDay {
+  day: string;
+  /** GitHub release installs (update checks left out); null before daily snapshots began. */
+  installs: number | null;
+  pypi: number | null;
+  npm: number | null;
+}
+export type DownloadSource = "installs" | "pypi" | "npm";
+const SOURCES: DownloadSource[] = ["installs", "pypi", "npm"];
+
+export interface DownloadWindow {
+  total: number;
+  previous: number | null;
+  /** Change against the equal window before; null when the source does not cover it. */
+  growth: number | null;
+  /** Last day counted: registries publish a day or two late, so both windows end there. */
+  through: string | null;
+}
+
+/**
+ * Downloads in a window of `span` days ending at `to` (exclusive), per source. Each source's
+ * windows end on its own last day with data, so a registry's reporting lag is not read as a drop.
+ */
+export function downloadWindows(
+  days: DownloadDay[],
+  span: number,
+  to: string,
+  /** Each source's first day of data overall, when `days` is a recent slice of it. */
+  firsts: Partial<Record<DownloadSource, string>> = {},
+): Record<DownloadSource, DownloadWindow> {
+  const out = {} as Record<DownloadSource, DownloadWindow>;
+  for (const s of SOURCES) {
+    const have = days.filter((d) => d[s] != null);
+    if (!have.length) {
+      out[s] = { total: 0, previous: null, growth: null, through: null };
+      continue;
+    }
+    const first = firsts[s] ?? have[0]!.day;
+    const last = have[have.length - 1]!.day;
+    const end = addDays(last, 1) < to ? addDays(last, 1) : to;
+    const start = addDays(end, -span);
+    const prevStart = addDays(start, -span);
+    const sum = (a: string, b: string) => have.reduce((n, d) => (d.day >= a && d.day < b ? n + d[s]! : n), 0);
+    const total = sum(start, end);
+    const previous = first <= prevStart ? sum(prevStart, start) : null;
+    out[s] = { total, previous, growth: previous ? total / previous - 1 : null, through: addDays(end, -1) };
+  }
+  return out;
+}
+
+/** Downloads per period for each source; null for a period with no data from that source. */
+export function downloadPeriods(days: DownloadDay[], gran: Gran, startAt: string, today: string): ({ start: string } & Record<DownloadSource, number | null>)[] {
+  if (!days.length) return [];
+  const out: ({ start: string } & Record<DownloadSource, number | null>)[] = [];
+  const first = days[0]!.day > startAt ? days[0]!.day : startAt;
+  for (let s = periodStart(first, gran); s <= today; s = nextStart(s, gran)) {
+    const e = nextStart(s, gran);
+    const row = { start: s } as { start: string } & Record<DownloadSource, number | null>;
+    for (const src of SOURCES) {
+      const vals = days.filter((d) => d.day >= s && d.day < e && d[src] != null).map((d) => d[src]!);
+      row[src] = vals.length ? vals.reduce((a, b) => a + b, 0) : null;
+    }
+    out.push(row);
+  }
+  return out;
+}

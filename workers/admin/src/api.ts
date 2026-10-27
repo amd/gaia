@@ -28,7 +28,7 @@ import {
   type EvalRunRow,
   type EvalScenarioRow,
 } from "./evalstats";
-import { activity, growthPeriods, growthWindow, newcomerRetention, per30, RETURN_DAYS } from "./growth";
+import { activity, downloadPeriods, downloadWindows, growthPeriods, growthWindow, newcomerRetention, per30, RETURN_DAYS, type DownloadDay } from "./growth";
 import { ciStats, dailyDeltas, releaseDownloads, type AssetRow, type ReleaseRow, type RunRow } from "./stats";
 
 const json = (body: unknown, status = 200): Response =>
@@ -128,6 +128,23 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
     // These are complete dated lists from GitHub, so the window before is always known (zero before the project began).
     const previous = allTime ? null : growthWindow(stars, forks, items, commits, maintainers, prevFrom, from);
     const gran = !allTime && days <= 90 ? "week" : "month";
+    // Daily downloads: GitHub installs from consecutive snapshots, registries as reported.
+    const hist = await all<{ day: string; tag: string; asset: string; downloads: number }>(
+      "SELECT day, tag, asset, downloads FROM asset_snapshots WHERE day >= ?",
+      // A week of slack: registries report late, so their windows end, and start, a few days early.
+      allTime ? "0000" : shift(prevFrom, -8),
+    );
+    const pkgs = await all<{ source: string; day: string; downloads: number }>("SELECT source, day, downloads FROM package_daily WHERE day >= ?", allTime ? "0000" : shift(prevFrom, -7));
+    const firsts = Object.fromEntries(
+      (await all<{ source: string; day: string }>("SELECT source, MIN(day) AS day FROM package_daily GROUP BY source UNION ALL SELECT 'installs', MIN(day) FROM asset_snapshots")).map((r) => [r.source, r.day]),
+    );
+    // Installs are differences between snapshots, so the first one counts from the day after.
+    if (firsts.installs) firsts.installs = shift(firsts.installs, 1);
+    const dl = new Map<string, DownloadDay>();
+    const at = (day: string) => dl.get(day) ?? dl.set(day, { day, installs: null, pypi: null, npm: null }).get(day)!;
+    for (const p of dailyDeltas(hist).points) at(p.day).installs = p.install;
+    for (const r of pkgs) if (r.source === "pypi" || r.source === "npm") at(r.day)[r.source] = (at(r.day)[r.source] ?? 0) + r.downloads;
+    const dlDays = [...dl.values()].sort((a, b) => a.day.localeCompare(b.day));
     return json({
       from,
       days: span,
@@ -137,6 +154,8 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
       // People whose first PR was 90 to 180 days ago, so every one has had the full 90 days.
       newcomers: newcomerRetention(activity(items, []), shift(today, -2 * RETURN_DAYS), shift(today, -RETURN_DAYS), today),
       periods: growthPeriods(stars, forks, items, commits, maintainers, gran, today, from),
+      downloads: allTime ? null : downloadWindows(dlDays, span, end, firsts),
+      downloadPeriods: downloadPeriods(dlDays, gran, from, today),
     });
   }
 

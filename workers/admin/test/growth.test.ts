@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from "vitest";
-import { activity, busFactor, growthPeriods, growthWindow, isExternal, newcomerRetention, per30, periodStart } from "../src/growth";
+import { activity, busFactor, downloadPeriods, downloadWindows, growthPeriods, growthWindow, isExternal, newcomerRetention, per30, periodStart, type DownloadDay } from "../src/growth";
 import type { CommitRow, ItemRow } from "../src/momentum";
 
 const c = (author: string, day: string): CommitRow => ({ author, day, at: day + "T12:00:00Z" });
@@ -108,5 +108,40 @@ describe("per30", () => {
     expect(per30(0.1, 30)).toBeCloseTo(0.1);
     expect(per30(0.21, 60)).toBeCloseTo(0.1);
     expect(per30(null, 30)).toBeNull();
+  });
+});
+
+describe("downloadWindows", () => {
+  const days = (from: string, n: number, f: (i: number) => Partial<DownloadDay>) =>
+    Array.from({ length: n }, (_, i) => {
+      const day = new Date(Date.parse(from) + i * 86_400_000).toISOString().slice(0, 10);
+      return { day, installs: null, pypi: null, npm: null, ...f(i) };
+    });
+
+  it("ends each source's windows on its last reported day, so a registry's lag is not read as a drop", () => {
+    // PyPI reported through Jan 28: the 7-day windows are Jan 22–28 and Jan 15–21.
+    const d = days("2026-01-01", 28, (i) => ({ pypi: i < 21 ? 10 : 20 }));
+    const w = downloadWindows(d, 7, "2026-01-31");
+    expect(w.pypi).toEqual({ total: 140, previous: 70, growth: 1, through: "2026-01-28" });
+  });
+
+  it("gives no comparison until the source covers the whole earlier window", () => {
+    const d = days("2026-01-20", 9, () => ({ installs: 5 }));
+    expect(downloadWindows(d, 7, "2026-01-29").installs).toMatchObject({ total: 35, previous: null, growth: null });
+    expect(downloadWindows(d, 7, "2026-01-29", { installs: "2026-01-01" }).installs.previous).toBe(10);
+    expect(downloadWindows([], 7, "2026-01-29").npm).toEqual({ total: 0, previous: null, growth: null, through: null });
+  });
+});
+
+describe("downloadPeriods", () => {
+  it("sums each source per period and leaves a source with no data in a period blank, not zero", () => {
+    const d: DownloadDay[] = [
+      { day: "2026-01-05", installs: null, pypi: 3, npm: 0 },
+      { day: "2026-01-06", installs: 4, pypi: 2, npm: null },
+    ];
+    expect(downloadPeriods(d, "week", "", "2026-01-12")).toEqual([
+      { start: "2026-01-05", installs: 4, pypi: 5, npm: 0 },
+      { start: "2026-01-12", installs: null, pypi: null, npm: null },
+    ]);
   });
 });
