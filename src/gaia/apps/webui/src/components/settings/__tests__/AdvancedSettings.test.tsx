@@ -60,6 +60,13 @@ describe('AdvancedSettings', () => {
         expect(screen.queryByText(/Expected:/)).not.toBeInTheDocument();
     });
 
+    it('rounds the GPU memory Lemonade reports', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({ gpu_name: 'Apple M4', gpu_vram_gb: 11.840011596679688 }));
+        render(<AdvancedSettings />);
+
+        expect(await screen.findByText('Apple M4 (11.8 GB)')).toBeInTheDocument();
+    });
+
     it('keeps them for a local model', async () => {
         mockedApi.getSystemStatus.mockResolvedValue(status({
             default_model_is_cloud: false, model_loaded: 'Qwen3-4B-GGUF', model_device: 'gpu',
