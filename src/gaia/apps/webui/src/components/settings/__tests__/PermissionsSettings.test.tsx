@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsSettings } from '../PermissionsSettings';
 import { useChatStore } from '../../../stores/chatStore';
 import * as api from '../../../services/api';
+import { usePermissionModeEvents } from '../../../utils/permissionModeEvents';
 import type { Session, SessionPermissions } from '../../../types';
 
 vi.mock('../../../services/api');
@@ -64,6 +65,17 @@ describe('PermissionsSettings', () => {
         render(<PermissionsSettings />);
         fireEvent.click(await screen.findByRole('button', { name: 'Turn off full access' }));
         await waitFor(() => expect(mockedApi.setPermissionMode).toHaveBeenCalledWith('chat-2', 'ask'));
+    });
+
+    it('tells the open chat its full access is off', async () => {
+        const seen: string[] = [];
+        function ChatChip() {
+            usePermissionModeEvents('chat-2', (mode) => seen.push(mode));
+            return null;
+        }
+        render(<><ChatChip /><PermissionsSettings /></>);
+        fireEvent.click(await screen.findByRole('button', { name: 'Turn off full access' }));
+        await waitFor(() => expect(seen).toEqual(['ask']));
     });
 
     it('shows why a revoke failed', async () => {
