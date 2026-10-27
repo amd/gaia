@@ -166,6 +166,8 @@ jobs:
           toolchain_args=()
           if [ -n "${VCPKG_INSTALLATION_ROOT:-}" ]; then
             toolchain_args+=("-DCMAKE_TOOLCHAIN_FILE=${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake")
+            # The consumer has no vcpkg.json; reuse the OpenSSL gaia_core was built against.
+            toolchain_args+=("-DVCPKG_INSTALLED_DIR=$(pwd -W 2>/dev/null || pwd)/cpp/build/vcpkg_installed")
           fi
           cmake -B consumer/build -S cpp/examples/fetch_content_consumer \
                 -DCMAKE_BUILD_TYPE=Release \
