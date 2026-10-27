@@ -144,16 +144,24 @@ def runs_replaced_install(inst: DaemonInstance) -> Optional[str]:
 
     try:
         process = psutil.Process(inst.pid)
-        launched_with = process.cmdline()[:1]
+        launchers = [process.cmdline()[:1]]
         # The OS's start time, not instance.json's: a record can say anything.
         started = process.create_time()
     except (psutil.Error, OSError):
         return None
+    # A Windows venv python.exe runs the base interpreter as a child, which
+    # is the pid recorded; the venv path is on its parent's command line.
+    try:
+        parent = process.parent()
+        if parent is not None:
+            launchers.append(parent.cmdline()[:1])
+    except (psutil.Error, OSError) as e:
+        logger.debug("daemon: cannot read the parent of pid %s: %s", inst.pid, e)
 
     def same(path: str) -> str:
         return os.path.normcase(os.path.abspath(path))
 
-    if [same(p) for p in launched_with] != [same(sys.executable)]:
+    if not any([same(p) for p in cmd] == [same(sys.executable)] for cmd in launchers):
         return None
     from gaia import version
 

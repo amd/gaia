@@ -64,23 +64,31 @@ def test_the_record_round_trips_through_instance_json(tmp_path, monkeypatch):
 
 
 class _Process:
-    def __init__(self, cmdline, started):
+    def __init__(self, cmdline, started, parent=None):
         self._cmdline = cmdline
         self._started = started
+        self._parent = parent
 
     def cmdline(self):
+        if isinstance(self._cmdline, Exception):
+            raise self._cmdline
         return self._cmdline
 
     def create_time(self):
         return self._started
+
+    def parent(self):
+        return self._parent
 
 
 @pytest.fixture
 def launched_with(monkeypatch):
     import psutil
 
-    def use(cmdline, started):
-        monkeypatch.setattr(psutil, "Process", lambda pid: _Process(cmdline, started))
+    def use(cmdline, started, parent=None):
+        monkeypatch.setattr(
+            psutil, "Process", lambda pid: _Process(cmdline, started, parent)
+        )
 
     return use
 
@@ -113,6 +121,52 @@ def test_the_process_start_time_wins_over_the_recorded_one(launched_with):
 def test_an_older_daemon_from_another_python_is_left_alone(launched_with):
     launched_with(["/opt/other-venv/bin/python", "-m", "gaia.daemon"], started=0.0)
     assert runs_replaced_install(DaemonInstance(pid=1, port=1, token="t")) is None
+
+
+_BASE_PYTHON = ["C:/uv/python/cpython-3.12/python.exe", "-m", "gaia.daemon"]
+
+
+def test_an_older_daemon_behind_a_windows_venv_launcher_is_judged(launched_with):
+    # The venv python.exe hands off to the base interpreter, which is the pid
+    # recorded; only its parent, the launcher, names this venv.
+    launcher = _Process([sys.executable, "-m", "gaia.daemon"], started=0.0)
+    launched_with(_BASE_PYTHON, started=_installed_at() - 60, parent=launcher)
+    why = runs_replaced_install(DaemonInstance(pid=1, port=1, token="t"))
+    assert why and "installed after it started" in why
+
+    launched_with(_BASE_PYTHON, started=_installed_at() + 60, parent=launcher)
+    assert runs_replaced_install(DaemonInstance(pid=1, port=1, token="t")) is None
+
+
+def test_a_launcher_from_another_venv_is_left_alone(launched_with):
+    # Another install on the same base interpreter must not restart this one.
+    other = _Process(["C:/other-venv/Scripts/python.exe", "-m", "gaia.daemon"], 0.0)
+    launched_with(_BASE_PYTHON, started=0.0, parent=other)
+    assert runs_replaced_install(DaemonInstance(pid=1, port=1, token="t")) is None
+
+
+def test_an_unreadable_or_missing_launcher_is_left_alone(launched_with):
+    import psutil
+
+    denied = _Process(psutil.AccessDenied(7), 0.0)
+    launched_with(_BASE_PYTHON, started=0.0, parent=denied)
+    assert runs_replaced_install(DaemonInstance(pid=1, port=1, token="t")) is None
+
+    launched_with(_BASE_PYTHON, started=0.0, parent=None)
+    assert runs_replaced_install(DaemonInstance(pid=1, port=1, token="t")) is None
+
+
+def test_an_unreadable_launcher_does_not_hide_a_matching_daemon(launched_with):
+    import psutil
+
+    denied = _Process(psutil.AccessDenied(7), 0.0)
+    launched_with(
+        [sys.executable, "-m", "gaia.daemon"],
+        started=_installed_at() - 60,
+        parent=denied,
+    )
+    why = runs_replaced_install(DaemonInstance(pid=1, port=1, token="t"))
+    assert why and "installed after it started" in why
 
 
 @pytest.fixture
