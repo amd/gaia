@@ -1059,7 +1059,8 @@ export interface StartCard {
 /** GET /api/onboarding/start */
 export interface StartScreen {
     cards: StartCard[];
-    working_folder: { path: string; name: string; gaia_folder: boolean };
+    /** choosable: a new chat can be given another folder. */
+    working_folder: { path: string; name: string; gaia_folder: boolean; choosable: boolean };
     /** Why there are no cards: the agent couldn't list its skills. */
     skills_error?: string | null;
 }
@@ -1295,6 +1296,9 @@ export interface SessionPermissions {
 
 // ── Skills (GET /api/skills) ──────────────────────────────────────────────
 
+/** Which discovery root a skill was found in. */
+export type SkillSource = 'agent-bundled' | 'user' | 'claude-import';
+
 export interface SkillInfo {
     name: string;
     description: string;
@@ -1304,4 +1308,6 @@ export interface SkillInfo {
     tier: string | null;
     tools: string[];
     path: string;
+    /** Absent when an older GAIA agent answered the listing. */
+    source?: SkillSource | null;
 }

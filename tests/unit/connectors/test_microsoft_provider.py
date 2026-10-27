@@ -99,7 +99,7 @@ class TestRegistry:
         # Actionable error names the env vars and points at the setup form.
         assert "GAIA_MICROSOFT_CLIENT_ID" in msg
         assert "Settings" in msg
-        assert "Connections" in msg
+        assert "Connectors" in msg
 
     def test_console_steps_do_not_diverge_from_the_guided_walkthrough(
         self, monkeypatch

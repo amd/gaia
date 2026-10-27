@@ -102,7 +102,7 @@ def load_grants() -> Dict[str, Dict[str, List[str]]]:
             f"Grants ledger at {path} is corrupted ({e.msg} at line "
             f"{e.lineno}). Delete the file to reset all per-agent grants: "
             f"  rm {path}\n"
-            "You will need to re-grant scopes from Settings → Connections "
+            "You will need to re-grant scopes from Settings → Connectors "
             "or via `gaia connectors grants grant ...`."
         ) from e
     except OSError as e:
