@@ -368,8 +368,11 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
         }
     }, [selectedFiles, currentSessionId, updateSessionInList, entries]);
 
+    // A second click can land before the re-render that disables the button.
+    const askingRef = useRef(false);
     const handleAskAgent = useCallback(async () => {
-        if (selectedFiles.size === 0) return;
+        if (selectedFiles.size === 0 || askingRef.current) return;
+        askingRef.current = true;
         const files = Array.from(selectedFiles);
         setIndexError(null);
         setIndexingFiles(new Set(files));
@@ -425,6 +428,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                 error: err instanceof Error ? err.message : 'An unexpected error occurred.',
             });
         } finally {
+            askingRef.current = false;
             setIndexingFiles(new Set());
             setIndexStatus(null);
         }
