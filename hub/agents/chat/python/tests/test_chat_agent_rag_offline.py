@@ -510,3 +510,23 @@ def test_watched_office_save_by_rename_ignores_temporary_files(agent, workdir):
 
     assert any("BRAVO" in chunk for chunk in agent.rag.chunks)
     assert not any("ALPHA" in chunk for chunk in agent.rag.chunks)
+
+
+def test_system_info_reports_free_disk_space_as_macos_counts_it(agent, monkeypatch):
+    # macOS's "/" is the sealed system volume: 12.6 GB used of a 245 GB
+    # container whose free space, 5.3 GB, every volume shares.
+    from collections import namedtuple
+
+    import psutil
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+
+    usage = namedtuple("usage", "total used free percent")(
+        245_100_000_000, 12_600_000_000, 5_300_000_000, 70.3
+    )
+    monkeypatch.setattr(psutil, "disk_usage", lambda path: usage)
+
+    info = _TOOL_REGISTRY["get_system_info"]["function"]()
+
+    assert info["disk_free_gb"] == 5.3
+    assert info["disk_used_pct"] == 97.8

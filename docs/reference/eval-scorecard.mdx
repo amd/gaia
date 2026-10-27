@@ -305,7 +305,7 @@ python -m gaia.eval.scorecard_gate \
    - Omit both for report mode (presence + regression only). The email release workflow reads these from the thresholds manifest (`acceptance_target`, `urgent_recall_floor`, `acceptance_enforce`) — data, not code.
 3. **Baseline resolution**:
    - `--baseline-file`: read the given file directly (no git access; suitable for unit tests).
-   - `--baseline-ref`: resolve via `git show <ref>:<scorecard-path>`. If the file does not exist at that ref → **first adoption**, exit 0.
+   - `--baseline-ref`: resolve via `git show <ref>:<scorecard-path>`. If the ref does not resolve to a commit → exit 1 (an actionable error, not first adoption). If the file does not exist at that ref → **first adoption**, exit 0.
    - Neither specified: **first adoption**, exit 0 (presence-only pass).
 4. **Regression check** (variance-aware, #1894): a regression is flagged only when `candidate < baseline − band`, where the band is the **wider** of `k·stdev` (`--regression-k`, default 1; stdev is on the [0,1] scale, scaled ×100 to match `aggregate.value`) and an absolute floor (`--regression-floor-pp`, default 1.5). Single-run cards record a stdev of `0.0`, so the floor is what gives them tolerance — without it the band would collapse to a strict `<` and trip on sub-noise wobble. Pass `--regression-floor-pp 0` for the strict behaviour.
 5. Equal or above the threshold → exit 0.
@@ -318,6 +318,7 @@ python -m gaia.eval.scorecard_gate \
 | Below `--min-aggregate` bar | `1` |
 | Below `--min-urgent-recall` floor (or metric absent) | `1` |
 | Regression beyond the variance band vs baseline | `1` |
+| `--baseline-ref` does not resolve to a commit | `1` |
 | No baseline (first adoption), bar/floor met | `0` |
 | File absent at `--baseline-ref` | `0` |
 | Equal score (patch carry-forward) | `0` |

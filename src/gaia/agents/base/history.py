@@ -549,12 +549,17 @@ def fit_pushed_history(
     """
     if not messages:
         return []
+    return select_history(pushed_turns(messages), history_budget(agent, query), on_cut)
+
+
+def pushed_turns(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Group a flat message list into turns: each user message starts one."""
     turns: list[list[dict[str, Any]]] = []
     for message in messages:
         if message.get("role") == "user" or not turns:
             turns.append([])
         turns[-1].append(message)
-    return select_history(turns, history_budget(agent, query), on_cut)
+    return turns
 
 
 def turn_cost(turn: list[dict[str, Any]]) -> int:

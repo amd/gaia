@@ -60,6 +60,7 @@ from gaia.ui.email_sidecar.profiles import (
     api_version_supported,
     changes_supported,
     confirmations_supported,
+    context_supported,
     documents_supported,
     memory_supported,
     profile_for,
@@ -1283,6 +1284,7 @@ def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
                 "Agent cache miss (agent_type change) for session %s", session_id[:8]
             )
             return None
+        _agent_cache[session_id] = _agent_cache.pop(session_id)
         return entry["agent"]
 
 
@@ -1293,7 +1295,7 @@ def _store_agent(
     agent,
     agent_type: str = "chat",
 ) -> None:
-    """Cache *agent* for *session_id*.  Evicts the oldest entry if over the limit.
+    """Cache *agent* for *session_id*. Evicts the least-recently-used entry if full.
 
     The agent_type is stored in canonical form so a later lookup with a
     legacy alias still matches (see ``_canonical_agent_type``).
@@ -1811,6 +1813,41 @@ def _session_mail_provider(session: dict) -> str | None:
 _history_cuts: dict = {}
 # Messages each relayed chat last showed clipped, so a clip is announced once.
 _relay_clips: dict = {}
+# Each relayed chat's last context measurement, or the reason it has none.
+_relayed_contexts: dict = {}
+_relayed_contexts_lock = threading.Lock()
+
+
+def record_relayed_context(
+    session_id: str, usage: Optional[dict], reason: Optional[str]
+) -> None:
+    """Keep what a relayed turn measured, or why it has no measurement.
+
+    A turn with neither (an error, a Stop) keeps the previous measurement.
+    """
+    with _relayed_contexts_lock:
+        if usage is not None:
+            _relayed_contexts[session_id] = {"usage": usage}
+        elif reason:
+            _relayed_contexts[session_id] = {"reason": reason}
+
+
+def relayed_context_reason(profile, api_version, handler) -> Optional[str]:
+    """Why a relayed turn has no measurement: an old agent, or its own error."""
+    if not context_supported(profile, api_version):
+        return profile.context_upgrade_message
+    return getattr(handler, "relay_context_error", None)
+
+
+def forget_relayed_context(session_id: str) -> None:
+    with _relayed_contexts_lock:
+        _relayed_contexts.pop(session_id, None)
+
+
+def relayed_context(session_id: str) -> Optional[dict]:
+    """``{"usage": ...}`` or ``{"reason": ...}`` for a relayed chat, else None."""
+    with _relayed_contexts_lock:
+        return _relayed_contexts.get(session_id)
 
 
 def _relayed_history(
@@ -2267,10 +2304,24 @@ def _dispatch_sidecar_query(
 
     # First-turn-per-session readiness check (#2101 lesson): a 503 from
     # /v1/<agent>/init is contract ("not ready yet"), not a transport failure.
+    import requests
+
     try:
         status_code, init_body = proxy.init()
     except SidecarError as exc:
         sse_handler._emit({"type": "agent_error", "content": str(exc)})
+        return
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+        # The agent stopped answering (crashed, hung or shutting down): not the model server.
+        logger.warning(
+            "chat: %s agent at %s did not answer its readiness check: %s",
+            agent_type,
+            proxy.base_url,
+            exc,
+        )
+        sse_handler._emit(
+            {"type": "agent_error", "content": profile.start_failed_text()}
+        )
         return
     if (
         status_code != 200
@@ -2363,6 +2414,12 @@ def _dispatch_sidecar_query(
         ),
         max_steps=max_steps,
     )
+    if session_id and profile.min_context_api_version is not None:
+        record_relayed_context(
+            session_id,
+            getattr(sse_handler, "relay_context", None),
+            relayed_context_reason(profile, handle.api_version, sse_handler),
+        )
 
 
 def _find_last_tool_step(steps: list) -> dict | None:
@@ -5014,8 +5071,10 @@ def _settled_quietly(future) -> None:
 
 
 # Failures retrying can't fix until the file itself changes: RAG's pdf_status
-# values, plus "empty_file" for a 0-byte file of any type.
-PERMANENT_INDEX_FAILURES = frozenset({"corrupted", "encrypted", "empty", "empty_file"})
+# and xlsx_status values, plus "empty_file" for a file with nothing to index.
+PERMANENT_INDEX_FAILURES = frozenset(
+    {"corrupted", "encrypted", "empty", "empty_file", "unsupported_workbook"}
+)
 
 
 class UnreadableDocumentError(RuntimeError):
@@ -5101,7 +5160,9 @@ async def _index_document(filepath: Path, display_name: Optional[str] = None) ->
         if error:
             message = f"RAG indexing failed for {name}: {error}"
             kind = (
-                "empty_file" if result.get("empty_file") else result.get("pdf_status")
+                "empty_file"
+                if result.get("empty_file")
+                else result.get("pdf_status") or result.get("xlsx_status")
             )
             if kind in PERMANENT_INDEX_FAILURES:
                 raise UnreadableDocumentError(message, kind)

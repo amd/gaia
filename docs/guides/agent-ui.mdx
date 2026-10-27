@@ -420,8 +420,9 @@ Open **Settings → Model** (or the model chip in the message box):
   to AMD's network or VPN, then press **Check again**. When Lemonade runs on
   another machine, or a proxy carries this PC's traffic, the check is skipped and
   the gateway stays choosable.
-- Recommended Fireworks models are ranked first, each with the benchmark result
-  behind the pick.
+- In **Settings → Model**, recommended Fireworks models appear by default. Choose
+  **Show all models** to reveal the rest; searching also finds unranked models.
+  Each recommendation includes the benchmark result behind the pick.
 - The model you choose is remembered across restarts (shared with the TUI). If
   it can't be restored, a one-line notice says why and asks you to pick one.
 - Switching from a local model to a cloud one shows the privacy note first.
@@ -504,15 +505,17 @@ When the same question comes back after you allowed it once, the prompt says
 so and highlights **Always allow**. It never answers for you, and a different
 tool or a riskier call gets no hint.
 
-Pick **Full access** from the shield to let a chat run everything without
-asking (you confirm once). **Settings → Permissions** lists every chat with full
-access or "always allow" answers and lets you revoke them. Grants end when GAIA
-restarts.
+Pick **Full access** from the shield to stop most of these questions in a chat
+(you confirm once). It does not open the shell: a gated `run_shell_command` — a
+delete, `git add` — still asks, and runs only when you allow it.
+**Settings → Permissions** lists every chat with full access or "always allow"
+answers and lets you revoke them. Grants end when GAIA restarts.
 
 A Hub-installed GAIA, which runs as its own process, follows the chat's mode
 too, from agent contract 2.14. It stops asking, but its shell guardrails stay
-on. If the mode can't be passed on when a turn starts, that turn stops with an
-error, so it never runs with full access you turned off.
+on, so those commands still reach you as a confirmation. If the mode can't be
+passed on when a turn starts, that turn stops with an error, so it never runs
+with full access you turned off.
 
 ## The session panel
 
@@ -610,6 +613,12 @@ Undo is all or nothing. If you, or a later turn, changed one of those files
 since, GAIA names it and changes nothing; you can then undo anyway and lose
 that later change. Undo the later turn first to keep it. To undo every turn at once, use
 **Undo all** in the session panel's Changes section.
+
+On macOS, undoing a change in Documents, Desktop or Downloads can need its own
+permission, separate from the one the agent got for making the change. If macOS
+is asking, Undo says so: answer the dialog, then undo again. If access was
+denied, allow GAIA in **System Settings > Privacy & Security > Files and
+Folders**.
 
 GAIA can't copy what a shell command, a Python snippet or a connected (MCP)
 tool is about to change. When a turn ran one that could have changed files,
