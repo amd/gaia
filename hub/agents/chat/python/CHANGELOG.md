@@ -2,9 +2,22 @@
 
 ## Unreleased
 
+- `get_system_info` reports free disk space (`disk_free_gb`) and available
+  memory (`memory_available_gb`), and computes disk use from free space. On a
+  Mac it reported only the share macOS's system volume uses, so a nearly full
+  disk read as 5% used. Its description now says it answers free-space
+  questions, so the model stops trying `df`, which the shell refuses.
+- `/quit` and `/reset` no longer discard the conversation when the session
+  cannot be saved; chat stays open so storage can be fixed and `/save` retried.
+  Ctrl-C still exits without saving. Document tools warn when an indexed
+  document's session attachment could not be saved (#3288).
 - Saving a Word, PowerPoint or Excel document in a watched folder now updates
   its index. Office owner files (`~$...`) and temporary save files are ignored;
   a document saved by renaming a temporary file over it is reindexed (#5478).
+- On macOS, a watched document saved by renaming a new copy over it (as Word
+  and most editors do) no longer drops out of the index right after it was
+  reindexed. macOS reports the replaced file as deleted; a file still on disk
+  is now treated as changed, not deleted.
 - A turn whose local model failed on a base URL the user set
   (`LEMONADE_BASE_URL` or an external Lemonade) now names that server — "The
   model server at 192.168.1.20:8080" — instead of "Lemonade on this machine",

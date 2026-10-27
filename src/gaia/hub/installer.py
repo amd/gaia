@@ -43,6 +43,7 @@ import sysconfig
 import tempfile
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -300,6 +301,22 @@ def read_sentinel(
         artifact_kind=data.get("artifact_kind", ARTIFACT_KIND_WHEEL),
         executable=data.get("executable", ""),
     )
+
+
+def binary_changed(
+    agent_id: str,
+    before: Optional[InstalledAgent],
+    install_root: Optional[Path] = None,
+) -> bool:
+    """True when an install replaced *before* with different bytes.
+
+    A same-version reinstall writes the same artifact, so a running copy of it
+    has nothing to restart for.
+    """
+    if before is None:
+        return False
+    after = read_sentinel(agent_id, install_root)
+    return after is not None and after.artifact_sha256 != before.artifact_sha256
 
 
 def list_installed(install_root: Optional[Path] = None) -> Dict[str, InstalledAgent]:
@@ -1036,12 +1053,13 @@ def _install_binary_artifact(
     """
     install_dir.mkdir(parents=True, exist_ok=True)
     target = install_dir / generic_name
+    _remove_replaced_binaries(target)
     tmp_fd, tmp_name = tempfile.mkstemp(dir=str(install_dir), prefix=".gaia-hub-tmp-")
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(tmp_fd, "wb") as f:
             f.write(artifact_bytes)
-        os.replace(str(tmp_path), str(target))
+        _replace_binary(tmp_path, target)
     except PermissionError as exc:
         tmp_path.unlink(missing_ok=True)
         raise InstallError(
@@ -1055,6 +1073,53 @@ def _install_binary_artifact(
         mode = target.stat().st_mode
         target.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return target
+
+
+#: Prefix of a binary moved aside because a running process held it.
+_REPLACED_PREFIX = ".replaced-"
+
+
+def _replace_binary(new: Path, target: Path) -> None:
+    """Move *new* over *target*, even while *target* is running on Windows.
+
+    Windows refuses to overwrite a running executable but lets it be renamed,
+    so the old one moves aside (the running process keeps its image) and the
+    next install deletes it.
+    """
+    try:
+        os.replace(str(new), str(target))
+        return
+    except PermissionError:
+        if os.name != "nt" or not target.exists():
+            raise
+    aside = target.with_name(f"{_REPLACED_PREFIX}{uuid.uuid4().hex[:8]}-{target.name}")
+    os.replace(str(target), str(aside))
+    try:
+        os.replace(str(new), str(target))
+    except OSError as swap_error:
+        try:
+            os.replace(str(aside), str(target))
+        except OSError as restore_error:
+            raise InstallError(
+                f"Could not install the new {target.name} ({swap_error}) or put "
+                f"the previous one back ({restore_error}). The previous one is "
+                f"{aside}: rename it to {target.name}, or run the install again."
+            ) from swap_error
+        raise
+    logger.info("Replaced running %s; the old copy is %s", target, aside.name)
+
+
+def _remove_replaced_binaries(target: Path) -> None:
+    """Delete binaries earlier installs moved aside, except ones still running."""
+    for old in target.parent.glob(f"{_REPLACED_PREFIX}*-{target.name}"):
+        try:
+            old.unlink()
+        except PermissionError:
+            # Still the image of a process started before that install.
+            logger.info("Keeping %s: a running process still uses it", old)
+        except OSError as exc:
+            # A leftover is harmless; the next install tries again.
+            logger.warning("Could not delete the old copy %s: %s", old, exc)
 
 
 def _filename_matches_platform(filename: str, platform_key: str) -> bool:
@@ -1216,6 +1281,29 @@ def resolve_installable_version(
             core=core,
         )
     return version
+
+
+def published_artifact_sha256(
+    agent_id: str,
+    *,
+    manifest: Optional[Dict[str, Any]] = None,
+    base_url: Optional[str] = None,
+    fetcher: Optional[catalog_mod.Fetcher] = None,
+    platform_key: Optional[str] = None,
+) -> str:
+    """The sha256 of the artifact :func:`install` would fetch for this machine now.
+
+    Same selection as an install with no *version*: the newest published
+    version this core can run, and its artifact for *platform_key*. Raises
+    :class:`catalog_mod.CatalogError` when the hub can't be read and
+    :class:`InstallError` when it has nothing for this machine.
+    """
+    if manifest is None:
+        manifest = catalog_mod.fetch_manifest(
+            agent_id, base_url=base_url, fetcher=fetcher
+        )
+    _, artifact = _resolve_version(manifest, None, platform_key=platform_key)
+    return str(artifact.get("sha256") or "")
 
 
 def _resolve_version(

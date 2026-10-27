@@ -15,6 +15,17 @@ function appIconPath(platform = process.platform) {
 }
 
 /**
+ * The icon desktop notifications carry. Deliberately small: notification daemons
+ * decode it on every banner, and KDE Plasma's panel crashes on the 4096 px app
+ * icon (#5888).
+ *
+ * @returns {string} Absolute path to a 256 px PNG.
+ */
+function notificationIconPath() {
+  return path.join(__dirname, "..", "assets", "notification-icon.png");
+}
+
+/**
  * The Windows AppUserModelID. Without one, the taskbar groups GAIA with every
  * other window of the same electron.exe and shows Electron's icon. Packaged
  * builds match the installer's shortcut (`appId` in electron-builder.yml).
@@ -26,4 +37,4 @@ function appUserModelId(isPackaged) {
   return isPackaged ? "ai.amd.gaia" : "ai.amd.gaia.dev";
 }
 
-module.exports = { appIconPath, appUserModelId };
+module.exports = { appIconPath, appUserModelId, notificationIconPath };

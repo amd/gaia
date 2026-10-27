@@ -186,6 +186,22 @@ def test_required_skill_that_is_not_installed_raises_with_the_install_command(tm
     assert "gaia skill install web-research@^1.0" in str(excinfo.value)
 
 
+@pytest.mark.parametrize("spec", ["*", ">=1.3.0-rc.1", "^1.3.0-rc.1", ">=1.0.0"])
+def test_installed_prerelease_respects_the_manifest_pin(tmp_path, spec):
+    root = tmp_path / "home" / "skills"
+    _install(root, "web-research", version="1.3.0-rc.2")
+    manager = isolated_manager(tmp_path, user_skills_root=root)
+    requirements = [SkillRequirement(name="web-research", version=spec)]
+
+    if spec == ">=1.0.0":
+        with pytest.raises(SkillValidationError, match="Version conflict"):
+            resolve_requirements(requirements, manager=manager)
+    else:
+        assert resolve_requirements(requirements, manager=manager).names == [
+            "web-research"
+        ]
+
+
 def test_optional_skill_that_is_missing_is_recorded_not_raised(tmp_path):
     root = tmp_path / "home" / "skills"
     _install(root, "web-research", version="1.0.0")

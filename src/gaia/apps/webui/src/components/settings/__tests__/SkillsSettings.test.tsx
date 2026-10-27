@@ -40,6 +40,24 @@ describe('SkillsSettings', () => {
         expect(onUseSkill).toHaveBeenCalledExactlyOnceWith('pdf-forms');
     });
 
+    it('labels always-on skills without offering a chat action', async () => {
+        const onUseSkill = vi.fn();
+        mockedApi.listSkills.mockResolvedValue({
+            skills: [
+                { ...skill('gaia-voice', 'Honesty floor'), always_on: true },
+                { ...skill('gh-cli', 'Work with GitHub'), always_on: false },
+            ],
+            invalid: {},
+        });
+        render(<SkillsSettings onUseSkill={onUseSkill} />);
+        const row = (await screen.findByText('gaia-voice')).closest('li')!;
+        expect(within(row).getByText('· Always on')).toBeInTheDocument();
+        expect(within(row).queryByRole('button')).not.toBeInTheDocument();
+        const selectableRow = screen.getByText('gh-cli').closest('li')!;
+        fireEvent.click(within(selectableRow).getByRole('button', { name: 'Use gh-cli in a new chat' }));
+        expect(onUseSkill).toHaveBeenCalledExactlyOnceWith('gh-cli');
+    });
+
     it('names skills that could not be read', async () => {
         mockedApi.listSkills.mockResolvedValue({ skills: [], invalid: { '/skills/broken/SKILL.md': 'missing name' } });
         render(<SkillsSettings onUseSkill={vi.fn()} />);

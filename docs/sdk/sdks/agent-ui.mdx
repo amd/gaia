@@ -1247,8 +1247,9 @@ Deleting a chat deletes its copies.
 
     **Response:** `DocumentResponse`. A failed index still returns 200, with
     `indexing_status: "failed"`, the reason in `last_error`, and `error_kind`
-    set to `corrupted`, `encrypted` or `empty` when retrying can't help until
-    the file is fixed.
+    set to `corrupted`, `encrypted`, `empty` (no text), `empty_file` (nothing
+    to index) or `unsupported_workbook` (a legacy `.xls` or password-protected
+    workbook) when retrying can't help until the file is fixed.
 
     **Errors:** 400 with `detail.status: "is_folder"` when the path is a folder
     (index it with `index-folder`); 400 for a file type GAIA doesn't index; 404
@@ -1594,7 +1595,10 @@ Used to reach the UI from a phone.
 <AccordionGroup>
   <Accordion title="POST /api/documents/upload">
     Multipart drag-and-drop upload. Stores the file in the library and
-    enqueues it for indexing.
+    enqueues it for indexing. A file that can't be read is a **422** whose
+    `detail.status` is one of the `error_kind` values listed under
+    `upload-path` and whose
+    `detail.message` says what to do.
   </Accordion>
 
   <Accordion title="GET /api/documents/monitor/status">
@@ -2246,9 +2250,10 @@ First-run hardware scan (issues #1726, #1727).
     `working_folder` (`{path, name, gaia_folder, choosable}`) a new chat's agent
     works in. `choosable` is false when the GAIA agent runs as its own process,
     so a new chat can't be given another folder.
-    Each card (`{skill, title, note, prompt, needs_input}`) is backed by an
-    installed skill; cards for what the user set up (indexed documents, a
-    connected mail account) come first. `needs_input` means the prompt ends
+    Each card is `{skill, title, note, prompt, needs_input}`. Its task runs on
+    the agent's own tools, so it appears whether or not `skill` is installed;
+    only the check-in card needs its skill. Cards for what the user set up
+    (indexed documents, a connected mail account) come first. `needs_input` means the prompt ends
     where the user types the subject. When the agent can't list its skills,
     `cards` is empty and `skills_error` says why. Makes no model call.
   </Accordion>

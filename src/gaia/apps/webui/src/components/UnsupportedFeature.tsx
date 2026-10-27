@@ -217,6 +217,7 @@ export const PERMANENT_FAILURE_HINTS: Record<string, string> = {
     encrypted: 'The PDF needs a password to open. Save a copy without the password, then index that.',
     empty: 'The PDF has no readable text, which usually means it is a scan. Run OCR on it, then index it again.',
     empty_file: 'This file is empty. Add content to it, then index it again.',
+    unsupported_workbook: 'This is an old .xls workbook or has a password. Open it in Excel, save a copy as .xlsx without a password, then index that.',
 };
 
 /** The backend's message without its leading category label, e.g. "File not found:". */

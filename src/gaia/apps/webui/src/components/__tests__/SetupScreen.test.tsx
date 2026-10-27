@@ -292,6 +292,39 @@ describe('SetupScreen: system check', () => {
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
+    const checkStep = () => screen.getByText('Check this PC').closest('li');
+
+    it('marks the check done only once the device is known', async () => {
+        mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        await screen.findByRole('list', { name: 'This PC' });
+        expect(checkStep()).toHaveClass('is-done');
+    });
+
+    it("doesn't mark the check done while the device waits for the model server", async () => {
+        mockedApi.getOnboardingPreflight.mockResolvedValue({ ...HARDWARE, gpu_name: null, npu_detected: null, lemonade_running: false });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        await screen.findByText('Checked once the model server is running');
+        expect(checkStep()).not.toHaveClass('is-done');
+    });
+
+    it("doesn't mark the check done when the hardware couldn't be read", async () => {
+        mockedApi.getOnboardingPreflight.mockRejectedValue(new Error('timed out'));
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        await screen.findByText(/couldn.t be read \(timed out\)/);
+        expect(checkStep()).not.toHaveClass('is-done');
+    });
+
+    it('reads the device again once setup has started the model server', async () => {
+        mockedApi.getOnboardingPreflight.mockResolvedValue({ ...HARDWARE, gpu_name: null, npu_detected: null, lemonade_running: false });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        await screen.findByText('Checked once the model server is running');
+        mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
+        fireEvent.click(screen.getByRole('button', { name: 'Start setup' }));
+        await waitFor(() => expect(mockedApi.getOnboardingPreflight).toHaveBeenCalledTimes(2));
+        await waitFor(() => expect(checkStep()).toHaveClass('is-done'));
+    });
+
     it("doesn't warn about the NPU before a model server can be asked", async () => {
         const npu = 'GAIA could not query Lemonade for NPU availability; the NPU result for the recommended model is unknown.';
         mockedApi.getOnboardingPreflight.mockResolvedValue({ ...HARDWARE, lemonade_running: false, warnings: [npu, 'Low memory.'] });
@@ -684,7 +717,7 @@ describe('SetupScreen: download progress', () => {
 });
 
 describe('SetupScreen: an unreachable AMD gateway (#5604)', () => {
-    const NO_NET = "No network available — can't reach llm-api.amd.com (needs AMD's network or VPN)";
+    const NO_NET = "Can't reach llm-api.amd.com. It needs AMD's network or VPN";
     const gateway = (reachable: boolean) => ({
         providers: [{
             id: 'amd' as const, name: 'AMD LLM Gateway', remote: true, privacy_notice: '',
@@ -694,12 +727,12 @@ describe('SetupScreen: an unreachable AMD gateway (#5604)', () => {
         lemonade_error: null,
     });
 
-    it('greys out the gateway choice and says there is no network', async () => {
+    it('greys out the gateway choice and says it needs AMD\'s network', async () => {
         mockedApi.listProviders.mockResolvedValue(gateway(false));
         render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
         const amd = await screen.findByRole('radio', { name: /AMD LLM Gateway/ });
         await waitFor(() => expect(amd).toBeDisabled());
-        expect(amd).toHaveTextContent('No network available');
+        expect(amd).toHaveTextContent("It needs AMD's network or VPN");
         expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toBeEnabled();
     });
 

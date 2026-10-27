@@ -61,7 +61,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from starlette.responses import StreamingResponse
 
 from gaia.agents.base import file_snapshots
-from gaia.agents.base.history import fit_pushed_history
+from gaia.agents.base.history import fit_pushed_history, pushed_turns
 from gaia.agents.base.readiness import start_advice, version_meets_min
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.llm.surface_hints import surface_wording
@@ -85,7 +85,15 @@ AGENT_ID = "gaia"
 #: 2.18 added ``/query``'s ``allowed_paths`` and ``memory`` fields.
 #: 2.19 added ``/query``'s ``changes_turn_id`` field.
 #: 2.20 added ``/query``'s ``surface`` field.
-API_VERSION = "2.20"
+#: 2.21 added ``context`` to ``/query``'s ``final`` event.
+API_VERSION = "2.21"
+
+#: How long ``final`` waits for the turn's context measurement before going without.
+_CONTEXT_WAIT_SECONDS = 15.0
+
+#: Budget for counting with the model's own tokenizer before the estimate stands in,
+#: so a busy model server never holds up the answer.
+_EXACT_COUNT_SECONDS = 2.0
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -420,6 +428,11 @@ class _QueryRun:
         self.result: Optional[Dict[str, Any]] = None
         #: Records the run's file changes when the caller asked for it.
         self.recorder: Optional[file_snapshots.TurnRecorder] = None
+        #: What the next model call holds, measured once the turn ends.
+        self.context: Optional[Dict[str, Any]] = None
+        #: Why measuring failed, when it did.
+        self.context_error: Optional[str] = None
+        self.context_done = threading.Event()
 
 
 class DuplicateRunError(RuntimeError):
@@ -595,6 +608,73 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
         ),
         "status": 500,
     }
+
+
+def _run_answer(result: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The answer text a finished run returned, or None when it has none."""
+    if not isinstance(result, dict) or result.get("status") == "cancelled":
+        return None
+    if result.get("model_failed"):
+        # The failure notice is not a turn the next push carries.
+        return None
+    for key in ("answer", "response", "result", "output"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _measure_turn_context(
+    agent: Any,
+    pushed: List[Dict[str, Any]],
+    query: str,
+    result: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """What the next model call holds: the pushed history plus this turn.
+
+    None for a turn with no answer (stopped, or the model failed), which adds
+    nothing the caller's next push would carry.
+    """
+    from gaia.ui.turn_insights import panel_context
+
+    answer = _run_answer(result)
+    if answer is None:
+        return None
+    messages = list(pushed) + [
+        {"role": "user", "content": query},
+        {"role": "assistant", "content": answer},
+    ]
+    turns = pushed_turns(messages)
+    model_id = getattr(agent, "model_id", None)
+    box: Dict[str, Any] = {}
+
+    deadline = time.monotonic() + _EXACT_COUNT_SECONDS
+
+    def _exact() -> None:
+        try:
+            box["usage"] = panel_context(agent, turns, model_id, deadline=deadline)
+        except Exception as exc:  # re-raised below, on the run's thread
+            box["error"] = exc
+
+    counter = threading.Thread(target=_exact, name="context-count", daemon=True)
+    counter.start()
+    counter.join(_EXACT_COUNT_SECONDS)
+    if "error" in box:
+        raise box["error"]
+    if "usage" in box:
+        return box["usage"]
+    logger.info(
+        "Tokenizer count took over %ss; sending the estimate", _EXACT_COUNT_SECONDS
+    )
+    return panel_context(
+        agent,
+        turns,
+        model_id,
+        estimate_reason=(
+            f"The model server didn't count tokens within {_EXACT_COUNT_SECONDS:g}s, "
+            "so these are estimates."
+        ),
+    )
 
 
 def _confirmation_refusal(action: str) -> Dict[str, Any]:
@@ -926,12 +1006,12 @@ async def skills() -> Dict[str, Any]:
     from gaia_agent.agent import ENGINEERING_SKILL, GaiaAgent
 
     from gaia.skills.errors import SkillError
-    from gaia.skills.listing import skills_listing
+    from gaia.skills.listing import skills_listing_for_agent
 
     try:
         # Off the event loop: discovery reads every skill folder.
         return await asyncio.to_thread(
-            skills_listing, GaiaAgent.SKILL_DIRS, (ENGINEERING_SKILL,)
+            skills_listing_for_agent, GaiaAgent, (ENGINEERING_SKILL,)
         )
     except SkillError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -1118,7 +1198,8 @@ _QUERY_SSE_RESPONSES = {
             "the arguments the model sent for the gated call, each value capped "
             "at 64,000 characters (`args_truncated: true` when one was cut); "
             "what the agent adds to its prompt is in `prompt_context` "
-            "{working_directory?, risk_note?}, never in `args`. The stream ends "
+            "{working_directory?, risk_note?, file_path?}, never in `args`. The "
+            "stream ends "
             "with exactly one `final` or `error`. `:`-prefixed heartbeat "
             "comments carry no payload."
         ),
@@ -1364,10 +1445,23 @@ async def query(request: QueryRequest):
                 request.query,
                 lambda cut: handler.print_warning(cut.notice),
             )
-        if request.max_steps is not None:
-            run.result = agent.process_query(request.query, max_steps=request.max_steps)
-        else:
-            run.result = agent.process_query(request.query)
+        pushed = list(getattr(agent, "conversation_history", None) or [])
+        try:
+            if request.max_steps is not None:
+                run.result = agent.process_query(
+                    request.query, max_steps=request.max_steps
+                )
+            else:
+                run.result = agent.process_query(request.query)
+            try:
+                run.context = _measure_turn_context(
+                    agent, pushed, request.query, run.result
+                )
+            except Exception as exc:  # the answer stands; the meter says why it's blank
+                logger.exception("Context measurement failed for run_id=%s", run.run_id)
+                run.context_error = f"GAIA couldn't measure this chat's context: {exc}"
+        finally:
+            run.context_done.set()
 
     def _run_agent() -> None:
         process_error: Optional[Exception] = None
@@ -1406,6 +1500,7 @@ async def query(request: QueryRequest):
             logger.exception("%s /query run failed for run_id=%s", AGENT_ID, run.run_id)
             handler.print_error(_terminal_error_detail(exc))
         finally:
+            run.context_done.set()
             handler.signal_done()
             # Unwire the follow-up queue the moment the loop stops draining it.
             # Left wired, a follow-up arriving in the window before the run
@@ -1463,6 +1558,27 @@ async def query(request: QueryRequest):
     def _emit(event: Dict[str, Any]) -> str:
         return _sse(_worded(event, _wording_surface(request)))
 
+    async def _with_context(final: Dict[str, Any]) -> Dict[str, Any]:
+        """``final`` carrying the turn's context measurement (contract >= 2.21)."""
+        if final.get("type") != "final":
+            return final
+        # ``final`` is printed inside process_query; the measurement follows it.
+        deadline = time.monotonic() + _CONTEXT_WAIT_SECONDS
+        while not run.context_done.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        if not run.context_done.is_set():
+            logger.warning(
+                "run_id=%s: no context measurement within %ss; final goes without it",
+                run.run_id,
+                _CONTEXT_WAIT_SECONDS,
+            )
+            return final
+        if run.context_error is not None:
+            return {**final, "context_error": run.context_error}
+        if run.context is None:
+            return final
+        return {**final, "context": run.context}
+
     async def _stream():
         translator = CanonicalTranslator(request.run_id, agent_id=AGENT_ID)
         terminated = False
@@ -1494,6 +1610,7 @@ async def query(request: QueryRequest):
                     if ctype in TERMINAL_TYPES:
                         for warning in await _finish_changes(run):
                             yield _emit(warning)
+                        canonical = await _with_context(canonical)
                     yield _emit(canonical)
                     last_write = time.monotonic()
                     if ctype == "needs_input":
@@ -1528,11 +1645,12 @@ async def query(request: QueryRequest):
                 if canonical.get("type") in TERMINAL_TYPES:
                     for warning in await _finish_changes(run):
                         yield _emit(warning)
+                    canonical = await _with_context(canonical)
                 yield _emit(canonical)
                 if canonical.get("type") in TERMINAL_TYPES:
                     terminated = True
             if not terminated:
-                yield _emit(_terminal_from_run_result(run.result))
+                yield _emit(await _with_context(_terminal_from_run_result(run.result)))
         finally:
             # A client that disconnected mid-run should not leave the loop running.
             handler.cancelled.set()

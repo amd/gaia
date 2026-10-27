@@ -49,13 +49,25 @@ def test_what_the_user_set_up_comes_first():
     assert cards[0]["note"] == "3 indexed documents"
 
 
-def test_a_card_needs_its_skill_installed():
-    cards = ss.pick_cards(_ctx(skills=frozenset({"summarize"}), docs=2, mail=True))
-    assert _skills(cards) == ["summarize"]
+def test_cards_run_on_the_agents_own_tools_without_their_skills():
+    cards = ss.pick_cards(_ctx(skills=frozenset(), docs=2, mail=True))
+    assert _skills(cards) == [
+        "document-brief",
+        "inbox-triage",
+        "research-report",
+        "coding",
+    ]
 
 
-def test_no_skills_means_no_cards():
-    assert ss.pick_cards(_ctx(skills=frozenset())) == []
+def test_without_the_starter_skills_a_new_chat_still_offers_tasks():
+    # What a release agent without the starter pack lists (#3057).
+    cards = ss.pick_cards(_ctx(skills=frozenset({"gaia-voice", "document-extract"})))
+    assert _skills(cards) == ["research-report", "coding", "summarize"]
+
+
+def test_check_in_needs_its_skill():
+    assert "check-in" not in _skills(ss.pick_cards(_ctx(skills=frozenset())))
+    assert "check-in" in _skills(ss.pick_cards(_ctx()))
 
 
 def test_cards_that_need_a_subject_say_so():
