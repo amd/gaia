@@ -6,6 +6,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **The Agent UI's "Under the hood" figures cover GAIA chats.** It said every
+  answer was "not measured", because only the agent saw its own step timings.
+  `final` now carries `performance` with them: the turn's model and tool
+  seconds and each model call's token counts. Older binaries never send it.
 - **`GET /v1/gaia/skills` says where each skill came from.** Each skill now
   carries a `source` (`agent-bundled`, `user` or `claude-import`; `null` for
   any other root), so the Agent UI can group the Skills list by origin. An
