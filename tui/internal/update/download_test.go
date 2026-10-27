@@ -50,6 +50,10 @@ const testDeb = "gaia_0.26.0_amd64.deb"
 // installer answers with status and body.
 func debRelease(t *testing.T, sums string, status int, body string) Release {
 	t.Helper()
+	// testDeb is an amd64 package; an arm64 runner would look for another name.
+	prevArch := goarch
+	goarch = "amd64"
+	t.Cleanup(func() { goarch = prevArch })
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/sums":
