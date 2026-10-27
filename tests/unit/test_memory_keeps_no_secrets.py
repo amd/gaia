@@ -189,6 +189,11 @@ def test_the_conversation_log_keeps_no_secret(store):
         "PIN code of my card is 4821",
         "PIN code is 48219",
         "PIN code is 4821937",
+        "PIN code is 123456",
+        "My PIN code: 123456",
+        "PIN code for my Chase card is 123456",
+        "My PIN code is 560001",
+        "PIN code 560001",
     ),
 )
 def test_pin_variants_are_masked(text):
@@ -201,10 +206,9 @@ def test_pin_variants_are_masked(text):
     (
         "GPIO pin 1023",
         "Pin on page 123",
-        "My PIN code is 560001",
-        "PIN code 560001",
         "PIN code of Bangalore is 560001",
         "PIN code for Koramangala 560034",
+        "PIN code for White Field is 560034",
         "Pin code on page 123",
     ),
 )
