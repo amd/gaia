@@ -423,7 +423,7 @@ function drawReleases(){var d=D.downloads,box=el('rel');
   el('share').innerHTML=ti?'<div class="kl">Install share'+info('share')+'</div><div class="ks" style="margin:2px 0 12px">Releases published in the '+(Z.rel?'zoomed window':rangeText())+'</div>'+lst('By OS',OS,os)+lst('By product',PROD,pr)+'<div class="ks" style="margin-top:14px">'+fmt(ti)+' installs from '+vis.length+' release'+(vis.length===1?'':'s')+'</div>':'';
   el('rel-table').innerHTML=tableView(['Release','Published','Installs','Update checks'].concat(OS.slice(0,4)),vis.slice().reverse().map(function(r){return [esc(r.tag)+(r.rc?' <span class="mono" style="color:var(--s2);font-size:10px">RC</span>':''),esc(r.publishedAt.slice(0,10)),fmt(r.install),fmt(r.meta)].concat(OS.slice(0,4).map(function(o){return fmt(r.byOs[o]||0);}));}));}
 
-function drawByDate(){var d=D.downloads;if(!d||d.empty)return;
+function drawByDate(){var d=D.downloads;if(!d||d.empty){emptyBox('by-date',d?esc(d.reason):'Could not load downloads.');return;}
   var rows=d.releases.filter(function(r){return r.main&&(P.rc||!r.rc);}).map(function(r){var o={day:r.publishedAt.slice(0,10)};OS.forEach(function(k){o[k]=r.byOs[k]||0;});o.meta=r.meta;return o;});
   var merged={};rows.forEach(function(r){var m=merged[r.day]||(merged[r.day]={day:r.day,meta:0});OS.forEach(function(k){m[k]=(m[k]||0)+r[k];});m.meta+=r.meta;});
   var list=Object.keys(merged).sort().map(function(k){return merged[k];}),how={meta:'sum'};OS.forEach(function(k){how[k]='sum';});
@@ -432,7 +432,7 @@ function drawByDate(){var d=D.downloads;if(!d||d.empty)return;
   if(!P.install)se.push({name:'Update checks',color:'var(--mute)',vals:x.b.map(function(r){return r.meta;})});
   chart('by-date',{keys:K,gran:x.g,type:'bar',stacked:true,title:'Installs by release date',h:220,series:se,empty:'No releases in this range.'});}
 
-function drawDaily(){var d=D.downloads;if(!d||d.empty)return;
+function drawDaily(){var d=D.downloads;if(!d||d.empty){emptyBox('daily',d?esc(d.reason):'Could not load downloads.');return;}
   if((d.daily||[]).length<1){emptyBox('daily','First day of counts arrives after tomorrow’s snapshot (collection began '+esc(longLab(d.firstSnapshotDay,'day'))+').');return;}
   var x=series(d.daily,{install:'sum',meta:'sum'});
   var se=[{name:'Installs',color:'var(--s1)',vals:x.b.map(function(r){return r.install;})}];if(!P.install)se.push({name:'Update checks',color:'var(--mute)',vals:x.b.map(function(r){return r.meta;})});
@@ -584,7 +584,7 @@ function drawKpis(){var ci=D.ci,t=D.tests,ct=D.citime,h='';if(!ci||!ci.coverage|
   el('ov').innerHTML='<div class="strip">'+h+'</div>';}
 function drawOutcomes(){var t=D.citrend;
   document.querySelectorAll('[data-om]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.om===P.om));});
-  var sel=el('wf'),key=t?t.workflows.join('\n'):'';if(t&&sel.getAttribute('data-opts')!==key){sel.length=1;t.workflows.forEach(function(w){var o=document.createElement('option');o.value=w;o.textContent=w.length>46?w.slice(0,45)+'…':w;o.title=w;sel.appendChild(o);});sel.setAttribute('data-opts',key);if(P.wf&&t.workflows.indexOf(P.wf)<0)P.wf='';}
+  var sel=el('wf'),key=t?t.workflows.join('\n'):'';if(t&&sel.getAttribute('data-opts')!==key){sel.length=1;t.workflows.forEach(function(w){var o=document.createElement('option');o.value=w;o.textContent=w.length>46?w.slice(0,45)+'…':w;o.title=w;sel.appendChild(o);});sel.setAttribute('data-opts',key);if(P.wf&&t.workflows.indexOf(P.wf)<0){P.wf='';sel.value='';reloadTrend();return;}}
   sel.value=P.wf;el('br').value=P.br;
   if(!t){emptyBox('outcomes','Could not load workflow runs.');return;}
   var rows=t.rows.map(function(r){return {day:r.period,success:r.success,failure:r.failure,cancelled:r.cancelled,other:r.other,total:r.total};});
@@ -635,7 +635,8 @@ function drawTable(){var ci=D.ci,box=el('wtable');if(!ci||!ci.coverage||!ci.cove
   var mb=el('more');if(mb)mb.addEventListener('click',function(){P.allWf=!P.allWf;drawTable();});}
 function render(){ATTN=[];setUrl({om:P.om!=='count'?P.om:'',wf:P.wf,br:P.br!=='main'?P.br:'',tm:P.tm!=='total'?P.tm:'',ctm:P.ctm!=='hours'?P.ctm:''});syncShell();drawKpis();drawOutcomes();drawTests();drawTime();drawTable();drawAttention();drawStatus();}
 function jobs(){return [['ci','/api/ci'],['tests','/api/tests'],['status','/api/status'],['citime','/api/ci-time'],['citrend','/api/ci-trend?branch='+encodeURIComponent(P.br)+'&workflow='+encodeURIComponent(P.wf)]];}
-function reloadTrend(){var g=++GEN;api(jobs()[4][1]).then(function(r){if(g!==GEN)return;D.citrend=r;delete Z.outcomes;render();}).catch(function(e){if(g!==GEN)return;el('errors').innerHTML='<div class="banner">Could not load workflow runs: '+esc(e.message)+'</div>';});}
+var TREND_GEN=0;
+function reloadTrend(){var g=++TREND_GEN,pg=GEN;api(jobs()[4][1]).then(function(r){if(g!==TREND_GEN||pg!==GEN)return;D.citrend=r;delete Z.outcomes;render();}).catch(function(e){if(g!==TREND_GEN||pg!==GEN)return;el('errors').innerHTML='<div class="banner">Could not load workflow runs: '+esc(e.message)+'</div>';});}
 document.querySelectorAll('[data-om]').forEach(function(b){b.addEventListener('click',function(){P.om=b.dataset.om;render();});});
 document.querySelectorAll('[data-tm]').forEach(function(b){b.addEventListener('click',function(){P.tm=b.dataset.tm;delete Z.tests;render();});});
 document.querySelectorAll('[data-ctm]').forEach(function(b){b.addEventListener('click',function(){P.ctm=b.dataset.ctm;delete Z.time;render();});});
@@ -649,12 +650,12 @@ if(!t)t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';docum
 
 const GLYPH =
   '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="7.3" y="7" width="1.4" height="4.6" rx=".7" fill="currentColor"/><circle cx="8" cy="4.9" r=".9" fill="currentColor"/></svg>';
-export const infoBtn = (key: string): string =>
-  `<button type="button" class="info" data-info="${key}" aria-label="About this">${GLYPH}</button>`;
+export const infoBtn = (key: string, label = "this chart"): string =>
+  `<button type="button" class="info" data-info="${key}" aria-label="About: ${label}">${GLYPH}</button>`;
 
 /** A chart card: title with an info button, optional controls, a one-line description, and the chart body. */
 export const card = (id: string, title: string, desc: string, controls = ""): string =>
-  `<div class="card"><div class="ch"><span class="t">${title}${infoBtn(id)}</span><span class="spacer"></span>${controls}<span class="d">${desc}</span></div><div class="cb" id="${id}"><div class="skel"></div></div></div>`;
+  `<div class="card"><div class="ch"><span class="t">${title}${infoBtn(id, title)}</span><span class="spacer"></span>${controls}<span class="d">${desc}</span></div><div class="cb" id="${id}"><div class="skel"></div></div></div>`;
 export const seg = (attr: string, opts: [string, string][], label: string): string =>
   `<div class="seg" role="group" aria-label="${label}">${opts.map(([v, l]) => `<button type="button" data-${attr}="${v}">${l}</button>`).join("")}</div>`;
 
@@ -679,7 +680,7 @@ export function shell(active: PageId, title: string, lede: string, body: string,
 <span class="spacer"></span><span class="sm" id="fresh"></span>
 <button type="button" class="icon" id="theme" aria-label="Toggle light and dark theme" title="Toggle theme">&#9680;</button></div>
 <div class="row row2">
-<div class="ctl"><span>Range</span>${seg("range", ranges, "Time range")}${infoBtn("range")}</div>
+<div class="ctl"><span>Range</span>${seg("range", ranges, "Time range")}${infoBtn("range", "the time range")}</div>
 ${active === "evals" ? "" : `<div class="ctl"><span>Group by</span>${seg("gran", [["auto", "Auto"], ["day", "Day"], ["week", "Week"], ["month", "Month"]], "Group by")}</div>`}
 <span class="spacer"></span>
 <button type="button" class="toggle" id="labels" aria-pressed="false" title="Show values on the charts; otherwise hover to see them">Value labels</button>
@@ -693,7 +694,7 @@ export function renderUsersPage(): string {
   const body = `
 <div id="ov"><div class="skel"></div></div>
 <section><div class="card">
-<div class="ch"><span class="t">Downloads per release${infoBtn("per-release")}</span><span class="spacer"></span>
+<div class="ch"><span class="t">Downloads per release${infoBtn("per-release", "Downloads per release")}</span><span class="spacer"></span>
 ${seg("mode", [["total", "Release vs RC"], ["os", "By OS"], ["product", "By product"]], "Split by")}
 <label class="chk"><input type="checkbox" id="o-install"> Installs only</label><label class="chk"><input type="checkbox" id="o-rc"> Release candidates</label>
 <span class="d">Each bar is a release at its publish date; its height is every download it has had so far.</span></div>
@@ -741,7 +742,7 @@ export function renderDevelopersPage(maintainers: string[] = []): string {
 <section class="stack"><div class="head"><h2>Contributors</h2></div>
 <div class="grid2">${card("commits", "Commits", "On the default branch.")}${card("people", "Contributors", "People committing code.", seg("pm", [["active", "Active"], ["new", "New"]], "Show"))}</div>
 ${card("loc", "Lines of code changed", "Added and deleted on the default branch.")}
-<div class="card"><div class="ch"><span class="t">Who contributed${infoBtn("who")}</span><span class="d">Untick anyone to leave them out of every number on this page.</span></div><div id="who"></div></div>
+<div class="card"><div class="ch"><span class="t">Who contributed${infoBtn("who", "Who contributed")}</span><span class="d">Untick anyone to leave them out of every number on this page.</span></div><div id="who"></div></div>
 </section>
 <section class="stack"><div class="head"><h2>Community</h2></div>
 ${card("community", "Stars and forks", "Growth of the GitHub community.", seg("comm", [["stars", "Stars"], ["forks", "Forks"]], "Metric") + seg("cmode", [["total", "Total"], ["new", "New"]], "Show"))}
@@ -770,10 +771,10 @@ ${card("tests", "Unit tests", "From the pytest summary of the daily main-branch 
 </section>
 <section class="stack"><div class="head"><h2>Where CI time goes</h2></div>
 ${card("time", "CI time by workflow", "Run time per period, all branches and triggers.", seg("ctm", [["hours", "Hours"], ["share", "Share"]], "Show"))}
-<div class="card"><div class="ch"><span class="t">Time per workflow${infoBtn("time-table")}</span><span class="d">In the selected range, against the window before.</span></div><div id="time-table"></div></div>
+<div class="card"><div class="ch"><span class="t">Time per workflow${infoBtn("time-table", "Time per workflow")}</span><span class="d">In the selected range, against the window before.</span></div><div id="time-table"></div></div>
 </section>
 <section class="stack"><div class="head"><h2>Workflow health</h2></div>
-<div class="card"><div class="ch"><span class="t">Workflows on main${infoBtn("table")}</span><span class="d">Push and nightly runs in the selected range, most failures first.</span></div><div id="wtable"><div class="skel"></div></div></div>
+<div class="card"><div class="ch"><span class="t">Workflows on main${infoBtn("table", "Workflows on main")}</span><span class="d">Push and nightly runs in the selected range, most failures first.</span></div><div id="wtable"><div class="skel"></div></div></div>
 </section>`;
   return shell("ci", "CI", "Whether the build is healthy and getting better: run outcomes, test counts, where CI time goes and the workflows that fail most.", body, CI_JS);
 }

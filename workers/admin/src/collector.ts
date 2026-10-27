@@ -104,11 +104,13 @@ export function insertMany(db: D1Database, table: string, cols: string[], rows: 
     chunk = [];
     size = 2;
   };
+  const enc = new TextEncoder();
   for (const r of rows) {
     const j = JSON.stringify(r);
-    if (size + j.length + 1 > MAX_JSON_BYTES) flush();
+    const bytes = enc.encode(j).length;
+    if (size + bytes + 1 > MAX_JSON_BYTES) flush();
     chunk.push(j);
-    size += j.length + 1;
+    size += bytes + 1;
   }
   flush();
   return out;

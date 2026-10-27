@@ -193,6 +193,7 @@ export async function collectEvals(env: CollectEnv, f: Fetcher, days: number, to
     ]),
   );
   let deferred = 0;
+  let attempted = 0;
   let runsRead = 0;
   let scenarios = 0;
   let noArtifacts = 0;
@@ -208,10 +209,11 @@ export async function collectEvals(env: CollectEnv, f: Fetcher, days: number, to
     }
     for (const run of runs) {
       if (run.conclusion === "skipped" || (known.get(run.id) === run.run_attempt && !refresh)) continue;
-      if (runsRead + noArtifacts >= MAX_RUNS_PER_INVOCATION) {
+      if (attempted >= MAX_RUNS_PER_INVOCATION) {
         deferred++;
         continue;
       }
+      attempted++;
       try {
       const arts = await getJson<{ artifacts: { id: number; name: string; size_in_bytes: number; expired: boolean }[] }>(
         f,

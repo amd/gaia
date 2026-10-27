@@ -70,6 +70,14 @@ describe("insertMany", () => {
     expect(stmts.length).toBe(3);
   });
 
+  it("sizes statements in bytes, so multi-byte text cannot overflow the limit", () => {
+    const { db } = fakeDb();
+    const wide = "é".repeat(5_000); // 5,000 characters, 10,000 bytes
+    const stmts = insertMany(db, "x", ["a"], Array.from({ length: 150 }, () => [wide])) as unknown as { args: string[] }[];
+    expect(stmts.length).toBe(2);
+    for (const s of stmts) expect(new TextEncoder().encode(s.args[0]).length).toBeLessThanOrEqual(1_000_000);
+  });
+
   it("writes nothing for no rows", () => {
     const { db } = fakeDb();
     expect(insertMany(db, "x", ["a"], [])).toEqual([]);

@@ -154,7 +154,7 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
     const span = await db
       .prepare("SELECT MIN(created_at) AS first, MAX(created_at) AS last FROM workflow_runs")
       .first<{ first: string | null; last: string | null }>();
-    return json({ main: ciStats(runs.filter(isBuildOnMain)), coverage: span });
+    return json({ main: ciStats(runs.filter(isBuildOnMain), LONG_RUN_S), coverage: span });
   }
 
   if (path === "/api/ci-trend") {

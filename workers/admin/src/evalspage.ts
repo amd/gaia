@@ -104,7 +104,7 @@ function drawRunsTable(runs){var box=el('runs');if(!runs.length){box.innerHTML='
      +'<td class="n">'+fmt(r.scenarios)+'</td><td class="n"><b class="'+prc(r.passRate)+'">'+pct(r.passRate)+'</b></td><td class="n">'+pct(r.judgedPassRate)+'</td><td class="n">'+(r.avgScore==null?'—':r.avgScore.toFixed(2))+'</td><td class="n">'+(r.infra||'')+'</td><td class="n">'+(r.costUsd==null?'—':'$'+r.costUsd.toFixed(2))+'</td><td class="n">'+(r.minutes?Math.round(r.minutes):'—')+'</td><td><a href="'+esc(r.html_url)+'" target="_blank" rel="noopener" title="Open the run on GitHub">↗</a></td></tr>';}).join('')+'</table></div>';
   box.querySelectorAll('tr[data-run]').forEach(function(tr){var go=function(){selectRun(Number(tr.getAttribute('data-run')));};
     tr.addEventListener('click',function(ev){if(ev.target.closest('a')||ev.target.closest('td.trunc.clipped,td.trunc.wide'))return;go();});
-    tr.addEventListener('keydown',function(ev){if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();go();}});});}
+    tr.addEventListener('keydown',function(ev){if(ev.target!==tr)return;if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();go();}});});}
 
 function drawReliability(){var e=D.evals,box=el('rel');
   var rows=(e&&e.reliability||[]).filter(function(x){return x.runs>=2&&(x.passed+x.failed)>0;}).slice(0,25);
@@ -143,12 +143,12 @@ ${card("trend", "Pass rate over time", "One point per run, one line per tier: co
 </section>
 <section class="stack"><div class="head"><h2>Selected run</h2></div>
 <div class="card" style="padding:16px 18px" id="run-head"></div>
-<div class="card"><div class="ch"><span class="t">By category${infoBtn("cats")}</span><span class="d">Passed out of attempted, weakest first, with the change since the previous run.</span></div><div id="cats" style="padding:6px 18px 14px;columns:3 300px;column-gap:28px"></div></div>
-<div class="card"><div class="ch"><span class="t">Scenarios${infoBtn("scen")}</span><span class="spacer"></span>${seg("sf", [["all", "All"], ["fail", "Not passing"], ["changed", "Changed"]], "Show")}<span class="d" id="scen-sum"></span></div><div id="scen"></div></div>
+<div class="card"><div class="ch"><span class="t">By category${infoBtn("cats", "By category")}</span><span class="d">Passed out of attempted, weakest first, with the change since the previous run.</span></div><div id="cats" style="padding:6px 18px 14px;columns:3 300px;column-gap:28px"></div></div>
+<div class="card"><div class="ch"><span class="t">Scenarios${infoBtn("scen", "Scenarios")}</span><span class="spacer"></span>${seg("sf", [["all", "All"], ["fail", "Not passing"], ["changed", "Changed"]], "Show")}<span class="d" id="scen-sum"></span></div><div id="scen"></div></div>
 </section>
 <section class="stack"><div class="head"><h2>History</h2></div>
-<div class="card"><div class="ch"><span class="t">Runs${infoBtn("runs")}</span><span class="d">Newest first. Click a row to open it.</span></div><div id="runs"></div></div>
-<div class="card"><div class="ch"><span class="t">Least reliable scenarios${infoBtn("rel")}</span><span class="d">Across the runs shown, lowest pass rate first.</span></div><div id="rel"></div></div>
+<div class="card"><div class="ch"><span class="t">Runs${infoBtn("runs", "Runs")}</span><span class="d">Newest first. Click a row to open it.</span></div><div id="runs"></div></div>
+<div class="card"><div class="ch"><span class="t">Least reliable scenarios${infoBtn("rel", "Least reliable scenarios")}</span><span class="d">Across the runs shown, lowest pass rate first.</span></div><div id="rel"></div></div>
 </section>`;
   return shell(
     "evals",

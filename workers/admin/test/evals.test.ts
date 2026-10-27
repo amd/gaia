@@ -323,6 +323,17 @@ describe("collectEvals against real SQLite", () => {
     expect((await db.prepare("SELECT run_id FROM eval_runs").all()).results).toEqual([{ run_id: 2 }]);
   });
 
+  it("counts failed downloads toward the per-collection cap, so broken runs cannot exhaust it", async () => {
+    const { memoryD1 } = await import("./d1");
+    const { collectEvals } = await import("../src/evals");
+    const db = memoryD1();
+    const runs = Array.from({ length: 45 }, (_, i) => ghRun(i + 1));
+    const zips = Object.fromEntries(runs.map((r) => [r.id, "gone" as const]));
+    const calls: string[] = [];
+    await expect(collectEvals(evalEnv(db), await github({ "eval_flagship.yml": runs }, zips, calls), 14, new Date())).rejects.toThrow(/5 more runs left/);
+    expect(calls.filter((c) => /runs\/\d+\/artifacts/.test(c)).length).toBe(40);
+  });
+
   it("remembers a run with no scorecards so it is not fetched again", async () => {
     const { memoryD1 } = await import("./d1");
     const { collectEvals } = await import("../src/evals");
