@@ -47,6 +47,7 @@ import { isPlaceholderTitle } from '../utils/sessionTitle';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
+import { useChatDraft } from '../hooks/useSavedDraft';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -183,7 +184,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const session = sessions.find((s) => s.id === sessionId);
     const sessionDocIds = new Set(session?.document_ids ?? []);
     const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
-    const [input, setInput] = useState('');
+    const [input, setInput] = useChatDraft(sessionId, session?.private);
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
     const [isDragOver, setIsDragOver] = useState(false);
@@ -1005,13 +1006,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
-                // ── Consolidate thinking events ──────────────────────────
-                // Instead of creating a new step for every thought, update
-                // the existing thinking step so we get ONE "Thinking" entry
-                // that shows the latest thought, not a massive stream.
-                // Uses appendThinkingContent() which atomically reads the
-                // current detail and appends inside a single set() call,
-                // preventing stale-read races that can lose accumulated text.
+                // One "Thinking" step per turn. appendThinkingContent() appends
+                // inside a single set(), so racing chunks never lose text.
                 if (event.type === 'thinking') {
                     const currentSteps = useChatStore.getState().agentSteps;
                     const lastStep = currentSteps[currentSteps.length - 1];
