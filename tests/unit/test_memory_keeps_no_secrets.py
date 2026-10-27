@@ -170,8 +170,14 @@ def test_ordinary_pin_phrases_are_not_masked(text):
     assert MemoryMixin._mask_credentials(text) == text
 
 
-def test_card_grouped_with_wide_spacing_is_masked():
-    text = "4111   1111   1111   1111"
+@pytest.mark.parametrize(
+    "text",
+    (
+        "4111 - 1111 - 1111 - 1111",
+        "4111   1111   1111   1111",
+    ),
+)
+def test_card_grouped_with_spaced_separators_is_masked(text):
     assert MemoryMixin._looks_like_credential(text)
     assert "[secret removed]" in MemoryMixin._mask_credentials(text)
 
