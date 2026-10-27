@@ -698,10 +698,11 @@ each step happen.
   page on this PC it can also run a short script to check what the page doesn't
   show, such as its stored data or app state. It never runs scripts on any other
   site.
-- **Boxes a page opens show above the page.** When a page shows an `alert`,
-  `confirm` or `prompt`, or asks before you leave it, a bar above the page shows
-  the message with **OK** and **Cancel** (**Leave** and **Stay**), and a field
-  for a prompt. The page waits until someone answers. GAIA can answer too; it
+- **Boxes a page opens show above the page.** When a page shows an `alert` or
+  `confirm`, or asks before you leave it, a bar above the page shows the
+  message with **OK** and **Cancel** (**Leave** and **Stay**). The page waits
+  until someone answers. A page's `prompt()` box can't open in the desktop app:
+  Electron refuses it, and the page gets an error instead. GAIA can answer too; it
   asks you first before pressing OK on another site's box or on one like
   "Delete account?". If GAIA opened the box and its turn ends without an
   answer, the box is cancelled, so the page is never left frozen. GAIA never

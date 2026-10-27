@@ -201,12 +201,6 @@ def describe_dialog(dialog: dict) -> str:
     quoted = f' "{message}"' if message else ""
     if kind == "alert":
         return f"The page shows a notice{quoted}. Close it with browser_dialog(accept=True)."
-    if kind == "prompt":
-        return (
-            f"The page asks for text{quoted}. Answer with "
-            "browser_dialog(accept=True, text='...'), or cancel with "
-            "browser_dialog(accept=False)."
-        )
     if kind == "beforeunload":
         return (
             "The page asks before leaving it: changes there may not be saved. "
@@ -220,7 +214,7 @@ def describe_dialog(dialog: dict) -> str:
 
 
 class PageDialogOpen(BrowserError):
-    """The pane's page is waiting on a box (alert, confirm, prompt, leave this page?).
+    """The pane's page is waiting on a box (alert, confirm, leave this page?).
 
     ``done`` is True when the step itself ran and opened the box, False when
     the box was already open and nothing was done.

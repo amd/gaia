@@ -141,10 +141,6 @@ def test_any_step_on_a_page_waiting_on_a_box_says_nothing_was_done(agent, bridge
             'notice "Saved". Close it with browser_dialog(accept=True)',
         ),
         (
-            box(type="prompt", message="Your name?"),
-            "browser_dialog(accept=True, text='...')",
-        ),
-        (
             box(type="beforeunload", message="Leave?"),
             "Leave with browser_dialog(accept=True)",
         ),
@@ -175,15 +171,12 @@ def test_the_batch_stops_at_the_step_that_opened_a_box(agent, bridge):
 # ---------------------------------------------------------- browser_dialog
 
 
-def test_answering_a_prompt_sends_the_text_and_reads_the_page(agent, bridge):
-    page_shows(
-        bridge,
-        box(type="prompt", message="What should we call you?", defaultText="friend"),
-    )
-    out = tool(agent, "browser_dialog")(accept=True, text="Ada")
+def test_accepting_a_confirm_sends_ok_and_reads_the_page(agent, bridge):
+    page_shows(bridge, box(type="confirm", message="Save this draft?"))
+    out = tool(agent, "browser_dialog")(accept=True)
     sent = bridge.last("dialog")["body"]
-    assert sent["op"] == "answer" and sent["accept"] is True and sent["text"] == "Ada"
-    assert 'Answered "Ada" to "What should we call you?".' in out
+    assert sent["op"] == "answer" and sent["accept"] is True
+    assert 'Pressed OK on "Save this draft?".' in out
     assert bridge.ops()[-1] == "evaluate"
     assert "Page: Pane fixture form" in out
 

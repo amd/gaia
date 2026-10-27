@@ -1268,7 +1268,7 @@ class BrowserUseToolsMixin:
             with mixin._reading("browser_dialog") as driver:
                 res = driver.answer_dialog(accept, text or None)
                 box = res["answered"]
-                lines = [driver.where, _answered_line(box, accept, text)]
+                lines = [driver.where, _answered_line(box, accept)]
                 if res.get("dialog"):
                     from gaia.browser.errors import describe_dialog
 
@@ -1279,17 +1279,16 @@ class BrowserUseToolsMixin:
             return "\n".join(lines) + "\n\n" + render(snap)
 
         @tool(atomic=True, registry=registry)
-        def browser_dialog(accept: bool = True, text: str = "") -> str:
-            """Answer the box a page in the browser pane is showing (alert, confirm, prompt, or "leave this page?").
+        def browser_dialog(accept: bool = True) -> str:
+            """Answer the box a page in the browser pane is showing (alert, confirm, or "leave this page?").
 
             While a box is open the page is frozen and other browser tools say
             so. Answer it, then go on.
 
             Args:
                 accept: True presses OK (or Leave); False presses Cancel (or Stay)
-                text: For a prompt box only: the text to answer with
             """
-            return answer("browser_dialog", _dialog, _truthy(accept), str(text or ""))
+            return answer("browser_dialog", _dialog, _truthy(accept), "")
 
         def _eval(expression: str) -> str:
             driver = mixin._ensure_driver()
@@ -1563,7 +1562,7 @@ class BrowserUseToolsMixin:
                 return fail(e)
 
 
-def _answered_line(box: Dict[str, Any], accept: bool, text: str) -> str:
+def _answered_line(box: Dict[str, Any], accept: bool) -> str:
     """What browser_dialog did, for the model."""
     kind = box.get("type")
     message = str(box.get("message") or "").strip()
@@ -1571,9 +1570,6 @@ def _answered_line(box: Dict[str, Any], accept: bool, text: str) -> str:
         return "Left the page." if accept else "Stayed on the page."
     if kind == "alert":
         return f'Closed the notice "{message}".'
-    if kind == "prompt" and accept:
-        answer = text or box.get("defaultText") or ""
-        return f'Answered "{answer}" to "{message}".'
     return f'Pressed {"OK" if accept else "Cancel"} on "{message}".'
 
 

@@ -62,7 +62,7 @@ Signing in is a hand-off, not something GAIA does for you:
 | `browser_viewport(preset, width, height, color_scheme)` | Show the page at a phone, tablet or desktop size, or in dark mode (browser pane only) | no |
 | `browser_tabs(switch_to)` | List the pane's tabs, or switch to one; private tabs are never listed (browser pane only) | no |
 | `browser_batch(steps)` | Run several of the steps above in one call (browser pane only) | each step as if run alone |
-| `browser_dialog(accept, text)` | Answer the page's alert, confirm, prompt or "leave this page?" box: OK or Cancel, with text for a prompt (browser pane only) | OK on another site's box, or on one that names an action that can't be undone |
+| `browser_dialog(accept)` | Answer the page's alert, confirm or "leave this page?" box: OK or Cancel (browser pane only; a page's `prompt()` can't open in the desktop app) | OK on another site's box, or on one that names an action that can't be undone |
 | `browser_eval(expression)` | Run one JavaScript expression in the page and get its value as JSON, to check app state or storage the page doesn't show (browser pane only, pages on this PC only) | no; refused on any other site |
 | `dev_server(action, name, project, errors_only, contains)` | Serve a folder of HTML with no setup, or start, list, stop or read the logs of a dev server from the project's [`.gaia/launch.json`](/guides/agent-ui#dev-servers); start shows it in the pane (browser pane only) | starting one, once per exact command |
 
