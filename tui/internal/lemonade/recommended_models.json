@@ -41,16 +41,6 @@
       "kv_bytes_per_token": 16384
     },
     {
-      "id": "qwen3.6-moe-35b-a3b-FLM",
-      "provider": "local",
-      "label": "Qwen3.6 35B A3B NPU",
-      "note": "Qwen3.6 35B A3B on the Ryzen AI NPU, in system RAM; leaves the GPU free",
-      "device": "npu",
-      "size_gb": 22.1,
-      "vision": true,
-      "min_ctx_size": 65536
-    },
-    {
       "id": "gemma4-it-e4b-FLM",
       "provider": "local",
       "label": "Gemma 4 E4B NPU",

@@ -43,8 +43,9 @@ func TestNPUMemoryIsRAMLessTheCarveOut(t *testing.T) {
 	}
 }
 
-func TestBothNPUTwinsAreRecommendedAsNPUModels(t *testing.T) {
-	want := map[string]bool{"qwen3.6-moe-35b-a3b-FLM": true, "gemma4-it-e4b-FLM": true}
+func TestOnlyGemmaIsRecommendedAsAnNPUModel(t *testing.T) {
+	// Qwen3.6's FLM build was too slow per agent turn to recommend.
+	want := map[string]bool{"gemma4-it-e4b-FLM": true}
 	for _, r := range RecommendedFor("local") {
 		if r.Device == "npu" && !want[r.ID] {
 			t.Fatalf("unexpected NPU recommendation %s", r.ID)
@@ -56,12 +57,13 @@ func TestBothNPUTwinsAreRecommendedAsNPUModels(t *testing.T) {
 	}
 }
 
-func TestBigNPUPCIsOfferedBothTwins(t *testing.T) {
+func TestBigNPUPCIsOfferedGemma(t *testing.T) {
 	by := entriesByID(BuildEntries("local", flmCatalog(), capacityOf(t, haloNPU), nil))
-	for _, id := range []string{"qwen3.6-moe-35b-a3b-FLM", "gemma4-it-e4b-FLM"} {
-		if e := by[id]; !e.Selectable() || !e.OnNPU() || e.Recommended == nil {
-			t.Fatalf("%s should be a selectable NPU recommendation: %+v", id, e)
-		}
+	if e := by["gemma4-it-e4b-FLM"]; !e.Selectable() || !e.OnNPU() || e.Recommended == nil {
+		t.Fatalf("Gemma NPU should be a selectable NPU recommendation: %+v", e)
+	}
+	if e := by["qwen3.6-moe-35b-a3b-FLM"]; e.Recommended != nil {
+		t.Fatalf("Qwen NPU must not be recommended: %+v", e)
 	}
 }
 
@@ -69,10 +71,6 @@ func TestSmallNPULaptopIsOfferedGemmaOnly(t *testing.T) {
 	by := entriesByID(BuildEntries("local", flmCatalog(), capacityOf(t, laptopNPU), nil))
 	if !by["gemma4-it-e4b-FLM"].Selectable() {
 		t.Fatalf("Gemma NPU should fit 15.5 GB of NPU RAM: %+v", by["gemma4-it-e4b-FLM"])
-	}
-	q := by["qwen3.6-moe-35b-a3b-FLM"]
-	if q.Selectable() || q.Reason == "" {
-		t.Fatalf("Qwen NPU must not fit a 16 GB laptop, and say why: %+v", q)
 	}
 }
 
@@ -104,7 +102,7 @@ func TestUnlistedNPUModelsAreHiddenWithoutAnNPUAndExplainedWithOne(t *testing.T)
 		}
 	}
 	by := entriesByID(BuildEntries("local", nil, capacityOf(t, haloNPU), nil))
-	for _, id := range []string{"qwen3.6-moe-35b-a3b-FLM", "gemma4-it-e4b-FLM"} {
+	for _, id := range []string{"gemma4-it-e4b-FLM"} {
 		e, ok := by[id]
 		if !ok || e.Selectable() || e.Reason != "needs Lemonade's NPU backend; run `gaia init`" {
 			t.Fatalf("%s on an NPU PC without the backend: %+v", id, e)

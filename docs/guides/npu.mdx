@@ -47,42 +47,28 @@ reached, setup still downloads the models, then reports itself incomplete and ex
 ## Which NPU model
 
 You don't need the NPU profile to use the NPU. On any PC with a Ryzen AI NPU, a plain
-`gaia init` installs Lemonade's NPU backend, and the two NPU models below then appear in
-the Agent UI and terminal UI model lists, ready to download on first use. The GPU model
+`gaia init` installs Lemonade's NPU backend, and `gemma4-it-e4b-FLM` then appears in the
+Agent UI and terminal UI model lists, ready to download on first use. The GPU model
 stays the default because it answers faster; `gaia init --profile npu` makes the NPU the
 default instead.
 
-GAIA's NPU models are the same two models it runs on the GPU, built for the NPU by
-FastFlowLM. They load into the system RAM Windows or Linux sees (installed RAM less
-any GPU carve-out), so the GPU stays free.
+`gemma4-it-e4b-FLM` is the same Gemma 4 E4B that GAIA runs on the GPU
+(`Gemma-4-E4B-it-GGUF`), built for the NPU by FastFlowLM. It is a 9.1 GB download, needs
+about 11 GB of system RAM (installed RAM less any GPU carve-out), sees images, calls
+tools natively, and loads with a 64K context window. The GPU stays free.
 
-| PC | NPU model | GPU twin | Download | Needs |
-|----|-----------|----------|----------|-------|
-| Larger Ryzen AI PC (e.g. Strix Halo) | `qwen3.6-moe-35b-a3b-FLM` | `Qwen3.6-35B-A3B-GGUF` | 22.1 GB | ~24 GB of system RAM |
-| Every other Ryzen AI PC | `gemma4-it-e4b-FLM` | `Gemma-4-E4B-it-GGUF` | 9.1 GB | ~11 GB of system RAM |
+Measured on a Ryzen AI MAX+ 395 (FLM v1.0.7, Lemonade 2026.43.3), a 31K-token prompt
+processes at 472 tokens/s and generates at 7 tokens/s, with a first answer in 67 s. In
+GAIA's agent evals on the same PC it scored close to its GPU twin (core conversation
+12/15, tool selection 3/7 against the GPU's 4/7).
 
-`gaia init --profile npu` picks `gemma4-it-e4b-FLM` on every PC and records it as
-`default_model`; the Qwen model is slower per agent turn, so you choose it yourself. Both see images, call tools
-natively, and load with a 64K context window.
-
-Measured on a Ryzen AI MAX+ 395 (FLM v1.0.7, Lemonade 2026.43.3), a 31K-token prompt:
-
-| Model | Prompt processing | Generation | First answer |
-|-------|-------------------|------------|--------------|
-| `gemma4-it-e4b-FLM` | 472 tokens/s | 7 tokens/s | 67 s |
-| `qwen3.6-moe-35b-a3b-FLM` | 186 tokens/s | 7 tokens/s | 168 s |
-
-In GAIA's agent evals on the same PC, `gemma4-it-e4b-FLM` scored as well as its GPU
-twin (core conversation 12/15, tool selection 3/7 against the GPU's 4/7).
-`qwen3.6-moe-35b-a3b-FLM` matched the GPU on tool selection (4/7), but its multi-step
-turns can take several minutes each.
+GAIA offers only NPU models whose agent evals have run. Qwen3.6's NPU build
+(`qwen3.6-moe-35b-a3b-FLM`) was tested and left out: its multi-step turns took several
+minutes each.
 
 The NPU trades speed for power: expect long first answers in a fresh chat. For the
-fastest replies, stay on the GPU (`gaia init`).
-
-To switch between them yourself, pick one in the model list of the Agent UI or the
-terminal UI (`/provider`), or run `gaia config set default_model <id>`. Both lists
-show an NPU model only on a PC with an NPU whose RAM holds it.
+fastest replies, stay on the GPU (`gaia init`). The model lists show the NPU model
+only on a PC with an NPU whose RAM holds it.
 
 ## Usage
 
@@ -128,7 +114,7 @@ gaia eval agent --compare eval/results/run1/scorecard.json eval/results/run2/sco
 |--------|-------|---------|----------|
 | **GPU** (default) | Gemma-4-E4B-it-GGUF | llamacpp:vulkan | General use, best throughput |
 | **CPU** | Gemma-4-E4B-it-GGUF | llamacpp:cpu | No GPU available (slower) |
-| **NPU** | gemma4-it-e4b-FLM (qwen3.6-moe-35b-a3b-FLM selectable where it fits) | flm:npu | Power efficiency, leaving the GPU free |
+| **NPU** | gemma4-it-e4b-FLM | flm:npu | Power efficiency, leaving the GPU free |
 
 ### Fallback Behavior
 

@@ -223,7 +223,7 @@ INIT_PROFILES = {
         "approx_size": "~10 GB",
         "min_lemonade_version": LEMONADE_MIN_VERSION,
         # The floor every profile shares (issue #1745); the chat model itself
-        # loads at its own window, 64K for both NPU twins.
+        # loads at its own window, 64K for the NPU twin.
         "min_context_size": 32768,
         # Same as the gaia profile: the daemon and Agent UI the flagship runs in.
         "pip_extras": ["ui"],

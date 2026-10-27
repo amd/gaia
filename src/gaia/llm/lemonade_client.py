@@ -381,12 +381,11 @@ LARGE_DEFAULT_MODEL_NAME = "Qwen3.6-35B-A3B-GGUF"
 # than decode speed.
 FLASH_OPTION_MODEL_NAME = "user.Qwen3.8-Flash-Next-GGUF"
 
-# The same two models built for the Ryzen AI NPU (FastFlowLM): the NPU twins of
-# the GPU defaults. They load into the system RAM the OS sees, not the GPU's,
-# so they leave the iGPU free. ``gaia init --profile npu`` picks between them
-# by the same fit rule, judged against that RAM (``model_fit.npu_capacity``).
+# Gemma built for the Ryzen AI NPU (FastFlowLM). It loads into the system RAM
+# the OS sees, not the GPU's, so it leaves the iGPU free, and is judged against
+# that RAM (``model_fit.npu_capacity``). Qwen3.6's FLM build was too slow per
+# agent turn to ship.
 NPU_DEFAULT_MODEL_NAME = "gemma4-it-e4b-FLM"
-NPU_LARGE_MODEL_NAME = "qwen3.6-moe-35b-a3b-FLM"
 
 # gpt-oss always reasons; its template grades how much. "medium" is the
 # template's own default.
@@ -1617,8 +1616,8 @@ MODELS = {
         min_ctx_size=NPU_CTX_SIZE,
         tool_calling=False,
     ),
-    # --- NPU twins of the GPU defaults (FastFlowLM builds, Lemonade built-ins) ---
-    # Native tool calls work on both (FLM v1.0.7), unlike E2B above.
+    # --- NPU twin of the GPU default (FastFlowLM build, a Lemonade built-in) ---
+    # Native tool calls work (FLM v1.0.7), unlike E2B above.
     "gemma-4-e4b-npu": ModelRequirement(
         model_type=ModelType.LLM,
         model_id=NPU_DEFAULT_MODEL_NAME,
@@ -1629,15 +1628,6 @@ MODELS = {
         tool_calling=True,
         vision=True,
         size_gb=9.1,
-    ),
-    "qwen3.6-35b-a3b-npu": ModelRequirement(
-        model_type=ModelType.LLM,
-        model_id=NPU_LARGE_MODEL_NAME,
-        display_name="Qwen3.6 35B A3B NPU",
-        min_ctx_size=GPU_CTX_SIZE,
-        tool_calling=True,
-        vision=True,
-        size_gb=22.1,
     ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
     "qwen3.5-35b": ModelRequirement(
@@ -2051,15 +2041,12 @@ def lemonade_server_version(client: "LemonadeClient") -> Optional[str]:
 #: Largest-first default chat models; the last is the floor every machine gets.
 DEFAULT_MODEL_LADDER = (LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME)
 
-#: NPU chat models the pickers offer, largest first. ``--profile npu`` picks
-#: only the last: the larger one's multi-step turns take minutes on the NPU.
-NPU_MODEL_LADDER = (NPU_LARGE_MODEL_NAME, NPU_DEFAULT_MODEL_NAME)
+#: NPU chat models the pickers offer. Only models whose agent evals ran on the
+#: NPU belong here.
+NPU_MODEL_LADDER = (NPU_DEFAULT_MODEL_NAME,)
 
-#: Each GPU default's NPU twin: the same model, built for FastFlowLM.
-NPU_TWINS = {
-    LARGE_DEFAULT_MODEL_NAME: NPU_LARGE_MODEL_NAME,
-    DEFAULT_MODEL_NAME: NPU_DEFAULT_MODEL_NAME,
-}
+#: A GPU default's NPU twin: the same model, built for FastFlowLM.
+NPU_TWINS = {DEFAULT_MODEL_NAME: NPU_DEFAULT_MODEL_NAME}
 
 #: Supported chat models the pickers offer for download beside the defaults,
 #: on machines they fit. Never picked as a default.
@@ -2097,8 +2084,7 @@ def npu_chat_models_that_fit(capacity: Any) -> List[str]:
 def recommend_npu_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
     """:func:`recommend_default_chat_model` for ``--profile npu``.
 
-    Always picks ``NPU_DEFAULT_MODEL_NAME``: the larger NPU model is too
-    slow per agent turn to be a default, so it stays a picker choice. Raises :class:`~gaia.llm.model_fit.ModelFitError` on a PC whose report
+    Always picks ``NPU_DEFAULT_MODEL_NAME``. Raises :class:`~gaia.llm.model_fit.ModelFitError` on a PC whose report
     names no NPU, since neither model can run there.
     """
     from gaia.llm.model_fit import (

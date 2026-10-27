@@ -82,24 +82,19 @@ class FakeClient:
 
 
 class TestRegistry:
-    @pytest.mark.parametrize(
-        "gpu, npu",
-        [
-            (lc.DEFAULT_MODEL_NAME, lc.NPU_DEFAULT_MODEL_NAME),
-            (lc.LARGE_DEFAULT_MODEL_NAME, lc.NPU_LARGE_MODEL_NAME),
-        ],
-    )
-    def test_each_gpu_default_has_an_npu_twin(self, gpu, npu):
-        assert lc.NPU_TWINS[gpu] == npu
+    def test_gemma_has_an_npu_twin(self):
+        npu = lc.NPU_TWINS[lc.DEFAULT_MODEL_NAME]
+        assert npu == lc.NPU_DEFAULT_MODEL_NAME
         mr = lc.find_model_requirement(npu)
         assert mr is not None and mr.size_gb and mr.vision
         assert lc.runs_on_npu(npu)
         # A built-in FLM model is pulled by name: a recipe would 400 (#1655).
         assert mr.recipe is None and mr.checkpoint is None
 
-    def test_ladder_runs_largest_first(self):
-        sizes = [lc.find_model_requirement(m).size_gb for m in lc.NPU_MODEL_LADDER]
-        assert sizes == sorted(sizes, reverse=True)
+    def test_only_evaluated_models_are_offered(self):
+        # Qwen3.6's FLM build was too slow per agent turn to ship.
+        assert lc.NPU_MODEL_LADDER == (lc.NPU_DEFAULT_MODEL_NAME,)
+        assert lc.LARGE_DEFAULT_MODEL_NAME not in lc.NPU_TWINS
 
 
 class TestNpuCapacity:
@@ -126,7 +121,7 @@ class TestNpuCapacity:
 
 
 class TestOffered:
-    def test_big_pc_is_offered_both(self):
+    def test_big_pc_is_offered_gemma(self):
         cap = capacity_from_system_info(STRIX_HALO_128)
         assert lc.npu_chat_models_that_fit(cap) == list(lc.NPU_MODEL_LADDER)
         assert set(lc.NPU_MODEL_LADDER) <= set(lc.optional_chat_models_that_fit(cap))
@@ -198,16 +193,16 @@ class TestProfileSwitch:
 
     def test_plain_init_keeps_an_npu_model_the_user_picked(self):
         cfg = GaiaConfig()
-        cfg.default_model = lc.NPU_LARGE_MODEL_NAME
+        cfg.default_model = lc.NPU_DEFAULT_MODEL_NAME
         cfg.save()
         choice = resolve_init_chat_model(
             FakeClient(STRIX_HALO_128), reset_corrupt=False, enforce_fit=False
         )
-        assert (choice.model_id, choice.user_set) == (lc.NPU_LARGE_MODEL_NAME, True)
+        assert (choice.model_id, choice.user_set) == (lc.NPU_DEFAULT_MODEL_NAME, True)
 
 
 class TestTuiAgrees:
-    def test_tui_recommends_both_twins_as_npu_models(self):
+    def test_tui_recommends_the_same_npu_models(self):
         doc = json.loads(
             (REPO_ROOT / "tui/internal/lemonade/recommended_models.json").read_text(
                 encoding="utf-8"
@@ -226,7 +221,6 @@ class TestTuiAgrees:
 class TestNpuWindow:
     def test_twins_get_a_64k_window_and_e2b_keeps_the_flm_ceiling(self):
         assert lc.npu_ctx_ceiling(lc.NPU_DEFAULT_MODEL_NAME) == lc.GPU_CTX_SIZE
-        assert lc.npu_ctx_ceiling(lc.NPU_LARGE_MODEL_NAME) == lc.GPU_CTX_SIZE
         assert lc.npu_ctx_ceiling("gemma4-it-e2b-FLM") == lc.NPU_CTX_SIZE
         assert lc.npu_ctx_ceiling("some-unknown-FLM") == lc.NPU_CTX_SIZE
 
@@ -270,19 +264,19 @@ class TestLoadTimeFreeMemory:
             model_fit,
             "read_os_memory",
             lambda: model_fit.OsMemory(
-                ram_total_gb=64, ram_available_gb=12, swap_free_gb=2
+                ram_total_gb=64, ram_available_gb=6, swap_free_gb=2
             ),
         )
 
     def test_npu_model_is_judged_on_free_system_ram(self, monkeypatch):
         self._machine(monkeypatch)
         free, _ = lc._free_memory_for(
-            "http://localhost:13305/api/v1", lc.NPU_LARGE_MODEL_NAME
+            "http://localhost:13305/api/v1", lc.NPU_DEFAULT_MODEL_NAME
         )
-        assert (free.free_gb, free.limit_gb) == (12, 14)
+        assert (free.free_gb, free.limit_gb) == (6, 8)
         verdict = lc.free_memory_verdict(
             "http://localhost:13305/api/v1",
-            lc.find_model_requirement(lc.NPU_LARGE_MODEL_NAME),
+            lc.find_model_requirement(lc.NPU_DEFAULT_MODEL_NAME),
             lc.GPU_CTX_SIZE,
         )
         assert not verdict.fits

@@ -13,10 +13,10 @@ import (
 
 // An FLM chat model is judged against the NPU's system RAM, not the GPU pool.
 func TestFitLineJudgesAnNPUModelOnNPUMemory(t *testing.T) {
-	size := 22.1
-	chat := gaiainit.Model{ID: "qwen3.6-moe-35b-a3b-FLM", SizeGB: &size}
-	// A big GPU pool but only 16 GB of NPU RAM: the GPU must not vouch for it.
-	small := lemonade.Capacity{MemoryGB: 96, MemorySource: "AMD iGPU", DiskFreeGB: -1, NPUMemoryGB: 16}
+	size := 9.1
+	chat := gaiainit.Model{ID: "gemma4-it-e4b-FLM", SizeGB: &size}
+	// A big GPU pool but only 8 GB of NPU RAM: the GPU must not vouch for it.
+	small := lemonade.Capacity{MemoryGB: 96, MemorySource: "AMD iGPU", DiskFreeGB: -1, NPUMemoryGB: 8}
 	if got := fitLine(small, chat, true); !strings.Contains(got, "will not fit") || !strings.Contains(got, "NPU, system RAM") {
 		t.Fatalf("got %q", got)
 	}
@@ -30,7 +30,7 @@ func TestFitLineJudgesAnNPUModelOnNPUMemory(t *testing.T) {
 	}
 }
 
-// The server-start window follows the NPU model: 64K for a twin, 32K for any
+// The server-start window follows the NPU model: 64K for the twin, 32K for any
 // other FLM build, as lemonade_client.npu_ctx_ceiling does.
 func TestServerWindowFollowsTheNPUModel(t *testing.T) {
 	probe := func(config string) hostProbe {
@@ -42,7 +42,6 @@ func TestServerWindowFollowsTheNPUModel(t *testing.T) {
 	}
 	cases := map[string]int{
 		`{"default_device":"npu","default_model":"gemma4-it-e4b-FLM"}`:       65536,
-		`{"default_device":"npu","default_model":"qwen3.6-moe-35b-a3b-FLM"}`: 65536,
 		`{"default_device":"npu","default_model":"gemma4-it-e2b-FLM"}`:       32768,
 		`{"default_device":"npu"}`:                                           32768,
 		`{"default_device":"gpu","default_model":"Gemma-4-E4B-it-GGUF"}`:     65536,
