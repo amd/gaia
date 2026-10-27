@@ -338,7 +338,7 @@ def _chunks_have_pages(chunks: List[Dict[str, Any]]) -> bool:
     return any("page" in chunk for chunk in chunks)
 
 
-def _documents_instruction(has_pages: bool) -> str:
+def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
     """How query_documents asks the model to cite: the full path, plus pages if any."""
     instruction = (
         "Use the provided document chunks to answer the user's question.\n\n"
@@ -353,6 +353,11 @@ def _documents_instruction(has_pages: bool) -> str:
             "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
             "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n\n"
         )
+        if not all_paged:
+            instruction += (
+                "Some chunks have no 'page' field: their files have no pages, so "
+                "cite those by path alone and don't mention pages for them.\n\n"
+            )
     else:
         instruction += (
             "Format: 'According to <absolute_path>:'\n"
@@ -853,7 +858,8 @@ class RAGToolsMixin:
                     "search_keys_used": search_keys,
                     "source_files": matched_source_files,
                     "instruction": _documents_instruction(
-                        _chunks_have_pages(formatted_chunks)
+                        _chunks_have_pages(formatted_chunks),
+                        all("page" in chunk for chunk in formatted_chunks),
                     ),
                 }
 

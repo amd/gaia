@@ -56,3 +56,10 @@ def test_unpaged_instructions_ask_for_no_page():
     assert "'According to policy.md:'" in _file_instruction(
         "policy.md", 2, has_pages=False
     )
+
+
+def test_mixed_results_ask_for_pages_only_where_chunks_have_them():
+    mixed = _documents_instruction(has_pages=True, all_paged=False)
+    assert "(page X)" in mixed
+    assert "cite those by path alone" in mixed
+    assert "cite those by path alone" not in _documents_instruction(has_pages=True)
