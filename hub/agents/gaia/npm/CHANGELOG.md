@@ -88,6 +88,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sent when the cancel lands is dropped.
 ### Fixed
 
+- **"Save it to my Documents folder" saves to the user's Documents folder.**
+  The system prompt told GAIA that "my documents" meant its own documents
+  folder (`~/.gaia/documents`), so a new file the user asked for in Documents
+  went into GAIA's hidden folder, where they would never find it. Finding an
+  existing file still checks GAIA's folders first.
 - **Secrets stay out of memory and the conversation log.** A bank PIN was saved
   as a memory, because the filter knew passwords and API keys but not PINs. The
   conversation log also kept the PIN, a password the agent had refused, a card
