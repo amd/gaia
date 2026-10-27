@@ -74,7 +74,7 @@ class _FakeTavilyClient:
         return {}
 
     def usage(self):
-        return {"cap": None, "total_credits": 0}
+        return {"cap": None, "total_credits": 0, "session_credits": 0}
 
     def close(self):
         self.closed = True

@@ -6683,7 +6683,10 @@ def _print_knowledge_usage(client):
     usage = client.usage()
     cap = usage["cap"]
     cap_str = "unlimited" if cap is None else str(cap)
-    print(f"\n💳 Credits used: {usage['total_credits']} (cap: {cap_str})")
+    print(
+        f"\n💳 Credits used: {usage['total_credits']} total, "
+        f"{usage['session_credits']} this session (cap: {cap_str})"
+    )
 
 
 def handle_knowledge_command(args):

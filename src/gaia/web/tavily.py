@@ -186,6 +186,8 @@ class _TavilyBase(DatabaseMixin):
     ) -> None:
         self.init_db(str(db_path))
         self._ensure_schema()
+        # The cap is per session; a row id, unlike created_at, survives clock steps.
+        self._session_start_id = self._latest_ledger_id()
         self._budget = budget or BudgetConfig()
         self._cache_ttl = cache_ttl
         self._web_client = web_client
@@ -319,9 +321,26 @@ class _TavilyBase(DatabaseMixin):
 
     # -- Credits / budget ----------------------------------------------------
 
+    def _latest_ledger_id(self) -> int:
+        row = self.query(
+            "SELECT COALESCE(MAX(id), 0) AS latest FROM tavily_ledger", one=True
+        )
+        return int(row["latest"]) if row else 0
+
     def _credits_used(self) -> int:
+        """Lifetime credits recorded in this ledger file."""
         row = self.query(
             "SELECT COALESCE(SUM(credits), 0) AS total FROM tavily_ledger", one=True
+        )
+        return int(row["total"]) if row else 0
+
+    def _session_credits_used(self) -> int:
+        """Credits spent since this client started; the budget cap applies here."""
+        row = self.query(
+            "SELECT COALESCE(SUM(credits), 0) AS total FROM tavily_ledger "
+            "WHERE id > :start",
+            {"start": self._session_start_id},
+            one=True,
         )
         return int(row["total"]) if row else 0
 
@@ -350,13 +369,13 @@ class _TavilyBase(DatabaseMixin):
         cap = self._budget.cap
         if cap is None:
             return
-        used = self._credits_used()
+        used = self._session_credits_used()
         est = self._estimate_credits(operation, depth)
         projected = used + est
 
         if projected > cap:
             msg = (
-                f"Tavily budget exceeded: {used} credits used + ~{est} for this "
+                f"Tavily budget exceeded: {used} credits used this session + ~{est} for this "
                 f"{operation} would reach {projected}, but the cap is {cap}."
             )
             if self._budget.block:
@@ -379,6 +398,7 @@ class _TavilyBase(DatabaseMixin):
     def usage(self) -> Dict[str, Any]:
         """Return a credit-usage summary for this cache DB."""
         used = self._credits_used()
+        session_used = self._session_credits_used()
         rows = self.query(
             "SELECT operation, COUNT(*) AS calls, COALESCE(SUM(credits), 0) AS credits "
             "FROM tavily_ledger GROUP BY operation"
@@ -386,8 +406,9 @@ class _TavilyBase(DatabaseMixin):
         cap = self._budget.cap
         return {
             "total_credits": used,
+            "session_credits": session_used,
             "cap": cap,
-            "remaining": (cap - used) if cap is not None else None,
+            "remaining": (cap - session_used) if cap is not None else None,
             "by_operation": {
                 r["operation"]: {"calls": r["calls"], "credits": r["credits"]}
                 for r in rows
