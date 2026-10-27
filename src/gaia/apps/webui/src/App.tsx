@@ -399,6 +399,7 @@ function App() {
                 agent_type: FLAGSHIP_AGENT_ID,
                 document_ids: store.draftDocumentIds,
                 private: store.draftPrivate,
+                folders: store.draftFolder ? [store.draftFolder] : [],
             });
         } catch (err) {
             if (!isFlagshipMissingError(err)) throw err;
@@ -418,6 +419,7 @@ function App() {
         }
         store.clearDraftDocuments();
         store.setDraftPrivate(false);
+        store.setDraftFolder(null);
         addSession(session);
         setCurrentSession(session.id);
         setMessages([]);
@@ -515,8 +517,9 @@ function App() {
         return () => mq.removeEventListener('change', syncSystemTheme);
     }, [syncSystemTheme]);
 
-    // Drop the previous chat's in-flight stream state when switching (#1580).
-    useEffect(() => { resetStreaming(); }, [currentSessionId, resetStreaming]);
+    // Drop the previous chat's in-flight stream state when switching (#1580),
+    // and when a page replaces the chat view, which ends its stream too.
+    useEffect(() => { resetStreaming(); }, [currentSessionId, showMemoryDashboard, showSchedules, resetStreaming]);
 
     // ── Mobile access ──────────────────────────────────────────────────
     useEffect(() => {

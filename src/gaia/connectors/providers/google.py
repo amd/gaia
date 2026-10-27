@@ -80,7 +80,7 @@ class GoogleOAuthProvider:
         # Resolution order (per AC; user-friendliness first):
         #   1. Explicit kwargs (used by tests and library callers).
         #   2. Keyring-stored credentials saved via the AgentUI's
-        #      Settings → Connections → Google → "Save & Connect" form.
+        #      Settings → Connectors → Google → "Save & Connect" form.
         #      This is the path real users take.
         #   3. Env vars (GAIA_GOOGLE_CLIENT_ID / GAIA_GOOGLE_CLIENT_SECRET)
         #      kept as a fallback for CI, scripted setups, and existing
