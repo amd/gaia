@@ -21,9 +21,10 @@ these functions act for that agent and that skill::
   allowed-folders check — the same ``validate_read`` / ``validate_write`` that
   ``read_file`` and ``write_file`` use, approval prompt included. A tool
   argument whose name says it is a path (``path``, ``file_path``,
-  ``output_dir`` …, see :func:`is_path_argument`) is read-checked before the
-  tool body runs, so a skill tool cannot be pointed outside the scope by
-  default. A tool that writes calls :func:`check_write` itself.
+  ``output_dir`` …, see :func:`is_path_argument`) is checked before the tool
+  body runs (as a write when the file does not exist yet), so a skill tool
+  cannot be pointed outside the scope by default. A tool that writes calls
+  :func:`check_write` itself.
 - **Programs.** :func:`run_program` starts one executable the manifest names
   (``program:run:<name>``): no shell, stdin closed, an environment holding
   only what a program needs to start (no API keys or tokens), and a timeout.
@@ -217,8 +218,13 @@ def is_path_argument(name: str) -> bool:
 
 
 def path_argument_refusal(agent: Any, tool_args: Dict[str, Any]) -> Optional[dict]:
-    """The read refusal for the first out-of-scope path argument, or ``None``."""
-    from gaia.agents.tools.path_access import read_access_error
+    """The refusal for the first out-of-scope path argument, or ``None``.
+
+    A path that does not exist yet is a file the tool will create, so it is
+    checked as a write: the user is asked about the folder instead of the model
+    being told the file was not found.
+    """
+    from gaia.agents.tools.path_access import read_access_error, write_access_error
 
     for name, value in tool_args.items():
         if not is_path_argument(name):
@@ -226,7 +232,11 @@ def path_argument_refusal(agent: Any, tool_args: Dict[str, Any]) -> Optional[dic
         values = value if isinstance(value, list) else [value]
         for item in values:
             if isinstance(item, str) and item.strip():
-                refusal = read_access_error(agent, os.path.expanduser(item))
+                path = os.path.expanduser(item)
+                check = (
+                    read_access_error if os.path.lexists(path) else write_access_error
+                )
+                refusal = check(agent, path)
                 if refusal is not None:
                     return refusal
     return None

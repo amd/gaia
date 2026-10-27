@@ -159,6 +159,24 @@ def test_check_write_outside_the_scope_is_refused(agent, tmp_path, allowed, outs
     assert "new.txt" in result["error"] or "outside" in result["error"]
 
 
+def test_a_new_output_file_outside_the_scope_asks_for_write_access(
+    agent, tmp_path, allowed, outside
+):
+    """A file the tool will create does not exist yet; that is not "not found"."""
+    asked = []
+    agent.path_validator.set_access_prompt(lambda path: asked.append(path) or True)
+    # pytest's tmp_path sits in the system temp folder, which no prompt may grant.
+    agent.path_validator._unaskable_reason = lambda path: ""
+    body = "ctx.check_write(file_path)\nreturn {'status': 'success'}\n"
+    _load(agent, tmp_path, "new-file-probe", [], body)
+    target = outside.parent / "deck.pptx"
+
+    result = agent._execute_tool("new-file-probe/probe", {"file_path": str(target)})
+
+    assert asked, "the user was never asked about the folder"
+    assert result == {"status": "success"}
+
+
 def test_a_skill_tool_works_in_a_session_that_never_loaded_the_skill(
     agent, tmp_path, allowed, home
 ):
