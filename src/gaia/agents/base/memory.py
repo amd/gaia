@@ -1351,10 +1351,14 @@ class MemoryMixin(ProceduralMemoryMixin):
                 "enable memory."
             )
         if reason == MEMORY_UNAVAILABLE_MODEL_NOT_PULLED:
+            # Startup downloads a registered embedder, so a restart is the retry.
             if find_model_requirement(model) is not None:
-                remedy = "Run `gaia init` to download it"
+                remedy = "Restart the agent to retry the download"
             else:
-                remedy = f"Pull '{model}' in Lemonade"
+                remedy = (
+                    f"Download '{model}' in Lemonade's model manager, then "
+                    "restart the agent"
+                )
             detail = (getattr(self, "_memory_unavailable_detail", None) or "").rstrip(
                 "."
             )
@@ -1362,8 +1366,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             return (
                 f"Memory is unavailable this session: the embedding model '{model}' "
                 "has not been pulled into Lemonade — Lemonade itself is "
-                f"running and reachable{detail_suffix}. {remedy}, then restart "
-                f"the agent. {restart_note} See {MEMORY_DOCS_URL}."
+                f"running and reachable{detail_suffix}. {remedy} — a running "
+                f"session cannot recover memory on its own. See {MEMORY_DOCS_URL}."
             )
         if reason == MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED:
             return (

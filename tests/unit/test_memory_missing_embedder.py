@@ -3,9 +3,9 @@
 """A missing embedding model is downloaded at startup, not left off (#2831).
 
 From a cold state (Lemonade running, the embedder never pulled) memory used to
-start disabled for the whole session. It now pulls the embedder the way
-``gaia init`` does and starts on; when the pull fails, the session reports the
-pull error and ``gaia init`` as the fix. Every test mocks Lemonade.
+start disabled for the whole session. It now pulls the embedder itself and
+starts on; when the pull fails, the session reports the pull error and says a
+restart retries it. Every test mocks Lemonade.
 """
 
 from contextlib import contextmanager
@@ -99,7 +99,7 @@ def test_a_missing_default_embedder_is_pulled_and_memory_starts(tmp_path):
         host.memory_store.close()
 
 
-def test_a_failed_pull_reports_its_reason_and_gaia_init(tmp_path):
+def test_a_failed_pull_reports_its_reason_and_a_restart_retries(tmp_path):
     with _lemonade([NOT_FOUND], pulled=False, pull_error="disk full"):
         host = _start(tmp_path)
     assert host.memory_store is None
@@ -107,7 +107,8 @@ def test_a_failed_pull_reports_its_reason_and_gaia_init(tmp_path):
     message = host.memory_unavailable_message()
     assert DEFAULT_EMBEDDING_MODEL in message
     assert "downloading it failed: disk full" in message
-    assert "Run `gaia init`" in message
+    assert "Restart the agent to retry the download" in message
+    assert "gaia " not in message
     assert "https://amd-gaia.ai/docs/reference/troubleshooting" in message
 
 
@@ -171,7 +172,10 @@ def test_an_unregistered_custom_embedder_is_not_pulled(tmp_path):
     assert host._memory_unavailable_reason == MEMORY_UNAVAILABLE_MODEL_NOT_PULLED
     message = host.memory_unavailable_message()
     assert "not in GAIA's model registry" in message
-    assert "Pull 'user.someone-elses-embed-GGUF' in Lemonade" in message
+    assert (
+        "Download 'user.someone-elses-embed-GGUF' in Lemonade's model manager"
+        in message
+    )
 
 
 def test_an_unreachable_server_is_not_sent_a_pull(tmp_path):
