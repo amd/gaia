@@ -6,6 +6,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **On Gemma 4 E4B the agent stops offering features that model fails.** The
+  SQL scratchpad, email, image generation, and finding or installing skills
+  failed GAIA's agent evals on Gemma, and their 16 tool descriptions were read
+  on every step. On Gemma, on the GPU or the NPU, they are now left out, along
+  with the skills built on them; larger models keep everything.
+  `GAIA_FEATURE_TIER=full` or `compact` forces one set for any model.
 - **An old failure in memory no longer stops a request you make now.** A note
   like "this page returned 503, don't waste tool calls on it" was obeyed as a
   standing ban, so the agent refused a URL you handed it. Memories now reach

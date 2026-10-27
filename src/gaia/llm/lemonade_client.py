@@ -1410,6 +1410,10 @@ class ModelRequirement:
     # Sent as ``chat_template_kwargs.reasoning_effort`` (``low``/``medium``/
     # ``high``) for templates that grade reasoning instead of switching it.
     reasoning_effort: Optional[str] = None
+    # Which agent features the model gets (``gaia.agents.base.model_features``).
+    # A capability of the model, not the device: Gemma gets "compact" on the
+    # GPU and the NPU alike.
+    feature_tier: str = "full"
 
     @property
     def scales_with_memory(self) -> bool:
@@ -1487,6 +1491,7 @@ MODELS = {
         # are full attention: 2 KV heads x 512 dims x K+V x f16 = 16 KiB/token,
         # 1.1 GB at 64K. The sliding-window layers hold 512 tokens each.
         kv_bytes_per_token=16384,
+        feature_tier="compact",
     ),
     # --- Qwen3.8-Flash-Next: opt-in on a 128 GB Strix Halo, never a default ---
     # 125B MoE (6B active) + 51B n-gram embedding; needs llama.cpp's qwen4exp
@@ -1615,6 +1620,7 @@ MODELS = {
         display_name="Gemma 4 E2B (NPU/FLM)",
         min_ctx_size=NPU_CTX_SIZE,
         tool_calling=False,
+        feature_tier="compact",
     ),
     # --- NPU twin of the GPU default (FastFlowLM build, a Lemonade built-in) ---
     # Native tool calls work (FLM v1.0.7), unlike E2B above.
@@ -1628,6 +1634,7 @@ MODELS = {
         tool_calling=True,
         vision=True,
         size_gb=9.1,
+        feature_tier="compact",
     ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
     "qwen3.5-35b": ModelRequirement(

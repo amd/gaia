@@ -62,6 +62,9 @@ processes at 472 tokens/s and generates at 7 tokens/s, with a first answer in 67
 GAIA's agent evals on the same PC it scored close to its GPU twin (core conversation
 12/15, tool selection 3/7 against the GPU's 4/7).
 
+On the NPU, as on the GPU, Gemma runs with a [smaller tool set](/guides/gaia#smaller-models):
+no data scratchpad, email, image generation or skill installs.
+
 GAIA offers only NPU models whose agent evals have run. Qwen3.6's NPU build
 (`qwen3.6-moe-35b-a3b-FLM`) was tested and left out: its multi-step turns took several
 minutes each.

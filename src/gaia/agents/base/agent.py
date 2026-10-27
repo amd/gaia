@@ -104,6 +104,12 @@ from gaia.agents.base.grounding import (
     unverified_reasons,
 )
 from gaia.agents.base.look_first import LOOK_FIRST_PROMPT, named_workspace_paths
+from gaia.agents.base.model_features import (
+    FULL,
+    ModelFeatures,
+    features_for_model,
+    withheld_tools,
+)
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
@@ -1850,6 +1856,13 @@ def _plan_step_placeholder(
     return None
 
 
+def _withheld_skill_tools(agent: Any, skill: Any) -> List[str]:
+    """The tools *skill* consumes that *agent*'s model is not offered."""
+    # getattr: test stubs copy load_skill onto a plain class.
+    features = getattr(agent, "model_features", FULL)
+    return sorted(set(skill.gaia.tools_required) & withheld_tools(features))
+
+
 def _skill_tool_names(skill: Any) -> List[str]:
     """Every tool name *skill* needs: its recipe's plus its own namespaced ones."""
     return [
@@ -2112,6 +2125,9 @@ class Agent(abc.ABC):
     #: composed prompt byte-identical; GaiaAgent turns it on.
     #: See :mod:`gaia.agents.base.skill_catalog`.
     _skill_catalog_enabled: bool = False
+
+    #: What this agent's model is offered; see :mod:`gaia.agents.base.model_features`.
+    model_features: ModelFeatures = FULL
 
     # Skill sets (#2466): the parsed manifest declarations, the explicit
     # ``--skill-set`` request, and the set that actually resolved.
@@ -2545,6 +2561,7 @@ Do NOT wrap conversational replies in JSON.
         # for tool-calling models — exactly what the suppression was meant
         # to prevent.
         self.model_id = model_id
+        self.model_features = features_for_model(model_id)
         # Claude always speaks native tool_calls, whatever model_id says — the
         # two tool-capability gates below read this alongside model_id.
         self._use_claude = use_claude
@@ -3603,7 +3620,10 @@ Do NOT wrap conversational replies in JSON.
             return ""
         from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
-        catalog = render_catalog(self.skill_manager.discover())
+        skills = self.skill_manager.discover()
+        catalog = render_catalog(
+            {n: s for n, s in skills.items() if not _withheld_skill_tools(self, s)}
+        )
         return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
 
     def _pin_skill_body(self, name: str, turns: Optional[int] = None) -> None:
@@ -3942,6 +3962,15 @@ Do NOT wrap conversational replies in JSON.
             return self.loaded_skills[name]
 
         skill = resolver.load(name)
+        withheld = _withheld_skill_tools(self, skill)
+        if withheld:
+            from gaia.skills.errors import SkillUnavailableError
+
+            raise SkillUnavailableError(
+                f"Skill '{skill.name}' needs {', '.join(withheld)}, which "
+                f"{self.model_id} is not offered. Tell the user this needs a "
+                "larger model; they can pick one in the model list."
+            )
 
         # Permission gate BEFORE any registration: a refused skill must not
         # leave tools or prompt fragments behind.

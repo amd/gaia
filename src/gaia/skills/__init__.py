@@ -58,6 +58,7 @@ from gaia.skills.errors import (
     SkillNotFoundError,
     SkillPermissionError,
     SkillSetError,
+    SkillUnavailableError,
     SkillValidationError,
 )
 from gaia.skills.format import (
@@ -230,5 +231,6 @@ __all__ = [
     "SkillValidationError",
     "SkillNotFoundError",
     "SkillPermissionError",
+    "SkillUnavailableError",
     "SkillSetError",
 ]
