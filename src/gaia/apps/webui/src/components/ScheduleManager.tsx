@@ -228,7 +228,7 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
 
 export function ScheduleManager() {
     const { setShowSchedules } = useChatStore();
-    const { schedules, loading, error, loadSchedules, createSchedule } = useScheduleStore();
+    const { schedules, loading, error, actionError, loadSchedules, createSchedule, dismissActionError } = useScheduleStore();
     const close = useCallback(() => setShowSchedules(false), [setShowSchedules]);
     useEscapeToClose(true, close);
     const dialogRef = useRef<HTMLDivElement>(null);
@@ -434,6 +434,14 @@ export function ScheduleManager() {
                     {/* Schedule list */}
                     <section className="schedule-section">
                         <h4>Active schedules</h4>
+                        {actionError && (
+                            <div className="schedule-action-error" role="alert">
+                                <span>{actionError}</span>
+                                <button className="btn-icon" onClick={dismissActionError} aria-label="Dismiss error">
+                                    <X size={14} />
+                                </button>
+                            </div>
+                        )}
                         {loading ? (
                             <p className="schedule-empty">Loading schedules...</p>
                         ) : error ? (
