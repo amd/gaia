@@ -3700,6 +3700,45 @@ class TestRecallToolTemporal:
         contents = [r.get("content", "") for r in result["results"]]
         assert any("Temporal recall beta" in c for c in contents)
 
+    def test_recall_time_to_date_includes_boundary_day(self, mixin_with_tools):
+        """A date-only time_to includes items stored later that day (#3524)."""
+        func_remember = mixin_with_tools._registered_tools["remember"]["function"]
+        with patch(
+            "gaia.agents.base.memory_store._now_iso",
+            return_value="2025-03-31T15:00:00-07:00",
+        ):
+            func_remember(
+                fact="Boundary day recall delta fact",
+                category="fact",
+            )
+
+        func_recall = mixin_with_tools._registered_tools["recall"]["function"]
+        result = func_recall(
+            query="Boundary day recall delta",
+            time_to="2025-03-31",
+        )
+        assert result["status"] == "found"
+        contents = [r.get("content", "") for r in result["results"]]
+        assert any("Boundary day recall delta" in c for c in contents)
+
+    def test_recall_browse_time_to_date_includes_boundary_day(self, mixin_with_tools):
+        """Browse-mode recall also keeps items from the time_to day (#3524)."""
+        func_remember = mixin_with_tools._registered_tools["remember"]["function"]
+        with patch(
+            "gaia.agents.base.memory_store._now_iso",
+            return_value="2025-03-31T15:00:00-07:00",
+        ):
+            func_remember(
+                fact="Boundary day browse epsilon fact",
+                category="fact",
+            )
+
+        func_recall = mixin_with_tools._registered_tools["recall"]["function"]
+        result = func_recall(time_to="2025-03-31")
+        assert result["status"] == "found"
+        contents = [r.get("content", "") for r in result["results"]]
+        assert any("Boundary day browse epsilon" in c for c in contents)
+
     def test_recall_by_time_range_only_finds_items(self, mixin_with_tools):
         """recall(time_from, time_to) without query returns filtered results."""
         func_remember = mixin_with_tools._registered_tools["remember"]["function"]
@@ -3798,6 +3837,31 @@ class TestSearchPastConversationsTemporal:
         assert result["count"] >= 1
         contents = [r.get("content", "") for r in result["results"]]
         assert any("Conversation range beta" in c for c in contents)
+
+    def test_search_conversations_time_to_date_includes_boundary_day(
+        self, mixin_with_tools
+    ):
+        """Conversation search keeps turns from the date-only time_to day (#3524)."""
+        with patch(
+            "gaia.agents.base.memory_store._now_iso",
+            return_value="2025-03-31T15:00:00-07:00",
+        ):
+            mixin_with_tools._memory_store.store_turn(
+                "test-conv-boundary",
+                "user",
+                "Boundary day conversation epsilon message",
+            )
+
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+        result = func(
+            query="Boundary day conversation epsilon",
+            time_to="2025-03-31",
+        )
+        assert result["status"] == "found"
+        contents = [r.get("content", "") for r in result["results"]]
+        assert any("Boundary day conversation epsilon" in c for c in contents)
 
     def test_search_conversations_no_params_returns_error(self, mixin_with_tools):
         """search_past_conversations() with no params returns error."""
