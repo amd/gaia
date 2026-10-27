@@ -7,7 +7,7 @@
  * up until the backend answers, then the chat UI appears with its chats.
  */
 
-import { act, render } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../services/api');
@@ -137,5 +137,44 @@ describe('startup before the backend listens', () => {
         expect(text()).toContain('Starting GAIA');
         await advance(60_000);
         expect(text()).toMatch(/Could not check whether GAIA is set up: Failed to fetch/);
+    });
+});
+
+describe('"Check again" on the setup banner', () => {
+    async function bannerAfterNeverStarting() {
+        render(<App />);
+        await advance(61_000);
+        expect(text()).toMatch(/Could not check whether GAIA is set up: Failed to fetch/);
+    }
+
+    it('answers at once while the backend is still down, instead of waiting another 60 s', async () => {
+        await bannerAfterNeverStarting();
+        const before = mocked.checkSetup.mock.calls.length;
+        fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+        await advance(500);
+        expect(text()).toMatch(/Could not check whether GAIA is set up: Failed to fetch/);
+        await advance(5_000);
+        // One click is one request; it does not start a background retry loop.
+        expect(mocked.checkSetup.mock.calls.length).toBe(before + 1);
+    });
+
+    it('repeated clicks while down each answer once and never stack retry loops', async () => {
+        await bannerAfterNeverStarting();
+        const before = mocked.checkSetup.mock.calls.length;
+        for (let i = 0; i < 3; i++) {
+            fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+            await advance(100);
+        }
+        await advance(10_000);
+        expect(mocked.checkSetup.mock.calls.length).toBe(before + 3);
+        expect(text()).toMatch(/Could not check whether GAIA is set up/);
+    });
+
+    it('clears the banner once the backend is up', async () => {
+        await bannerAfterNeverStarting();
+        backendUp = true;
+        fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+        await advance(500);
+        expect(text()).not.toMatch(/Could not check whether GAIA is set up/);
     });
 });

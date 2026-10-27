@@ -126,7 +126,8 @@ function App() {
 
     // ── First run: is GAIA set up? Same question the TUI asks. ──────────
     // Quiet: keep the current screen until the answer, so a re-check never blanks the app.
-    const checkSetup = useCallback(async (quiet = false) => {
+    // waitForStart: only the launch check treats a refused connection as "still starting".
+    const checkSetup = useCallback(async (quiet = false, waitForStart = false) => {
         if (!quiet) setSetup({ state: 'checking' });
         let waited = 0;
         try {
@@ -137,7 +138,7 @@ function App() {
                 try {
                     check = await api.checkSetup(!!active?.remote);
                 } catch (err) {
-                    if (!isRefused(err) || waited >= BACKEND_START_WAIT_MS) throw err;
+                    if (!waitForStart || !isRefused(err) || waited >= BACKEND_START_WAIT_MS) throw err;
                     // A refused local connection is cheap; poll steadily so the app opens as soon as it listens.
                     await sleep(RETRY_INITIAL_MS);
                     waited += RETRY_INITIAL_MS;
@@ -193,7 +194,7 @@ function App() {
     const startupLoads = useRef<Retrier[]>([]);
     useEffect(() => {
         logBanner(__APP_VERSION__);
-        void checkSetup();
+        void checkSetup(false, true);
         const loads = [
             retryUntilOk(loadAgents, {
                 onError: (err, n) => { if (shouldLogRetry(n)) log.api.warn(`Agent list unavailable (attempt ${n}); retrying`, err); },
