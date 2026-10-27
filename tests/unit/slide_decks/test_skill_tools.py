@@ -215,3 +215,14 @@ def test_markdown_tool_and_required_items_through_the_tool_layer(tools, tmp_path
             markdown="", output_path=str(tmp_path / "x.pptx")
         )
         assert bad["status"] == "error"
+
+
+def test_a_one_slide_markdown_build_is_one_slide(tools, tmp_path):
+    skill, fns, _r = tools
+    md = "# Ferry plan\n\n## Ferry service grows to a network\n- Four piers\n"
+    with bind(_Host(), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "one.pptx"), expected_slides=1
+        )
+    assert r["status"] == "ok", r
+    assert r["slides"] == 1

@@ -101,6 +101,10 @@ metadata:
           required_items:
             type: array
             required: false
+          expected_slides:
+            type: integer
+            required: false
+            default: 0
         returns:
           type: object
       - name: add_slide
@@ -229,7 +233,8 @@ Use this for stages, steps, levels or options instead of a wall of bullets.
 ## Hard rules
 
 - **Exact slide count.** If the user named a number, build exactly that many
-  and pass it as `expected_slides`. Otherwise use the blueprint's default.
+  and pass it as `expected_slides` to the build and verify tools (a one-slide
+  request then gets no cover). Otherwise use the blueprint's default.
 - **Every must-show item is visible on a slide.** List each number, name,
   event, section and message the request asks for and pass them as
   `required_items`. Never move requested content into the notes: cut other

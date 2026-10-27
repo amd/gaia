@@ -234,6 +234,7 @@ def build_deck_from_markdown(
     theme: str = "",
     prefs: Optional[dict] = None,
     required_items: Optional[list] = None,
+    expected_slides: int = 0,
 ) -> dict:
     """Build and check a .pptx from Markdown: the easiest way to make a deck.
 
@@ -247,9 +248,10 @@ def build_deck_from_markdown(
         theme: light, dark or minimal; empty uses the saved preference.
         prefs: Optional style the user asked for in this request.
         required_items: Facts the request needs visible on the slides; checked.
+        expected_slides: The slide count the user asked for; 0 skips the check.
     """
     try:
-        outline = _md.outline_from_markdown(markdown)
+        outline = _md.outline_from_markdown(markdown, expected_slides or None)
     except OutlineError as exc:
         return _error(exc)
     return _build_from(outline, output_path, theme, "", prefs, required_items)

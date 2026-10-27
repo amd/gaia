@@ -394,8 +394,14 @@ def _diagram_slide(
     return slide
 
 
-def outline_from_markdown(md: str) -> Dict[str, Any]:
-    """Parse Markdown into ``{"slides": [...]}``. Raises OutlineError when empty."""
+def outline_from_markdown(
+    md: str, expected_slides: Optional[int] = None
+) -> Dict[str, Any]:
+    """Parse Markdown into ``{"slides": [...]}``. Raises OutlineError when empty.
+
+    With *expected_slides*, the ``#`` cover is left out when the ``##`` slides
+    alone make that count: "one slide" means the slide, not a cover plus it.
+    """
     if not md or not md.strip():
         raise OutlineError(["The Markdown is empty."])
     lines = md.replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -484,7 +490,16 @@ def outline_from_markdown(md: str) -> Dict[str, Any]:
         raise OutlineError(
             ["No slides found: start each slide with a '## Title' line."]
         )
+    if (
+        expected_slides
+        and deck_title is not None
+        and len(out) == expected_slides + 1
+        and slides
+    ):
+        out = out[1:]
     result: Dict[str, Any] = {"slides": out}
+    if expected_slides:
+        result["expected_slides"] = expected_slides
     if required:
         result["required_items"] = required
     return result

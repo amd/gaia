@@ -396,3 +396,12 @@ def test_an_axis_line_names_what_grows_along_a_process():
     md = "## Orders move in three steps\nDiagram: process\nAxis: More handling cost\n- Pick\n- Pack\n- Ship\n"
     (slide,) = outline_from_markdown(md)["slides"]
     assert slide["x_axis"] == "More handling cost"
+
+
+def test_a_one_slide_request_gets_the_slide_without_a_cover():
+    md = "# Ferry plan\nOctober 2026\n\n## Ferry service grows to a network\n- Four piers\n"
+    outline = outline_from_markdown(md, expected_slides=1)
+    assert [s["type"] for s in outline["slides"]] == ["bullets"]
+    assert outline["expected_slides"] == 1
+    two = outline_from_markdown(md, expected_slides=2)
+    assert [s["type"] for s in two["slides"]] == ["title", "bullets"]
