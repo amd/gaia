@@ -541,8 +541,9 @@ function App() {
     }, [syncSystemTheme]);
 
     // Drop the previous chat's in-flight stream state when switching (#1580),
-    // and when a page replaces the chat view, which ends its stream too.
-    useEffect(() => { resetStreaming(); }, [currentSessionId, showMemoryDashboard, showSchedules, resetStreaming]);
+    // and when Memory replaces the chat view, which ends its stream too.
+    // Scheduled tasks opens over the chat, so its stream keeps running.
+    useEffect(() => { resetStreaming(); }, [currentSessionId, showMemoryDashboard, resetStreaming]);
 
     // ── Mobile access ──────────────────────────────────────────────────
     useEffect(() => {
