@@ -65,6 +65,21 @@ from tests.unit.skills_helpers import make_key
         ("1.5.0", ">=1.2.0, <2.0.0", True),
         ("2.0.0", ">=1.2.0, <2.0.0", False),
         ("1.1.0", ">=1.2.0, <2.0.0", False),
+        ("2.0.0-beta.1", ">=1.0.0, <2.0.0", False),
+        ("1.2.5-rc.1", "1.2", False),
+        ("1.3.0-rc.2", "^1.3.0-rc.1", True),
+        ("1.3.0-rc.2", "~1.3.0-rc.1", True),
+        ("1.3.0-rc.2", "~=1.3.0-rc.1", True),
+        ("1.3.0-rc.2", ">=1.3.0-rc.1, <2.0.0", True),
+        ("1.3.0-rc.1", ">=1.3.0-rc.2", False),
+        ("1.3.0-rc.1", "1.3.0-rc.1", True),
+        ("1.3.0-rc.1", "==1.3.0-rc.1", True),
+        ("1.5.0-rc.1", ">=1.2.3-beta.1", False),
+        ("1.3.1-rc.1", ">=1.3.0-rc.1", False),
+        ("1.3.0", ">=1.3.0-rc.1", True),
+        ("1.2.3+build-5", ">=1.2.3", True),
+        ("1.2.3-rc.1", ">=1.0.0+build-5", False),
+        ("2.0.0-beta.1", "*", True),
     ],
 )
 def test_semver_range_matching(version, spec, expected):
@@ -74,7 +89,7 @@ def test_semver_range_matching(version, spec, expected):
 
 
 def test_resolve_picks_the_highest_satisfying_version():
-    """'Highest satisfying' matches how the hub resolves agent dependencies."""
+    """Stable versions still follow the requested range."""
     from gaia.skills.versions import resolve
 
     published = ["0.9.0", "1.0.0", "1.2.0", "1.4.7", "2.0.0"]
@@ -84,15 +99,42 @@ def test_resolve_picks_the_highest_satisfying_version():
     assert resolve(published, ">=3.0.0") is None
 
 
+@pytest.mark.parametrize("spec", [None, "", "*", "latest", "any", " LATEST "])
+def test_resolve_prefers_stable_and_accepts_prerelease_only_catalogs(spec):
+    from gaia.skills.versions import resolve
+
+    assert resolve(iter(["1.9.0", "2.0.0-beta.1"]), spec) == "1.9.0"
+    assert resolve(iter(["2.0.0-beta.1", "2.0.0-beta.2"]), spec) == "2.0.0-beta.2"
+    assert resolve(iter(["1.9.0+build-5", "2.0.0-beta.1"]), spec) == "1.9.0+build-5"
+    assert resolve(iter([]), spec) is None
+
+
+@pytest.mark.parametrize(
+    "published,spec,expected",
+    [
+        (["1.9.0", "2.0.0-beta.1"], ">=1.0.0", "1.9.0"),
+        (["1.2.0", "1.3.0-rc.1"], "^1.2", "1.2.0"),
+        (["2.0.0-beta.1"], ">=1.0.0", None),
+        (["1.3.0-rc.1", "1.3.0-rc.2"], ">=1.3.0-rc.1", "1.3.0-rc.2"),
+    ],
+)
+def test_resolve_requires_explicit_prerelease_opt_in(published, spec, expected):
+    from gaia.skills.versions import resolve
+
+    assert resolve(iter(published), spec) == expected
+
+
+@pytest.mark.parametrize("version", ["1.5.0", "1.5.0-rc.1"])
 @pytest.mark.parametrize("spec", ["1.0.0 || 2.0.0", "1.0.0 - 2.0.0"])
-def test_unsupported_range_syntax_raises_rather_than_matching_everything(spec):
+def test_unsupported_range_syntax_raises_rather_than_matching_everything(version, spec):
     """An unreadable pin must never degrade to 'any' — that would silently widen it."""
     from gaia.skills.versions import matches
 
     with pytest.raises(SkillValidationError, match="does not support"):
-        matches("1.5.0", spec)
+        matches(version, spec)
 
 
+@pytest.mark.parametrize("version", ["1.5.0", "1.5.0-rc.1"])
 @pytest.mark.parametrize(
     "spec",
     [
@@ -108,7 +150,7 @@ def test_unsupported_range_syntax_raises_rather_than_matching_everything(spec):
         "abc.def.ghi",
     ],
 )
-def test_a_comparator_target_that_is_not_a_version_raises(spec):
+def test_a_comparator_target_that_is_not_a_version_raises(version, spec):
     """``compare_versions`` is a lenient *sort* comparator (#2864).
 
     It coerces unreadable text to a sortable key rather than raising, so
@@ -120,7 +162,7 @@ def test_a_comparator_target_that_is_not_a_version_raises(spec):
     from gaia.skills.versions import matches
 
     with pytest.raises(SkillValidationError, match="does not name a version number"):
-        matches("1.5.0", spec)
+        matches(version, spec)
 
 
 def test_validate_spec_accepts_every_supported_range_shape():

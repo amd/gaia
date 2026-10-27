@@ -215,8 +215,9 @@ def _dispatch_one(
             if event.get("tool_label"):
                 request["tool_label"] = str(event["tool_label"])
             # The whole call: the summary shortens code, and a path prompt is
-            # worded from the path's kind. The card reads GAIA's folder and risk
-            # note from args, as in-process, so prompt_context goes back there.
+            # worded from the path's kind. The card reads GAIA's folder, risk note
+            # and resolved path from args, as in-process, so prompt_context goes
+            # back there.
             args = dict(event["args"]) if isinstance(event.get("args"), dict) else {}
             context = event.get("prompt_context")
             if isinstance(context, dict):
@@ -224,6 +225,8 @@ def _dispatch_one(
                     args["working_directory"] = str(context["working_directory"])
                 if context.get("risk_note"):
                     args[RISK_NOTE_ARG] = str(context["risk_note"])
+                if context.get("file_path"):
+                    args["file_path"] = str(context["file_path"])
             if args:
                 request["args"] = args
                 if event.get("args_truncated"):
@@ -330,6 +333,13 @@ def _dispatch_one(
         usage = event.get("usage")
         if isinstance(usage, dict):
             out.update({k: usage[k] for k in _ANSWER_USAGE_KEYS if k in usage})
+        context = event.get("context")
+        if isinstance(context, dict):
+            # Contract >= 2.21: the composer's meter, as an in-process turn streams it.
+            handler.relay_context = context
+            handler._emit({"type": "context_usage", **context})
+        elif isinstance(event.get("context_error"), str):
+            handler.relay_context_error = event["context_error"]
         handler._emit(out)
         return True
 

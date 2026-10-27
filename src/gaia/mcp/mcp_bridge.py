@@ -871,11 +871,13 @@ def build_parser():
 
 
 def main():
+    from gaia.login_path import apply_login_path
     from gaia.tls import use_os_trust_store
 
     use_os_trust_store()
     parser = build_parser()
     args = parser.parse_args()
+    apply_login_path()
     start_server(
         args.host, args.port, args.base_url, args.verbose, auth_token=args.auth_token
     )

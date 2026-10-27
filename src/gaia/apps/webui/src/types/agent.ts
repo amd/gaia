@@ -129,7 +129,7 @@ export interface GaiaElectronAPI {
 // Augment Window to include gaiaAPI when running in Electron
 /** window.gaiaWindow (preload.cjs): how the desktop app's window frame is drawn. */
 export interface GaiaWindowFrame {
-  titleBar: 'mac' | 'overlay';
+  titleBar: 'mac' | 'overlay' | 'native';
   setColors: (colors: { color: string; symbolColor: string }) => Promise<boolean>;
 }
 
