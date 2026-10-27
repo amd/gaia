@@ -333,11 +333,7 @@ function Permission({ sessionId }: { sessionId: string }) {
     }, [sessionId]);
     usePermissionModeEvents(sessionId, setMode);
 
-    const apply = async (next: PermissionMode) => {
-        if (next === 'full_access' && !confirming) {
-            setConfirming(true);
-            return;
-        }
+    const save = async (next: PermissionMode) => {
         setConfirming(false);
         setError(null);
         try {
@@ -360,7 +356,8 @@ function Permission({ sessionId }: { sessionId: string }) {
                         role="radio"
                         aria-checked={mode === m.mode}
                         className={mode === m.mode ? 'is-selected' : undefined}
-                        onClick={() => void apply(m.mode)}
+                        // Full access only turns on from "Turn it on", so a double-click can't confirm it.
+                        onClick={() => (m.mode === 'full_access' ? setConfirming(true) : void save(m.mode))}
                     >
                         {m.mode === 'full_access'
                             ? <ShieldAlert size={12} aria-hidden="true" />
@@ -373,7 +370,7 @@ function Permission({ sessionId }: { sessionId: string }) {
             {confirming && (
                 <span className="sp-confirm" role="alert">
                     Full access lets GAIA change files and run commands on this PC without asking.
-                    <button type="button" className="sp-action is-warning" onClick={() => void apply('full_access')}>Turn it on</button>
+                    <button type="button" className="sp-action is-warning" onClick={() => void save('full_access')}>Turn it on</button>
                     <button type="button" className="sp-action" onClick={() => setConfirming(false)}>Cancel</button>
                 </span>
             )}
