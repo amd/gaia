@@ -126,6 +126,8 @@ class TabCdp {
     this.pending = new Map();
     this.attached = false;
     this.detachReason = null;
+    /** @type {Set<(params: any) => void>} */
+    this.bindingListeners = new Set();
     this.ready = this.attach();
   }
 
@@ -154,7 +156,17 @@ class TabCdp {
     this.pending.clear();
   }
 
+  /** Calls `fn` with each Runtime.bindingCalled event; returns its unsubscribe. */
+  onBinding(fn) {
+    this.bindingListeners.add(fn);
+    return () => this.bindingListeners.delete(fn);
+  }
+
   onMessage(method, params) {
+    if (method === "Runtime.bindingCalled") {
+      for (const fn of this.bindingListeners) fn(params);
+      return;
+    }
     const entry = consoleEntry(method, params);
     if (entry) {
       this.console.push(entry);

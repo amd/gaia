@@ -34,6 +34,8 @@ const CHANNELS = Object.freeze({
   setActiveSession: "pane:set-active-session",
   setControl: "pane:set-control",
   setViewport: "pane:set-viewport",
+  togglePicking: "pane:toggle-picking",
+  picked: "pane:picked",
 });
 
 const HISTORY_ACTIONS = new Set(["back", "forward", "reload", "stop"]);
@@ -155,6 +157,7 @@ function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downlo
   handle(CHANNELS.clearData, (h) => h.clearBrowsingData());
   handle(CHANNELS.openExternal, (h, id) => h.openExternal(requireString(id, "tab id")));
   handle(CHANNELS.setControl, (h, id, control) => h.setControl(requireString(id, "tab id"), control));
+  handle(CHANNELS.togglePicking, (h) => h.togglePicking());
   handle(CHANNELS.setViewport, (h, id, choice) => h.setUserViewport(requireString(id, "tab id"), parseViewportChoice(choice)));
 
   // Sent on every resize, so it is fire-and-forget; a throw here would reach the crash handler.
@@ -193,6 +196,7 @@ function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downlo
         publish: (state) => send(CHANNELS.state, state),
         onToggleRequest: () => send(CHANNELS.command, "toggle"),
         onShowRequest: () => send(CHANNELS.command, "show"),
+        onPicked: (event) => send(CHANNELS.picked, event),
         openExternal: (url) => {
           shell.openExternal(url).catch((err) =>
             console.error(`[browser-pane] Could not open ${url} in the system browser: ${err.message}`)

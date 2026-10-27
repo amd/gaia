@@ -16,12 +16,13 @@ import { useAppOverlayOpen } from '../../hooks/useAppOverlayOpen';
 import { useDockedResize } from '../../hooks/useDockedResize';
 import { formatShortcut } from '../../utils/platform';
 import { log } from '../../utils/logger';
-import { AgentStrip, BrowserToolbar, TOGGLE_SHORTCUT } from './BrowserToolbar';
+import { usePickedElementsStore } from '../../stores/pickedElementsStore';
+import { AgentStrip, BrowserToolbar, PickStrip, TOGGLE_SHORTCUT } from './BrowserToolbar';
 import type { GaiaBrowserPaneAPI, PaneNotice, PaneState, TabState } from '../../../services/browser-pane/contract';
 import './BrowserPane.css';
 
-function isToggleKey(e: KeyboardEvent): boolean {
-    return (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'b';
+function isShortcut(e: KeyboardEvent, key: string): boolean {
+    return (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === key;
 }
 
 /** Mounted with the chat in the desktop app; renders the pane while it is open. */
@@ -39,12 +40,19 @@ export function BrowserPane({ api }: { api: GaiaBrowserPaneAPI }) {
         });
     }, [api]);
 
-    // The shortcut works from the app and, through main, from inside a pane page.
+    useEffect(() => api.onPicked((event) => usePickedElementsStore.getState().applyPick(event)), [api]);
+
+    // The shortcuts work from the app and, through main, from inside a pane page.
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
-            if (!isToggleKey(e)) return;
-            e.preventDefault();
-            useBrowserPaneStore.getState().toggle();
+            if (isShortcut(e, 'b')) {
+                e.preventDefault();
+                useBrowserPaneStore.getState().toggle();
+            } else if (isShortcut(e, 's')) {
+                e.preventDefault();
+                useBrowserPaneStore.getState().setOpen(true);
+                api.togglePicking().catch((err) => log.ui.warn('Could not start selecting an element', err));
+            }
         };
         window.addEventListener('keydown', onKey);
         const off = api.onCommand((command) => {
@@ -136,7 +144,7 @@ function OpenPane({ api, pane }: { api: GaiaBrowserPaneAPI; pane: PaneState }) {
                 {...resize.separatorProps}
             />
             <BrowserToolbar pane={pane} api={api} onClosePane={() => setOpen(false)} addressRef={addressRef} />
-            <AgentStrip tab={active} api={api} />
+            {pane.picking ? <PickStrip api={api} /> : <AgentStrip tab={active} api={api} />}
             {active.notice && <NoticeBar notice={active.notice} />}
             <div ref={viewportRef} className="bp-viewport">
                 {frozen && <img className="bp-frozen" src={frozen} alt="" aria-hidden="true" />}

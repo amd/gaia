@@ -15,7 +15,15 @@
  *        | session                 (the bridge discovery file and the chat the window shows)
  *        | drag <selector> <dx>     (e.g. drag .bp-resize -400 widens the pane)
  *        | type <text> | key <key> | chat <text> | reply [seconds] | shot <file.png> | quit
+ *        | pick <selector> [shift]  (real mouse input on it while Select element runs)
+ *        | page-key <key>           (a real key press in the pane's page, e.g. ArrowUp, Escape)
+ *        | chips                    (the composer's picked-element chips)
+ *        | attach <file>            (attaches a file to the composer)
  *   node scripts/qa-pane.mjs perf open-pane      (against the running app)
+ *   node scripts/qa-pane.mjs perf pick [runs]    (pick click to chip, against the running app)
+ *   node scripts/qa-pane.mjs perf send [runs] [prompt] [settle s]
+ *                                       (send to first reply token in a new chat, with and without one chip,
+ *                                        interleaved; waits settle seconds for the new chat's warm-up first)
  *   GAIA_BIN=... node scripts/qa-pane.mjs perf launch [--app <webui dir>]
  *
  * QA_PANE_DIR overrides where the control file lives (default: a temp dir
@@ -37,6 +45,8 @@ const REPO = path.resolve(HERE, '..', '..', '..', '..', '..');
 const SITE = path.join(REPO, 'tests', 'fixtures', 'browser_pane', 'site');
 const SLOW_MS = 3000;
 const TOGGLE = 'ControlOrMeta+Shift+B';
+const PICK = 'ControlOrMeta+Shift+S';
+const NEW_CHAT = 'ControlOrMeta+Shift+O';
 const CHAT_READY = '.composer-input';
 
 function fail(message) {
@@ -64,9 +74,37 @@ function controlFile(appDir) {
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript' };
 
+let reactApp = null;
+
+/** The React dev page's script: react-app.src.js bundled with React's development build, so component names stay readable. */
+function bundleReactApp() {
+    if (!reactApp) {
+        reactApp = (async () => {
+            const req = createRequire(path.join(HERE, '..', 'package.json'));
+            const { build } = await import(req.resolve('rolldown'));
+            const out = await build({
+                input: path.join(SITE, 'react-app.src.js'),
+                write: false,
+                resolve: { alias: { react: path.dirname(req.resolve('react/package.json')), 'react-dom': path.dirname(req.resolve('react-dom/package.json')) } },
+                transform: { define: { 'process.env.NODE_ENV': '"development"' } },
+                output: { format: 'iife' },
+                logLevel: 'warn',
+            });
+            return out.output[0].code;
+        })();
+    }
+    return reactApp;
+}
+
 function serveFixtures() {
     const server = http.createServer((req, res) => {
         const name = decodeURIComponent(new URL(req.url, 'http://x').pathname).replace(/^\/+/, '') || 'index.html';
+        if (name === 'react-app.js') {
+            bundleReactApp()
+                .then((code) => res.writeHead(200, { 'content-type': TYPES['.js'], 'cache-control': 'no-store' }).end(code))
+                .catch((err) => res.writeHead(500, { 'content-type': 'text/plain' }).end(`Could not build the React fixture: ${err.message}`));
+            return;
+        }
         const file = path.join(SITE, name);
         if (!file.startsWith(SITE + path.sep) || !fs.existsSync(file)) {
             res.writeHead(404, { 'content-type': 'text/plain' }).end(`No fixture ${name}`);
@@ -168,6 +206,123 @@ async function windowShot(app, file) {
     return path.resolve(file);
 }
 
+/** Real input in the pane's visible page: what a user's own mouse or keyboard sends. */
+function paneInput(app, kind, arg, flags = {}) {
+    return app.evaluate(async ({ BrowserWindow, WebContentsView }, [k, a, f]) => {
+        const win = BrowserWindow.getAllWindows().find((w) => w.isVisible());
+        const view = win.contentView.children.find((v) => v instanceof WebContentsView && v.getVisible());
+        if (!view) throw new Error('No pane page is showing');
+        const wc = view.webContents;
+        if (k === 'key') {
+            const keyCode = { ArrowUp: 'Up', ArrowDown: 'Down', Escape: 'Escape', Enter: 'Return' }[a] || a;
+            wc.focus();
+            wc.sendInputEvent({ type: 'keyDown', keyCode });
+            wc.sendInputEvent({ type: 'keyUp', keyCode });
+            return { at: Date.now() };
+        }
+        const r = await wc.executeJavaScript(
+            `(() => { const el = document.querySelector(${JSON.stringify(a)}); if (!el) return null; el.scrollIntoView({ block: 'center' }); const b = el.getBoundingClientRect(); return { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2) }; })()`,
+            true,
+        );
+        if (!r) return { error: `no element ${a}` };
+        const modifiers = f.shift ? ['shift'] : [];
+        wc.sendInputEvent({ type: 'mouseMove', x: r.x, y: r.y, modifiers });
+        const at = Date.now();
+        wc.sendInputEvent({ type: 'mouseDown', x: r.x, y: r.y, button: 'left', clickCount: 1, modifiers });
+        wc.sendInputEvent({ type: 'mouseUp', x: r.x, y: r.y, button: 'left', clickCount: 1, modifiers });
+        return { at };
+    }, [kind, arg, flags]);
+}
+
+const readChips = (page) => page.evaluate(() => [...document.querySelectorAll('.element-chips:not(.is-sent) .element-chip')]
+    .map((li) => ({ ref: li.dataset.ref, text: li.innerText.replace(/\s+/g, ' ').trim() })));
+
+function median(xs) {
+    const s = [...xs].sort((a, b) => a - b);
+    return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+}
+
+async function setPicking(page, on) {
+    const s = await paneState(page);
+    if (s.picking !== on) await page.evaluate(() => window.gaiaBrowserPane.togglePicking());
+    await page.waitForFunction(async (want) => (await window.gaiaBrowserPane.getState()).picking === want, on, { polling: 10, timeout: 5000 });
+}
+
+async function clearChips(page) {
+    for (const button of await page.locator('.element-chips:not(.is-sent) [aria-label^="Remove"]').all()) await button.click();
+}
+
+/** Time from a real click on the Save button to its chip in the composer, each pick in a fresh picking run. */
+async function measurePick(ctx) {
+    const { app, page } = ctx;
+    await clearChips(page);
+    await setPicking(page, false);
+    await setPicking(page, true);
+    await page.evaluate(() => {
+        window.__chipAt = 0;
+        const list = () => document.querySelectorAll('.element-chips:not(.is-sent) .element-chip').length;
+        const obs = new MutationObserver(() => {
+            if (list() > 0 && !window.__chipAt) {
+                window.__chipAt = Date.now();
+                obs.disconnect();
+            }
+        });
+        obs.observe(document.body, { childList: true, subtree: true });
+    });
+    const { at, error } = await paneInput(app, 'click', 'button.primary');
+    if (error) throw new Error(error);
+    await page.waitForFunction(() => window.__chipAt > 0, null, { polling: 5, timeout: 10_000 });
+    const ms = (await page.evaluate(() => window.__chipAt)) - at;
+    await page.waitForFunction(() => !document.querySelector('.element-chips:not(.is-sent)')?.innerText.includes('Uploading'), null, { timeout: 10_000 });
+    await setPicking(page, false);
+    return ms;
+}
+
+/** Send to the first reply token in a new chat, and the prompt tokens the model reported. */
+async function measureSend(ctx, withChip, prompt, settleMs) {
+    const { app, page } = ctx;
+    await page.keyboard.press(NEW_CHAT);
+    await page.locator(CHAT_READY).first().waitFor({ state: 'visible' });
+    // A new chat warms the model with the system prompt (about 22 s here); a send during it waits for it.
+    await page.waitForTimeout(settleMs);
+    await clearChips(page);
+    if (withChip) {
+        await setPicking(page, true);
+        await paneInput(app, 'click', 'button.primary');
+        await page.waitForFunction(() => {
+            const chips = document.querySelector('.element-chips:not(.is-sent)');
+            return chips && chips.querySelector('.element-chip') && !chips.innerText.includes('Uploading');
+        }, null, { timeout: 10_000 });
+        await setPicking(page, false);
+    }
+    const box = page.locator(CHAT_READY).first();
+    await box.fill(prompt);
+    await page.evaluate(() => {
+        window.__firstTokenAt = 0;
+        const obs = new MutationObserver(() => {
+            const text = [...document.querySelectorAll('.msg-assistant .md-content')].map((n) => n.innerText).join('').trim();
+            if (text && !window.__firstTokenAt) {
+                window.__firstTokenAt = performance.now();
+                obs.disconnect();
+            }
+        });
+        obs.observe(document.body, { childList: true, subtree: true, characterData: true });
+        window.__sentAt = performance.now();
+    });
+    await box.press('Enter');
+    await page.waitForFunction(() => window.__firstTokenAt > 0, null, { polling: 10, timeout: 300_000 });
+    const ms = await page.evaluate(() => window.__firstTokenAt - window.__sentAt);
+    await page.locator('[aria-label="Stop"]').waitFor({ state: 'detached', timeout: 300_000 });
+    const sid = await app.evaluate(() => globalThis.qaPaneSession ?? null);
+    const msgs = await page.evaluate(async (id) => {
+        // A file:// window names its backend in ?api=, as utils/apiBase.ts reads it.
+        const api = location.protocol === 'file:' ? new URLSearchParams(location.search).get('api') : '/api';
+        return (await (await fetch(`${api}/sessions/${id}/messages`, { headers: { 'x-gaia-ui': '1' } })).json()).messages;
+    }, sid);
+    const answer = [...msgs].reverse().find((m) => m.role === 'assistant');
+    return { ms: Math.round(ms), inputTokens: answer && answer.stats ? answer.stats.input_tokens : null, sid };
+}
+
 // ── Commands run inside the launch process ─────────────────────────────
 
 function commands(ctx) {
@@ -255,6 +410,41 @@ function commands(ctx) {
             throw new Error(`No reply within ${seconds} s`);
         },
         shot: (file) => windowShot(app, file),
+        pick: async (selector, shift) => {
+            const res = await paneInput(app, 'click', selector, { shift: shift === 'shift' });
+            if (res.error) throw new Error(res.error);
+            return 'picked';
+        },
+        'page-key': async (key) => {
+            await paneInput(app, 'key', key);
+            return 'pressed';
+        },
+        chips: () => readChips(page),
+        attach: async (file) => {
+            await page.locator('.composer input[type="file"]').first().setInputFiles(path.resolve(file));
+            return 'attached';
+        },
+        'perf-pick': async (runs = '20') => {
+            const ms = [];
+            for (let i = 0; i < Number(runs); i += 1) ms.push(await measurePick(ctx));
+            await clearChips(page);
+            return { runs: ms, median: median(ms) };
+        },
+        'perf-send': async (runs = '5', prompt = 'Reply with one short sentence: what is on this settings page?', settle = '35') => {
+            const rows = [];
+            for (let i = 0; i < Number(runs); i += 1) {
+                rows.push({ chip: false, ...(await measureSend(ctx, false, prompt, Number(settle) * 1000)) });
+                rows.push({ chip: true, ...(await measureSend(ctx, true, prompt, Number(settle) * 1000)) });
+            }
+            const pick = (c) => rows.filter((r) => r.chip === c);
+            return {
+                rows,
+                medianNoChip: median(pick(false).map((r) => r.ms)),
+                medianOneChip: median(pick(true).map((r) => r.ms)),
+                medianTokensNoChip: median(pick(false).map((r) => r.inputTokens ?? 0)),
+                medianTokensOneChip: median(pick(true).map((r) => r.inputTokens ?? 0)),
+            };
+        },
         'perf-open-pane': async () => {
             ctx.runs = (ctx.runs || 0) + 1;
             return { ms: await measureOpenPane(page, fixtureUrl, ctx.runs) };
@@ -344,12 +534,17 @@ async function main() {
         console.log(`perf launch ${launched.launchMs} ms`);
         return;
     }
+    if (cmd === 'perf' && (rest[0] === 'pick' || rest[0] === 'send')) {
+        const out = await send(`perf-${rest[0]}`, rest.slice(1));
+        console.log(JSON.stringify(out, null, 2));
+        return;
+    }
     if (cmd === 'perf' && rest[0] === 'open-pane') {
         const { ms } = await send('perf-open-pane', []);
         console.log(`perf open-pane ${ms} ms`);
         return;
     }
-    if (!cmd) fail('give a command: launch, state, session, shortcut, open, click, page-click, user-click, drag, type, key, chat, reply, shot, perf, quit');
+    if (!cmd) fail('give a command: launch, state, session, shortcut, open, click, page-click, user-click, pick, page-key, chips, attach, drag, type, key, chat, reply, shot, perf, quit');
     const result = await send(cmd, rest);
     console.log(typeof result === 'string' ? result : JSON.stringify(result, null, 2));
 }

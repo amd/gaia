@@ -19,6 +19,7 @@ const { attachTabPolicy, classifyNavigation, isApprovalFreeHost } = require("./n
 const { TabCdp } = require("./cdp-session.cjs");
 const { BridgeError } = require("./bridge-error.cjs");
 const input = require("./input.cjs");
+const { PickerSession } = require("./picker.cjs");
 
 /** @typedef {import("./contract").TabId} TabId */
 /** @typedef {import("./contract").TabState} TabState */
@@ -80,15 +81,31 @@ function withTimeout(promise, ms, what) {
   return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
 
-/** True for the key that toggles the pane: Cmd or Ctrl, Shift and B. */
-function isToggleShortcut(input) {
+function isShortcut(input, key) {
   return (
     input.type === "keyDown" &&
     (input.meta || input.control) &&
     input.shift &&
     !input.alt &&
-    input.key.toLowerCase() === "b"
+    input.key.toLowerCase() === key
   );
+}
+
+/** True for the key that toggles the pane: Cmd or Ctrl, Shift and B. */
+function isToggleShortcut(input) {
+  return isShortcut(input, "b");
+}
+
+/** True for the key that starts or ends picking elements: Cmd or Ctrl, Shift and S. */
+function isPickShortcut(input) {
+  return isShortcut(input, "s");
+}
+
+/** A crop as a PNG data URL no wider than maxWidth. */
+function encodeCrop(png, maxWidth) {
+  let image = nativeImage.createFromBuffer(png);
+  if (image.getSize().width > maxWidth) image = image.resize({ width: maxWidth });
+  return image.toPNG().toString("base64");
 }
 
 /**
@@ -124,7 +141,9 @@ class PaneHost {
    *   onToggleRequest: () => void,
    *   onShowRequest: () => void,
    *   openExternal: (url: string) => void,
+   *   onPicked: (event: import("./contract").PickEvent) => void,
    *   createCdp?: (webContents: Electron.WebContents) => TabCdp,
+   *   createPicker?: (deps: ConstructorParameters<typeof PickerSession>[0]) => PickerSession,
    * }} deps
    */
   constructor(deps) {
@@ -142,6 +161,10 @@ class PaneHost {
     this.disposed = false;
     /** The chat session the window shows, reported by the renderer; the bridge's attach answers from it. */
     this.activeSessionId = null;
+    /** @type {{ tabId: TabId, session: PickerSession } | null} */
+    this.picker = null;
+    this.pickRuns = 0;
+    this.nextPickRef = 1;
     /** @type {TabId} */
     this.activeTabId = this.addTab();
   }
@@ -154,6 +177,7 @@ class PaneHost {
       tabs: [...this.tabs.values()].map((t) => ({ ...t.state })),
       activeTabId: this.activeTabId,
       recent: this.recent.slice(),
+      picking: this.picker !== null,
     };
   }
 
@@ -170,6 +194,7 @@ class PaneHost {
   /** @param {boolean} visible */
   setVisible(visible) {
     this.visible = visible;
+    if (!visible) this.stopPicking();
     this.syncViews();
     this.publish();
   }
@@ -201,6 +226,7 @@ class PaneHost {
    * @returns {TabId}
    */
   openTab(url) {
+    this.stopPicking();
     const id = this.addTab();
     this.activeTabId = id;
     if (url !== null) this.navigate(id, url);
@@ -214,6 +240,7 @@ class PaneHost {
     const order = [...this.tabs.keys()];
     const index = order.indexOf(id);
     const tab = this.requireTab(id);
+    if (this.picker && this.picker.tabId === id) this.stopPicking();
     this.destroyView(tab.view);
     this.tabs.delete(id);
     if (this.tabs.size === 0) {
@@ -229,6 +256,7 @@ class PaneHost {
   /** @param {TabId} id */
   selectTab(id) {
     this.requireTab(id);
+    if (id !== this.activeTabId) this.stopPicking();
     this.activeTabId = id;
     this.syncViews();
     this.publish();
@@ -337,6 +365,55 @@ class PaneHost {
       throw new Error(`Tab ${id} has no web page to open in the system browser.`);
     }
     this.deps.openExternal(url);
+  }
+
+  // ── Element picker ────────────────────────────────────────────────────
+
+  /** Start picking elements on the tab the user is looking at, or end it if it runs. */
+  async togglePicking() {
+    if (this.picker) {
+      this.stopPicking();
+      return;
+    }
+    const tab = this.activeTab();
+    if (!tab.view || tab.state.url === null) {
+      throw new Error("There is no page to pick from: open a page in the browser pane first.");
+    }
+    const wc = tab.view.webContents;
+    const run = ++this.pickRuns;
+    const session = (this.deps.createPicker || ((d) => new PickerSession(d)))({
+      cdp: tab.cdp,
+      wc,
+      allocateRef: () => `p${this.nextPickRef++}`,
+      encodeCrop,
+      onSelection: (elements) => this.deps.onPicked({ run, elements }),
+      onEnd: () => {
+        if (this.picker && this.picker.session === session) {
+          this.picker = null;
+          this.publish();
+        }
+      },
+    });
+    this.picker = { tabId: tab.state.id, session };
+    this.publish();
+    try {
+      await session.start();
+    } catch (err) {
+      this.picker = null;
+      this.publish();
+      throw new Error(`Could not start picking elements on ${tab.state.url}: ${err.message}`);
+    }
+    // Arrow keys and Escape reach the picker only when the page has focus.
+    wc.focus();
+  }
+
+  /** End picking, keeping the chips already made. */
+  stopPicking() {
+    if (!this.picker) return;
+    const { session } = this.picker;
+    this.picker = null;
+    this.publish();
+    session.stop().catch((err) => console.error(`[browser-pane] Ending the element picker failed: ${err.message}`));
   }
 
   // ── Agent ops (the bridge) ────────────────────────────────────────────
@@ -714,6 +791,7 @@ class PaneHost {
   }
 
   dispose() {
+    this.stopPicking();
     this.disposed = true;
     for (const tab of this.tabs.values()) this.destroyView(tab.view);
     this.tabs.clear();
@@ -845,6 +923,7 @@ class PaneHost {
     }));
     wc.on("did-start-navigation", update((details) => {
       if (!details.isMainFrame || details.isSameDocument) return;
+      if (this.picker && this.picker.tabId === s.id) this.stopPicking();
       s.notice = null;
       tab.cdp.onNavigationStarted();
     }));
@@ -889,9 +968,13 @@ class PaneHost {
       if (!this.disposed && this.tabs.has(s.id)) this.noteUserInput(tab);
     });
     wc.on("before-input-event", (event, input) => {
-      if (!isToggleShortcut(input)) return;
-      event.preventDefault();
-      this.deps.onToggleRequest();
+      if (isToggleShortcut(input)) {
+        event.preventDefault();
+        this.deps.onToggleRequest();
+      } else if (isPickShortcut(input)) {
+        event.preventDefault();
+        this.togglePicking().catch((err) => console.error(`[browser-pane] ${err.message}`));
+      }
     });
   }
 
@@ -923,6 +1006,7 @@ module.exports = {
   PaneHost,
   USER_PAUSE_MS,
   inScope,
+  isPickShortcut,
   isToggleShortcut,
   toViewBounds,
 };

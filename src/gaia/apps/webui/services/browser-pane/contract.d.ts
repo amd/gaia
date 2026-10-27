@@ -60,6 +60,8 @@ export interface PaneState {
   tabs: TabState[];
   activeTabId: TabId;
   recent: RecentPage[];
+  /** True while the user picks elements on the active tab (Cmd+Shift+S). */
+  picking: boolean;
 }
 
 /** The placeholder's rect in CSS pixels, from getBoundingClientRect. */
@@ -71,6 +73,62 @@ export interface CssRect {
 }
 
 export type HistoryAction = "back" | "forward" | "reload" | "stop";
+
+// ─── Element picker ─────────────────────────────────────────────────────
+
+/** The computed styles a pick carries. Mirrors STYLE_PROPS in picker.cjs and gaia/browser/picked.py. */
+export type PickedStyleProp =
+  | "display" | "position" | "width" | "height" | "margin" | "padding" | "gap"
+  | "color" | "background-color" | "font-family" | "font-size" | "font-weight" | "line-height"
+  | "border" | "border-radius" | "box-shadow" | "opacity" | "z-index";
+
+/** A React component from the page's main world; source only where the dev build stamps it. */
+export interface PickedComponent {
+  name: string;
+  source: { file: string; line: number } | null;
+}
+
+/** One element the user picked, as main builds it (picker.cjs). */
+export interface PickedElement {
+  /** "p1", "p2" ...: stamped on the element as data-gaia-pick, so browser_click("p1") clicks it. */
+  ref: string;
+  url: string;
+  title: string;
+  tag: string;
+  /** tag.class, as the outline's label shows it. */
+  label: string;
+  /** Shortest unique: #id, [data-testid], then a tag:nth-of-type path. */
+  selector: string;
+  role: string;
+  name: string;
+  text: string;
+  /** CSS px, relative to the viewport when picked. */
+  rect: CssRect;
+  component: PickedComponent | null;
+  /** At most 1536 characters; descendants past depth 2 folded to a comment. */
+  outerHTML: string;
+  /** Only values that differ from the usual default. */
+  styles: Partial<Record<PickedStyleProp, string>>;
+  /** PNG crop, base64, at most 800 px wide; null when it had no size or could not be taken. */
+  crop: string | null;
+}
+
+/**
+ * One chip as the chat request carries it (`page_elements`), validated by
+ * gaia/browser/picked.py. A toggle that is off sends null; the crop travels
+ * as an uploaded file.
+ */
+export interface PageElementWire extends Omit<PickedElement, "crop" | "outerHTML" | "styles"> {
+  outerHTML: string | null;
+  styles: Partial<Record<PickedStyleProp, string>> | null;
+  cropUrl: string | null;
+}
+
+/** The current selection of one picking run. A later event for the same run replaces it. */
+export interface PickEvent {
+  run: number;
+  elements: PickedElement[];
+}
 
 /** Commands main sends the window: the toggle shortcut pressed inside a pane page, or the agent opening a page. */
 export type PaneCommand = "toggle" | "show";
@@ -99,6 +157,9 @@ export interface GaiaBrowserPaneAPI {
   setControl(tabId: TabId, control: TabControl): Promise<void>;
   /** The Responsive control. null fills the pane again and lets the agent choose. */
   setViewport(tabId: TabId, choice: ViewportChoice | null): Promise<void>;
+  /** Select element (Cmd+Shift+S): starts picking on the active tab, or ends it. */
+  togglePicking(): Promise<void>;
+  onPicked(cb: (event: PickEvent) => void): () => void;
 }
 
 // ─── Bridge (the agent, in Python, to main) ─────────────────────────────

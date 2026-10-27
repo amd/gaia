@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
-import { ArrowLeft, ArrowRight, Ellipsis, Eraser, ExternalLink, Lock, LockOpen, MonitorSmartphone, PanelRightClose, Plus, RotateCcwSquare, RotateCw, SquareCode, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Ellipsis, Eraser, ExternalLink, Lock, LockOpen, MonitorSmartphone, PanelRightClose, Plus, RotateCcwSquare, RotateCw, SquareCode, SquareDashedMousePointer, X } from 'lucide-react';
 import { Popover } from '../Popover';
 import { CLAIMS_ESCAPE } from '../../hooks/useEscapeToClose';
 import { log } from '../../utils/logger';
@@ -11,6 +11,7 @@ import { normalizeAddress } from './address';
 import type { GaiaBrowserPaneAPI, PaneState, TabState, ViewportChoice } from '../../../services/browser-pane/contract';
 
 export const TOGGLE_SHORTCUT = 'Mod+Shift+B';
+export const PICK_SHORTCUT = 'Mod+Shift+S';
 
 /** Run a pane call; its failure is a bug or a closed tab, so it is logged rather than shown. */
 function run(what: string, call: Promise<unknown>): void {
@@ -117,6 +118,17 @@ export function BrowserToolbar({ pane, api, onClosePane, addressRef }: BrowserTo
                     inputRef={addressRef}
                     onSubmit={(url) => run('navigate', api.navigate(active.id, url))}
                 />
+                <button
+                    type="button"
+                    className={`btn-icon-sm${pane.picking ? ' active' : ''}`}
+                    aria-label="Select element"
+                    aria-pressed={pane.picking}
+                    title={`${pane.picking ? 'Stop selecting' : 'Select an element to send to the chat'} (${formatShortcut(PICK_SHORTCUT)})`}
+                    disabled={!hasPage}
+                    onClick={() => run('select element', api.togglePicking())}
+                >
+                    <SquareDashedMousePointer size={15} />
+                </button>
                 <button
                     type="button"
                     className={`btn-icon-sm${active.devToolsOpen ? ' active' : ''}`}
@@ -404,6 +416,18 @@ function ResponsiveMenu({ api, tab }: { api: GaiaBrowserPaneAPI; tab: TabState }
 }
 
 /** What the agent is doing in this tab, with Pause and Resume. Clicking the page itself also pauses it. */
+/** While picking: how to pick, and the way out. */
+export function PickStrip({ api }: { api: GaiaBrowserPaneAPI }) {
+    return (
+        <div className="bp-agent-strip is-picking" role="status">
+            <span>Click an element to send it to the chat. Shift-click adds, ↑ ↓ walk to parent and child, Esc ends.</span>
+            <button type="button" className="bp-chip" onClick={() => run('stop selecting', api.togglePicking())}>
+                Done
+            </button>
+        </div>
+    );
+}
+
 export function AgentStrip({ tab, api }: { tab: TabState; api: GaiaBrowserPaneAPI }) {
     if (tab.control === 'private') {
         return (

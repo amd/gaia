@@ -258,6 +258,21 @@ def message_to_response(msg: dict) -> MessageResponse:
                 exc,
             )
 
+    page_elements = None
+    if msg.get("page_elements"):
+        from pydantic import ValidationError
+
+        from gaia.browser.picked import PageElement
+
+        try:
+            page_elements = [PageElement(**e) for e in msg["page_elements"]]
+        except (ValidationError, TypeError) as exc:
+            logger.warning(
+                "Message %s picked elements do not match the schema: %s",
+                msg.get("id"),
+                exc,
+            )
+
     return MessageResponse(
         id=msg["id"],
         session_id=msg["session_id"],
@@ -268,6 +283,7 @@ def message_to_response(msg: dict) -> MessageResponse:
         agent_steps=agent_steps,
         stats=stats,
         turn_summary=turn_summary,
+        page_elements=page_elements,
     )
 
 

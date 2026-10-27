@@ -126,6 +126,7 @@ const PAGE: PaneState = {
     }],
     activeTabId: TAB,
     recent: [],
+    picking: false,
 };
 
 function paneApi(state: PaneState) {
@@ -141,6 +142,7 @@ function paneApi(state: PaneState) {
         openTab: vi.fn(), closeTab: vi.fn(), selectTab: vi.fn(),
         navigate: vi.fn(() => Promise.resolve()), history: vi.fn(), toggleDevTools: vi.fn(),
         clearBrowsingData: vi.fn(), openExternal: vi.fn(), setActiveSession: vi.fn(),
+        togglePicking: vi.fn(() => Promise.resolve()), onPicked: vi.fn(() => () => {}),
     };
     return {
         api: api as unknown as GaiaBrowserPaneAPI,

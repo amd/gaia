@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from gaia.browser.picked import MAX_ELEMENTS as _MAX_PAGE_ELEMENTS
+from gaia.browser.picked import PageElement
 from gaia.version import __version__ as _gaia_version
 
 # ── System ──────────────────────────────────────────────────────────────────
@@ -471,6 +473,10 @@ class ChatRequest(BaseModel):
     document_ids: Optional[List[str]] = None
     stream: bool = True
     agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    #: Elements the user picked in the browser pane (the composer's chips).
+    page_elements: Optional[List[PageElement]] = Field(
+        None, max_length=_MAX_PAGE_ELEMENTS
+    )
 
 
 class SourceInfo(BaseModel):
@@ -675,6 +681,7 @@ class MessageResponse(BaseModel):
     agent_steps: Optional[List[AgentStepResponse]] = None
     stats: Optional[InferenceStatsResponse] = None
     turn_summary: Optional[TurnSummaryResponse] = None
+    page_elements: Optional[List[PageElement]] = None
 
 
 class MessageListResponse(BaseModel):

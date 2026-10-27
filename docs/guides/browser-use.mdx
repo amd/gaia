@@ -50,7 +50,7 @@ Signing in is a hand-off, not something GAIA does for you:
 |---|---|---|
 | `browser_open(url)` | Open a page, return its elements | no |
 | `browser_snapshot()` | Re-read the current page | no |
-| `browser_click(ref)` | Click an element | only when signed in |
+| `browser_click(ref)` | Click an element; `ref` is a snapshot ref like `g2e5`, or `p1` for an element the user [picked in the pane](/guides/agent-ui#send-page-elements-to-the-chat) | only when signed in |
 | `browser_type(ref, text, press_enter)` | Fill a field or pick an option | only when signed in |
 | `browser_login(url)` | Hand over for sign-in, then save the session | always |
 | `browser_sessions()` | List sites with a saved sign-in | no |
@@ -177,6 +177,10 @@ The second one is easy to miss; the Python package alone has no browser.
 
 **"Element 'e7' is not on the page any more"** — the page changed. The agent
 should call `browser_snapshot()` for fresh refs. Expected on a busy page.
+
+**"Element 'p1' the user picked is not on this page any more"** — the page
+reloaded or navigated since the pick, or it was picked in another tab. Pick the
+element again.
 
 **Sign-in did not stick** — some sites issue short-lived sessions. Run
 `browser_login(url)` again; the old session is replaced.

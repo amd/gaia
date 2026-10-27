@@ -4,6 +4,7 @@
 /** Types shared across the GAIA Agent UI frontend. */
 
 import type { TurnSummaryResponse } from './api.gen';
+import type { PageElementWire } from '../../services/browser-pane/contract';
 
 export interface Session {
     id: string;
@@ -442,6 +443,8 @@ export interface Message {
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */
     turnSummary?: TurnSummary;
+    /** Elements the user picked in the browser pane and sent with this message. */
+    page_elements?: PageElementWire[] | null;
 }
 
 /** What one turn used, wrote, and sent off this PC (`done.turn_summary`). */

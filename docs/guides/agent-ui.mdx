@@ -632,6 +632,31 @@ asks. Downloads always ask where to save. Only http and https pages open:
 is GAIA's own local service. While a dialog or menu is open over the pane, the
 page shows as a still picture and comes back live when you close it.
 
+### Send page elements to the chat
+
+Point at part of a page and ask about it. Press **Cmd+Shift+S** (macOS) or
+**Ctrl+Shift+S** (Windows and Linux), or click **Select element** in the pane's
+toolbar, then click an element in the page. It gets an outline labelled with
+its tag and class, and a chip such as `button.primary "Save"` appears above the
+message box.
+
+- **Shift-click** adds more elements, up to eight per message.
+- **Up and Down arrows** move the last pick to its parent and back to a child.
+- **Escape**, **Done** on the strip, or the shortcut again ends picking.
+  Clicks on the page do nothing while you pick.
+- **Each chip has HTML, Styles and Screenshot toggles.** What you switch off is
+  not sent. The selector, role, text and page address always go. Screenshot
+  starts off, because GAIA then studies the picture, which makes the reply
+  slower; turn it on when how the element looks matters.
+- **On a React dev build** the chip also names the component, and where the
+  build records it, its file and line.
+
+When you send, GAIA gets the elements as page data, never as instructions: text
+on the page like "ignore your instructions" is something GAIA reads about, not
+something it does. The message keeps its chips, so you can see what you sent.
+GAIA can click a picked element directly, so "click the button I picked" works.
+A pick lasts until the page reloads or navigates; after that, pick it again.
+
 ### GAIA uses the pane
 
 GAIA can open pages in the pane, read the one you're looking at, and click,
@@ -823,6 +848,7 @@ Sessions let you organize conversations by topic. They sync between the CLI (`ga
 | `Ctrl+B` | Show or hide the sidebar |
 | `Ctrl+,` | Settings |
 | `Ctrl+Shift+B` | Show or hide the [browser pane](#browser-pane) (desktop app) |
+| `Ctrl+Shift+S` | [Select an element](#send-page-elements-to-the-chat) in the browser pane |
 
 On macOS, press `⌘` where this table says `Ctrl`; the app labels its shortcuts that way there.
 

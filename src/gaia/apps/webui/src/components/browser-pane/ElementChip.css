@@ -1,0 +1,116 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.element-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.element-chips.is-sent {
+    margin-bottom: 6px;
+}
+
+.element-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    min-width: 0;
+    padding: 3px 4px 3px 6px;
+    border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: var(--fs-label);
+}
+
+.element-chips.is-sent .element-chip {
+    padding-right: 8px;
+}
+
+.element-chip.has-error {
+    background: var(--danger-dim);
+}
+
+.element-chip-thumb {
+    width: 22px;
+    height: 22px;
+    object-fit: cover;
+    border-radius: var(--radius-xs);
+    background: var(--bg-input);
+}
+
+.element-chip-text {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.element-chip-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+.element-chip-component {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.element-chip-parts {
+    display: inline-flex;
+    gap: 2px;
+}
+
+.element-chip-part {
+    height: 20px;
+    padding: 0 5px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-xs);
+    background: transparent;
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    font-size: 11px;
+    text-decoration: line-through;
+    cursor: pointer;
+}
+
+.element-chip-part[aria-pressed='true'] {
+    border-color: color-mix(in srgb, var(--text-muted) 40%, transparent);
+    color: var(--text-primary);
+    text-decoration: none;
+}
+
+.element-chip-part:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+
+.element-chip-part:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.element-chip-state {
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.element-chip.has-error .element-chip-state {
+    color: var(--danger);
+}
+
+.element-chip .composer-icon-btn {
+    width: 22px;
+    height: 22px;
+}

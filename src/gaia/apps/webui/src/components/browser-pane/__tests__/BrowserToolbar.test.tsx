@@ -5,7 +5,7 @@ import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { AgentStrip, BrowserToolbar } from '../BrowserToolbar';
+import { AgentStrip, BrowserToolbar, PickStrip } from '../BrowserToolbar';
 import type { GaiaBrowserPaneAPI, PaneState, TabId, TabState } from '../../../../services/browser-pane/contract';
 
 const id = (s: string) => s as TabId;
@@ -30,7 +30,7 @@ function tab(over: Partial<TabState> = {}): TabState {
 }
 
 function pane(tabs: TabState[], active = tabs[0].id): PaneState {
-    return { visible: true, occluded: false, tabs, activeTabId: active, recent: [] };
+    return { visible: true, occluded: false, tabs, activeTabId: active, recent: [], picking: false };
 }
 
 function fakeApi(): GaiaBrowserPaneAPI {
@@ -53,6 +53,8 @@ function fakeApi(): GaiaBrowserPaneAPI {
         setActiveSession: vi.fn(),
         setControl: ok(),
         setViewport: ok(),
+        togglePicking: ok(),
+        onPicked: vi.fn(() => () => {}),
     } as unknown as GaiaBrowserPaneAPI;
 }
 
@@ -235,5 +237,28 @@ describe('AgentStrip', () => {
     it('shows nothing while GAIA is idle in a shared tab', () => {
         strip({});
         expect(screen.queryByRole('status')).toBeNull();
+    });
+});
+
+describe('Select element', () => {
+    it('has nothing to pick on a new tab page', () => {
+        renderToolbar(pane([tab({ url: null, title: 'New tab' })]));
+        expect(screen.getByRole('button', { name: 'Select element' })).toBeDisabled();
+    });
+
+    it('starts and ends picking, and shows when it is on', async () => {
+        const { api } = renderToolbar({ ...pane([tab()]), picking: true });
+        const button = screen.getByRole('button', { name: 'Select element' });
+        expect(button).toHaveAttribute('aria-pressed', 'true');
+        await userEvent.click(button);
+        expect(api.togglePicking).toHaveBeenCalledTimes(1);
+    });
+
+    it('the strip says how to pick, and Done ends it', async () => {
+        const api = fakeApi();
+        render(<PickStrip api={api} />);
+        expect(screen.getByRole('status')).toHaveTextContent('Shift-click adds');
+        await userEvent.click(screen.getByRole('button', { name: 'Done' }));
+        expect(api.togglePicking).toHaveBeenCalledTimes(1);
     });
 });

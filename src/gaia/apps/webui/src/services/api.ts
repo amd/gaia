@@ -7,6 +7,7 @@ import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, T
 import type { ModelServerInfo } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import type { SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
+import type { PageElementWire } from '../../services/browser-pane/contract';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -578,10 +579,16 @@ const AGENT_EVENT_TYPES = new Set([
     'followup_taken', 'followup_returned', 'context_usage',
 ]);
 
+/** What a send carries besides its text and callbacks. */
+export interface SendExtras {
+    /** Elements picked in the browser pane, sent as `page_elements`. */
+    pageElements?: PageElementWire[];
+}
+
 export function sendMessageStream(
     sessionId: string,
     message: string,
-    onChunkOrCallbacks: ((event: StreamEvent) => void) | StreamCallbacks,
+    onChunkOrCallbacks: ((event: StreamEvent) => void) | (StreamCallbacks & SendExtras),
     onDone?: (event: StreamEvent) => void,
     onError?: (error: Error) => void,
     agentType?: string,
@@ -613,6 +620,9 @@ export function sendMessageStream(
             session_id: sessionId,
             message,
             stream: true,
+            ...(typeof onChunkOrCallbacks !== 'function' && onChunkOrCallbacks.pageElements
+                ? { page_elements: onChunkOrCallbacks.pageElements }
+                : {}),
             ...(agentType ? { agent_type: agentType } : {}),
             ...(device ? { device } : {}),
         }),

@@ -34,6 +34,7 @@ import { OfflineNotice } from './session-panel/OfflineNotice';
 import { ExportErrorBar } from './ExportErrorBar';
 import { useSessionPanelStore } from '../stores/sessionPanelStore';
 import { useAttachments } from '../hooks/useAttachments';
+import { fromApiMessages } from '../utils/apiMessages';
 import { useAnswerComparison } from '../hooks/useAnswerComparison';
 import { useContextUsage } from '../hooks/useContextUsage';
 import { useJumpToMessage } from '../hooks/useJumpToMessage';
@@ -202,16 +203,6 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
         default:
             return null;
     }
-}
-
-/** Messages as the API sends them, with steps and stats under the names the view reads. */
-function fromApiMessages(raw: unknown[] | undefined): Message[] {
-    return (raw || []).map((m: any) => ({
-        ...m,
-        agentSteps: m.agentSteps || m.agent_steps || undefined,
-        stats: m.stats || m.inference_stats || undefined,
-        turnSummary: m.turnSummary || m.turn_summary || undefined,
-    }));
 }
 
 function policyReceiptAnchor(receiptId: string): string {
@@ -660,6 +651,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // Build message text with attachment references
         let messageText = text;
         let optimisticUser: Message | null = null;
+        const page_elements = reattach || fromQueue ? undefined : attach.takeElements();
         if (!reattach) {
             messageText = fromQueue ? text : attach.compose(text);
 
@@ -681,6 +673,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 content: messageText,
                 created_at: new Date().toISOString(),
                 rag_sources: null,
+                page_elements,
             };
             addMessage(userMsg);
             optimisticUser = userMsg;
@@ -1403,7 +1396,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         const controller = reattach
             ? api.attachToRun(sessionId, streamCallbacks)
-            : api.sendMessageStream(sessionId, messageText, streamCallbacks);
+            : api.sendMessageStream(sessionId, messageText, { ...streamCallbacks, pageElements: page_elements });
 
         streamController = controller;
         abortRef.current = controller;

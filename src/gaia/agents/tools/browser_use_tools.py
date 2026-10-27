@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.tool_grants import SITE_ARG
 from gaia.browser.errors import BrowserError, PaneSignInByHand
+from gaia.browser.snapshot import is_pick_ref
 from gaia.logger import get_logger
 
 if TYPE_CHECKING:
@@ -454,8 +455,24 @@ class BrowserUseToolsMixin:
         """The label of the control a click would press, when that label names an irreversible action."""
         if tool_name != "browser_click":
             return ""
-        label = self._element_label(str((tool_args or {}).get("ref") or ""))
+        ref = str((tool_args or {}).get("ref") or "")
+        if is_pick_ref(ref):
+            label = self._pick_label(ref)
+            if label is None:
+                return "an element the user picked (its label could not be read)"
+        else:
+            label = self._element_label(ref)
         return label if self._looks_irreversible(label) else ""
+
+    def _pick_label(self, ref: str) -> Optional[str]:
+        """The live label of an element the user picked, or None when the pane can't say."""
+        try:
+            pane = self._pane()
+            return pane.pick_label(ref) if pane is not None else ""
+        except BrowserError as e:
+            # Fails closed: the caller treats an unreadable label as irreversible.
+            logger.warning("Could not read the label of picked element %s: %s", ref, e)
+            return None
 
     @staticmethod
     def _looks_irreversible(label: str) -> bool:
@@ -755,8 +772,8 @@ class BrowserUseToolsMixin:
             """Click an element on the current page.
 
             Args:
-                ref: Element ref from browser_snapshot (e.g. 'e7'), not a CSS
-                     selector and not screen coordinates
+                ref: Element ref from browser_snapshot (e.g. 'e7'), or 'p1'
+                     for an element the user picked. Not a CSS selector
             """
             return _answer("browser_click", _click, ref)
 

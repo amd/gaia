@@ -726,6 +726,21 @@
         "title": "Message",
         "type": "string"
       },
+      "page_elements": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/components/schemas/PageElement"
+            },
+            "maxItems": 8,
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Page Elements"
+      },
       "session_id": {
         "title": "Session Id",
         "type": "string"
@@ -819,6 +834,32 @@
       "message"
     ],
     "title": "CommitRequest",
+    "type": "object"
+  },
+  "Component": {
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "maxLength": 120,
+        "minLength": 1,
+        "title": "Name",
+        "type": "string"
+      },
+      "source": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SourceLoc"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "title": "Component",
     "type": "object"
   },
   "ConfigureRequest": {
@@ -2532,6 +2573,20 @@
         "title": "Id",
         "type": "integer"
       },
+      "page_elements": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/components/schemas/PageElement"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Page Elements"
+      },
       "rag_sources": {
         "anyOf": [
           {
@@ -2773,6 +2828,122 @@
     "title": "OpenFileRequest",
     "type": "object"
   },
+  "PageElement": {
+    "additionalProperties": false,
+    "description": "One composer chip as the renderer sends it. A toggle that is off sends null.",
+    "properties": {
+      "component": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Component"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "cropUrl": {
+        "anyOf": [
+          {
+            "pattern": "^/api/files/uploads/[^/\\\\\\s)]+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Cropurl"
+      },
+      "label": {
+        "maxLength": 120,
+        "title": "Label",
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 200,
+        "title": "Name",
+        "type": "string"
+      },
+      "outerHTML": {
+        "anyOf": [
+          {
+            "maxLength": 1536,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Outerhtml"
+      },
+      "rect": {
+        "$ref": "#/components/schemas/PickedRect"
+      },
+      "ref": {
+        "pattern": "^p\\d{1,6}$",
+        "title": "Ref",
+        "type": "string"
+      },
+      "role": {
+        "maxLength": 40,
+        "title": "Role",
+        "type": "string"
+      },
+      "selector": {
+        "maxLength": 500,
+        "title": "Selector",
+        "type": "string"
+      },
+      "styles": {
+        "anyOf": [
+          {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Styles"
+      },
+      "tag": {
+        "pattern": "^[a-z][a-z0-9-]{0,39}$",
+        "title": "Tag",
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 300,
+        "title": "Text",
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 300,
+        "title": "Title",
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 2000,
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ref",
+      "url",
+      "title",
+      "tag",
+      "label",
+      "selector",
+      "role",
+      "name",
+      "text",
+      "rect"
+    ],
+    "title": "PageElement",
+    "type": "object"
+  },
   "ParseScheduleRequest": {
     "description": "Request to parse a natural language schedule description.",
     "properties": {
@@ -2905,6 +3076,37 @@
       "mode"
     ],
     "title": "PermissionModeRequest",
+    "type": "object"
+  },
+  "PickedRect": {
+    "additionalProperties": false,
+    "properties": {
+      "height": {
+        "minimum": 0.0,
+        "title": "Height",
+        "type": "number"
+      },
+      "width": {
+        "minimum": 0.0,
+        "title": "Width",
+        "type": "number"
+      },
+      "x": {
+        "title": "X",
+        "type": "number"
+      },
+      "y": {
+        "title": "Y",
+        "type": "number"
+      }
+    },
+    "required": [
+      "x",
+      "y",
+      "width",
+      "height"
+    ],
+    "title": "PickedRect",
     "type": "object"
   },
   "PreflightReport": {
@@ -3780,6 +3982,27 @@
       "score"
     ],
     "title": "SourceInfo",
+    "type": "object"
+  },
+  "SourceLoc": {
+    "additionalProperties": false,
+    "properties": {
+      "file": {
+        "maxLength": 300,
+        "title": "File",
+        "type": "string"
+      },
+      "line": {
+        "minimum": 0.0,
+        "title": "Line",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "file",
+      "line"
+    ],
+    "title": "SourceLoc",
     "type": "object"
   },
   "StartAgentServerRequest": {

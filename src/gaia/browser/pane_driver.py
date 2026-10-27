@@ -32,10 +32,19 @@ from gaia.browser.snapshot import (
     _FIND_JS,
     _SNAPSHOT_JS,
     in_frame_ref,
+    is_pick_ref,
     merge_frames,
     ref_selector,
     snapshot_args,
 )
+
+# The label the confirmation gate checks before a click on a picked element.
+_PICK_LABEL_JS = """(sel) => {
+  const el = document.querySelector(sel);
+  if (!el) return "";
+  const label = el.getAttribute("aria-label") || el.innerText || el.value || el.getAttribute("title") || "";
+  return String(label).replace(/\\s+/g, " ").trim().slice(0, 120);
+}"""
 
 LogKind = Literal["console", "network"]
 
@@ -188,6 +197,25 @@ class PaneDriver:
         res = self._call("origin", {"tabId": None})
         return bool(res["hasCookies"]) and res["origin"] == origin
 
+    def pick_label(self, ref: str) -> str:
+        """The visible label of the element the user picked as ``ref``, or ""."""
+        res = self._call(
+            "evaluate",
+            {
+                "tabId": None,
+                "script": _PICK_LABEL_JS,
+                "args": ref_selector(ref),
+                "frames": "main",
+                **self._scope(),
+            },
+        )
+        main = res["frames"][0]
+        if not main["ok"]:
+            raise BrowserError(
+                f"Could not read the picked element in the browser pane: {main['error']}"
+            )
+        return str(main["value"] or "")
+
     def screenshot(self, ref: Optional[str] = None, *, max_width: int = 1280) -> Shot:
         """The visible part of the page, or one element of it."""
         clip = self._target(ref) if ref else None
@@ -288,6 +316,9 @@ class PaneDriver:
     def _target(self, ref: str) -> Dict[str, Any]:
         """Where ``ref`` lives: its frame and the selector the snapshot stamped on it."""
         ref_selector(ref)
+        # The picker runs in the main frame only.
+        if is_pick_ref(ref):
+            return {"frameId": None, "selector": ref_selector(ref)}
         if ref not in self._frames_by_ref and not ref.startswith(
             f"g{self._generation}e"
         ):

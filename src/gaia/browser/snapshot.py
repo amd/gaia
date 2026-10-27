@@ -25,6 +25,11 @@ from typing import Any, Dict, List, Tuple
 #: Attribute stamped on each snapshotted element; also the click selector.
 REF_ATTR = "data-gaia-ref"
 
+#: Attribute the browser pane's element picker stamps on what the user picked
+#: (``p1``, ``p2`` ...). A snapshot clears and restamps ``REF_ATTR``, so picks
+#: live in their own attribute and survive it.
+PICK_ATTR = "data-gaia-pick"
+
 #: Ceiling on elements returned in one snapshot. A page with more than this is
 #: almost always a list/feed where the first N carry the affordances; the
 #: snapshot says it truncated so the model knows to scroll or refine.
@@ -321,15 +326,25 @@ def snapshot_args(generation: int = 0) -> Dict[str, Any]:
 #: the page any more", which the model already knows how to recover from.
 _REF_RE = re.compile(r"^g\d+(?:f\d+)?e\d+$")
 
+#: An element the user picked in the browser pane: ``p1``, ``p2`` ...
+_PICK_REF_RE = re.compile(r"^p\d{1,6}$")
+
+
+def is_pick_ref(ref: str) -> bool:
+    """True for a ref the user's pick made (``p1``), not a snapshot."""
+    return bool(ref) and bool(_PICK_REF_RE.match(ref))
+
 
 def ref_selector(ref: str) -> str:
     """CSS selector addressing the element stamped with ``ref``."""
     # Whitelist, not escaping: this is interpolated into a CSS selector, so
     # model-supplied text must never reach it.
+    if is_pick_ref(ref):
+        return f'[{PICK_ATTR}="{ref}"]'
     if not ref or not _REF_RE.match(ref):
         raise ValueError(
             f"Invalid element ref {ref!r}. Refs look like 'g4e12' and come "
-            "from browser_snapshot()."
+            "from browser_snapshot(), or 'p1' for an element the user picked."
         )
     return f'[{REF_ATTR}="{ref}"]'
 

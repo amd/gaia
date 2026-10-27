@@ -9,6 +9,7 @@ headless browser: the user is looking at the pane.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -249,6 +250,50 @@ def test_a_loopback_click_asks_only_when_its_label_is_irreversible(pane_agent, b
     assert "Create account" in shown["_risk_note"]
     # A risk note makes the prompt one-time: no "always" grant can cover it.
     assert grant_scope("browser_click", shown) is None
+
+
+def _page_says(bridge, label):
+    def reply(body):
+        if "data-gaia-pick" not in json.dumps(body.get("args")):
+            return fixture("evaluate_snapshot.json")
+        return {
+            "tabId": "tab-1",
+            "url": "http://127.0.0.1:5000/picker.html",
+            "frames": [
+                {
+                    "frameId": None,
+                    "url": "http://127.0.0.1:5000/picker.html",
+                    "ok": True,
+                    "value": label,
+                }
+            ],
+        }
+
+    bridge.replies["evaluate"] = reply
+
+
+def test_a_click_on_a_picked_element_reads_its_label_for_the_gate(pane_agent, bridge):
+    _page_says(bridge, "Save")
+    assert (
+        pane_agent.browser_call_needs_confirmation("browser_click", {"ref": "p1"})
+        is False
+    )
+    assert bridge.last("evaluate")["body"]["args"] == '[data-gaia-pick="p1"]'
+    _page_says(bridge, "Delete everything")
+    args = {"ref": "p1"}
+    shown = pane_agent.confirmation_args_for_call("browser_click", args)
+    assert pane_agent.browser_call_needs_confirmation("browser_click", args) is True
+    assert "Delete everything" in shown["_risk_note"]
+
+
+def test_a_picked_element_whose_label_cannot_be_read_asks_first(pane_agent, bridge):
+    bridge.replies["evaluate"] = (409, fixture("error_off_scope.json"))
+    args = {"ref": "p1"}
+    assert pane_agent.browser_call_needs_confirmation("browser_click", args) is True
+    assert (
+        "could not be read"
+        in pane_agent.confirmation_args_for_call("browser_click", args)["_risk_note"]
+    )
 
 
 def test_signing_in_is_left_to_the_user_in_the_pane(pane_agent, bridge):

@@ -10,6 +10,8 @@ next — the browser is the most failure-prone thing GAIA drives, and a bare
 
 from __future__ import annotations
 
+from gaia.browser.snapshot import is_pick_ref
+
 
 class BrowserError(Exception):
     """Base for every browser-use failure."""
@@ -78,6 +80,14 @@ class ElementNotFound(BrowserError):
     """A ref no longer resolves to an element on the page."""
 
     def __init__(self, ref: str) -> None:
+        if is_pick_ref(ref):
+            super().__init__(
+                f"Element '{ref}' the user picked is not on this page any more: "
+                "the page reloaded or changed, or it was picked in another tab. "
+                "Ask the user to pick it again, or call browser_snapshot() and "
+                "use a ref from that."
+            )
+            return
         super().__init__(
             f"Element '{ref}' is not on the page any more. The page changed "
             "since the last snapshot — call browser_snapshot() to get current "

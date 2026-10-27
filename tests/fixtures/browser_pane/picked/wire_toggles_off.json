@@ -1,0 +1,21 @@
+{
+  "ref": "p1",
+  "url": "http://127.0.0.1:5000/picker.html",
+  "title": "Pane fixture picker",
+  "tag": "button",
+  "label": "button.primary",
+  "selector": "#settings > button.primary",
+  "role": "button",
+  "name": "Save",
+  "text": "Save",
+  "rect": {
+    "x": 24,
+    "y": 146.5,
+    "width": 64,
+    "height": 36
+  },
+  "component": null,
+  "outerHTML": null,
+  "styles": null,
+  "cropUrl": "/api/files/uploads/picked-p1.png"
+}

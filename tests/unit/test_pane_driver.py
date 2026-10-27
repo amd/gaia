@@ -441,3 +441,16 @@ def test_keys_match_the_contract_and_the_fixture():
 @pytest.mark.parametrize("origin,expected", fixture("loopback.json")["cases"])
 def test_loopback_matches_the_shared_list(origin, expected):
     assert is_loopback_origin(origin) is expected
+
+
+def test_a_picked_element_is_acted_on_by_its_pick_stamp_in_the_main_frame(
+    bridge, discovery_file
+):
+    driver = _driver(bridge, discovery_file)
+    driver.click("p1", read=False)
+    assert bridge.last("act")["body"]["target"] == {
+        "frameId": None,
+        "selector": '[data-gaia-pick="p1"]',
+    }
+    # No snapshot first: a pick ref does not come from one.
+    assert "evaluate" not in bridge.ops()

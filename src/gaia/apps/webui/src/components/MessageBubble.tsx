@@ -21,6 +21,7 @@ import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
+import { SentElementChips } from './browser-pane/ElementChip';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
@@ -607,6 +608,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {(message.cards ?? cards)?.map((card, i) => (
                         <RenderCard key={i} render={card.render} data={card.data} />
                     ))}
+                    {message.page_elements && message.page_elements.length > 0 && (
+                        <SentElementChips elements={message.page_elements} />
+                    )}
                     {/* The cursor is a streaming indicator, not decoration — it never
                         outlives the write. See docs/spec/gaia-design-language.mdx. */}
                     {collapsibleUser ? (
