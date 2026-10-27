@@ -120,7 +120,7 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                     onChange={(e) => setDraft(e.target.value)}
                     onBlur={() => finishEdit(true)}
                     onKeyDown={(e) => {
-                        if (e.key === 'Enter') finishEdit(true);
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) finishEdit(true);
                         if (e.key === 'Escape') { e.preventDefault(); finishEdit(false); }
                     }}
                     {...CLAIMS_ESCAPE}

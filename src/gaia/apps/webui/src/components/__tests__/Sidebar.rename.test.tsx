@@ -110,6 +110,21 @@ describe('Sidebar rename', () => {
         ));
     });
 
+    it('ignores Enter that confirms an IME candidate, then saves on the real Enter', async () => {
+        const input = startRename();
+        fireEvent.change(input, { target: { value: '虹の仕組み' } });
+        fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+        fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+        expect(mockedApi.updateSession).not.toHaveBeenCalled();
+        expect(screen.getByRole('textbox')).toHaveValue('虹の仕組み');
+
+        fireEvent.keyDown(input, { key: 'Enter' });
+        await waitFor(() => expect(mockedApi.updateSession).toHaveBeenCalledExactlyOnceWith(
+            'b', { title: '虹の仕組み', title_is_custom: true },
+        ));
+        expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    });
+
     it('puts the old title back and says so when the save fails', async () => {
         mockedApi.updateSession.mockRejectedValue(new Error('Database is locked'));
         const input = startRename();
