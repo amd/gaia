@@ -227,9 +227,10 @@ asks you to **Restart now** or **Later**. **Settings → General → Updates** h
 
 - **Install updates automatically** — off by default. On, releases download in the
   background and you're asked only to restart.
-- **Include release candidates** — off by default, and available only while
-  auto-update is on. On, auto-update also takes test builds (`vX.Y.Z-rcN`) before
-  their final release.
+- **Include release candidates** — off by default. On, GAIA also offers test builds
+  (`vX.Y.Z-rcN`) before their final release; they install only when you ask, unless
+  auto-update is on. A release candidate build is offered newer candidates either
+  way, and moves to the final release once it ships.
 - **Check for updates**, and **Update to vX** when one is waiting.
 - **Install a specific version…** — any published release, newer or older. GAIA then
   stays on that version (pinned) until you click **Unpin**.
@@ -243,7 +244,7 @@ asks you to **Restart now** or **Later**. **Settings → General → Updates** h
 | `/update v0.25.0` | Install that exact release and pin to it |
 | `/update list` | List recent releases |
 | `/update auto on` / `off` | Install new releases automatically when you quit (off by default) |
-| `/update rc on` / `off` | Let auto-update take release candidates too (off by default; needs auto-update on) |
+| `/update rc on` / `off` | Offer release candidates too (off by default; they still wait for `/update now` unless auto-update is on) |
 | `/update unpin` | Offer new releases again after a pinned install |
 | `/update cancel` | Don't install the release queued for quit |
 
@@ -258,9 +259,13 @@ isn't pinned; keep auto-update off to stay on it.
 
 Both apps keep the auto-update and release-candidate choices in
 `~/.gaia/update-config.json`, so turning one on in either app turns it on in the
-other. Turning auto-update off stops release candidates too. Pins stay separate. Release checks call
-GitHub's API, which allows 60 anonymous requests an hour per network; set
-`GH_TOKEN` to lift that in the Terminal UI.
+other. Pins stay separate. Both check the
+[GitHub releases](https://github.com/amd/gaia/releases): GitHub's API allows 60
+anonymous requests an hour per network; set `GH_TOKEN` to lift that in the Terminal
+UI. The desktop app installs only releases that publish its update for your
+platform; macOS releases don't yet
+([#5682](https://github.com/amd/gaia/issues/5682)), so on a Mac the Updates section
+says so and you install the `.dmg` from the releases page.
 
 To turn update checks off entirely, set `GAIA_DISABLE_UPDATE=1` before launching.
 

@@ -720,8 +720,9 @@ Everything lives in **Settings → General → Updates** (desktop installer only
 
 - **Install updates automatically** — off by default. The Terminal UI follows the
   same setting.
-- **Include release candidates** — off by default; it can be turned on only while
-  auto-update is on, and then auto-update also takes `vX.Y.Z-rcN` test builds.
+- **Include release candidates** — off by default. On, GAIA also offers `vX.Y.Z-rcN`
+  test builds; they still wait for you unless auto-update is on. A release
+  candidate build is offered newer candidates either way.
 - **Check for updates**, then **Update to vX** when one is waiting. The corner chip
   offers the same **Update now**.
 - **Install a specific version…** — pick any published release, newer or older
@@ -731,12 +732,17 @@ Everything lives in **Settings → General → Updates** (desktop installer only
 **Pinning:** after installing a specific version, GAIA stays on it and offers no
 updates. The Updates section shows "Pinned to vX.Y.Z"; click **Unpin** to resume.
 
+Checks read the [GitHub releases](https://github.com/amd/gaia/releases) and take the
+newest one on your channel that publishes this platform's update. When none does,
+the Updates section says so rather than "up to date", and you install from the
+releases page instead.
+
 ### Platform support
 
 | Platform | Specific-version install |
 |----------|-----------------|
 | Windows (NSIS installer) | Full — download + reinstall works end-to-end |
-| macOS (DMG/ZIP, signed builds) | Works on signed release builds; unsigned dev builds download but cannot apply the update |
+| macOS | Not yet — releases don't publish the `.zip` the macOS updater installs from ([#5682](https://github.com/amd/gaia/issues/5682)); install the `.dmg` from [Releases](https://github.com/amd/gaia/releases) |
 | Linux AppImage | Supported (self-replacing) |
 | Linux .deb | Not supported via in-app rollback — use `sudo apt install ./gaia-agent-ui-<version>-amd64.deb` from [Releases](https://github.com/amd/gaia/releases) |
 

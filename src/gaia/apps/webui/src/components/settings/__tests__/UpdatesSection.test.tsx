@@ -28,7 +28,7 @@ const bridge = {
     installVersion: vi.fn(async () => state),
     resumeUpdates: vi.fn(async () => { push({ pinnedVersion: null }); return state; }),
     setAutoUpdate: vi.fn(async (enabled: boolean) => { push({ autoUpdate: enabled }); return state; }),
-    setAutoUpdatePrereleases: vi.fn(async (enabled: boolean) => { push({ autoUpdatePrereleases: enabled }); return state; }),
+    setIncludePrereleases: vi.fn(async (enabled: boolean) => { push({ includePrereleases: enabled }); return state; }),
     downloadUpdate: vi.fn(async () => { push({ status: 'downloading', progress: 0 }); return state; }),
     restart: vi.fn(async () => state),
 };
@@ -64,24 +64,31 @@ describe('UpdatesSection', () => {
         await waitFor(() => expect(autoSwitch()).toBeChecked());
     });
 
-    it('release candidates are off and unavailable until auto-update is on', async () => {
+    it('opting into release candidates leaves auto-update off', async () => {
         render(<UpdatesSection />);
-        await screen.findByText(/available once auto-update is on/i);
+        await screen.findByText(/running gaia 0\.25\.0/i);
         expect(rcSwitch()).not.toBeChecked();
-        expect(rcSwitch()).toBeDisabled();
+        expect(rcSwitch()).toBeEnabled();
 
-        await userEvent.click(autoSwitch());
-        await waitFor(() => expect(rcSwitch()).toBeEnabled());
         await userEvent.click(rcSwitch());
-        expect(bridge.setAutoUpdatePrereleases).toHaveBeenCalledWith(true);
+        expect(bridge.setIncludePrereleases).toHaveBeenCalledWith(true);
         await waitFor(() => expect(rcSwitch()).toBeChecked());
+        expect(autoSwitch()).not.toBeChecked();
+        expect(bridge.setAutoUpdate).not.toHaveBeenCalled();
     });
 
-    it('shows release candidates off while auto-update is off, even if saved on', async () => {
-        state = { ...state, autoUpdate: false, autoUpdatePrereleases: true };
+    it('tells a release-candidate build it is offered newer candidates anyway', async () => {
+        state = { ...state, currentVersion: '0.25.2-rc.3' };
         render(<UpdatesSection />);
-        await screen.findByText(/available once auto-update is on/i);
+        expect(await screen.findByText(/this is a release candidate/i)).toBeInTheDocument();
         expect(rcSwitch()).not.toBeChecked();
+    });
+
+    it('says plainly when no release publishes an update for this platform', async () => {
+        state = { ...state, status: 'no-channel', error: 'No GAIA release publishes a desktop update for this platform yet' };
+        render(<UpdatesSection />);
+        expect(await screen.findByText(/no gaia release publishes a desktop update/i)).toBeInTheDocument();
+        expect(screen.queryByText(/up to date/i)).toBeNull();
     });
 
     it('offers an available update and downloads it on request', async () => {

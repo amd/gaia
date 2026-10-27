@@ -22,7 +22,7 @@ import (
 // download feed, which a terminal pin must not do.
 const (
 	autoUpdateKey = "autoUpdate"
-	prereleaseKey = "autoUpdatePrereleases"
+	prereleaseKey = "includePrereleases"
 	pinKey        = "tuiPinnedVersion"
 )
 
@@ -32,7 +32,7 @@ var homeDir = os.UserHomeDir
 // Config is the saved update preferences.
 type Config struct {
 	AutoUpdate    bool   // install a newer release on quit; off by default
-	Prereleases   bool   // auto-update takes release candidates too; needs AutoUpdate
+	Prereleases   bool   // offer release candidates too; off by default
 	PinnedVersion string // a tag such as "v0.25.0", or "" when not pinned
 	Path          string
 }
@@ -73,24 +73,10 @@ func ReadConfig() (Config, error) {
 // SetAutoUpdate saves the auto-update preference.
 func SetAutoUpdate(on bool) error { return writeKey(autoUpdateKey, on) }
 
-// IncludeRCs reports whether release candidates count as updates: only while
-// auto-update is on, so a saved "on" does nothing once auto-update is off.
-func (c Config) IncludeRCs() bool { return c.AutoUpdate && c.Prereleases }
-
-// SetPrereleases saves whether auto-update takes release candidates. Turning
-// it on is refused while auto-update is off.
-func SetPrereleases(on bool) error {
-	if on {
-		cfg, err := ReadConfig()
-		if err != nil {
-			return err
-		}
-		if !cfg.AutoUpdate {
-			return errors.New("turn on auto-update first (/update auto on) — release candidates are an option of auto-update")
-		}
-	}
-	return writeKey(prereleaseKey, on)
-}
+// SetPrereleases saves whether release candidates are offered as updates.
+// It is a channel, not an install trigger: with auto-update off an offered
+// candidate still waits for /update now.
+func SetPrereleases(on bool) error { return writeKey(prereleaseKey, on) }
 
 // SetPin pins the Terminal UI to tag; "" unpins.
 func SetPin(tag string) error {

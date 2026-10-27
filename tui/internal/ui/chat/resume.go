@@ -32,7 +32,7 @@ type resumeFile struct {
 }
 
 // resumeDir holds one file per TUI process, so two windows never overwrite
-// or take each other's conversation by accident.
+// each other's saved conversation. The next launch shows the newest one.
 func resumeDir() (string, error) {
 	cfg, err := update.ConfigPath()
 	if err != nil {

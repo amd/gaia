@@ -10,6 +10,11 @@ import { VersionPicker } from '../VersionPicker';
 const AUTO_LABEL = 'Install updates automatically';
 const RC_LABEL = 'Include release candidates';
 
+/** "0.25.2-rc.3" is a release candidate; "0.25.2" is not. */
+export function isReleaseCandidate(version: string | null): boolean {
+    return /^\d+\.\d+\.\d+-/.test(version ?? '');
+}
+
 /** One line saying where updates stand. */
 export function describeUpdateStatus(s: UpdateState): string {
     switch (s.status) {
@@ -24,7 +29,7 @@ export function describeUpdateStatus(s: UpdateState): string {
         case 'error':
             return `Update check failed: ${s.error ?? 'unknown error'}`;
         case 'no-channel':
-            return s.error ?? 'No update channel is configured.';
+            return s.error ?? 'No GAIA release publishes a desktop update for this platform yet.';
         case 'disabled':
             return 'Updates are turned off for this install (GAIA_DISABLE_UPDATE=1).';
         default:
@@ -100,15 +105,15 @@ export function UpdatesSection() {
                     <input
                         type="checkbox"
                         role="switch"
-                        checked={update.autoUpdate && Boolean(update.autoUpdatePrereleases)}
+                        checked={Boolean(update.includePrereleases)}
                         aria-describedby="updates-rc-hint"
                         aria-label={RC_LABEL}
                         aria-busy={busy}
-                        disabled={disabled || !update.autoUpdate}
+                        disabled={disabled}
                         onChange={() => {
                             if (!busy) {
                                 void run('Saving the release-candidate setting', (b) =>
-                                    b.setAutoUpdatePrereleases(!update.autoUpdatePrereleases));
+                                    b.setIncludePrereleases(!update.includePrereleases));
                             }
                         }}
                     />
@@ -116,9 +121,9 @@ export function UpdatesSection() {
                 </span>
             </label>
             <p className="settings-hint" id="updates-rc-hint">
-                {update.autoUpdate
-                    ? 'Also install test builds (vX.Y.Z-rcN) before they become a final release. Off by default.'
-                    : 'Available once auto-update is on.'}
+                Also offer test builds (vX.Y.Z-rcN) before they become a final release. Off by default.
+                {isReleaseCandidate(update.currentVersion) &&
+                    ' This is a release candidate, so newer ones are offered either way.'}
             </p>
 
             {update.pinnedVersion && (

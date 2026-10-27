@@ -33,8 +33,8 @@ export interface UpdateState {
     pinnedVersion: string | null;
     /** Download and install updates without asking. Off by default. */
     autoUpdate: boolean;
-    /** Auto-update also takes release candidates. Off by default; needs autoUpdate. */
-    autoUpdatePrereleases?: boolean;
+    /** Offer release candidates too. Off by default; independent of autoUpdate. */
+    includePrereleases?: boolean;
     /** ~/.gaia/update-config.json could not be read; why, or null. */
     configError?: string | null;
 }
@@ -57,7 +57,7 @@ export interface GaiaUpdaterBridge {
     installVersion: (tag: string) => Promise<UpdateState>;
     resumeUpdates: () => Promise<UpdateState>;
     setAutoUpdate: (enabled: boolean) => Promise<UpdateState>;
-    setAutoUpdatePrereleases: (enabled: boolean) => Promise<UpdateState>;
+    setIncludePrereleases: (enabled: boolean) => Promise<UpdateState>;
     downloadUpdate: () => Promise<UpdateState>;
     restart: () => Promise<UpdateState>;
 }
@@ -76,7 +76,7 @@ export const INITIAL_STATE: UpdateState = {
     currentVersion: null,
     pinnedVersion: null,
     autoUpdate: false,
-    autoUpdatePrereleases: false,
+    includePrereleases: false,
 };
 
 /**

@@ -37,11 +37,14 @@ const (
 	KindRpm Kind = "rpm"
 )
 
-// Script installers. amd-gaia.ai serves them at the site root.
-const (
+// installerSums is the checksum file each release publishes for its
+// platform installers.
+const installerSums = "gaia-installers-SHA256SUMS.txt"
+
+// Script installers. amd-gaia.ai serves them at the site root. Swapped by tests.
+var (
 	installPS1URL = "https://amd-gaia.ai/install.ps1"
 	installSHURL  = "https://amd-gaia.ai/install.sh"
-	installerSums = "gaia-installers-SHA256SUMS.txt"
 )
 
 // Swapped by tests.
@@ -51,6 +54,8 @@ var (
 	goarch     = runtime.GOARCH
 	lookPath   = exec.LookPath
 	ownsFile   = packageOwns
+	// startDetached opens the Windows setup without waiting for it.
+	startDetached = func(path string) error { return exec.Command(path).Start() }
 	// windowsSetupDir is where the GAIA Windows setup installed the terminal
 	// (HKCU\Software\GAIA\TerminalHub InstallDir), or "".
 	windowsSetupDir = setupInstallDir
@@ -347,6 +352,14 @@ func runPackage(ctx context.Context, p Plan, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// The Windows setup outlives this process and runs from dir, so it alone
+	// keeps it; every other path, failures included, removes it.
+	keepDir := false
+	defer func() {
+		if !keepDir {
+			os.RemoveAll(dir)
+		}
+	}()
 	sumsPath := filepath.Join(dir, installerSums)
 	if err := download(ctx, sums.URL, sumsPath); err != nil {
 		return err
@@ -363,7 +376,6 @@ func runPackage(ctx context.Context, p Plan, stdout, stderr io.Writer) error {
 	if got, err := sha256File(file); err != nil {
 		return err
 	} else if got != want {
-		os.Remove(file)
 		return fmt.Errorf("%s does not match its published checksum (expected %s, got %s) — refusing to install it; retry, and report it at https://github.com/amd/gaia/issues if it persists", asset.Name, want, got)
 	}
 
@@ -374,7 +386,11 @@ func runPackage(ctx context.Context, p Plan, stdout, stderr io.Writer) error {
 		// outlive it. Its own window takes it from here, which is also why
 		// its temp folder is left for the OS to clear.
 		fmt.Fprintf(stdout, "Opening the GAIA %s setup. Finish it there.\n", p.Tag)
-		return exec.Command(file).Start()
+		if err := startDetached(file); err != nil {
+			return fmt.Errorf("cannot open the verified setup %s: %w", file, err)
+		}
+		keepDir = true
+		return nil
 	case KindMacPkg:
 		fmt.Fprintf(stdout, "Opening the GAIA %s installer. Finish it there.\n", p.Tag)
 		cmd = exec.CommandContext(ctx, "open", "-W", file)
@@ -385,10 +401,9 @@ func runPackage(ctx context.Context, p Plan, stdout, stderr io.Writer) error {
 	default:
 		return fmt.Errorf("no installer for %s installs", p.Kind)
 	}
-	defer os.RemoveAll(dir)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, stdout, stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%s stopped (%v) — its output above says why; the verified installer was %s", cmd.Path, err, file)
+		return fmt.Errorf("%s stopped (%v) — its output above says why; run /update again to retry", cmd.Path, err)
 	}
 	return nil
 }

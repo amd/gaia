@@ -357,8 +357,8 @@ describe("installVersion()", () => {
   });
 
   test("throws a busy error when a check is already in progress", async () => {
-    // A configured feed so checkForUpdates() proceeds far enough to flip the
-    // in-progress guard (an unconfigured updater short-circuits to NO_CHANNEL).
+    // A configured feed so checkForUpdates() reaches electron-updater without
+    // a GitHub lookup.
     process.env.GAIA_UPDATE_FEED_URL = "https://updates.example.com/gaia";
     const mod = loadModule();
     const win = makeMockWindow();
@@ -576,7 +576,7 @@ describe("setAutoUpdate / downloadUpdate / restart", () => {
   });
 });
 
-describe("release candidates (setAutoUpdatePrereleases)", () => {
+describe("release candidates (setIncludePrereleases)", () => {
   const rc = { tag: "v0.27.0-rc1", version: "0.27.0-rc1", prerelease: true, platform: process.platform };
   const final = { tag: "v0.26.0", version: "0.26.0", platform: process.platform };
 
@@ -585,50 +585,65 @@ describe("release candidates (setAutoUpdatePrereleases)", () => {
     mod.init(makeMockWindow(), INIT_OPTIONS);
     stubFetch([makeRelease(rc), makeRelease(final)]);
 
-    expect(mod.getState().autoUpdatePrereleases).toBe(false);
+    expect(mod.getState().includePrereleases).toBe(false);
     expect(mockAutoUpdaterInstance.allowPrerelease).toBe(false);
     const tags = (await mod.listReleases()).map((r) => r.tag);
     expect(tags).toEqual(["v0.26.0"]);
   });
 
-  test("refused while auto-update is off, without writing", async () => {
-    const mod = loadModule();
-    mod.init(makeMockWindow(), INIT_OPTIONS);
-
-    await expect(
-      electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update-prereleases", true)
-    ).rejects.toThrow(/Turn on auto-update first/);
-    expect(fs.existsSync(pinFilePath())).toBe(false);
-  });
-
-  test("with auto-update on, turning it on saves it and lets RCs through", async () => {
-    writeUpdateConfig({ autoUpdate: true });
+  test("turning it on needs no auto-update, saves it, and lets RCs through", async () => {
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
     stubFetch([makeRelease(rc), makeRelease(final)]);
 
     const state = await electronMock.ipcMain.simulateInvoke(
-      "gaia:update:set-auto-update-prereleases",
+      "gaia:update:set-include-prereleases",
       true
     );
 
-    expect(state.autoUpdatePrereleases).toBe(true);
+    expect(state.includePrereleases).toBe(true);
+    expect(state.autoUpdate).toBe(false);
     expect(mockAutoUpdaterInstance.allowPrerelease).toBe(true);
-    expect(readUpdateConfig()).toEqual({ autoUpdate: true, autoUpdatePrereleases: true });
+    // A channel, not an install trigger: nothing downloads unasked.
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
+    expect(readUpdateConfig()).toEqual({ includePrereleases: true });
     const tags = (await mod.listReleases()).map((r) => r.tag);
     expect(tags).toEqual(["v0.27.0-rc1", "v0.26.0"]);
   });
 
-  test("turning auto-update off stops RCs but keeps the saved choice", async () => {
-    writeUpdateConfig({ autoUpdate: true, autoUpdatePrereleases: true });
+  test("turning auto-update off keeps the release-candidate channel", async () => {
+    writeUpdateConfig({ autoUpdate: true, includePrereleases: true });
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
     expect(mockAutoUpdaterInstance.allowPrerelease).toBe(true);
 
     await electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update", false);
 
-    expect(mockAutoUpdaterInstance.allowPrerelease).toBe(false);
-    expect(readUpdateConfig().autoUpdatePrereleases).toBe(true);
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
+    expect(mockAutoUpdaterInstance.allowPrerelease).toBe(true);
+    expect(readUpdateConfig().includePrereleases).toBe(true);
+  });
+
+  test("a release-candidate build lists candidates without opting in", async () => {
+    jest.spyOn(electronMock.app, "getVersion").mockReturnValue("0.26.1-rc.2");
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    stubFetch([makeRelease(rc), makeRelease(final)]);
+
+    expect(mod.getState().includePrereleases).toBe(false);
+    expect(mockAutoUpdaterInstance.allowPrerelease).toBe(true);
+    const tags = (await mod.listReleases()).map((r) => r.tag);
+    expect(tags).toEqual(["v0.27.0-rc1", "v0.26.0"]);
+  });
+
+  test("a non-boolean is refused without writing", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    await expect(
+      electronMock.ipcMain.simulateInvoke("gaia:update:set-include-prereleases", "yes")
+    ).rejects.toThrow(/expects true or false/);
+    expect(fs.existsSync(pinFilePath())).toBe(false);
   });
 });
 
@@ -823,14 +838,16 @@ describe("gaia:update:install-version IPC tag validation", () => {
 });
 
 describe("gaia:update:check IPC", () => {
-  test("with no feed configured, reports no-channel instead of checking", async () => {
+  test("with no feed configured, says so when no release has an update for this platform", async () => {
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
     const checkSpy = jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates");
+    stubFetch([]);
 
     const state = await invoke("gaia:update:check");
 
     expect(state.status).toBe("no-channel");
+    expect(state.error).toMatch(/download an installer/);
     expect(checkSpy).not.toHaveBeenCalled();
   });
 

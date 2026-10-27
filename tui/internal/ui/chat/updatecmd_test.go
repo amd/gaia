@@ -89,23 +89,21 @@ func TestUpdateAutoOnSavesTheSharedSetting(t *testing.T) {
 	}
 }
 
-func TestUpdateRCNeedsAutoUpdate(t *testing.T) {
+func TestUpdateRCOptsIntoCandidatesWithoutAutoUpdate(t *testing.T) {
 	m := updateModel(t)
 	_, cmd := m.submit("/update rc on")
 	next, _ := m.Update(cmd())
-	msgs := next.(ChatModel).messages
-	if last := msgs[len(msgs)-1]; last.Role != RoleError || !strings.Contains(last.Content, "auto-update first") {
-		t.Errorf("last message = %+v; want an error naming auto-update", last)
-	}
-	_, cmd = m.submit("/update auto on")
-	m.Update(cmd())
-	_, cmd = m.submit("/update rc on")
-	next, _ = m.Update(cmd())
-	if got := lastStatus(t, next.(ChatModel)); !strings.Contains(got, "includes release candidates") {
+	if got := lastStatus(t, next.(ChatModel)); !strings.Contains(got, "offers release candidates") {
 		t.Errorf("status = %q", got)
 	}
-	if cfg, _ := update.ReadConfig(); !cfg.IncludeRCs() {
-		t.Fatalf("config = %+v; want RCs included", cfg)
+	cfg, _ := update.ReadConfig()
+	if !cfg.Prereleases || cfg.AutoUpdate {
+		t.Fatalf("config = %+v; want candidates offered and auto-update still off", cfg)
+	}
+	_, cmd = m.submit("/update rc off")
+	m.Update(cmd())
+	if cfg, _ := update.ReadConfig(); cfg.Prereleases {
+		t.Fatal("rc off did not save")
 	}
 }
 
