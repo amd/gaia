@@ -163,6 +163,26 @@ def _imports_gaia_tools(code: str) -> Optional[str]:
     return match.group(0).strip() if match else None
 
 
+def _server_refusal(
+    agent: Any, source: str, folder: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """The refusal for Python that starts a never-ending server, or None."""
+    from gaia.browser.dev_servers import (
+        dev_server_offered,
+        server_in_python,
+        server_refusal,
+    )
+
+    server = server_in_python(source)
+    if server is None:
+        return None
+    return {
+        "status": "error",
+        "error": server_refusal(server.what, folder, dev_server_offered(agent)),
+        "has_errors": True,
+    }
+
+
 def _python_run_result(
     run: Any,
     stdout: str,
@@ -1954,6 +1974,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "error": f"Could not read {file_path}: {e}",
                         "has_errors": True,
                     }
+                refused = _server_refusal(self, source, str(p.resolve().parent))
+                if refused is not None:
+                    return refused
                 start = time.monotonic()
                 run_dir = p.resolve().parent
                 try:
@@ -2071,6 +2094,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         ),
                         "has_errors": True,
                     }
+                refused = _server_refusal(self, code, None)
+                if refused is not None:
+                    return refused
 
                 try:
                     if hasattr(self, "_project_map_root"):

@@ -12,6 +12,12 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import socket
+import subprocess
+import sys
+import time
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -231,6 +237,10 @@ class _Agent(BrowserUseToolsMixin):
         self._tool_overrides = {}
         self.console = SilentConsole()
         self.path_validator = _Validator(root)
+
+    @property
+    def _tools_registry(self):
+        return {**tools_mod._TOOL_REGISTRY, **self._tool_overrides}
 
 
 @pytest.fixture(autouse=True)
@@ -456,3 +466,175 @@ def test_an_app_too_old_for_dev_servers_says_so(agent, bridge):
     agent._pane()._bridge.ops = frozenset({"hello", "attach", "tabs"})
     out = agent._tool_overrides["dev_server"]["function"](action="list")
     assert "older than the agent" in out
+
+
+# ------------------------------------------------- a plain HTML folder, no setup
+
+
+@pytest.fixture
+def site(project):
+    """A folder of plain HTML inside the chat's allowed folder, with no launch.json."""
+    folder = project / "landing page"
+    folder.mkdir()
+    (folder / "index.html").write_text("<h1>Hello</h1>")
+    return folder.resolve()
+
+
+def test_a_plain_html_folder_is_served_on_loopback_with_no_setup(agent, bridge, site):
+    shown, asks, run = call(agent, action="start", project=str(site))
+    port = shown["port"]
+    assert asks
+    assert shown["name"] == "static"
+    assert shown["folder"] == str(site)
+    assert shown["command"] == shlex.join(
+        [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"]
+        + ["--directory", str(site)]
+    )
+    out = run()
+    ensure = [b for b in dev_ops(bridge) if b["op"] == "ensure"][0]
+    assert ensure["spec"]["argv"] == shlex.split(shown["command"])
+    assert ensure["spec"]["cwd"] == str(site)
+    assert ensure["spec"]["url"] == f"http://localhost:{port}/"
+    assert f'Dev server "static"' in out and f"on port {port}" in out
+
+
+def test_the_run_uses_the_port_the_prompt_showed(agent, bridge, site):
+    shown, _asks, run = call(agent, action="start", project=str(site))
+    with socket.socket() as held:
+        held.bind(("127.0.0.1", shown["port"]))
+        run()
+    ensure = [b for b in dev_ops(bridge) if b["op"] == "ensure"][0]
+    assert ensure["spec"]["port"] == shown["port"]
+    assert str(shown["port"]) in ensure["spec"]["argv"]
+
+
+def test_a_folder_keeps_its_port_so_always_still_covers_it(agent, bridge, site):
+    first, _asks, _run = call(agent, action="start", project=str(site))
+    agent.console.grant_call_for_session("dev_server", first)
+    again, asks, _run = call(agent, action="start", project=str(site))
+    assert again["port"] == first["port"]
+    assert not asks
+
+
+def test_a_running_static_server_keeps_its_port(agent, bridge, site):
+    running = dev_servers.static_spec(site, 18321)
+    bridge.servers = [server_state(running)]
+    shown, asks, run = call(agent, action="start", project=str(site))
+    assert shown["port"] == 18321
+    assert not asks
+    run()
+    assert [b for b in dev_ops(bridge) if b["op"] == "ensure"][0]["spec"]["port"] == (
+        18321
+    )
+
+
+def test_launch_json_wins_over_html_files(agent, bridge, project):
+    (project / "index.html").write_text("<h1>Hi</h1>")
+    shown, _asks, _run = call(agent, action="start", project=str(project))
+    assert shown["name"] == "web" and shown["command"] == "node server.js"
+
+
+def test_a_folder_with_no_html_and_no_launch_json_names_both_fixes(
+    agent, bridge, project
+):
+    empty = project / "empty"
+    empty.mkdir()
+    shown, asks, run = call(agent, action="start", project=str(empty))
+    assert not asks
+    out = run()
+    assert "index.html" in out and "launch.json" in out
+    assert "ensure" not in [b["op"] for b in dev_ops(bridge)]
+
+
+def test_an_html_folder_outside_the_allowed_folders_is_refused(agent, bridge, tmp_path):
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "index.html").write_text("<h1>x</h1>")
+    shown, asks, run = call(agent, action="start", project=str(outside))
+    assert not asks
+    out = run()
+    assert "outside the folders this chat may use" in out
+    assert "ensure" not in [b["op"] for b in dev_ops(bridge)]
+
+
+def test_a_named_server_in_a_plain_folder_says_there_is_only_static(agent, site):
+    _shown, _asks, run = call(agent, action="start", project=str(site), name="web")
+    assert '"static"' in run()
+
+
+def test_the_docstring_teaches_the_no_setup_call(agent):
+    doc = agent._tool_overrides["dev_server"]["description"]
+    assert 'dev_server(action="start", project="<folder>")' in " ".join(doc.split())
+
+
+def test_the_static_server_answers_on_loopback_only(tmp_path):
+    (tmp_path / "index.html").write_text("<h1>served</h1>")
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    spec = dev_servers.static_spec(tmp_path, port)
+    proc = subprocess.Popen(
+        list(spec.argv),
+        cwd=spec.cwd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        body = _fetch_when_up(f"http://127.0.0.1:{port}/")
+        assert "<h1>served</h1>" in body
+        lan = _non_loopback_address()
+        if lan is not None:
+            with pytest.raises(OSError):
+                socket.create_connection((lan, port), timeout=2).close()
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+    if lan is None:
+        pytest.skip("no non-loopback address to check the bind against")
+
+
+def _fetch_when_up(url: str) -> str:
+    deadline = time.monotonic() + 15
+    while True:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as r:
+                return r.read().decode()
+        except OSError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.1)
+
+
+def _non_loopback_address():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("192.0.2.1", 9))  # TEST-NET-1: routes, sends nothing
+        except OSError:
+            return None
+        address = s.getsockname()[0]
+    return None if address.startswith("127.") or address == "0.0.0.0" else address
+
+
+# ---------------------------------------------------------- browser_open file://
+
+
+def test_a_file_url_points_at_dev_server_for_its_folder(agent, bridge, site):
+    out = agent._tool_overrides["browser_open"]["function"](
+        url=(site / "index.html").as_uri()
+    )
+    assert "file://" in out
+    assert f'dev_server(action="start", project="{site}")' in out
+    assert "invalid URL" not in out
+    assert not [r for r in bridge.requests if r["op"] == "navigate"]
+
+
+def test_a_file_url_without_the_pane_says_to_ask_the_user(monkeypatch, tmp_path):
+    monkeypatch.setenv(DISCOVERY_ENV, str(tmp_path / "absent.json"))
+    monkeypatch.setattr(browser_driver, "installed", lambda: True)
+    a = _Agent(tmp_path)
+    a.register_browser_use_tools()
+    out = tools_mod._TOOL_REGISTRY["browser_open"]["function"](
+        url=(tmp_path / "index.html").as_uri()
+    )
+    assert "Ask the user to run the server" in out
+    assert "dev_server" not in out

@@ -3,6 +3,12 @@
 
 """Dev servers: ``<project>/.gaia/launch.json``, parsed here and only here.
 
+A folder with no launch.json but with HTML files gets a static server
+(:func:`static_spec`): Python's ``http.server`` bound to 127.0.0.1. This
+module also knows what a server command looks like (:func:`server_in_command`,
+:func:`server_in_python`), so the tools that wait for a command to finish
+refuse one and point at ``dev_server`` instead.
+
 The agent writes the file with ``write_file`` and the user can edit it. It has
 the shape of Claude Code's ``.claude/launch.json``::
 
@@ -24,14 +30,20 @@ import hashlib
 import json
 import re
 import shlex
+import socket
+import sys
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.agents.base.call_risk import DESTRUCTIVE, shell_command_risk
-from gaia.agents.base.tool_grants import launch_digest
+from gaia.agents.base.tool_grants import DEV_SERVER_TOOL, launch_digest
 
 LAUNCH_FILE = Path(".gaia") / "launch.json"
+STATIC_NAME = "static"
+#: A folder's static server prefers one port in this range, so "Always" sticks.
+STATIC_PORTS = range(18000, 19000)
 
 #: Environment names a configuration may set. ``dev-servers.cjs`` applies the
 #: same rule; both test it against ``bridge/dev_server_env.json``.
@@ -91,9 +103,7 @@ class DevServerSpec:
     @property
     def key(self) -> str:
         """Main's handle: two projects may both have a server named "web"."""
-        return hashlib.sha256(f"{self.cwd}\0{self.name}".encode("utf-8")).hexdigest()[
-            :16
-        ]
+        return server_key(self.cwd, self.name)
 
     @property
     def digest(self) -> str:
@@ -126,6 +136,10 @@ class DevServerSpec:
             "url": self.url,
             "readyTimeoutMs": self.ready_timeout_s * 1000,
         }
+
+
+def server_key(cwd: Path, name: str) -> str:
+    return hashlib.sha256(f"{cwd}\0{name}".encode("utf-8")).hexdigest()[:16]
 
 
 def env_name_allowed(name: str) -> bool:
@@ -198,6 +212,88 @@ def spec_named(
     raise LaunchConfigError(
         f"{launch_file(project)} has {what}. Its servers: {listed}. Pass name=."
     )
+
+
+def resolve_spec(
+    project: Path,
+    name: str,
+    *,
+    allowed: Callable[[Path], bool],
+    static_port: Callable[[str], int],
+) -> DevServerSpec:
+    """launch.json's server called ``name``; for a plain HTML folder, its static server.
+
+    ``static_port`` maps the static server's key to its port, so the prompt
+    and the run agree on one port without picking it twice.
+    """
+    project = project.expanduser().resolve()
+    if launch_file(project).is_file():
+        return spec_named(project, name, allowed=allowed)
+    if not allowed(project):
+        raise LaunchConfigError(
+            f"{project} is outside the folders this chat may use. Ask the user to "
+            "give GAIA access to it, then try again."
+        )
+    if not project.is_dir():
+        raise LaunchConfigError(f"{project} is not a folder.")
+    if not any(project.glob("*.htm*")):
+        raise LaunchConfigError(
+            f"{project} has no .html file and no {LAUNCH_FILE}. For a plain web "
+            "page, write index.html there and call dev_server again; it is served "
+            f"with no setup. For an app with its own dev command, write "
+            f"{launch_file(project)} with write_file. Example: {_EXAMPLE}"
+        )
+    if name and name != STATIC_NAME:
+        raise LaunchConfigError(
+            f'{project} has no {LAUNCH_FILE}, so its only server is "{STATIC_NAME}", '
+            f"which serves its files. Leave name empty, or write {LAUNCH_FILE} to "
+            f'define "{name}".'
+        )
+    return static_spec(project, static_port(server_key(project, STATIC_NAME)))
+
+
+def static_spec(folder: Path, port: int) -> DevServerSpec:
+    """Serve ``folder``'s files on 127.0.0.1 only; nothing else on the network sees it."""
+    folder = folder.expanduser().resolve()
+    return DevServerSpec(
+        name=STATIC_NAME,
+        argv=(
+            sys.executable,
+            "-m",
+            "http.server",
+            str(port),
+            "--bind",
+            "127.0.0.1",
+            "--directory",
+            str(folder),
+        ),
+        cwd=folder,
+        port=port,
+        env=(),
+        url_path="/",
+        ready_timeout_s=DEFAULT_READY_TIMEOUT_S,
+    )
+
+
+def static_port(key: str, running: List[Dict[str, Any]]) -> int:
+    """The port a static server keeps: its running one, else its folder's own, else any free one."""
+    for server in running:
+        if server.get("key") == key and server.get("status") in ("starting", "ready"):
+            return int(server["port"])
+    preferred = STATIC_PORTS.start + zlib.crc32(key.encode()) % len(STATIC_PORTS)
+    return _free_loopback_port(preferred) or _free_loopback_port(0)
+
+
+def _free_loopback_port(port: int) -> Optional[int]:
+    """``port`` if nothing holds it on 127.0.0.1, None if taken; 0 asks the OS for one."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+        except OSError:
+            if port == 0:
+                raise
+            return None
+        return s.getsockname()[1]
 
 
 def _parse(
@@ -273,6 +369,205 @@ def _parse(
     )
 
 
+# ----------------------------------------------------- servers run the wrong way
+
+#: What a never-ending server looks like, as one command after
+#: :func:`_normalize` (``python -m X`` is ``X``, ``npx X`` is ``X``, a package
+#: script is ``script NAME``). ``(what, pattern)``; ``what`` goes in the refusal.
+SHELL_SERVERS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = tuple(
+    (what, re.compile(pattern))
+    for what, pattern in (
+        ("Python's http.server", r"^(http\.server|SimpleHTTPServer)\b"),
+        ("a package dev script", r"^script (dev|start|serve|preview)\b"),
+        ("Vite", r"^vite( (dev|serve|preview)\b| -|$)"),
+        ("Next.js", r"^next (dev|start)\b"),
+        (
+            "a static file server",
+            r"^(serve|http-server|live-server|browser-sync|webpack-dev-server)\b",
+        ),
+        ("webpack's dev server", r"^webpack (serve|s)\b"),
+        ("Parcel", r"^parcel (?!build\b)"),
+        ("Flask", r"^flask (\S+ )*run\b"),
+        (
+            "an ASGI/WSGI server",
+            r"^(uvicorn|gunicorn|hypercorn|daphne|waitress-serve)\b",
+        ),
+        ("Django's runserver", r"^manage\.py runserver\b"),
+        ("PHP's built-in server", r"^php (\S+ )*-S\b"),
+        ("a site server", r"^(jekyll|hugo|rails) (serve|server|s)\b"),
+    )
+)
+
+#: The same, in Python source run by run_python or execute_python_file.
+PYTHON_SERVERS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = tuple(
+    (what, re.compile(pattern))
+    for what, pattern in (
+        ("serve_forever()", r"\.serve_forever\s*\("),
+        (
+            "an http.server / socketserver server",
+            r"\b(HTTPServer|ThreadingHTTPServer|TCPServer|ThreadingTCPServer)\s*\(",
+        ),
+        (
+            "Python's http.server",
+            r"""http\.server\.test\s*\(|['"](-m\s+)?http\.server\b""",
+        ),
+        ("app.run()", r"\bapp\.run\s*\("),
+        ("uvicorn.run()", r"\buvicorn\.run\s*\("),
+        ("aiohttp's run_app()", r"\bweb\.run_app\s*\("),
+        ("waitress.serve()", r"\bwaitress\.serve\s*\("),
+    )
+)
+
+_SEPARATORS = frozenset({"&&", "||", ";", "|", "&", "(", ")", ";;"})
+_WRAPPERS = frozenset({"nohup", "exec", "env", "time", "sudo", "command", "caffeinate"})
+_RUNNERS = {"npx", "pnpx", "bunx"}
+_SCRIPT_RUNNERS = {"npm", "pnpm", "yarn", "bun"}
+_SHELLS = {"sh", "bash", "zsh"}
+_PYTHON = re.compile(r"python[\d.]*|py")
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _is_assignment(token: str) -> bool:
+    return _ASSIGNMENT.match(token) is not None
+
+
+@dataclass(frozen=True)
+class ServerMatch:
+    """A server the call would start: what it is, and the folder it serves if the line says."""
+
+    what: str
+    folder: Optional[str] = None
+
+
+def server_in_command(command: str) -> Optional[ServerMatch]:
+    """The never-ending server ``command`` starts, or None. ``grep vite package.json`` is None."""
+    try:
+        lex = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        tokens = list(lex)
+    except ValueError:
+        tokens = command.split()
+    folder: Optional[str] = None
+    segment: List[str] = []
+    for token in [*tokens, ";"]:
+        if token not in _SEPARATORS:
+            segment.append(token)
+            continue
+        if segment[:1] == ["cd"] and len(segment) > 1:
+            folder = _join(folder, segment[1])
+        found = _segment_server(segment)
+        if found is not None:
+            return ServerMatch(found.what, _join(folder, found.folder))
+        segment = []
+    return None
+
+
+def _join(folder: Optional[str], then: Optional[str]) -> Optional[str]:
+    if folder is None or then is None:
+        return then or folder
+    return str(Path(folder) / then)
+
+
+def _segment_server(argv: List[str]) -> Optional[ServerMatch]:
+    while argv and (_is_assignment(argv[0]) or argv[0] in _WRAPPERS):
+        argv = argv[1:]
+    if len(argv) >= 3 and argv[1] == "-c":
+        head = Path(argv[0]).name
+        if head in _SHELLS:
+            return server_in_command(argv[2])
+        if _PYTHON.fullmatch(head):
+            return server_in_python(argv[2])
+    line = " ".join(_normalize(argv))
+    for what, pattern in SHELL_SERVERS:
+        if pattern.search(line):
+            return ServerMatch(what, _flag_value(argv, ("--directory", "-d")))
+    return None
+
+
+def _normalize(argv: List[str]) -> List[str]:
+    """``python -m X`` -> ``X``, ``python app.py`` -> ``app.py``, ``npx X`` -> ``X``, ``npm run X`` -> ``script X``."""
+    if not argv:
+        return argv
+    head, rest = Path(argv[0]).name, argv[1:]
+    if _PYTHON.fullmatch(head):
+        while rest and rest[0].startswith("-") and rest[0] != "-m":
+            rest = rest[1:]
+        if rest[:1] == ["-m"]:
+            return rest[1:]
+        return [Path(rest[0]).name, *rest[1:]] if rest else []
+    if head in _RUNNERS or argv[:2] in (
+        ["pnpm", "dlx"],
+        ["yarn", "dlx"],
+        ["npm", "exec"],
+    ):
+        rest = rest[1:] if head not in _RUNNERS else rest
+        while rest and rest[0].startswith("-"):
+            rest = rest[1:]
+        return _normalize(rest)
+    if argv[:2] == ["bundle", "exec"]:
+        return _normalize(argv[2:])
+    if head in _SCRIPT_RUNNERS:
+        if rest[:1] == ["run"]:
+            rest = rest[1:]
+        return ["script", *rest] if rest else [head]
+    return [head, *rest]
+
+
+def _flag_value(argv: List[str], flags: Tuple[str, ...]) -> Optional[str]:
+    for n, arg in enumerate(argv[:-1]):
+        if arg in flags:
+            return argv[n + 1]
+    return None
+
+
+def server_in_python(source: str) -> Optional[ServerMatch]:
+    """The never-ending server this Python source starts, or None."""
+    for what, pattern in PYTHON_SERVERS:
+        if pattern.search(source):
+            return ServerMatch(what)
+    return None
+
+
+def dev_server_offered(agent: Any) -> bool:
+    """Whether this agent has dev_server, loaded or loadable: it registers only in GAIA desktop."""
+    return DEV_SERVER_TOOL in (getattr(agent, "_tools_registry", None) or {})
+
+
+def server_refusal(what: str, folder: Optional[str], offered: bool) -> str:
+    """The refusal for a server started the wrong way, naming the right way."""
+    head = (
+        f"Not run: this starts {what}, a server that never exits. This tool waits "
+        "for its command to finish, so it would hang the turn until it times out."
+    )
+    return f"{head} {_how_to_serve(folder, offered)}"
+
+
+def file_url_refusal(url: str, offered: bool) -> str:
+    """browser_open's answer to a file:// URL: serve the file's folder instead."""
+    from urllib.parse import urlsplit
+    from urllib.request import url2pathname
+
+    path = Path(url2pathname(urlsplit(url).path))
+    folder = path if path.is_dir() else path.parent
+    return f"Error: the browser does not open file:// pages ({url}). " + _how_to_serve(
+        str(folder), offered
+    )
+
+
+def _how_to_serve(folder: Optional[str], offered: bool) -> str:
+    target = folder or "<the folder holding index.html>"
+    if offered:
+        return (
+            f'To show the page in the browser pane, call dev_server(action="start", '
+            f'project="{target}"); call load_tools("dev_server") first if it is not '
+            "in your tools. A folder of HTML files needs no setup."
+        )
+    return (
+        "Starting servers needs GAIA desktop's browser pane, which this chat does not "
+        "have. Ask the user to run the server in their own terminal."
+    )
+
+
 def find_projects(roots: List[Path]) -> List[Path]:
     """The roots that hold a launch.json, for a call that names no project."""
     return [r for r in roots if launch_file(r).is_file()]
@@ -301,13 +596,25 @@ __all__ = [
     "ENV_NAMES",
     "ENV_PREFIXES",
     "LAUNCH_FILE",
+    "PYTHON_SERVERS",
+    "SHELL_SERVERS",
+    "STATIC_NAME",
     "DevServerSpec",
     "LaunchConfigError",
+    "ServerMatch",
     "describe",
+    "dev_server_offered",
     "env_name_allowed",
+    "file_url_refusal",
     "find_projects",
     "launch_file",
     "load_specs",
     "pick_running",
+    "resolve_spec",
+    "server_in_command",
+    "server_in_python",
+    "server_refusal",
     "spec_named",
+    "static_port",
+    "static_spec",
 ]

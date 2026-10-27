@@ -36,6 +36,7 @@ from gaia.logger import get_logger
 
 if TYPE_CHECKING:
     from gaia.browser.base import BrowserDriver
+    from gaia.browser.dev_servers import DevServerSpec
 
 logger = get_logger(__name__)
 
@@ -158,8 +159,8 @@ class BrowserUseToolsMixin:
     _site_pending: Optional[Tuple[str, Optional[str]]] = None
     #: (tool, id(args), origin) worked out for the prompt, reused by the gate.
     _site_memo: Optional[Tuple[str, int, Optional[str]]] = None
-    #: (id(args), spec digest, already running) of the dev server the prompt showed.
-    _dev_pending: Optional[Tuple[int, str, bool]] = None
+    #: (id(args), spec, already running) of the dev server the prompt showed.
+    _dev_pending: Optional[Tuple[int, "DevServerSpec", bool]] = None
 
     # ------------------------------------------------------------------ internals
 
@@ -626,7 +627,7 @@ class BrowserUseToolsMixin:
         )
 
     def _dev_project(self, project: str) -> Path:
-        """The folder whose ``.gaia/launch.json`` a dev_server call reads."""
+        """The folder a dev_server call serves: the one named, or the one with a launch.json."""
         from gaia.agents.tools.search_scope import search_roots
         from gaia.browser.dev_servers import (
             LAUNCH_FILE,
@@ -649,23 +650,28 @@ class BrowserUseToolsMixin:
         raise LaunchConfigError(
             f"No {LAUNCH_FILE} in the folders this chat uses ("
             + ", ".join(str(r) for r in roots)
-            + f"). Pass project= with the project folder. If it has no {LAUNCH_FILE}, "
-            "write one there with write_file first."
+            + "). Pass project= with the folder to serve."
         )
 
-    def _dev_spec(self, name: str, project: str):
-        from gaia.browser.dev_servers import spec_named
+    def _dev_spec(self, name: str, project: str, static_port):
+        from gaia.browser.dev_servers import resolve_spec
 
-        return spec_named(self._dev_project(project), name, allowed=self._dev_allowed)
+        return resolve_spec(
+            self._dev_project(project),
+            name,
+            allowed=self._dev_allowed,
+            static_port=static_port,
+        )
 
     def _dev_server_prompt(self, tool_args) -> Optional[Dict[str, Any]]:
         """What the prompt shows for ``dev_server(action="start")``: the exact command, folder and port.
 
         Display and grant only. The tool body resolves the spec again and runs
         it only when its digest is the one shown here, so an edit between the
-        prompt and the run is refused rather than run unseen.
+        prompt and the run is refused rather than run unseen. A static server's
+        port is picked here once and carried to the body.
         """
-        from gaia.browser.dev_servers import LaunchConfigError
+        from gaia.browser.dev_servers import LaunchConfigError, static_port
 
         self._dev_pending = None
         args = tool_args if isinstance(tool_args, dict) else {}
@@ -675,15 +681,18 @@ class BrowserUseToolsMixin:
             pane = self._pane()
             if pane is None:
                 return None
+            servers = pane.dev_servers()
             spec = self._dev_spec(
-                str(args.get("name") or ""), str(args.get("project") or "")
+                str(args.get("name") or ""),
+                str(args.get("project") or ""),
+                lambda key: static_port(key, servers),
             )
-            running = any(_same_server(s, spec) for s in pane.dev_servers())
+            running = any(_same_server(s, spec) for s in servers)
         except (LaunchConfigError, BrowserError) as e:
             # The tool body raises the same error before it runs anything.
             logger.info("dev_server start not prompted: %s", e)
             return None
-        self._dev_pending = (id(tool_args), spec.digest, running)
+        self._dev_pending = (id(tool_args), spec, running)
         return spec.prompt_args()
 
     def cleanup_browser_use(self) -> None:
@@ -788,6 +797,13 @@ class BrowserUseToolsMixin:
             mixin._note_elements(snap)
 
         def _open(url: str) -> str:
+            if url.lower().startswith("file:"):
+                from gaia.browser.dev_servers import (
+                    dev_server_offered,
+                    file_url_refusal,
+                )
+
+                raise _Refused(file_url_refusal(url, dev_server_offered(mixin)))
             pane = mixin._pane()
             if pane is None:
                 bad = mixin._check_navigable(url)
@@ -1260,8 +1276,12 @@ class BrowserUseToolsMixin:
 
         def _start(driver, name: str, project: str) -> str:
             pending, mixin._dev_pending = mixin._dev_pending, None
-            spec = mixin._dev_spec(name, project)
-            if pending is None or pending[1] != spec.digest:
+            shown = pending[1] if pending is not None else None
+            # Resolved even when unapproved, so a config error is what the model reads.
+            spec = mixin._dev_spec(
+                name, project, lambda _key: shown.port if shown else 0
+            )
+            if shown is None or spec.digest != shown.digest:
                 raise _Refused(
                     "Error: not started. The server's command changed after the user "
                     "approved it, or it was never approved. Call dev_server again and "
@@ -1345,10 +1365,11 @@ class BrowserUseToolsMixin:
         ) -> str:
             """Run a project's dev server and show it in the browser pane; or list, stop, or read its logs.
 
-            Use this, not run_shell_command, to start any dev or web server:
-            it keeps running after the reply. Servers are defined in
-            <project>/.gaia/launch.json. If it is missing,
-            write it with write_file first, like:
+            Use this, not run_shell_command or a Python script, to start any
+            web server: it keeps running after the reply. A folder of plain
+            HTML/CSS/JS needs no setup: dev_server(action="start",
+            project="<folder>"). An app with its own dev command needs
+            <project>/.gaia/launch.json; write it with write_file first, like:
             {"version": "0.0.1", "configurations": [{"name": "web",
             "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 5173}]}
             Starting asks the user first. A server already running is reused.
@@ -1358,8 +1379,8 @@ class BrowserUseToolsMixin:
                         'logs', or 'stop'
                 name: The server's name in launch.json, like 'web'. Needed when
                       it has more than one.
-                project: Folder holding .gaia/launch.json. Leave empty for the
-                         current project.
+                project: The folder to serve, or the one holding
+                         .gaia/launch.json. Leave empty for the current project.
                 errors_only: For logs: only error lines
                 contains: For logs: only lines containing this text
             """

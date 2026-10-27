@@ -403,13 +403,13 @@ FULL_BUNDLES = [
             "dark mode, switch tabs, and run several browser steps in one call."
         ),
     ),
-    # Pane-only as well: runs the project's dev server from .gaia/launch.json.
+    # Pane-only as well: serves a folder of HTML, or runs .gaia/launch.json.
     ToolBundle(
         name="dev_server",
         members=frozenset({"dev_server"}),
         description=(
-            "Start, stop and read the logs of the project's dev server, and "
-            "preview it in the browser pane."
+            "Serve a web page or site you built, or start, stop and read the "
+            "logs of the project's dev server, and preview it in the browser pane."
         ),
     ),
     ToolBundle(

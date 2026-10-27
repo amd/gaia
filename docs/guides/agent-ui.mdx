@@ -706,8 +706,15 @@ browser tool result says which browser answered.
 
 GAIA can start your project's dev server and show it in the pane. Ask "start
 the dev server and show me the home page", and GAIA runs the server, waits for
-its port to answer, and opens it in a pane tab. Servers are defined in
-`.gaia/launch.json` at the top of the project:
+its port to answer, and opens it in a pane tab.
+
+**A folder of plain HTML needs no setup.** Ask GAIA to build a page and show
+it, and it serves the folder with Python's built-in server on `127.0.0.1`, so
+nothing else on your network can reach it. The folder keeps the same port
+between runs, so **Always allow** keeps covering it.
+
+An app with its own dev command defines its servers in `.gaia/launch.json` at
+the top of the project. When that file exists, GAIA uses it:
 
 ```json
 {
@@ -749,6 +756,12 @@ its port to answer, and opens it in a pane tab. Servers are defined in
   app's data folder. Ask "any errors in the dev server?" and GAIA reads the
   error lines, or lines holding some text.
 - **The project and `cwd` must be in folders this chat may use.**
+- **Servers start only this way.** A shell command or Python script that
+  starts a server (`python -m http.server`, `npm run dev`, `serve_forever()`)
+  is refused, because those tools wait for the command to finish and would
+  hang the turn. GAIA is told to use the dev server instead, or, outside the
+  desktop app, to ask you to run it in your own terminal. The browser does not
+  open `file://` pages; GAIA serves the file's folder instead.
 - **Quitting GAIA stops every dev server.** If GAIA crashes, the next launch
   stops the servers it left running, checking each process is still the one
   it started.

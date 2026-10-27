@@ -3361,7 +3361,13 @@ class ShellToolsMixin:
         An install into an environment outside the project (the system Python,
         ``npm -g``) is the exception: it is a one-time approval normally, and
         refused under full access, where nobody is asked.
+
+        A server that never exits is refused under every rule: this tool waits
+        for the line to finish, so it would hang the turn.
         """
+        server = self._server_refusal(command, working_directory)
+        if server is not None:
+            return server, []
         error, steps = self._validate_shell_command(command)
         if error is None or _reaches_the_prompt(error):
             install = self._system_install_block(steps, working_directory)
@@ -3442,6 +3448,33 @@ class ShellToolsMixin:
             if refusal is not None:
                 return {"tier": TIER_REFUSE, **refusal, **NOT_EXECUTED}, steps
         return error, steps
+
+    def _server_refusal(
+        self, command: str, working_directory: Any
+    ) -> Optional[Dict[str, Any]]:
+        """The refusal for a line that starts a never-ending server, or None."""
+        from gaia.browser.dev_servers import (
+            dev_server_offered,
+            server_in_command,
+            server_refusal,
+        )
+
+        server = server_in_command(command)
+        if server is None:
+            return None
+        # Read-only: repairing the session folder waits until the call runs.
+        located = self._call_cwd(working_directory) if working_directory else None
+        cwd = located[0] if located else self.shell_session.cwd
+        folder = os.path.normpath(
+            os.path.join(cwd, os.path.expanduser(server.folder or "."))
+        )
+        return {
+            **NOT_EXECUTED,
+            "status": "error",
+            "tier": TIER_REFUSE,
+            "error": server_refusal(server.what, folder, dev_server_offered(self)),
+            "has_errors": True,
+        }
 
     def _system_install_block(
         self, steps: list, working_directory: Any
