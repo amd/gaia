@@ -20,25 +20,35 @@ from urllib.parse import unquote
 #: Uncompressed size above which an .epub is refused as a likely zip bomb.
 MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024
 
+#: Chapter markup one book may hand the HTML parser, summed over its chapters.
+MAX_CHAPTER_BYTES = 64 * 1024 * 1024
+
+#: Characters one book may produce, about three times War and Peace.
+MAX_TEXT_CHARS = 10_000_000
+
 _XHTML_TYPES = {"application/xhtml+xml", "text/html"}
-_BLOCK_TAGS = [
-    "p",
-    "div",
-    "section",
-    "article",
-    "blockquote",
-    "pre",
-    "li",
-    "tr",
-    "br",
-    "hr",
-    "table",
-    "ul",
-    "ol",
-    "dt",
-    "dd",
-]
-_HEADINGS = ["h1", "h2", "h3", "h4", "h5", "h6"]
+_BLOCK_TAGS = frozenset(
+    {
+        "p",
+        "div",
+        "section",
+        "article",
+        "blockquote",
+        "pre",
+        "li",
+        "tr",
+        "br",
+        "hr",
+        "table",
+        "ul",
+        "ol",
+        "dt",
+        "dd",
+    }
+)
+_HEADINGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
+_SKIPPED = frozenset({"script", "style"})
+_BLOCK_END = object()
 
 
 def _tag(name: str):
@@ -65,19 +75,32 @@ def _soup(markup: bytes):
 
 
 def _chapter_text(markup: bytes) -> str:
+    # pylint: disable-next=import-outside-toplevel
+    from bs4 import CData, NavigableString, Tag
+
+    # One read-only pass: editing the tree costs a scan of the parent per edit.
+    parts = []
     soup = _soup(markup)
-    body = soup.body or soup
-    for tag in body.find_all(["script", "style"]):
-        tag.decompose()
-    # Headings become Markdown so the chunker sees chapter boundaries.
-    for tag in body.find_all(_HEADINGS):
-        level = int(tag.name[1])
-        title = " ".join(tag.get_text(" ").split())
-        tag.replace_with(f"\n\n{'#' * level} {title}\n\n" if title else "\n")
-    for tag in body.find_all(_BLOCK_TAGS):
-        tag.insert_after("\n")
-    text = body.get_text()
-    lines = [" ".join(line.split()) for line in text.splitlines()]
+    stack = [soup.body or soup]
+    while stack:
+        node = stack.pop()
+        if node is _BLOCK_END:
+            parts.append("\n")
+        elif isinstance(node, NavigableString):
+            # Exact types, as get_text matches: no comments, script or style text.
+            if type(node) in (NavigableString, CData):
+                parts.append(node)
+        elif isinstance(node, Tag) and node.name not in _SKIPPED:
+            if node.name in _HEADINGS:
+                # Headings become Markdown so the chunker sees chapter boundaries.
+                title = " ".join(node.get_text(" ").split())
+                level = int(node.name[1])
+                parts.append(f"\n\n{'#' * level} {title}\n\n" if title else "\n")
+                continue
+            if node.name in _BLOCK_TAGS:
+                stack.append(_BLOCK_END)
+            stack.extend(reversed(node.contents))
+    lines = [" ".join(line.split()) for line in "".join(parts).splitlines()]
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
@@ -90,6 +113,19 @@ def _read(zf: zipfile.ZipFile, name: str, file_name: str) -> bytes:
             f"Could not read EPUB file: {file_name}\n"
             f"Reason: entry '{name}' is unreadable ({e})\n{_CORRUPT_HINT}"
         ) from e
+    except RuntimeError as e:
+        # A password-protected entry; after NotImplementedError, its subclass.
+        raise ValueError(
+            f"Could not read EPUB file: {file_name}\n"
+            f"Reason: entry '{name}' is password-protected ({e})\n"
+            "Remove the password with the tool that set it, or convert the "
+            "book to PDF and index the PDF instead."
+        ) from e
+
+
+def _member_path(href: str) -> str:
+    """Map an href to its zip member name: drop ``#fragment``, ``./``, ``%20``, ``/``."""
+    return posixpath.normpath(unquote(href.split("#")[0])).lstrip("/")
 
 
 def _spine_paths(zf: zipfile.ZipFile, file_name: str) -> List[str]:
@@ -115,17 +151,14 @@ def _spine_paths(zf: zipfile.ZipFile, file_name: str) -> List[str]:
         for item in opf.find_all(_tag("item"))
         if item.get("id") and item.get("href")
     }
-    paths = []
+    # A dict keeps reading order and lists a chapter the spine repeats once.
+    paths = {}
     for ref in opf.find_all(_tag("itemref")):
         item = manifest.get(ref.get("idref"))
         if item is None or item.get("media-type") not in _XHTML_TYPES:
             continue
-        paths.append(
-            posixpath.normpath(
-                posixpath.join(base, unquote(item["href"].split("#")[0]))
-            )
-        )
-    return paths
+        paths[_member_path(posixpath.join(base, item["href"]))] = None
+    return list(paths)
 
 
 def _encrypted_paths(zf: zipfile.ZipFile, file_name: str) -> set:
@@ -134,9 +167,19 @@ def _encrypted_paths(zf: zipfile.ZipFile, file_name: str) -> set:
     except KeyError:
         return set()
     return {
-        unquote(ref.get("uri", ""))
+        _member_path(ref["uri"])
         for ref in encryption.find_all(_tag("cipherreference"))
+        if ref.get("uri")
     }
+
+
+def _too_large(file_name: str, reason: str) -> ValueError:
+    return ValueError(
+        f"EPUB file too large to index: {file_name}\n"
+        f"Reason: {reason}, the most GAIA indexes from one book.\n"
+        "Split it into smaller books (Calibre can do this), or index only the "
+        "chapters you need as PDF or text files."
+    )
 
 
 def extract_epub_text(epub_path: str) -> Tuple[str, int]:
@@ -147,7 +190,8 @@ def extract_epub_text(epub_path: str) -> Tuple[str, int]:
         held any text.
 
     Raises:
-        ValueError: the file is missing, corrupt, DRM-protected, or a zip bomb.
+        ValueError: the file is missing, corrupt, password- or DRM-protected,
+            or too large to index.
     """
     file_name = Path(epub_path).name
 
@@ -186,6 +230,7 @@ def extract_epub_text(epub_path: str) -> Tuple[str, int]:
 
         names = set(zf.namelist())
         chapters = []
+        markup_bytes = text_chars = 0
         for path in spine:
             if path not in names:
                 raise ValueError(
@@ -193,7 +238,19 @@ def extract_epub_text(epub_path: str) -> Tuple[str, int]:
                     f"Reason: chapter '{path}' is listed but missing\n"
                     f"{_CORRUPT_HINT}"
                 )
+            markup_bytes += zf.getinfo(path).file_size
+            if markup_bytes > MAX_CHAPTER_BYTES:
+                raise _too_large(
+                    file_name,
+                    "its chapters hold more than "
+                    f"{MAX_CHAPTER_BYTES // (1024 * 1024)} MB of markup",
+                )
             text = _chapter_text(_read(zf, path, file_name))
+            text_chars += len(text)
+            if text_chars > MAX_TEXT_CHARS:
+                raise _too_large(
+                    file_name, f"it holds more than {MAX_TEXT_CHARS:,} characters"
+                )
             if text:
                 chapters.append(text)
 

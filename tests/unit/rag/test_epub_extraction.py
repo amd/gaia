@@ -7,6 +7,8 @@ EPUB fixtures are built with zipfile so the tests stay hermetic.
 
 from __future__ import annotations
 
+import struct
+import time
 import zipfile
 import zlib
 from pathlib import Path
@@ -15,6 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.agents.tools.document_text import INDEX_ONLY_DOCUMENTS
+from gaia.rag import epub_utils
 from gaia.rag.epub_utils import extract_epub_text
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.utils.document_formats import UNSUPPORTED_DOCUMENTS
@@ -49,7 +52,9 @@ def _chapter(title: str, body: str) -> str:
     )
 
 
-def _make_epub(path: Path, *, encrypted: bool = False) -> Path:
+def _make_epub(
+    path: Path, *, encrypted: bool = False, cipher_uri: str = "OEBPS/Text/ch1.xhtml"
+) -> Path:
     with zipfile.ZipFile(path, "w") as zf:
         zf.writestr("mimetype", "application/epub+zip")
         zf.writestr("META-INF/container.xml", _CONTAINER)
@@ -71,7 +76,7 @@ def _make_epub(path: Path, *, encrypted: bool = False) -> Path:
                 "META-INF/encryption.xml",
                 '<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" '
                 'xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData>'
-                '<enc:CipherData><enc:CipherReference URI="OEBPS/Text/ch1.xhtml"/>'
+                f'<enc:CipherData><enc:CipherReference URI="{cipher_uri}"/>'
                 "</enc:CipherData></enc:EncryptedData></encryption>",
             )
     return path
@@ -263,3 +268,168 @@ def test_spine_href_escaping_the_archive_is_a_missing_chapter(tmp_path):
         )
     with pytest.raises(ValueError, match="listed but missing"):
         extract_epub_text(str(path))
+
+
+def _paragraphs(n: int) -> bytes:
+    return _chapter("Long", "<p>A <em>short</em> paragraph.</p>" * n).encode()
+
+
+def _best_of_two(markup: bytes) -> float:
+    times = []
+    for _ in range(2):
+        start = time.perf_counter()
+        epub_utils._chapter_text(markup)
+        times.append(time.perf_counter() - start)
+    return min(times)
+
+
+def test_chapter_text_time_grows_linearly_with_paragraphs():
+    """A novel in one XHTML file holds tens of thousands of <p>."""
+    small, large = _paragraphs(5_000), _paragraphs(50_000)
+    text = epub_utils._chapter_text(large)
+    assert text.count("A short paragraph.") == 50_000
+    # 10x input: linear is ~10x time, quadratic ~100x. 40x leaves room for CI noise.
+    ratio = _best_of_two(large) / _best_of_two(small)
+    assert ratio < 40, f"10x paragraphs took {ratio:.0f}x as long"
+
+
+def test_chapter_text_keeps_inline_text_and_block_tails_apart():
+    text = epub_utils._chapter_text(
+        b"<body><div><p>one <b>two</b></p>tail<br/>after<!-- note -->"
+        b"<script>x()</script><h2>Sub <i>head</i></h2>end</div></body>"
+    )
+    assert text == "one two\ntail\nafter\n\n## Sub head\n\nend"
+
+
+def test_deeply_nested_chapter_does_not_hit_the_recursion_limit():
+    depth = 5_000
+    markup = b"<body>" + b"<div>" * depth + b"deep" + b"</div>" * depth + b"</body>"
+    assert epub_utils._chapter_text(markup) == "deep"
+
+
+def _spine_epub(path: Path, itemrefs: str, chapters: dict) -> Path:
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("META-INF/container.xml", _CONTAINER)
+        manifest = "".join(
+            f'<item id="{cid}" href="{cid}.xhtml" media-type="application/xhtml+xml"/>'
+            for cid in chapters
+        )
+        zf.writestr(
+            "OEBPS/content.opf",
+            f"<package><manifest>{manifest}</manifest><spine>{itemrefs}</spine>"
+            "</package>",
+        )
+        for cid, body in chapters.items():
+            zf.writestr(f"OEBPS/{cid}.xhtml", _chapter(cid, body))
+    return path
+
+
+def test_a_chapter_the_spine_repeats_is_read_once(tmp_path):
+    path = _spine_epub(
+        tmp_path / "repeat.epub",
+        '<itemref idref="a"/><itemref idref="b"/>' + '<itemref idref="a"/>' * 5_000,
+        {"a": "<p>Alpha</p>", "b": "<p>Beta</p>"},
+    )
+    with patch.object(
+        epub_utils, "_chapter_text", wraps=epub_utils._chapter_text
+    ) as parse:
+        text, chapters = extract_epub_text(str(path))
+    assert parse.call_count == 2
+    assert chapters == 2
+    assert text.count("Alpha") == 1
+    assert text.index("Alpha") < text.index("Beta")
+
+
+def test_book_over_the_text_cap_is_refused_with_a_clear_error(tmp_path):
+    path = _spine_epub(
+        tmp_path / "huge.epub",
+        '<itemref idref="a"/><itemref idref="b"/>',
+        {"a": "<p>" + "x" * 60 + "</p>", "b": "<p>" + "y" * 60 + "</p>"},
+    )
+    with (
+        patch.object(epub_utils, "MAX_TEXT_CHARS", 100),
+        patch.object(
+            epub_utils, "_chapter_text", wraps=epub_utils._chapter_text
+        ) as parse,
+        pytest.raises(ValueError, match=r"huge\.epub[\s\S]*more than 100 char"),
+    ):
+        extract_epub_text(str(path))
+    assert parse.call_count == 2
+
+
+def test_book_exactly_at_the_text_cap_is_read(tmp_path):
+    path = _spine_epub(tmp_path / "edge.epub", '<itemref idref="a"/>', {"a": ""})
+    exact = len(extract_epub_text(str(path))[0])
+    with patch.object(epub_utils, "MAX_TEXT_CHARS", exact):
+        assert extract_epub_text(str(path))[1] == 1
+
+
+def test_book_over_the_markup_cap_is_refused_before_parsing(tmp_path):
+    path = _spine_epub(
+        tmp_path / "big.epub",
+        '<itemref idref="a"/><itemref idref="b"/>',
+        {"a": "<p>a</p>", "b": "<p>" + "b" * 5_000 + "</p>"},
+    )
+    with (
+        patch.object(epub_utils, "MAX_CHAPTER_BYTES", 1_000),
+        patch.object(
+            epub_utils, "_chapter_text", wraps=epub_utils._chapter_text
+        ) as parse,
+        pytest.raises(ValueError, match=r"big\.epub[\s\S]*Split it"),
+    ):
+        extract_epub_text(str(path))
+    assert parse.call_count == 1
+
+
+def _flag_password_protected(path: Path, member: str) -> None:
+    raw = bytearray(path.read_bytes())
+    at = raw.find(b"PK\x01\x02")
+    while at != -1:
+        name_len = struct.unpack_from("<H", raw, at + 28)[0]
+        if raw[at + 46 : at + 46 + name_len] == member.encode():
+            raw[at + 8] |= 1
+        at = raw.find(b"PK\x01\x02", at + 4)
+    path.write_bytes(bytes(raw))
+
+
+def test_password_protected_chapter_names_the_file(tmp_path):
+    path = _make_epub(tmp_path / "locked.epub")
+    _flag_password_protected(path, "OEBPS/Text/ch2.xhtml")
+    with pytest.raises(
+        ValueError, match=r"locked\.epub[\s\S]*ch2\.xhtml' is password-protected"
+    ) as err:
+        extract_epub_text(str(path))
+    assert isinstance(err.value.__cause__, RuntimeError)
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "./OEBPS/Text/ch1.xhtml",
+        "/OEBPS/Text/ch1.xhtml",
+        "OEBPS/Text/%63h1.xhtml",
+        "OEBPS/Misc/../Text/ch1.xhtml",
+    ],
+)
+def test_drm_check_matches_differently_spelled_chapter_paths(tmp_path, uri):
+    path = _make_epub(tmp_path / "drm.epub", encrypted=True, cipher_uri=uri)
+    with pytest.raises(ValueError, match="DRM-encrypted"):
+        extract_epub_text(str(path))
+
+
+def test_obfuscated_font_alone_is_not_drm(tmp_path):
+    path = _make_epub(
+        tmp_path / "fonts.epub", encrypted=True, cipher_uri="OEBPS/Fonts/a.otf"
+    )
+    assert extract_epub_text(str(path))[1] == 2
+
+
+@pytest.mark.parametrize(
+    "bom,codec",
+    [(b"\xff\xfe\x00\x00", "utf-32-le"), (b"\x00\x00\xfe\xff", "utf-32-be")],
+)
+def test_utf32_text_is_called_utf32_not_utf16(rag, tmp_path, bom, codec):
+    path = tmp_path / "notes.adoc"
+    path.write_bytes(bom + "Plain notes".encode(codec))
+    with pytest.raises(ValueError, match="UTF-32 text.*Re-save it as UTF-8"):
+        rag._extract_text_from_file(str(path))

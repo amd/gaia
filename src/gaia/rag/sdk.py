@@ -2476,6 +2476,12 @@ These positions indicate where to split the text."""
         """Raise when *file_path* holds binary data; latin-1 would "decode" it as garbage."""
         with self._safe_open(file_path, "rb") as f:
             head = f.read(8192)
+        # UTF-32 LE's BOM starts with UTF-16 LE's, so check it first.
+        if head.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+            raise ValueError(
+                f"Cannot index {Path(file_path).name}: it is UTF-32 text, which "
+                "GAIA does not decode. Re-save it as UTF-8 and index that copy."
+            )
         if head.startswith((b"\xff\xfe", b"\xfe\xff")):
             raise ValueError(
                 f"Cannot index {Path(file_path).name}: it is UTF-16 text, which "
