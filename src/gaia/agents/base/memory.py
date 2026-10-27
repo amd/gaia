@@ -3896,7 +3896,13 @@ class MemoryMixin(ProceduralMemoryMixin):
             r"(?:is|was|to|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
             r"\bpin(?:'s)?(?:\s+number)?\s+(?:for|on|at|of)"
             r"(?!\s+page\b)(?:\s+\w+){1,8}?\s+\d{3,8}\b",
-            r"\bpin\s+code\s*(?:(?:is|was|to|:|=|[-\u2013\u2014])\s*)?\d{3,5}\b",
+            # "PIN code" also names an Indian postal code, which is 6 digits.
+            r"\bpin\s+code\s*(?:(?:is|was|to|:|=|[-\u2013\u2014])\s*)?"
+            r"(?!\d{6}\b)\d{3,8}\b",
+            r"\bpin\s+code\s+(?:for|on|at|of)(?:\s+\w+){1,8}?\s{0,3}"
+            r"(?:is|was|to|:|=|[-\u2013\u2014])\s{0,3}(?!\d{6}\b)\d{3,8}\b",
+            r"\bpin\s+code\s+(?:for|on|at|of)(?!\s+page\b)(?:\s+\w+){1,8}?\s+"
+            r"(?!\d{6}\b)\d{3,8}\b",
             r"(?<!gpio )\bpin(?:'s)?(?!\s+code\b)(?:\s+number)?\s*"
             r"(?:is|was|to|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
             r"(?<!gpio )\bpin(?:'s)?(?!\s+(?:code|on|at|for)\b)(?:\s+number)?\s+"
@@ -3914,12 +3920,13 @@ class MemoryMixin(ProceduralMemoryMixin):
         )
     )
 
-    #: A run of 13+ digits, optionally grouped by spaces, dashes or dots. A card
-    #: number is a 13-19-digit stretch of it that has a card network's prefix
-    #: and length and passes the Luhn check, so a tracking number, a timestamp
-    #: or a 15-digit IMEI is not one.
+    #: A run of 13+ digits, optionally grouped by spaces (of any width, but
+    #: never a line break), dashes or dots. A card number is a 13-19-digit
+    #: stretch of it that has a card network's prefix and length and passes the
+    #: Luhn check, so a tracking number, a timestamp or a 15-digit IMEI is not one.
     _CARD_NUMBER: ClassVar[re.Pattern] = re.compile(
-        r"(?<!\d)\d(?:[\t .\u00a0\u2010-\u2015-]{0,8}\d){12,}(?!\d)"
+        r"(?<!\d)\d(?:(?:[^\S\n\r\x85\u2028\u2029]|[.\u2010-\u2015-]){0,8}\d){12,}"
+        r"(?!\d)"
     )
     #: Visa, Mastercard, Amex, Discover, JCB, Diners Club, UnionPay, by length.
     _CARD_PREFIX: ClassVar[re.Pattern] = re.compile(

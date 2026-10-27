@@ -108,6 +108,10 @@ LONG_INPUTS = {
     "passcode then spaces": "passcode" + " " * 20_000,
     "security code then spaces": "security code" + " " * 20_000,
     "pin parentheses then spaces": "pin (" + " " * 20_000,
+    "pin code then spaces": "pin code" + " " * 100_000,
+    "pin code for then spaces": "pin code for x" + " " * 100_000,
+    "pin code for then words": "pin code for " + "word " * 20_000,
+    "narrow-space digits": "4\u202f" * 50_000,
     "spaced digits": "4 " * 50_000,
     "dotted digits": "1." * 50_000,
     "card-grouped digits": "4111 " * 20_000,
@@ -179,6 +183,12 @@ def test_the_conversation_log_keeps_no_secret(store):
         "passcode for the alarm is 4821",
         "Passcode number 4821",
         "pass code is 4821",
+        "PIN code for Chase is 4821",
+        "PIN code on my card: 4821",
+        "PIN code at my bank 4821",
+        "PIN code of my card is 4821",
+        "PIN code is 48219",
+        "PIN code is 4821937",
     ),
 )
 def test_pin_variants_are_masked(text):
@@ -193,6 +203,9 @@ def test_pin_variants_are_masked(text):
         "Pin on page 123",
         "My PIN code is 560001",
         "PIN code 560001",
+        "PIN code of Bangalore is 560001",
+        "PIN code for Koramangala 560034",
+        "Pin code on page 123",
     ),
 )
 def test_ordinary_pin_phrases_are_not_masked(text):
@@ -206,6 +219,10 @@ def test_ordinary_pin_phrases_are_not_masked(text):
         "4111 - 1111 - 1111 - 1111",
         "4111   1111   1111   1111",
         "4111\t1111\t1111\t1111",
+        "4111\u202f1111\u202f1111\u202f1111",
+        "4111\u20091111\u20091111\u20091111",
+        "4111\u30001111\u30001111\u30001111",
+        "4111\u00a01111\u00a01111\u00a01111",
     ),
 )
 def test_card_grouped_with_spaced_separators_is_masked(text):
@@ -219,8 +236,9 @@ def test_amex_4_4_4_3_is_masked():
     assert "[secret removed]" in MemoryMixin._mask_credentials(text)
 
 
-def test_card_groups_do_not_cross_a_newline():
-    text = "4111\n1111\n1111\n1111"
+@pytest.mark.parametrize("newline", ("\n", "\r\n", "\u2028", "\x85"))
+def test_card_groups_do_not_cross_a_newline(newline):
+    text = newline.join(("4111", "1111", "1111", "1111"))
     assert not MemoryMixin._looks_like_credential(text)
     assert MemoryMixin._mask_credentials(text) == text
 
