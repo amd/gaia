@@ -487,7 +487,7 @@ function majorOf(v: string): number {
 }
 
 export interface VersionCheckOptions {
-  /** apiVersion this package was built against. Default API_VERSION ("2.21"). */
+  /** apiVersion this package was built against. Default API_VERSION ("2.22"). */
   expectedApiVersion?: string;
 }
 
