@@ -628,6 +628,7 @@ class BrowserUseToolsMixin:
 
     def _dev_project(self, project: str) -> Path:
         """The folder a dev_server call serves: the one named, or the one with a launch.json."""
+        from gaia.agents.tools.path_access import read_access_error
         from gaia.agents.tools.search_scope import search_roots
         from gaia.browser.dev_servers import (
             LAUNCH_FILE,
@@ -636,7 +637,12 @@ class BrowserUseToolsMixin:
         )
 
         if project:
-            return Path(project).expanduser()
+            folder = Path(project).expanduser()
+            # Asks the user for a folder outside the chat, as read_file does.
+            refused = read_access_error(self, folder)
+            if refused is not None:
+                raise LaunchConfigError(refused["error"])
+            return folder
         roots = search_roots(self)
         found = find_projects(roots)
         if len(found) == 1:

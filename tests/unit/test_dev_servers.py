@@ -63,6 +63,8 @@ class _Validator:
     def __init__(self, *roots: Path) -> None:
         self.allowed_paths = {r.resolve() for r in roots}
         self.scratch_dir = None
+        self.asked: list = []
+        self.user_allows = False
 
     def is_path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         assert (
@@ -70,6 +72,16 @@ class _Validator:
         ), "dev_server must never prompt for a folder from its gate"
         p = Path(path).resolve()
         return any(p == r or r in p.parents for r in self.allowed_paths)
+
+    def validate_read(self, path: str, prompt_user: bool = True):
+        if self.is_path_allowed(path, prompt_user=False):
+            return True, ""
+        if prompt_user:
+            self.asked.append(Path(path).resolve())
+            if self.user_allows:
+                self.allowed_paths.add(Path(path).resolve())
+                return True, ""
+        return False, f"Access denied: {path} is outside the folders this chat may use."
 
 
 def allow(*roots: Path):
@@ -554,7 +566,20 @@ def test_an_html_folder_outside_the_allowed_folders_is_refused(agent, bridge, tm
     assert not asks
     out = run()
     assert "outside the folders this chat may use" in out
+    assert agent.path_validator.asked, "the user was asked for the folder"
     assert "ensure" not in [b["op"] for b in dev_ops(bridge)]
+
+
+def test_a_folder_the_user_allows_when_asked_is_served(agent, bridge, tmp_path):
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "index.html").write_text("<h1>x</h1>")
+    agent.path_validator.user_allows = True
+    shown, asks, run = call(agent, action="start", project=str(outside))
+    assert asks and shown["folder"] == str(outside.resolve())
+    run()
+    assert agent.path_validator.asked == [outside.resolve()]
+    assert "ensure" in [b["op"] for b in dev_ops(bridge)]
 
 
 def test_a_named_server_in_a_plain_folder_says_there_is_only_static(agent, site):
