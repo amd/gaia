@@ -111,7 +111,7 @@ Dependabot can't see these pins because they are string literals in Python, so r
 3. **Compare tool names against what GAIA references.** Grep `docs/connectors/`, `hub/skills/`, and `src/` for the old names and update every hit in the same PR.
 4. **Bump the pin** in `mcp_servers.py` and run `python -m pytest tests/unit/connectors/ -q`.
 
-A configured connector keeps the command it was saved with in `~/.gaia/mcp_servers.json`. Existing users pick up a new pin when they re-run `gaia connectors configure <id>` (or re-save the tile in Settings → Connections), so call out tool renames in the release notes.
+A configured connector keeps the command it was saved with in `~/.gaia/mcp_servers.json`. Existing users pick up a new pin when they re-run `gaia connectors configure <id>` (or re-save the tile in Settings → Connectors), so call out tool renames in the release notes.
 
 ## See also
 
