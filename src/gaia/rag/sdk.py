@@ -2273,16 +2273,21 @@ These positions indicate where to split the text."""
 
         # Unknown file type - try as text
         else:
+            self._refuse_binary(file_path, file_type)
             self.log.warning(
                 f"Unknown file type {file_type}, attempting to read as text"
             )
-            self._refuse_binary(file_path, file_type)
             return self._extract_text_from_text_file(file_path), metadata
 
     def _refuse_binary(self, file_path: str, file_type: str) -> None:
         """Raise when *file_path* holds binary data; latin-1 would "decode" it as garbage."""
         with self._safe_open(file_path, "rb") as f:
             head = f.read(8192)
+        if head.startswith((b"\xff\xfe", b"\xfe\xff")):
+            raise ValueError(
+                f"Cannot index {Path(file_path).name}: it is UTF-16 text, which "
+                "GAIA does not decode. Re-save it as UTF-8 and index that copy."
+            )
         if b"\x00" in head:
             raise ValueError(
                 f"Cannot index {Path(file_path).name}: it is a binary file, not "

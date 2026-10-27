@@ -185,3 +185,81 @@ def test_index_only_formats_reach_a_real_parser(rag, tmp_path, ext):
         rag._extract_text_from_file(str(path))
     assert "no reader for" not in str(err.value)
     assert f"not a valid {ext} file" in str(err.value)
+
+
+def test_refused_binary_does_not_log_that_it_is_read_as_text(rag, tmp_path):
+    path = tmp_path / "book.mobi"
+    path.write_bytes(b"BOOKMOBI\x00\x00")
+    with (
+        patch.object(rag.log, "warning") as warning,
+        pytest.raises(ValueError, match="binary file"),
+    ):
+        rag._extract_text_from_file(str(path))
+    warning.assert_not_called()
+
+
+@pytest.mark.parametrize("bom", [b"\xff\xfe", b"\xfe\xff"])
+def test_utf16_text_is_called_utf16_not_binary(rag, tmp_path, bom):
+    path = tmp_path / "notes.adoc"
+    codec = "utf-16-le" if bom == b"\xff\xfe" else "utf-16-be"
+    path.write_bytes(bom + "Plain notes".encode(codec))
+    with pytest.raises(ValueError, match="UTF-16 text.*Re-save it as UTF-8"):
+        rag._extract_text_from_file(str(path))
+
+
+def test_utf8_bom_and_cjk_text_with_unknown_extension_is_read(rag, tmp_path):
+    path = tmp_path / "notes.adoc"
+    path.write_bytes("﻿设备 NPU 推理 — ünïcödé".encode("utf-8"))
+    text, _ = rag._extract_text_from_file(str(path))
+    assert "设备 NPU 推理" in text
+
+
+def test_nul_in_the_last_sniffed_byte_is_refused(rag, tmp_path):
+    path = tmp_path / "log.adoc"
+    path.write_bytes(b"a" * 8191 + b"\x00")
+    with pytest.raises(ValueError, match="binary file"):
+        rag._extract_text_from_file(str(path))
+
+
+def test_epub_over_the_uncompressed_cap_is_refused_as_a_zip_bomb(tmp_path):
+    path = _make_epub(tmp_path / "bomb.epub")
+    with (
+        patch("gaia.rag.epub_utils.MAX_UNCOMPRESSED_BYTES", 100),
+        pytest.raises(ValueError, match=r"bomb\.epub[\s\S]*zip bomb"),
+    ):
+        extract_epub_text(str(path))
+
+
+def test_prefixed_opf_and_encoded_fragment_hrefs_resolve(tmp_path):
+    path = tmp_path / "real.epub"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip")
+        zf.writestr("META-INF/container.xml", _CONTAINER)
+        zf.writestr(
+            "OEBPS/content.opf",
+            '<opf:package xmlns:opf="http://www.idpf.org/2007/opf"><opf:manifest>'
+            '<opf:item id="a" href="Text/chapter%20one.xhtml#top" '
+            'media-type="application/xhtml+xml"/>'
+            '<opf:item id="n" href="nav.xhtml" media-type="application/xhtml+xml" '
+            'properties="nav"/></opf:manifest>'
+            '<opf:spine><opf:itemref idref="a"/></opf:spine></opf:package>',
+        )
+        zf.writestr("OEBPS/Text/chapter one.xhtml", _chapter("One", "<p>Body</p>"))
+        zf.writestr("OEBPS/nav.xhtml", _chapter("Contents", "<p>TOC</p>"))
+    text, chapters = extract_epub_text(str(path))
+    assert chapters == 1
+    assert "# One" in text and "TOC" not in text
+
+
+def test_spine_href_escaping_the_archive_is_a_missing_chapter(tmp_path):
+    path = tmp_path / "evil.epub"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("META-INF/container.xml", _CONTAINER)
+        zf.writestr(
+            "OEBPS/content.opf",
+            '<package><manifest><item id="x" href="../../../etc/passwd" '
+            'media-type="application/xhtml+xml"/></manifest>'
+            '<spine><itemref idref="x"/></spine></package>',
+        )
+    with pytest.raises(ValueError, match="listed but missing"):
+        extract_epub_text(str(path))
