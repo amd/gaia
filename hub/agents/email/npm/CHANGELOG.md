@@ -6,6 +6,10 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **One very long turn no longer vanishes from the conversation.** A turn
+  bigger than the whole history budget was dropped from what the model saw
+  next, answer included. It is now kept with its longest messages cut and a
+  note saying how much.
 - **SKILL.md examples include authorization headers.** The stateful-agent
   and autonomy code examples in SKILL.md now send the session token required
   by the sidecar, and the gotchas note lists `/v1/email/health` and

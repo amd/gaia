@@ -28,7 +28,9 @@ from gaia.ui.email_sidecar import relay
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
+    SIDECAR_AGENT_IDS,
     memory_supported,
+    profile_for,
     surface_supported,
 )
 from gaia.ui.models import ChatRequest
@@ -414,10 +416,10 @@ class _Handler:
         self.events.append(event)
 
 
-def _dispatch(monkeypatch, api_version, memory):
+def _dispatch(monkeypatch, api_version, memory, agent_type="gaia", proxy=None):
     handle = SimpleNamespace(
         api_version=api_version,
-        proxy=lambda: SimpleNamespace(init=lambda: (200, {})),
+        proxy=lambda: proxy or SimpleNamespace(init=lambda: (200, {})),
     )
     monkeypatch.setattr(
         daemon_client_module, "acquire_handle", lambda _agent_id: handle
@@ -428,10 +430,10 @@ def _dispatch(monkeypatch, api_version, memory):
     handler = _Handler()
     helpers._dispatch_sidecar_query(
         handler,
-        ChatRequest(session_id="s1", message="hi", agent_type="gaia"),
+        ChatRequest(session_id="s1", message="hi", agent_type=agent_type),
         [],
         "m",
-        "gaia",
+        agent_type,
         memory=memory,
     )
     return handler.events, calls
@@ -457,6 +459,42 @@ def test_a_memory_on_turn_still_runs_on_an_older_agent(monkeypatch):
 def test_a_current_agent_is_told_the_mode(monkeypatch):
     _events, calls = _dispatch(monkeypatch, "2.18", "private")
     assert calls[0]["memory"] == "private"
+
+
+def test_every_profile_without_a_memory_floor_explains_the_refusal():
+    for agent_id in SIDECAR_AGENT_IDS:
+        profile = profile_for(agent_id)
+        if profile.min_memory_api_version is None:
+            assert profile.memory_upgrade_message.strip(), agent_id
+
+
+@pytest.mark.parametrize("version", ["2.4", "2.18", "9.9"])
+@pytest.mark.parametrize("memory", ["private", "off"])
+def test_email_refuses_private_turns_before_init_or_query(monkeypatch, version, memory):
+    init_calls = []
+    proxy = SimpleNamespace(init=lambda: (init_calls.append(True) or (200, {})))
+    events, calls = _dispatch(monkeypatch, version, memory, "email", proxy)
+
+    assert init_calls == []
+    assert calls == []
+    assert len(events) == 1 and events[0]["type"] == "agent_error"
+    message = events[0]["content"]
+    assert "email agent" in message
+    assert "private" in message and "memory" in message
+    assert "not sent" in message
+
+
+@pytest.mark.parametrize("version", ["2.4", "2.18", "9.9"])
+def test_email_with_memory_on_still_runs_without_an_unsupported_field(
+    monkeypatch, version
+):
+    init_calls = []
+    proxy = SimpleNamespace(init=lambda: (init_calls.append(True) or (200, {})))
+    events, calls = _dispatch(monkeypatch, version, "on", "email", proxy)
+
+    assert init_calls == [True]
+    assert len(calls) == 1 and calls[0]["memory"] is None
+    assert not [event for event in events if event["type"] == "agent_error"]
 
 
 # ── provider-error wording (#5295) ─────────────────────────────────────────

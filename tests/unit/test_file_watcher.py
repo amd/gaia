@@ -575,6 +575,7 @@ class TestFileChangeHandler:
 
         handler.on_created(self._event(target))
         assert handler.wait_idle(5)
+        target.unlink()
         handler.on_deleted(self._event(target))
         assert handler.wait_idle(5)
 

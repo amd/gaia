@@ -2257,9 +2257,10 @@ First-run hardware scan (issues #1726, #1727).
   <Accordion title="GET /api/onboarding/start">
     What a new chat's empty screen offers: up to four `cards` and the
     `working_folder` (`{path, name, gaia_folder}`) a new chat's agent works in.
-    Each card (`{skill, title, note, prompt, needs_input}`) is backed by an
-    installed skill; cards for what the user set up (indexed documents, a
-    connected mail account) come first. `needs_input` means the prompt ends
+    Each card is `{skill, title, note, prompt, needs_input}`. Its task runs on
+    the agent's own tools, so it appears whether or not `skill` is installed;
+    only the check-in card needs its skill. Cards for what the user set up
+    (indexed documents, a connected mail account) come first. `needs_input` means the prompt ends
     where the user types the subject. When the agent can't list its skills,
     `cards` is empty and `skills_error` says why. Makes no model call.
   </Accordion>

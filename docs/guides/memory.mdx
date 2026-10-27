@@ -43,7 +43,7 @@ Before using Agent Memory, make sure you have the following in place:
 
 ## Turn Memory On or Off
 
-Memory is on by default, in the terminal UI and the Agent UI alike. Turning it off stops all memory writes on this machine until you turn it back on; a private chat pauses it for that chat only. To keep even a chat's first message out of memory, turn on **Private** next to the message box before you send it; an open chat can be made private with the eye icon in its header. Either switch takes effect on the next message, in open chats as well as new ones; the Agent UI's background goal runs and scheduled tasks follow it too.
+Memory is on by default, in the terminal UI and the Agent UI alike. Turning it off stops all memory writes on this machine until you turn it back on; a private chat pauses it for that chat only. To keep even a chat's first message out of memory, turn on **Private** next to the message box before you send it; an open chat can be made private with the eye button in its header, which stays filled while the chat is private. Either switch takes effect on the next message, in open chats as well as new ones; the Agent UI's background goal runs and scheduled tasks follow it too.
 
 ### Via the Agent UI (recommended)
 
@@ -66,6 +66,8 @@ Verify it stuck:
 curl http://localhost:4200/api/memory/settings
 # → {"memory_enabled": false, ...}
 ```
+
+The email agent is not available in private chats or while memory is turned off. The chat HTTP API stops these requests before sending them to the email agent, which does not yet support these settings. Use the GAIA agent to continue with memory disabled.
 
 While memory is off, none of the behaviors on this page (cross-session recall, automatic extraction, the Memory page) are active -- sessions run in "incognito" mode, nothing is written to `~/.gaia/memory.db`, and the agent says memory is turned off when asked to remember something.
 

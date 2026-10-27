@@ -1411,9 +1411,10 @@ def build_parser():
     email_parser = subparsers.add_parser(
         "email",
         help=(
-            "Email Triage Agent — read, organize, and reply to Gmail with "
-            "all body inference running locally on Lemonade. Requires the "
-            "Google connector to be configured (Settings → Connections)."
+            "Email Triage Agent — read, organize, and reply to Gmail or "
+            "Outlook with all body inference running locally on Lemonade. "
+            "Requires the Google or Microsoft connector to be configured "
+            "(Settings → Connections)."
         ),
         parents=[
             parent_parser,

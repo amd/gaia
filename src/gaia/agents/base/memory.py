@@ -84,11 +84,11 @@ from gaia.agents.base.tool_outcome import (
 from gaia.agents.base.verification import check_was_executed
 from gaia.chat.sdk import AgentSDK, LLMCallCancelled
 from gaia.llm.lemonade_client import (
-    DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
     _endpoint_label,
     backend_crash_remedy,
     configured_lemonade_url,
+    find_model_requirement,
 )
 
 if TYPE_CHECKING:
@@ -600,6 +600,24 @@ _MEMORY_TOOLS = frozenset(
 #: Guards the one-time creation of each instance's extraction bookkeeping.
 _EXTRACTION_STATE_LOCK = threading.Lock()
 
+
+class _UserTurns:
+    """User turns running in this process, across every agent.
+
+    Each chat session has its own agent, and all of them share the one local
+    model, so a turn in any session must hold back every session's extraction —
+    not only its own, or a new chat waits behind the previous chat's. Agents on
+    a cloud provider are held back too; only the timing changes for them.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.in_flight = 0
+        self.last_end = float("-inf")
+
+
+_USER_TURNS = _UserTurns()
+
 #: Guards each instance's per-session write-failure counts.
 _WRITE_FAILURE_LOCK = threading.Lock()
 
@@ -660,6 +678,12 @@ _EXTRACTION_AGENTS: "weakref.WeakValueDictionary[int, Any]" = (
 )
 
 
+def _extraction_agents() -> List[Any]:
+    """The live agents that have started an extraction worker."""
+    with _EXTRACTION_STATE_LOCK:
+        return list(_EXTRACTION_AGENTS.values())
+
+
 @atexit.register
 def _drain_extraction_at_exit() -> None:
     """Flush jobs still held for the idle window before the interpreter exits.
@@ -667,10 +691,8 @@ def _drain_extraction_at_exit() -> None:
     The worker is a daemon thread, so a long-lived host (Agent UI, sidecar) that
     shuts down without draining would otherwise drop them without a word.
     """
-    with _EXTRACTION_STATE_LOCK:
-        agents = list(_EXTRACTION_AGENTS.values())
     deadline = time.monotonic() + EXTRACTION_EXIT_WAIT_S
-    for agent in agents:
+    for agent in _extraction_agents():
         drain_memory_extraction(agent, max(0.0, deadline - time.monotonic()))
 
 
@@ -790,6 +812,8 @@ MEMORY_UNAVAILABLE_DISABLED_BY_ENV = "disabled_by_env"
 MEMORY_UNAVAILABLE_MODEL_NOT_PULLED = "model_not_pulled"
 MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED = "model_load_failed"
 MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE = "service_unreachable"
+
+MEMORY_DOCS_URL = "https://amd-gaia.ai/docs/reference/troubleshooting"
 
 #: Substrings that identify a Lemonade "model not found" response (the
 #: service answered, it just doesn't have this model pulled) rather than a
@@ -980,6 +1004,65 @@ class MemoryMixin(ProceduralMemoryMixin):
             context,
         )
 
+    def _probe_embedder(self) -> int:
+        """Embed one string and return the live embedder's dimension.
+
+        Different embedders (e.g. the NPU FLM one) have different dims, so the
+        FAISS index must match the active model, not a constant (#1744).
+        """
+        self._get_embedder()
+        return int(self._embed_text("connectivity test").shape[0])
+
+    def _pull_missing_embedder(self, cause: Exception) -> None:
+        """Download the embedder into a running Lemonade, as ``gaia init`` does.
+
+        Raises when it cannot: the error keeps the "was not found" wording so
+        the degraded session is still reported as a model that is not pulled.
+        """
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        model = self._active_embedding_model()
+        requirement = find_model_requirement(model)
+        if requirement is None and model.startswith("user."):
+            raise RuntimeError(
+                f"Embedding model '{model}' was not found, and it is not in GAIA's "
+                "model registry, so its checkpoint is unknown and it cannot be "
+                "downloaded automatically"
+            ) from cause
+        notice = f"Downloading the embedding model '{model}' for memory…"
+        logger.warning("[MemoryMixin] %s", notice)
+        console = getattr(self, "console", None)
+        if console is not None:
+            console.print_info(notice)
+
+        errors: List[str] = []
+
+        def on_progress(event: Dict[str, Any]) -> None:
+            if event.get("event") == "error":
+                errors.append(str(event.get("error") or "unknown error"))
+
+        # A user. model registers under its registry id, whatever the caller wrote.
+        name = requirement.model_id if requirement else model
+        pull_kwargs = requirement.pull_kwargs() if requirement else {}
+        try:
+            # Streamed: a stalled pull fails after PULL_IDLE_TIMEOUT_S, and the
+            # error event carries the reason instead of only logging it.
+            pulled = LemonadeClient(model=model).ensure_model_downloaded(
+                name, show_progress=False, on_progress=on_progress, **pull_kwargs
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"Embedding model '{model}' was not found, and downloading it "
+                f"failed: {e}"
+            ) from e
+        if not pulled:
+            reason = "; ".join(errors) or "Lemonade did not report the download done"
+            raise RuntimeError(
+                f"Embedding model '{model}' was not found, and downloading it "
+                f"failed: {reason}"
+            ) from cause
+        logger.info("[MemoryMixin] downloaded embedding model '%s'", model)
+
     def _start_memory_embedder(self) -> bool:
         """Validate the embedder, then backfill and index (startup steps 2-5).
 
@@ -999,14 +1082,18 @@ class MemoryMixin(ProceduralMemoryMixin):
         # The degrade is loud (WARNING-level), reversible (next agent
         # instance with Lemonade up will init memory normally), and tracked
         # via ``_memory_store is None`` checks at every memory operation.
+        # A reachable Lemonade that lacks the embedder gets it pulled first.
         try:
-            self._get_embedder()
-            # Validate connectivity AND derive the embedding dimension from the
-            # live embedder — different embedders (e.g. the NPU FLM embedder)
-            # have different dims, so the FAISS index must match the active
-            # model rather than a hardcoded constant (#1744).
-            test_vec = self._embed_text("connectivity test")
-            dim = int(test_vec.shape[0])
+            try:
+                dim = self._probe_embedder()
+            except Exception as e:
+                if (
+                    _classify_embedding_failure(e)
+                    != MEMORY_UNAVAILABLE_MODEL_NOT_PULLED
+                ):
+                    raise
+                self._pull_missing_embedder(e)
+                dim = self._probe_embedder()
             if dim <= 0:
                 raise RuntimeError(
                     f"Embedder '{self._embedding_model}' returned a 0-length "
@@ -1305,20 +1392,23 @@ class MemoryMixin(ProceduralMemoryMixin):
                 "enable memory."
             )
         if reason == MEMORY_UNAVAILABLE_MODEL_NOT_PULLED:
-            if model == EMBEDDING_MODEL:
-                remedy = (
-                    f"Pull it — POST /api/v1/pull "
-                    f'{{"model_name": "{model}", "checkpoint": '
-                    f'"{DEFAULT_EMBEDDING_CHECKPOINT}", "recipe": "llamacpp", '
-                    '"embedding": true}'
-                )
+            # Startup downloads a registered embedder, so a restart is the retry.
+            if find_model_requirement(model) is not None:
+                remedy = "Restart the agent to retry the download"
             else:
-                remedy = f"Pull '{model}' in Lemonade"
+                remedy = (
+                    f"Download '{model}' in Lemonade's model manager, then "
+                    "restart the agent"
+                )
+            detail = (getattr(self, "_memory_unavailable_detail", None) or "").rstrip(
+                "."
+            )
+            detail_suffix = f" ({detail})" if detail else ""
             return (
                 f"Memory is unavailable this session: the embedding model '{model}' "
                 "has not been pulled into Lemonade — Lemonade itself is "
-                f"running and reachable. {remedy}, then restart the agent. "
-                f"{restart_note}"
+                f"running and reachable{detail_suffix}. {remedy} — a running "
+                f"session cannot recover memory on its own. See {MEMORY_DOCS_URL}."
             )
         if reason == MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED:
             return (
@@ -4342,8 +4432,6 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._extraction_thread: Optional[threading.Thread] = None
             self._extraction_queue: Deque[_ExtractionJob] = deque()
             self._extraction_wake = threading.Condition(self._extraction_lock)
-            self._turns_in_flight = 0
-            self._last_turn_end = float("-inf")
             self._extraction_flush = False
             self._extraction_running = False
             self._extraction_cancel = threading.Event()
@@ -4358,25 +4446,30 @@ class MemoryMixin(ProceduralMemoryMixin):
             return self._extraction_cancel
 
     def _note_user_turn_started(self) -> None:
-        """Hold back queued extraction, and stop a running one, while a user turn runs.
+        """Hold back queued extraction, and stop a running one, in every agent.
 
         The local backend serves one request at a time, so a running
-        extraction would make the user's first model call wait behind it. A
-        flush is left alone: its caller is exiting and wants the memories saved.
+        extraction would make the user's first model call wait behind it,
+        whichever chat it belongs to. A flush is left alone: its caller is
+        exiting and wants the memories saved.
         """
         self._ensure_extraction_state()
-        with self._extraction_lock:
-            self._turns_in_flight += 1
-            if self._extraction_running and not self._extraction_flush:
-                self._extraction_cancel.set()
+        with _USER_TURNS.lock:
+            _USER_TURNS.in_flight += 1
+        for agent in _extraction_agents():
+            with agent._extraction_lock:
+                if agent._extraction_running and not agent._extraction_flush:
+                    agent._extraction_cancel.set()
 
     def _note_user_turn_finished(self) -> None:
-        """Start the idle clock that queued extraction waits out."""
+        """Start the idle clock that every agent's queued extraction waits out."""
         self._ensure_extraction_state()
-        with self._extraction_lock:
-            self._turns_in_flight = max(0, self._turns_in_flight - 1)
-            self._last_turn_end = time.monotonic()
-            self._extraction_wake.notify_all()
+        with _USER_TURNS.lock:
+            _USER_TURNS.in_flight = max(0, _USER_TURNS.in_flight - 1)
+            _USER_TURNS.last_end = time.monotonic()
+        for agent in _extraction_agents():
+            with agent._extraction_lock:
+                agent._extraction_wake.notify_all()
 
     def _wait_for_extraction_turn(self) -> None:
         """Block (lock held) until no user turn ran for ``EXTRACTION_IDLE_S``.
@@ -4390,10 +4483,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             not self._extraction_flush
             and len(self._extraction_queue) < EXTRACTION_QUEUE_MAX
         ):
-            if self._turns_in_flight > 0:
+            with _USER_TURNS.lock:
+                in_flight, last_end = _USER_TURNS.in_flight, _USER_TURNS.last_end
+            if in_flight > 0:
                 remaining = None
             else:
-                remaining = EXTRACTION_IDLE_S - (time.monotonic() - self._last_turn_end)
+                remaining = EXTRACTION_IDLE_S - (time.monotonic() - last_end)
                 if remaining <= 0:
                     break
             if not deferred:
