@@ -9,9 +9,11 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../services/api');
+vi.mock('../services/memoryApi');
 
 import App from '../App';
 import * as api from '../services/api';
+import * as memoryApi from '../services/memoryApi';
 import { useChatStore } from '../stores/chatStore';
 import { useModelStore } from '../stores/modelStore';
 import type { Session, SetupCheck, StartCard } from '../types';
@@ -83,6 +85,9 @@ beforeEach(() => {
     // ChatView's mount effects chain off these; auto-mocked they return undefined.
     mocked.listDocuments.mockResolvedValue({ documents: [] } as never);
     mocked.getMessageCount.mockResolvedValue({ count: 0 } as never);
+    vi.mocked(memoryApi.getMemorySettings).mockResolvedValue({
+        memory_enabled: true, mcp_memory_enabled: false, system_discovery_consent: false,
+    });
 
     useModelStore.setState({ active: null, error: null, restoreNotice: null });
     useChatStore.setState({
@@ -249,10 +254,9 @@ describe('a private new chat', () => {
             id: 'sess-new-0001', title: 'New Task', message_count: 0, agent_type: 'gaia', private: !!data?.private,
         }));
         render(<App />);
-        const chip = await screen.findByRole('button', { name: 'Private chat' });
-        expect(chip).toHaveAttribute('aria-pressed', 'false');
+        const chip = await screen.findByRole('button', { name: 'Turn on private chat' });
         await userEvent.click(chip);
-        expect(chip).toHaveAttribute('aria-pressed', 'true');
+        expect(chip).toHaveAccessibleName('Turn off private chat');
         await sendFirstMessage('Please remember: my bank PIN hint is the dog');
 
         await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());

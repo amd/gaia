@@ -222,3 +222,8 @@
     background: var(--accent-dim);
     color: var(--accent);
 }
+
+.composer-chip.is-unavailable {
+    opacity: 0.5;
+    cursor: default;
+}
