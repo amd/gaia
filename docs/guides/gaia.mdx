@@ -113,7 +113,7 @@ Every one of them is offered to the model on every turn, as in the Agent UI: a t
 
 ### Smaller models
 
-On Gemma 4 E4B, on the GPU or the NPU, the agent leaves out four features that failed GAIA's agent evals on that model: the SQL scratchpad (`create_table` through `drop_table`), email, image generation, and finding, installing or removing skills (`search_skill_hub`, `install_skill`, `remove_skill`). That is 16 fewer tool descriptions for the model to read on every step. The skills built on them (`data-explore`, `image-gen`, `inbox-triage`) are left out of the skill list too, and asking for one by name gets an answer that it needs a larger model.
+On Gemma 4 E4B, on the GPU or the NPU, the agent leaves out four features that failed GAIA's agent evals on that model: the SQL scratchpad (`create_table` through `drop_table`), email, image generation, and finding, installing or removing skills (`search_skill_hub`, `install_skill`, `remove_skill`). That is 16 fewer tool descriptions for the model to read on every step. The skills built on them (`data-explore`, `image-gen`, `inbox-triage`) are left out of the skill list too. Asked for one of these features, Gemma says it can't do it; if it tries to load one of those skills anyway, the load is refused with a message that it needs a larger model.
 
 `analyze_data_file` still answers questions about CSV and Excel files, and installed skills still load. For the full set, pick a larger model in the model list. `GAIA_FEATURE_TIER=full` gives Gemma every tool anyway, and `GAIA_FEATURE_TIER=compact` gives any model the smaller set.
 
