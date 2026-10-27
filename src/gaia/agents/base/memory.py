@@ -3799,20 +3799,28 @@ class MemoryMixin(ProceduralMemoryMixin):
             # generic dash/underscore-joined high-entropy-looking token, e.g.
             # HALIBUT-4417-ZULU: 2+ alnum groups with at least one numeric group.
             r"\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b",
-            # a PIN, passcode or card security code next to its digits
-            r"\b(?:pin|passcode|pass code|cvv2?|cvc|security code)\b"
-            r"(?:\s+(?:number|code))?\s*(?:is|:|=)?\s*\d{3,8}\b",
+            # a PIN, passcode or card security code next to its digits, also
+            # worded as a memory model writes it: "PIN for Chase is 4821"
+            r"\b(?:pin|passcode|pass code|cvv2?|cvc|security code)(?:'s)?\b"
+            r"(?:\s+(?:number|code))?(?:\s+(?:for|on|at|of)(?:\s+\w+){1,3}?)?"
+            r"\s*(?:is|was|:|=|to|[-\u2013\u2014])?\s*\d{3,8}\b",
             r"\b\d{3}-\d{2}-\d{4}\b",  # US social security number
+            r"\b(?:ssn|social security(?: number)?)\b(?:\s*(?:is|was|:|=))?"
+            r"\s*\d{3}[ -]?\d{2}[ -]?\d{4}\b",
         )
     )
 
-    #: 13-19 digits, optionally grouped by spaces or dashes: a card number when
-    #: it also starts with a card network's prefix and passes the Luhn check, so
-    #: a tracking number or a millisecond timestamp does not.
-    _CARD_NUMBER: ClassVar[re.Pattern] = re.compile(r"\b\d(?:[ -]?\d){12,18}\b")
-    #: Visa, Mastercard, Amex, Discover, JCB, Diners Club, UnionPay.
+    #: 13-19 digits, optionally grouped by spaces, dashes or dots: a card number
+    #: when it also has a card network's prefix and length and passes the Luhn
+    #: check, so a tracking number, a timestamp or a 15-digit IMEI does not.
+    _CARD_NUMBER: ClassVar[re.Pattern] = re.compile(
+        r"(?<!\d)\d(?:[\s.\u2010-\u2015-]{0,2}\d){12,18}(?!\d)"
+    )
+    #: Visa, Mastercard, Amex, Discover, JCB, Diners Club, UnionPay, by length.
     _CARD_PREFIX: ClassVar[re.Pattern] = re.compile(
-        r"4|5[1-5]|2[2-7]|3[47]|6011|65|64[4-9]|35|30[0-5]|36|38|62"
+        r"4\d{12}(?:\d{3}){0,2}|(?:5[1-5]|2[2-7])\d{14}|3[47]\d{13}"
+        r"|6011\d{12,15}|64[4-9]\d{13,16}|(?:65|35|62)\d{14,17}"
+        r"|(?:30[0-5]|36|38)\d{11,16}"
     )
 
     @staticmethod
@@ -3829,8 +3837,9 @@ class MemoryMixin(ProceduralMemoryMixin):
     def _card_spans(cls, text: str) -> List[tuple]:
         spans = []
         for m in cls._CARD_NUMBER.finditer(text):
-            digits = re.sub(r"[ -]", "", m.group())
-            if cls._CARD_PREFIX.match(digits) and cls._luhn_valid(digits):
+            # Full-width and other script digits are the same card number.
+            digits = "".join(str(int(c)) for c in m.group() if c.isdigit())
+            if cls._CARD_PREFIX.fullmatch(digits) and cls._luhn_valid(digits):
                 spans.append(m.span())
         return spans
 

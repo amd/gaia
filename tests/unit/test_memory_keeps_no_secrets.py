@@ -25,6 +25,21 @@ SECRETS = [
     "My social security number is 123-45-6789",
     "card 4111 1111 1111 1111 exp 12/29",
     "online banking password is Blue-Heron-77",
+    # Worded the way the memory model writes a fact down.
+    "The user's PIN for Chase is 4821",
+    "User's PIN number for the ATM is 4821",
+    "my pin was 4821",
+    "Bank PIN — 4821",
+    "User's SSN is 123 45 6789",
+    "User's social security number is 123456789",
+    # A card number grouped or written some other way is the same number.
+    "4111\u00a01111\u00a01111\u00a01111",  # non-breaking spaces
+    "4111–1111–1111–1111",
+    "4111.1111.1111.1111",
+    "4111  1111  1111  1111",
+    "４" + "１" * 15,  # full-width digits
+    "card4111111111111111",
+    "Amex 3782 822463 10005",
 ]
 
 NOT_SECRETS = [
@@ -37,6 +52,13 @@ NOT_SECRETS = [
     "Tracking 1000000000009 is out for delivery",
     "Logged at 9000000000001 ms",
     "My zip code is 97201",
+    # IMEIs pass the Luhn check by design; 15 digits is no card but Amex.
+    "My phone's IMEI is 356938035643809",
+    "IMEI 490154203237518",
+    "Call 1-800-555-0199 or +1 (408) 555 0123",
+    "See pages 4111-4122",
+    "the security code review is 2026 Q4",
+    "pin the tab to slot 2",
 ]
 
 
