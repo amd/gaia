@@ -84,6 +84,42 @@ describe("/api/momentum", () => {
   });
 });
 
+describe("/api/growth", () => {
+  it("counts maintainers as core even when GitHub labels them contributors, and compares with the window before", async () => {
+    const db = memoryD1();
+    await put(db, "star_daily", ["day", "n"], [[day(10), 100], [day(7), 1000], [day(6), 4], [day(5), 6]]);
+    await put(db, "items", ["number", "kind", "created_at", "closed_at", "merged_at", "assoc", "author"], [
+      [1, "pr", iso(4), iso(3), iso(3), "CONTRIBUTOR", "alice"],
+      [2, "pr", iso(4), iso(3), iso(3), "FIRST_TIME_CONTRIBUTOR", "carol"],
+    ]);
+    await put(db, "commits", ["sha", "day", "author", "at"], [["a", day(3), "alice", iso(3)]]);
+    const g = await get(db, "/api/growth", "range=7&core=Alice");
+    // Seven whole days ending today: six days ago is in, seven days ago is not.
+    expect(g).toMatchObject({ from: day(6), days: 7 });
+    expect(g.current).toMatchObject({ stars: 10, starGrowth: 10 / 1100, prsMerged: 2, externalShare: 0.5, active: 2, newContributors: 2 });
+    expect(g.previous).toMatchObject({ stars: 1100, starGrowth: null, active: 0 });
+    expect(g.periods[0].start >= day(13)).toBe(true);
+    const all = await get(db, "/api/growth", "range=all");
+    expect(all).toMatchObject({ from: day(10), days: 11, previous: null, gran: "month" });
+    expect((await get(db, "/api/growth", "range=1")).days).toBe(2);
+    expect(g.gran).toBe("week");
+    expect((await get(db, "/api/growth", "range=7")).current.externalShare).toBe(1);
+  });
+});
+
+describe("/api/growth newcomer retention", () => {
+  it("does not count a newcomer's own PR landing as a commit as coming back", async () => {
+    const db = memoryD1();
+    await put(db, "items", ["number", "kind", "created_at", "closed_at", "merged_at", "assoc", "author"], [
+      [1, "pr", iso(120), iso(117), iso(117), "NONE", "erin"],
+      [2, "pr", iso(130), iso(129), iso(129), "NONE", "finn"],
+      [3, "pr", iso(110), null, null, "NONE", "finn"],
+    ]);
+    await put(db, "commits", ["sha", "day", "author", "at"], [["e", day(117), "erin", iso(117)]]);
+    expect((await get(db, "/api/growth", "range=30")).newcomers).toEqual({ cohort: 2, returned: 1, rate: 0.5 });
+  });
+});
+
 describe("/api/evals", () => {
   const RUN = ["run_id", "workflow", "event", "ref", "is_tag", "sha", "created_at", "conclusion", "tier", "agent_model", "judge_model", "minutes", "lanes", "html_url", "collected_at", "run_attempt"];
   const SC = ["run_id", "category", "scenario_id", "lane", "status", "score", "elapsed_s", "cost_usd", "tps", "ttft_s", "input_tokens", "output_tokens", "tool_calls", "turns", "root_cause", "kind"];

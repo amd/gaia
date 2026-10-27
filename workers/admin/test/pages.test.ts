@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { renderEvalsPage } from "../src/evalspage";
+import { renderGrowthPage } from "../src/growthpage";
 import { renderCiPage, renderDevelopersPage, renderUsersPage } from "../src/page";
 
 /** The client script of a page; a syntax error there leaves the page blank in the browser. */
@@ -11,6 +12,7 @@ const scriptOf = (html: string) => html.split("<script>").pop()!.split("</script
 describe("page scripts", () => {
   const pages: [string, string][] = [
     ["users", renderUsersPage()],
+    ["growth", renderGrowthPage(["alice"])],
     ["developers", renderDevelopersPage(["alice", "bob-work"])],
     ["ci", renderCiPage()],
     ["evals", renderEvalsPage()],
@@ -21,6 +23,6 @@ describe("page scripts", () => {
   });
 
   it.each(pages)("%s page has no unfilled placeholders", (_name, html) => {
-    expect(html).not.toMatch(/__[A-Z]+__/);
+    expect(html).not.toMatch(/__[A-Z_]+__/);
   });
 });

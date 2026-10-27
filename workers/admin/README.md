@@ -1,8 +1,12 @@
 # gaia-admin (Cloudflare Worker)
 
-The GAIA admin dashboard at `amd-gaia.ai/admin`, in four pages:
+The GAIA admin dashboard at `amd-gaia.ai/admin`, in five pages:
 
 - **Users** (`/admin`): installs per release by OS and product, installs over time, PyPI and npm.
+- **Growth** (`/admin/growth`): how fast stars, forks and contributors grow, newcomers,
+  retention, the share of merged PRs from outside the core team, and bus factor, each
+  scored against a target and set beside Hermes Agent and other fast-growing AI-agent
+  projects (`TARGETS` and `BENCHMARKS` in `src/growthpage.ts`).
 - **Developers** (`/admin/developers`): issues, pull requests, time to merge and close (median
   and P90), commits, lines of code, contributors (with a filter to hide chosen people or
   bots), stars and forks.
@@ -89,8 +93,10 @@ npx wrangler secret put MAINTAINER_LOGINS   # comma-separated GitHub logins, e.g
 ```
 
 `MAINTAINER_LOGINS` drives the Developers page's "Hide maintainers" button, so the
-team's own work can be set aside to see outside contributions. It is kept out of the
-repo on purpose; leave it unset and the button does not appear.
+team's own work can be set aside to see outside contributions, and defines the core team
+on the Growth page (with GitHub organisation members and collaborators). It is kept out of the
+repo on purpose; leave it unset and the button does not appear, and anyone outside the
+organisation counts as an outside contributor.
 
 ### 4. Set up the email-code sign-in
 

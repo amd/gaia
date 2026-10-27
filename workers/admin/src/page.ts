@@ -661,9 +661,10 @@ export const card = (id: string, title: string, desc: string, controls = ""): st
 export const seg = (attr: string, opts: [string, string][], label: string): string =>
   `<div class="seg" role="group" aria-label="${label}">${opts.map(([v, l]) => `<button type="button" data-${attr}="${v}">${l}</button>`).join("")}</div>`;
 
-export type PageId = "users" | "developers" | "ci" | "evals";
+export type PageId = "users" | "growth" | "developers" | "ci" | "evals";
 const TABS: [PageId, string, string][] = [
   ["users", "Users", "/admin"],
+  ["growth", "Growth", "/admin/growth"],
   ["developers", "Developers", "/admin/developers"],
   ["ci", "CI", "/admin/ci"],
   ["evals", "Evals", "/admin/evals"],
@@ -683,7 +684,7 @@ export function shell(active: PageId, title: string, lede: string, body: string,
 <button type="button" class="icon" id="theme" aria-label="Toggle light and dark theme" title="Toggle theme">&#9680;</button></div>
 <div class="row row2">
 <div class="ctl"><span>Range</span>${seg("range", ranges, "Time range")}${infoBtn("range", "the time range")}</div>
-${active === "evals" ? "" : `<div class="ctl"><span>Group by</span>${seg("gran", [["auto", "Auto"], ["day", "Day"], ["week", "Week"], ["month", "Month"]], "Group by")}</div>`}
+${active === "evals" || active === "growth" ? "" : `<div class="ctl"><span>Group by</span>${seg("gran", [["auto", "Auto"], ["day", "Day"], ["week", "Week"], ["month", "Month"]], "Group by")}</div>`}
 <span class="spacer"></span>
 <button type="button" class="toggle" id="labels" aria-pressed="false" title="Show values on the charts; otherwise hover to see them">Value labels</button>
 </div></div>

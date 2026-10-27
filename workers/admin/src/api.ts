@@ -28,6 +28,7 @@ import {
   type EvalRunRow,
   type EvalScenarioRow,
 } from "./evalstats";
+import { activity, growthPeriods, growthWindow, newcomerRetention, per30, RETURN_DAYS } from "./growth";
 import { ciStats, dailyDeltas, releaseDownloads, type AssetRow, type ReleaseRow, type RunRow } from "./stats";
 
 const json = (body: unknown, status = 200): Response =>
@@ -106,6 +107,36 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
       stars: cumulativeDaily(stars, today),
       forks: cumulativeDaily(forks, today),
       packages: packageDaily(pkgs, today),
+    });
+  }
+
+  if (path === "/api/growth") {
+    const maintainers = new Set((url.searchParams.get("core") ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean));
+    const stars = await all<DailyRow>("SELECT day, n FROM star_daily ORDER BY day");
+    const forks = await all<DailyRow>("SELECT day, n FROM fork_daily ORDER BY day");
+    const items = await all<ItemRow>("SELECT kind, created_at, closed_at, merged_at, assoc, author FROM items WHERE kind = 'pr'");
+    const commits = await all<CommitRow>("SELECT day, at, author FROM commits");
+    const shift = (day: string, n: number) => new Date(Date.parse(day) + n * 86_400_000).toISOString().slice(0, 10);
+    const end = shift(today, 1);
+    const allTime = days >= 36500;
+    const first = [stars[0]?.day, forks[0]?.day, commits.map((c) => c.day).sort()[0]].filter(Boolean).sort()[0] ?? today;
+    // Whole calendar days ending today, as the page's charts count them.
+    const span = allTime ? Math.round((Date.parse(end) - Date.parse(first)) / 86_400_000) : Math.max(2, days);
+    const from = allTime ? first : new Date(Date.parse(end) - span * 86_400_000).toISOString().slice(0, 10);
+    const prevFrom = new Date(Date.parse(from) - span * 86_400_000).toISOString().slice(0, 10);
+    const current = growthWindow(stars, forks, items, commits, maintainers, from, end);
+    // These are complete dated lists from GitHub, so the window before is always known (zero before the project began).
+    const previous = allTime ? null : growthWindow(stars, forks, items, commits, maintainers, prevFrom, from);
+    const gran = !allTime && days <= 90 ? "week" : "month";
+    return json({
+      from,
+      days: span,
+      gran,
+      current: { ...current, starRate30: per30(current.starGrowth, span), forkRate30: per30(current.forkGrowth, span) },
+      previous: previous && { ...previous, starRate30: per30(previous.starGrowth, span), forkRate30: per30(previous.forkGrowth, span) },
+      // People whose first PR was 90 to 180 days ago, so every one has had the full 90 days.
+      newcomers: newcomerRetention(activity(items, []), shift(today, -2 * RETURN_DAYS), shift(today, -RETURN_DAYS), today),
+      periods: growthPeriods(stars, forks, items, commits, maintainers, gran, today, from),
     });
   }
 

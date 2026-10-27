@@ -31,6 +31,7 @@ evals, with history, so we see trends rather than snapshots.
 | Page | Answers |
 |------|---------|
 | Users | Installs per release by OS and product (update-feed polling separated from installs), installs over time, PyPI and npm |
+| Growth | Monthly growth rate of stars and forks, active and new contributors, retention, outside share of merged PRs and bus factor, each scored against a target |
 | Developers | Issue and PR flow, backlog, time to merge and close (median and P90), commits, lines of code, contributors, stars and forks |
 | CI | Run outcomes, unit-test counts, where CI time goes, per-workflow health and runtime |
 | Evals | Pass rate per run and tier tied to the commit or release measured, per-category and per-scenario results, regressions, SWE-bench |
@@ -41,12 +42,15 @@ listed at the top of the page.
 
 ## Next
 
-1. **Release quality:** issues filed within 7 days of a release, regressions per
+1. **Time to first human reply** on issues and pull requests, the one benchmarked
+   growth metric not collected yet: it needs each item's first comment or review by
+   someone other than the author or a bot, read nightly for new items.
+2. **Release quality:** issues filed within 7 days of a release, regressions per
    release, RC-to-final lead time.
-2. **Alerts and a weekly digest:** notify on a sharp drop in CI pass rate, eval score or
+3. **Alerts and a weekly digest:** notify on a sharp drop in CI pass rate, eval score or
    install volume, so the page does not have to be watched.
-3. **Backups beyond D1's 30-day restore:** a weekly `wrangler d1 export` to R2, since
+4. **Backups beyond D1's 30-day restore:** a weekly `wrangler d1 export` to R2, since
    much of this history exists nowhere else once GitHub drops it.
-4. **Retention, if growth ever needs it:** keep raw CI runs for 1–2 years and only daily
+5. **Retention, if growth ever needs it:** keep raw CI runs for 1–2 years and only daily
    totals after that. At today's volume the database grows about 450 MB a year against
    a 10 GB limit.
