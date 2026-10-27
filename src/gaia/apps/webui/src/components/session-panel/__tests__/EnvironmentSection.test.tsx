@@ -247,4 +247,21 @@ describe('Permission mode', () => {
         fireEvent.click(await screen.findByRole('button', { name: /Ask before acting/ }));
         await waitFor(() => expect(screen.getByRole('radio', { name: /Ask/ })).toHaveAttribute('aria-checked', 'true'));
     });
+
+    it('keeps Ask after a double-click on Full access, until "Turn it on"', async () => {
+        mocked.setPermissionMode.mockImplementation(async (_sid, mode) => ({ session_id: SID, mode, grants: [] }));
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const full = await screen.findByRole('radio', { name: /Full access/ });
+        await waitFor(() => expect(screen.getByRole('radio', { name: /Ask/ })).toHaveAttribute('aria-checked', 'true'));
+
+        fireEvent.click(full);
+        fireEvent.click(full);
+        await act(async () => {});
+        expect(mocked.setPermissionMode).not.toHaveBeenCalled();
+        expect(full).toHaveAttribute('aria-checked', 'false');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Turn it on' }));
+        await waitFor(() => expect(full).toHaveAttribute('aria-checked', 'true'));
+        expect(mocked.setPermissionMode).toHaveBeenCalledExactlyOnceWith(SID, 'full_access');
+    });
 });
