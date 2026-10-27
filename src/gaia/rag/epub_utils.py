@@ -21,10 +21,21 @@ from urllib.parse import unquote
 MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024
 
 #: Chapter markup one book may hand the HTML parser, summed over its chapters.
-MAX_CHAPTER_BYTES = 64 * 1024 * 1024
+MAX_CHAPTER_BYTES = 16 * 1024 * 1024
+
+#: ``<`` one book's chapters may hold. A parsed tag costs ~1.5 KB of RAM and
+#: ~20 us, so this keeps a book near 0.6 GB; the King James Bible has 51,000.
+MAX_CHAPTER_TAGS = 400_000
+
+#: Size and ``<`` caps for each of container.xml, the OPF and encryption.xml.
+MAX_PACKAGE_BYTES = 1024 * 1024
+MAX_PACKAGE_TAGS = 100_000
 
 #: Characters one book may produce, about three times War and Peace.
 MAX_TEXT_CHARS = 10_000_000
+
+_TAG_NAME = re.compile(rb"<[A-Za-z][\w:.-]*")
+_TAG_STOP = re.compile(rb"""[>"']""")
 
 _XHTML_TYPES = {"application/xhtml+xml", "text/html"}
 _BLOCK_TAGS = frozenset(
@@ -74,13 +85,41 @@ def _soup(markup: bytes):
         return BeautifulSoup(markup, "html.parser")
 
 
+def _drop_attributes(markup: bytes) -> bytes:
+    """Strip start-tag attributes: text never needs them and each costs parser RAM.
+
+    Linear: every byte is scanned a bounded number of times, and a tag that
+    never closes loses its attributes up to the next ``<``.
+    """
+    out = []
+    pos = 0
+    while (name := _TAG_NAME.search(markup, pos)) is not None:
+        out.append(markup[pos : name.end()])
+        end = markup.find(b"<", name.end())
+        end = len(markup) if end == -1 else end
+        pos = end
+        cursor = name.end()
+        while (stop := _TAG_STOP.search(markup, cursor, end)) is not None:
+            if stop[0] == b">":
+                if markup[stop.start() - 1 : stop.start()] == b"/":
+                    out.append(b"/")
+                out.append(b">")
+                pos = stop.end()
+                break
+            closing = markup.find(stop[0], stop.end(), end)
+            # An unmatched quote (``class=it's``) is an ordinary character.
+            cursor = stop.end() if closing == -1 else closing + 1
+    out.append(markup[pos:])
+    return b"".join(out)
+
+
 def _chapter_text(markup: bytes) -> str:
     # pylint: disable-next=import-outside-toplevel
     from bs4 import CData, NavigableString, Tag
 
     # One read-only pass: editing the tree costs a scan of the parent per edit.
     parts = []
-    soup = _soup(markup)
+    soup = _soup(_drop_attributes(markup))
     stack = [soup.body or soup]
     while stack:
         node = stack.pop()
@@ -128,9 +167,27 @@ def _member_path(href: str) -> str:
     return posixpath.normpath(unquote(href.split("#")[0])).lstrip("/")
 
 
+def _package_soup(zf: zipfile.ZipFile, name: str, file_name: str):
+    """Parse a small package file; KeyError when it is absent."""
+    if zf.getinfo(name).file_size > MAX_PACKAGE_BYTES:
+        raise _too_large(
+            file_name,
+            f"its {name} is over {MAX_PACKAGE_BYTES // 1024:,} KB, "
+            "the most GAIA reads from that file",
+        )
+    markup = _read(zf, name, file_name)
+    if markup.count(b"<") > MAX_PACKAGE_TAGS:
+        raise _too_large(
+            file_name,
+            f"its {name} has more than {MAX_PACKAGE_TAGS:,} tags, "
+            "the most GAIA reads from that file",
+        )
+    return _soup(markup)
+
+
 def _spine_paths(zf: zipfile.ZipFile, file_name: str) -> List[str]:
     try:
-        container = _soup(_read(zf, "META-INF/container.xml", file_name))
+        container = _package_soup(zf, "META-INF/container.xml", file_name)
     except KeyError as e:
         raise ValueError(
             f"Could not read EPUB file: {file_name}\n"
@@ -144,7 +201,7 @@ def _spine_paths(zf: zipfile.ZipFile, file_name: str) -> List[str]:
             f"Reason: the package (.opf) file is missing\n{_CORRUPT_HINT}"
         )
 
-    opf = _soup(_read(zf, opf_path, file_name))
+    opf = _package_soup(zf, opf_path, file_name)
     base = posixpath.dirname(opf_path)
     manifest = {
         item.get("id"): item
@@ -163,7 +220,7 @@ def _spine_paths(zf: zipfile.ZipFile, file_name: str) -> List[str]:
 
 def _encrypted_paths(zf: zipfile.ZipFile, file_name: str) -> set:
     try:
-        encryption = _soup(_read(zf, "META-INF/encryption.xml", file_name))
+        encryption = _package_soup(zf, "META-INF/encryption.xml", file_name)
     except KeyError:
         return set()
     return {
@@ -176,7 +233,7 @@ def _encrypted_paths(zf: zipfile.ZipFile, file_name: str) -> set:
 def _too_large(file_name: str, reason: str) -> ValueError:
     return ValueError(
         f"EPUB file too large to index: {file_name}\n"
-        f"Reason: {reason}, the most GAIA indexes from one book.\n"
+        f"Reason: {reason}.\n"
         "Split it into smaller books (Calibre can do this), or index only the "
         "chapters you need as PDF or text files."
     )
@@ -230,7 +287,8 @@ def extract_epub_text(epub_path: str) -> Tuple[str, int]:
 
         names = set(zf.namelist())
         chapters = []
-        markup_bytes = text_chars = 0
+        markup_bytes = tags = text_chars = 0
+        per_book = "the most GAIA indexes from one book"
         for path in spine:
             if path not in names:
                 raise ValueError(
@@ -243,13 +301,23 @@ def extract_epub_text(epub_path: str) -> Tuple[str, int]:
                 raise _too_large(
                     file_name,
                     "its chapters hold more than "
-                    f"{MAX_CHAPTER_BYTES // (1024 * 1024)} MB of markup",
+                    f"{MAX_CHAPTER_BYTES // (1024 * 1024)} MB of markup, {per_book}",
                 )
-            text = _chapter_text(_read(zf, path, file_name))
+            markup = _read(zf, path, file_name)
+            # Counted before parsing: the parsed tree costs RAM per tag.
+            tags += markup.count(b"<")
+            if tags > MAX_CHAPTER_TAGS:
+                raise _too_large(
+                    file_name,
+                    f"its chapters hold more than {MAX_CHAPTER_TAGS:,} tags, "
+                    f"{per_book}",
+                )
+            text = _chapter_text(markup)
             text_chars += len(text)
             if text_chars > MAX_TEXT_CHARS:
                 raise _too_large(
-                    file_name, f"it holds more than {MAX_TEXT_CHARS:,} characters"
+                    file_name,
+                    f"it holds more than {MAX_TEXT_CHARS:,} characters, {per_book}",
                 )
             if text:
                 chapters.append(text)

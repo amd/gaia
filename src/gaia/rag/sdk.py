@@ -2476,18 +2476,17 @@ These positions indicate where to split the text."""
         """Raise when *file_path* holds binary data; latin-1 would "decode" it as garbage."""
         with self._safe_open(file_path, "rb") as f:
             head = f.read(8192)
-        # UTF-32 LE's BOM starts with UTF-16 LE's, so check it first.
-        if head.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
-            raise ValueError(
-                f"Cannot index {Path(file_path).name}: it is UTF-32 text, which "
-                "GAIA does not decode. Re-save it as UTF-8 and index that copy."
-            )
-        if head.startswith((b"\xff\xfe", b"\xfe\xff")):
-            raise ValueError(
-                f"Cannot index {Path(file_path).name}: it is UTF-16 text, which "
-                "GAIA does not decode. Re-save it as UTF-8 and index that copy."
-            )
-        if b"\x00" in head:
+        has_nul = b"\x00" in head
+        for bom, encoding in _TEXT_BOM_ENCODINGS:
+            if head.startswith(bom):
+                # UTF-16/32 text is full of NUL bytes; judge its decoded form.
+                decoder = codecs.getincrementaldecoder(encoding)()
+                try:
+                    has_nul = "\x00" in decoder.decode(head, final=False)
+                except UnicodeDecodeError:
+                    return  # the text decoder reports the bad encoding
+                break
+        if has_nul:
             raise ValueError(
                 f"Cannot index {Path(file_path).name}: it is a binary file, not "
                 f"text, and GAIA has no reader for {file_type} files.\n"

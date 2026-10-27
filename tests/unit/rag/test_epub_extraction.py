@@ -203,15 +203,6 @@ def test_refused_binary_does_not_log_that_it_is_read_as_text(rag, tmp_path):
     warning.assert_not_called()
 
 
-@pytest.mark.parametrize("bom", [b"\xff\xfe", b"\xfe\xff"])
-def test_utf16_text_is_called_utf16_not_binary(rag, tmp_path, bom):
-    path = tmp_path / "notes.adoc"
-    codec = "utf-16-le" if bom == b"\xff\xfe" else "utf-16-be"
-    path.write_bytes(bom + "Plain notes".encode(codec))
-    with pytest.raises(ValueError, match="UTF-16 text.*Re-save it as UTF-8"):
-        rag._extract_text_from_file(str(path))
-
-
 def test_utf8_bom_and_cjk_text_with_unknown_extension_is_read(rag, tmp_path):
     path = tmp_path / "notes.adoc"
     path.write_bytes("﻿设备 NPU 推理 — ünïcödé".encode("utf-8"))
@@ -424,12 +415,188 @@ def test_obfuscated_font_alone_is_not_drm(tmp_path):
     assert extract_epub_text(str(path))[1] == 2
 
 
-@pytest.mark.parametrize(
-    "bom,codec",
-    [(b"\xff\xfe\x00\x00", "utf-32-le"), (b"\x00\x00\xfe\xff", "utf-32-be")],
-)
-def test_utf32_text_is_called_utf32_not_utf16(rag, tmp_path, bom, codec):
-    path = tmp_path / "notes.adoc"
-    path.write_bytes(bom + "Plain notes".encode(codec))
-    with pytest.raises(ValueError, match="UTF-32 text.*Re-save it as UTF-8"):
+_BOM_TEXT = [
+    ("settings.reg", "utf-16-le", b"\xff\xfe"),
+    ("settings.reg", "utf-16-be", b"\xfe\xff"),
+    ("readme.nfo", "utf-32-le", b"\xff\xfe\x00\x00"),
+    ("readme.nfo", "utf-32-be", b"\x00\x00\xfe\xff"),
+]
+
+
+@pytest.mark.parametrize("name,codec,bom", _BOM_TEXT)
+def test_bom_tagged_utf16_and_utf32_text_is_read(rag, tmp_path, name, codec, bom):
+    path = tmp_path / name
+    path.write_bytes(bom + "Windows Registry Editor — ünïcödé 设备".encode(codec))
+    text, _ = rag._extract_text_from_file(str(path))
+    assert "Windows Registry Editor — ünïcödé 设备" in text
+
+
+@pytest.mark.parametrize("name,codec,bom", _BOM_TEXT)
+def test_bom_tagged_text_holding_nul_characters_is_refused(
+    rag, tmp_path, name, codec, bom
+):
+    path = tmp_path / name
+    path.write_bytes(bom + "header\x00\x01\x02payload".encode(codec))
+    with pytest.raises(ValueError, match="binary file"):
         rag._extract_text_from_file(str(path))
+
+
+def test_utf8_bom_does_not_hide_nul_bytes(rag, tmp_path):
+    path = tmp_path / "blob.dat"
+    path.write_bytes(b"\xef\xbb\xbfMZ\x00\x00ab\x00")
+    with pytest.raises(ValueError, match="binary file"):
+        rag._extract_text_from_file(str(path))
+
+
+def test_utf16_sniff_ending_mid_surrogate_pair_is_still_read(rag, tmp_path):
+    path = tmp_path / "emoji.reg"
+    # 8192-byte sniff = BOM + 4094 code units, splitting the 4095th pair.
+    text = "a" * 4094 + "\U0001f600" + " tail"
+    path.write_bytes(b"\xff\xfe" + text.encode("utf-16-le"))
+    assert rag._extract_text_from_file(str(path))[0].endswith("\U0001f600 tail")
+
+
+def test_bom_tagged_file_that_does_not_decode_gets_the_decode_error(rag, tmp_path):
+    path = tmp_path / "broken.reg"
+    path.write_bytes(b"\xff\xfe" + b"\x00\xd8" + b"\x00\xd8" * 8)
+    with pytest.raises(ValueError, match="Failed to decode"):
+        rag._extract_text_from_file(str(path))
+
+
+def _soup_inputs():
+    """Patch the parser to record each markup it is handed."""
+    seen = []
+    real = epub_utils._soup
+
+    def spy(markup):
+        seen.append(markup)
+        return real(markup)
+
+    return seen, patch.object(epub_utils, "_soup", side_effect=spy)
+
+
+def test_attributes_are_dropped_without_changing_the_text():
+    text = epub_utils._chapter_text(
+        b'<body><div class="x"/>after <p title="a>b" id=\'q\'>One</p>'
+        b'<p class="c"><span lang="en">Two</span><br class="z"/>Three</p>'
+        b'<img src="a.png" alt="pic"/>End</body>'
+    )
+    assert text == "after One\nTwo\nThree\nEnd"
+
+
+@pytest.mark.parametrize(
+    "tag", [b"<p class=it's>", b'<p title="x>', b"<p a='1\" b>", b"<p/ x>"]
+)
+def test_a_stray_quote_in_a_tag_keeps_the_text_after_it(tag):
+    assert epub_utils._chapter_text(b"<body>" + tag + b"Hello</p></body>") == "Hello"
+
+
+@pytest.mark.parametrize(
+    "flood",
+    [
+        b"<p" + b" a" * 200_000 + b">x</p>",  # many valueless attributes
+        b"<p" + b' a="1"' * 100_000 + b">x</p>",
+        b"<p" + b" a" * 200_000 + b"<b>x</b>",  # the tag never closes
+        b'<p q="' + b" a" * 200_000 + b">x</p>",  # an unclosed quote
+    ],
+    ids=["valueless", "valued", "no-close", "open-quote"],
+)
+def test_an_attribute_flood_never_reaches_the_parser(flood):
+    seen, spy = _soup_inputs()
+    with spy:
+        epub_utils._chapter_text(b"<body>" + flood + b"</body>")
+    assert len(seen[0]) < 100
+
+
+@pytest.mark.parametrize(
+    "unit",
+    [b"<a", b'<a x="1', b' x="1"', b"<a x='>'>"],
+    ids=["never-closed", "open-quotes", "one-tag-many-quotes", "quoted-close"],
+)
+def test_attribute_stripping_time_grows_linearly(unit):
+    """A scan that restarts per "<" or per quote would grow with the square."""
+
+    def strip_time(n: int) -> float:
+        markup = b"<p" + unit * n
+        start = time.perf_counter()
+        epub_utils._drop_attributes(markup)
+        return time.perf_counter() - start
+
+    small = min(strip_time(20_000) for _ in range(2))
+    large = min(strip_time(200_000) for _ in range(2))
+    assert large / max(small, 1e-3) < 40
+
+
+def test_chapter_tags_over_the_cap_are_refused_before_parsing(tmp_path):
+    path = _spine_epub(
+        tmp_path / "tags.epub",
+        '<itemref idref="a"/><itemref idref="b"/>',
+        {"a": "<p>a</p>" * 300, "b": "<p>b" * 600},
+    )
+    with (
+        patch.object(epub_utils, "MAX_CHAPTER_TAGS", 1_000),
+        patch.object(
+            epub_utils, "_chapter_text", wraps=epub_utils._chapter_text
+        ) as parse,
+        pytest.raises(ValueError, match=r"tags\.epub[\s\S]*more than 1,000 tags"),
+    ):
+        extract_epub_text(str(path))
+    assert parse.call_count == 1
+
+
+def test_chapters_at_the_tag_cap_are_read(tmp_path):
+    path = _spine_epub(tmp_path / "ok.epub", '<itemref idref="a"/>', {"a": ""})
+    with zipfile.ZipFile(path) as zf:
+        exact = zf.read("OEBPS/a.xhtml").count(b"<")
+    with patch.object(epub_utils, "MAX_CHAPTER_TAGS", exact):
+        assert extract_epub_text(str(path))[1] == 1
+
+
+def test_real_novel_sized_book_fits_the_default_caps():
+    """10 MB of tag-dense Calibre markup (3x Gutenberg's density) must index."""
+    paragraph = (
+        b'<p class="calibre1">It was a <span class="i">dark</span> and stormy '
+        b"night, said the narrator to all who listened.</p>\n"
+    )
+    markup = paragraph * 85_000
+    assert len(markup) > 9.5 * 1024 * 1024
+    assert len(markup) < epub_utils.MAX_CHAPTER_BYTES
+    assert markup.count(b"<") < epub_utils.MAX_CHAPTER_TAGS
+
+
+@pytest.mark.parametrize(
+    "member", ["META-INF/container.xml", "OEBPS/content.opf", "META-INF/encryption.xml"]
+)
+@pytest.mark.parametrize("cap", ["bytes", "tags"])
+def test_package_files_over_their_cap_are_refused_before_parsing(tmp_path, member, cap):
+    source = _make_epub(tmp_path / "src.epub", encrypted=True, cipher_uri="x.otf")
+    path = tmp_path / "pkg.epub"
+    # Pad only *member*, so the other package files stay under the caps.
+    padding = b" " * 5_000 if cap == "bytes" else b"<!---->" * 500
+    with zipfile.ZipFile(source) as src, zipfile.ZipFile(path, "w") as dst:
+        for info in src.infolist():
+            data = src.read(info.filename)
+            dst.writestr(
+                info.filename, data + padding if info.filename == member else data
+            )
+    seen, spy = _soup_inputs()
+    with (
+        patch.object(epub_utils, "MAX_PACKAGE_BYTES", 4_000),
+        patch.object(epub_utils, "MAX_PACKAGE_TAGS", 400),
+        spy,
+        pytest.raises(ValueError, match=rf"pkg\.epub[\s\S]*its {member}"),
+    ):
+        extract_epub_text(str(path))
+    assert not any(padding in markup for markup in seen)
+
+
+def test_package_files_at_their_cap_are_read(tmp_path):
+    path = _make_epub(tmp_path / "pkg.epub")
+    with zipfile.ZipFile(path) as zf:
+        size = zf.getinfo("OEBPS/content.opf").file_size
+        tags = zf.read("OEBPS/content.opf").count(b"<")
+    with (
+        patch.object(epub_utils, "MAX_PACKAGE_BYTES", size),
+        patch.object(epub_utils, "MAX_PACKAGE_TAGS", tags),
+    ):
+        assert extract_epub_text(str(path))[1] == 2
