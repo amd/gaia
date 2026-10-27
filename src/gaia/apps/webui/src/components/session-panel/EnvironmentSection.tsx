@@ -251,16 +251,22 @@ function Internet({ sessionId }: { sessionId: string }) {
             setSaving(false);
         }
     };
+    if (!env.enforced) {
+        return (
+            <Row label="Internet">
+                <span className="sp-state-text">{env.internet ? 'On' : 'Off'}</span>
+            </Row>
+        );
+    }
     return (
         <Row label="Internet">
             <Switch
                 checked={env.internet}
                 onChange={(on) => void toggle(on)}
-                disabled={saving || !env.enforced}
+                disabled={saving}
                 label="Internet for this chat"
                 text={env.internet ? 'On' : 'Off: web search and pages are blocked'}
             />
-            {!env.enforced && <span className="sp-meta">Set by the agent; can't be changed from this chat.</span>}
             {error && <span className="sp-error" role="alert">{error}</span>}
         </Row>
     );

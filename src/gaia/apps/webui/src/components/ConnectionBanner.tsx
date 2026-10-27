@@ -297,7 +297,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 <div className="connection-banner__text">
                     {unresponsive
                         ? `The model server is not answering (${systemStatus.lemonade_error}). It may be busy with another app or loading a model.`
-                        : 'The model server stopped responding.'}{' '}
+                        : "The model server isn't running."}{' '}
                     {systemStatus.start_command ? (
                         <span className="connection-banner__hint">
                             {unresponsive ? 'If it stays this way, restart it: ' : 'To start it by hand, run '}
