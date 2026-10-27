@@ -309,7 +309,7 @@ describe('ModelSettings model list', () => {
 });
 
 describe('ModelSettings: an unreachable AMD gateway (#5604)', () => {
-    const NO_NET = "No network available — can't reach llm-api.amd.com (needs AMD's network or VPN)";
+    const NO_NET = "Can't reach llm-api.amd.com. It needs AMD's network or VPN";
     function amd(over: Partial<ProviderInfo> = {}): ProviderInfo {
         return {
             id: 'amd', name: 'AMD LLM Gateway', remote: true, models_discovered: false, key_source: null,

@@ -132,6 +132,7 @@ metadata:
         returns: { type: object }
         atomic: false              # maps to @tool(atomic=...)
     tools_required: []             # registry tools this skill CONSUMES (recipe contract)
+    pairs_with: []                 # skills this one is combined with (mutual; unknown names ignored)
 ```
 
 #### `tools` vs `tools_required` — never conflate them
@@ -160,6 +161,7 @@ The field name **`tools_required` is locked** as the cross-spec contract with
 | `metadata.gaia.requirements` | object | no | Model / context / deps / env / hardware constraints. Default: none. |
 | `metadata.gaia.tools` | list | no | Provided `@tool` declarations. Default: none (instruction-only). |
 | `metadata.gaia.tools_required` | list | no | Registry tool names consumed (recipe contract). Default: `[]`. |
+| `metadata.gaia.pairs_with` | list | no | Skills this one is usually combined with on one request. Mutual, shown in the skill catalogue and named by `load_skill`; names that are not installed are ignored. See [Companion skills](/spec/agent-skills#companion-skills). Default: `[]`. |
 
 ### Manifest-side grammar: `skills`, `skill_sets`, `default_skill_set`
 

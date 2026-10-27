@@ -1045,8 +1045,9 @@ export interface SetupPlan {
     download_gb: number | null;
 }
 
-/** A task a new chat offers, from an installed skill and what is set up. */
+/** A task a new chat offers, from what is set up on this PC. */
 export interface StartCard {
+    /** The skill that sharpens this task when installed; also the card's id. */
     skill: string;
     title: string;
     note: string;

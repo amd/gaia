@@ -27,6 +27,8 @@ A companion workflow at [`.github/workflows/dependabot-automerge.yml`](https://g
 
 **Workspace coverage.** The root npm entry follows the workspaces declaration in `package.json` (`src/gaia/electron`, `src/gaia/apps/*/webui`), including the example Electron app. The flagship Agent UI at `src/gaia/apps/webui` is **not** matched by that glob (it sits directly under `apps/`, not under `apps/<name>/webui`) so it has its own entry above. Apps that match `src/gaia/apps/*/webui` should not carry a nested lockfile or a nested Dependabot entry.
 
+**Held-back versions.** The pip entry ignores `cryptography` 49 and later. `setup.py` keeps Intel Macs below 49 on purpose, because 49+ publishes no x86_64 macOS wheel and its source build needs Rust. Other platforms are uncapped, so they already get 49+ without a bump. Without the ignore, Dependabot would propose lifting that cap every week. Drop the ignore when cryptography ships an x86_64 macOS wheel again.
+
 ## Auto-merge policy
 
 The workflow at `.github/workflows/dependabot-automerge.yml` enrols a Dependabot PR in GitHub's native auto-merge queue (`gh pr merge --auto --squash`) when **all** of the following are true:
