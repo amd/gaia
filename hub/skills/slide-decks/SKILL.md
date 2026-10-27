@@ -34,7 +34,8 @@ metadata:
             required: true
           output_path:
             type: string
-            required: true
+            required: false
+            default: ""
           theme:
             type: string
             required: false
@@ -90,7 +91,8 @@ metadata:
             required: true
           output_path:
             type: string
-            required: true
+            required: false
+            default: ""
           theme:
             type: string
             required: false
@@ -229,6 +231,9 @@ lines are bullets, `Must show:` lists what has to be visible. Three or more
 bullets inside it. `Diagram: process` draws them as left-to-right stages
 (also `cycle`, `pyramid`, `stack`) and `Axis:` names what grows along them.
 Use this for stages, steps, levels or options instead of a wall of bullets.
+Keep the user's own names for each stage. Under each, write 2-4 bullets of
+2-6 words, with no labels like `Focus:`. Use the user's terms in titles
+without inventing abbreviations. Keep `Axis:` under 10 words.
 
 ## Hard rules
 
@@ -262,6 +267,8 @@ Use this for stages, steps, levels or options instead of a wall of bullets.
 4. **Build** with Markdown, or `build_deck` with JSON for timelines, flows,
    2x2 matrices and combo charts. Big decks: 6-8 slides first, then
    `add_slide`.
+   Leave `output_path` empty unless the user named a folder or file: the deck
+   is then saved in GAIA's documents folder.
 5. **Check.** The build result's `verify` is the check. Fix every error it
    lists and rebuild (or `update_slide`) until its `status` is `pass`. Call
    `verify_deck(path, expected_slides=N, required_items=[...])` only after

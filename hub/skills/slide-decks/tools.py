@@ -14,6 +14,7 @@ Each tool returns a dict; a problem the model can fix comes back as
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -25,6 +26,7 @@ from slidedeck import verify as _verify
 from slidedeck.outline import OutlineError, load_outline, normalize_outline
 
 from gaia.agents.base.tools import tool
+from gaia.config import gaia_home
 from gaia.logger import get_logger
 from gaia.skills.context import (
     SkillContextError,
@@ -78,8 +80,23 @@ def _readable(path: str, what: str) -> Path:
     return resolved
 
 
-def _writable_deck(path: str, what: str = "output_path") -> Path:
-    p = _absolute(path, what)
+def _deck_name(outline: Dict[str, Any]) -> str:
+    slides = outline.get("slides") or []
+    title = str(
+        outline.get("title") or (slides[0].get("title") if slides else "") or ""
+    )
+    stem = re.sub(r"[^A-Za-z0-9]+", " ", title).strip()[:60].strip()
+    return (stem or "Slide deck") + ".pptx"
+
+
+def _writable_deck(
+    path: str, outline: Dict[str, Any], what: str = "output_path"
+) -> Path:
+    # A bare name or no path saves in GAIA's documents folder, which every chat can write.
+    p = Path(path.strip()).expanduser() if path.strip() else Path(_deck_name(outline))
+    if not p.is_absolute():
+        p = gaia_home() / "documents" / p
+        p.parent.mkdir(parents=True, exist_ok=True)
     if p.suffix.lower() != ".pptx":
         raise OutlineError([f"{what} must end in .pptx, got {p.name!r}."])
     if _SKILL_DIR == p.resolve().parent or _SKILL_DIR in p.resolve().parents:
@@ -165,7 +182,7 @@ def _renderer():
 @tool(display_label="Building slide deck")
 def build_deck(
     outline: dict,
-    output_path: str,
+    output_path: str = "",
     theme: str = "",
     template_path: str = "",
     prefs: Optional[dict] = None,
@@ -178,7 +195,8 @@ def build_deck(
 
     Args:
         outline: The slide outline object, or its JSON text.
-        output_path: Absolute path of the .pptx to write, in an existing folder.
+        output_path: Where to save the .pptx. Leave empty, or give just a file
+            name, to save in GAIA's documents folder.
         theme: light, dark or minimal; empty uses the saved preference.
         template_path: Optional .pptx/.potx whose layouts and theme to use.
         prefs: Optional style the user asked for in this request (density, colors...).
@@ -208,7 +226,7 @@ def _build_from(
                 dict.fromkeys([*(data.get("required_items") or []), *required_items])
             )
         _check_inputs(data, saved, template_path)
-        out = _writable_deck(output_path)
+        out = _writable_deck(output_path, data)
         result = _build.build_deck(
             data, str(out), theme or None, template_path or None, saved
         )
@@ -230,7 +248,7 @@ def _build_from(
 @tool(display_label="Building slide deck from Markdown")
 def build_deck_from_markdown(
     markdown: str,
-    output_path: str,
+    output_path: str = "",
     theme: str = "",
     prefs: Optional[dict] = None,
     required_items: Optional[list] = None,
@@ -244,7 +262,8 @@ def build_deck_from_markdown(
 
     Args:
         markdown: The deck as Markdown.
-        output_path: Absolute path of the .pptx to write, in an existing folder.
+        output_path: Where to save the .pptx. Leave empty, or give just a file
+            name, to save in GAIA's documents folder.
         theme: light, dark or minimal; empty uses the saved preference.
         prefs: Optional style the user asked for in this request.
         required_items: Facts the request needs visible on the slides; checked.

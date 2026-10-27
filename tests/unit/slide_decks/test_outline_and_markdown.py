@@ -405,3 +405,43 @@ def test_a_one_slide_request_gets_the_slide_without_a_cover():
     assert outline["expected_slides"] == 1
     two = outline_from_markdown(md, expected_slides=2)
     assert [s["type"] for s in two["slides"]] == ["title", "bullets"]
+
+
+def test_latex_arrows_from_the_model_become_symbols_on_the_slide():
+    from slidedeck.outline import normalize_outline
+
+    out = normalize_outline(
+        {
+            "slides": [
+                {
+                    "type": "bullets",
+                    "title": r"Assist $\rightarrow$ Autonomy",
+                    "bullets": [
+                        r"Concept $\to$ draft",
+                        r"$\Downarrow \text{ Increasing Complexity}$",
+                        "Costs $5 and $10, 50\\% growth",
+                    ],
+                }
+            ]
+        }
+    )
+    slide = out["slides"][0]
+    assert slide["title"] == "Assist → Autonomy"
+    assert [p[0] for p in slide["paras"]] == [
+        "Concept → draft",
+        "⇓ Increasing Complexity",
+        "Costs $5 and $10, 50% growth",
+    ]
+
+
+def test_latex_in_a_process_axis_becomes_symbols():
+    from slidedeck.markdown import outline_from_markdown
+    from slidedeck.outline import normalize_outline
+
+    md = (
+        "## Stages\nDiagram: process\n### A\n- one\n### B\n- two\n### C\n- three\n"
+        "Axis: Complexity $\\rightarrow$ Compute\n"
+    )
+    slide = normalize_outline(outline_from_markdown(md))["slides"][0]
+    assert "Complexity → Compute" in str(slide)
+    assert "rightarrow" not in str({k: v for k, v in slide.items() if k != "raw"})

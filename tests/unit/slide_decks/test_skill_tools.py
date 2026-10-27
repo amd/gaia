@@ -68,7 +68,7 @@ def test_manifest_validates_and_declares_every_tool(tools):
     )
     assert (
         registered["slide-decks/build_deck"]["parameters"]["output_path"]["required"]
-        is True
+        is False
     )
     perms = {str(p) for p in skill.parsed_permissions()}
     assert {"program:run:soffice", "scratch:write"} <= perms
@@ -127,13 +127,6 @@ def test_tool_errors_are_returned_not_raised(tools, tmp_path):
         assert (
             fns["build_deck"](
                 outline={"slides": []}, output_path=str(tmp_path / "x.pptx")
-            )["status"]
-            == "error"
-        )
-        assert (
-            fns["build_deck"](
-                outline={"slides": [{"type": "title", "title": "x"}]},
-                output_path="relative.pptx",
             )["status"]
             == "error"
         )
@@ -241,3 +234,18 @@ def test_the_procedure_checks_a_fresh_build_once(tools, tmp_path):
             expected_slides=1,
         )
     assert r["verify"]["status"] == "pass"
+
+
+def test_a_deck_with_no_folder_saves_in_gaia_documents(tools, tmp_path):
+    skill, fns, _r = tools
+    md = (
+        "# Ferry plan\n\n## Crossings rose after the timetable change\n- 1,180 a week\n"
+    )
+    documents = tmp_path / "home" / "documents"
+    with bind(_Host(), skill):
+        unnamed = fns["build_deck_from_markdown"](markdown=md)
+        named = fns["build_deck_from_markdown"](markdown=md, output_path="ferry.pptx")
+    assert unnamed["path"] == str(documents / "Ferry plan.pptx")
+    assert named["path"] == str(documents / "ferry.pptx")
+    assert (documents / "Ferry plan.pptx").is_file()
+    assert (documents / "ferry.pptx").is_file()

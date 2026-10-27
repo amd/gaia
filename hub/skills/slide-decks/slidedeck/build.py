@@ -748,6 +748,15 @@ class DeckBuilder:
             else:
                 ppr.set("marL", str(int(para.indent_pt * EMU_PER_PT)))
                 ppr.set("indent", str(int(-14 * EMU_PER_PT)))
+                # In a filled shape the bullet would take the shape's own text colour.
+                paint = (
+                    colors[i]
+                    if colors and i < len(colors) and colors[i] is not None
+                    else color
+                )
+                if paint is not None:
+                    bu = etree.SubElement(ppr, qn("a:buClr"))
+                    etree.SubElement(bu, qn("a:srgbClr")).set("val", paint.hex)
                 etree.SubElement(ppr, qn("a:buFont")).set("typeface", "Arial")
                 etree.SubElement(ppr, qn("a:buChar")).set(
                     "char", "•" if para.level % 2 == 0 else "–"
@@ -2506,7 +2515,14 @@ class DeckBuilder:
                     sw - (Inches(0.12) if style == "chevrons" else 0),
                     row_h - head_h - Inches(0.12),
                 )
-                tb = self.textbox(slide, d, f"Step {k + 1} detail")
+                tb = self.shape(
+                    slide,
+                    MSO_SHAPE.ROUNDED_RECTANGLE,
+                    d,
+                    f"Step {k + 1} detail",
+                    self.theme.panel,
+                    round_adj=0.05,
+                )
                 ps, raws = self._card_paras(
                     {"text": it.get("text"), "bullets": it.get("bullets")},
                     body_scale=1.0,
@@ -2522,7 +2538,14 @@ class DeckBuilder:
             inset_x=int(point * 1.05) + INSET_X if style == "chevrons" else INSET_X,
             write_inset_x=INSET_X,
         )
-        self._write_group(details, 18, "step details")
+        self._write_group(
+            details,
+            18,
+            "step details",
+            align=PP_ALIGN.LEFT,
+            inset_x=Inches(0.15),
+            inset_y=Inches(0.12),
+        )
 
     def _diagram_boxes(self, slide, s, box: Box, cols: Optional[int] = None):
         items = s["items"]

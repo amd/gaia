@@ -16,6 +16,7 @@ import csv
 import io
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -191,6 +192,65 @@ class OutlineError(ValueError):
             else ""
         )
         super().__init__(head + "\n- ".join(problems) if head else problems[0])
+
+
+_LATEX_SYMBOLS = {
+    "rightarrow": "\u2192",
+    "to": "\u2192",
+    "longrightarrow": "\u2192",
+    "Rightarrow": "\u21d2",
+    "leftarrow": "\u2190",
+    "Leftarrow": "\u21d0",
+    "leftrightarrow": "\u2194",
+    "uparrow": "\u2191",
+    "downarrow": "\u2193",
+    "Uparrow": "\u21d1",
+    "Downarrow": "\u21d3",
+    "times": "\u00d7",
+    "le": "\u2264",
+    "leq": "\u2264",
+    "ge": "\u2265",
+    "geq": "\u2265",
+    "approx": "\u2248",
+    "pm": "\u00b1",
+    "cdot": "\u00b7",
+}
+_LATEX_SYMBOL_RE = re.compile(
+    r"\\(" + "|".join(sorted(_LATEX_SYMBOLS, key=len, reverse=True)) + r")(?![A-Za-z])"
+)
+_LATEX_MATH_RE = re.compile(r"\$([^$\n]{1,80})\$")
+_LATEX_TEXT_RE = re.compile(r"\\text\{([^{}]*)\}")
+
+
+def _plain(text: str) -> str:
+    """Models write arrows as LaTeX (``$\\rightarrow$``); a slide shows the symbol."""
+    if "\\" not in text:
+        return text
+
+    def math(m: "re.Match[str]") -> str:
+        if "\\" not in m.group(1):
+            return m.group(0)
+        inner = _LATEX_TEXT_RE.sub(r"\1", m.group(1))
+        inner = _LATEX_SYMBOL_RE.sub(lambda s: _LATEX_SYMBOLS[s.group(1)], inner)
+        return m.group(0) if "\\" in inner else " ".join(inner.split())
+
+    text = _LATEX_MATH_RE.sub(math, text)
+    text = _LATEX_SYMBOL_RE.sub(lambda s: _LATEX_SYMBOLS[s.group(1)], text)
+    return re.sub(r"\\([%&#_$])", r"\1", text)
+
+
+_PATH_KEY_RE = re.compile(r"path|image|src|file|url", re.I)
+
+
+def _plain_fields(value: Any, key: str = "") -> Any:
+    """Every display string of a raw slide through :func:`_plain`; paths untouched."""
+    if isinstance(value, str):
+        return value if _PATH_KEY_RE.search(key) else _plain(value)
+    if isinstance(value, dict):
+        return {k: _plain_fields(v, str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_plain_fields(v, key) for v in value]
+    return value
 
 
 def _text(value: Any) -> str:
@@ -997,7 +1057,7 @@ def normalize_slide(
             f"{where}: must be an object, got {type(raw).__name__}. For example: {EXAMPLES['bullets']}"
         )
         return {"type": "bullets", "index": index, "title": "", "paras": []}
-    raw = _canonical_fields(raw)
+    raw = _plain_fields(_canonical_fields(raw))
     before = len(problems)
     s = _normalize_slide(raw, index, problems, base_dir)
     for issue in _unknown_fields(raw, s["type"]):
