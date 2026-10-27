@@ -84,6 +84,23 @@ describe("/api/momentum", () => {
   });
 });
 
+describe("/api/momentum core and outside split", () => {
+  it("splits people's PRs by core team and outside, ignores the people filter, and counts open bot issues", async () => {
+    const db = memoryD1();
+    await put(db, "items", ["number", "kind", "created_at", "closed_at", "merged_at", "assoc", "author"], [
+      [1, "pr", iso(3), iso(2), iso(2), "CONTRIBUTOR", "alice"],
+      [2, "pr", iso(4), iso(2), iso(2), "NONE", "carol"],
+      [3, "pr", iso(3), iso(2), iso(2), "NONE", "dependabot[bot]"],
+      [4, "issue", iso(3), null, null, "NONE", "github-actions[bot]"],
+      [5, "issue", iso(3), null, null, "NONE", "carol"],
+    ]);
+    const m = await get(db, "/api/momentum", "range=30&core=Alice&exclude=alice");
+    expect(m.split.core).toMatchObject({ prsMerged: 1, medianDaysToMerge: 1 });
+    expect(m.split.outside).toMatchObject({ prsMerged: 1, medianDaysToMerge: 2, openIssues: 1 });
+    expect(m.botOpenIssues).toBe(1);
+  });
+});
+
 describe("/api/growth", () => {
   it("counts maintainers as core even when GitHub labels them contributors, and compares with the window before", async () => {
     const db = memoryD1();

@@ -20,7 +20,7 @@ export const TARGETS = {
   external: { good: 0.2, warn: 0.1 },
   busFactor: { good: 2, warn: 1 },
   /** Downloads in the window against the window before. */
-  downloads: { good: 0.05, warn: -0.2 },
+  downloads: { good: -0.1, warn: -0.3 },
 } as const;
 
 const pc = (x: number) => `${Math.round(x * 1000) / 10}%`;
@@ -49,8 +49,8 @@ var INFO={` + INFO_COMMON + String.raw`
 'g-ret':['Newcomer retention','Of the people whose first pull request was 90 to 180 days ago, the share who opened another within 90 days of it. It does not follow the range: everyone counted has had the full 90 days. Hermes Agent keeps 30 to 34%; research finds under 20% of newcomers stay. Green: __RET_GOOD__ or more. Amber: __RET_WARN__ or more. Red: below.'],
 'g-ext':['Outside contributions','Share of merged pull requests opened by people outside the core team. The core team is the maintainer accounts configured for this dashboard plus GitHub organisation members and collaborators; bots are left out of both counts. Green: __EXT_GOOD__ or more. Amber: __EXT_WARN__ or more. Red: below.'],
 'g-bus':['Bus factor','Fewest people who together made at least half of the commits in the window (CHAOSS: contributor absence factor). A bus factor of 1 means one person leaving would halve the work. One person with two accounts counts as two, so read 2 with care. A small core team usually sits at 1 or 2, so 1 is amber, not red. Green: __BUS_GOOD__ or more. Amber: __BUS_WARN__.'],
-'d-installs':['GitHub installs','Installer, app and package downloads from GitHub releases in the window, against the window before. Update checks by the desktop app are left out. Counted from nightly snapshots of GitHub’s running totals, which began on __SNAP__, so the comparison appears once a full earlier window has been collected. Downloads swing with release cycles, so only a fall of more than 20% is red. Green: up 5% or more. Amber: down up to 20%, or up less than 5%.'],
-'d-pypi':['PyPI downloads','Downloads of the Python package, as PyPI reports them a day late, so the window ends on the last reported day. Includes mirrors and CI installs. Green: up 5% or more. Amber: down up to 20%, or up less than 5%. Red: down more than 20%.'],
+'d-installs':['GitHub installs','Installer, app and package downloads from GitHub releases in the window, against the window before. Update checks by the desktop app are left out. Counted from nightly snapshots of GitHub’s running totals, which began on __SNAP__, so the comparison appears once a full earlier window has been collected. Downloads swing with release cycles, so the colours judge the trend loosely. Green: flat or up, or down less than 10%. Amber: down 10 to 30%. Red: down more than 30%.'],
+'d-pypi':['PyPI downloads','Downloads of the Python package, as PyPI reports them a day late, so the window ends on the last reported day. Includes mirrors and CI installs. Green: flat or up, or down less than 10%. Amber: down 10 to 30%. Red: down more than 30%.'],
 'd-npm':['npm downloads','Downloads of the npm package, as npm reports them. Too few to score.'],
 'dl':['Downloads per period','GitHub installs, PyPI and npm per period. GitHub installs start when daily snapshots began. Click a legend entry to hide a source, for example PyPI to see the smaller ones.'],
 'rate':['Growth rate','Stars and forks added in each period over the total when the period began. The dashed line is the star target (__STAR_GOOD__ a month) converted to the period length; forks aim higher, at __FORK_GOOD__. Click a legend entry to hide it.'],

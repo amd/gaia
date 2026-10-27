@@ -4,6 +4,7 @@
 import {
   contributors,
   cumulativeDaily,
+  isBot,
   keepAuthor,
   median,
   momentumDaily,
@@ -13,6 +14,7 @@ import {
   type CommitRow,
   type DailyRow,
   type ItemRow,
+  type RangeSummary,
 } from "./momentum";
 import {
   categoryBreakdown,
@@ -28,7 +30,7 @@ import {
   type EvalRunRow,
   type EvalScenarioRow,
 } from "./evalstats";
-import { activity, downloadPeriods, downloadWindows, growthPeriods, growthWindow, newcomerRetention, per30, RETURN_DAYS, type DownloadDay } from "./growth";
+import { activity, isExternal, downloadPeriods, downloadWindows, growthPeriods, growthWindow, newcomerRetention, per30, RETURN_DAYS, type DownloadDay } from "./growth";
 import { ciStats, dailyDeltas, releaseDownloads, type AssetRow, type ReleaseRow, type RunRow } from "./stats";
 
 const json = (body: unknown, status = 200): Response =>
@@ -183,7 +185,22 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
           return m.set(w.week, v);
         }, new Map<string, { week: string; additions: number; deletions: number }>()).values()].sort((x, y) => x.week.localeCompare(y.week))
       : await all<{ week: string; additions: number; deletions: number }>("SELECT week, additions, deletions FROM loc_weekly ORDER BY week");
+    // Core team against outside contributors, people only and whatever the people filter hides.
+    const maintainers = new Set((url.searchParams.get("core") ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean));
+    const humans = allItems.filter((i) => i.author && !isBot(i.author));
+    const outside = humans.filter((i) => isExternal(i, maintainers));
+    const core = humans.filter((i) => !isExternal(i, maintainers));
+    const brief = (s: RangeSummary) => ({ prsOpened: s.prsOpened, prsMerged: s.prsMerged, issuesOpened: s.issuesOpened, medianDaysToMerge: s.medianDaysToMerge, p90DaysToMerge: s.p90DaysToMerge, openIssues: s.openIssues, openPrs: s.openPrs });
+    const allTimeRange = days >= 36500;
+    const split = {
+      core: brief(rangeSummary(core, [], since)),
+      outside: brief(rangeSummary(outside, [], since)),
+      corePrevious: allTimeRange ? null : brief(rangeSummary(core, [], prevSince, since)),
+      outsidePrevious: allTimeRange ? null : brief(rangeSummary(outside, [], prevSince, since)),
+    };
     return json({
+      split,
+      botOpenIssues: allItems.filter((i) => i.kind === "issue" && !i.closed_at && isBot(i.author)).length,
       daily: momentumDaily(items, commits, today),
       summary: rangeSummary(items, commits, since),
       // The equal-length window before this one, for trend colours; "all" has none.
