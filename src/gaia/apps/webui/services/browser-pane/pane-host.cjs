@@ -17,6 +17,8 @@
 const { WebContentsView, nativeImage } = require("electron");
 const { attachTabPolicy, classifyNavigation, isApprovalFreeHost } = require("./navigation-policy.cjs");
 const { TabCdp } = require("./cdp-session.cjs");
+const { BridgeError } = require("./bridge-error.cjs");
+const input = require("./input.cjs");
 
 /** @typedef {import("./contract").TabId} TabId */
 /** @typedef {import("./contract").TabState} TabState */
@@ -38,20 +40,15 @@ const BUSY_LINGER_MS = 1500;
 const SETTLE_MS = 400;
 const LOAD_TIMEOUT_MS = 30000;
 const EVAL_TIMEOUT_MS = 15000;
-
-/** An agent op's failure, with a code from BridgeErrorCode and a message written for the model. */
-class BridgeError extends Error {
-  /**
-   * @param {import("./contract").BridgeErrorCode} code
-   * @param {string} message
-   * @param {Record<string, unknown>} [data]
-   */
-  constructor(code, message, data = {}) {
-    super(message);
-    this.code = code;
-    this.data = data;
-  }
-}
+const ACT_TIMEOUT_MS = 15000;
+// After the user clicks or types in a tab, the agent's input waits this long there.
+const USER_PAUSE_MS = 4000;
+// "GAIA is using this tab" stays up this long after an action, covering the model's think time between steps.
+const ACT_LINGER_MS = 10000;
+// The page reports the agent's own CDP input back as input events for a moment after it lands.
+const AGENT_ECHO_MS = 100;
+const USER_INPUT = new Set(["mouseDown", "rawKeyDown", "keyDown", "touchStart"]);
+const CONTROLS = new Set(["shared", "user", "private"]);
 
 /** True when an agent op may read or land on `url`: loopback, or an origin the user approved. */
 function inScope(url, allowedOrigins) {
@@ -289,6 +286,36 @@ class PaneHost {
     else wc.openDevTools({ mode: DEVTOOLS_MODE });
   }
 
+  /**
+   * Who may drive a tab: shared with the agent, held by the user (the agent
+   * is paused there), or private (the agent can't see it at all).
+   *
+   * @param {TabId} id
+   * @param {import("./contract").TabControl} control
+   */
+  setControl(id, control) {
+    if (!CONTROLS.has(control)) throw new Error(`Unknown tab control "${control}"; use shared, user or private.`);
+    const tab = this.requireTab(id);
+    tab.state.control = control;
+    // Resume means go now, not after the last click's pause runs out.
+    if (control === "shared") tab.userInputAt = 0;
+    this.publish();
+  }
+
+  /**
+   * The user's Responsive choice. While it is set, an agent viewport request
+   * is reported back to the agent and not applied.
+   *
+   * @param {TabId} id
+   * @param {import("./contract").ViewportChoice | null} choice null fills the pane again.
+   */
+  async setUserViewport(id, choice) {
+    const tab = this.requireTab(id);
+    tab.state.viewport = choice ? { ...choice, source: "user" } : null;
+    this.publish();
+    await this.applyViewport(tab);
+  }
+
   /** Clears the pane's cookies, storage, cache, tab histories and recent pages. Nothing outside the pane. */
   async clearBrowsingData() {
     const ses = this.deps.session;
@@ -340,24 +367,50 @@ class PaneHost {
     }
   }
 
+  /** The tabs the agent may know about: private ones are left out, and an active private tab reads as none. */
   listTabs() {
+    const shown = [...this.tabs.values()].filter(({ state }) => state.control !== "private");
     return {
-      tabs: [...this.tabs.values()].map(({ state }) => ({
+      tabs: shown.map(({ state }) => ({
         id: state.id,
         url: state.url,
         title: state.title,
         active: state.id === this.activeTabId,
         openedBy: state.openedBy,
+        control: state.control,
       })),
-      activeTabId: this.activeTabId,
+      activeTabId: shown.some(({ state }) => state.id === this.activeTabId) ? this.activeTabId : null,
     };
   }
 
   /** @param {TabId | null} id null means the tab the user is looking at. */
   agentTab(id) {
     const tab = this.tabs.get(id === null ? this.activeTabId : id);
-    if (!tab) throw new BridgeError("no_such_tab", `No browser pane tab "${id}"; it may have been closed.`);
+    if (tab && tab.state.control === "private" && id === null) {
+      throw new BridgeError(
+        "private_tab",
+        "The user marked the tab they are looking at private, so GAIA can't see or use it. Open your own tab with browser_open(url), or ask the user to switch tabs."
+      );
+    }
+    // A private tab is invisible to the agent, so naming one gets the same answer as a closed tab.
+    if (!tab || tab.state.control === "private") throw new BridgeError("no_such_tab", `No browser pane tab "${id}"; it may have been closed.`);
     return tab;
+  }
+
+  /** Agent input lands only in a tab the user has not taken over and has not touched in the last few seconds. */
+  requireAgentInput(tab) {
+    if (tab.state.control === "user") {
+      throw new BridgeError(
+        "user_active",
+        "FAILED: this step was not done. The user took control of this browser tab, so GAIA is paused there. Stop using the browser now. Tell the user which steps are not done, and ask how to continue (they can press Resume in the browser pane)."
+      );
+    }
+    if (Date.now() - tab.userInputAt < USER_PAUSE_MS) {
+      throw new BridgeError(
+        "user_active",
+        "FAILED: this step was not done. The user is clicking or typing in this browser tab right now. Stop using the browser now. Tell the user which steps are not done, and ask how to continue."
+      );
+    }
   }
 
   requirePage(tab, allowedOrigins) {
@@ -374,11 +427,19 @@ class PaneHost {
     return wc;
   }
 
-  /** Run one agent op on a tab: shows the strip, and stops navigations off the allowed origins. */
-  async withAgent(tab, allowedOrigins, fn) {
+  /**
+   * Run one agent op on a tab: shows the strip, and stops navigations off the
+   * allowed origins. An acting op shows "GAIA is using this tab", which stays
+   * up between the agent's steps; touching the page then takes the tab over.
+   */
+  async withAgent(tab, allowedOrigins, fn, { acting = false } = {}) {
     tab.busy = (tab.busy || 0) + 1;
     clearTimeout(tab.busyTimer);
     tab.state.agentBusy = true;
+    if (acting) {
+      clearTimeout(tab.actTimer);
+      tab.state.agentActing = true;
+    }
     tab.scope = { allowed: allowedOrigins, blocked: null };
     this.publish();
     try {
@@ -394,6 +455,15 @@ class PaneHost {
           tab.state.agentBusy = false;
           this.publish();
         }, BUSY_LINGER_MS);
+        tab.busyTimer.unref?.();
+      }
+      if (acting) {
+        tab.actTimer = setTimeout(() => {
+          if (!this.tabs.has(tab.state.id)) return;
+          tab.state.agentActing = false;
+          this.publish();
+        }, ACT_LINGER_MS);
+        tab.actTimer.unref?.();
       }
     }
   }
@@ -423,6 +493,7 @@ class PaneHost {
    */
   async agentNavigate(id, to, allowedOrigins) {
     const tab = this.agentTab(id);
+    this.requireAgentInput(tab);
     if (to === "back" || to === "forward" || to === "reload") {
       if (!tab.view) throw new BridgeError("no_page", "This tab has no page yet, so it has no history.");
       const wc = tab.view.webContents;
@@ -561,6 +632,87 @@ class PaneHost {
     return this.withAgent(tab, allowedOrigins, async () => ({ ...tab.cdp.logs(query), url: wc.getURL() }));
   }
 
+  /**
+   * The only way the agent changes a page: a click, typing, or a key, as
+   * trusted input (input.cjs). Refused in a tab the user holds or has just
+   * touched. Waits for a navigation the action starts, and follows a popup
+   * the pane opened as a new tab.
+   *
+   * @param {TabId | null} id
+   * @param {import("./contract").ActAction} action
+   * @param {import("./contract").ActTarget | null} target
+   * @param {string[]} allowedOrigins
+   */
+  async agentAct(id, action, target, allowedOrigins) {
+    const tab = this.agentTab(id);
+    this.requireAgentInput(tab);
+    const wc = this.requirePage(tab, allowedOrigins);
+    this.deps.onShowRequest();
+    const before = this.activeTabId;
+    return this.withAgent(
+      tab,
+      allowedOrigins,
+      async () => {
+        tab.dispatching = true;
+        try {
+          await withTimeout(input.perform({ wc, cdp: tab.cdp, action, target }), ACT_TIMEOUT_MS, "Acting on the page");
+        } catch (err) {
+          if (err instanceof BridgeError) throw err;
+          throw new BridgeError("internal", `Could not act on the page: ${err.message}`);
+        } finally {
+          tab.dispatching = false;
+          tab.agentEchoUntil = Date.now() + AGENT_ECHO_MS;
+        }
+        await this.settle(wc);
+        const reply = { tabId: tab.state.id, url: wc.getURL(), title: wc.getTitle() };
+        if (this.activeTabId !== before) reply.adoptedTabId = this.activeTabId;
+        return reply;
+      },
+      { acting: true }
+    );
+  }
+
+  /**
+   * Emulate a screen size and color scheme for the agent. The user's own
+   * Responsive choice wins: then nothing changes and applied is false.
+   *
+   * @param {TabId | null} id
+   * @param {import("./contract").ViewportChoice} choice
+   */
+  async agentViewport(id, choice) {
+    const tab = this.agentTab(id);
+    this.requireAgentInput(tab);
+    if (!tab.view) throw new BridgeError("no_page", "This tab has no page yet. Open one with browser_open(url) first.");
+    const current = tab.state.viewport;
+    if (current && current.source === "user") return { tabId: tab.state.id, applied: false, viewport: current };
+    tab.state.viewport = choice.size || choice.colorScheme ? { ...choice, source: "agent" } : null;
+    this.deps.onShowRequest();
+    this.publish();
+    await this.applyViewport(tab);
+    return { tabId: tab.state.id, applied: true, viewport: tab.state.viewport };
+  }
+
+  async applyViewport(tab) {
+    if (!tab.cdp) return;
+    const v = tab.state.viewport;
+    if (v && v.size) {
+      const { width, height, mobile } = v.size;
+      await tab.cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 0, mobile });
+    } else {
+      await tab.cdp.send("Emulation.clearDeviceMetricsOverride");
+    }
+    await tab.cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: (v && v.colorScheme) || "" }] });
+  }
+
+  /** A click or keystroke from the user: the agent waits, and mid-task it hands the tab to the user. */
+  noteUserInput(tab) {
+    tab.userInputAt = Date.now();
+    if (tab.state.agentActing && tab.state.control === "shared") {
+      tab.state.control = "user";
+      this.publish();
+    }
+  }
+
   dispose() {
     this.disposed = true;
     for (const tab of this.tabs.values()) this.destroyView(tab.view);
@@ -585,11 +737,18 @@ class PaneHost {
         notice: null,
         openedBy: null,
         agentBusy: false,
+        agentActing: false,
+        control: "shared",
+        viewport: null,
       },
       cdp: null,
       busy: 0,
       busyTimer: null,
+      actTimer: null,
       scope: null,
+      userInputAt: 0,
+      dispatching: false,
+      agentEchoUntil: 0,
     });
     return id;
   }
@@ -725,6 +884,10 @@ class PaneHost {
     });
     wc.on("devtools-opened", update(() => { s.devToolsOpen = true; }));
     wc.on("devtools-closed", update(() => { s.devToolsOpen = false; }));
+    wc.on("input-event", (_event, event) => {
+      if (!USER_INPUT.has(event.type) || tab.dispatching || Date.now() < tab.agentEchoUntil) return;
+      if (!this.disposed && this.tabs.has(s.id)) this.noteUserInput(tab);
+    });
     wc.on("before-input-event", (event, input) => {
       if (!isToggleShortcut(input)) return;
       event.preventDefault();
@@ -753,10 +916,12 @@ class PaneHost {
 }
 
 module.exports = {
+  ACT_LINGER_MS,
   BridgeError,
   DEVTOOLS_MODE,
   PANE_PARTITION,
   PaneHost,
+  USER_PAUSE_MS,
   inScope,
   isToggleShortcut,
   toViewBounds,

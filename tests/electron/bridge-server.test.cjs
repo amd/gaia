@@ -144,7 +144,7 @@ describe("who may call", () => {
   });
 
   test("an unknown op, a GET, or a body that is not JSON is refused before any handler", async () => {
-    expect((await post(ctx.bridge.port, "act", {}, ctx.auth)).body.error.code).toBe("unknown_op");
+    expect((await post(ctx.bridge.port, "click", {}, ctx.auth)).body.error.code).toBe("unknown_op");
     expect((await post(ctx.bridge.port, "hello", "{nope", ctx.auth)).body.error.code).toBe("bad_request");
     const get = await new Promise((resolve) => {
       http.get({ host: "127.0.0.1", port: ctx.bridge.port, path: "/v1/hello", headers: ctx.auth }, (res) => resolve(res.statusCode));
@@ -185,7 +185,7 @@ describe("parsing", () => {
 
   test("every error code the code can send is in the contract and the shared list", () => {
     const sent = new Set();
-    for (const file of ["bridge-server.cjs", "pane-host.cjs"]) {
+    for (const file of ["bridge-server.cjs", "pane-host.cjs", "input.cjs"]) {
       const src = fs.readFileSync(path.join(PANE, file), "utf8");
       for (const m of src.matchAll(/new BridgeError\("([a-z_]+)"/g)) sent.add(m[1]);
       for (const m of src.matchAll(/^const bad = .*BridgeError\("([a-z_]+)"/gm)) sent.add(m[1]);

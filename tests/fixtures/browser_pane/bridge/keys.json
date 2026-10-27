@@ -1,0 +1,18 @@
+{
+  "_doc": "The keys the agent may press. input.cjs KEYS, contract.d.ts AllowedKey and pane_driver.PANE_KEYS must all equal this list.",
+  "keys": [
+    "Enter",
+    "Escape",
+    "Tab",
+    "Backspace",
+    "Space",
+    "PageDown",
+    "PageUp",
+    "Home",
+    "End",
+    "ArrowLeft",
+    "ArrowUp",
+    "ArrowRight",
+    "ArrowDown"
+  ]
+}

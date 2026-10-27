@@ -118,6 +118,8 @@ contextBridge.exposeInMainWorld("gaiaBrowserPane", {
   clearBrowsingData: () => ipcRenderer.invoke("pane:clear-data"),
   openExternal: (tabId) => ipcRenderer.invoke("pane:open-external", tabId),
   setActiveSession: (sessionId) => ipcRenderer.send("pane:set-active-session", sessionId),
+  setControl: (tabId, control) => ipcRenderer.invoke("pane:set-control", tabId, control),
+  setViewport: (tabId, choice) => ipcRenderer.invoke("pane:set-viewport", tabId, choice),
 });
 
 // ── Install progress (Phase A) ──────────────────────────────────────────

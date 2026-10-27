@@ -32,6 +32,8 @@ const CHANNELS = Object.freeze({
   clearData: "pane:clear-data",
   openExternal: "pane:open-external",
   setActiveSession: "pane:set-active-session",
+  setControl: "pane:set-control",
+  setViewport: "pane:set-viewport",
 });
 
 const HISTORY_ACTIONS = new Set(["back", "forward", "reload", "stop"]);
@@ -83,6 +85,21 @@ function parseRect(rect) {
     rect &&
     ["x", "y", "width", "height"].every((k) => typeof rect[k] === "number" && Number.isFinite(rect[k]));
   return ok ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
+}
+
+const VIEWPORT_LIMITS = { min: 200, max: 4000 };
+
+/** The Responsive control's choice, or null; anything else is a bug in the renderer. */
+function parseViewportChoice(choice) {
+  if (choice === null) return null;
+  const size = choice && choice.size;
+  const scheme = choice && choice.colorScheme;
+  const dim = (n) => Number.isInteger(n) && n >= VIEWPORT_LIMITS.min && n <= VIEWPORT_LIMITS.max;
+  const sizeOk = size === null || (size && dim(size.width) && dim(size.height) && typeof size.mobile === "boolean");
+  if (!choice || !sizeOk || (scheme !== null && scheme !== "light" && scheme !== "dark")) {
+    throw new Error(`Browser pane: bad viewport ${JSON.stringify(choice)}`);
+  }
+  return { size: size && { width: size.width, height: size.height, mobile: size.mobile }, colorScheme: scheme };
 }
 
 /**
@@ -137,6 +154,8 @@ function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downlo
   handle(CHANNELS.toggleDevTools, (h, id) => h.toggleDevTools(requireString(id, "tab id")));
   handle(CHANNELS.clearData, (h) => h.clearBrowsingData());
   handle(CHANNELS.openExternal, (h, id) => h.openExternal(requireString(id, "tab id")));
+  handle(CHANNELS.setControl, (h, id, control) => h.setControl(requireString(id, "tab id"), control));
+  handle(CHANNELS.setViewport, (h, id, choice) => h.setUserViewport(requireString(id, "tab id"), parseViewportChoice(choice)));
 
   // Sent on every resize, so it is fire-and-forget; a throw here would reach the crash handler.
   ipcMain.on(CHANNELS.setBounds, (event, rect) => {

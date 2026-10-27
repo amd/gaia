@@ -1,14 +1,14 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
-import { ArrowLeft, ArrowRight, Ellipsis, Eraser, ExternalLink, PanelRightClose, Plus, RotateCw, SquareCode, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { ArrowLeft, ArrowRight, Ellipsis, Eraser, ExternalLink, Lock, LockOpen, MonitorSmartphone, PanelRightClose, Plus, RotateCcwSquare, RotateCw, SquareCode, X } from 'lucide-react';
 import { Popover } from '../Popover';
 import { CLAIMS_ESCAPE } from '../../hooks/useEscapeToClose';
 import { log } from '../../utils/logger';
 import { formatShortcut } from '../../utils/platform';
 import { normalizeAddress } from './address';
-import type { GaiaBrowserPaneAPI, PaneState, TabState } from '../../../services/browser-pane/contract';
+import type { GaiaBrowserPaneAPI, PaneState, TabState, ViewportChoice } from '../../../services/browser-pane/contract';
 
 export const TOGGLE_SHORTCUT = 'Mod+Shift+B';
 
@@ -43,6 +43,7 @@ export function BrowserToolbar({ pane, api, onClosePane, addressRef }: BrowserTo
                                 onClick={() => run('select tab', api.selectTab(tab.id))}
                             >
                                 {tab.loading && <span className="bp-tab-spinner" aria-hidden="true" />}
+                                {tab.control === 'private' && <Lock size={11} aria-label="Private" />}
                                 <span>{tab.title || tab.url || 'New tab'}</span>
                             </button>
                             <button
@@ -127,6 +128,7 @@ export function BrowserToolbar({ pane, api, onClosePane, addressRef }: BrowserTo
                 >
                     <SquareCode size={15} />
                 </button>
+                <ResponsiveMenu api={api} tab={active} />
                 <PaneMenu api={api} tab={active} />
                 <button
                     type="button"
@@ -221,6 +223,22 @@ function PaneMenu({ api, tab }: { api: GaiaBrowserPaneAPI; tab: TabState }) {
                 <button
                     type="button"
                     className="popover-item"
+                    onClick={() => {
+                        close();
+                        run('tab privacy', api.setControl(tab.id, tab.control === 'private' ? 'shared' : 'private'));
+                    }}
+                >
+                    {tab.control === 'private' ? <LockOpen size={14} aria-hidden="true" /> : <Lock size={14} aria-hidden="true" />}
+                    <span className="popover-item-body">
+                        <span className="popover-item-title">{tab.control === 'private' ? 'Share this tab with GAIA' : 'Make this tab private'}</span>
+                        <span className="popover-item-note">
+                            {tab.control === 'private' ? 'GAIA can see and use it again' : "GAIA can't see or use it"}
+                        </span>
+                    </span>
+                </button>
+                <button
+                    type="button"
+                    className="popover-item"
                     disabled={tab.url === null}
                     onClick={() => {
                         close();
@@ -247,6 +265,170 @@ function PaneMenu({ api, tab }: { api: GaiaBrowserPaneAPI; tab: TabState }) {
                     </span>
                 </button>
             </Popover>
+        </div>
+    );
+}
+
+/** Screens the Responsive menu offers. Fill pane lets the page fill the pane, and lets the agent choose again. */
+export const DEVICE_PRESETS: { name: string; width: number; height: number; mobile: boolean }[] = [
+    { name: 'iPhone SE', width: 375, height: 667, mobile: true },
+    { name: 'iPhone 15', width: 393, height: 852, mobile: true },
+    { name: 'Pixel 8', width: 412, height: 915, mobile: true },
+    { name: 'iPad mini', width: 768, height: 1024, mobile: true },
+    { name: 'iPad Air', width: 820, height: 1180, mobile: true },
+    { name: 'Laptop', width: 1280, height: 800, mobile: false },
+];
+
+const SCHEMES: { label: string; value: ViewportChoice['colorScheme'] }[] = [
+    { label: 'System', value: null },
+    { label: 'Light', value: 'light' },
+    { label: 'Dark', value: 'dark' },
+];
+
+const MIN_SIDE = 200;
+const MAX_SIDE = 4000;
+
+/** Device presets, an exact size, rotate, and light or dark. What the user picks here wins over GAIA. */
+function ResponsiveMenu({ api, tab }: { api: GaiaBrowserPaneAPI; tab: TabState }) {
+    const [open, setOpen] = useState(false);
+    // Stable, so the popover does not refocus its first button on every keystroke.
+    const close = useCallback(() => setOpen(false), []);
+    const anchor = useRef<HTMLButtonElement>(null);
+    const current = tab.viewport;
+    const size = current?.size ?? null;
+    const scheme = current?.colorScheme ?? null;
+    const [width, setWidth] = useState('');
+    const [height, setHeight] = useState('');
+
+    useEffect(() => {
+        setWidth(size ? String(size.width) : '');
+        setHeight(size ? String(size.height) : '');
+    }, [size?.width, size?.height]);
+
+    const choose = (choice: ViewportChoice) => {
+        const filled = choice.size === null && choice.colorScheme === null;
+        run('responsive', api.setViewport(tab.id, filled ? null : choice));
+    };
+    const parsed = (v: string) => {
+        const n = Number(v);
+        return Number.isInteger(n) && n >= MIN_SIDE && n <= MAX_SIDE ? n : null;
+    };
+    const w = parsed(width);
+    const h = parsed(height);
+
+    return (
+        <div className="bp-menu">
+            <button
+                ref={anchor}
+                type="button"
+                className={`btn-icon-sm${current ? ' active' : ''}`}
+                aria-label="Responsive"
+                aria-expanded={open}
+                aria-pressed={current !== null}
+                title={size ? `Responsive: ${size.width}×${size.height}` : 'Responsive'}
+                disabled={tab.url === null}
+                onClick={() => setOpen((o) => !o)}
+            >
+                <MonitorSmartphone size={15} />
+            </button>
+            <Popover open={open} onClose={close} anchor={anchor} label="Responsive" placement="below" align="end">
+                <div className="bp-responsive">
+                    {current?.source === 'agent' && <p className="bp-responsive-note">GAIA chose this. Pick one here and yours wins.</p>}
+                    <div className="bp-responsive-presets" role="group" aria-label="Screen size">
+                        <button
+                            type="button"
+                            className={`bp-chip${size === null ? ' is-on' : ''}`}
+                            aria-pressed={size === null}
+                            onClick={() => choose({ size: null, colorScheme: scheme })}
+                        >
+                            Fill pane
+                        </button>
+                        {DEVICE_PRESETS.map((d) => {
+                            const on = size !== null && size.width === d.width && size.height === d.height;
+                            return (
+                                <button
+                                    key={d.name}
+                                    type="button"
+                                    className={`bp-chip${on ? ' is-on' : ''}`}
+                                    aria-pressed={on}
+                                    title={`${d.width}×${d.height}`}
+                                    onClick={() => choose({ size: { width: d.width, height: d.height, mobile: d.mobile }, colorScheme: scheme })}
+                                >
+                                    {d.name}
+                                </button>
+                            );
+                        })}
+                    </div>
+                    <form
+                        className="bp-responsive-size"
+                        onSubmit={(e) => {
+                            e.preventDefault();
+                            if (w === null || h === null) return;
+                            choose({ size: { width: w, height: h, mobile: w < 768 }, colorScheme: scheme });
+                        }}
+                    >
+                        <input aria-label="Width" inputMode="numeric" value={width} placeholder="Width" onChange={(e) => setWidth(e.target.value)} />
+                        <span aria-hidden="true">×</span>
+                        <input aria-label="Height" inputMode="numeric" value={height} placeholder="Height" onChange={(e) => setHeight(e.target.value)} />
+                        <button type="submit" className="bp-chip" disabled={w === null || h === null}>
+                            Set
+                        </button>
+                        <button
+                            type="button"
+                            className="btn-icon-sm"
+                            aria-label="Rotate"
+                            title="Rotate"
+                            disabled={size === null}
+                            onClick={() => size && choose({ size: { ...size, width: size.height, height: size.width }, colorScheme: scheme })}
+                        >
+                            <RotateCcwSquare size={15} />
+                        </button>
+                    </form>
+                    <div className="bp-responsive-presets" role="group" aria-label="Color scheme">
+                        {SCHEMES.map((sch) => (
+                            <button
+                                key={sch.label}
+                                type="button"
+                                className={`bp-chip${scheme === sch.value ? ' is-on' : ''}`}
+                                aria-pressed={scheme === sch.value}
+                                onClick={() => choose({ size, colorScheme: sch.value })}
+                            >
+                                {sch.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            </Popover>
+        </div>
+    );
+}
+
+/** What the agent is doing in this tab, with Pause and Resume. Clicking the page itself also pauses it. */
+export function AgentStrip({ tab, api }: { tab: TabState; api: GaiaBrowserPaneAPI }) {
+    if (tab.control === 'private') {
+        return (
+            <div className="bp-agent-strip is-private" role="status">
+                <span>Private tab. GAIA can't see or use it.</span>
+            </div>
+        );
+    }
+    if (tab.control === 'user') {
+        return (
+            <div className="bp-agent-strip is-paused" role="status">
+                <span>GAIA is paused in this tab. You have control.</span>
+                <button type="button" className="bp-chip" onClick={() => run('resume', api.setControl(tab.id, 'shared'))}>
+                    Resume
+                </button>
+            </div>
+        );
+    }
+    if (!tab.agentActing && !tab.agentBusy) return null;
+    return (
+        <div className="bp-agent-strip" role="status">
+            <span>{tab.agentActing ? 'GAIA is using this tab' : 'GAIA is reading this page'}</span>
+            <button type="button" className="bp-chip" onClick={() => run('pause', api.setControl(tab.id, 'user'))}>
+                Pause
+            </button>
         </div>
     );
 }

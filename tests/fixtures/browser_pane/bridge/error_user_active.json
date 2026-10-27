@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "user_active",
+    "message": "FAILED: this step was not done. The user took control of this browser tab, so GAIA is paused there. Stop using the browser now. Tell the user which steps are not done, and ask how to continue (they can press Resume in the browser pane).",
+    "data": {}
+  }
+}

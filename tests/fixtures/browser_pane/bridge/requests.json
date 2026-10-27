@@ -73,5 +73,51 @@
     "pattern": null,
     "limit": 50,
     "allowedOrigins": []
+  },
+  "act_click": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "action": {
+      "kind": "click"
+    },
+    "target": {
+      "frameId": null,
+      "selector": "[data-gaia-ref=\"g1e2\"]"
+    },
+    "allowedOrigins": []
+  },
+  "act_fill": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "action": {
+      "kind": "fill",
+      "text": "Ada Lovelace",
+      "pressEnter": false
+    },
+    "target": {
+      "frameId": null,
+      "selector": "[data-gaia-ref=\"g1e2\"]"
+    },
+    "allowedOrigins": []
+  },
+  "act_press": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "action": {
+      "kind": "press",
+      "key": "Escape"
+    },
+    "target": null,
+    "allowedOrigins": []
+  },
+  "viewport": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "size": {
+      "width": 390,
+      "height": 844,
+      "mobile": true
+    },
+    "colorScheme": "dark"
   }
 }

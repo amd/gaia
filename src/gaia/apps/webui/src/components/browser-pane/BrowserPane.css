@@ -211,12 +211,78 @@
 }
 
 .bp-agent-strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     padding: 4px 12px;
     border-bottom: 1px solid var(--border-light);
     background: var(--accent-dim);
     color: var(--text-secondary);
     font-size: var(--fs-label);
     line-height: 1.4;
+}
+
+.bp-agent-strip.is-paused,
+.bp-agent-strip.is-private {
+    background: var(--bg-secondary);
+}
+
+.bp-chip {
+    padding: 2px 8px;
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: var(--fs-label);
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.bp-chip.is-on {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+}
+
+.bp-chip:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.bp-responsive {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px;
+    max-width: 300px;
+}
+
+.bp-responsive-note {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: var(--fs-label);
+}
+
+.bp-responsive-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.bp-responsive-size {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.bp-responsive-size input {
+    width: 64px;
+    padding: 2px 6px;
+    border: 1px solid var(--border-light);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: var(--fs-label);
 }
 
 .bp-viewport {

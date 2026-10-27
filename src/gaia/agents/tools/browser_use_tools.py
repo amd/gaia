@@ -21,13 +21,15 @@ Every tool result's first line names which one answered.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
+from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.tool_grants import SITE_ARG
-from gaia.browser.errors import BrowserError
+from gaia.browser.errors import BrowserError, PaneSignInByHand
 from gaia.logger import get_logger
 
 if TYPE_CHECKING:
@@ -87,10 +89,11 @@ _IRREVERSIBLE_PHRASES = (
     "send message",
     "publish",
     "send invite",
+    "create account",
 )
 
 
-#: Pane tools that read a page. Off loopback, each asks before it reads a site.
+#: Pane tools that read or act on a page. Off loopback, each asks before it touches a site.
 _PANE_SITE_TOOLS = frozenset(
     {
         "browser_open",
@@ -99,8 +102,28 @@ _PANE_SITE_TOOLS = frozenset(
         "browser_back",
         "browser_screenshot",
         "browser_logs",
+        "browser_click",
+        "browser_type",
+        "browser_press",
     }
 )
+
+#: What browser_batch may run, and the ones that change the page without reading it back.
+_BATCH_STEPS = (
+    "browser_open",
+    "browser_click",
+    "browser_type",
+    "browser_press",
+    "browser_back",
+    "browser_snapshot",
+    "browser_screenshot",
+)
+_BATCH_ACTS = frozenset({"browser_click", "browser_type", "browser_press"})
+MAX_BATCH_STEPS = 10
+
+
+class _Refused(Exception):
+    """A tool refusing its arguments; the message goes to the model as written."""
 
 
 class BrowserUseToolsMixin:
@@ -278,7 +301,16 @@ class BrowserUseToolsMixin:
             return shown
         origin = self._pane_site(pane, tool_name, tool_args)
         self._site_memo = (tool_name, id(tool_args), origin)
-        return {**shown, SITE_ARG: origin} if origin else shown
+        if origin:
+            shown = {**shown, SITE_ARG: origin}
+        label = self._irreversible_click_label(tool_name, tool_args)
+        if label:
+            # A one-time prompt: a site grant must never cover a click like this.
+            shown = {
+                **shown,
+                RISK_NOTE_ARG: f'This clicks "{label}" on the page, which may not be undoable.',
+            }
+        return shown
 
     def _restore_session_for(self, url: str) -> bool:
         """Reopen the browser with a saved session for ``url``, if one exists.
@@ -416,6 +448,15 @@ class BrowserUseToolsMixin:
         """Accessible name of ``ref`` from the last snapshot, or ""."""
         return (getattr(self, "_browser_last_elements", None) or {}).get(ref, "")
 
+    def _irreversible_click_label(
+        self, tool_name: str, tool_args: Optional[dict]
+    ) -> str:
+        """The label of the control a click would press, when that label names an irreversible action."""
+        if tool_name != "browser_click":
+            return ""
+        label = self._element_label(str((tool_args or {}).get("ref") or ""))
+        return label if self._looks_irreversible(label) else ""
+
     @staticmethod
     def _looks_irreversible(label: str) -> bool:
         """Whether a control's own label names an action that cannot be undone."""
@@ -504,17 +545,46 @@ class BrowserUseToolsMixin:
     def _pane_needs_confirmation(
         self, pane, tool_name: str, tool_args: Optional[dict]
     ) -> bool:
-        """The site gate: a pane call asks before it reads a page off loopback.
+        """The site gate, plus the irreversible-click check headless has.
 
+        A pane call asks before it reads or acts on a page off loopback;
         "Always" is a ``_site_scope`` grant on that origin, answered by the
-        console before any prompt. Tools the pane refuses (sign-in, clicking
-        and typing for now) are not asked about; their bodies refuse.
+        console before any prompt. A click on a control labelled with an
+        irreversible action ("Delete", "Place order", "Create account") asks
+        every time, on loopback too. Sign-in is not asked about: the pane
+        refuses it.
         """
         if tool_name not in _PANE_SITE_TOOLS:
             return False
         origin = self._pane_site(pane, tool_name, tool_args)
         self._site_pending = (tool_name, origin)
-        return origin is not None
+        return origin is not None or bool(
+            self._irreversible_click_label(tool_name, tool_args)
+        )
+
+    def _step_would_ask(self, tool_name: str, tool_args: dict) -> bool:
+        """Whether running this call on its own would put a prompt in front of the user.
+
+        Runs the same gate the agent runs before any tool, so a batch step
+        that would ask is never run unasked. A call an earlier "always"
+        already covers, or a run that approves everything, does not ask.
+        """
+        shows = getattr(self, "confirmation_args_for_call", None)
+        shown = shows(tool_name, tool_args) if callable(shows) else tool_args
+        gate = getattr(self, "_tool_requires_confirmation", None)
+        if callable(gate):
+            needs = gate(tool_name, tool_args)
+        else:
+            needs = self.browser_call_needs_confirmation(tool_name, tool_args)
+        if not needs:
+            return False
+        console = getattr(self, "console", None)
+        if console is None:
+            return True
+        return not (
+            console.auto_approve_confirmations_enabled()
+            or console.call_is_granted(tool_name, shown)
+        )
 
     def cleanup_browser_use(self) -> None:
         """Close the browser. Safe to call when none was ever opened."""
@@ -600,9 +670,46 @@ class BrowserUseToolsMixin:
             # BrowserError messages are already written for the model: what
             # failed, what to do, where to look. Anything else gets a prefix so
             # the model can tell a browser failure from a tool-arg mistake.
+            if isinstance(e, _Refused):
+                return str(e)
             msg = str(e) if isinstance(e, BrowserError) else f"Browser error: {e}"
             where = getattr(mixin._browser_driver, "where", None)
             return f"{where}\n{msg}" if where else msg
+
+        def _answer(name: str, run, *args, **kwargs):
+            try:
+                return run(*args, **kwargs)
+            except Exception as e:  # noqa: BLE001 — returned to the model
+                logger.error("%s%s failed: %s", name, args, e)
+                return _fail(e)
+
+        def _seen(snap: dict) -> None:
+            mixin._note_location(snap)
+            mixin._note_elements(snap)
+
+        def _open(url: str) -> str:
+            pane = mixin._pane()
+            if pane is None:
+                bad = mixin._check_navigable(url)
+                if bad:
+                    raise _Refused(bad)
+                # Restore whenever this origin has a stored session and this
+                # run has not already loaded it — NOT only on the first
+                # browser call. The common trajectory is "read something,
+                # then go to the site that needs the account"; gating on a
+                # cold driver meant the saved sign-in was skipped exactly
+                # then, and the agent landed on a login screen.
+                if not mixin.browser_origin_is_authenticated(url):
+                    mixin._restore_session_for(url)
+            elif not url.startswith(("http://", "https://")):
+                raise _Refused(
+                    f"Error: invalid URL {url!r}. It must start with http:// "
+                    "or https://."
+                )
+            with mixin._reading("browser_open") as driver:
+                snap = driver.goto(url)
+            _seen(snap)
+            return f"{driver.where}\n{render(snap)}"
 
         @tool(atomic=True, registry=shared)
         def browser_open(url: str) -> str:
@@ -618,32 +725,12 @@ class BrowserUseToolsMixin:
             Args:
                 url: Full URL to open (must start with http:// or https://)
             """
-            try:
-                pane = mixin._pane()
-                if pane is None:
-                    bad = mixin._check_navigable(url)
-                    if bad:
-                        return bad
-                    # Restore whenever this origin has a stored session and this
-                    # run has not already loaded it — NOT only on the first
-                    # browser call. The common trajectory is "read something,
-                    # then go to the site that needs the account"; gating on a
-                    # cold driver meant the saved sign-in was skipped exactly
-                    # then, and the agent landed on a login screen.
-                    if not mixin.browser_origin_is_authenticated(url):
-                        mixin._restore_session_for(url)
-                elif not url.startswith(("http://", "https://")):
-                    return (
-                        f"Error: invalid URL {url!r}. It must start with http:// "
-                        "or https://."
-                    )
-                with mixin._reading("browser_open") as driver:
-                    snap = driver.goto(url)
-                mixin._note_location(snap)
-                mixin._note_elements(snap)
-            except Exception as e:  # noqa: BLE001 — returned to the model
-                logger.error("browser_open(%s) failed: %s", url, e)
-                return _fail(e)
+            return _answer("browser_open", _open, url)
+
+        def _snapshot() -> str:
+            with mixin._reading("browser_snapshot") as driver:
+                snap = driver.snapshot()
+            _seen(snap)
             return f"{driver.where}\n{render(snap)}"
 
         @tool(atomic=True, registry=shared)
@@ -655,15 +742,13 @@ class BrowserUseToolsMixin:
             a ref from an earlier snapshot no longer works. Refs are only valid
             until the next snapshot.
             """
-            try:
-                with mixin._reading("browser_snapshot") as driver:
-                    snap = driver.snapshot()
-                mixin._note_location(snap)
-                mixin._note_elements(snap)
-            except Exception as e:  # noqa: BLE001 — returned to the model
-                logger.error("browser_snapshot failed: %s", e)
-                return _fail(e)
-            return f"{driver.where}\n{render(snap)}"
+            return _answer("browser_snapshot", _snapshot)
+
+        def _click(ref: str) -> str:
+            with mixin._reading("browser_click") as driver:
+                snap = driver.click(ref)
+            _seen(snap)
+            return f"{driver.where}\nClicked {ref}.\n\n" + render(snap)
 
         @tool(atomic=True, registry=shared)
         def browser_click(ref: str) -> str:
@@ -673,15 +758,14 @@ class BrowserUseToolsMixin:
                 ref: Element ref from browser_snapshot (e.g. 'e7'), not a CSS
                      selector and not screen coordinates
             """
-            try:
-                with mixin._reading("browser_click") as driver:
-                    snap = driver.click(ref)
-                mixin._note_location(snap)
-                mixin._note_elements(snap)
-            except Exception as e:  # noqa: BLE001 — returned to the model
-                logger.error("browser_click(%s) failed: %s", ref, e)
-                return _fail(e)
-            return f"{driver.where}\nClicked {ref}.\n\n" + render(snap)
+            return _answer("browser_click", _click, ref)
+
+        def _type(ref: str, text: str, press_enter: bool = False) -> str:
+            with mixin._reading("browser_type") as driver:
+                snap = driver.type_text(ref, text, press_enter=press_enter)
+            _seen(snap)
+            suffix = " and pressed Enter" if press_enter else ""
+            return f"{driver.where}\nTyped into {ref}{suffix}.\n\n" + render(snap)
 
         @tool(atomic=True, registry=shared)
         def browser_type(ref: str, text: str, press_enter: bool = False) -> str:
@@ -695,16 +779,7 @@ class BrowserUseToolsMixin:
                 text: Text to enter, or the option label to select
                 press_enter: Press Enter afterwards — use to submit a search box
             """
-            try:
-                with mixin._reading("browser_type") as driver:
-                    snap = driver.type_text(ref, text, press_enter=press_enter)
-                mixin._note_location(snap)
-                mixin._note_elements(snap)
-            except Exception as e:  # noqa: BLE001 — returned to the model
-                logger.error("browser_type(%s) failed: %s", ref, e)
-                return _fail(e)
-            suffix = " and pressed Enter" if press_enter else ""
-            return f"{driver.where}\nTyped into {ref}{suffix}.\n\n" + render(snap)
+            return _answer("browser_type", _type, ref, text, press_enter)
 
         @tool(atomic=True, timeout=DEFAULT_LOGIN_TIMEOUT_S + 60, registry=shared)
         def browser_login(url: str) -> str:
@@ -721,13 +796,9 @@ class BrowserUseToolsMixin:
                 url: The site's sign-in URL
             """
             try:
-                if mixin._pane() is not None:
-                    return (
-                        "(in the browser pane)\nSigning in is not done for you in "
-                        "the browser pane. Ask the user to sign in to the site "
-                        "themselves in the pane, then tell you when they are done. "
-                        "The pane keeps that sign-in."
-                    )
+                pane = mixin._pane()
+                if pane is not None:
+                    return f"{pane.where}\n{PaneSignInByHand()}"
                 bad = mixin._check_navigable(url)
                 if bad:
                     return bad
@@ -749,6 +820,12 @@ class BrowserUseToolsMixin:
                 "Later runs will reuse it without asking.\n\n" + render(snap)
             )
 
+        def _back() -> str:
+            with mixin._reading("browser_back") as driver:
+                snap = driver.back()
+            _seen(snap)
+            return f"{driver.where}\nWent back.\n\n" + render(snap)
+
         @tool(atomic=True, registry=shared)
         def browser_back() -> str:
             """Go back to the previous page, or close a tab and return to its opener.
@@ -758,15 +835,7 @@ class BrowserUseToolsMixin:
 
             Returns the interactive elements of the page you land on.
             """
-            try:
-                with mixin._reading("browser_back") as driver:
-                    snap = driver.back()
-                mixin._note_location(snap)
-                mixin._note_elements(snap)
-            except Exception as e:  # noqa: BLE001 — returned to the model
-                logger.error("browser_back failed: %s", e)
-                return _fail(e)
-            return f"{driver.where}\nWent back.\n\n" + render(snap)
+            return _answer("browser_back", _back)
 
         @tool(atomic=True, registry=shared)
         def browser_find(text: str) -> str:
@@ -825,11 +894,30 @@ class BrowserUseToolsMixin:
             return "\n".join(lines)
 
         if attached:
-            self._register_pane_inspect_tools(tool, here, _fail)
+            self._register_pane_tools(tool, here, _fail, _answer, _seen)
 
-    def _register_pane_inspect_tools(self, tool, registry, fail) -> None:
+    def _register_pane_tools(self, tool, registry, fail, answer, seen) -> None:
         """Tools only the browser pane can serve, on this agent alone."""
+        from gaia.browser.pane_driver import VIEWPORT_PRESETS
+        from gaia.browser.snapshot import render
+
         mixin = self
+
+        def _picture(ref: str = "") -> Dict[str, Any]:
+            with mixin._reading("browser_screenshot") as driver:
+                shot = driver.screenshot(ref or None)
+            path = _save_screenshot(shot.png)
+            mixin._let_read(path)
+            what = f"element {ref}" if ref else "the visible page"
+            return {
+                "browser": driver.where,
+                "status": "success",
+                "message": f"Took a picture of {what} at {shot.url}.",
+                "image_path": path,
+                "width": shot.width,
+                "height": shot.height,
+                "next_step": "To see what it shows, call analyze_image with this image_path.",
+            }
 
         @tool(atomic=True, registry=registry)
         def browser_screenshot(ref: str = "") -> dict:
@@ -846,23 +934,10 @@ class BrowserUseToolsMixin:
                      only that element. Leave empty for the whole visible page.
             """
             try:
-                with mixin._reading("browser_screenshot") as driver:
-                    shot = driver.screenshot(ref or None)
-                path = _save_screenshot(shot.png)
-                mixin._let_read(path)
+                return _picture(ref)
             except Exception as e:  # noqa: BLE001 — returned to the model
                 logger.error("browser_screenshot(%s) failed: %s", ref, e)
                 return {"status": "error", "error": fail(e)}
-            what = f"element {ref}" if ref else "the visible page"
-            return {
-                "browser": driver.where,
-                "status": "success",
-                "message": f"Took a picture of {what} at {shot.url}.",
-                "image_path": path,
-                "width": shot.width,
-                "height": shot.height,
-                "next_step": "To see what it shows, call analyze_image with this image_path.",
-            }
 
         @tool(atomic=True, registry=registry)
         def browser_logs(
@@ -898,6 +973,262 @@ class BrowserUseToolsMixin:
                 logger.error("browser_logs(%s) failed: %s", kind, e)
                 return fail(e)
             return f"{driver.where}\n" + _render_logs(kind, res, errors_only, contains)
+
+        def _press(key: str, ref: str = "") -> str:
+            with mixin._reading("browser_press") as driver:
+                snap = driver.press(key, ref or None)
+            seen(snap)
+            on = f" on {ref}" if ref else ""
+            return f"{driver.where}\nPressed {key}{on}.\n\n" + render(snap)
+
+        @tool(atomic=True, registry=registry)
+        def browser_press(key: str, ref: str = "") -> str:
+            """Press one key on the page in the browser pane.
+
+            Use Escape to close a dialog or menu, Enter to submit, Tab to go
+            to the next field, PageDown or End to scroll down.
+
+            Args:
+                key: One of Enter, Escape, Tab, Backspace, Space, PageDown,
+                     PageUp, Home, End, ArrowUp, ArrowDown, ArrowLeft, ArrowRight
+                ref: Element ref to press the key on (e.g. 'g2e5'). Leave
+                     empty for whatever has focus.
+            """
+            return answer("browser_press", _press, key, ref)
+
+        @tool(atomic=True, registry=registry)
+        def browser_viewport(
+            preset: str = "", width: int = 0, height: int = 0, color_scheme: str = ""
+        ) -> str:
+            """Show the browser pane's page at a phone, tablet or desktop size, or in dark mode.
+
+            Use to check how a page looks on other screens. If the user chose
+            a size in the pane's Responsive menu, theirs stays.
+
+            Args:
+                preset: 'mobile', 'tablet', 'desktop', or 'fill' to fit the pane again
+                width: Exact width in pixels instead of a preset (give height too)
+                height: Exact height in pixels instead of a preset
+                color_scheme: 'dark' or 'light'. Leave empty for the system setting.
+            """
+            if preset and preset not in (*VIEWPORT_PRESETS, "fill"):
+                return "Error: preset must be 'mobile', 'tablet', 'desktop' or 'fill'."
+            if color_scheme not in ("", "dark", "light"):
+                return "Error: color_scheme must be 'dark', 'light' or empty."
+            if (width or height) and not (
+                200 <= width <= 4000 and 200 <= height <= 4000
+            ):
+                return (
+                    "Error: give both width and height, each from 200 to 4000 pixels."
+                )
+            if width:
+                size = {"width": width, "height": height, "mobile": width < 768}
+            else:
+                size = VIEWPORT_PRESETS.get(preset)
+
+            def _set() -> str:
+                driver = mixin._ensure_driver()
+                res = driver.viewport(size, color_scheme or None)
+                return f"{driver.where}\n" + _describe_viewport(res)
+
+            return answer("browser_viewport", _set)
+
+        @tool(atomic=True, registry=registry)
+        def browser_tabs(switch_to: str = "") -> str:
+            """List the tabs open in the browser pane, or switch to one.
+
+            The browser tools read and act in the tab that is showing.
+
+            Args:
+                switch_to: A tab id from the list (e.g. 'tab-2') to show that
+                           tab. Leave empty to only list them.
+            """
+
+            def _list() -> str:
+                driver = mixin._ensure_driver()
+                res = driver.select_tab(switch_to) if switch_to else driver.tabs()
+                return f"{driver.where}\n" + _render_tabs(res, switch_to)
+
+            return answer("browser_tabs", _list)
+
+        def _act_step(driver, name: str, args: Dict[str, Any]) -> str:
+            ref = str(args.get("ref") or "")
+            if name == "browser_click":
+                driver.click(ref, read=False)
+                label = mixin._element_label(ref)
+                return f'Clicked {ref} ("{label}").' if label else f"Clicked {ref}."
+            if name == "browser_type":
+                enter = bool(args.get("press_enter"))
+                driver.type_text(ref, str(args["text"]), press_enter=enter, read=False)
+                return f"Typed into {ref}" + (" and pressed Enter." if enter else ".")
+            driver.press(str(args["key"]), ref or None, read=False)
+            return f"Pressed {args['key']}" + (f" on {ref}." if ref else ".")
+
+        def _read_step(driver, name: str, args: Dict[str, Any]):
+            if name == "browser_open":
+                url = str(args["url"])
+                if not url.startswith(("http://", "https://")):
+                    raise _Refused(f"invalid URL {url!r}; it must start with http://")
+                snap = driver.goto(url)
+                return f"Opened {snap.get('url') or url}.", snap
+            if name == "browser_back":
+                return "Went back.", driver.back()
+            if name == "browser_snapshot":
+                return "Read the page.", driver.snapshot()
+            shot = driver.screenshot(str(args.get("ref") or "") or None)
+            path = _save_screenshot(shot.png)
+            mixin._let_read(path)
+            return (
+                f"Took a picture: image_path {path}. To see it, call "
+                "analyze_image with this image_path.",
+                None,
+            )
+
+        @tool(atomic=True, timeout=300, registry=registry)
+        def browser_batch(steps: List[dict]) -> str:
+            """Run several browser steps in one call, in order, in the browser pane.
+
+            Use for a known sequence, like filling in a form. Steps can use
+            browser_open, browser_click, browser_type, browser_press,
+            browser_back, browser_snapshot and browser_screenshot. The batch
+            stops at the first step that fails, and before any step that needs
+            the user's approval: call that step on its own and GAIA asks.
+
+            Args:
+                steps: Steps in order, each a tool name and its arguments, e.g.
+                    [{"tool": "browser_type", "ref": "g2e3", "text": "Ada"},
+                    {"tool": "browser_click", "ref": "g2e7"}]
+            """
+            try:
+                plan = _parse_batch(steps)
+            except ValueError as e:
+                return f"Error: {e}"
+            try:
+                driver = mixin._ensure_driver()
+            except Exception as e:  # noqa: BLE001 — returned to the model
+                return fail(e)
+            done: List[str] = []
+            stop = ""
+            snap = None
+            unread = False
+            approved: List[str] = []
+            for n, (name, args) in enumerate(plan, 1):
+                if mixin._step_would_ask(name, args):
+                    stop = (
+                        f"Stopped before step {n} ({name}): it needs the user's "
+                        f"approval. Call {_call_text(name, args)} on its own, and "
+                        "GAIA will ask the user."
+                    )
+                    break
+                approved = mixin._take_site_approval(name)
+                try:
+                    with driver.scoped(approved):
+                        if name in _BATCH_ACTS:
+                            done.append(f"{n}. {_act_step(driver, name, args)}")
+                            unread = True
+                            continue
+                        line, read = _read_step(driver, name, args)
+                except Exception as e:  # noqa: BLE001 — reported in the result
+                    logger.error("browser_batch step %d (%s) failed: %s", n, name, e)
+                    stop = f"Step {n} ({name}) failed, so the batch stopped: {e}"
+                    break
+                done.append(f"{n}. {line}")
+                if read is not None:
+                    snap, unread = read, False
+                    seen(snap)
+            if unread:
+                try:
+                    with driver.scoped(approved):
+                        snap = driver.snapshot()
+                    seen(snap)
+                except Exception as e:  # noqa: BLE001 — reported in the result
+                    done.append(f"Could not read the page afterwards: {e}")
+            lines = [driver.where, f"Ran {len(done)} of {len(plan)} steps:", *done]
+            if stop:
+                lines.append(stop)
+            if snap is not None:
+                lines += ["", render(snap)]
+            return "\n".join(lines)
+
+
+def _parse_batch(steps: Any) -> List[Tuple[str, Dict[str, Any]]]:
+    """``[(tool, args), ...]`` from the model's steps; ValueError names what is wrong."""
+    if isinstance(steps, str):
+        try:
+            steps = json.loads(steps)
+        except ValueError as e:
+            raise ValueError(f"steps is not a JSON list ({e}).") from e
+    if not isinstance(steps, list) or not steps:
+        raise ValueError("steps must be a non-empty list of steps.")
+    if len(steps) > MAX_BATCH_STEPS:
+        raise ValueError(f"a batch runs at most {MAX_BATCH_STEPS} steps.")
+    plan = []
+    for n, step in enumerate(steps, 1):
+        if not isinstance(step, dict) or "tool" not in step:
+            raise ValueError(
+                f'step {n} must be like {{"tool": "browser_click", "ref": "g2e5"}}.'
+            )
+        args = {k: v for k, v in step.items() if k not in ("tool", "args")}
+        if isinstance(step.get("args"), dict):
+            args.update(step["args"])
+        name = str(step["tool"])
+        if name not in _BATCH_STEPS:
+            raise ValueError(
+                f"step {n} uses {name}; a batch can use {', '.join(_BATCH_STEPS)}."
+            )
+        reserved = sorted(k for k in args if k.startswith("_"))
+        if reserved:
+            raise ValueError(
+                f"step {n} has arguments GAIA sets itself: {', '.join(reserved)}."
+            )
+        needed = {
+            "browser_open": ("url",),
+            "browser_click": ("ref",),
+            "browser_type": ("ref", "text"),
+            "browser_press": ("key",),
+        }.get(name, ())
+        missing = [k for k in needed if k not in args]
+        if missing:
+            raise ValueError(f"step {n} ({name}) needs {', '.join(missing)}.")
+        plan.append((name, args))
+    return plan
+
+
+def _call_text(name: str, args: Dict[str, Any]) -> str:
+    return f"{name}({', '.join(f'{k}={v!r}' for k, v in args.items())})"
+
+
+def _describe_viewport(res: dict) -> str:
+    """What browser_viewport did, for the model."""
+    v = res.get("viewport") or {}
+    size = v.get("size")
+    shown = f"{size['width']}x{size['height']}" if size else "the full pane width"
+    scheme = v.get("colorScheme")
+    look = f"{shown}, {scheme} mode" if scheme else shown
+    if not res.get("applied"):
+        return (
+            f"Not changed. The user picked {look} in the pane's Responsive menu, "
+            "and the user's choice wins, so the page still shows at that size. "
+            "Tell the user, and ask them to pick Fill pane there if they want "
+            "your size."
+        )
+    return f"The page now shows at {look}. Call browser_screenshot to see it."
+
+
+def _render_tabs(res: dict, switched_to: str) -> str:
+    tabs = res.get("tabs") or []
+    lines = [f"Switched to {switched_to}." if switched_to else f"{len(tabs)} tabs:"]
+    for t in tabs:
+        mark = " (showing)" if t.get("active") else ""
+        paused = (
+            " (the user has control; GAIA is paused there)"
+            if t.get("control") == "user"
+            else ""
+        )
+        lines.append(
+            f"  {t.get('id')}{mark}{paused} {t.get('title') or 'New tab'}  {t.get('url') or ''}".rstrip()
+        )
+    return "\n".join(lines)
 
 
 def _save_screenshot(png: bytes) -> str:

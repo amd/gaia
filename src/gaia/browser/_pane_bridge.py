@@ -139,7 +139,7 @@ def _error_for(code: str, message: str, data: Dict[str, Any]) -> BrowserError:
         return NavigationBlocked(str(data.get("url", "")), message)
     if code in ("unauthorized", "forbidden", "bad_request", "unknown_op", "internal"):
         return PaneUnreachable(f"the bridge refused the call ({code}: {message})")
-    # no_such_tab, no_page, element_not_found, unsupported, not_in_desktop, timeout: written for the model.
+    # Every other code's message is written for the model: what happened, what to do.
     return BrowserError(message)
 
 
@@ -161,6 +161,9 @@ ERROR_CODES = frozenset(
         "element_not_found",
         "not_in_desktop",
         "timeout",
+        "user_active",
+        "private_tab",
+        "not_actionable",
     }
 )
 

@@ -15,5 +15,13 @@
     <p><label><input type="checkbox" name="news"> Send me news</label></p>
     <p><button type="submit">Create account</button></p>
   </form>
+  <p id="status"></p>
+  <script>
+    document.querySelector("form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const data = new FormData(e.target);
+      document.getElementById("status").textContent = `Account created for ${data.get("name")} (${data.get("email")}), ${data.get("plan")} plan.`;
+    });
+  </script>
 </body>
 </html>

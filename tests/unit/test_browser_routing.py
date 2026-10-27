@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from gaia.agents.base import tools as tools_mod
+from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
 from gaia.browser import driver as browser_driver
 from gaia.browser._pane_bridge import DISCOVERY_ENV
@@ -170,6 +171,10 @@ def test_the_pane_alone_registers_the_tools_on_this_agent_only(
         "browser_snapshot",
         "browser_screenshot",
         "browser_logs",
+        "browser_press",
+        "browser_viewport",
+        "browser_tabs",
+        "browser_batch",
     } <= set(agent._tool_overrides)
     # Another chat's agent, built in the same process, must not inherit them.
     assert set(tools_mod._TOOL_REGISTRY) == before
@@ -182,8 +187,13 @@ def test_pane_only_tools_need_the_chat_attached(
     bridge.write_discovery(discovery_file)
     agent = _Agent()
     agent.register_browser_use_tools()
-    assert "browser_screenshot" not in agent._tool_overrides
-    assert "browser_logs" not in agent._tool_overrides
+    for name in (
+        "browser_screenshot",
+        "browser_logs",
+        "browser_press",
+        "browser_batch",
+    ):
+        assert name not in agent._tool_overrides
     assert "browser_open" in tools_mod._TOOL_REGISTRY
 
 
@@ -219,15 +229,26 @@ def test_a_pane_failure_also_names_the_pane(pane_agent, bridge):
     assert "https://evil.example" in result
 
 
-def test_clicking_in_the_pane_fails_loudly_instead_of_acting_elsewhere(
-    pane_agent, bridge
-):
+def test_a_click_in_the_pane_lands_in_the_pane(pane_agent, bridge):
+    _tool(pane_agent, "browser_snapshot")()
     result = _tool(pane_agent, "browser_click")(ref="g1e2")
-    assert "coming in a later step" in result
+    assert result.splitlines()[:2] == ["(in the browser pane)", "Clicked g1e2."]
+    assert bridge.last("act")["body"]["action"] == {"kind": "click"}
+
+
+def test_a_loopback_click_asks_only_when_its_label_is_irreversible(pane_agent, bridge):
+    _tool(pane_agent, "browser_snapshot")()
     assert (
-        pane_agent.browser_call_needs_confirmation("browser_click", {"ref": "g1e2"})
+        pane_agent.browser_call_needs_confirmation("browser_click", {"ref": "g1e1"})
         is False
     )
+    pane_agent._browser_last_elements["g1e2"] = "Create account"
+    args = {"ref": "g1e2"}
+    shown = pane_agent.confirmation_args_for_call("browser_click", args)
+    assert pane_agent.browser_call_needs_confirmation("browser_click", args) is True
+    assert "Create account" in shown["_risk_note"]
+    # A risk note makes the prompt one-time: no "always" grant can cover it.
+    assert grant_scope("browser_click", shown) is None
 
 
 def test_signing_in_is_left_to_the_user_in_the_pane(pane_agent, bridge):

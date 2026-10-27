@@ -56,13 +56,22 @@ Signing in is a hand-off, not something GAIA does for you:
 | `browser_sessions()` | List sites with a saved sign-in | no |
 | `browser_back()` | Go back a page | no |
 | `browser_find(text)` | Search the whole page for text | no |
-| `browser_screenshot(ref)` | Picture of the page or one element ([browser pane](/guides/agent-ui#gaia-reads-the-pane) only) | other sites |
-| `browser_logs(kind, errors_only, contains, new_only)` | Console messages or network requests ([browser pane](/guides/agent-ui#gaia-reads-the-pane) only) | other sites |
+| `browser_screenshot(ref)` | Picture of the page or one element ([browser pane](/guides/agent-ui#gaia-uses-the-pane) only) | other sites |
+| `browser_logs(kind, errors_only, contains, new_only)` | Console messages or network requests ([browser pane](/guides/agent-ui#gaia-uses-the-pane) only) | other sites |
+| `browser_press(key, ref)` | Press one key such as Escape, Enter or PageDown (browser pane only) | other sites |
+| `browser_viewport(preset, width, height, color_scheme)` | Show the page at a phone, tablet or desktop size, or in dark mode (browser pane only) | no |
+| `browser_tabs(switch_to)` | List the pane's tabs, or switch to one; private tabs are never listed (browser pane only) | no |
+| `browser_batch(steps)` | Run several of the steps above in one call (browser pane only) | each step as if run alone |
 
-In GAIA desktop, a chat open in the window uses the [browser pane](/guides/agent-ui#gaia-reads-the-pane)
-instead of the headless browser, and asks before reading any site that is not
-on this PC. There, clicking, typing and `browser_login` are not available yet;
-you sign in yourself in the pane.
+In GAIA desktop, a chat open in the window uses the [browser pane](/guides/agent-ui#gaia-uses-the-pane)
+instead of the headless browser, and asks before reading or acting on any site
+that is not on this PC. Clicks and typing land in the pane as real input you
+can watch, and stop the moment you press **Pause** or click in the page
+yourself. A click on a control that can't be undone (Delete, Place order,
+Create account) asks every time, on this PC too. `browser_batch` stops before
+any step that would ask, so you approve that step on its own. `browser_login`
+is not used there: you sign in yourself in the pane, and GAIA never types into
+a password field.
 
 Elements are addressed by **ref** (`e1`, `e7`) from the last snapshot, never by
 screen coordinates:

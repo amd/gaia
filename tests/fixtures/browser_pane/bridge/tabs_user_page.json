@@ -5,7 +5,8 @@
       "url": "http://127.0.0.1:5000/index.html",
       "title": "Pane fixture home",
       "active": true,
-      "openedBy": null
+      "openedBy": null,
+      "control": "shared"
     }
   ],
   "activeTabId": "tab-1"

@@ -40,6 +40,8 @@ class FakeBridge:
             "origin": fixture("origin_loopback.json"),
             "screenshot": fixture("screenshot.json"),
             "logs": fixture("logs_console.json"),
+            "act": fixture("act.json"),
+            "viewport": fixture("viewport.json"),
         }
         bridge = self
 

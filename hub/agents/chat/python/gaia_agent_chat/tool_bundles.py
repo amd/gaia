@@ -392,6 +392,17 @@ FULL_BUNDLES = [
             "console errors and network requests."
         ),
     ),
+    # Also pane-only: keys, screen sizes, tabs, and several steps in one call.
+    ToolBundle(
+        name="browser_pane",
+        members=frozenset(
+            {"browser_press", "browser_viewport", "browser_tabs", "browser_batch"}
+        ),
+        description=(
+            "Press keys like Escape, show the page at phone or tablet size or in "
+            "dark mode, switch tabs, and run several browser steps in one call."
+        ),
+    ),
     ToolBundle(
         name="code_index",
         members=frozenset(
@@ -608,6 +619,10 @@ FULL_OPTIONAL_TOOLS = frozenset(
         # Browser pane: registered only for a chat open in GAIA desktop.
         "browser_screenshot",
         "browser_logs",
+        "browser_press",
+        "browser_viewport",
+        "browser_tabs",
+        "browser_batch",
         "remember",
         "recall",
         "update_memory",

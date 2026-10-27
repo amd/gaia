@@ -12,6 +12,20 @@ export type PaneNotice =
   | { kind: "load-failed"; url: string; message: string }
   | { kind: "permission-denied"; permission: string; origin: string };
 
+/** Who may drive a tab: shared with the agent, held by the user (the agent is paused), or private (hidden from the agent). */
+export type TabControl = "shared" | "user" | "private";
+
+/** A screen to emulate. size null fills the pane; colorScheme null follows the system. */
+export interface ViewportChoice {
+  size: { width: number; height: number; mobile: boolean } | null;
+  colorScheme: "light" | "dark" | null;
+}
+
+/** The emulated screen, and who chose it. A user's choice wins over the agent's. */
+export interface ViewportState extends ViewportChoice {
+  source: "user" | "agent";
+}
+
 export interface TabState {
   id: TabId;
   /** null while the tab shows the new tab page and has no page of its own. */
@@ -26,6 +40,11 @@ export interface TabState {
   openedBy: string | null;
   /** True while an agent op runs on this tab, and briefly after; drives the "GAIA is reading" strip. */
   agentBusy: boolean;
+  /** True while the agent clicks or types here, and between its steps; drives "GAIA is using this tab". */
+  agentActing: boolean;
+  control: TabControl;
+  /** null when the page fills the pane at the system color scheme. */
+  viewport: ViewportState | null;
 }
 
 export interface RecentPage {
@@ -76,6 +95,10 @@ export interface GaiaBrowserPaneAPI {
   openExternal(tabId: TabId): Promise<void>;
   /** The chat session this window shows; only that chat's agent may use the pane. */
   setActiveSession(sessionId: string | null): void;
+  /** Pause and Resume on the strip, and marking a tab private. */
+  setControl(tabId: TabId, control: TabControl): Promise<void>;
+  /** The Responsive control. null fills the pane again and lets the agent choose. */
+  setViewport(tabId: TabId, choice: ViewportChoice | null): Promise<void>;
 }
 
 // ─── Bridge (the agent, in Python, to main) ─────────────────────────────
@@ -100,17 +123,38 @@ export type TabRef = TabId | null;
  */
 export type AllowedOrigins = string[];
 
+/** A tab as the agent sees it. Private tabs are never listed. */
 export interface TabSummary {
   id: TabId;
   url: string | null;
   title: string;
   active: boolean;
   openedBy: string | null;
+  control: "shared" | "user";
 }
 
 export interface TabsReply {
   tabs: TabSummary[];
-  activeTabId: TabId;
+  /** null while the user looks at a private tab. */
+  activeTabId: TabId | null;
+}
+
+/** The only keys the agent may press; anything else is refused before it reaches the page. */
+export type AllowedKey =
+  | "Enter" | "Escape" | "Tab" | "Backspace" | "Space"
+  | "PageDown" | "PageUp" | "Home" | "End"
+  | "ArrowLeft" | "ArrowUp" | "ArrowRight" | "ArrowDown";
+
+/** One trusted input action. fill picks a <select> option by its label. */
+export type ActAction =
+  | { kind: "click" }
+  | { kind: "fill"; text: string; pressEnter: boolean }
+  | { kind: "press"; key: AllowedKey };
+
+/** Built by Python from its snapshot ref table, never from model text. frameId null is the main frame. */
+export interface ActTarget {
+  frameId: string | null;
+  selector: string;
 }
 
 export interface FrameEval {
@@ -190,6 +234,16 @@ export interface BridgeOps {
     };
     res: { entries: (LogEntry | NetworkEntry)[]; lastSeq: number; dropped: number; url: string };
   };
+  /** Refused with user_active in a tab the user holds or touched in the last 4 s. A press may have no target: the focused element gets it. */
+  act: {
+    req: { sessionId: string; tabId: TabRef; action: ActAction; target: ActTarget | null; allowedOrigins: AllowedOrigins };
+    res: { tabId: TabId; url: string; title: string; adoptedTabId?: TabId };
+  };
+  /** applied is false when the user picked the viewport; theirs stays. */
+  viewport: {
+    req: { sessionId: string; tabId: TabRef } & ViewportChoice;
+    res: { tabId: TabId; applied: boolean; viewport: ViewportState | null };
+  };
 }
 
 export type BridgeOp = keyof BridgeOps;
@@ -210,7 +264,10 @@ export type BridgeErrorCode =
   | "blocked_url"
   | "element_not_found"
   | "not_in_desktop"
-  | "timeout";
+  | "timeout"
+  | "user_active"
+  | "private_tab"
+  | "not_actionable";
 
 export interface BridgeErrorReply {
   error: { code: BridgeErrorCode; message: string; data: Record<string, unknown> };

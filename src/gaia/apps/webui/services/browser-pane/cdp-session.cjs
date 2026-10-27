@@ -222,18 +222,23 @@ class TabCdp {
     return (isConsole ? this.console : this.network).query({ afterSeq, limit, keep });
   }
 
+  /** One CDP command on this tab, once attached. */
+  async send(method, params = {}) {
+    await this.ready;
+    if (!this.attached) {
+      throw new Error(`the DevTools protocol is not attached to this tab (${this.detachReason || "unknown reason"})`);
+    }
+    return this.wc.debugger.sendCommand(method, params);
+  }
+
   /**
    * PNG of the viewport, or of `clip` (CSS pixels relative to the page) when given.
    * @returns {Promise<Buffer>}
    */
   async screenshot(clip) {
-    await this.ready;
-    if (!this.attached) {
-      throw new Error(`the DevTools protocol is not attached to this tab (${this.detachReason || "unknown reason"})`);
-    }
     const params = { format: "png", captureBeyondViewport: Boolean(clip) };
     if (clip) params.clip = { ...clip, scale: 1 };
-    const { data } = await this.wc.debugger.sendCommand("Page.captureScreenshot", params);
+    const { data } = await this.send("Page.captureScreenshot", params);
     return Buffer.from(data, "base64");
   }
 }

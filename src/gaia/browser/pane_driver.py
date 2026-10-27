@@ -22,7 +22,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Literal, Optional, Sequence, Tuple
 
 from gaia.browser._pane_bridge import PaneBridge, is_loopback_origin, origin_of
-from gaia.browser.errors import BrowserError, PageOffScope, PaneCannotActYet
+from gaia.browser.errors import (
+    BrowserError,
+    ElementNotFound,
+    PageOffScope,
+    PaneSignInByHand,
+)
 from gaia.browser.snapshot import (
     _FIND_JS,
     _SNAPSHOT_JS,
@@ -36,6 +41,30 @@ LogKind = Literal["console", "network"]
 
 #: Most log lines one call returns; the newest are kept.
 MAX_LOG_LINES = 50
+
+#: The keys the pane presses. Main refuses any other (``KEYS`` in input.cjs).
+PANE_KEYS = (
+    "Enter",
+    "Escape",
+    "Tab",
+    "Backspace",
+    "Space",
+    "PageDown",
+    "PageUp",
+    "Home",
+    "End",
+    "ArrowLeft",
+    "ArrowUp",
+    "ArrowRight",
+    "ArrowDown",
+)
+
+#: Screens browser_viewport offers by name.
+VIEWPORT_PRESETS: Dict[str, Dict[str, Any]] = {
+    "mobile": {"width": 390, "height": 844, "mobile": True},
+    "tablet": {"width": 820, "height": 1180, "mobile": True},
+    "desktop": {"width": 1280, "height": 800, "mobile": False},
+}
 
 
 @dataclass(frozen=True)
@@ -86,8 +115,11 @@ class PaneDriver:
         agent opens its own tab beside it instead.
         """
         listing = self._call("tabs", {"op": "list"})
-        active = next(t for t in listing["tabs"] if t["id"] == listing["activeTabId"])
-        if active["url"] is None or active["openedBy"] == self._session:
+        # No active tab in the listing means the user is looking at a private one.
+        active = next(
+            (t for t in listing["tabs"] if t["id"] == listing["activeTabId"]), None
+        )
+        if active and (active["url"] is None or active["openedBy"] == self._session):
             self._call("navigate", {"tabId": active["id"], "to": url, **self._scope()})
         else:
             self._call(
@@ -158,20 +190,7 @@ class PaneDriver:
 
     def screenshot(self, ref: Optional[str] = None, *, max_width: int = 1280) -> Shot:
         """The visible part of the page, or one element of it."""
-        clip = None
-        if ref:
-            ref_selector(ref)
-            if ref not in self._frames_by_ref and not ref.startswith(
-                f"g{self._generation}e"
-            ):
-                raise BrowserError(
-                    f"Element '{ref}' is not on the page any more. Call "
-                    "browser_snapshot() to get current refs, then retry."
-                )
-            clip = {
-                "frameId": self._frames_by_ref.get(ref),
-                "selector": ref_selector(in_frame_ref(ref)),
-            }
+        clip = self._target(ref) if ref else None
         res = self._call(
             "screenshot",
             {"tabId": None, "clip": clip, "maxWidth": max_width, **self._scope()},
@@ -213,23 +232,75 @@ class PaneDriver:
         self._cursors[kind] = max(self._cursors[kind], int(res["lastSeq"]))
         return res
 
-    # --------------------------------------------------- not in the pane (yet)
+    # ------------------------------------------------------------------ acting
 
-    def click(self, ref: str) -> Dict[str, Any]:
-        raise PaneCannotActYet("browser_click")
+    # ``read=False`` skips the snapshot after an action, so the refs the
+    # agent already holds stay valid for the next step of a batch.
+
+    def click(self, ref: str, *, read: bool = True) -> Optional[Dict[str, Any]]:
+        self._act({"kind": "click"}, self._target(ref))
+        return self.snapshot() if read else None
 
     def type_text(
-        self, ref: str, text: str, *, press_enter: bool = False
+        self, ref: str, text: str, *, press_enter: bool = False, read: bool = True
+    ) -> Optional[Dict[str, Any]]:
+        """Type into a field (replacing what it held), or pick a dropdown option by label."""
+        action = {"kind": "fill", "text": text, "pressEnter": press_enter}
+        self._act(action, self._target(ref))
+        return self.snapshot() if read else None
+
+    def press(
+        self, key: str, ref: Optional[str] = None, *, read: bool = True
+    ) -> Optional[Dict[str, Any]]:
+        """Press one key, on ``ref`` or on whatever has focus."""
+        if key not in PANE_KEYS:
+            raise BrowserError(
+                f"'{key}' is not a key GAIA can press. Use one of: "
+                + ", ".join(PANE_KEYS)
+                + "."
+            )
+        self._act({"kind": "press", "key": key}, self._target(ref) if ref else None)
+        return self.snapshot() if read else None
+
+    def viewport(
+        self, size: Optional[Dict[str, Any]], color_scheme: Optional[str]
     ) -> Dict[str, Any]:
-        raise PaneCannotActYet("browser_type")
+        """Emulate a screen; ``applied`` is False when the user picked one in the pane."""
+        return self._call(
+            "viewport", {"tabId": None, "size": size, "colorScheme": color_scheme}
+        )
+
+    def tabs(self) -> Dict[str, Any]:
+        """The pane's tabs, without the ones the user marked private."""
+        return self._call("tabs", {"op": "list"})
+
+    def select_tab(self, tab_id: str) -> Dict[str, Any]:
+        return self._call("tabs", {"op": "select", "tabId": tab_id})
 
     def storage_state(self) -> Dict[str, Any]:
-        raise PaneCannotActYet("browser_login")
+        raise PaneSignInByHand()
 
     def wait_for_login(self, url: str, *, timeout_s: float = 300.0) -> Dict[str, Any]:
-        raise PaneCannotActYet("browser_login")
+        raise PaneSignInByHand()
 
     # --------------------------------------------------------------- internals
+
+    def _target(self, ref: str) -> Dict[str, Any]:
+        """Where ``ref`` lives: its frame and the selector the snapshot stamped on it."""
+        ref_selector(ref)
+        if ref not in self._frames_by_ref and not ref.startswith(
+            f"g{self._generation}e"
+        ):
+            raise ElementNotFound(ref)
+        return {
+            "frameId": self._frames_by_ref.get(ref),
+            "selector": ref_selector(in_frame_ref(ref)),
+        }
+
+    def _act(self, action: Dict[str, Any], target: Optional[Dict[str, Any]]) -> Any:
+        return self._call(
+            "act", {"tabId": None, "action": action, "target": target, **self._scope()}
+        )
 
     def _scope(self) -> Dict[str, List[str]]:
         return {"allowedOrigins": list(self._allowed)}
@@ -245,4 +316,11 @@ class PaneDriver:
         return self._bridge.call(op, {"sessionId": self._session, **body})
 
 
-__all__ = ["LogKind", "MAX_LOG_LINES", "PaneDriver", "Shot"]
+__all__ = [
+    "LogKind",
+    "MAX_LOG_LINES",
+    "PANE_KEYS",
+    "VIEWPORT_PRESETS",
+    "PaneDriver",
+    "Shot",
+]

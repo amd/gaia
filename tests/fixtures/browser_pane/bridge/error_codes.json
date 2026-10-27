@@ -10,11 +10,14 @@
     "navigation_failed",
     "no_page",
     "no_such_tab",
+    "not_actionable",
     "not_in_desktop",
     "off_scope",
+    "private_tab",
     "timeout",
     "unauthorized",
     "unknown_op",
-    "unsupported"
+    "unsupported",
+    "user_active"
   ]
 }

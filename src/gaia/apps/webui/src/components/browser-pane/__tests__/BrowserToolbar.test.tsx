@@ -5,7 +5,7 @@ import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { BrowserToolbar } from '../BrowserToolbar';
+import { AgentStrip, BrowserToolbar } from '../BrowserToolbar';
 import type { GaiaBrowserPaneAPI, PaneState, TabId, TabState } from '../../../../services/browser-pane/contract';
 
 const id = (s: string) => s as TabId;
@@ -22,6 +22,9 @@ function tab(over: Partial<TabState> = {}): TabState {
         notice: null,
         openedBy: null,
         agentBusy: false,
+        agentActing: false,
+        control: 'shared',
+        viewport: null,
         ...over,
     };
 }
@@ -48,6 +51,8 @@ function fakeApi(): GaiaBrowserPaneAPI {
         clearBrowsingData: ok(),
         openExternal: ok(),
         setActiveSession: vi.fn(),
+        setControl: ok(),
+        setViewport: ok(),
     } as unknown as GaiaBrowserPaneAPI;
 }
 
@@ -140,5 +145,95 @@ describe('BrowserToolbar', () => {
         const { onClosePane } = renderToolbar(pane([tab()]));
         await userEvent.click(screen.getByRole('button', { name: 'Close browser pane' }));
         expect(onClosePane).toHaveBeenCalled();
+    });
+});
+
+describe('Responsive', () => {
+    const open = () => userEvent.click(screen.getByRole('button', { name: 'Responsive' }));
+
+    it('a device preset emulates its screen, keeping the color scheme', async () => {
+        const { api } = renderToolbar(pane([tab({ viewport: { size: null, colorScheme: 'dark', source: 'user' } })]));
+        await open();
+        await userEvent.click(screen.getByRole('button', { name: 'iPad Air' }));
+        expect(api.setViewport).toHaveBeenCalledWith('tab-1', { size: { width: 820, height: 1180, mobile: true }, colorScheme: 'dark' });
+    });
+
+    it('rotate swaps width and height, and an exact size can be typed', async () => {
+        const size = { width: 390, height: 844, mobile: true };
+        const { api } = renderToolbar(pane([tab({ viewport: { size, colorScheme: null, source: 'user' } })]));
+        await open();
+        await userEvent.click(screen.getByRole('button', { name: 'Rotate' }));
+        expect(api.setViewport).toHaveBeenLastCalledWith('tab-1', { size: { width: 844, height: 390, mobile: true }, colorScheme: null });
+        const width = screen.getByRole('textbox', { name: 'Width' });
+        await userEvent.clear(width);
+        await userEvent.type(width, '1024');
+        expect(width).toHaveValue('1024');
+        expect(screen.getByRole('button', { name: 'Set' })).toBeEnabled();
+        await userEvent.click(screen.getByRole('button', { name: 'Set' }));
+        expect(api.setViewport).toHaveBeenLastCalledWith('tab-1', { size: { width: 1024, height: 844, mobile: false }, colorScheme: null });
+    });
+
+    it('dark mode alone keeps the pane size; back to fill and system gives control back', async () => {
+        const { api } = renderToolbar(pane([tab()]));
+        await open();
+        await userEvent.click(screen.getByRole('button', { name: 'Dark' }));
+        expect(api.setViewport).toHaveBeenLastCalledWith('tab-1', { size: null, colorScheme: 'dark' });
+        await userEvent.click(screen.getByRole('button', { name: 'Fill pane' }));
+        expect(api.setViewport).toHaveBeenLastCalledWith('tab-1', null);
+    });
+
+    it('says when GAIA chose the size', async () => {
+        renderToolbar(pane([tab({ viewport: { size: { width: 390, height: 844, mobile: true }, colorScheme: null, source: 'agent' } })]));
+        await open();
+        expect(screen.getByText(/GAIA chose this/)).toBeInTheDocument();
+    });
+});
+
+describe('private tabs', () => {
+    it('the menu makes a tab private and shares it again, and the tab shows a lock', async () => {
+        const { api } = renderToolbar(pane([tab()]));
+        await userEvent.click(screen.getByRole('button', { name: 'More browser actions' }));
+        await userEvent.click(screen.getByRole('button', { name: /Make this tab private/ }));
+        expect(api.setControl).toHaveBeenCalledWith('tab-1', 'private');
+    });
+
+    it('a private tab offers to share it again', async () => {
+        const { api } = renderToolbar(pane([tab({ control: 'private' })]));
+        expect(screen.getByLabelText('Private')).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', { name: 'More browser actions' }));
+        await userEvent.click(screen.getByRole('button', { name: /Share this tab with GAIA/ }));
+        expect(api.setControl).toHaveBeenCalledWith('tab-1', 'shared');
+    });
+});
+
+describe('AgentStrip', () => {
+    const strip = (over: Partial<TabState>) => {
+        const api = fakeApi();
+        render(<AgentStrip tab={tab(over)} api={api} />);
+        return api;
+    };
+
+    it('says GAIA is using the tab while it acts, and Pause hands it to the user', async () => {
+        const api = strip({ agentActing: true, agentBusy: true });
+        expect(screen.getByRole('status')).toHaveTextContent('GAIA is using this tab');
+        await userEvent.click(screen.getByRole('button', { name: 'Pause' }));
+        expect(api.setControl).toHaveBeenCalledWith('tab-1', 'user');
+    });
+
+    it('keeps "reading" for reads', () => {
+        strip({ agentBusy: true });
+        expect(screen.getByRole('status')).toHaveTextContent('GAIA is reading this page');
+    });
+
+    it('a paused tab offers Resume', async () => {
+        const api = strip({ control: 'user' });
+        expect(screen.getByRole('status')).toHaveTextContent('GAIA is paused in this tab');
+        await userEvent.click(screen.getByRole('button', { name: 'Resume' }));
+        expect(api.setControl).toHaveBeenCalledWith('tab-1', 'shared');
+    });
+
+    it('shows nothing while GAIA is idle in a shared tab', () => {
+        strip({});
+        expect(screen.queryByRole('status')).toBeNull();
     });
 });

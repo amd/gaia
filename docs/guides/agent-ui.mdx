@@ -613,10 +613,13 @@ in the pane too. The browser pane isn't in the web version of the Agent UI.
 - **Back, Forward and Reload.** Reload turns into **Stop** while a page loads.
 - **Developer tools** opens Chromium's DevTools docked at the bottom of the
   page, inspecting that page rather than GAIA.
-- **More (⋯)** has **Open in system browser**, which hands the page to your
-  default browser, and **Clear browsing data**, which deletes the pane's
-  cookies, site data, cache and recent pages. It never touches your system
-  browser or GAIA's own data.
+- **Responsive** shows the page at a phone, tablet or laptop size, at a width
+  and height you type, turned sideways with **Rotate**, and in light or dark
+  mode. **Fill pane** and **System** put it back.
+- **More (⋯)** has **Make this tab private**, **Open in system browser**,
+  which hands the page to your default browser, and **Clear browsing data**,
+  which deletes the pane's cookies, site data, cache and recent pages. It never
+  touches your system browser or GAIA's own data.
 - **Resize** by dragging the pane's left edge, or focus the edge and use the
   arrow keys; double-click it for the default width. The width and whether the
   pane is open are remembered. The pane and the session panel share the right
@@ -629,13 +632,32 @@ asks. Downloads always ask where to save. Only http and https pages open:
 is GAIA's own local service. While a dialog or menu is open over the pane, the
 page shows as a still picture and comes back live when you close it.
 
-### GAIA reads the pane
+### GAIA uses the pane
 
-GAIA can open pages in the pane and read the one you're looking at. Ask "what
-does this page say?", "any console errors here?" or "open localhost:5173 and
-check the settings page", and the pane opens if it was closed. While GAIA reads
-a page, a strip above it says **GAIA is reading this page**. Pages GAIA opens
-get their own tab; it never navigates away from a page you opened.
+GAIA can open pages in the pane, read the one you're looking at, and click,
+type and press keys in it. Ask "what does this page say?", "any console errors
+here?", "fill in this form" or "open localhost:5173 and check the settings
+page", and the pane opens if it was closed. Pages GAIA opens get their own tab;
+it never navigates away from a page you opened.
+
+While GAIA reads a page, a strip above it says **GAIA is reading this page**.
+While it clicks and types, the strip says **GAIA is using this tab** and you see
+each step happen.
+
+- **You can take over at any time.** Press **Pause** on the strip, or just
+  click or type in the page while GAIA is using it. GAIA stops there, says
+  which steps it didn't do, and asks how to go on. Press **Resume** to hand the
+  tab back. Any click or keystroke of yours also holds GAIA off that tab for a
+  few seconds.
+- **Private tabs are yours alone.** **Make this tab private** in the **⋯** menu
+  hides the tab from GAIA: it isn't listed when GAIA asks which tabs are open,
+  and GAIA can't read or act in it. A lock shows on the tab.
+- **Your Responsive choice wins.** GAIA can show a page at a phone or tablet
+  size or in dark mode to check how it looks, but if you picked a size, it
+  stays, and GAIA tells you so.
+- **Buttons that can't be undone ask first.** Before GAIA clicks something like
+  **Delete**, **Place order** or **Create account**, you get an **Allow once**
+  prompt, even on a page on this PC.
 
 - **Pages on this PC need no approval.** `localhost`, `*.localhost`,
   `127.0.0.1` and `[::1]` are read straight away, so local dev servers just work.
@@ -646,9 +668,8 @@ get their own tab; it never navigates away from a page you opened.
   GAIA is told only where it went.
 - **GAIA can take a picture of the page** and read its console messages and
   network requests, which helps when a page you're building misbehaves.
-- **GAIA can't click, type or sign in in the pane yet.** It tells you what to do
-  instead. To use a site that needs an account, sign in yourself in the pane;
-  the pane keeps that sign-in.
+- **GAIA never signs in or types a password.** It asks you to sign in
+  yourself in the pane, and the pane keeps that sign-in.
 
 Only the chat open in the window uses the pane. A chat in the terminal, on your
 phone, or in another window keeps using GAIA's own headless browser, and each

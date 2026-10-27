@@ -1,2 +1,3 @@
 body { font-family: system-ui, sans-serif; margin: 24px; line-height: 1.5; color: #1f2937; background: #ffffff; }
 a { color: #2563eb; }
+@media (prefers-color-scheme: dark) { body { color: #e5e7eb; background: #111827; } a { color: #93c5fd; } }

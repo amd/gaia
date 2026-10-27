@@ -9,6 +9,8 @@
     "evaluate",
     "origin",
     "screenshot",
-    "logs"
+    "logs",
+    "act",
+    "viewport"
   ]
 }

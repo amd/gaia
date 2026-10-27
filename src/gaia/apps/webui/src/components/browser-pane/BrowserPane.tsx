@@ -16,7 +16,7 @@ import { useAppOverlayOpen } from '../../hooks/useAppOverlayOpen';
 import { useDockedResize } from '../../hooks/useDockedResize';
 import { formatShortcut } from '../../utils/platform';
 import { log } from '../../utils/logger';
-import { BrowserToolbar, TOGGLE_SHORTCUT } from './BrowserToolbar';
+import { AgentStrip, BrowserToolbar, TOGGLE_SHORTCUT } from './BrowserToolbar';
 import type { GaiaBrowserPaneAPI, PaneNotice, PaneState, TabState } from '../../../services/browser-pane/contract';
 import './BrowserPane.css';
 
@@ -136,11 +136,7 @@ function OpenPane({ api, pane }: { api: GaiaBrowserPaneAPI; pane: PaneState }) {
                 {...resize.separatorProps}
             />
             <BrowserToolbar pane={pane} api={api} onClosePane={() => setOpen(false)} addressRef={addressRef} />
-            {active.agentBusy && (
-                <div className="bp-agent-strip" role="status">
-                    GAIA is reading this page
-                </div>
-            )}
+            <AgentStrip tab={active} api={api} />
             {active.notice && <NoticeBar notice={active.notice} />}
             <div ref={viewportRef} className="bp-viewport">
                 {frozen && <img className="bp-frozen" src={frozen} alt="" aria-hidden="true" />}

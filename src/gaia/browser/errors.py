@@ -173,12 +173,12 @@ class PaneNavigationBlocked(BrowserError):
         )
 
 
-class PaneCannotActYet(BrowserError):
-    """A tool that acts on the page is not wired to the browser pane yet."""
+class PaneSignInByHand(BrowserError):
+    """The browser pane never signs in for the user; they sign in there themselves."""
 
-    def __init__(self, tool_name: str) -> None:
+    def __init__(self) -> None:
         super().__init__(
-            f"{tool_name} does not work in the browser pane yet; it is coming in a "
-            "later step. Tell the user what to do on the page, and they can do it "
-            "in the pane themselves."
+            "Signing in is not done for you in the browser pane. Ask the user to "
+            "sign in to the site themselves in the pane, then tell you when they "
+            "are done. The pane keeps that sign-in."
         )

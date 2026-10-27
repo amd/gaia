@@ -5,7 +5,8 @@
       "url": null,
       "title": "New tab",
       "active": true,
-      "openedBy": null
+      "openedBy": null,
+      "control": "shared"
     }
   ],
   "activeTabId": "tab-1"

@@ -27,13 +27,14 @@ from gaia.browser._pane_bridge import (
 from gaia.browser.driver import PlaywrightDriver
 from gaia.browser.errors import (
     BrowserError,
+    ElementNotFound,
     PageOffScope,
-    PaneCannotActYet,
     PaneNavigationBlocked,
     PaneProtocolMismatch,
+    PaneSignInByHand,
     PaneUnreachable,
 )
-from gaia.browser.pane_driver import PaneDriver
+from gaia.browser.pane_driver import PANE_KEYS, PaneDriver
 from gaia.browser.snapshot import _FIND_JS, _SNAPSHOT_JS
 
 from .browser_pane_fake import TOKEN, FakeBridge, fixture
@@ -329,13 +330,89 @@ def test_new_only_logs_start_after_the_last_entry_seen(bridge, discovery_file):
     assert third["afterSeq"] == 0
 
 
-def test_acting_tools_say_they_are_not_in_the_pane_yet(bridge, discovery_file):
+def test_a_click_is_one_act_on_the_snapshot_ref_then_a_fresh_read(
+    bridge, discovery_file
+):
     driver = _driver(bridge, discovery_file)
-    with pytest.raises(PaneCannotActYet, match="coming in a later step"):
+    driver.snapshot()
+    snap = driver.click("g1e2")
+    assert bridge.last("act")["body"] == fixture("requests.json")["act_click"]
+    assert bridge.ops()[-2:] == ["act", "evaluate"]
+    assert snap["title"] == "Pane fixture form"
+
+
+def test_typing_replaces_the_field_and_pressing_needs_no_target(bridge, discovery_file):
+    driver = _driver(bridge, discovery_file)
+    driver.snapshot()
+    driver.type_text("g1e2", "Ada Lovelace")
+    assert bridge.last("act")["body"] == fixture("requests.json")["act_fill"]
+    driver.snapshot()
+    driver.press("Escape")
+    assert bridge.last("act")["body"] == fixture("requests.json")["act_press"]
+
+
+def test_an_element_in_a_frame_is_acted_on_in_that_frame(bridge, discovery_file):
+    driver = _driver(bridge, discovery_file)
+    driver.snapshot()
+    driver.click("g1f1e1")
+    assert bridge.last("act")["body"]["target"] == {
+        "frameId": "4:7",
+        "selector": '[data-gaia-ref="g1e1"]',
+    }
+
+
+def test_a_batch_step_can_act_without_reading_so_its_refs_stay_valid(
+    bridge, discovery_file
+):
+    driver = _driver(bridge, discovery_file)
+    driver.snapshot()
+    assert driver.type_text("g1e1", "a@b.c", read=False) is None
+    assert driver.click("g1e2", read=False) is None
+    assert bridge.ops()[-2:] == ["act", "act"]
+
+
+def test_a_stale_ref_or_a_key_off_the_list_never_reaches_the_page(
+    bridge, discovery_file
+):
+    driver = _driver(bridge, discovery_file)
+    driver.snapshot()
+    driver.snapshot()
+    with pytest.raises(ElementNotFound, match="g1e2"):
         driver.click("g1e2")
-    with pytest.raises(PaneCannotActYet, match="browser_type"):
-        driver.type_text("g1e1", "a@b.c")
+    with pytest.raises(BrowserError, match="Escape"):
+        driver.press("F12")
     assert "act" not in bridge.ops()
+
+
+def test_the_user_taking_over_reaches_the_model_as_written(bridge, discovery_file):
+    bridge.replies["act"] = (409, fixture("error_user_active.json"))
+    driver = _driver(bridge, discovery_file)
+    driver.snapshot()
+    with pytest.raises(BrowserError, match="Stop using the browser"):
+        driver.click("g1e2")
+    assert bridge.ops()[-1] == "act"
+
+
+def test_viewport_sends_the_size_and_scheme(bridge, discovery_file):
+    bridge.replies["viewport"] = fixture("viewport.json")
+    driver = _driver(bridge, discovery_file)
+    res = driver.viewport({"width": 390, "height": 844, "mobile": True}, "dark")
+    assert bridge.last("viewport")["body"] == fixture("requests.json")["viewport"]
+    assert res["applied"] is True
+
+
+def test_a_private_active_tab_makes_open_use_a_tab_of_its_own(bridge, discovery_file):
+    bridge.replies["tabs"] = {"tabs": [], "activeTabId": None}
+    driver = _driver(bridge, discovery_file)
+    driver.goto("http://127.0.0.1:5000/form.html")
+    assert bridge.last("tabs")["body"]["op"] == "open"
+    assert "navigate" not in bridge.ops()
+
+
+def test_the_pane_never_signs_in_for_the_user(bridge, discovery_file):
+    driver = _driver(bridge, discovery_file)
+    with pytest.raises(PaneSignInByHand, match="sign in"):
+        driver.storage_state()
 
 
 # --------------------------------------------------- drift with the TS side
@@ -351,6 +428,14 @@ def test_error_codes_match_the_contract_and_the_fixture():
         )
     )
     assert ERROR_CODES == set(fixture("error_codes.json")["codes"]) == in_contract
+
+
+def test_keys_match_the_contract_and_the_fixture():
+    allowed = (
+        CONTRACT.read_text().split("export type AllowedKey =", 1)[1].split(";", 1)[0]
+    )
+    assert list(PANE_KEYS) == fixture("keys.json")["keys"]
+    assert set(re.findall(r'"([A-Za-z]+)"', allowed)) == set(PANE_KEYS)
 
 
 @pytest.mark.parametrize("origin,expected", fixture("loopback.json")["cases"])

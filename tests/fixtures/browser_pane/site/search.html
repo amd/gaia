@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pane fixture search</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>Search this site</h1>
+  <form action="search.html">
+    <label for="q">Search</label> <input id="q" name="q" type="search">
+    <button type="submit">Search</button>
+  </form>
+  <ul id="results"></ul>
+  <script>
+    const pages = [
+      { title: "Pricing", href: "pricing.html", words: "pricing price plans cost" },
+      { title: "Sign up form", href: "form.html", words: "sign up form account" },
+      { title: "Second page", href: "second.html", words: "second page" },
+    ];
+    const q = (new URLSearchParams(location.search).get("q") || "").trim().toLowerCase();
+    document.getElementById("q").value = q;
+    const list = document.getElementById("results");
+    if (q) {
+      const hits = pages.filter((p) => p.words.includes(q) || p.title.toLowerCase().includes(q));
+      list.innerHTML = hits.length
+        ? hits.map((p) => `<li><a href="${p.href}">${p.title}</a></li>`).join("")
+        : "<li>No results</li>";
+    }
+  </script>
+</body>
+</html>

@@ -18,7 +18,8 @@ const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
-const { BridgeError } = require("./pane-host.cjs");
+const { BridgeError } = require("./bridge-error.cjs");
+const { KEYS } = require("./input.cjs");
 
 /** @typedef {import("./contract").BridgeDiscovery} BridgeDiscovery */
 /** @typedef {import("./contract").BridgeOp} BridgeOp */
@@ -30,6 +31,9 @@ const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_SCRIPT_CHARS = 512 * 1024;
 const MAX_LOG_LIMIT = 500;
 const MAX_SHOT_WIDTH = 4096;
+const MAX_TYPED_CHARS = 10000;
+const VIEWPORT_MIN = 200;
+const VIEWPORT_MAX = 4000;
 
 const STATUS = {
   bad_request: 400,
@@ -104,6 +108,31 @@ function origins(body) {
   return v;
 }
 
+/** An element: { frameId, selector }, with frameId null for the main frame. */
+function element(value, key) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw bad(`"${key}" must be { frameId, selector }.`);
+  const frameId = value.frameId;
+  if (frameId !== null && typeof frameId !== "string") throw bad(`"${key}.frameId" must be a frame id or null.`);
+  return { frameId, selector: str(value, "selector", { max: 200 }) };
+}
+
+function action(body) {
+  const a = body.action;
+  if (typeof a !== "object" || a === null) throw bad('"action" must be { kind, ... }.');
+  const kind = oneOf(a, "kind", ["click", "fill", "press"]);
+  if (kind === "click") return { kind };
+  if (kind === "press") return { kind, key: oneOf(a, "key", Object.keys(KEYS)) };
+  if (typeof a.text !== "string" || a.text.length > MAX_TYPED_CHARS) throw bad(`"action.text" must be text of at most ${MAX_TYPED_CHARS} characters.`);
+  return { kind, text: a.text, pressEnter: bool(a, "pressEnter") };
+}
+
+function viewportSize(body) {
+  const v = body.size;
+  if (v === null) return null;
+  if (typeof v !== "object" || Array.isArray(v)) throw bad('"size" must be null or { width, height, mobile }.');
+  return { width: int(v, "width", VIEWPORT_MIN, VIEWPORT_MAX), height: int(v, "height", VIEWPORT_MIN, VIEWPORT_MAX), mobile: bool(v, "mobile") };
+}
+
 /** One parser per op. A test asserts this table and the handler table have the same keys. */
 const PARSERS = {
   hello: () => ({}),
@@ -129,13 +158,7 @@ const PARSERS = {
   },
   origin: (b) => ({ sessionId: session(b), tabId: tabIdOrActive(b) }),
   screenshot: (b) => {
-    let clip = null;
-    if (b.clip !== null && b.clip !== undefined) {
-      if (typeof b.clip !== "object") throw bad('"clip" must be null or { frameId, selector }.');
-      const frameId = b.clip.frameId;
-      if (frameId !== null && typeof frameId !== "string") throw bad('"clip.frameId" must be a frame id or null.');
-      clip = { frameId, selector: str(b.clip, "selector", { max: 200 }) };
-    }
+    const clip = b.clip === null || b.clip === undefined ? null : element(b.clip, "clip");
     return { sessionId: session(b), tabId: tabIdOrActive(b), clip, maxWidth: int(b, "maxWidth", 100, MAX_SHOT_WIDTH), allowedOrigins: origins(b) };
   },
   logs: (b) => {
@@ -154,6 +177,18 @@ const PARSERS = {
       allowedOrigins: origins(b),
     };
   },
+  act: (b) => {
+    const act = action(b);
+    const target = b.target === null || b.target === undefined ? null : element(b.target, "target");
+    if (target === null && act.kind !== "press") throw bad(`A ${act.kind} needs a "target" element.`);
+    return { sessionId: session(b), tabId: tabIdOrActive(b), action: act, target, allowedOrigins: origins(b) };
+  },
+  viewport: (b) => ({
+    sessionId: session(b),
+    tabId: tabIdOrActive(b),
+    size: viewportSize(b),
+    colorScheme: b.colorScheme === null ? null : oneOf(b, "colorScheme", ["light", "dark"]),
+  }),
 };
 
 /**
@@ -207,6 +242,8 @@ function createHandlers({ getHost, appVersion }) {
         { kind: req.kind, afterSeq: req.afterSeq, errorsOnly: req.errorsOnly, pattern: req.pattern, limit: req.limit },
         req.allowedOrigins
       ),
+    act: async (req) => host(req.sessionId).agentAct(req.tabId, req.action, req.target, req.allowedOrigins),
+    viewport: async (req) => host(req.sessionId).agentViewport(req.tabId, { size: req.size, colorScheme: req.colorScheme }),
   };
 }
 

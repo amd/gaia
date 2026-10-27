@@ -10,7 +10,9 @@
  *
  *   GAIA_BIN=<venv>/bin/gaia node scripts/qa-pane.mjs launch [--app <webui dir>]
  *   node scripts/qa-pane.mjs state | shortcut | open <url> | click <selector>
- *        | page-click <selector>   (inside the pane's visible page)
+ *        | page-click <selector>   (inside the pane's visible page, by script)
+ *        | user-click <selector>   (real mouse input on it, as the user's own click)
+ *        | session                 (the bridge discovery file and the chat the window shows)
  *        | drag <selector> <dx>     (e.g. drag .bp-resize -400 widens the pane)
  *        | type <text> | key <key> | chat <text> | reply [seconds] | shot <file.png> | quit
  *   node scripts/qa-pane.mjs perf open-pane      (against the running app)
@@ -101,6 +103,10 @@ async function launchApp(appDir) {
         env: { ...process.env, GAIA_BIN: gaiaBin },
         timeout: 120_000,
     });
+    // The renderer names its chat to main on every switch; remembered here for `session`.
+    await app.evaluate(({ ipcMain }) => {
+        ipcMain.prependListener('pane:set-active-session', (_event, id) => { globalThis.qaPaneSession = id; });
+    });
     const page = await app.firstWindow({ timeout: 120_000 });
     await page.locator(CHAT_READY).first().waitFor({ state: 'visible', timeout: 120_000 });
     return { app, page, userDataDir, launchMs: Date.now() - started };
@@ -189,6 +195,23 @@ function commands(ctx) {
                 true,
             );
         }, selector),
+        'user-click': (selector) => app.evaluate(async ({ BrowserWindow, WebContentsView }, sel) => {
+            const win = BrowserWindow.getAllWindows().find((w) => w.isVisible());
+            const view = win.contentView.children.find((v) => v instanceof WebContentsView && v.getVisible());
+            if (!view) throw new Error('No pane page is showing');
+            const r = await view.webContents.executeJavaScript(
+                `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return null; const b = el.getBoundingClientRect(); return { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2) }; })()`,
+                true,
+            );
+            if (!r) return 'no element';
+            view.webContents.sendInputEvent({ type: 'mouseDown', x: r.x, y: r.y, button: 'left', clickCount: 1 });
+            view.webContents.sendInputEvent({ type: 'mouseUp', x: r.x, y: r.y, button: 'left', clickCount: 1 });
+            return 'clicked';
+        }, selector),
+        session: async () => ({
+            sessionId: await app.evaluate(() => globalThis.qaPaneSession ?? null),
+            discovery: path.join(ctx.userDataDir, 'run', 'browser-pane.json'),
+        }),
         drag: async (selector, dx) => {
             const box = await page.locator(selector).first().boundingBox();
             if (!box) throw new Error(`${selector} is not on screen`);
@@ -209,6 +232,7 @@ function commands(ctx) {
             return 'pressed';
         },
         chat: async (text) => {
+            ctx.repliesBefore = await page.locator('[data-role="assistant"]').count();
             const box = page.locator(CHAT_READY).first();
             await box.fill(text);
             await box.press('Enter');
@@ -221,7 +245,8 @@ function commands(ctx) {
             await stop.first().waitFor({ timeout: 10000 }).catch(() => {});
             while (Date.now() < deadline) {
                 if (await prompt.count()) return { waiting: 'approval', prompt: (await prompt.first().innerText()).slice(0, 600) };
-                if (!(await stop.count())) {
+                const fresh = (await page.locator('[data-role="assistant"]').count()) > (ctx.repliesBefore ?? -1);
+                if (fresh && !(await stop.count())) {
                     const last = page.locator('[data-role="assistant"]').last();
                     return { reply: (await last.innerText()).slice(0, 2000) };
                 }
@@ -324,7 +349,7 @@ async function main() {
         console.log(`perf open-pane ${ms} ms`);
         return;
     }
-    if (!cmd) fail('give a command: launch, state, shortcut, open, click, type, key, chat, shot, perf, quit');
+    if (!cmd) fail('give a command: launch, state, session, shortcut, open, click, page-click, user-click, drag, type, key, chat, reply, shot, perf, quit');
     const result = await send(cmd, rest);
     console.log(typeof result === 'string' ? result : JSON.stringify(result, null, 2));
 }

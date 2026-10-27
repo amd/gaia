@@ -122,7 +122,7 @@ const PAGE: PaneState = {
     tabs: [{
         id: TAB, url: 'https://example.com/', title: 'Example', loading: false,
         canGoBack: false, canGoForward: false, devToolsOpen: false, notice: null,
-        openedBy: null, agentBusy: false,
+        openedBy: null, agentBusy: false, agentActing: false, control: 'shared', viewport: null,
     }],
     activeTabId: TAB,
     recent: [],
