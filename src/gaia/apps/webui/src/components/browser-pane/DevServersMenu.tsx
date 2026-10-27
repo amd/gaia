@@ -5,6 +5,7 @@ import { useRef, useState } from 'react';
 import { CircleStop, PanelTopOpen, Server } from 'lucide-react';
 import { Popover } from '../Popover';
 import { log } from '../../utils/logger';
+import { useChatStore } from '../../stores/chatStore';
 import type { DevServerState, DevServerStatus, GaiaBrowserPaneAPI } from '../../../services/browser-pane/contract';
 
 const STATUS: Record<DevServerStatus, string> = {
@@ -21,7 +22,21 @@ function run(what: string, call: Promise<unknown>): void {
     call.catch((err) => log.ui.error(`Browser pane: ${what} failed`, err));
 }
 
-/** The dev servers GAIA started: status and port, Open in pane, and Stop. */
+/** Which chat started the server, by its title; nothing while the chat list has not loaded it. */
+function useStartedIn(server: DevServerState): string | null {
+    const starter = server.chats[0];
+    const current = useChatStore((s) => s.currentSessionId);
+    const title = useChatStore((s) => s.sessions.find((c) => c.id === starter)?.title);
+    if (starter === current) return 'Started in this chat';
+    return title === undefined ? null : `Started in ${title}`;
+}
+
+function StartedIn({ server }: { server: DevServerState }) {
+    const text = useStartedIn(server);
+    return text === null ? null : <div className="bp-devserver-chat">{text}</div>;
+}
+
+/** The dev servers GAIA started: status and port, the chat that started each, Open in pane, and Stop. */
 export function DevServersMenu({ api, servers }: { api: GaiaBrowserPaneAPI; servers: DevServerState[] }) {
     const [open, setOpen] = useState(false);
     const anchor = useRef<HTMLButtonElement>(null);
@@ -54,6 +69,7 @@ export function DevServersMenu({ api, servers }: { api: GaiaBrowserPaneAPI; serv
                             <span className={`bp-devserver-status is-${s.status}`}>{STATUS[s.status]}</span>
                             <span className="bp-devserver-port">:{s.port}</span>
                         </div>
+                        <StartedIn server={s} />
                         <div className="bp-devserver-cmd" title={s.cwd}>
                             {s.argv.join(' ')}
                         </div>

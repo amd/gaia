@@ -332,7 +332,7 @@ function createHandlers({ getHost, devServers, appVersion }) {
       if (req.op === "list") return { servers: devServers.list() };
       if (req.op === "stop") return { server: await devServers.stop(req.key) };
       if (req.op === "logs") return devServers.logs(req.key, { errorsOnly: req.errorsOnly, pattern: req.pattern, limit: req.limit });
-      return devServers.ensure(req.key, req.spec, req.searchPath);
+      return devServers.ensure(req.key, req.spec, req.sessionId, req.searchPath);
     },
   };
 }

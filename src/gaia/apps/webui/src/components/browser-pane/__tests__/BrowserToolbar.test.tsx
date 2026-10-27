@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 import { createRef } from 'react';
-import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AgentStrip, BrowserToolbar, PickStrip } from '../BrowserToolbar';
+import { useChatStore } from '../../../stores/chatStore';
+import type { Session } from '../../../types';
 import type { DevServerState, GaiaBrowserPaneAPI, PaneState, TabId, TabState } from '../../../../services/browser-pane/contract';
 
 const id = (s: string) => s as TabId;
@@ -279,7 +281,23 @@ describe('Dev servers', () => {
         startedAt: 1,
         exitCode: null,
         logFile: '/tmp/web.log',
+        chats: ['chat-1'],
         ...over,
+    });
+
+    afterEach(() => {
+        act(() => useChatStore.setState({ currentSessionId: null, sessions: [] }));
+    });
+
+    it('names the chat that started each server', async () => {
+        act(() => useChatStore.setState({
+            currentSessionId: 'chat-1',
+            sessions: [{ id: 'chat-2', title: 'Fix the login page' }] as Session[],
+        }));
+        renderToolbar({ ...pane([tab()]), devServers: [server(), server({ key: 'fedcba9876543210', name: 'api', chats: ['chat-2', 'chat-1'] })] });
+        await userEvent.click(screen.getByRole('button', { name: 'Dev servers' }));
+        expect(screen.getByRole('group', { name: 'Dev server web' })).toHaveTextContent('Started in this chat');
+        expect(screen.getByRole('group', { name: 'Dev server api' })).toHaveTextContent('Started in Fix the login page');
     });
 
     it('lists each server with its status and port, opens it in the pane and stops it', async () => {

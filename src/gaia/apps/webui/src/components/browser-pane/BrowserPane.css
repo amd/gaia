@@ -433,6 +433,14 @@
     color: var(--danger);
 }
 
+.bp-devserver-chat {
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: var(--fs-caption);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .bp-devserver-cmd {
     overflow: hidden;
     color: var(--text-muted);

@@ -91,7 +91,7 @@ posix("ensure", () => {
     const { sup, onChange } = supervisor();
     await sup.start();
     const port = await freePort();
-    const res = await sup.ensure(KEY, spec(port));
+    const res = await sup.ensure(KEY, spec(port), "chat-1");
     expect(res.reused).toBe(false);
     expect(res.server).toMatchObject({ key: KEY, name: "web", status: "ready", port, url: `http://localhost:${port}/` });
     expect(await portAnswers(port)).toBe(true);
@@ -104,8 +104,8 @@ posix("ensure", () => {
     const { sup } = supervisor({ spawn });
     await sup.start();
     const port = await freePort();
-    const first = await sup.ensure(KEY, spec(port));
-    const [a, b] = await Promise.all([sup.ensure(KEY, spec(port)), sup.ensure(KEY, spec(port))]);
+    const first = await sup.ensure(KEY, spec(port), "chat-1");
+    const [a, b] = await Promise.all([sup.ensure(KEY, spec(port), "chat-1"), sup.ensure(KEY, spec(port), "chat-1")]);
     expect(spawn).toHaveBeenCalledTimes(1);
     expect([a.reused, b.reused]).toEqual([true, true]);
     expect(a.server.pid).toBe(first.server.pid);
@@ -115,8 +115,8 @@ posix("ensure", () => {
     const { sup } = supervisor();
     await sup.start();
     const port = await freePort();
-    const first = await sup.ensure(KEY, spec(port));
-    const second = await sup.ensure(KEY, { ...spec(port), env: { NODE_ENV: "production" } });
+    const first = await sup.ensure(KEY, spec(port), "chat-1");
+    const second = await sup.ensure(KEY, { ...spec(port), env: { NODE_ENV: "production" } }, "chat-1");
     expect(second.reused).toBe(false);
     expect(second.server.pid).not.toBe(first.server.pid);
     expect(alive(first.server.pid)).toBe(false);
@@ -127,7 +127,7 @@ posix("ensure", () => {
     const { sup } = supervisor();
     await sup.start();
     const port = await freePort();
-    const err = await sup.ensure(KEY, spec(port, ["--crash"])).catch((e) => e);
+    const err = await sup.ensure(KEY, spec(port, ["--crash"]), "chat-1").catch((e) => e);
     expect(err).toBeInstanceOf(BridgeError);
     expect(err.code).toBe("dev_server_failed");
     expect(err.message).toMatch(/exited before it answered on port \d+ \(exit code 1\)/);
@@ -140,7 +140,7 @@ posix("ensure", () => {
     const { sup } = supervisor();
     await sup.start();
     const port = await freePort();
-    const err = await sup.ensure(KEY, { ...spec(port), argv: ["gaia-no-such-program-xyz"] }).catch((e) => e);
+    const err = await sup.ensure(KEY, { ...spec(port), argv: ["gaia-no-such-program-xyz"] }, "chat-1").catch((e) => e);
     expect(err.code).toBe("dev_server_failed");
     expect(err.message).toMatch(/Could not start gaia-no-such-program-xyz: .*ENOENT/);
   });
@@ -152,7 +152,7 @@ posix("ensure", () => {
     const port = await freePort();
     const stranger = net.createServer().listen(port, "127.0.0.1");
     await new Promise((r) => stranger.once("listening", r));
-    const err = await sup.ensure(KEY, spec(port)).catch((e) => e);
+    const err = await sup.ensure(KEY, spec(port), "chat-1").catch((e) => e);
     stranger.close();
     expect(err.code).toBe("port_in_use");
     expect(err.message).toMatch(/another program is already listening/);
@@ -163,7 +163,7 @@ posix("ensure", () => {
     const port = await freePort();
     const { sup } = supervisor({ blockedPorts: () => [port] });
     await sup.start();
-    await expect(sup.ensure(KEY, spec(port))).rejects.toMatchObject({ code: "port_in_use" });
+    await expect(sup.ensure(KEY, spec(port), "chat-1")).rejects.toMatchObject({ code: "port_in_use" });
   });
 
   test("the server gets only the allowed environment", () => {
@@ -178,7 +178,7 @@ posix("ensure", () => {
 
   test("ensure before start is a bug, not a silent wait", async () => {
     const { sup } = supervisor();
-    await expect(sup.ensure(KEY, spec(1234))).rejects.toMatchObject({ code: "internal" });
+    await expect(sup.ensure(KEY, spec(1234), "chat-1")).rejects.toMatchObject({ code: "internal" });
   });
 });
 
@@ -187,7 +187,7 @@ posix("stop, quit and orphans", () => {
     const { sup } = supervisor();
     await sup.start();
     const port = await freePort();
-    const { server } = await sup.ensure(KEY, spec(port));
+    const { server } = await sup.ensure(KEY, spec(port), "chat-1");
     const stopped = await sup.stop(KEY);
     expect(stopped).toMatchObject({ status: "stopped", pid: null });
     expect(alive(server.pid)).toBe(false);
@@ -200,8 +200,8 @@ posix("stop, quit and orphans", () => {
     const { sup, dir } = supervisor();
     await sup.start();
     const [p1, p2] = [await freePort(), await freePort()];
-    const a = await sup.ensure(KEY, spec(p1));
-    const b = await sup.ensure("fedcba9876543210", { ...spec(p2), name: "api" });
+    const a = await sup.ensure(KEY, spec(p1), "chat-1");
+    const b = await sup.ensure("fedcba9876543210", { ...spec(p2), name: "api" }, "chat-1");
     expect(JSON.parse(fs.readFileSync(path.join(dir, "ledger.json"), "utf8")).servers.map((s) => s.name).sort()).toEqual(["api", "web"]);
     await sup.stopAll();
     expect([alive(a.server.pid), alive(b.server.pid)]).toEqual([false, false]);
@@ -212,7 +212,7 @@ posix("stop, quit and orphans", () => {
     const { sup, dir } = supervisor();
     await sup.start();
     const port = await freePort();
-    const { server } = await sup.ensure(KEY, spec(port));
+    const { server } = await sup.ensure(KEY, spec(port), "chat-1");
     const ledger = JSON.parse(fs.readFileSync(path.join(dir, "ledger.json"), "utf8"));
     expect(ledger.servers[0].processes[0]).toMatchObject({ pid: server.pid, command: expect.stringContaining("server.js") });
     // The app died here: a new supervisor reads the same ledger, nothing else.
@@ -259,12 +259,25 @@ posix("stop, quit and orphans", () => {
   });
 });
 
+posix("the chats a server belongs to", () => {
+  test("each server names the chat that started it, then the chats that asked for it since", async () => {
+    const { sup } = supervisor();
+    await sup.start();
+    const port = await freePort();
+    await sup.ensure(KEY, spec(port), "chat-a");
+    await sup.ensure(KEY, spec(port), "chat-b");
+    await sup.ensure(KEY, spec(port), "chat-a");
+    expect(sup.list()[0].chats).toEqual(["chat-a", "chat-b"]);
+    expect(() => sup.ensure(KEY, spec(port), undefined)).toThrow(/must be started for a chat/);
+  });
+});
+
 posix("logs", () => {
   test("a filtered slice returns the build error and only matching lines", async () => {
     const { sup } = supervisor();
     await sup.start();
     const port = await freePort();
-    await sup.ensure(KEY, spec(port));
+    await sup.ensure(KEY, spec(port), "chat-1");
     await fetch(`http://localhost:${port}/`);
     const errors = sup.logs(KEY, { errorsOnly: true, pattern: null, limit: 50 });
     expect(errors.lines).toEqual([]);
@@ -315,6 +328,11 @@ describe("bridge op", () => {
     expect(devServers.ensure).not.toHaveBeenCalled();
     host.requireSession = jest.fn();
     await handlers.devServers(req);
-    expect(devServers.ensure).toHaveBeenCalledWith(KEY, requests.devServers_ensure.spec, requests.devServers_ensure.searchPath);
+    expect(devServers.ensure).toHaveBeenCalledWith(
+      KEY,
+      requests.devServers_ensure.spec,
+      requests.devServers_ensure.sessionId,
+      requests.devServers_ensure.searchPath
+    );
   });
 });

@@ -7,6 +7,9 @@
  * and asks the user; this file only runs the spec Python sends, argv only,
  * never through a shell.
  *
+ * Servers are app-wide, but each remembers the chats that use it: the one
+ * that started it first, then any that asked for the same server since.
+ *
  * A ledger file records each server's pids and command lines, so the next
  * launch can stop servers a crash left behind. It only ever signals a pid it
  * recorded whose command line still matches.
@@ -184,21 +187,28 @@ class DevServerSupervisor {
 
   /**
    * Converge on "this spec runs and answers on its port".
-   * @param {string} key @param {DevServerSpec} spec @param {string | null} searchPath
+   * @param {string} key @param {DevServerSpec} spec
+   * @param {string} chat The chat whose agent asked.
+   * @param {string | null} searchPath
    * @returns {Promise<{ server: DevServerState, reused: boolean, ms: number }>}
    */
-  ensure(key, spec, searchPath = null) {
+  ensure(key, spec, chat, searchPath = null) {
+    if (typeof chat !== "string" || chat === "") throw new Error(`A dev server must be started for a chat, got ${JSON.stringify(chat)}.`);
     return this.serial(key, async () => {
       if (!this.started) throw new BridgeError("internal", "Dev servers were used before main started them.");
       await this.started;
       const t0 = Date.now();
       const current = this.entries.get(key);
       if (current && current.status === "ready" && sameSpec(current.spec, spec)) {
+        if (!current.chats.includes(chat)) {
+          current.chats.push(chat);
+          this.deps.onChange();
+        }
         return { server: this.stateOf(current), reused: true, ms: Date.now() - t0 };
       }
       if (current && this.running(current)) await this.halt(current);
       await this.checkPort(key, spec);
-      const entry = this.spawn(key, spec, searchPath);
+      const entry = this.spawn(key, spec, chat, searchPath);
       try {
         await this.recordLedger();
         await this.untilReady(entry);
@@ -332,12 +342,13 @@ class DevServerSupervisor {
     throw new BridgeError("port_in_use", `Port ${spec.port} is taken: ${who}.`, { port: spec.port });
   }
 
-  spawn(key, spec, searchPath = null) {
+  spawn(key, spec, chat, searchPath = null) {
     const log = new CappedLog(path.join(this.deps.dir, `${key}.log`));
     log.write(`[GAIA] ${new Date().toISOString()} starting: ${spec.argv.join(" ")} (in ${spec.cwd})\n`);
     const entry = {
       key,
       spec,
+      chats: [chat],
       log,
       logFile: log.file,
       status: "starting",
@@ -430,6 +441,7 @@ class DevServerSupervisor {
       startedAt: e.startedAt,
       exitCode: e.exitCode,
       logFile: e.logFile,
+      chats: e.chats.slice(),
     };
   }
 }

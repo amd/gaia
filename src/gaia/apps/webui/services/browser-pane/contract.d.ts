@@ -117,6 +117,8 @@ export interface DevServerState {
   startedAt: number;
   exitCode: number | null;
   logFile: string;
+  /** Session ids of the chats using it: the one that started it first. */
+  chats: string[];
 }
 
 /** The placeholder's rect in CSS pixels, from getBoundingClientRect. */
