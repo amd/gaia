@@ -3889,14 +3889,20 @@ class MemoryMixin(ProceduralMemoryMixin):
             # generic dash/underscore-joined high-entropy-looking token, e.g.
             # HALIBUT-4417-ZULU: 2+ alnum groups with at least one numeric group.
             r"\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b",
-            # a PIN, passcode or card security code next to its digits, also
-            # worded as a memory model writes it: "PIN for Chase is 4821".
-            # Whitespace is bounded so the optional parts can't trade it back
-            # and forth on a long run of spaces.
-            r"\b(?:pin|passcode|pass code|cvv2?|cvc|security code)(?:'s)?\b"
-            r"(?:\s{1,3}(?:number|code)\b)?"
-            r"(?:\s{1,3}(?:for|on|at|of)(?:\s{1,3}\w+){1,3}?)?"
-            r"(?:\s{0,3}(?:is|was|:|=|to|[-\u2013\u2014]))?\s{0,3}\d{3,8}\b",
+            # A PIN/passcode or card security code in a user-owned context.
+            # Keep the PIN forms bounded: generic uses such as GPIO pins,
+            # page numbers, and postal-code phrases are ordinary data.
+            r"\b(?:my|your|their|user(?:'s)?|bank|atm|debit|credit|card)\s+"
+            r"(?:bank\s+|debit\s+|credit\s+|atm\s+)?"
+            r"pin(?:'s)?(?:\s+number)?(?:\s+for(?:\s+\w+){1,8}?)?\s*"
+            r"(?:is|was|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
+            r"\bpin(?:'s)?\s+for(?:\s+\w+){1,8}?\s+"
+            r"(?:is|was|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
+            r"\bpin\s*(?:#|:|=|\(\s*)\s*\d{3,8}\b\s*\)?",
+            r"(?<!gpio )\bpin\s+(?!code\b)\d{3,8}\b",
+            r"\b\d{3,8}\s+is\s+(?:my|your|their|the|user(?:'s)?\s+)?pin\b",
+            r"\b(?:passcode|pass code|cvv2?|cvc|security code)\b"
+            r"(?:'s)?\s*(?:is|was|:|=|[-\u2013\u2014])?\s*\d{3,8}\b",
             r"\b\d{3}-\d{2}-\d{4}\b",  # US social security number
             r"\b(?:ssn|social security(?: number)?)\b(?:\s{0,3}(?:is|was|:|=))?"
             r"\s{0,3}\d{3}[ -]?\d{2}[ -]?\d{4}\b",
@@ -3908,7 +3914,7 @@ class MemoryMixin(ProceduralMemoryMixin):
     #: and length and passes the Luhn check, so a tracking number, a timestamp
     #: or a 15-digit IMEI is not one.
     _CARD_NUMBER: ClassVar[re.Pattern] = re.compile(
-        r"(?<!\d)\d(?:[\s.\u2010-\u2015-]{0,2}\d){12,}(?!\d)"
+        r"(?<!\d)\d(?:[ .\u00a0\u2010-\u2015-]{0,8}\d){12,}(?!\d)"
     )
     #: Visa, Mastercard, Amex, Discover, JCB, Diners Club, UnionPay, by length.
     _CARD_PREFIX: ClassVar[re.Pattern] = re.compile(
@@ -3918,10 +3924,18 @@ class MemoryMixin(ProceduralMemoryMixin):
     )
 
     #: How a card number is written in groups: unbroken, 4-4-4-4(-3), 4-4-5 for
-    #: a 13-digit Visa, Amex and Diners Club 4-6-5 and 4-6-4, UnionPay 6-13.
+    #: a 13-digit Visa, Amex 4-4-4-3, Diners Club 4-6-5 and 4-6-4, UnionPay 6-13.
     _CARD_GROUPINGS: ClassVar[frozenset] = frozenset(
         {(k,) for k in range(13, 20)}
-        | {(4, 4, 4, 4), (4, 4, 4, 4, 3), (4, 4, 5), (4, 6, 5), (4, 6, 4), (6, 13)}
+        | {
+            (4, 4, 4, 4),
+            (4, 4, 4, 4, 3),
+            (4, 4, 4, 3),
+            (4, 4, 5),
+            (4, 6, 5),
+            (4, 6, 4),
+            (6, 13),
+        }
     )
     _CARD_GROUPING_PREFIXES: ClassVar[frozenset] = frozenset(
         g[:k] for g in _CARD_GROUPINGS for k in range(1, len(g) + 1)
@@ -3983,15 +3997,41 @@ class MemoryMixin(ProceduralMemoryMixin):
         return spans
 
     @classmethod
+    def _credential_spans(cls, text: str) -> List[tuple]:
+        """Return merged credential-shaped spans in *text*.
+
+        Card matching and keyword patterns can overlap. Sorting the spans once
+        lets masking assemble the output in a single pass instead of copying a
+        long conversation once per match.
+        """
+        spans = cls._card_spans(text)
+        for pattern in cls._CREDENTIAL_PATTERNS:
+            spans.extend(match.span() for match in pattern.finditer(text))
+        if not spans:
+            return []
+        spans.sort()
+        merged = [spans[0]]
+        for start, end in spans[1:]:
+            previous_start, previous_end = merged[-1]
+            if start <= previous_end:
+                merged[-1] = (previous_start, max(previous_end, end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    @classmethod
     def _mask_credentials(cls, text: str) -> str:
         """*text* with every credential-shaped span replaced, for the conversation log."""
-        if not text:
+        spans = cls._credential_spans(text)
+        if not spans:
             return text
-        for start, end in reversed(cls._card_spans(text)):
-            text = text[:start] + "[secret removed]" + text[end:]
-        for pattern in cls._CREDENTIAL_PATTERNS:
-            text = pattern.sub("[secret removed]", text)
-        return text
+        masked = []
+        cursor = 0
+        for start, end in spans:
+            masked.extend((text[cursor:start], "[secret removed]"))
+            cursor = end
+        masked.append(text[cursor:])
+        return "".join(masked)
 
     @classmethod
     def _looks_like_credential(cls, text: str) -> bool:
@@ -4003,11 +4043,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         false positives just mean "ask the user to rephrase", false negatives
         mean a leaked secret, so this errs conservative on what it flags.
         """
-        if not text:
-            return False
-        return any(p.search(text) for p in cls._CREDENTIAL_PATTERNS) or bool(
-            cls._card_spans(text)
-        )
+        return bool(text and cls._credential_spans(text))
 
     #: Argument keys naming what a call acted on, in priority order. A shell
     #: command is keyed by its binary, so ``pytest -q`` working again retires

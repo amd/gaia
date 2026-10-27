@@ -140,3 +140,43 @@ def test_the_conversation_log_keeps_no_secret(store):
     )
     assert "4821" not in logged and "4111" not in logged
     assert "Remember them" in logged
+
+
+def test_pin_variants_are_masked_without_masking_ordinary_numbers():
+    secret_text = (
+        "User's PIN for their Chase debit card is 4821; pin#4821; "
+        "PIN (4821); 4821 is my PIN"
+    )
+    ordinary_text = "GPIO pin 1023; Pin on page 123; My PIN code is 560001"
+    assert "[secret removed]" in MemoryMixin._mask_credentials(secret_text)
+    assert MemoryMixin._mask_credentials(ordinary_text) == ordinary_text
+    assert MemoryMixin._looks_like_credential(secret_text)
+    assert not MemoryMixin._looks_like_credential(ordinary_text)
+
+
+def test_card_grouped_with_wide_spacing_is_masked():
+    text = "4111   1111   1111   1111"
+    assert MemoryMixin._looks_like_credential(text)
+    assert "[secret removed]" in MemoryMixin._mask_credentials(text)
+
+
+def test_amex_4_4_4_3_is_masked():
+    text = "3782 8224 6310 005"
+    assert MemoryMixin._looks_like_credential(text)
+    assert "[secret removed]" in MemoryMixin._mask_credentials(text)
+
+
+def test_card_groups_do_not_cross_a_newline():
+    text = "4111\\n1111\\n1111\\n1111"
+    assert not MemoryMixin._looks_like_credential(text)
+    assert MemoryMixin._mask_credentials(text) == text
+
+
+def test_phone_lists_and_tracking_numbers_are_not_masked():
+    texts = (
+        "+49 30 12345678 or +49 89 98765432",
+        "9400 1000 0000 0000 0000 00",
+    )
+    for text in texts:
+        assert not MemoryMixin._looks_like_credential(text)
+        assert MemoryMixin._mask_credentials(text) == text
