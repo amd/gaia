@@ -5,13 +5,13 @@ import { handleApi } from "./api";
 import { authenticate, AuthError, type AuthEnv } from "./auth";
 import { collectAll, type CollectEnv } from "./collector";
 import { renderEvalsPage } from "./evalspage";
-import { renderCiPage, renderDevelopersPage, renderUsersPage } from "./page";
+import { parseMaintainers, renderCiPage, renderDevelopersPage, renderUsersPage } from "./page";
 
-type Env = CollectEnv & AuthEnv;
+type Env = CollectEnv & AuthEnv & { MAINTAINER_LOGINS?: string };
 
-const PAGES: Record<string, () => string> = {
+const PAGES: Record<string, (env: Env) => string> = {
   "/": renderUsersPage,
-  "/developers": renderDevelopersPage,
+  "/developers": (env) => renderDevelopersPage(parseMaintainers(env.MAINTAINER_LOGINS)),
   "/ci": renderCiPage,
   "/evals": renderEvalsPage,
 };
@@ -33,7 +33,7 @@ export default {
     const path = url.pathname.slice("/admin".length) || "/";
     if (req.method === "GET") {
       const page = PAGES[path];
-      if (page) return text(page(), 200, "text/html");
+      if (page) return text(page(env), 200, "text/html");
     }
 
     if (path === "/api/collect" && req.method === "POST") {

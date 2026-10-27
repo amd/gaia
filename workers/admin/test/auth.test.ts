@@ -26,7 +26,7 @@ const good = (over: Record<string, unknown> = {}) => ({
   aud: [AUD],
   iss: `https://${TEAM}`,
   exp: Math.floor(Date.now() / 1000) + 600,
-  email: "dev@amd.com",
+  email: "dev@example.com",
   ...over,
 });
 const req = (token?: string, url = "https://amd-gaia.ai/admin") =>
@@ -53,7 +53,7 @@ beforeAll(async () => {
 
 describe("authenticate", () => {
   it("accepts a valid Access assertion and returns the email", async () => {
-    expect(await authenticate(req(await sign(good(), pair.privateKey)), env, jwks)).toBe("dev@amd.com");
+    expect(await authenticate(req(await sign(good(), pair.privateKey)), env, jwks)).toBe("dev@example.com");
   });
 
   it("rejects a request with no assertion", async () => {

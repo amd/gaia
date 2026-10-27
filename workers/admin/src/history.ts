@@ -105,7 +105,8 @@ export async function collectCommits(env: CollectEnv, f: Fetcher, sinceDay?: str
   await writeAtomic(
     env.DB,
     insertMany(env.DB, "commits", ["sha", "day", "author", "at"],
-      rows.map((c) => [c.sha, c.commit.author!.date.slice(0, 10), c.author?.login ?? c.commit.author!.email?.split("@")[0] ?? "unknown", c.commit.author!.date])),
+      rows.map((c) => [c.sha, c.commit.author!.date.slice(0, 10), // Commits with no linked GitHub account are grouped together rather than keyed by email.
+        c.author?.login ?? "(no GitHub account)", c.commit.author!.date])),
   );
   return `${rows.length} commits${sinceDay ? ` since ${sinceDay}` : " (full history)"}`;
 }

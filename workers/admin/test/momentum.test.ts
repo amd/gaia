@@ -116,10 +116,10 @@ describe("people filters and contributors", () => {
   it("recognises bots and filters excluded accounts case-insensitively", async () => {
     const { isBot, keepAuthor, parsePeople } = await import("../src/momentum");
     expect(["dependabot[bot]", "github-actions", "claude"].every(isBot)).toBe(true);
-    expect(isBot("kovtcharov")).toBe(false);
-    const keep = keepAuthor(parsePeople(new URLSearchParams("exclude=Kovtcharov,kovtcharov-amd&bots=0")));
-    expect(["kovtcharov", "KOVTCHAROV-AMD", "dependabot[bot]"].map(keep)).toEqual([false, false, false]);
-    expect(keep("itomek")).toBe(true);
+    expect(isBot("alice")).toBe(false);
+    const keep = keepAuthor(parsePeople(new URLSearchParams("exclude=Alice,alice-work&bots=0")));
+    expect(["alice", "ALICE-WORK", "dependabot[bot]"].map(keep)).toEqual([false, false, false]);
+    expect(keep("bob")).toBe(true);
   });
 
   it("totals each person's commits, pull requests, issues and lines in the range", async () => {

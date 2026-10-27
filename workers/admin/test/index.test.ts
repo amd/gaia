@@ -39,3 +39,21 @@ describe("routing", () => {
     expect((await worker.fetch(new Request("http://localhost:8787/other"), env)).status).toBe(404);
   });
 });
+
+describe("maintainer accounts", () => {
+  it("are read from MAINTAINER_LOGINS and offered as a Hide maintainers button", async () => {
+    const res = await worker.fetch(new Request("http://localhost:8787/admin/developers"), { ...env, MAINTAINER_LOGINS: "ann, bob-2" });
+    expect(await res.text()).toContain('var MINE=["ann","bob-2"];');
+  });
+
+  it("default to none, so no personal account is baked into the page", async () => {
+    const html = await (await worker.fetch(new Request("http://localhost:8787/admin/developers"), env)).text();
+    expect(html).toContain("var MINE=[];");
+  });
+
+  it("refuse anything that is not a GitHub login (nothing can be injected into the page)", async () => {
+    const { parseMaintainers } = await import("../src/page");
+    expect(() => parseMaintainers('ann,"];alert(1)//')).toThrow(/not GitHub logins/);
+    expect(parseMaintainers("dependabot[bot]")).toEqual(["dependabot[bot]"]);
+  });
+});

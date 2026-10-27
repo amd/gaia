@@ -23,7 +23,7 @@ from public APIs (GitHub Releases, Actions, issues, commits, stargazers; npm; Py
 cd workers/admin
 npm install
 npm run migrate:local                      # creates the local D1 tables
-printf 'ADMIN_DEV_NO_AUTH=1\nGITHUB_TOKEN=%s\n' "$(gh auth token)" > .dev.vars
+printf 'ADMIN_DEV_NO_AUTH=1\nGITHUB_TOKEN=%s\nMAINTAINER_LOGINS=<your-login>\n' "$(gh auth token)" > .dev.vars
 npm run dev                                # http://localhost:8787/admin
 curl -X POST -H "x-admin-action: collect" "http://localhost:8787/admin/api/collect?days=14&full=1"   # first fill
 ```
@@ -81,11 +81,16 @@ then create the tables:
 npx wrangler d1 migrations apply gaia-admin --remote
 ```
 
-### 3. Store the GitHub token
+### 3. Store the GitHub token and the maintainers' accounts
 
 ```bash
-npx wrangler secret put GITHUB_TOKEN    # paste the token when asked
+npx wrangler secret put GITHUB_TOKEN        # paste the token when asked
+npx wrangler secret put MAINTAINER_LOGINS   # comma-separated GitHub logins, e.g. alice,bob-amd
 ```
+
+`MAINTAINER_LOGINS` drives the Developers page's "Hide maintainers" button, so the
+team's own work can be set aside to see outside contributions. It is kept out of the
+repo on purpose; leave it unset and the button does not appear.
 
 ### 4. Set up the email-code sign-in
 

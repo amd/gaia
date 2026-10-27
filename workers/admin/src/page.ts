@@ -464,7 +464,7 @@ var INFO={` + INFO_COMMON + String.raw`
 'loc':['Lines of code changed','Lines added and deleted on the default branch per period, from GitHub’s code-frequency statistics (weeks start on Sunday on GitHub; shown from the following Monday). With people hidden, it sums GitHub’s per-contributor statistics instead, which cover the top 100 contributors. Lockfiles and generated files count too, so read spikes with care.'],
 'who':['Contributors in the range','Everyone who committed, opened a PR or opened an issue in the selected window. Lines come from GitHub’s weekly statistics, so they cover whole weeks. Untick a person, or use the buttons, to leave them out of every number on this page.'],
 'community':['Stars and forks','Rebuilt from GitHub’s dated stargazer and fork lists, so the full history is available. Total is the running count; New is how many were added in each period.']};
-var MINE=['kovtcharov','kovtcharov-amd'];
+var MINE=__MAINTAINERS__;
 var P={pm:qs.get('pm')||'active',comm:qs.get('comm')||'stars',cmode:qs.get('cmode')||'total',bots:qs.get('bots')!=='0',
   exclude:(qs.get('exclude')!==null?qs.get('exclude'):(function(){try{return localStorage.getItem('gaia-admin-exclude')||'';}catch(e){return '';}})()).split(',').filter(Boolean)};
 var HB=[[0,1/24,'<1h'],[1/24,6/24,'1–6h'],[6/24,1,'6–24h'],[1,3,'1–3d'],[3,7,'3–7d'],[7,14,'1–2w'],[14,30,'2–4w'],[30,90,'1–3mo'],[90,1e9,'3mo+']];
@@ -489,18 +489,18 @@ function drawKpis(){var m=D.momentum;if(!m){el('ov').innerHTML='';return;}var s=
   h+=kpi('k-ttc','Time to close',ddur(s.medianDaysToClose),'P90 '+ddur(s.p90DaysToClose)+' · '+fmt(s.issuesClosed)+' closed issues',level(s.medianDaysToClose,{good:7,warn:30,higher:false}),'median '+ddur(s.medianDaysToClose)+' (healthy: within 7 days)');
   el('ov').innerHTML='<div class="strip">'+h+'</div>';}
 function drawPeople(){var m=D.momentum;
-  var chips='<button type="button" class="chip" id="hide-mine" aria-pressed="'+MINE.every(function(x){return P.exclude.indexOf(x)>=0;})+'">Hide my accounts</button>'
+  var chips=(MINE.length?'<button type="button" class="chip" id="hide-mine" title="'+esc(MINE.join(', '))+'" aria-pressed="'+MINE.every(function(x){return P.exclude.indexOf(x)>=0;})+'">Hide maintainers</button>':'')
    +'<button type="button" class="chip" id="hide-bots" aria-pressed="'+!P.bots+'">Hide bots</button>'
    +P.exclude.map(function(x){return '<button type="button" class="chip" data-unex="'+esc(x)+'" title="Show '+esc(x)+' again">'+esc(x)+' ×</button>';}).join('');
   el('people-bar').innerHTML='<span class="kl" style="margin-right:4px">People</span>'+chips+(P.exclude.length||!P.bots?'<span class="ks">Hidden people are left out of every number on this page.</span>':'<span class="ks">Showing everyone.</span>');
-  el('hide-mine').onclick=function(){var all=MINE.every(function(x){return P.exclude.indexOf(x)>=0;});P.exclude=all?P.exclude.filter(function(x){return MINE.indexOf(x)<0;}):P.exclude.concat(MINE.filter(function(x){return P.exclude.indexOf(x)<0;}));savePeople();reload();};
+  if(el('hide-mine'))el('hide-mine').onclick=function(){var all=MINE.every(function(x){return P.exclude.indexOf(x)>=0;});P.exclude=all?P.exclude.filter(function(x){return MINE.indexOf(x)<0;}):P.exclude.concat(MINE.filter(function(x){return P.exclude.indexOf(x)<0;}));savePeople();reload();};
   el('hide-bots').onclick=function(){P.bots=!P.bots;reload();};
   el('people-bar').querySelectorAll('[data-unex]').forEach(function(b){b.onclick=function(){var x=b.getAttribute('data-unex');P.exclude=P.exclude.filter(function(y){return y!==x;});savePeople();reload();};});
   if(!m){el('who').innerHTML='';return;}
   var ex={};P.exclude.forEach(function(x){ex[x.toLowerCase()]=1;});
   var rows=m.contributors.filter(function(r){return r.commits||r.prsOpened||r.issuesOpened;});
   el('who').innerHTML=rows.length?'<div class="scroll" style="max-height:420px"><table><tr><th>Show</th><th>Person</th><th class="n">Commits</th><th class="n">PRs opened</th><th class="n">PRs merged</th><th class="n">Issues opened</th><th class="n">Lines +</th><th class="n">Lines −</th><th>First commit</th></tr>'
-   +rows.map(function(r){var off=ex[r.author.toLowerCase()]||(r.bot&&!P.bots);return '<tr'+(off?' style="opacity:.5"':'')+'><td><input type="checkbox" data-person="'+esc(r.author)+'"'+(off?'':' checked')+(r.bot&&!P.bots?' disabled title="Bots are hidden"':'')+' aria-label="Include '+esc(r.author)+'"></td><td class="trunc mono" style="max-width:220px;font-size:12px"><a href="https://github.com/'+encodeURIComponent(r.author.replace(/\[bot\]$/,''))+'" target="_blank" rel="noopener">'+esc(r.author)+'</a>'+(r.bot?' <span class="badge">bot</span>':'')+'</td>'
+   +rows.map(function(r){var off=ex[r.author.toLowerCase()]||(r.bot&&!P.bots);return '<tr'+(off?' style="opacity:.5"':'')+'><td><input type="checkbox" data-person="'+esc(r.author)+'"'+(off?'':' checked')+(r.bot&&!P.bots?' disabled title="Bots are hidden"':'')+' aria-label="Include '+esc(r.author)+'"></td><td class="trunc mono" style="max-width:220px;font-size:12px">'+(/^[A-Za-z0-9]/.test(r.author)?'<a href="https://github.com/'+encodeURIComponent(r.author.replace(/\[bot\]$/,''))+'" target="_blank" rel="noopener">'+esc(r.author)+'</a>':esc(r.author))+(r.bot?' <span class="badge">bot</span>':'')+'</td>'
      +'<td class="n">'+fmt(r.commits)+'</td><td class="n">'+fmt(r.prsOpened)+'</td><td class="n">'+fmt(r.prsMerged)+'</td><td class="n">'+fmt(r.issuesOpened)+'</td><td class="n good">'+(r.additions?'+'+cmp(r.additions):'')+'</td><td class="n bad">'+(r.deletions?'−'+cmp(r.deletions):'')+'</td><td>'+(r.firstCommit?esc(r.firstCommit):'—')+'</td></tr>';}).join('')+'</table></div>'
    :'<div class="empty">Nobody contributed in this range.</div>';
   el('who').querySelectorAll('[data-person]').forEach(function(cb){cb.onchange=function(){var x=cb.getAttribute('data-person');P.exclude=cb.checked?P.exclude.filter(function(y){return y.toLowerCase()!==x.toLowerCase();}):P.exclude.concat([x]);savePeople();reload();};});}
@@ -707,7 +707,21 @@ ${card("packages", "Package downloads", "PyPI and npm, from the registries.")}
   );
 }
 
-export function renderDevelopersPage(): string {
+/** GitHub logins: letters, digits and hyphens, optionally a [bot] suffix. */
+const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$/;
+
+/**
+ * The maintainers' own accounts, for the "Hide maintainers" button. Set at deploy
+ * time (MAINTAINER_LOGINS, comma-separated) so personal accounts stay out of the repo.
+ */
+export function parseMaintainers(raw: string | undefined): string[] {
+  const list = (raw ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  const bad = list.filter((x) => !LOGIN.test(x));
+  if (bad.length) throw new Error(`MAINTAINER_LOGINS has entries that are not GitHub logins: ${bad.join(", ")}.`);
+  return list;
+}
+
+export function renderDevelopersPage(maintainers: string[] = []): string {
   const body = `
 <div class="card chips" id="people-bar" style="padding:10px 16px;margin-bottom:14px"></div>
 <div id="ov"><div class="skel"></div></div>
@@ -729,7 +743,7 @@ ${card("community", "Stars and forks", "Growth of the GitHub community.", seg("c
     "Developers",
     "How fast the project moves and who moves it: issues, pull requests, commits, lines of code, contributors and the GitHub community.",
     body,
-    DEV_JS,
+    DEV_JS.replace("__MAINTAINERS__", JSON.stringify(maintainers)),
   );
 }
 
