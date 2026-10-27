@@ -142,16 +142,32 @@ def test_the_conversation_log_keeps_no_secret(store):
     assert "Remember them" in logged
 
 
-def test_pin_variants_are_masked_without_masking_ordinary_numbers():
-    secret_text = (
-        "User's PIN for their Chase debit card is 4821; pin#4821; "
-        "PIN (4821); 4821 is my PIN"
-    )
-    ordinary_text = "GPIO pin 1023; Pin on page 123; My PIN code is 560001"
-    assert "[secret removed]" in MemoryMixin._mask_credentials(secret_text)
-    assert MemoryMixin._mask_credentials(ordinary_text) == ordinary_text
-    assert MemoryMixin._looks_like_credential(secret_text)
-    assert not MemoryMixin._looks_like_credential(ordinary_text)
+@pytest.mark.parametrize(
+    "text",
+    (
+        "User's PIN for their Chase debit card is 4821",
+        "PIN is 4821",
+        "4821 is my PIN",
+        "pin#4821",
+        "PIN (4821)",
+    ),
+)
+def test_pin_variants_are_masked(text):
+    assert MemoryMixin._looks_like_credential(text)
+    assert "[secret removed]" in MemoryMixin._mask_credentials(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "GPIO pin 1023",
+        "Pin on page 123",
+        "My PIN code is 560001",
+    ),
+)
+def test_ordinary_pin_phrases_are_not_masked(text):
+    assert not MemoryMixin._looks_like_credential(text)
+    assert MemoryMixin._mask_credentials(text) == text
 
 
 def test_card_grouped_with_wide_spacing_is_masked():
@@ -167,7 +183,7 @@ def test_amex_4_4_4_3_is_masked():
 
 
 def test_card_groups_do_not_cross_a_newline():
-    text = "4111\\n1111\\n1111\\n1111"
+    text = "4111\n1111\n1111\n1111"
     assert not MemoryMixin._looks_like_credential(text)
     assert MemoryMixin._mask_credentials(text) == text
 
