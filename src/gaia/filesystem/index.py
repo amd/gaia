@@ -17,6 +17,7 @@ from gaia.config import gaia_home
 from gaia.database.mixin import DatabaseMixin
 from gaia.filesystem.categorizer import auto_categorize as _auto_categorize
 from gaia.filesystem.name_match import fts_name_terms
+from gaia.utils.sqlite_wal import enable_wal
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +219,7 @@ class FileSystemIndexService(DatabaseMixin):
 
         # A file that is not a database fails here; rebuild rather than raise.
         try:
-            self._db.execute("PRAGMA journal_mode=WAL")
+            enable_wal(self._db)
         except sqlite3.DatabaseError as exc:
             if not _is_corruption(exc):
                 # Locked, or an AV/backup tool holding the file.

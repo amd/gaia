@@ -64,7 +64,7 @@ def _fail_first(monkeypatch, prefix, error):
     monkeypatch.setattr(FileSystemIndexService, "init_db", init_db)
 
 
-@pytest.mark.parametrize("message", ["database is locked", "disk I/O error"])
+@pytest.mark.parametrize("message", ["unable to open database file", "disk I/O error"])
 def test_operational_error_on_open_keeps_the_index(
     monkeypatch, index_with_bookmark, message
 ):
@@ -79,7 +79,7 @@ def test_operational_error_on_open_keeps_the_index(
 
 @pytest.mark.parametrize(
     "prefix",
-    ["PRAGMA journal_mode", "PRAGMA quick_check", "SELECT 1 FROM sqlite_master"],
+    ["PRAGMA quick_check", "SELECT 1 FROM sqlite_master"],
 )
 def test_a_lock_error_closes_the_connection_before_raising(
     monkeypatch, index_with_bookmark, prefix
@@ -98,6 +98,24 @@ def test_a_lock_error_closes_the_connection_before_raising(
         FileSystemIndexService(db_path=str(index_with_bookmark))
 
     assert closed == [True]
+
+
+def test_a_locked_wal_switch_on_an_index_already_in_wal_opens_it(
+    monkeypatch, index_with_bookmark
+):
+    """Another process holding the index (a second agent) is not a failure."""
+    _fail_first(
+        monkeypatch,
+        "PRAGMA journal_mode=WAL",
+        sqlite3.OperationalError("database is locked"),
+    )
+
+    service = FileSystemIndexService(db_path=str(index_with_bookmark))
+    assert service.rebuilt_from is None
+    service.close_db()
+
+    monkeypatch.undo()
+    assert _bookmarks(index_with_bookmark) == ["keep me"]
 
 
 @pytest.mark.parametrize(

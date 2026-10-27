@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from gaia.config import gaia_home
 from gaia.database.mixin import DatabaseMixin
 from gaia.logger import get_logger
+from gaia.utils.sqlite_wal import enable_wal
 
 log = get_logger(__name__)
 
@@ -103,7 +104,7 @@ class ScratchpadService(DatabaseMixin):
         """
         try:
             # Both statements fail loudly on a corrupt file — catch together.
-            self._db.execute("PRAGMA journal_mode=WAL")
+            enable_wal(self._db)
             row = self._db.execute("PRAGMA integrity_check").fetchone()
             if row and row[0] == "ok":
                 return True
