@@ -187,7 +187,8 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
         branch,
       )
     ).map((r) => r.workflow);
-    return json({ rows, workflows: names });
+    // Echoed so the page can tell a response for an older menu choice from the current one.
+    return json({ rows, workflows: names, branch: url.searchParams.get("branch") ?? "main", workflow: url.searchParams.get("workflow") ?? "" });
   }
 
   if (path === "/api/ci-time") {

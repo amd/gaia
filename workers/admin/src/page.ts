@@ -350,7 +350,7 @@ function sumDays(rows,f,from,to){return rows.reduce(function(s,r){return r.day>=
 function shift(day,n){return new Date(Date.parse(day+'T00:00:00Z')+n*864e5).toISOString().slice(0,10);}
 
 function drawOverview(){var d=D.downloads,t=D.traction,h='';
-  if(!d||d.empty){el('ov').innerHTML='<div class="card empty">'+esc(d?d.reason:'Loading…')+'</div>';return;}
+  if(!d||d.empty){el('ov').innerHTML='<div class="card empty">'+esc(d?d.reason:'Could not load downloads.')+'</div>';return;}
   var all=0,ins=0,byOs={};d.releases.forEach(function(r){all+=r.install+r.meta;ins+=r.install;OS.forEach(function(k){byOs[k]=(byOs[k]||0)+(r.byOs[k]||0);});});
   var fin=d.releases.filter(function(r){return r.main&&!r.rc;}),last=fin[fin.length-1],ks=OS.filter(function(k){return byOs[k]>0;});
   h+='<div class="hero"><div class="card big"><div class="kl">Installs to date'+info('installs')+'</div><div class="bigval num">'+fmt(ins)+'</div>'
@@ -376,7 +376,7 @@ function drawOverview(){var d=D.downloads,t=D.traction,h='';
 DRAW.rel=drawReleases;
 function drawReleases(){var d=D.downloads,box=el('rel');
   document.querySelectorAll('[data-mode]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.mode===P.mode));});el('o-install').checked=P.install;el('o-rc').checked=P.rc;
-  if(!d||d.empty){box.innerHTML='';el('share').innerHTML='';el('rel-table').innerHTML='';return;}
+  if(!d||d.empty){box.innerHTML='<div class="empty">'+esc(d?d.reason:'Could not load downloads.')+'</div>';el('share').innerHTML='';el('rel-table').innerHTML='';return;}
   var rel=d.releases.filter(relInRange);
   if(!rel.length){box.innerHTML='<div class="empty">No releases were published in the '+rangeText()+'. Pick a longer range.</div>';el('share').innerHTML='';el('rel-table').innerHTML='';return;}
   var hid=HID.rel||{},W=Math.max(320,Math.round(box.clientWidth-24)),H=360,L=52,R=12,T=20,B=30;
@@ -584,9 +584,11 @@ function drawKpis(){var ci=D.ci,t=D.tests,ct=D.citime,h='';if(!ci||!ci.coverage|
   el('ov').innerHTML='<div class="strip">'+h+'</div>';}
 function drawOutcomes(){var t=D.citrend;
   document.querySelectorAll('[data-om]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.om===P.om));});
-  var sel=el('wf'),key=t?t.workflows.join('\n'):'';if(t&&sel.getAttribute('data-opts')!==key){sel.length=1;t.workflows.forEach(function(w){var o=document.createElement('option');o.value=w;o.textContent=w.length>46?w.slice(0,45)+'…':w;o.title=w;sel.appendChild(o);});sel.setAttribute('data-opts',key);if(P.wf&&t.workflows.indexOf(P.wf)<0){P.wf='';sel.value='';reloadTrend();return;}}
+  var sel=el('wf'),key=t?t.workflows.join('\n'):'';if(t&&sel.getAttribute('data-opts')!==key){sel.length=1;t.workflows.forEach(function(w){var o=document.createElement('option');o.value=w;o.textContent=w.length>46?w.slice(0,45)+'…':w;o.title=w;sel.appendChild(o);});sel.setAttribute('data-opts',key);if(P.wf&&t.workflows.indexOf(P.wf)<0)P.wf='';}
   sel.value=P.wf;el('br').value=P.br;
   if(!t){emptyBox('outcomes','Could not load workflow runs.');return;}
+  // A page load can land after a newer menu choice; never draw one workflow's runs under another's name.
+  if(t.branch!==P.br||t.workflow!==P.wf){emptyBox('outcomes','Loading…');reloadTrend();return;}
   var rows=t.rows.map(function(r){return {day:r.period,success:r.success,failure:r.failure,cancelled:r.cancelled,other:r.other,total:r.total};});
   var x=series(rows,{success:'sum',failure:'sum',cancelled:'sum',other:'sum',total:'sum'}),b=x.b,K=b.map(function(r){return r.key;}),col=function(f){return b.map(function(r){return r[f];});};
   var se=[{name:'Passed',color:OC.success,vals:col('success')},{name:'Failed',color:OC.failure,vals:col('failure')},{name:'Cancelled',color:OC.cancelled,vals:col('cancelled')},{name:'Skipped or other',color:OC.other,vals:col('other')}];
@@ -636,7 +638,7 @@ function drawTable(){var ci=D.ci,box=el('wtable');if(!ci||!ci.coverage||!ci.cove
 function render(){ATTN=[];setUrl({om:P.om!=='count'?P.om:'',wf:P.wf,br:P.br!=='main'?P.br:'',tm:P.tm!=='total'?P.tm:'',ctm:P.ctm!=='hours'?P.ctm:''});syncShell();drawKpis();drawOutcomes();drawTests();drawTime();drawTable();drawAttention();drawStatus();}
 function jobs(){return [['ci','/api/ci'],['tests','/api/tests'],['status','/api/status'],['citime','/api/ci-time'],['citrend','/api/ci-trend?branch='+encodeURIComponent(P.br)+'&workflow='+encodeURIComponent(P.wf)]];}
 var TREND_GEN=0;
-function reloadTrend(){var g=++TREND_GEN,pg=GEN;api(jobs()[4][1]).then(function(r){if(g!==TREND_GEN||pg!==GEN)return;D.citrend=r;delete Z.outcomes;render();}).catch(function(e){if(g!==TREND_GEN||pg!==GEN)return;el('errors').innerHTML='<div class="banner">Could not load workflow runs: '+esc(e.message)+'</div>';});}
+function reloadTrend(){var g=++TREND_GEN,pg=GEN;api(jobs()[4][1]).then(function(r){if(g!==TREND_GEN||pg!==GEN)return;D.citrend=r;delete Z.outcomes;render();}).catch(function(e){if(g!==TREND_GEN||pg!==GEN)return;emptyBox('outcomes','Could not load workflow runs: '+esc(e.message));});}
 document.querySelectorAll('[data-om]').forEach(function(b){b.addEventListener('click',function(){P.om=b.dataset.om;render();});});
 document.querySelectorAll('[data-tm]').forEach(function(b){b.addEventListener('click',function(){P.tm=b.dataset.tm;delete Z.tests;render();});});
 document.querySelectorAll('[data-ctm]').forEach(function(b){b.addEventListener('click',function(){P.ctm=b.dataset.ctm;delete Z.time;render();});});

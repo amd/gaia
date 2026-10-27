@@ -7,7 +7,7 @@
  * the nightly run reports it; nothing is filled in with a guessed value.
  */
 
-import { collectEvals } from "./evals";
+import { collectEvals, EVAL_ARTIFACT_DAYS } from "./evals";
 import { collectTests } from "./tests";
 import { collectCodeStats, collectCommits, collectForks, collectItems, collectPackageHistory, collectStars } from "./history";
 
@@ -261,7 +261,7 @@ export async function collectAll(
     ["runs", () => collectRuns(env, f, opts.runDays, now, opts.skipDays ?? 0)],
     ["tests", () => collectTests(env, f, opts.runDays, now, opts.skipDays ?? 0, opts.fullHistory ?? false)],
     // Eval artifacts expire after 14 days; reading the last 14 every night keeps a missed night recoverable.
-    ["evals", () => collectEvals(env, f, Math.max(opts.runDays, 14), now, opts.fullHistory ?? false)],
+    ["evals", () => collectEvals(env, f, EVAL_ARTIFACT_DAYS, now, opts.fullHistory ?? false)],
   ];
   // Independent sources: one failing must not stop the others from recording.
   const unknown = (opts.only ?? []).filter((o) => !steps.some(([n]) => n === o));

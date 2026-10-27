@@ -323,7 +323,7 @@ describe("collectEvals against real SQLite", () => {
     expect((await db.prepare("SELECT run_id FROM eval_runs").all()).results).toEqual([{ run_id: 2 }]);
   });
 
-  it("counts failed downloads toward the per-collection cap, so broken runs cannot exhaust it", async () => {
+  it("counts failed downloads toward the per-collection cap, so broken runs cannot run past it", async () => {
     const { memoryD1 } = await import("./d1");
     const { collectEvals } = await import("../src/evals");
     const db = memoryD1();
@@ -332,6 +332,38 @@ describe("collectEvals against real SQLite", () => {
     const calls: string[] = [];
     await expect(collectEvals(evalEnv(db), await github({ "eval_flagship.yml": runs }, zips, calls), 14, new Date())).rejects.toThrow(/5 more runs left/);
     expect(calls.filter((c) => /runs\/\d+\/artifacts/.test(c)).length).toBe(40);
+  });
+
+  it("reads the newest runs first across workflows, so old expired runs cannot hold back new results", async () => {
+    const { memoryD1 } = await import("./d1");
+    const { collectEvals } = await import("../src/evals");
+    const db = memoryD1();
+    const at = (d: number) => ({ created_at: new Date(Date.now() - d * 86_400_000).toISOString() });
+    const old = Array.from({ length: 40 }, (_, i) => ({ ...ghRun(100 + i), ...at(12) }));
+    const fresh = { ...ghRun(7), ...at(1) };
+    const zips: Record<number, Uint8Array | "gone"> = Object.fromEntries(old.map((r) => [r.id, "gone" as const]));
+    zips[7] = await zipWith("PASS");
+    await expect(collectEvals(evalEnv(db), await github({ "eval_flagship.yml": old, "eval_swebench.yml": [fresh] }, zips, []), 14, new Date())).rejects.toThrow(/1 more runs left/);
+    expect((await db.prepare("SELECT run_id FROM eval_runs").all()).results).toEqual([{ run_id: 7 }]);
+  });
+
+  it("works through every stored run over repeated full refreshes, oldest-read first", async () => {
+    const { memoryD1 } = await import("./d1");
+    const { collectEvals } = await import("../src/evals");
+    const db = memoryD1();
+    const runs = Array.from({ length: 45 }, (_, i) => ghRun(i + 1));
+    const zips = Object.fromEntries(await Promise.all(runs.map(async (r) => [r.id, await zipWith("PASS")] as const)));
+    const gh = await github({ "eval_flagship.yml": runs }, zips, []);
+    await collectEvals(evalEnv(db), gh, 14, new Date());
+    await collectEvals(evalEnv(db), gh, 14, new Date());
+    const before = new Map((await db.prepare("SELECT run_id, collected_at FROM eval_runs").all<{ run_id: number; collected_at: string }>()).results.map((r) => [r.run_id, r.collected_at]));
+    expect(before.size).toBe(45);
+    await new Promise((r) => setTimeout(r, 5));
+    await collectEvals(evalEnv(db), gh, 14, new Date(), true);
+    await new Promise((r) => setTimeout(r, 5));
+    await collectEvals(evalEnv(db), gh, 14, new Date(), true);
+    const after = (await db.prepare("SELECT run_id, collected_at FROM eval_runs").all<{ run_id: number; collected_at: string }>()).results;
+    expect(after.filter((r) => r.collected_at === before.get(r.run_id))).toEqual([]);
   });
 
   it("remembers a run with no scorecards so it is not fetched again", async () => {

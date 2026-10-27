@@ -180,24 +180,25 @@ interface GhRun {
   run_attempt: number;
 }
 
+/** GitHub deletes eval artifacts after this many days, so older runs can never be read. */
+export const EVAL_ARTIFACT_DAYS = 14;
+
 /** New or changed runs downloaded per invocation; the rest wait for the next run (artifacts last 14 days). */
 const MAX_RUNS_PER_INVOCATION = 40;
 
 export async function collectEvals(env: CollectEnv, f: Fetcher, days: number, today: Date, refresh = false): Promise<string> {
   const since = new Date(today.getTime() - days * 86_400_000).toISOString().slice(0, 10);
   // Stored attempt per run: a re-run of failed lanes keeps the run id but bumps the attempt.
-  const known = new Map(
-    (await env.DB.prepare("SELECT run_id, run_attempt FROM eval_runs").all<{ run_id: number; run_attempt: number }>()).results.map((r) => [
-      r.run_id,
-      r.run_attempt,
-    ]),
-  );
+  const stored = (await env.DB.prepare("SELECT run_id, run_attempt, collected_at FROM eval_runs").all<{ run_id: number; run_attempt: number; collected_at: string }>()).results;
+  const known = new Map(stored.map((r) => [r.run_id, r.run_attempt]));
+  const readAt = new Map(stored.map((r) => [r.run_id, r.collected_at]));
   let deferred = 0;
   let attempted = 0;
   let runsRead = 0;
   let scenarios = 0;
   let noArtifacts = 0;
   const failures: string[] = [];
+  const todo: GhRun[] = [];
   for (const wf of EVAL_WORKFLOWS) {
     const runs: GhRun[] = [];
     for (let page = 1; page <= 10; page++) {
@@ -207,14 +208,18 @@ export async function collectEvals(env: CollectEnv, f: Fetcher, days: number, to
       if (res.workflow_runs.length < 100) break;
       if (page === 10) throw new Error(`More than 1,000 finished runs of ${wf} since ${since}; the listing would be cut off.`);
     }
-    for (const run of runs) {
-      if (run.conclusion === "skipped" || (known.get(run.id) === run.run_attempt && !refresh)) continue;
-      if (attempted >= MAX_RUNS_PER_INVOCATION) {
-        deferred++;
-        continue;
-      }
-      attempted++;
-      try {
+    todo.push(...runs.filter((r) => r.conclusion !== "skipped" && (refresh || known.get(r.id) !== r.run_attempt)));
+  }
+  // Newest first across all workflows, so the cap never holds recent results back for old ones.
+  // A refresh starts with the runs read longest ago, so repeated refreshes work through every run.
+  todo.sort((a, b) => (refresh ? (readAt.get(a.id) ?? "").localeCompare(readAt.get(b.id) ?? "") : 0) || b.created_at.localeCompare(a.created_at));
+  for (const run of todo) {
+    if (attempted >= MAX_RUNS_PER_INVOCATION) {
+      deferred++;
+      continue;
+    }
+    attempted++;
+    try {
       const arts = await getJson<{ artifacts: { id: number; name: string; size_in_bytes: number; expired: boolean }[] }>(
         f,
         `https://api.github.com/repos/${env.GITHUB_REPO}/actions/runs/${run.id}/artifacts?per_page=100`,
@@ -269,10 +274,9 @@ export async function collectEvals(env: CollectEnv, f: Fetcher, days: number, to
       ]);
       runsRead++;
       scenarios += rows.length;
-      } catch (e) {
-        // One unreadable run must not stop the others; it is retried next night and reported below.
-        failures.push((e as Error).message);
-      }
+    } catch (e) {
+      // One unreadable run must not stop the others; it is retried next night and reported below.
+      failures.push((e as Error).message);
     }
   }
   const summary =

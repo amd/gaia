@@ -215,8 +215,10 @@ shows the last result of each source.
 - Cancelled eval runs are stored but left out of pass rates: they only measured the lanes
   that finished. A re-run of failed lanes keeps the run id; the collector re-reads it when
   GitHub reports a newer attempt.
-- Each collection downloads at most 40 new or changed eval runs; the rest wait for the next
-  night (artifacts last 14 days, so the nightly job catches up well within that).
+- Each collection downloads at most 40 new or changed eval runs, newest first across the
+  workflows; the rest wait for the next night (artifacts last 14 days, so the nightly job
+  catches up well within that). With `full=1` every run is re-read, the ones read longest ago
+  first, so repeating the call works through all of them.
 - Unit-test counts are read from the pytest summary line in the main-branch
   `Unit Tests` job log (the workflow uploads no JUnit file). Change `TEST_WORKFLOW`
   in `wrangler.toml` to follow a different workflow.

@@ -35,7 +35,7 @@ function refLink(r){var u=r.is_tag?'https://github.com/amd/gaia/releases/tag/'+e
 function shaLink(sha){return '<a class="mono" href="https://github.com/amd/gaia/commit/'+encodeURIComponent(sha)+'" target="_blank" rel="noopener">'+esc(sha.slice(0,7))+'</a>';}
 function prc(p){return p==null?'':p>=.8?'good':p>=.6?'warnc':'bad';}
 function refetch(){P.run=0;load(jobs(),render);}
-function selectRun(id){P.run=id;var g=++GEN;api('/api/evals?'+fq()+'&run='+id).then(function(r){if(g!==GEN)return;D.evals=r;render();}).catch(function(e){el('errors').innerHTML='<div class="banner">Could not load run '+id+': '+esc(e.message)+'</div>';});}
+function selectRun(id){P.run=id;var g=++GEN;api('/api/evals?'+fq()+'&run='+id).then(function(r){if(g!==GEN)return;D.evals=r;Z={};render();}).catch(function(e){if(g!==GEN)return;el('errors').innerHTML='<div class="banner">Could not load run '+id+': '+esc(e.message)+'</div>';});}
 
 function drawFilters(){var e=D.evals;if(!e)return;
   document.querySelectorAll('[data-trig]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.trig===P.trig));});
