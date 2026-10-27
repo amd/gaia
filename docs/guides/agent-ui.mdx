@@ -46,7 +46,9 @@ The agent searches your common folders first, then offers a deep search across a
 In-process chat agents retain file reads, tool calls and tool results for later
 questions, including after the server restarts. Complete older turns leave the
 model's context only when its estimated history budget fills; the transcript and
-stored evidence remain on your machine. When more older turns leave the model's
+stored evidence remain on your machine. A single turn too big for that budget
+stays in view shortened: long tool results become a one-line note naming the
+tool, and its longest messages are cut with a note saying how much. When more older turns leave the model's
 view — a long chat, or a switch to a smaller model — the chat shows one quiet
 line before the reply — "Older messages are now out of the model's view (N
 turns)" — and the TUI shows the same line in its transcript. Ask GAIA to recall

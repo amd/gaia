@@ -1850,56 +1850,6 @@ def relayed_context(session_id: str) -> Optional[dict]:
         return _relayed_contexts.get(session_id)
 
 
-def _clip_marker(cut: int, total: int) -> str:
-    return (
-        f"\n\n[GAIA cut the last {cut:,} of this message's {total:,} characters "
-        "to fit the model's context window; that part is not visible to you.]"
-    )
-
-
-def _clip_message(turn: list[dict], index: int, budget: int) -> int:
-    """Keep the longest head of ``turn[index]`` that lets *turn* fit *budget*.
-
-    The rest is replaced by a marker; returns how many characters were cut.
-    """
-    from gaia.agents.base.history import turn_cost
-
-    text = turn[index]["content"]
-
-    def clipped(keep: int) -> str:
-        return text[:keep] + _clip_marker(len(text) - keep, len(text))
-
-    low, high = 0, len(text) - 1
-    while low < high:
-        mid = (low + high + 1) // 2
-        turn[index]["content"] = clipped(mid)
-        if turn_cost(turn) <= budget:
-            low = mid
-        else:
-            high = mid - 1
-    turn[index]["content"] = clipped(low)
-    return len(text) - low
-
-
-def _clip_turn(turn: list[dict], budget: int) -> tuple[list[dict], list[tuple]]:
-    """Cut the turn's longest messages until it fits *budget*, marking each cut.
-
-    Returns the turn and ``(index, cut, total)`` for every message cut.
-    """
-    from gaia.agents.base.history import turn_cost
-
-    turn = [dict(m) for m in turn]
-    clips = []
-    for index in sorted(range(len(turn)), key=lambda i: -len(turn[i]["content"])):
-        if turn_cost(turn) <= budget:
-            break
-        total = len(turn[index]["content"])
-        if total <= len(_clip_marker(total, total)):
-            continue
-        clips.append((index, _clip_message(turn, index, budget), total))
-    return turn, clips
-
-
 def _relayed_history(
     history_pairs: list,
     model_id: str | None,
@@ -1916,6 +1866,7 @@ def _relayed_history(
     """
     from gaia.agents.base.history import (
         CutReporter,
+        clip_turn,
         relayed_history_budget,
         select_history,
         turn_cost,
@@ -1934,7 +1885,7 @@ def _relayed_history(
         ]
         if budget > 0 and turn_cost(turn) > budget:
             # To half, where overflow evicts down to, so the next turn keeps it.
-            fitted, clips = _clip_turn(turn, budget // 2)
+            fitted, clips = clip_turn(turn, budget // 2)
             for index, cut, total in clips:
                 clipped[(pair, index)] = (cut, total)
             if clips:
