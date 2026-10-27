@@ -99,6 +99,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sent when the cancel lands is dropped.
 ### Fixed
 
+- **Secrets stay out of memory and the conversation log.** A bank PIN was saved
+  as a memory, because the filter knew passwords and API keys but not PINs. The
+  conversation log also kept the PIN, a password the agent had refused, a card
+  number and an SSN verbatim, where `search_past_conversations` read them back.
+  PINs, passcodes, card security codes, Luhn-valid card numbers and SSNs are now
+  refused as memories, and every credential-shaped span is replaced with
+  `[secret removed]` before a turn is logged.
 - **"How much free disk space do I have?" gets the right number, first try.**
   On a Mac, GAIA said a nearly full disk had ~233 GB free: its system-info
   tool reported only the share the system volume uses, so 97.8% used read as
