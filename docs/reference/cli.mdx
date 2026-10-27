@@ -3418,7 +3418,7 @@ client compares that with the version now installed where the daemon runs from.
 A daemon started by a release older than this check is restarted only by a
 client from the same Python environment.
 
-A busy daemon is not restarted: while a scheduled job is waiting, another GAIA
+A busy daemon is not restarted: while a scheduled job is running or due, another GAIA
 app (the terminal app or the Agent UI) is connected, or its model server
 answered a request in the last two minutes, clients keep using it and log that
 it is out of date. A later command restarts it once it is free, or run

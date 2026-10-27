@@ -353,31 +353,58 @@ def start_or_attach(
         return _spawn_and_wait(timeout, on_progress, drop_env)
 
 
+def _scheduled_work() -> Optional[str]:
+    """Scheduled jobs the daemon is running or is due to start, or None.
+
+    Read straight from its job store: older daemons report only a pending
+    count, and a recurring schedule is always pending.
+    """
+    import sqlite3
+    from contextlib import closing
+
+    from gaia.daemon.scheduler.clock import DEFAULT_STALE_FIRING_SECONDS
+
+    path = paths.host_dir() / "scheduler.db"
+    if not path.exists():
+        return None
+    now = time.time()
+    try:
+        with closing(
+            sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=2.0)
+        ) as db:
+            running, due = db.execute(
+                "SELECT SUM(status = 'firing' AND claimed_at > ?), "
+                "SUM(status = 'pending' AND fire_at <= ?) FROM daemon_jobs",
+                (now - DEFAULT_STALE_FIRING_SECONDS, now),
+            ).fetchone()
+    except sqlite3.Error as e:
+        return f"GAIA could not read its scheduled jobs at {path} ({e})"
+    if running:
+        return f"{running} scheduled job(s) are running on it"
+    if due:
+        return f"{due} scheduled job(s) are due to run on it"
+    return None
+
+
 def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     """Why stopping *inst* now could cut off work, or None when it is free.
 
-    Reads only routes older daemons serve too: their scheduled jobs, the front
-    ends registered with them, and when Lemonade last served a request.
+    Uses what older daemons expose too: their job store, the front ends
+    registered with them, and when Lemonade last served a request.
     """
     import requests
 
-    headers = {"Authorization": f"{AUTH_SCHEME} {inst.token}"}
+    jobs = _scheduled_work()
+    if jobs is not None:
+        return jobs
     try:
-        status = requests.get(
-            f"{inst.base_url}{API_PREFIX}/status", headers=headers, timeout=5.0
-        )
         clients = requests.get(
             f"{inst.base_url}{API_PREFIX}/lemonade/clients",
-            headers=headers,
+            headers={"Authorization": f"{AUTH_SCHEME} {inst.token}"},
             timeout=5.0,
         )
     except requests.exceptions.RequestException as e:
         return f"GAIA could not check whether it is busy ({e})"
-    if status.status_code != 200:
-        return f"GAIA could not check whether it is busy ({_error_detail(status)})"
-    pending = (status.json().get("clock") or {}).get("pending_jobs") or 0
-    if pending:
-        return f"{pending} scheduled job(s) are waiting to run on it"
     if clients.status_code == 404:
         return None
     if clients.status_code != 200:

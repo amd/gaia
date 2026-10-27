@@ -214,30 +214,65 @@ class _Response:
 
 
 @pytest.fixture
-def daemon_reports(monkeypatch):
-    """Answers the two routes outdated_daemon_busy reads."""
+def daemon_reports(monkeypatch, tmp_path):
+    """Answers the clients route; the job store lives in a scratch host dir."""
     import requests
 
     answers = {
-        "status": _Response(200, {"clock": {"pending_jobs": 0}}),
         "clients": _Response(200, {"clients": [], "seconds_since_request": None}),
     }
-
-    def get(url, **kwargs):
-        return answers["clients" if url.endswith("/lemonade/clients") else "status"]
-
-    monkeypatch.setattr(requests, "get", get)
+    monkeypatch.setattr(requests, "get", lambda url, **kwargs: answers["clients"])
     monkeypatch.setattr(client, "pid_alive", lambda pid: pid != 999999)
+    monkeypatch.setattr(client.paths, "host_dir", lambda: tmp_path)
     return answers
+
+
+def _job(tmp_path, status, fire_at=None, claimed_at=None):
+    import sqlite3
+    import time as _time
+
+    from gaia.daemon.scheduler.store import DAEMON_JOBS_DDL
+
+    with sqlite3.connect(tmp_path / "scheduler.db") as db:
+        db.executescript(DAEMON_JOBS_DDL)
+        db.execute(
+            "INSERT INTO daemon_jobs (job_id, source, kind, fire_at, "
+            "interval_seconds, payload_json, status, created_at, claimed_at) "
+            "VALUES (?, 'test', 'recurring', ?, 86400, '{}', ?, ?, ?)",
+            (f"j{_time.monotonic_ns()}", fire_at, status, _time.time(), claimed_at),
+        )
 
 
 def test_an_idle_daemon_is_free_to_restart(daemon_reports):
     assert client.outdated_daemon_busy(_inst()) is None
 
 
-def test_a_waiting_scheduled_job_keeps_the_daemon(daemon_reports):
-    daemon_reports["status"] = _Response(200, {"clock": {"pending_jobs": 2}})
-    assert "2 scheduled job" in client.outdated_daemon_busy(_inst())
+def test_a_recurring_job_waiting_for_tomorrow_does_not_keep_it(
+    daemon_reports, tmp_path
+):
+    import time as _time
+
+    _job(tmp_path, "pending", fire_at=_time.time() + 86400)
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_a_running_scheduled_job_keeps_the_daemon(daemon_reports, tmp_path):
+    import time as _time
+
+    _job(tmp_path, "firing", claimed_at=_time.time())
+    assert "1 scheduled job(s) are running" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_job_due_now_keeps_the_daemon(daemon_reports, tmp_path):
+    import time as _time
+
+    _job(tmp_path, "pending", fire_at=_time.time() - 5)
+    assert "due to run" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_firing_row_left_by_a_crash_does_not_keep_it(daemon_reports, tmp_path):
+    _job(tmp_path, "firing", claimed_at=1.0)
+    assert client.outdated_daemon_busy(_inst()) is None
 
 
 def test_another_running_front_end_keeps_the_daemon(daemon_reports):
