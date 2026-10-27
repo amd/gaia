@@ -3,7 +3,7 @@
 
 import { fireEvent, render, screen } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
-import { AgentActivity, toolActiveLabel } from '../AgentActivity';
+import { AgentActivity, toolRowText } from '../AgentActivity';
 import type { AgentStep } from '../../types';
 
 vi.mock('../../services/api');
@@ -29,7 +29,7 @@ it('names the connector and tool on an MCP step, not "MCP tool"', () => {
 });
 
 it('names the connector while the MCP call runs', () => {
-    expect(toolActiveLabel('mcp_git_git_log', { mcpServerLabel: 'Git', mcpTool: 'git_log' }))
+    expect(toolRowText({ ...gitLog(), active: true, success: undefined, result: undefined }))
         .toBe('Using Git: git_log');
 });
 

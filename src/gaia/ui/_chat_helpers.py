@@ -4515,11 +4515,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # already sent but not yet dispatched arrive immediately.
                 if idle_cycles % 25 == 0:
                     yield ": keepalive " + "x" * 490 + "\n\n"
-                # Every 15s (75 cycles) emit a visible status so the user knows
-                # the model is still processing (prompt prefill is silent).
-                # Use status='working' so active=true; consecutive events merge
-                # into a single updating step on the frontend. A running tool
-                # shows its own timer, so the model is not the one being waited on.
+                # Every 15s (75 cycles) say the model is still processing (prompt
+                # prefill is silent). Stream readers such as the MCP server log it;
+                # the Agent UI drops it and times the wait itself. A running tool
+                # means the model is not the one being waited on.
                 if idle_cycles % 75 == 0 and not sse_handler.tool_running():
                     elapsed = int(_turn_clock() - last_event_at)
                     status_evt = json.dumps(

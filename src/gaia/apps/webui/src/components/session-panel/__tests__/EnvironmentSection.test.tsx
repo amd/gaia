@@ -144,12 +144,13 @@ describe('Can read and write', () => {
         expect(screen.queryByText(/can't be changed from this chat/)).not.toBeInTheDocument();
     });
 
-    it('locks the Internet switch for an agent that keeps its own network rules', async () => {
+    it('shows Internet as text for an agent that keeps its own network rules', async () => {
         mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false, internet_enforced: false });
         useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'email' }] });
         render(<EnvironmentSection sessionId={SID} busy={false} />);
-        expect(await screen.findByRole('switch', { name: 'Internet for this chat' })).toBeDisabled();
-        expect(screen.getByText(/can't be changed from this chat/)).toBeInTheDocument();
+        expect(await screen.findByText('On')).toBeInTheDocument();
+        expect(screen.queryByRole('switch', { name: 'Internet for this chat' })).not.toBeInTheDocument();
+        expect(screen.getAllByText(/can't be changed from/)).toHaveLength(1);
     });
 
     it("doesn't claim another agent's scope", async () => {
