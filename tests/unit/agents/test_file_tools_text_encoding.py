@@ -105,7 +105,9 @@ class TestBomTextReadsAsText:
     def test_size_is_the_file_on_disk(self, request, tools, bom_file, tmp_path):
         cp1252 = tmp_path / "note.txt"
         cp1252.write_bytes("Café budget: €250 for the “team lunch”.\n".encode("cp1252"))
-        for path in (bom_file[0], cp1252):
+        crlf = tmp_path / "windows.txt"
+        crlf.write_bytes(b"first line\r\nsecond line\r\n")
+        for path in (bom_file[0], cp1252, crlf):
             result = request.getfixturevalue(tools)["read_file"](str(path))
             assert result["status"] == "success"
             assert result["size_bytes"] == path.stat().st_size
