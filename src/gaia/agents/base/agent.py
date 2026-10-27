@@ -129,6 +129,7 @@ from gaia.agents.base.tool_outcome import (
 from gaia.agents.base.tools import (
     _TOOL_REGISTRY,
     bare_tool_name,
+    partial_json_string,
     tool_call_progress_message,
 )
 from gaia.agents.base.turn_scope import (
@@ -4515,6 +4516,8 @@ Do NOT wrap conversational replies in JSON.
         provider = getattr(getattr(self, "chat", None), "llm_client", None)
         if provider is not None and hasattr(provider, "tool_call_progress"):
             provider.tool_call_progress = self._report_tool_call_progress
+        if provider is not None and hasattr(provider, "tool_call_draft"):
+            provider.tool_call_draft = self._report_tool_call_draft
         if provider is not None and hasattr(provider, "reasoning_progress"):
             provider.reasoning_progress = self._report_reasoning_progress
         backend = getattr(provider, "_backend", None)
@@ -4541,6 +4544,14 @@ Do NOT wrap conversational replies in JSON.
         self.console.report_phase(
             "tool_call", tool_call_progress_message(tool, chars), chars=chars
         )
+
+    def _report_tool_call_draft(self, tool: str, arguments: str) -> None:
+        field = (self._tools_registry.get(tool) or {}).get("draft_argument")
+        if not field:
+            return
+        text = partial_json_string(arguments, field)
+        if text:
+            self.console.report_draft(tool, text)
 
     def _report_reasoning_progress(self, words: int) -> None:
         self.console.report_phase(

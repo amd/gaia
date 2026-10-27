@@ -9,7 +9,7 @@ import logging
 import re
 import types
 import typing
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # Re-exported for existing callers of this module.
 # pylint: disable=unused-import
@@ -30,6 +30,7 @@ _TOOL_REGISTRY: dict[str, dict] = {}
 _SUPPORTED_TOOL_KWARGS = (
     "atomic",
     "display_label",
+    "draft_argument",
     "timeout",
     "timeout_arg",
     "preflight",
@@ -234,6 +235,7 @@ def tool(
     *,
     atomic: bool = False,
     display_label: str | None = None,
+    draft_argument: str | None = None,
     timeout: float | None = None,
     timeout_arg: str | None = None,
     preflight: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]] | None = None,
@@ -250,6 +252,8 @@ def tool(
         func: Function to register as a tool (when used as @tool)
         atomic: If True, marks this tool as atomic (can execute without multi-step planning)
         display_label: Optional user-facing label for UI progress strips
+        draft_argument: Name of a text parameter the UI may show as a live
+            draft while the model is still writing the call (a deck's Markdown).
         timeout: Per-tool execution limit in seconds. Overrides the global
             ``GAIA_AGENT_TOOL_TIMEOUT`` default in ``Agent._execute_tool``. Set
             this on tools that legitimately run long (e.g. image generation that
@@ -284,6 +288,11 @@ def tool(
         # Extract function name and signature for the tool registry
         tool_name = f.__name__
         sig = inspect.signature(f)
+        if draft_argument is not None and draft_argument not in sig.parameters:
+            raise TypeError(
+                f"@tool(draft_argument={draft_argument!r}) names no parameter of "
+                f"tool {tool_name!r}. Parameters: {', '.join(sig.parameters) or 'none'}."
+            )
         if timeout_arg is not None and timeout_arg not in sig.parameters:
             raise TypeError(
                 f"@tool(timeout_arg={timeout_arg!r}) names no parameter of tool "
@@ -322,6 +331,7 @@ def tool(
             "function": f,
             "atomic": atomic,
             "display_label": display_label,
+            "draft_argument": draft_argument,
             "timeout": timeout,
             "timeout_arg": timeout_arg,
             "preflight": preflight,
@@ -403,6 +413,55 @@ def tool_call_progress_message(tool: Optional[str], chars: int) -> str:
         f"Preparing {tool}" if tool else "Preparing a tool call"
     )
     return f"{label} — {chars:,} characters so far"
+
+
+_JSON_ESCAPES = {
+    '"': '"',
+    "\\": "\\",
+    "/": "/",
+    "b": "\b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+}
+
+
+def partial_json_string(arguments: str, key: str) -> Optional[str]:
+    """The text of string field *key* in JSON *arguments* still being written.
+
+    Returns what has arrived so far (``None`` before the field starts), stopping
+    at the closing quote or at an escape cut off mid-way.
+    """
+    m = re.search(r'"' + re.escape(key) + r'"\s*:\s*"', arguments)
+    if m is None:
+        return None
+    out: List[str] = []
+    i, n = m.end(), len(arguments)
+    while i < n:
+        ch = arguments[i]
+        if ch == '"':
+            break
+        if ch != "\\":
+            out.append(ch)
+            i += 1
+            continue
+        if i + 1 >= n:
+            break
+        esc = arguments[i + 1]
+        if esc == "u":
+            code = arguments[i + 2 : i + 6]
+            if len(code) < 4:
+                break
+            try:
+                out.append(chr(int(code, 16)))
+            except ValueError:
+                break
+            i += 6
+            continue
+        out.append(_JSON_ESCAPES.get(esc, esc))
+        i += 2
+    return "".join(out)
 
 
 def get_tool_metadata(tool_name: str):

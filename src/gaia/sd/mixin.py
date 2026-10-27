@@ -156,6 +156,9 @@ class SDToolsMixin:
         ) -> Dict[str, Any]:
             """Generate an image from a text prompt using Stable Diffusion.
 
+            Only for a picture. A slide, deck, chart or diagram is a file its
+            skill builds, never an image.
+
             Args:
                 prompt: Text description of the image. Be detailed for best results.
                 model: SDXL-Turbo (default), SD-Turbo (faster, lower quality),

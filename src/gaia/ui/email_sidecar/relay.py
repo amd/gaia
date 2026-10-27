@@ -218,6 +218,15 @@ def _dispatch_one(
     if etype == "status":
         handler._emit({"type": "status", "message": str(event.get("message", ""))})
 
+    elif etype == "draft":
+        handler._emit(
+            {
+                "type": "draft",
+                "tool": str(event.get("tool", "")),
+                "text": str(event.get("text", "")),
+            }
+        )
+
     elif etype == "token":
         delta = event.get("delta", "")
         if delta:

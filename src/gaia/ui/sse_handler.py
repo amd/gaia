@@ -793,6 +793,9 @@ class SSEOutputHandler(OutputHandler):
         # summary may be incomplete instead of making them infer truncation.
         if not isinstance(data, dict) and len(str(data)) > _SUMMARY_CHAR_CAP:
             event["summary_truncated"] = True
+        # The file a tool wrote, so a client can offer to open it.
+        if isinstance(data, dict) and isinstance(data.get("path"), str):
+            event["path"] = data["path"]
 
         # Attach latency for tool calls (measured from print_tool_usage)
         if self._tool_start_time is not None:
@@ -949,6 +952,9 @@ class SSEOutputHandler(OutputHandler):
                 **counts,
             }
         )
+
+    def report_draft(self, tool: str, text: str):
+        self._emit({"type": "draft", "tool": tool, "text": text})
 
     # === Structured-render map (#2109) ===
 

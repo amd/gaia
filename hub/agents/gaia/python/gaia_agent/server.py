@@ -1068,7 +1068,9 @@ async def query(request: QueryRequest):
             close_agent(one_shot_agent)
 
     try:
-        kwargs: Dict[str, Any] = {}
+        # Streaming is what turns the answer and a tool call being written into
+        # events as they happen; without it each lands in one frame at the end.
+        kwargs: Dict[str, Any] = {"streaming": True}
         if _effective_provider(request) == _CLAUDE_PROVIDER:
             # ``model`` names a CLAUDE model here, not a Lemonade one — putting
             # it in model_id would point the local client at an id it cannot

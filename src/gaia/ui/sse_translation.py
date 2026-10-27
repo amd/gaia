@@ -107,6 +107,7 @@ SUMMARY_VIEW_KEYS = (
     "summary_truncated",
     "command_output",
     "latency_ms",
+    "path",
 )
 
 #: Counts a ``status`` carrying a ``phase`` may report alongside it: reasoning
@@ -346,6 +347,15 @@ class CanonicalTranslator:
             if phase == "model_queue" and isinstance(queue, dict):
                 out[0]["queue"] = {k: queue[k] for k in _QUEUE_FIELDS if k in queue}
         return out
+
+    def _on_draft(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return [
+            {
+                "type": "draft",
+                "tool": str(event.get("tool", "")),
+                "text": str(event.get("text", "")),
+            }
+        ]
 
     def _on_step(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         step = event.get("step")
@@ -591,6 +601,7 @@ class CanonicalTranslator:
     # Dispatch table: every top-level source type sse_handler.py emits.
     _DISPATCH = {
         "status": _on_status,
+        "draft": _on_draft,
         "step": _on_step,
         "thinking": _on_thinking,
         "plan": _on_plan,

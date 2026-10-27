@@ -1343,7 +1343,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         # A rule about a tool the session lacks made the model offer images.
         if getattr(self.config, "enable_sd_tools", False):
             data_file_rules += """
-**IMAGE GENERATION:** Always CALL `generate_image` first for a picture (draw, photo, illustration, art). Don't pre-announce availability. If it errors, say so and give its error in 1-2 sentences; don't apologize or describe what you would have done. A slide, deck, chart or document is a file, not a picture: load its skill and build the file.
+**IMAGE GENERATION:** `generate_image` is only for a picture the user asked for (draw, photo, illustration, art). A slide, deck, framework, chart or document is a file, never a picture: load its skill and build the file. For a picture, call `generate_image` instead of pre-announcing it. If it errors, say so and give its error in 1-2 sentences; don't apologize or describe what you would have done.
 """
         else:
             data_file_rules += """

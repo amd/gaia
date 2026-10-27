@@ -10,7 +10,7 @@
 import { create } from 'zustand';
 import { log } from '../utils/logger';
 
-export type PanelSectionId = 'answer' | 'environment' | 'context' | 'outputs' | 'changes';
+export type PanelSectionId = 'slide' | 'answer' | 'environment' | 'context' | 'outputs' | 'changes';
 
 export const PANEL_MIN_WIDTH = 280;
 export const PANEL_MAX_WIDTH = 640;
@@ -21,6 +21,7 @@ const WIDTH_KEY = 'gaia.sessionPanel.width';
 const SECTIONS_KEY = 'gaia.sessionPanel.sections';
 
 const DEFAULT_SECTIONS: Record<PanelSectionId, boolean> = {
+    slide: true,
     answer: true,
     environment: true,
     context: false,

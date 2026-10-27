@@ -249,3 +249,48 @@ def test_a_deck_with_no_folder_saves_in_gaia_documents(tools, tmp_path):
     assert named["path"] == str(documents / "ferry.pptx")
     assert (documents / "Ferry plan.pptx").is_file()
     assert (documents / "ferry.pptx").is_file()
+
+
+def test_an_unchanged_rebuild_of_a_deck_that_failed_its_check_is_refused(
+    tools, tmp_path
+):
+    skill, fns, _r = tools
+    md = "## Ferry crossings rose\n- 1,180 a week\n"
+    out = str(tmp_path / "ferry.pptx")
+    with bind(_Host(), skill):
+        first = fns["build_deck_from_markdown"](
+            markdown=md, output_path=out, required_items=["Pier repair finishes in May"]
+        )
+        again = fns["build_deck_from_markdown"](
+            markdown=md, output_path=out, required_items=["Pier repair finishes in May"]
+        )
+        fixed = fns["build_deck_from_markdown"](
+            markdown=md + "- Pier repair finishes in May\n",
+            output_path=out,
+            required_items=["Pier repair finishes in May"],
+        )
+    assert (
+        first["status"] == "built_with_issues"
+        and "Never call it verified" in first["next"]
+    )
+    assert again["status"] == "error"
+    assert any("Pier repair" in p for p in again["problems"])
+    assert fixed["status"] == "ok"
+
+
+def test_a_build_says_when_to_stop(tools, tmp_path):
+    skill, fns, _r = tools
+    md = "# Ferry plan\n\n## Ferry crossings rose\n- 1,180 a week\n"
+    must = ["Pier repair finishes in May"]
+    with bind(_Host(), skill):
+        passed = fns["build_deck_from_markdown"](markdown=md)
+        first = fns["build_deck_from_markdown"](
+            markdown=md + "- a\n", required_items=must
+        )
+        second = fns["build_deck_from_markdown"](
+            markdown=md + "- b\n", required_items=must
+        )
+    assert "Report it to the user now" in passed["next"]
+    assert first["next"].startswith("The deck failed its check")
+    assert second["next"].startswith("Stop building")
+    assert passed["path"] == first["path"] == second["path"]

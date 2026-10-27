@@ -14,6 +14,8 @@ Each tool returns a dict; a problem the model can fix comes back as
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -33,6 +35,7 @@ from gaia.skills.context import (
     check_read,
     check_write,
     copy_to_temp,
+    current,
     find_program,
     preferences,
     run_program,
@@ -52,6 +55,26 @@ _SKILL_DIR = Path(__file__).resolve().parent
 def _error(exc: Exception) -> Dict[str, Any]:
     problems = getattr(exc, "problems", None) or [str(exc)]
     return {"status": "error", "error": str(exc), "problems": problems}
+
+
+#: The last build of each deck path that failed its check: (fingerprint, problems).
+_FAILED_BUILDS: Dict[str, tuple] = {}
+#: Failed checks in a row, per agent; a model that keeps missing stops and says so.
+_FAILED_IN_A_ROW: Dict[int, int] = {}
+_MAX_FAILED_IN_A_ROW = 2
+
+
+def _agent_key() -> int:
+    try:
+        return id(current().agent)
+    except SkillContextError:
+        return 0
+
+
+def _fingerprint(*parts: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(parts, sort_keys=True, default=str).encode()
+    ).hexdigest()
 
 
 def _saved_prefs() -> Dict[str, Any]:
@@ -227,9 +250,45 @@ def _build_from(
             )
         _check_inputs(data, saved, template_path)
         out = _writable_deck(output_path, data)
+        key = _fingerprint(data, theme, template_path, saved)
+        failed = _FAILED_BUILDS.get(str(out))
+        if failed and failed[0] == key:
+            raise OutlineError(
+                [
+                    "This is the same deck as the last build, so it would fail the "
+                    "same check. Change the Markdown to fix these, or tell the user "
+                    "they are not done:",
+                    *failed[1],
+                ]
+            )
         result = _build.build_deck(
             data, str(out), theme or None, template_path or None, saved
         )
+        if result.get("status") == "built_with_issues":
+            issues = (result.get("verify") or {}).get("issues") or []
+            problems = [
+                f"{i.get('detail')} {i.get('fix') or ''}".strip()
+                for i in issues
+                if i.get("severity") == "error"
+            ]
+            _FAILED_BUILDS[str(out)] = (key, problems)
+            misses = _FAILED_IN_A_ROW.get(_agent_key(), 0) + 1
+            _FAILED_IN_A_ROW[_agent_key()] = misses
+            result["next"] = (
+                "Stop building. Give the user the path and tell them which of "
+                "these errors remain; never call the deck verified."
+                if misses >= _MAX_FAILED_IN_A_ROW
+                else "The deck failed its check. Change the Markdown to fix each "
+                "error and build again; if you stop, tell the user which errors "
+                "remain. Never call it verified."
+            )
+        else:
+            _FAILED_BUILDS.pop(str(out), None)
+            _FAILED_IN_A_ROW.pop(_agent_key(), None)
+            result["next"] = (
+                "The deck is built and passed its check. Report it to the user "
+                "now; build again only if they ask for a change."
+            )
         result["style_options"] = _style.style_offer(
             _style.resolve_tokens(request, saved)
         )
@@ -245,7 +304,7 @@ def _build_from(
         }
 
 
-@tool(display_label="Building slide deck from Markdown")
+@tool(display_label="Building slide deck from Markdown", draft_argument="markdown")
 def build_deck_from_markdown(
     markdown: str,
     output_path: str = "",
@@ -269,6 +328,9 @@ def build_deck_from_markdown(
         required_items: Facts the request needs visible on the slides; checked.
         expected_slides: The slide count the user asked for; 0 skips the check.
     """
+    if "\n" not in markdown and "\\n" in markdown:
+        # The model escaped its line breaks twice; the deck is one line otherwise.
+        markdown = markdown.replace("\\n", "\n")
     try:
         outline = _md.outline_from_markdown(markdown, expected_slides or None)
     except OutlineError as exc:

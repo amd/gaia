@@ -476,3 +476,71 @@
     .sp-switch-knob,
     .msg-jump-target { transition: none; }
 }
+
+/* Slide preview: the deck drawn from its Markdown, in the deck's light theme. */
+.sd-preview { display: flex; flex-direction: column; gap: 10px; }
+.sd-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.sd-status.is-error { color: var(--color-error, #b91c1c); }
+.sd-spin { animation: sd-spin 1s linear infinite; }
+@keyframes sd-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .sd-spin { animation: none; } }
+.sd-slide {
+    container-type: inline-size;
+    aspect-ratio: 16 / 9;
+    background: #fff;
+    color: #1f2937;
+    border: 1px solid var(--border-color, #d1d5db);
+    border-radius: 6px;
+    padding: 4cqw 4.5cqw 3cqw;
+    display: flex;
+    flex-direction: column;
+    gap: 2cqw;
+    overflow: hidden;
+    font-family: Calibri, Carlito, 'Segoe UI', system-ui, sans-serif;
+}
+.sd-empty { background: linear-gradient(90deg, #f3f4f6, #fafafa, #f3f4f6); }
+.sd-title { font-size: 4.2cqw; font-weight: 700; line-height: 1.15; }
+.sd-title::after { content: ''; display: block; width: 7cqw; height: 0.45cqw; background: #0072b2; margin-top: 1cqw; }
+.sd-body { flex: 1; display: flex; flex-direction: column; gap: 1.6cqw; min-height: 0; }
+.sd-bullets { margin: 0; padding-left: 2.6cqw; font-size: 2.3cqw; line-height: 1.3; }
+.sd-bullets li + li { margin-top: 0.6cqw; }
+.sd-cover { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 1.5cqw; }
+.sd-cover-title { font-size: 5.4cqw; font-weight: 700; line-height: 1.1; }
+.sd-cover-sub { font-size: 2.6cqw; color: #4b5563; }
+.sd-stages { flex: 1; display: grid; gap: 0.6cqw; min-height: 0; }
+.sd-stage { display: flex; flex-direction: column; gap: 0.9cqw; min-width: 0; }
+.sd-stage-head {
+    background: #0072b2;
+    color: #fff;
+    font-weight: 700;
+    font-size: 1.9cqw;
+    line-height: 1.2;
+    text-align: center;
+    min-height: 8cqw;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.8cqw 3cqw;
+    border-radius: 0.6cqw;
+}
+.sd-process .sd-stage-head { border-radius: 0; clip-path: polygon(0 0, calc(100% - 2.4cqw) 0, 100% 50%, calc(100% - 2.4cqw) 100%, 0 100%, 2.4cqw 50%); }
+.sd-process .sd-stage:first-child .sd-stage-head { clip-path: polygon(0 0, calc(100% - 2.4cqw) 0, 100% 50%, calc(100% - 2.4cqw) 100%, 0 100%); }
+.sd-stage-card { flex: 1; background: #f3f4f6; border-radius: 0.8cqw; padding: 1.2cqw 1.4cqw; }
+.sd-stage-card .sd-bullets { font-size: 1.75cqw; padding-left: 2cqw; }
+.sd-axis {
+    background: #0072b2;
+    color: #fff;
+    font-weight: 700;
+    font-size: 1.9cqw;
+    text-align: center;
+    padding: 1.1cqw 4cqw;
+    clip-path: polygon(0 0, calc(100% - 2.4cqw) 0, 100% 50%, calc(100% - 2.4cqw) 100%, 0 100%);
+}
+.sd-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 3cqw; }
+.sd-col-head { font-size: 2.4cqw; font-weight: 700; color: #0072b2; margin-bottom: 1cqw; }
+.sd-table { border-collapse: collapse; font-size: 1.9cqw; width: 100%; }
+.sd-table th { background: #0072b2; color: #fff; text-align: left; }
+.sd-table th, .sd-table td { padding: 0.6cqw 1cqw; border-bottom: 1px solid #d1d5db; }
+.sd-chart { flex: 1; display: flex; align-items: center; justify-content: center; background: #f3f4f6; border-radius: 0.8cqw; color: #4b5563; font-size: 2.2cqw; text-transform: capitalize; }
+.sd-source { font-size: 1.4cqw; color: #4b5563; }
+.sd-open { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; }

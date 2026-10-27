@@ -242,8 +242,8 @@ without inventing abbreviations. Keep `Axis:` under 10 words.
   request then gets no cover). Otherwise use the blueprint's default.
 - **Every must-show item is visible on a slide.** List each number, name,
   event, section and message the request asks for and pass them as
-  `required_items`. Never move requested content into the notes: cut other
-  words or split the slide. Notes hold extra detail and the spoken script.
+  `required_items`: short facts and names, not the deck's overall message.
+  Never move requested content into the notes: cut other words or split. Notes hold extra detail and the spoken script.
 - **Every number comes from a source**, with its unit and period. Every
   chart, table and KPI slide names its source.
 - **On `status: "error"`**, fix every listed problem and call again. Never
@@ -267,8 +267,7 @@ without inventing abbreviations. Keep `Axis:` under 10 words.
 4. **Build** with Markdown, or `build_deck` with JSON for timelines, flows,
    2x2 matrices and combo charts. Big decks: 6-8 slides first, then
    `add_slide`.
-   Leave `output_path` empty unless the user named a folder or file: the deck
-   is then saved in GAIA's documents folder.
+   Leave `output_path` empty unless the user named where to save it.
 5. **Check.** The build result's `verify` is the check. Fix every error it
    lists and rebuild (or `update_slide`) until its `status` is `pass`. Call
    `verify_deck(path, expected_slides=N, required_items=[...])` only after

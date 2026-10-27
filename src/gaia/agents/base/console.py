@@ -472,6 +472,9 @@ class OutputHandler(ABC):
         the same thing in words for clients that only show text. Optional.
         """
 
+    def report_draft(self, tool: str, text: str) -> None:
+        """The text a tool call is being written with, so far. Optional."""
+
     def pause_progress(self):
         """Pause progress indicator, remembering state for later resume. Optional — default no-op."""
         ...

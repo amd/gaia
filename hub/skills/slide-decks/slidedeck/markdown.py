@@ -137,7 +137,33 @@ def _csv_block(title: str, lang: str, lines: List[str]) -> Dict[str, Any]:
     return out
 
 
+def _unfence_diagrams(lines: List[str]) -> List[str]:
+    """A ```diagram block written in Markdown, read as the slide's own lines.
+
+    A block the model never closed runs to the end of the slide.
+    """
+    out: List[str] = []
+    i = 0
+    while i < len(lines):
+        m = re.match(r"^\s*```\s*diagram\b[\s:]*([\w -]*)$", lines[i], re.I)
+        end = next(
+            (j for j in range(i + 1, len(lines)) if lines[j].strip().startswith("```")),
+            None,
+        )
+        stop = len(lines) if end is None else end
+        body = lines[i + 1 : stop] if m else []
+        if not m or "".join(body).strip().startswith("{"):
+            out.append(lines[i])
+            i += 1
+            continue
+        out.append(f"Diagram: {m.group(1).strip() or 'boxes'}")
+        out.extend(body)
+        i = stop + 1
+    return out
+
+
 def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
+    lines = _unfence_diagrams(lines)
     slide: Dict[str, Any] = {"title": title.strip()}
     bullets: List[Any] = []
     text: List[str] = []
@@ -267,6 +293,13 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
             continue
         text.append(s)
     flush_table()
+    if fence is not None:
+        raise OutlineError(
+            [
+                f"slide {title!r}: the ```{fence_lang or 'slide'} block is never "
+                "closed, so nothing after it would show. End it with a ``` line."
+            ]
+        )
 
     if notes:
         slide["notes"] = "\n".join(n.strip() for n in notes).strip()
@@ -498,6 +531,8 @@ def outline_from_markdown(
     ):
         out = out[1:]
     result: Dict[str, Any] = {"slides": out}
+    if deck_title:
+        result["title"] = deck_title
     if expected_slides:
         result["expected_slides"] = expected_slides
     if required:

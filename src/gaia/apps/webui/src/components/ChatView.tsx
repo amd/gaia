@@ -41,6 +41,7 @@ import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
+import { followSlideEvent } from '../stores/slideDraftStore';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -818,6 +819,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onAgentEvent: (event) => {
                 // The client's own "waiting to start" notice is not the server taking the message.
                 if (!(event.type === 'status' && event.phase === 'waiting')) accepted();
+                if (followSlideEvent(sessionId, event)) return;
                 // The queue is this chat's, so it stays current even after the view moved on.
                 if (event.type === 'followup_taken' && event.text) {
                     const takenText = event.text;

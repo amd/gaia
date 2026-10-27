@@ -23,6 +23,7 @@ import { PanelSection } from './PanelSection';
 import { EnvironmentSection } from './EnvironmentSection';
 import { OutputsSection } from './OutputsSection';
 import { ChangesSection } from './ChangesSection';
+import { SlidePreview } from './SlidePreview';
 import type { ContextUsage, Message } from '../../types';
 import './SessionPanel.css';
 
@@ -148,6 +149,7 @@ export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessa
                     </button>
                 </header>
                 <div className="sp-body">
+                    <SlidePreview sessionId={sessionId} />
                     {answer && (
                         <PanelSection id="answer" title="This answer">
                             <ThisAnswer messages={messages} busy={busy} />

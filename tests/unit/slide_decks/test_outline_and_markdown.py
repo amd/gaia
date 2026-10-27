@@ -445,3 +445,30 @@ def test_latex_in_a_process_axis_becomes_symbols():
     slide = normalize_outline(outline_from_markdown(md))["slides"][0]
     assert "Complexity → Compute" in str(slide)
     assert "rightarrow" not in str({k: v for k, v in slide.items() if k != "raw"})
+
+
+def test_a_diagram_written_in_markdown_inside_a_code_block_is_a_diagram():
+    from slidedeck.markdown import outline_from_markdown
+
+    md = (
+        "## Stages\n```diagram process\n### A\n- one\n### B\n- two\n### C\n- three\n"
+        "Axis: More\n```\n"
+    )
+    slide = outline_from_markdown(md)["slides"][0]
+    assert slide["type"] == "diagram" and slide["diagram"] == "process"
+    assert [it["title"] for it in slide["items"]] == ["A", "B", "C"]
+    assert slide["x_axis"] == "More"
+
+
+def test_an_unclosed_code_block_never_drops_a_slide_silently():
+    import pytest
+    from slidedeck.markdown import outline_from_markdown
+    from slidedeck.outline import OutlineError
+
+    diagram = (
+        "## Stages\n```diagram process\n### A\n- one\n### B\n- two\n### C\n- three\n"
+    )
+    slide = outline_from_markdown(diagram)["slides"][0]
+    assert slide["type"] == "diagram" and len(slide["items"]) == 3
+    with pytest.raises(OutlineError, match="never closed"):
+        outline_from_markdown("## Revenue\n```chart column\nQ,Rev\nQ1,4\n")

@@ -829,7 +829,8 @@ export type StreamEventType =
     | 'agent_created' // New agent created — triggers agent list refresh
     | 'followup_taken'    // The running turn took a message sent mid-turn
     | 'followup_returned' // The turn ended without taking these mid-turn messages
-    | 'context_usage';    // What this turn's model call holds, by kind
+    | 'context_usage'     // What this turn's model call holds, by kind
+    | 'draft';           // A tool call's text so far, while the model writes it
 
 export interface StreamEvent {
     type: StreamEventType;
