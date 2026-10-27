@@ -43,13 +43,15 @@ export function FolderChip({ folder, disabled }: { folder: WorkingFolder; disabl
                 onClick={() => setPicking(true)}
                 disabled={disabled}
                 aria-haspopup="dialog"
-                aria-label={`Folder for this chat: ${picked ? baseName(picked) : folder.name}`}
+                aria-label={picked
+                    ? `Folder for this chat: ${folder.name}, plus ${baseName(picked)}`
+                    : `Folder for this chat: ${folder.name}`}
                 title={picked
                     ? `This chat can read and write ${picked}. Click to pick another folder.`
                     : `${where} Click to give this chat another folder.`}
             >
                 <Folder size={13} aria-hidden="true" />
-                <span className="new-chat-folder-name">{picked ? baseName(picked) : folder.name}</span>
+                <span className="new-chat-folder-name">{picked ? `${folder.name} + ${baseName(picked)}` : folder.name}</span>
                 <ChevronDown size={12} aria-hidden="true" />
             </button>
             {picked && (

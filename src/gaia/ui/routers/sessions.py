@@ -257,6 +257,13 @@ async def create_session(
             # A chat is made whole or not at all.
             try:
                 db.delete_session(session["id"])
+            except Exception as cleanup_err:  # the original error stays the answer
+                logger.error(
+                    "Could not remove half-made chat %s: %s",
+                    session["id"],
+                    cleanup_err,
+                    exc_info=True,
+                )
             finally:
                 session_permissions.forget_session(session["id"])
         if isinstance(e, session_environment.EnvironmentChangeError):

@@ -296,7 +296,9 @@ describe('NewChat empty state', () => {
 
         expect(useChatStore.getState().draftFolder).toBe('/home/u/site');
         expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'Folder for this chat: site' })).toBeInTheDocument();
+        const chip = screen.getByRole('button', { name: 'Folder for this chat: my-project, plus site' });
+        // Picking adds a folder; the working folder stays in the label.
+        expect(chip).toHaveTextContent('my-project + site');
 
         fireEvent.click(screen.getByRole('button', { name: "Don't give this chat site" }));
         expect(useChatStore.getState().draftFolder).toBeNull();

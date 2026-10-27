@@ -282,3 +282,44 @@ def test_a_failed_folder_save_leaves_no_chat_behind(client, folder, monkeypatch)
     failed = client.post("/api/sessions", json={"folders": [str(folder)]})
     assert failed.status_code == 500
     assert _chat_count(client) == 0
+
+
+def _break_rollback(monkeypatch):
+    def broken_delete(*_args, **_kwargs):
+        raise OSError("database is locked")
+
+    monkeypatch.setattr(ChatDatabase, "delete_session", broken_delete)
+
+
+def test_a_failed_rollback_keeps_the_folder_refusal_as_the_answer(
+    client, folder, monkeypatch, caplog
+):
+    checked = session_environment.check_new_chat_folders
+
+    def check_then_remove(agent_type, folders):
+        checked(agent_type, folders)
+        folder.rmdir()
+
+    monkeypatch.setattr(
+        session_environment, "check_new_chat_folders", check_then_remove
+    )
+    _break_rollback(monkeypatch)
+    refused = client.post("/api/sessions", json={"folders": [str(folder)]})
+    assert refused.status_code == 400
+    assert "is not a folder" in refused.text
+    assert "Could not remove half-made chat" in caplog.text
+
+
+def test_a_failed_rollback_keeps_the_original_500_and_logs_both(
+    client, folder, monkeypatch, caplog
+):
+    def broken_save(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ChatDatabase, "set_session_environment", broken_save)
+    _break_rollback(monkeypatch)
+    failed = client.post("/api/sessions", json={"folders": [str(folder)]})
+    assert failed.status_code == 500
+    assert "Check server logs" in failed.json()["detail"]
+    assert "database is locked" in caplog.text
+    assert "disk full" in caplog.text
