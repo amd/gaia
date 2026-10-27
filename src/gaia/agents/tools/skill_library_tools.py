@@ -559,7 +559,8 @@ class SkillLibraryToolsMixin:
 
             Returns:
                 The skill's tier, its directory (resolve relative paths
-                against it), the tools it registered, and a warning if a
+                against it), the tools it registered, companion skills it
+                pairs with that are not loaded yet, and a warning if a
                 needed tool or command is missing.
             """
             from gaia.skills.errors import SkillError
@@ -624,6 +625,20 @@ class SkillLibraryToolsMixin:
                     agent.get_skills_system_prompt()
                 ),
             }
+            from gaia.agents.base.skill_catalog import companions
+
+            unloaded_companions = [
+                other
+                for other in companions(agent.skill_manager.discover(), skill.name)
+                if other not in agent.loaded_skills
+            ]
+            if unloaded_companions:
+                payload["companion_skills"] = unloaded_companions
+                payload["companion_hint"] = (
+                    f"'{skill.name}' pairs with {', '.join(unloaded_companions)}, "
+                    "not loaded yet. If the request also involves what one of them "
+                    "covers, load it too before starting."
+                )
             if deferred:
                 payload["deferred_tools"] = list(skill.tool_names)
                 payload["warning"] = (

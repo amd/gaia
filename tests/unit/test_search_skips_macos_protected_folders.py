@@ -27,6 +27,8 @@ _GUARDED = (
     "Desktop",
     "Documents",
     "Downloads",
+    "Library/Containers",
+    "Library/Group Containers",
     "Library/Mobile Documents",
     "Movies/TV",
     "Music",
@@ -163,7 +165,8 @@ class TestFindFilesOnMacOS:
             "~/Library/Mobile Documents, ~/Movies/TV, ~/Music, "
             "~/Pictures/Photos Library.photoslibrary: macOS asks for permission "
             "before GAIA can read them; ask the user to name the folder to "
-            "search it."
+            "search it. Skipped other apps' private data (~/Library/Containers, "
+            "~/Library/Group Containers)."
         ), out
 
     def test_a_miss_still_carries_the_note(self, home, on_macos):
