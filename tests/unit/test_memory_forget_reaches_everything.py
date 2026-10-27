@@ -165,6 +165,8 @@ def test_forget_everything_says_so_when_another_reader_blocks_the_scrub(
     store._conn.execute("PRAGMA busy_timeout=0")
     reader._conn.execute("BEGIN")
     reader._conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()
+    # Debian's SQLite defaults secure_delete on, so compare to what it was.
+    secure_delete = store._conn.execute("PRAGMA secure_delete").fetchone()[0]
 
     with pytest.raises(RuntimeError, match="was erased, but"):
         store.clear_all()
@@ -172,4 +174,29 @@ def test_forget_everything_says_so_when_another_reader_blocks_the_scrub(
     reader._conn.rollback()
     reader.close()
     assert store._conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0] == 0
-    assert store._conn.execute("PRAGMA secure_delete").fetchone()[0] == 0
+    assert store._conn.execute("PRAGMA secure_delete").fetchone()[0] == secure_delete
+
+
+def test_a_blocked_scrub_still_drops_the_erased_facts_from_the_agent(
+    store, tmp_path, monkeypatch
+):
+    host = _Host(store, [])
+    refreshed = []
+    monkeypatch.setattr(
+        host, "_refresh_stable_memory_prompt", lambda: refreshed.append("prompt")
+    )
+    monkeypatch.setattr(host, "_rebuild_faiss_index", lambda: refreshed.append("index"))
+    store.store(category="fact", content="User's bank PIN is 4821", sensitive=True)
+    reader = MemoryStore(db_path=tmp_path / "memory.db")
+    reader._conn.execute("PRAGMA busy_timeout=0")
+    store._conn.execute("PRAGMA busy_timeout=0")
+    reader._conn.execute("BEGIN")
+    reader._conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()
+
+    out = _tool("forget_everything")()
+
+    reader._conn.rollback()
+    reader.close()
+    assert out["status"] == "error"
+    assert "Close other GAIA windows and erase again" in out["message"]
+    assert sorted(refreshed) == ["index", "prompt"]

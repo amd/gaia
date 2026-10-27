@@ -24,6 +24,7 @@ from gaia.agents.base.memory_store import (
 from gaia.agents.base.memory_store import VALID_CATEGORIES as _VALID_CATEGORIES
 from gaia.agents.base.memory_store import (
     MemoryContentError,
+    MemoryScrubError,
     check_memory_content,
     is_about_user,
 )
@@ -1052,6 +1053,9 @@ def clear_all_memory() -> Dict:
     """
     try:
         return _get_store().clear_all()
+    except MemoryScrubError as exc:
+        logger.error("[memory router] clear_all scrub failed: %s", exc)
+        raise HTTPException(500, str(exc)) from exc
     except Exception as exc:
         logger.error("[memory router] clear_all failed: %s", exc)
         raise HTTPException(500, f"Clear failed: {type(exc).__name__}")

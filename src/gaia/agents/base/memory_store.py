@@ -738,6 +738,10 @@ class MemoryStoreClosedError(RuntimeError):
     """A store call arrived after ``close()``."""
 
 
+class MemoryScrubError(RuntimeError):
+    """Memory was erased, but the deleted text may still be readable in the file."""
+
+
 class MemoryStore:
     """Pure SQLite storage for agent memory. No agent dependencies."""
 
@@ -4535,7 +4539,7 @@ class MemoryStore:
                     0
                 ]
             except sqlite3.OperationalError as e:
-                raise RuntimeError(
+                raise MemoryScrubError(
                     f"Memory at {self._db_path} was erased, but the deleted text "
                     f"could not be scrubbed from the file ({e}). Close other GAIA "
                     "windows and erase again."
@@ -4543,7 +4547,7 @@ class MemoryStore:
             finally:
                 self._conn.execute(f"PRAGMA secure_delete={secure_delete}")
             if busy:
-                raise RuntimeError(
+                raise MemoryScrubError(
                     f"Memory at {self._db_path} was erased, but another connection "
                     "kept its write-ahead log from being cleared, so deleted text "
                     "may remain there. Close other GAIA windows and erase again."

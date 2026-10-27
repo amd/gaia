@@ -1672,6 +1672,21 @@ class TestClearAllMemory:
         assert "tool_history" in data
         assert "conversations" in data
 
+    def test_clear_all_says_why_a_scrub_failed(self, client, test_store, mocker):
+        """A blocked scrub reaches the UI with its remedy, not just an error type."""
+        from gaia.agents.base.memory_store import MemoryScrubError
+
+        mocker.patch.object(
+            test_store,
+            "clear_all",
+            side_effect=MemoryScrubError(
+                "was erased, but ... Close other GAIA windows"
+            ),
+        )
+        resp = client.delete("/api/memory/all")
+        assert resp.status_code == 500
+        assert "Close other GAIA windows" in resp.json()["detail"]
+
     def test_clear_all_wipes_knowledge(self, client, test_store):
         """After DELETE /api/memory/all, knowledge list is empty."""
         test_store.store(category="fact", content="A fact that should be wiped")

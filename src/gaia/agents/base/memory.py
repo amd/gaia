@@ -74,6 +74,7 @@ from gaia.agents.base.memory_store import (
     MAX_EXTRACTION_TURN_LENGTH,
     VALID_CATEGORIES,
     MemoryContentError,
+    MemoryScrubError,
     content_stems,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
@@ -5325,9 +5326,14 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Erase all of memory: every fact, preference and reminder, sensitive ones included, and the stored past conversations. Only when the user asks to forget everything; it cannot be undone."""
             if (gone := _store_gone()) is not None:
                 return gone
-            cleared = mixin._memory_store.clear_all()
-            mixin._rebuild_faiss_index()
-            mixin._refresh_stable_memory_prompt()
+            try:
+                cleared = mixin._memory_store.clear_all()
+            except MemoryScrubError as e:
+                return {"status": "error", "message": str(e)}
+            finally:
+                # The rows may be gone even when the scrub fails; stop using them.
+                mixin._rebuild_faiss_index()
+                mixin._refresh_stable_memory_prompt()
             return {
                 "status": "cleared",
                 **cleared,
