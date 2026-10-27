@@ -255,11 +255,13 @@ script for `~/.gaia/bin`, or the release's Windows setup, macOS `.pkg`, or Linux
 Releases older than the combined Windows setup can't be installed that way from the
 Terminal UI; use the one-line installer with `GAIA_RELEASE_TAG` set instead. The
 Windows setup finishes in its own window, so an exact version installed through it
-isn't pinned; keep auto-update off to stay on it.
+isn't pinned; keep auto-update off to stay on it. The launch check and `/update now` offer only
+the newest release that has an installer for your machine's OS and architecture.
 
 Both apps keep the auto-update and release-candidate choices in
 `~/.gaia/update-config.json`, so turning one on in either app turns it on in the
-other. Pins stay separate. Both check the
+other. Pins stay separate. If the file can't be read, neither app overwrites it: saving a
+setting fails with a message saying to fix or delete the file. Both check the
 [GitHub releases](https://github.com/amd/gaia/releases): GitHub's API allows 60
 anonymous requests an hour per network; set `GH_TOKEN` to lift that in the Terminal
 UI. The desktop app installs only releases that publish its update for your

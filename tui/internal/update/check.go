@@ -43,7 +43,16 @@ func Check(ctx context.Context) (Status, error) {
 		return st, err
 	}
 	st.Releases = rs
-	if latest, ok := Latest(rs, Current, cfg.Prereleases); ok {
+	// Offer only a release this machine can install; NewPlan says why when
+	// the install itself can't replace this binary.
+	kind, _ := DetectKind()
+	var installable []Release
+	for _, r := range rs {
+		if Installable(r, kind) {
+			installable = append(installable, r)
+		}
+	}
+	if latest, ok := Latest(installable, Current, cfg.Prereleases); ok {
 		st.Latest = latest
 		st.Available = Newer(latest.Tag, Current)
 	}

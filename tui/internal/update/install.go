@@ -138,23 +138,60 @@ type Plan struct {
 	Pin     bool // keep this version: an exact-version install pins it
 }
 
-// assetPattern is the installer file for kind on this machine.
+// assetPattern is the installer file for kind on this machine. The version
+// part never takes a slash or backslash, so a name cannot smuggle in a path.
 func assetPattern(kind Kind) (*regexp.Regexp, error) {
+	const ver = `[0-9][^/\\]*`
 	switch kind {
 	case KindWindowsSetup:
-		return regexp.MustCompile(`^gaia-[0-9][^/]*-win-x64-setup\.exe$`), nil
+		return regexp.MustCompile(`^gaia-` + ver + `-win-x64-setup\.exe$`), nil
 	case KindMacPkg:
 		arch := "x64"
 		if goarch == "arm64" {
 			arch = "arm64"
 		}
-		return regexp.MustCompile(`^gaia-[0-9][^/]*-darwin-` + arch + `\.pkg$`), nil
+		return regexp.MustCompile(`^gaia-` + ver + `-darwin-` + arch + `\.pkg$`), nil
 	case KindDeb:
-		return regexp.MustCompile(`^gaia_[0-9][^/]*_amd64\.deb$`), nil
+		return regexp.MustCompile(`^gaia_` + ver + `_` + regexp.QuoteMeta(goarch) + `\.deb$`), nil
 	case KindRpm:
-		return regexp.MustCompile(`^gaia-[0-9][^/]*\.x86_64\.rpm$`), nil
+		arch := "x86_64"
+		if goarch == "arm64" {
+			arch = "aarch64"
+		} else if goarch != "amd64" {
+			arch = regexp.QuoteMeta(goarch)
+		}
+		return regexp.MustCompile(`^gaia-` + ver + `\.` + arch + `\.rpm$`), nil
 	}
 	return nil, fmt.Errorf("no installer file for %s installs", kind)
+}
+
+// tuiBinary is the build the install scripts fetch for this machine, e.g.
+// gaia-linux-amd64 or gaia-windows-arm64.exe.
+func tuiBinary() string {
+	name := "gaia-" + goos + "-" + goarch
+	if goos == "windows" {
+		name += ".exe"
+	}
+	return name
+}
+
+// tuiSums is the checksum file the install scripts verify tuiBinary against.
+const tuiSums = "gaia-tui-SHA256SUMS.txt"
+
+// Installable reports whether r carries what kind needs to install on this
+// machine. An empty kind (an install GAIA cannot replace) asks only for a
+// build for this OS and architecture.
+func Installable(r Release, kind Kind) bool {
+	if kind == "" || kind == KindScript {
+		_, bin := r.Asset(tuiBinary())
+		_, sums := r.Asset(tuiSums)
+		return bin && sums
+	}
+	if _, err := installerAsset(r, kind); err != nil {
+		return false
+	}
+	_, ok := r.Asset(installerSums)
+	return ok
 }
 
 // installerAsset finds the installer file for kind in r.

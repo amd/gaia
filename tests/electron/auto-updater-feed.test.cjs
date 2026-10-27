@@ -343,6 +343,62 @@ describe("GitHub releases as the default feed", () => {
     expect(checkSpy).not.toHaveBeenCalled();
   });
 
+  test("unparseable JSON says GitHub's answer couldn't be read, not 'check your connection'", async () => {
+    const mod = start("0.25.0");
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("Unexpected token < in JSON at position 0");
+      },
+    });
+
+    await mod.checkForUpdates();
+
+    const state = mod.getState();
+    expect(state.status).toBe(mod.STATES.ERROR);
+    expect(state.error).toMatch(/GitHub sent a response GAIA couldn't read/);
+    expect(state.error).not.toMatch(/connection/);
+    expect(checkSpy).not.toHaveBeenCalled();
+  });
+
+  test("the request is bounded, and a timeout says GitHub didn't answer", async () => {
+    const mod = start("0.25.0");
+    global.fetch = jest.fn((_url, opts) => {
+      expect(opts && opts.signal).toBeInstanceOf(AbortSignal);
+      return Promise.reject(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }));
+    });
+
+    await mod.checkForUpdates();
+
+    const state = mod.getState();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(state.status).toBe(mod.STATES.ERROR);
+    expect(state.error).toMatch(/GitHub didn't answer within 20 seconds/);
+    expect(checkSpy).not.toHaveBeenCalled();
+  });
+
+  test("a hung GitHub is cut off after 20 seconds", async () => {
+    const mod = start("0.25.0");
+    const controller = new AbortController();
+    const timeoutSpy = jest.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    global.fetch = jest.fn(
+      (_url, opts) =>
+        new Promise((_resolve, reject) => {
+          opts.signal.addEventListener("abort", () => reject(opts.signal.reason));
+        })
+    );
+    try {
+      const done = mod.checkForUpdates();
+      controller.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+      await done;
+      expect(timeoutSpy).toHaveBeenCalledWith(20 * 1000);
+      expect(mod.getState().error).toMatch(/GitHub didn't answer/);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   test("each check re-reads GitHub, so a new release is found", async () => {
     const mod = start("0.25.0");
     serveReleases([release("v0.25.1")]);

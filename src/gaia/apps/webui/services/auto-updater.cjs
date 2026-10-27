@@ -85,6 +85,60 @@ const MAX_RELEASES_SHOWN = 10;
 
 const RELEASES_PAGE = "https://github.com/amd/gaia/releases";
 
+// A black-holed connection must fail, not leave "Checking…" up forever.
+const GITHUB_TIMEOUT_MS = 20 * 1000;
+
+/**
+ * GET the release list within GITHUB_TIMEOUT_MS. Resolves to the parsed JSON;
+ * rejects with `.kind` set to "timeout", "network", "http" (with `.status`)
+ * or "garbled", so each caller can word its own message.
+ */
+async function _fetchReleases() {
+  let resp;
+  try {
+    resp = await fetch(GITHUB_API_RELEASES, {
+      headers: { Accept: "application/vnd.github+json", "User-Agent": "GAIA-Agent-UI" },
+      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+    });
+  } catch (err) {
+    const timedOut = err && (err.name === "TimeoutError" || err.name === "AbortError");
+    throw Object.assign(new Error((err && err.message) || String(err)), {
+      kind: timedOut ? "timeout" : "network",
+    });
+  }
+  if (!resp.ok) {
+    throw Object.assign(new Error(`HTTP ${resp.status}`), { kind: "http", status: resp.status });
+  }
+  try {
+    return await resp.json();
+  } catch (err) {
+    const timedOut = err && (err.name === "TimeoutError" || err.name === "AbortError");
+    throw Object.assign(new Error((err && err.message) || String(err)), {
+      kind: timedOut ? "timeout" : "garbled",
+    });
+  }
+}
+
+/** The user-facing sentence for a _fetchReleases failure while `doing`. */
+function _releasesErrorMessage(err, doing) {
+  switch (err && err.kind) {
+    case "timeout":
+      return `GitHub didn't answer within ${GITHUB_TIMEOUT_MS / 1000} seconds when GAIA tried to ${doing} — try again later, or download an installer from ${RELEASES_PAGE}.`;
+    case "http": {
+      const limited = err.status === 403 || err.status === 429;
+      return (
+        `GitHub answered HTTP ${err.status} when GAIA tried to ${doing}` +
+        (limited ? " — its hourly limit for this network may be used up; try again later" : " — try again later") +
+        `, or download an installer from ${RELEASES_PAGE}.`
+      );
+    }
+    case "garbled":
+      return `GitHub sent a response GAIA couldn't read when it tried to ${doing} (${err.message}) — try again later, or download an installer from ${RELEASES_PAGE}.`;
+    default:
+      return `Couldn't reach GitHub to ${doing} (${(err && err.message) || err}) — check your connection, or download an installer from ${RELEASES_PAGE}.`;
+  }
+}
+
 const STATES = Object.freeze({
   IDLE: "idle",
   CHECKING: "checking",
@@ -225,23 +279,33 @@ function _savePin(pinnedVersion) {
  * Merge `patch` into update-config.json. Propagates write errors so a failed
  * pin write can abort a rollback (AC2 must not be silently broken). Callers
  * that can tolerate a failed write (e.g. clearPin) should catch.
+ *
+ * A file that can't be read or parsed is refused, never overwritten: it holds
+ * keys this app doesn't own (feedUrl, the Terminal UI's pin). The write goes
+ * to a temp file and is renamed over, so a crash never leaves half a file.
  */
 function _writeConfig(patch) {
   fs.mkdirSync(path.dirname(UPDATE_CONFIG_PATH), { recursive: true });
-  // Merge so we don't clobber a persisted feedUrl or the Terminal UI's keys.
   let existing = {};
-  try {
-    if (fs.existsSync(UPDATE_CONFIG_PATH)) {
-      existing = JSON.parse(fs.readFileSync(UPDATE_CONFIG_PATH, "utf8")) || {};
+  if (fs.existsSync(UPDATE_CONFIG_PATH)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(UPDATE_CONFIG_PATH, "utf8"));
+    } catch (err) {
+      throw new Error(
+        `${UPDATE_CONFIG_PATH} cannot be read (${(err && err.message) || err}), so the setting was not saved — ` +
+          "fix the file by hand or delete it."
+      );
     }
-  } catch {
-    existing = {};
+    if (!existing || typeof existing !== "object" || Array.isArray(existing)) {
+      throw new Error(
+        `${UPDATE_CONFIG_PATH} does not hold a settings object, so the setting was not saved — ` +
+          "fix the file by hand or delete it."
+      );
+    }
   }
-  fs.writeFileSync(
-    UPDATE_CONFIG_PATH,
-    JSON.stringify({ ...existing, ...patch }, null, 2),
-    "utf8"
-  );
+  const tmp = `${UPDATE_CONFIG_PATH}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ ...existing, ...patch }, null, 2), "utf8");
+  fs.renameSync(tmp, UPDATE_CONFIG_PATH);
 }
 
 // ── Forward-update feed resolution (issue #1724) ────────────────────────────────
@@ -335,27 +399,14 @@ async function _applyGithubFeed() {
   const allowPrerelease = _prereleasesAllowed();
   let releases;
   try {
-    const resp = await fetch(GITHUB_API_RELEASES, {
-      headers: { Accept: "application/vnd.github+json", "User-Agent": "GAIA-Agent-UI" },
-    });
-    if (!resp.ok) {
-      const limited = resp.status === 403 || resp.status === 429;
-      throw new Error(
-        `GitHub answered HTTP ${resp.status} when asked for GAIA releases` +
-          (limited ? " — its hourly limit for this network may be used up; try again later" : " — try again later") +
-          `, or download an installer from ${RELEASES_PAGE}.`
-      );
-    }
-    releases = await resp.json();
+    releases = await _fetchReleases();
   } catch (err) {
-    if (err && /^GitHub answered/.test(err.message)) throw err;
-    throw new Error(
-      `Couldn't reach GitHub to check for updates (${(err && err.message) || err}) — check your connection, ` +
-        `or download an installer from ${RELEASES_PAGE}.`
-    );
+    throw new Error(_releasesErrorMessage(err, "check for updates"));
   }
   if (!Array.isArray(releases)) {
-    throw new Error(`GitHub's release list was not a list — try again later, or see ${RELEASES_PAGE}.`);
+    throw new Error(
+      `GitHub sent a response GAIA couldn't read when it tried to check for updates (not a list) — try again later, or see ${RELEASES_PAGE}.`
+    );
   }
   const manifest = _platformManifest();
   const candidates = releases.filter(
@@ -469,23 +520,13 @@ async function listReleases() {
 
   let releases;
   try {
-    const resp = await fetch(GITHUB_API_RELEASES, {
-      headers: {
-        Accept: "application/vnd.github+json",
-        "User-Agent": "GAIA-Agent-UI",
-      },
-    });
-    if (!resp.ok) {
-      return {
-        error: `Couldn't reach GitHub to list releases (HTTP ${resp.status}) — check your connection; you can still download installers from the Releases page.`,
-      };
-    }
-    releases = await resp.json();
+    releases = await _fetchReleases();
   } catch (err) {
+    return { error: _releasesErrorMessage(err, "list releases") };
+  }
+  if (!Array.isArray(releases)) {
     return {
-      error: `Couldn't reach GitHub to list releases — check your connection; you can still download installers from the Releases page. (${
-        err && err.message
-      })`,
+      error: `GitHub sent a response GAIA couldn't read when it tried to list releases (not a list) — try again later, or see ${RELEASES_PAGE}.`,
     };
   }
 

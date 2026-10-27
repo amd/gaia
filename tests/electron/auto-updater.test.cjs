@@ -879,3 +879,100 @@ describe("update-config.json problems are reported, not hidden", () => {
     expect(mod.getState().configError).toMatch(/update-config\.json cannot be read/);
   });
 });
+
+describe("saving a setting never wipes update-config.json", () => {
+  function writeRaw(text) {
+    const dir = path.join(tmpHome, ".gaia");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "update-config.json"), text);
+  }
+
+  test.each([
+    ["broken JSON", '{"feedUrl": "https://r2.example/gaia", "tuiPinnedVersion": "v0.25.0",'],
+    ["a JSON list", "[1, 2]"],
+    ["JSON null", "null"],
+  ])("a file holding %s is refused and left as it was", async (_label, text) => {
+    writeRaw(text);
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    await expect(mod.setAutoUpdate(true)).rejects.toThrow(/cannot be read|does not hold a settings object/);
+    await expect(mod.setIncludePrereleases(true)).rejects.toThrow(/fix the file by hand or delete it/);
+    expect(fs.readFileSync(pinFilePath(), "utf8")).toBe(text);
+    expect(mod.getState().autoUpdate).toBe(false);
+    expect(fs.existsSync(`${pinFilePath()}.tmp`)).toBe(false);
+  });
+
+  test("a rollback is refused before it starts when the file is broken", async () => {
+    writeRaw("{oops");
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    const checkSpy = jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates");
+
+    await expect(mod.installVersion("v0.20.0")).rejects.toThrow(/cannot be read/);
+    expect(checkSpy).not.toHaveBeenCalled();
+    expect(fs.readFileSync(pinFilePath(), "utf8")).toBe("{oops");
+  });
+
+  test("a valid file keeps every key it doesn't own, and is replaced whole", async () => {
+    writeRaw(JSON.stringify({ feedUrl: "https://r2.example/gaia", tuiPinnedVersion: "v0.25.0" }));
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    const renameSpy = jest.spyOn(fs, "renameSync");
+
+    await mod.setIncludePrereleases(true);
+
+    expect(JSON.parse(fs.readFileSync(pinFilePath(), "utf8"))).toEqual({
+      feedUrl: "https://r2.example/gaia",
+      tuiPinnedVersion: "v0.25.0",
+      includePrereleases: true,
+    });
+    expect(renameSpy).toHaveBeenCalledWith(`${pinFilePath()}.tmp`, pinFilePath());
+    expect(fs.existsSync(`${pinFilePath()}.tmp`)).toBe(false);
+    renameSpy.mockRestore();
+  });
+
+  test("a failed write leaves the old file intact", async () => {
+    const original = JSON.stringify({ feedUrl: "https://r2.example/gaia" });
+    writeRaw(original);
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    const renameSpy = jest.spyOn(fs, "renameSync").mockImplementation(() => {
+      throw new Error("EPERM: file in use");
+    });
+
+    await expect(mod.setAutoUpdate(true)).rejects.toThrow(/EPERM/);
+    expect(fs.readFileSync(pinFilePath(), "utf8")).toBe(original);
+    renameSpy.mockRestore();
+  });
+});
+
+describe("listReleases says which way GitHub failed", () => {
+  test("a timeout says GitHub didn't answer", async () => {
+    const mod = loadModule();
+    global.fetch = jest.fn().mockRejectedValue(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }));
+    const result = await mod.listReleases();
+    expect(result.error).toMatch(/GitHub didn't answer within 20 seconds/);
+  });
+
+  test("garbled JSON is not called a connection problem", async () => {
+    const mod = loadModule();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("Unexpected token < in JSON");
+      },
+    });
+    const result = await mod.listReleases();
+    expect(result.error).toMatch(/GitHub sent a response GAIA couldn't read/);
+    expect(result.error).not.toMatch(/connection/);
+  });
+
+  test("an object instead of a list is an error, not a crash", async () => {
+    const mod = loadModule();
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ message: "Not Found" }) });
+    const result = await mod.listReleases();
+    expect(result.error).toMatch(/couldn't read/);
+  });
+});
