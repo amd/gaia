@@ -8,6 +8,7 @@ import { expectShape } from '../../utils/responseShape';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import type { BrowseResponse } from '../../types';
+import './SessionPanel.css';
 
 /** Pick a folder on this PC to give the chat, by browsing or by pasting its path. */
 export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => void; onClose: () => void }) {

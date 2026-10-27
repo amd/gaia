@@ -1059,7 +1059,8 @@ export interface StartCard {
 /** GET /api/onboarding/start */
 export interface StartScreen {
     cards: StartCard[];
-    working_folder: { path: string; name: string; gaia_folder: boolean };
+    /** choosable: a new chat can be given another folder. */
+    working_folder: { path: string; name: string; gaia_folder: boolean; choosable: boolean };
     /** Why there are no cards: the agent couldn't list its skills. */
     skills_error?: string | null;
 }

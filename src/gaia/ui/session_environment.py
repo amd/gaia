@@ -78,13 +78,34 @@ def relayed(session: Dict[str, Any]) -> bool:
     )
 
 
-def _require_enforceable(db: ChatDatabase, session_id: str) -> None:
-    session = db.get_session(session_id)
-    if session is not None and relayed(session):
+def _require_holdable(session: Dict[str, Any]) -> None:
+    if relayed(session):
         raise EnvironmentChangeError(
             "This chat's agent runs as its own process, so GAIA can't hold it to "
             "these settings. Start a chat with the GAIA agent to use them."
         )
+
+
+def _require_enforceable(db: ChatDatabase, session_id: str) -> None:
+    session = db.get_session(session_id)
+    if session is not None:
+        _require_holdable(session)
+
+
+def check_new_chat_folders(agent_type: Optional[str], folders: List[str]) -> None:
+    """Refuse folders a chat about to be made with *agent_type* could not be given.
+
+    Checked before the chat exists, so a refused folder leaves no chat behind.
+
+    Raises:
+        EnvironmentChangeError: The agent can't hold folder settings, or a
+            folder is missing or too broad.
+    """
+    if not folders:
+        return
+    _require_holdable({"agent_type": agent_type})
+    for path in folders:
+        check_folder(path)
 
 
 def _live_agent(session_id: str) -> Optional[Any]:
@@ -178,11 +199,14 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def add_folder(db: ChatDatabase, session_id: str, path: str) -> None:
-    """Let the chat read and write *path*, now and in later turns."""
+def check_folder(path: str) -> Path:
+    """*path* resolved, if a chat may be given it.
+
+    Raises:
+        EnvironmentChangeError: It is not a folder, or too broad to grant.
+    """
     from ._chat_helpers import _unsafe_directory_grant_reason
 
-    _require_enforceable(db, session_id)
     target = Path(os.path.expanduser(path)).resolve()
     if not target.is_dir():
         raise EnvironmentChangeError(f"{target} is not a folder on this PC.")
@@ -191,6 +215,13 @@ def add_folder(db: ChatDatabase, session_id: str, path: str) -> None:
         raise EnvironmentChangeError(
             f"GAIA can't be given {target}: {reason}. Pick a narrower folder."
         )
+    return target
+
+
+def add_folder(db: ChatDatabase, session_id: str, path: str) -> None:
+    """Let the chat read and write *path*, now and in later turns."""
+    _require_enforceable(db, session_id)
+    target = check_folder(path)
     env = load(db, session_id)
     covering = [
         w

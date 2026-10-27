@@ -131,15 +131,25 @@ def pick_cards(ctx: Context) -> List[Dict[str, Any]]:
 
 
 def working_folder() -> Dict[str, Any]:
-    """The folder a new chat's agent works in, as ``_compute_allowed_paths`` grants it."""
+    """The folder a new chat's agent works in, as ``_compute_allowed_paths`` grants it.
+
+    ``choosable`` says whether a new chat can be given another folder.
+    """
     from gaia.ui import _chat_helpers as chat
+    from gaia.ui.security import FLAGSHIP_AGENT_ID
+    from gaia.ui.session_environment import relayed
 
     cwd = Path.cwd().resolve()
     if chat._unsafe_directory_grant_reason(cwd):
         folder, own = chat._managed_documents_dir(), True
     else:
         folder, own = cwd, False
-    return {"path": str(folder), "name": folder.name or str(folder), "gaia_folder": own}
+    return {
+        "path": str(folder),
+        "name": folder.name or str(folder),
+        "gaia_folder": own,
+        "choosable": not relayed({"agent_type": FLAGSHIP_AGENT_ID}),
+    }
 
 
 def _mail_connected() -> bool:
