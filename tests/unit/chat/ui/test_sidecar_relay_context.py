@@ -110,3 +110,63 @@ def test_email_still_gets_its_transcript(monkeypatch, sidecar_flagship_registry)
     )
 
     assert captured["history_pairs"] == prior
+
+
+def test_a_relayed_turn_is_measured_for_under_the_hood(
+    monkeypatch, sidecar_flagship_registry
+):
+    """The sidecar's timings on ``final`` reach the Context panel's turn record."""
+    from gaia.ui.email_sidecar.profiles import profile_for
+    from gaia.ui.email_sidecar.relay import _dispatch_one
+    from gaia.ui.turn_insights import turn_record
+
+    stats = {
+        "type": "stats",
+        "step": 1,
+        "performance_stats": {"prompt_tokens": 1200, "completion_tokens": 40},
+    }
+    result = {
+        "answer": "Canberra.",
+        "timing_summary": {"llm_seconds": 2.5, "tool_seconds": 0.0, "llm_calls": 1},
+        "conversation": [
+            {"role": "user", "content": "Capital of Australia?"},
+            {"role": "system", "content": stats},
+        ],
+    }
+
+    def _fake_dispatch(sse_handler, request, history_pairs, model_id, agent, **kw):
+        final = {
+            "type": "final",
+            "answer": "Canberra.",
+            "performance": turn_record(result),
+        }
+        _dispatch_one(sse_handler, final, profile_for("gaia"))
+
+    monkeypatch.setattr(
+        chat_helpers_module, "_agent_registry", sidecar_flagship_registry
+    )
+    monkeypatch.setattr(chat_helpers_module, "_dispatch_sidecar_query", _fake_dispatch)
+    monkeypatch.setattr(
+        chat_helpers_module, "_maybe_update_session_title", _noop_retitle
+    )
+    db = ChatDatabase(":memory:")
+    session = db.create_session(agent_type="gaia")
+    request = ChatRequest(
+        session_id=session["id"],
+        message="Capital of Australia?",
+        stream=True,
+        agent_type="gaia",
+    )
+
+    async def _drive():
+        run = SimpleNamespace(handler=None)
+        async for _ in _stream_chat_impl(run, db, session, request):
+            pass
+
+    asyncio.run(_drive())
+
+    [turn] = db.turn_performance(session["id"])
+    assert turn["model_calls"] == 1
+    assert turn["tokens_in"] == 1200
+    assert turn["tokens_out"] == 40
+    assert turn["time"]["model_seconds"] is not None

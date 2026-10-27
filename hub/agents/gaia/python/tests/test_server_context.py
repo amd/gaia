@@ -171,3 +171,29 @@ def test_a_slow_tokenizer_never_holds_up_the_answer(built, monkeypatch):
     assert final["context"]["used"] == 2
     assert final["context"]["tokenizer"]["exact"] is False
     assert "estimates" in final["context"]["tokenizer"]["reason"]
+
+
+def test_final_carries_the_turns_timings(built, measured):
+    """The Agent UI's Under the hood panel measures a relayed turn from these."""
+    client, state = built
+    stats = {
+        "type": "stats",
+        "step": 1,
+        "performance_stats": {"prompt_tokens": 1200, "completion_tokens": 40},
+    }
+    timing = {"llm_seconds": 2.5, "tool_seconds": 0.0, "llm_calls": 1}
+    state["result"] = {
+        "answer": "Paris.",
+        "timing_summary": timing,
+        "conversation": [
+            {"role": "user", "content": "Capital of France?"},
+            {"role": "system", "content": stats},
+        ],
+    }
+
+    final = _final(client)
+
+    assert final["performance"] == {
+        "timing_summary": timing,
+        "conversation": [{"role": "system", "content": stats}],
+    }

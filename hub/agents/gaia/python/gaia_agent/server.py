@@ -67,6 +67,7 @@ from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
+from gaia.ui.turn_insights import turn_record
 from gaia.version import LEMONADE_MIN_VERSION
 
 logger = get_logger(__name__)
@@ -1559,7 +1560,7 @@ async def query(request: QueryRequest):
         return _sse(_worded(event, _wording_surface(request)))
 
     async def _with_context(final: Dict[str, Any]) -> Dict[str, Any]:
-        """``final`` carrying the turn's context measurement (contract >= 2.21)."""
+        """``final`` carrying the turn's context measurement (contract >= 2.21) and timings."""
         if final.get("type") != "final":
             return final
         # ``final`` is printed inside process_query; the measurement follows it.
@@ -1573,6 +1574,9 @@ async def query(request: QueryRequest):
                 _CONTEXT_WAIT_SECONDS,
             )
             return final
+        performance = turn_record(run.result)
+        if performance is not None:
+            final = {**final, "performance": performance}
         if run.context_error is not None:
             return {**final, "context_error": run.context_error}
         if run.context is None:

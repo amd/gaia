@@ -361,6 +361,24 @@ def _cost(model_id: Optional[str], tokens_in, cached, tokens_out) -> Dict[str, A
     return {"kind": "estimate", "usd": round(usd, 6)}
 
 
+def turn_record(result: Any) -> Optional[Dict[str, Any]]:
+    """The part of an agent's result :func:`summarize_turn` reads, or None if it timed nothing.
+
+    Small enough for the sidecar to send on ``/query``'s ``final`` event, so a
+    relayed turn is measured the same way as an in-process one.
+    """
+    if not isinstance(result, dict):
+        return None
+    timing = result.get("timing_summary") or {}
+    steps = _step_stats(result.get("conversation"))
+    if not (timing or steps):
+        return None
+    return {
+        "timing_summary": timing,
+        "conversation": [{"role": "system", "content": stats} for stats in steps],
+    }
+
+
 def summarize_turn(
     result: Dict[str, Any],
     *,

@@ -614,6 +614,7 @@ class SSEOutputHandler(OutputHandler):
         # What the sidecar measured fills its context, from its ``final`` event.
         self.relay_context: Optional[Dict[str, Any]] = None
         self.relay_context_error: Optional[str] = None
+        self.relay_performance: Optional[Dict[str, Any]] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None

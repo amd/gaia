@@ -340,6 +340,10 @@ def _dispatch_one(
             handler._emit({"type": "context_usage", **context})
         elif isinstance(event.get("context_error"), str):
             handler.relay_context_error = event["context_error"]
+        performance = event.get("performance")
+        if isinstance(performance, dict):
+            # What summarize_turn reads, so Under the hood measures this turn.
+            handler.relay_performance = performance
         handler._emit(out)
         return True
 
