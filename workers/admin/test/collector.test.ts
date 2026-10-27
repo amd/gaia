@@ -156,10 +156,10 @@ describe("collectAll", () => {
     const f = async (u: string) => {
       if (u.includes("/releases")) return new Response("boom", { status: 500 });
       if (u.includes("/actions/runs")) return ok({ total_count: 0, workflow_runs: [] });
-      if (u.includes("npmjs") && u.includes("/range/")) return ok({ downloads: [{ day: "2026-10-25", downloads: 1 }] });
-      if (u.includes("npmjs")) return ok({ downloads: 3 });
-      if (u.includes("pypistats") && u.includes("/overall")) return ok({ data: [{ category: "without_mirrors", date: "2026-10-25", downloads: 2 }] });
-      if (u.includes("pypistats")) return ok({ data: { last_week: 4 } });
+      if (new URL(u).host === "api.npmjs.org" && u.includes("/range/")) return ok({ downloads: [{ day: "2026-10-25", downloads: 1 }] });
+      if (new URL(u).host === "api.npmjs.org") return ok({ downloads: 3 });
+      if (new URL(u).host === "pypistats.org" && u.includes("/overall")) return ok({ data: [{ category: "without_mirrors", date: "2026-10-25", downloads: 2 }] });
+      if (new URL(u).host === "pypistats.org") return ok({ data: { last_week: 4 } });
       if (u.includes("/stargazers") || u.includes("/forks") || u.includes("/issues") || u.includes("/commits")) return ok([]);
       if (u.includes("/actions/workflows/")) return ok({ workflow_runs: [] });
       if (u.includes("/stats/")) return ok([]);

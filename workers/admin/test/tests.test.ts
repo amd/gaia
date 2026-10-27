@@ -53,7 +53,7 @@ describe("jobLog", () => {
     const calls: { url: string; auth: string | undefined }[] = [];
     const f = async (url: string, init?: RequestInit) => {
       calls.push({ url, auth: (init?.headers as Record<string, string> | undefined)?.Authorization });
-      if (url.includes("api.github.com")) return new Response(null, { status: 302, headers: { location: "https://blob.example/log" } });
+      if (new URL(url).host === "api.github.com") return new Response(null, { status: 302, headers: { location: "https://blob.example/log" } });
       return new Response("10 passed in 1.0s");
     };
     expect(await jobLog(env, f, 7)).toBe("10 passed in 1.0s");
