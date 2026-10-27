@@ -156,6 +156,7 @@ describe('Settings › Model', () => {
         fireEvent.click(await screen.findByRole('radio', { name: /Fireworks AI/ }));
         const card = await screen.findByRole('region', { name: 'Fireworks AI' });
         expect(await within(card).findByText('$0.15 in · $0.50 out per 1M tokens')).toBeInTheDocument();
+        fireEvent.click(within(card).getByRole('button', { name: 'Show all models' }));
         expect(within(card).getByText('price unknown')).toBeInTheDocument();
     });
 });

@@ -1,7 +1,8 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Pins what the shell sends when a chat starts, and when it shows first-run setup.
+// Pins what the shell sends when a chat starts, when it shows first-run setup,
+// and which sidebar destination is open.
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -312,7 +313,7 @@ describe('a private new chat', () => {
             .toBeLessThan(mocked.sendMessageStream.mock.invocationCallOrder[0]);
         expect(mocked.toggleSessionPrivacy).not.toHaveBeenCalled();
         expect(useChatStore.getState().sessions.find((s) => s.id === 'sess-new-0001')?.private).toBe(true);
-        expect(await screen.findByRole('button', { name: 'Private chat on' })).toHaveAttribute('aria-pressed', 'true');
+        expect(await screen.findByRole('button', { name: 'Turn off private chat' })).toHaveAttribute('data-private', 'true');
         // The next new chat starts non-private again.
         expect(useChatStore.getState().draftPrivate).toBe(false);
     });
@@ -451,5 +452,22 @@ describe('opening the app on a chat link', () => {
         await waitFor(() => expect(mocked.listSessions).toHaveBeenCalled());
         await waitFor(() => expect(window.location.hash).toBe(''));
         expect(useChatStore.getState().currentSessionId).toBeNull();
+    });
+});
+
+describe('sidebar destinations', () => {
+    it('opens Scheduled tasks over the chat, and Documents in its place', async () => {
+        mocked.listSchedules.mockResolvedValue({ schedules: [], total: 0 });
+        render(<App />);
+        await userEvent.click(await screen.findByRole('button', { name: 'Scheduled tasks' }));
+
+        expect(await screen.findByRole('dialog', { name: 'Scheduled tasks' })).toBeInTheDocument();
+        expect(screen.getByLabelText('Message')).toBeInTheDocument();
+
+        // The backdrop covers the sidebar for a pointer, not for a screen reader or voice control.
+        fireEvent.click(screen.getByRole('button', { name: 'Documents' }));
+
+        expect(await screen.findByRole('dialog', { name: 'Document library' })).toBeInTheDocument();
+        expect(screen.queryByRole('dialog', { name: 'Scheduled tasks' })).not.toBeInTheDocument();
     });
 });
