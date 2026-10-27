@@ -1141,7 +1141,7 @@ class FileSearchToolsMixin:
                     "file_path": file_path,
                     "content": content,
                     "line_count": len(content.splitlines()),
-                    "size_bytes": len(content.encode("utf-8")),
+                    "size_bytes": os.path.getsize(file_path),
                 }
                 if encoding != "utf-8":
                     result["encoding"] = encoding

@@ -157,7 +157,7 @@
     align-items: center;
     gap: 8px;
     min-height: 34px;
-    margin: 2px 0 4px;
+    margin: 0 0 4px;
     padding: 0 8px;
     border: 1px solid var(--border-light);
     border-radius: var(--radius-md);
@@ -231,6 +231,25 @@
     color: var(--text-primary);
     font-size: 13.5px;
     text-align: left;
+}
+
+.sb-row-edit {
+    flex: 1;
+    min-width: 0;
+    min-height: 32px;
+    margin: 0 3px;
+    padding: 4px 8px;
+    border: 1px solid var(--accent-solid);
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13.5px;
+    outline: none;
+}
+
+.sb-row-edit:focus {
+    box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .sb-row-icon {
@@ -327,6 +346,7 @@
     color: var(--text-primary);
 }
 
+.sb-row-rename,
 .sb-row-pin,
 .sb-row-delete {
     display: inline-flex;
@@ -341,10 +361,13 @@
     opacity: 0;
 }
 
+.sb-row-rename,
 .sb-row-pin {
     margin-right: 0;
 }
 
+.sb-row:hover .sb-row-rename,
+.sb-row:focus-within .sb-row-rename,
 .sb-row:hover .sb-row-pin,
 .sb-row:focus-within .sb-row-pin,
 .sb-row:hover .sb-row-delete,
@@ -353,6 +376,7 @@
     opacity: 1;
 }
 
+.sb-row-rename:hover,
 .sb-row-pin:hover {
     color: var(--text-primary);
 }
@@ -368,6 +392,58 @@
 .sb-row-delete-label {
     font-size: 11.5px;
     font-weight: 600;
+}
+
+/* Phone: one ⋯ per row, sized to a 44px touch target. */
+.sb-row-more {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-md);
+    color: var(--text-muted);
+}
+
+.sb-row-more[aria-expanded="true"] {
+    color: var(--text-primary);
+}
+
+.sb-row-menu .popover-item {
+    align-items: center;
+    min-height: 44px;
+    gap: 10px;
+}
+
+.sb-row-menu .sb-row-menu-delete {
+    color: var(--danger);
+}
+
+/* Phone rename: Save and Cancel, since a phone has no visible way to finish an edit. */
+.sb-row-edit-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-md);
+    color: var(--text-muted);
+}
+
+.sb-row-edit-btn.is-save {
+    color: var(--accent);
+}
+
+/* A row that just moved groups (pin/unpin) is marked briefly so it can be found. */
+.sb-row.is-moved {
+    background: var(--accent-dim);
+    transition: background var(--duration-slow) var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sb-row.is-moved { transition: none; }
 }
 
 .sb-empty,
@@ -456,10 +532,5 @@
 
     .sb.is-open {
         transform: translateX(0);
-    }
-
-    .sb-row-pin,
-    .sb-row-delete {
-        opacity: 1;
     }
 }
