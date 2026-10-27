@@ -112,6 +112,28 @@ class TestBomTextReadsAsText:
             assert result["status"] == "success"
             assert result["size_bytes"] == path.stat().st_size
 
+    @pytest.mark.parametrize("tools", ["search_tools", "io_tools"])
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            b"",
+            "Ω≈ç√ 日本語 🚀\n".encode("utf-8"),
+            ("x" * 120 + "\r\n").encode("utf-8") * 2000,
+        ],
+        ids=["empty", "utf8-multibyte", "crlf-over-truncation-budget"],
+    )
+    def test_size_matches_disk_and_paged_read(self, request, tools, raw, tmp_path):
+        path = tmp_path / "edge.txt"
+        path.write_bytes(raw)
+        read_file = request.getfixturevalue(tools)["read_file"]
+        full = read_file(str(path))
+        assert full["status"] == "success"
+        assert full["size_bytes"] == len(raw)
+        if raw:
+            paged = read_file(str(path), offset=0, limit=10)
+            assert paged["status"] == "success"
+            assert paged["size_bytes"] == full["size_bytes"]
+
     def test_plain_utf8_result_is_unchanged(self, search_tools, tmp_path):
         path = tmp_path / "plain.txt"
         path.write_text(SECRET, encoding="utf-8")
