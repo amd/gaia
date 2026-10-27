@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
+import sys
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 MCP_TEST_MODULES = (
     "tests/mcp/test_mcp_simple.py",
@@ -13,7 +17,7 @@ MCP_TEST_MODULES = (
 
 
 def _module_tree(relative_path: str) -> ast.Module:
-    path = Path(relative_path)
+    path = REPO_ROOT / relative_path
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
@@ -63,3 +67,18 @@ def test_mcp_modules_keep_windows_encoding_setup_in_main_guard():
             )
             for guard in main_guards
         ), f"{relative_path} configures Windows stdout outside __main__"
+
+
+def test_importing_mcp_modules_as_windows_keeps_the_same_stdout(monkeypatch):
+    """Behavioural check: catches setattr() or helper calls the AST scan misses."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    for relative_path in MCP_TEST_MODULES:
+        original = sys.stdout
+        monkeypatch.setattr(sys, "stdout", original)
+        path = REPO_ROOT / relative_path
+        spec = importlib.util.spec_from_file_location(
+            f"_stdout_probe_{path.stem}", path
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert sys.stdout is original, f"{relative_path} replaces sys.stdout on import"
