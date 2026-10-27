@@ -8,9 +8,7 @@ import { log } from '../../utils/logger';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
 import { formatGb } from '../../utils/modelLabels';
-import { useUpdateStatus } from '../../hooks/useUpdateStatus';
 import type { SystemStatus, MCPServerStatus } from '../../types';
-import { VersionPicker } from '../VersionPicker';
 import { LemonadeServerSection } from './LemonadeServerSection';
 import { ModelServerPanel } from './ModelServerPanel';
 import '../SettingsModal.css';
@@ -20,8 +18,6 @@ export function AdvancedSettings() {
     const [status, setStatus] = useState<SystemStatus | null>(null);
     const [loading, setLoading] = useState(true);
     const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
-    const [showVersionPicker, setShowVersionPicker] = useState(false);
-    const updateStatus = useUpdateStatus();
 
     // Active Model override
     const [customModel, setCustomModel] = useState<string>('');
@@ -415,38 +411,8 @@ export function AdvancedSettings() {
                     <div className="about-info">
                         <p>GAIA v{version} <span className="beta-badge">BETA</span></p>
                         <p className="about-sub">Privacy-first AI chat for AMD Ryzen AI PCs.</p>
-                        {updateStatus.pinnedVersion && (
-                            <p className="about-pinned-notice">
-                                Auto-update paused (pinned to {updateStatus.pinnedVersion}).{' '}
-                                <button
-                                    type="button"
-                                    className="about-resume-btn"
-                                    onClick={() => {
-                                        const bridge = (window as unknown as { gaiaUpdater?: { resumeUpdates: () => Promise<unknown> } }).gaiaUpdater;
-                                        void bridge?.resumeUpdates().catch((e) => {
-                                            log.system.error('Resume updates failed', e);
-                                        });
-                                    }}
-                                >
-                                    Resume updates
-                                </button>
-                            </p>
-                        )}
-                    </div>
-                    <div className="setting-actions">
-                        <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={() => setShowVersionPicker(true)}
-                        >
-                            Roll back to a previous version
-                        </button>
                     </div>
                 </section>
-
-                {showVersionPicker && (
-                    <VersionPicker onClose={() => setShowVersionPicker(false)} />
-                )}
         </div>
     );
 }
