@@ -42,75 +42,146 @@ curl -X POST -H "x-admin-action: collect" "http://localhost:8787/admin/api/colle
 - The collector only answers a request carrying `x-admin-action: collect` from the same
   site, so a link or form on another site cannot trigger it.
 
-## Deploy (maintainer)
-
-Needs the Workers **paid** plan: the nightly collection makes far more than the free
-plan's 50 subrequests per invocation and needs more than 10 ms of CPU.
+## Deploy and sign-in (maintainer)
 
 The dashboard is a Worker on the `amd-gaia.ai` zone, not part of the Railway site. Its
 route `amd-gaia.ai/admin*` is more specific than `website-router`'s `amd-gaia.ai/*`, so
 Cloudflare sends `/admin` here and everything else to Railway as before. Railway never
-sees `/admin` traffic, so its public `*.up.railway.app` hostname is not a way around
-sign-in.
+sees `/admin` traffic, so its `*.up.railway.app` hostname is not a way around sign-in.
+Sign-in is Cloudflare Access with a code emailed to an allowlisted address; the Worker
+re-checks Access's signed token (`Cf-Access-Jwt-Assertion`) on every request, so a
+misconfigured policy still cannot expose data.
 
-1. **Database.** `npx wrangler d1 create gaia-admin`, paste the id into `wrangler.toml`,
-   then `npx wrangler d1 migrations apply gaia-admin --remote`.
-2. **Token.** `npx wrangler secret put GITHUB_TOKEN`: a fine-grained token with read
-   access to `amd/gaia` (Contents, Actions, Issues, Pull requests, Metadata). Actions
-   read is needed for job logs and eval artifacts.
-3. **Sign-in (Cloudflare Access, email code, allowlist).** See below. Do this before the
-   first deploy: without `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` the Worker answers 500 to
-   everyone rather than serving unauthenticated.
-4. **Deploy.** `npx wrangler deploy`. The first nightly run (03:17 UTC) reads the full
-   issue and commit history on its own. To fill 90 days of CI history right away, create
-   an Access **service token** (Zero Trust → Access → Service Auth → Create service
-   token), add a second policy to the application with action **Service Auth** that
-   includes that token, then run the backfill in chunks:
-   ```bash
-   for skip in 0 30 60; do
-     curl -X POST -H "x-admin-action: collect"        -H "CF-Access-Client-Id: <id>" -H "CF-Access-Client-Secret: <secret>"        "https://amd-gaia.ai/admin/api/collect?days=30&skip=$skip&only=runs,tests"
-   done
-   ```
-   Measure the first collection against the real database before relying on it:
-   `npx wrangler dev --remote` runs the Worker against remote D1.
+### What you need
 
-### Sign-in with an emailed code for allowlisted addresses
+- The Cloudflare account that owns `amd-gaia.ai`, with the **Workers paid plan** (the
+  nightly collection exceeds the free plan's 50 subrequests and 10 ms CPU per run).
+- Zero Trust enabled on that account (free for up to 50 users).
+- A GitHub fine-grained token with **read** access to `amd/gaia`: Contents, Actions,
+  Issues, Pull requests, Metadata. Actions read is needed for job logs and eval artifacts.
+- Node 22+ and this repo checked out: `cd workers/admin && npm ci`.
 
-Cloudflare Zero Trust (free for up to 50 users) checks identity at the edge, before
-any request reaches the Worker. The Worker then re-checks the signed token Access
-adds (`Cf-Access-Jwt-Assertion`), so a misconfigured policy still cannot expose data.
+### 1. Log in to Cloudflare from the CLI
 
-1. **Turn on Zero Trust.** In the Cloudflare dashboard for the account that owns
-   `amd-gaia.ai`, open **Zero Trust**. The first time, pick a team name (for example
-   `amd-gaia`); your team domain becomes `amd-gaia.cloudflareaccess.com`.
-2. **Enable email codes.** Zero Trust → **Settings → Authentication → Login methods →
-   Add new → One-time PIN**. No identity provider is needed; Access emails a six-digit
-   code to the address entered.
-3. **Create the application.** Zero Trust → **Access → Applications → Add an
-   application → Self-hosted**.
-   - Application name: `GAIA admin`
+```bash
+npx wrangler login          # opens a browser; pick the account that owns amd-gaia.ai
+npx wrangler whoami         # confirm the account
+```
+
+### 2. Create the database
+
+```bash
+npx wrangler d1 create gaia-admin
+```
+
+Copy the printed `database_id` into `wrangler.toml` (replace the all-zero placeholder),
+then create the tables:
+
+```bash
+npx wrangler d1 migrations apply gaia-admin --remote
+```
+
+### 3. Store the GitHub token
+
+```bash
+npx wrangler secret put GITHUB_TOKEN    # paste the token when asked
+```
+
+### 4. Set up the email-code sign-in
+
+1. **Team.** Cloudflare dashboard → **Zero Trust**. The first time, choose a team name,
+   for example `amd-gaia`. The team domain is then `amd-gaia.cloudflareaccess.com`
+   (shown under **Settings → Custom pages**).
+2. **Email codes.** Zero Trust → **Settings → Authentication → Login methods → Add new →
+   One-time PIN**. No identity provider is needed: Access emails a six-digit code.
+3. **Application.** Zero Trust → **Access → Applications → Add an application →
+   Self-hosted**.
+   - Name: `GAIA admin`
    - Session duration: 24 hours (or shorter)
-   - Application domain: `amd-gaia.ai`, path `admin` (add a second entry with path
-     `admin/*` so the API is covered too)
-   - Identity providers: **One-time PIN** only
-4. **Allowlist the emails.** In the application's **Policies** step, add a policy:
-   - Action: **Allow**
-   - Include → **Emails** → list each address (or **Emails ending in** `@amd.com` to
-     allow everyone at AMD)
-   - Save. Anyone not on the list is refused before a code is even sent.
-5. **Copy the two values into `wrangler.toml`.** On the application's **Overview** tab,
-   copy the **Application Audience (AUD) Tag**. Set:
-   ```toml
-   ACCESS_TEAM_DOMAIN = "amd-gaia.cloudflareaccess.com"
-   ACCESS_AUD = "<the AUD tag>"
-   ```
-   then `npx wrangler deploy`.
-6. **Check it.** In a private window, open `https://amd-gaia.ai/admin`. You should see
-   Cloudflare's sign-in page; enter an allowlisted email, then the code from your inbox.
-   An address not on the list is refused. `curl -i https://amd-gaia.ai/admin/api/status`
-   without a cookie must return a redirect to the sign-in page, never data.
+   - Public hostname: domain `amd-gaia.ai`, path `admin`. Add a second hostname entry
+     with path `admin/*` so the API under it is covered too.
+   - Login methods: **One-time PIN** only; turn off "Accept all available identity
+     providers".
+4. **Who may sign in.** In the application's **Policies** step, add a policy:
+   - Name `Admins`, action **Allow**
+   - Include → **Emails** → each allowed address (or **Emails ending in** `@amd.com`
+     for everyone at AMD)
+   - Anyone not on the list is refused before a code is sent.
+5. **Service token for scripts** (used for the backfill in step 7, and any automation):
+   - Zero Trust → **Access → Service Auth → Create service token**, name `gaia-admin-backfill`.
+     Copy the Client ID and Client Secret now; the secret is shown once.
+   - Back in the `GAIA admin` application, add a second policy: name `Scripts`, action
+     **Service Auth**, Include → **Service Token** → `gaia-admin-backfill`.
+6. **AUD tag.** Open the application → **Overview** (or Basic information) and copy the
+   **Application Audience (AUD) Tag**.
 
-To add or remove someone later, edit the policy's email list; no deploy is needed.
+Put the two values in `wrangler.toml`:
+
+```toml
+ACCESS_TEAM_DOMAIN = "amd-gaia.cloudflareaccess.com"
+ACCESS_AUD = "<the AUD tag>"
+```
+
+Until both are set, the Worker answers 500 to every request rather than serving the
+dashboard unauthenticated. Neither value is a secret.
+
+### 5. Deploy
+
+```bash
+npx wrangler deploy
+```
+
+This creates the `amd-gaia.ai/admin*` route and the nightly 03:17 UTC collection.
+
+### 6. Check the sign-in
+
+- In a private browser window, open `https://amd-gaia.ai/admin`. You should land on
+  Cloudflare's sign-in page. Enter an allowlisted email, then the code from your inbox;
+  the dashboard opens.
+- Enter an address that is not on the list: it must be refused.
+- Without a session, `curl -i https://amd-gaia.ai/admin/api/status` must return a
+  redirect to the sign-in page (or 403), never data.
+
+### 7. Fill the history
+
+The first nightly run reads the full issue, commit, star and fork history by itself. CI
+runs and test counts go back about 90 days on GitHub and are read 3 days per night, so
+backfill them once with the service token (about a minute per day of runs, so the 90
+days take a while; run the three chunks one after another):
+
+```bash
+ID=<client id>; SECRET=<client secret>
+for skip in 0 30 60; do
+  curl -X POST \
+    -H "x-admin-action: collect" \
+    -H "CF-Access-Client-Id: $ID" -H "CF-Access-Client-Secret: $SECRET" \
+    "https://amd-gaia.ai/admin/api/collect?days=30&skip=$skip&only=runs,tests"
+done
+```
+
+Each call returns `ok`, or the sources that failed and why. The footer of every page
+shows the last result of each source.
+
+### Day to day
+
+- **Add or remove a person:** edit the `Admins` policy's email list. No deploy needed.
+- **A source failing:** the footer turns red and lists it; the error says what to fix.
+- **Backups:** D1 Time Travel restores to any minute in the last 30 days
+  (`npx wrangler d1 time-travel restore gaia-admin --timestamp=<ISO time>`). For a copy
+  older than that, `npx wrangler d1 export gaia-admin --remote --output backup.sql`.
+- **Schema changes:** add a numbered file under `migrations/`, then
+  `npx wrangler d1 migrations apply gaia-admin --remote` before `npx wrangler deploy`.
+
+### If something is wrong
+
+| Symptom | Cause |
+|---|---|
+| 500 "ACCESS_TEAM_DOMAIN and ACCESS_AUD are not set" | Step 4.6 values missing from `wrangler.toml`, or not redeployed |
+| 401 "Access token is for a different application" | `ACCESS_AUD` is from another application; copy it again |
+| 401 "Access token issuer mismatch" | `ACCESS_TEAM_DOMAIN` is not exactly `<team>.cloudflareaccess.com` |
+| The page loads without asking to sign in | The Access application does not cover the path; check both `admin` and `admin/*` |
+| 403 "send the header 'x-admin-action: collect'" | The collect call is missing that header |
+| Collection fails with HTTP 403/429 from GitHub | `GITHUB_TOKEN` missing, expired, or lacking Actions read |
 
 ## Things to know
 
