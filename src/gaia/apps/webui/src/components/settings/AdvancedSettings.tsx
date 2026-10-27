@@ -7,6 +7,7 @@ import * as api from '../../services/api';
 import { log } from '../../utils/logger';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
+import { formatGb } from '../../utils/modelLabels';
 import type { SystemStatus, MCPServerStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
 import { ModelServerPanel } from './ModelServerPanel';
@@ -184,7 +185,7 @@ export function AdvancedSettings() {
                                 )}
                                 <StatusRow label="Embedding Model" value={status.embedding_model_loaded ? 'Available' : 'Not loaded'} ok={status.embedding_model_loaded} />
                                 {status.gpu_name && (
-                                    <StatusRow label="GPU" value={`${status.gpu_name}${status.gpu_vram_gb ? ` (${status.gpu_vram_gb} GB)` : ''}`} ok={true} />
+                                    <StatusRow label="GPU" value={`${status.gpu_name}${status.gpu_vram_gb ? ` (${formatGb(status.gpu_vram_gb)})` : ''}`} ok={true} />
                                 )}
                                 <StatusRow
                                     label="Disk Space"

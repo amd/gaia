@@ -10,6 +10,7 @@ recurring task in the Agent UI, it said it had no scheduler.
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -68,6 +69,30 @@ def test_the_prompt_names_exactly_the_sessions_existing_folders(gaia_docs, tmp_p
     listed = line.split(": ", 1)[1].split(". For", 1)[0]
     assert listed == f"{gaia_docs} (GAIA's documents folder), {work.resolve()}"
     assert '"my documents"' in line and "look here first" in line
+
+
+def test_saving_to_my_documents_names_the_users_folder_not_gaias(gaia_docs):
+    # "my Documents folder" sent new files into the hidden GAIA folder.
+    agent = _build(allowed_paths=[str(gaia_docs)])
+    try:
+        line = _folders_line(agent._get_system_prompt())
+    finally:
+        agent.__del__()
+    assert (
+        f"save a new file to the user's Documents folder, use {Path.home() / 'Documents'}"
+        in line
+    )
+
+
+def test_no_documents_note_without_gaias_documents_folder(gaia_docs, tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    agent = _build(allowed_paths=[str(work)])
+    try:
+        line = _folders_line(agent._get_system_prompt())
+    finally:
+        agent.__del__()
+    assert "Documents folder" not in line
 
 
 def test_the_folders_line_does_not_change_mid_session(gaia_docs, tmp_path):
