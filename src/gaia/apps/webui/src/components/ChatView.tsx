@@ -460,6 +460,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             }
             dismissPolicyToast();
             streamBufferRef.current = '';
+            // Clear this view's live turn now, before the next view's effects re-attach theirs.
+            useChatStore.getState().resetStreaming();
         };
     }, [sessionId]);
 

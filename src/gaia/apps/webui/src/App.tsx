@@ -72,7 +72,6 @@ function App() {
     const setCurrentSession = useChatStore((s) => s.setCurrentSession);
     const addSession = useChatStore((s) => s.addSession);
     const setMessages = useChatStore((s) => s.setMessages);
-    const resetStreaming = useChatStore((s) => s.resetStreaming);
     const showDocLibrary = useChatStore((s) => s.showDocLibrary);
     const showFileBrowser = useChatStore((s) => s.showFileBrowser);
     const showMemoryDashboard = useChatStore((s) => s.showMemoryDashboard);
@@ -567,11 +566,6 @@ function App() {
         mq.addEventListener('change', syncSystemTheme);
         return () => mq.removeEventListener('change', syncSystemTheme);
     }, [syncSystemTheme]);
-
-    // Drop the previous chat's in-flight stream state when switching (#1580),
-    // and when Memory replaces the chat view, which ends its stream too.
-    // Scheduled tasks opens over the chat, so its stream keeps running.
-    useEffect(() => { resetStreaming(); }, [currentSessionId, showMemoryDashboard, resetStreaming]);
 
     // ── Mobile access ──────────────────────────────────────────────────
     useEffect(() => {
