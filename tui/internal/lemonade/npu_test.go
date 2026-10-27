@@ -118,3 +118,22 @@ func TestSingleTurnFLMBuildsAreNotChatOptions(t *testing.T) {
 		t.Fatal("the NPU twin must stay a chat option")
 	}
 }
+
+// The NPU model is an option the user picks, never shown as a recommendation.
+func TestNPUModelIsListedWithTheOtherModelsNotRecommended(t *testing.T) {
+	gpu := Model{ID: "Gemma-4-E4B-it-GGUF", Size: 5.97, Labels: []string{"chat"}}
+	entries := BuildEntries("local", append([]Model{gpu}, flmCatalog()...), capacityOf(t, haloNPU), nil)
+	seenOther := false
+	for _, e := range entries {
+		if e.Model.ID == "gemma4-it-e4b-FLM" {
+			if e.Featured() || !seenOther {
+				t.Fatalf("Gemma NPU must sit with the other models: %+v", e)
+			}
+			return
+		}
+		if !e.Featured() {
+			seenOther = true
+		}
+	}
+	t.Fatal("Gemma NPU missing")
+}

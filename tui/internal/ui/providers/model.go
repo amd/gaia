@@ -967,10 +967,10 @@ func (m Model) View() string {
 		start := max(0, m.focus-count+1)
 		for i := start; i < min(len(entries), start+count); i++ {
 			e := entries[i]
-			if e.Recommended != nil && (i == start || entries[i-1].Recommended == nil) {
+			if e.Featured() && (i == start || !entries[i-1].Featured()) {
 				lines = append(lines, title.Render("Recommended"))
 			}
-			if e.Recommended == nil && (i == start || entries[i-1].Recommended != nil) {
+			if !e.Featured() && (i == start || entries[i-1].Featured()) {
 				lines = append(lines, title.Render("All models"))
 			}
 			marker := "  "
@@ -978,7 +978,7 @@ func (m Model) View() string {
 				marker = "› "
 			}
 			label := entryName(e, m.chosen())
-			if e.Recommended != nil {
+			if e.Featured() {
 				label = "★ " + label
 			}
 			if rank, note, ok := lemonade.Rank(e.Model.ID); ok {

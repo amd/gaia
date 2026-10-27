@@ -43,6 +43,12 @@ func (e Entry) SizeGB() float64 {
 	return 0
 }
 
+// Featured reports a row shown under "Recommended": a recommendation that is
+// not just an option.
+func (e Entry) Featured() bool {
+	return e.Recommended != nil && !e.Recommended.Option
+}
+
 // OnNPU reports a FastFlowLM model, which the NPU runs from system RAM.
 func (e Entry) OnNPU() bool {
 	return e.Model.Recipe == "flm" || (e.Recommended != nil && e.Recommended.Device == "npu")
@@ -166,7 +172,14 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 	}
 
 	used := make([]bool, len(models))
-	var head []Entry
+	var head, rest []Entry
+	place := func(e Entry) {
+		if e.Featured() {
+			head = append(head, e)
+		} else {
+			rest = append(rest, e)
+		}
+	}
 	for _, rec := range RecommendedFor(provider) {
 		rec := rec
 		matched := false
@@ -175,7 +188,7 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 				used[i], matched = true, true
 				e := Entry{Model: m, Recommended: &rec, Listed: true}
 				judge(&e)
-				head = append(head, e)
+				place(e)
 			}
 		}
 		// A cloud recommendation the account does not list is simply absent.
@@ -197,9 +210,8 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 		default:
 			judge(&e)
 		}
-		head = append(head, e)
+		place(e)
 	}
-	var rest []Entry
 	for i, m := range models {
 		if used[i] {
 			continue

@@ -44,8 +44,9 @@
       "id": "gemma4-it-e4b-FLM",
       "provider": "local",
       "label": "Gemma 4 E4B NPU",
-      "note": "Gemma 4 E4B on the Ryzen AI NPU, in system RAM; leaves the GPU free",
+      "note": "Gemma 4 E4B on the Ryzen AI NPU, in system RAM; slower than the GPU, but leaves it free",
       "device": "npu",
+      "option": true,
       "size_gb": 9.1,
       "vision": true,
       "min_ctx_size": 65536
