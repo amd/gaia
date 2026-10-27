@@ -1,8 +1,8 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Leaving a chat for Memory or Scheduled tasks mid-turn, then coming back,
-// still shows the turn's answer.
+// Leaving a chat mid-turn for another chat, Memory or Scheduled tasks, then
+// coming back, still shows the turn live and then its answer.
 
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -71,16 +71,33 @@ afterEach(() => {
     vi.unstubAllGlobals();
 });
 
+const OTHER: Session = { ...CHAT, id: 'sess-idle-0002', title: 'Other chat' };
+
+// The server once the turn ends: no longer running, and the answer saved.
+function finishRun() {
+    mocked.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
+    mocked.getMessages.mockResolvedValue({ messages: [{
+        id: 7, session_id: CHAT.id, role: 'assistant', content: 'Final answer.',
+        created_at: '2026-01-01T00:00:01Z', rag_sources: null,
+    }] } as never);
+}
+
+async function startTurn() {
+    render(<App />);
+    await waitFor(() => expect(attaches).toHaveLength(1));
+    act(() => attaches[0].onChunk({ type: 'chunk', content: 'Partial' } as unknown as StreamEvent));
+}
+
 describe('coming back from Memory while the turn still runs', () => {
     it('re-attaches once and shows the answer', async () => {
-        render(<App />);
-        await waitFor(() => expect(attaches).toHaveLength(1));
-        act(() => attaches[0].onChunk({ type: 'chunk', content: 'Partial' } as unknown as StreamEvent));
+        await startTurn();
 
         act(() => useChatStore.getState().setShowMemoryDashboard(true));
         act(() => useChatStore.getState().setShowMemoryDashboard(false));
 
         await waitFor(() => expect(attaches).toHaveLength(2));
+        expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+        finishRun();
         act(() => attaches[1].onDone({ type: 'done', message_id: 7, content: 'Final answer.' } as unknown as StreamEvent));
         expect(await screen.findByText('Final answer.')).toBeInTheDocument();
         expect(attaches).toHaveLength(2);
@@ -99,5 +116,42 @@ describe('closing Scheduled tasks while the turn still runs', () => {
         expect(await screen.findByText('Partial')).toBeInTheDocument();
         expect(useChatStore.getState().isStreaming).toBe(true);
         expect(attaches).toHaveLength(1);
+    });
+});
+
+describe('switching to another chat and back while the turn still runs', () => {
+    beforeEach(() => {
+        mocked.listSessions.mockResolvedValue({ sessions: [CHAT, OTHER], total: 2 });
+        useChatStore.setState({ sessions: [CHAT, OTHER] });
+    });
+
+    it('shows the turn live again, with Stop', async () => {
+        await startTurn();
+
+        act(() => useChatStore.getState().setCurrentSession(OTHER.id));
+        expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
+        act(() => useChatStore.getState().setCurrentSession(CHAT.id));
+
+        await waitFor(() => expect(attaches).toHaveLength(2));
+        expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument();
+        finishRun();
+        act(() => attaches[1].onDone({ type: 'done', message_id: 7, content: 'Final answer.' } as unknown as StreamEvent));
+        expect(await screen.findByText('Final answer.')).toBeInTheDocument();
+        expect(attaches).toHaveLength(2);
+    });
+
+    it('keeps waiting on an approval prompt, with Stop', async () => {
+        await startTurn();
+
+        act(() => useChatStore.getState().setCurrentSession(OTHER.id));
+        act(() => useChatStore.getState().setCurrentSession(CHAT.id));
+
+        await waitFor(() => expect(attaches).toHaveLength(2));
+        act(() => attaches[1].onAgentEvent({
+            type: 'permission_request', tool: 'run_shell_command', tool_label: 'Run shell',
+            confirm_id: 'perm-1', args: { command: 'ls' },
+        } as unknown as StreamEvent));
+        expect((await screen.findAllByText('Allow Run shell?')).length).toBeGreaterThan(0);
+        expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
     });
 });
