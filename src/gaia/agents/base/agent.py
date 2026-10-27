@@ -3438,7 +3438,10 @@ Do NOT wrap conversational replies in JSON.
         Withheld tools are kept aside rather than dropped, so a model switch
         can give them back. Call ``rebuild_system_prompt()`` afterwards.
         """
-        features = features_for_model(model_id)
+        self._offer_features(features_for_model(model_id))
+
+    def _offer_features(self, features: ModelFeatures) -> None:
+        """Withhold the tools *features* turns off; give back the rest."""
         if self._instance_tools is not None:
             # getattr: tests build agents without running Agent.__init__.
             self._instance_tools.update(getattr(self, "_withheld_tool_entries", {}))

@@ -2830,7 +2830,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             }
             for _name in _chat_exclude:
                 self._instance_tools.pop(_name, None)
-        self.apply_model_features(self.model_id)
+        self._offer_features(self.model_features)
 
     def _offers_image_generation(self) -> bool:
         """Image generation is on in the config and the model is offered it."""
