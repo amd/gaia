@@ -10,6 +10,9 @@ with the server that will actually load the model:
   Lemonade's ``select_gpu_memory_pool`` uses. A discrete GPU contributes its
   VRAM; Apple Silicon its Metal working set. With no GPU, system RAM.
 * **Disk** is the free space in Lemonade's model store.
+* **NPU memory**, for FastFlowLM (``-FLM``) models, is the system RAM the OS
+  sees: installed RAM less an APU's GPU carve-out. Only a PC whose Lemonade
+  reports an available ``amd_npu`` has any.
 
 A model fits when ``size * MEMORY_OVERHEAD_FACTOR + MEMORY_OVERHEAD_GB`` plus
 its KV cache fits the memory pool, and its download fits the disk. The KV cache
@@ -45,6 +48,8 @@ MEMORY_OVERHEAD_GB = 1.0
 WINDOWS_IGPU_SHARED_RAM_FRACTION = 0.5
 #: ``MachineCapacity.memory_source`` when no GPU holds the model.
 SYSTEM_RAM = "System RAM"
+#: ``memory_source`` of :func:`npu_capacity`.
+NPU_RAM = "NPU, system RAM"
 #: Share of the pool a window above a model's floor must leave free: the
 #: desktop and driver, and llama.cpp compute buffers that grow with the window.
 CONTEXT_HEADROOM_FRACTION = 0.10
@@ -74,11 +79,30 @@ class MachineCapacity:
     memory_source: str
     #: Free space in the model store, or ``None`` when Lemonade did not say.
     disk_free_gb: Optional[float]
+    #: System RAM an FLM model loads into, or ``None`` when no NPU is reported.
+    npu_memory_gb: Optional[float] = None
 
     @property
     def on_gpu(self) -> bool:
         """The memory pool is a GPU's, not system RAM on a CPU-only PC."""
-        return self.memory_source != SYSTEM_RAM
+        return self.memory_source not in (SYSTEM_RAM, NPU_RAM)
+
+    @property
+    def has_npu(self) -> bool:
+        """Lemonade reports an available AMD NPU with memory to load into."""
+        return bool(self.npu_memory_gb)
+
+
+def npu_capacity(capacity: MachineCapacity) -> Optional[MachineCapacity]:
+    """*capacity* as an FLM model sees it, or ``None`` on a PC with no NPU."""
+    if not capacity.has_npu:
+        return None
+    return MachineCapacity(
+        memory_gb=capacity.npu_memory_gb,
+        memory_source=NPU_RAM,
+        disk_free_gb=capacity.disk_free_gb,
+        npu_memory_gb=capacity.npu_memory_gb,
+    )
 
 
 @dataclass(frozen=True)
@@ -317,7 +341,31 @@ def capacity_from_system_info(info: Dict[str, Any]) -> MachineCapacity:
             )
         pool = (ram, SYSTEM_RAM)
     disk, _ = model_store_free_gb(info)
-    return MachineCapacity(memory_gb=pool[0], memory_source=pool[1], disk_free_gb=disk)
+    return MachineCapacity(
+        memory_gb=pool[0],
+        memory_source=pool[1],
+        disk_free_gb=disk,
+        npu_memory_gb=_npu_memory_gb(info.get("devices") or {}, ram),
+    )
+
+
+def _npu_memory_gb(devices: Dict[str, Any], physical_gb: float) -> Optional[float]:
+    """System RAM an FLM model can load into, or ``None`` with no NPU.
+
+    The NPU shares the RAM the OS sees, so an APU's GPU carve-out — which
+    installed RAM still counts — comes off first.
+    """
+    npu = devices.get("amd_npu")
+    if not isinstance(npu, dict) or not npu.get("available") or physical_gb <= 0:
+        return None
+    carve_out = 0.0
+    for vendor, integrated, gpu in _gpu_entries(devices):
+        if vendor == "AMD" and integrated:
+            carve_out = _num(gpu.get("vram_gb")) or _windows_adapter_memory_gb(
+                gpu.get("name")
+            )
+            break
+    return max(0.0, physical_gb - carve_out) or None
 
 
 def model_store_free_gb(info: Dict[str, Any]) -> Tuple[Optional[float], Optional[str]]:
@@ -496,6 +544,19 @@ def _card_for(cards: Tuple[GpuMemoryUse, ...], vram_gb: float):
         ]
         return close[0] if len(close) == 1 else None
     return cards[0] if len(cards) == 1 else None
+
+
+def npu_free_memory(info: Dict[str, Any], os_memory: OsMemory) -> FreeMemory:
+    """Memory an FLM model load can take now: the RAM the OS reports free.
+
+    The NPU allocates from system RAM, which on an APU already excludes the
+    GPU carve-out. Raises :class:`ModelFitError` when ``/system-info`` is
+    unusable, as :func:`free_memory` does.
+    """
+    if not isinstance(info, dict):
+        raise ModelFitError("Lemonade /system-info did not return an object")
+    ram = os_memory.ram_available_gb
+    return FreeMemory(ram, ram + os_memory.swap_free_gb)
 
 
 def free_memory(info: Dict[str, Any], os_memory: OsMemory) -> Optional[FreeMemory]:

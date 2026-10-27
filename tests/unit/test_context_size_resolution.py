@@ -235,7 +235,7 @@ def test_installer_saved_recipe_uses_same_override(
 
 @pytest.mark.parametrize(
     "profile,previous,expected,gguf_load",
-    [("npu", "gpu", 32768, 131072), ("chat", "npu", 131072, 131072)],
+    [("npu", "gpu", 65536, 131072), ("chat", "npu", 131072, 131072)],
 )
 def test_installer_profile_wins_before_config_is_saved(
     monkeypatch, profile, previous, expected, gguf_load

@@ -381,6 +381,13 @@ LARGE_DEFAULT_MODEL_NAME = "Qwen3.6-35B-A3B-GGUF"
 # than decode speed.
 FLASH_OPTION_MODEL_NAME = "user.Qwen3.8-Flash-Next-GGUF"
 
+# The same two models built for the Ryzen AI NPU (FastFlowLM): the NPU twins of
+# the GPU defaults. They load into the system RAM the OS sees, not the GPU's,
+# so they leave the iGPU free. ``gaia init --profile npu`` picks between them
+# by the same fit rule, judged against that RAM (``model_fit.npu_capacity``).
+NPU_DEFAULT_MODEL_NAME = "gemma4-it-e4b-FLM"
+NPU_LARGE_MODEL_NAME = "qwen3.6-moe-35b-a3b-FLM"
+
 # gpt-oss always reasons; its template grades how much. "medium" is the
 # template's own default.
 GPT_OSS_REASONING_EFFORT = "medium"
@@ -513,11 +520,12 @@ DEFAULT_CONTEXT_SIZE = 32768
 # Context window per device profile, for callers that size a window without
 # naming a model. With a model, ``resolve_ctx_size`` reads its MODELS entry.
 #
-# These are deliberately NOT one global number: the NPU's FLM build is
-# registered at 32768 and cannot reach 65536, so collapsing them would cap
-# GPU doc-Q&A at 32K and re-open the #1030 context overflow.
+# These are deliberately NOT one global number: FLM builds such as E2B load at
+# 32768 and cannot reach 65536, so collapsing them would cap GPU doc-Q&A at
+# 32K and re-open the #1030 context overflow. An FLM model measured higher
+# raises its own ceiling (``npu_ctx_ceiling``).
 GPU_CTX_SIZE = 65536  # GPU/CPU — Gemma-4-E4B-it-GGUF (llama.cpp)
-NPU_CTX_SIZE = 32768  # NPU — gemma4-it-e2b-FLM (FastFlowLM ceiling)
+NPU_CTX_SIZE = 32768  # NPU — the FastFlowLM ceiling for unmeasured FLM builds
 
 # llama.cpp flags for a chat model. One slot meant every side request with its
 # own prompt (memory extraction, titles) first saved the conversation's cache to
@@ -646,11 +654,19 @@ def add_model_load_listener(listener: Callable[[str], None]) -> None:
 def profile_ctx_size(device: Optional[str]) -> int:
     """Context window for *device*'s profile.
 
-    Resolve through here rather than defaulting to ``GPU_CTX_SIZE``: the NPU's
-    FLM build cannot load above ``NPU_CTX_SIZE``, so handing it the GPU window
-    fails the load outright.
+    Resolve through here rather than defaulting to ``GPU_CTX_SIZE``: an FLM
+    build GAIA has not measured cannot be assumed to load above
+    ``NPU_CTX_SIZE``. With a model in hand, :func:`resolve_ctx_size` applies
+    its own ceiling instead.
     """
     return NPU_CTX_SIZE if (device or "").strip().lower() == "npu" else GPU_CTX_SIZE
+
+
+def npu_ctx_ceiling(model: Optional[str] = None) -> int:
+    """The largest window an NPU load gets: ``NPU_CTX_SIZE``, or more for an FLM
+    model whose MODELS entry was measured loading at a larger floor."""
+    requirement = find_model_requirement(model) if model else None
+    return max(NPU_CTX_SIZE, requirement.min_ctx_size if requirement else 0)
 
 
 def runs_on_npu(model: Optional[str]) -> bool:
@@ -718,6 +734,17 @@ def _is_local_url(url: str) -> bool:
     return host in ("localhost", "::1", "0.0.0.0") or host.startswith("127.")
 
 
+def _free_memory_for(url: str, model_id: str):
+    """:func:`_free_memory_snapshot` on the pool *model_id* loads into: the
+    system RAM the OS reports free for an NPU model, else the GPU's."""
+    if not runs_on_npu(model_id):
+        return _free_memory_snapshot(url)
+    from gaia.llm.model_fit import npu_free_memory, read_os_memory
+
+    _, resident = _free_memory_snapshot(url)
+    return npu_free_memory(_system_info(url), read_os_memory()), resident
+
+
 def _free_memory_snapshot(url: str):
     """``(FreeMemory or None, {loaded model: ctx})`` for the Lemonade at *url*.
 
@@ -767,7 +794,9 @@ def free_memory_verdict(url: str, requirement: "ModelRequirement", window: int):
     disagree with it. None when this machine does not report free memory for
     that pool. Raises like :func:`_free_memory_snapshot`.
     """
-    return _verdict_for(*_free_memory_snapshot(url), requirement, window)
+    return _verdict_for(
+        *_free_memory_for(url, requirement.model_id), requirement, window
+    )
 
 
 def _verdict_for(free, resident, requirement: "ModelRequirement", window: int):
@@ -887,7 +916,7 @@ def fit_ctx_to_free_memory(
             return _FITTED_CTX_CACHE[key]
     log = get_logger(__name__)
     try:
-        free, resident = _free_memory_snapshot(url)
+        free, resident = _free_memory_for(url, requirement.model_id)
     except (LemonadeClientError, ModelFitError) as e:
         # Not a guess: the load re-reads free memory and refuses if it cannot.
         log.warning(
@@ -1103,13 +1132,14 @@ def resolve_ctx_size(
                 "GAIA_CTX_SIZE must be a positive integer (tokens); fix or unset it."
             )
 
-    if on_npu and ctx > NPU_CTX_SIZE:
+    ceiling = npu_ctx_ceiling(model)
+    if on_npu and ctx > ceiling:
         get_logger(__name__).warning(
             "Requested context %d exceeds the NPU ceiling; using %d tokens.",
             ctx,
-            NPU_CTX_SIZE,
+            ceiling,
         )
-        ctx = NPU_CTX_SIZE
+        ctx = ceiling
     if override and ctx < DEFAULT_CONTEXT_SIZE:
         get_logger(__name__).warning(
             "GAIA_CTX_SIZE=%d is below the recommended %d tokens; agent prompts "
@@ -1587,6 +1617,28 @@ MODELS = {
         min_ctx_size=NPU_CTX_SIZE,
         tool_calling=False,
     ),
+    # --- NPU twins of the GPU defaults (FastFlowLM builds, Lemonade built-ins) ---
+    # Native tool calls work on both (FLM v1.0.7), unlike E2B above.
+    "gemma-4-e4b-npu": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id=NPU_DEFAULT_MODEL_NAME,
+        display_name="Gemma 4 E4B NPU",
+        # Measured loading at 64K on FLM v1.0.7 (Strix Halo), unlike E2B's 32K;
+        # the flagship's prompt and tools alone run ~20K tokens.
+        min_ctx_size=GPU_CTX_SIZE,
+        tool_calling=True,
+        vision=True,
+        size_gb=9.1,
+    ),
+    "qwen3.6-35b-a3b-npu": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id=NPU_LARGE_MODEL_NAME,
+        display_name="Qwen3.6 35B A3B NPU",
+        min_ctx_size=GPU_CTX_SIZE,
+        tool_calling=True,
+        vision=True,
+        size_gb=22.1,
+    ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
     "qwen3.5-35b": ModelRequirement(
         model_type=ModelType.LLM,
@@ -1999,13 +2051,24 @@ def lemonade_server_version(client: "LemonadeClient") -> Optional[str]:
 #: Largest-first default chat models; the last is the floor every machine gets.
 DEFAULT_MODEL_LADDER = (LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME)
 
+#: NPU chat models the pickers offer, largest first. ``--profile npu`` picks
+#: only the last: the larger one's multi-step turns take minutes on the NPU.
+NPU_MODEL_LADDER = (NPU_LARGE_MODEL_NAME, NPU_DEFAULT_MODEL_NAME)
+
+#: Each GPU default's NPU twin: the same model, built for FastFlowLM.
+NPU_TWINS = {
+    LARGE_DEFAULT_MODEL_NAME: NPU_LARGE_MODEL_NAME,
+    DEFAULT_MODEL_NAME: NPU_DEFAULT_MODEL_NAME,
+}
+
 #: Supported chat models the pickers offer for download beside the defaults,
 #: on machines they fit. Never picked as a default.
 OPTIONAL_CHAT_MODELS = (GPT_OSS_20B_MODEL_NAME, "gpt-oss-120b-mxfp-GGUF")
 
 
 def optional_chat_models_that_fit(capacity: Any) -> List[str]:
-    """``OPTIONAL_CHAT_MODELS`` that fit *capacity*, KV cache at their floor included."""
+    """``OPTIONAL_CHAT_MODELS`` that fit *capacity*, KV cache at their floor
+    included, then the NPU models that fit its NPU memory."""
     from gaia.llm.model_fit import check_fit, kv_cache_gb
 
     out = []
@@ -2014,7 +2077,53 @@ def optional_chat_models_that_fit(capacity: Any) -> List[str]:
         kv = kv_cache_gb(mr.kv_bytes_per_token, mr.min_ctx_size)
         if check_fit(mr.size_gb, capacity, kv).fits:
             out.append(model_id)
-    return out
+    return out + npu_chat_models_that_fit(capacity)
+
+
+def npu_chat_models_that_fit(capacity: Any) -> List[str]:
+    """``NPU_MODEL_LADDER`` models this PC's NPU memory holds; none without an NPU."""
+    from gaia.llm.model_fit import check_fit, npu_capacity
+
+    npu = npu_capacity(capacity)
+    if npu is None:
+        return []
+    return [
+        m
+        for m in NPU_MODEL_LADDER
+        if check_fit(find_model_requirement(m).size_gb, npu).fits
+    ]
+
+
+def recommend_npu_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
+    """:func:`recommend_default_chat_model` for ``--profile npu``.
+
+    Always picks ``NPU_DEFAULT_MODEL_NAME``: the larger NPU model is too
+    slow per agent turn to be a default, so it stays a picker choice. Raises :class:`~gaia.llm.model_fit.ModelFitError` on a PC whose report
+    names no NPU, since neither model can run there.
+    """
+    from gaia.llm.model_fit import (
+        ModelFitError,
+        capacity_from_system_info,
+        npu_capacity,
+        pick_default_model,
+    )
+
+    try:
+        capacity = capacity_from_system_info(client.get_system_info(timeout=15))
+    except (ModelFitError, LemonadeClientError):
+        return NPU_DEFAULT_MODEL_NAME, [], None
+    npu = npu_capacity(capacity)
+    if npu is None:
+        raise ModelFitError(
+            "Lemonade reports no available AMD NPU on this PC, so the NPU models "
+            f"({', '.join(NPU_MODEL_LADDER)}) cannot run. Run `gaia init` without "
+            "`--profile npu` to use the GPU, or see "
+            "https://amd-gaia.ai/docs/guides/npu for supported processors."
+        )
+    model = NPU_DEFAULT_MODEL_NAME
+    candidates = [(model, find_model_requirement(model).size_gb, 0.0)]
+    model_id, skipped = pick_default_model(candidates, npu)
+    return model_id, skipped, npu
 
 
 def _free_memory_rules_out(client, requirement, capacity) -> Optional[str]:
@@ -2030,7 +2139,7 @@ def _free_memory_rules_out(client, requirement, capacity) -> Optional[str]:
         return None
     window = min(MIN_CONTEXT_TOKENS, context_for_capacity(requirement, capacity))
     try:
-        free, resident = _free_memory_snapshot(url)
+        free, resident = _free_memory_for(url, requirement.model_id)
     except (ModelFitError, LemonadeClientError) as e:
         return f"could not read this PC's free memory, so cannot confirm it would load: {e}"
     verdict = _verdict_for(free, resident, requirement, window)

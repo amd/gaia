@@ -27,7 +27,8 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_client import (
     GPU_CTX_SIZE,
-    NPU_CTX_SIZE,
+    NPU_DEFAULT_MODEL_NAME,
+    npu_ctx_ceiling,
 )
 from gaia.logger import get_logger
 
@@ -360,11 +361,11 @@ DEFAULT_DEVICE_CONFIGS: List[DeviceConfig] = [
     ),
     DeviceConfig(
         device="npu",
-        model="gemma4-it-e2b-FLM",
+        model=NPU_DEFAULT_MODEL_NAME,
         recipe="flm",
         backend="flm:npu",
         verified=True,
-        ctx_size=NPU_CTX_SIZE,
+        ctx_size=npu_ctx_ceiling(NPU_DEFAULT_MODEL_NAME),
         # FLM-native embedder so chat + embeddings stay co-resident on the NPU
         # backend and don't thrash NPU<->Vulkan every turn (#1744).
         embedding_model="embed-gemma-300m-FLM",

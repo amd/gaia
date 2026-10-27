@@ -5,7 +5,7 @@
 
 ``src/gaia/installer/init_command.py`` is the single source of truth for what
 "set up" means, so this never re-derives it. It asks ``gaia init --check`` and
-runs ``gaia init --profile gaia --yes``, exactly as ``tui/internal/gaiainit``
+runs ``gaia init --profile <gaia|npu> --yes``, exactly as ``tui/internal/gaiainit``
 does, and turns the output into numbered steps with progress. Readiness is read
 from the real state every time, never from a marker file.
 
@@ -29,6 +29,8 @@ from gaia.utils.terminal import windows_hidden_popen_kwargs
 
 logger = get_logger(__name__)
 
+#: The profile a fresh install sets up; afterwards setup follows
+#: ``configured_setup_profile()``.
 PROFILE = "gaia"
 #: Covers a daemon start plus an embedded Lemonade start (see gaiainit.CheckTimeout).
 CHECK_TIMEOUT_S = 180
@@ -102,13 +104,22 @@ def desktop_setup_error() -> Optional[str]:
     )
 
 
+def configured_setup_profile() -> str:
+    # Imported on use: init_command is slow to import and most UI paths never need it.
+    from gaia.installer.init_command import (
+        configured_setup_profile as profile,  # pylint: disable=import-outside-toplevel
+    )
+
+    return profile()
+
+
 def _gaia_argv(*args: str) -> List[str]:
     # This interpreter, so setup acts on the same GAIA install that serves the UI.
     return [sys.executable, "-m", "gaia.cli", *args]
 
 
 def check_args(skip_chat_model: bool, load: bool) -> List[str]:
-    args = ["init", "--check", "--profile", PROFILE, "--json"]
+    args = ["init", "--check", "--profile", configured_setup_profile(), "--json"]
     if skip_chat_model:
         args.append("--skip-chat-model")
     if load:
@@ -119,7 +130,13 @@ def check_args(skip_chat_model: bool, load: bool) -> List[str]:
 def run_args(skip_chat_model: bool, gaia_lemonade: bool = False) -> List[str]:
     # --yes: nobody can answer a prompt on a pipe. --skip-webui-build: a source
     # checkout would otherwise rebuild the very UI that is running this.
-    args = ["init", "--profile", PROFILE, "--yes", "--skip-webui-build"]
+    args = [
+        "init",
+        "--profile",
+        configured_setup_profile(),
+        "--yes",
+        "--skip-webui-build",
+    ]
     if skip_chat_model:
         args.append("--skip-chat-model")
     if gaia_lemonade:
@@ -130,7 +147,7 @@ def run_args(skip_chat_model: bool, gaia_lemonade: bool = False) -> List[str]:
 def run_command(skip_chat_model: bool, gaia_lemonade: bool = False) -> str:
     """What a person would type to do this themselves."""
     return (
-        "gaia init --profile gaia"
+        f"gaia init --profile {configured_setup_profile()}"
         + (" --skip-chat-model" if skip_chat_model else "")
         + (" --gaia-lemonade" if gaia_lemonade else "")
     )

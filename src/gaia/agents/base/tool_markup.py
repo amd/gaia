@@ -105,6 +105,20 @@ def _outside_code(pattern: re.Pattern, text: str, pos: int = 0) -> Optional[int]
     return None
 
 
+# Gemma 4's own tool syntax: its string quote and its call/response delimiters.
+_GEMMA_TOOL_MARKUP = re.compile(r'<\|"\|>|<\|?tool_(?:call|response)\|?>')
+
+
+def has_gemma_tool_markup(text: str) -> bool:
+    """Whether *text* carries Gemma's native tool-call or tool-response syntax.
+
+    A server that does not stop generation at the end of a native tool call
+    (FastFlowLM) lets Gemma keep writing: it invents the tool's response in
+    this syntax, then answers from it, before the real result exists.
+    """
+    return bool(text) and _outside_code(_GEMMA_TOOL_MARKUP, text) is not None
+
+
 def has_tool_markup(text: str) -> bool:
     """Whether *text* carries tool-call markup of any supported format."""
     return bool(text) and _outside_code(_ANY_MARKUP, text) is not None

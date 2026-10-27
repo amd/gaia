@@ -413,12 +413,12 @@ class TestChatAgentConfigDeviceField:
 class TestResolveDeviceModelUI:
     """``resolve_device_model`` is the heart of the UI dropdown fix."""
 
-    def test_npu_resolves_to_flm_model_and_32k_ctx(self):
+    def test_npu_resolves_to_flm_model_and_its_64k_ctx(self):
         from gaia.ui._chat_helpers import resolve_device_model
 
         model, ctx = resolve_device_model("chat", "npu", None)
-        assert model == "gemma4-it-e2b-FLM"
-        assert ctx == 32768
+        assert model == "gemma4-it-e4b-FLM"
+        assert ctx == 65536
 
     def test_gpu_resolves_to_gguf_model_and_profile_ctx(self):
         from gaia.llm.lemonade_client import GPU_CTX_SIZE
@@ -477,7 +477,7 @@ class TestCliDeviceModelMapping:
         [
             ("gpu", "Gemma-4-E4B-it-GGUF"),
             ("cpu", "Gemma-4-E4B-it-GGUF"),
-            ("npu", "gemma4-it-e2b-FLM"),
+            ("npu", "gemma4-it-e4b-FLM"),
         ],
     )
     def test_default_device_config_models(self, device, expected_model):
@@ -511,7 +511,7 @@ class TestSessionsRouterDeviceRewrite:
         assert resp.status_code == 200
         body = resp.json()
         assert body["device"] == "npu"
-        assert body["model"] == "gemma4-it-e2b-FLM"
+        assert body["model"] == "gemma4-it-e4b-FLM"
 
     def test_switch_to_gpu_keeps_default_model(self, client):
         created = client.post("/api/sessions", json={}).json()
@@ -548,7 +548,7 @@ class TestSessionsRouterDeviceRewrite:
         assert resp.status_code == 200
         body = resp.json()
         assert body["device"] == "npu"
-        assert body["model"] == "gemma4-it-e2b-FLM"
+        assert body["model"] == "gemma4-it-e4b-FLM"
 
     def test_create_session_with_corrupt_config_returns_actionable_500(self, client):
         from gaia import config as config_mod

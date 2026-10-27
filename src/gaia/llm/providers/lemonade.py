@@ -968,6 +968,7 @@ class LemonadeProvider(LLMClient):
         usage_seen = False
         text_seen: list[str] = []
         reasoning_seen: list[str] = []
+        ran_past_call = False
 
         def close_thinking():
             nonlocal in_thinking, thought
@@ -1009,6 +1010,13 @@ class LemonadeProvider(LLMClient):
                             time.perf_counter() + TOOL_CALL_PROGRESS_INTERVAL_S
                         )
                 content = delta.get("content")
+                if tool_calls and (content or choice.get("text")):
+                    # A tool call ends the reply. Text after it is the model
+                    # running past its own call (FastFlowLM does not stop Gemma
+                    # there): an invented tool result, then an answer from it.
+                    ran_past_call = True
+                    finish_reason = finish_reason or "tool_calls"
+                    break
                 if content:
                     # Close thinking block before yielding actual content
                     if in_thinking:
@@ -1056,6 +1064,15 @@ class LemonadeProvider(LLMClient):
                                 yield close_thinking()
                             text_seen.append(text)
                             yield text
+        if ran_past_call:
+            logger.warning(
+                "%s kept writing after its tool call; stopped the stream there",
+                self._last_model,
+            )
+            # Closing the stream stops the server generating the rest.
+            close = getattr(response, "close", None)
+            if close is not None:
+                close()
         self._last_reasoning = "".join(reasoning_seen) or None
         self._last_finish_reason = finish_reason or None
         if not finish_reason and not usage_seen:

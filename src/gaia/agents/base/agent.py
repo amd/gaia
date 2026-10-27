@@ -117,6 +117,7 @@ from gaia.agents.base.tool_grants import (
 )
 from gaia.agents.base.tool_markup import (
     MalformedToolMarkup,
+    has_gemma_tool_markup,
     has_tool_markup,
     parse_deepseek_tool_calls,
     strip_tool_markup,
@@ -5530,6 +5531,15 @@ Do NOT wrap conversational replies in JSON.
                 tc_id = tc.get("id") or f"call_{idx}_{uuid.uuid4().hex[:8]}"
                 normalised.append({"id": tc_id, "name": name, "tool_args": tool_args})
             content = envelope.get("content")
+            if has_gemma_tool_markup(content):
+                # Written past the call, from a result the model invented;
+                # replayed in history it makes the next turn come back empty.
+                logger.warning(
+                    "[PARSE] dropped %d chars written after %s's native tool call",
+                    len(content),
+                    self.model_id,
+                )
+                content = None
             logger.debug(
                 "[PARSE] tool_call_path=native model_id=%s n_calls=%d tools=%s",
                 self.model_id,

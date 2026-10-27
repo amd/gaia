@@ -43,6 +43,11 @@ func (e Entry) SizeGB() float64 {
 	return 0
 }
 
+// OnNPU reports a FastFlowLM model, which the NPU runs from system RAM.
+func (e Entry) OnNPU() bool {
+	return e.Model.Recipe == "flm" || (e.Recommended != nil && e.Recommended.Device == "npu")
+}
+
 // Selectable reports whether choosing the row can proceed: a downloaded local
 // model, a local model that fits (it downloads first), or a listed cloud model.
 func (e Entry) Selectable() bool {
@@ -77,17 +82,21 @@ func isChatModel(m Model) bool {
 	if m.ID == "" || strings.HasPrefix(m.Recipe, "collection.") {
 		return false
 	}
-	chat := false
+	chat, other := false, false
 	for _, label := range m.Labels {
 		switch label {
 		case "embeddings", "image", "reranker", "reranking", "audio", "tts", "stt", "transcription", "classification":
+			other = true
+		case "single-turn":
+			// FLM builds that answer one message at a time cannot hold a conversation.
 			return false
 		case "chat":
 			chat = true
 		}
 	}
+	// `chat` wins, as in the Agent UI: FLM omni models are labeled `chat` and `audio`.
 	// Cloud listings do not always carry labels; their provider prefix is enough.
-	return chat || m.Cloud()
+	return chat || (!other && m.Cloud())
 }
 
 // Catalog lists every chat model Lemonade offers for provider — downloaded or
@@ -138,7 +147,16 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 		if e.Recommended != nil {
 			kv = e.Recommended.KVCacheGB()
 		}
-		e.Fits, e.Reason = capacity.Fit(size, kv)
+		pool := capacity
+		if e.OnNPU() {
+			npu, ok := capacity.NPU()
+			if !ok {
+				e.Reason = "runs on a Ryzen AI NPU, and Lemonade reports none on this PC"
+				return
+			}
+			pool = npu
+		}
+		e.Fits, e.Reason = pool.Fit(size, kv)
 		// Version after fit: "upgrade Lemonade" only helps a model that fits.
 		if e.Fits && e.Recommended != nil {
 			if ok, why := capacity.SupportsModel(e.Recommended.MinLemonade); !ok {
@@ -165,7 +183,14 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 			continue
 		}
 		e := Entry{Model: Model{ID: rec.ID}, Recommended: &rec}
+		_, hasNPU := capacity.NPU()
 		switch {
+		case rec.Device == "npu" && (capErr != nil || !hasNPU):
+			// No NPU here: an NPU model is not an option, not a broken one.
+			continue
+		case rec.Device == "npu":
+			// Lemonade lists FLM models only once its NPU backend is installed.
+			e.Reason = "needs Lemonade's NPU backend; run `gaia init`"
 		case rec.RegisterAs == "":
 			// A built-in this Lemonade does not ship: it cannot be pulled by name.
 			e.Reason = "this Lemonade server does not offer it; update Lemonade with `gaia init`"

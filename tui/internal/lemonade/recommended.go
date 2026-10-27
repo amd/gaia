@@ -18,6 +18,9 @@ type Recommended struct {
 	Provider string `json:"provider"`
 	Label    string `json:"label"`
 	Note     string `json:"note"`
+	// Device is "npu" for a FastFlowLM model, which loads into system RAM
+	// rather than GPU memory; empty for the rest.
+	Device string `json:"device"`
 
 	// Registration for a model that is not a Lemonade built-in. Empty for
 	// built-ins, which Lemonade pulls by name.

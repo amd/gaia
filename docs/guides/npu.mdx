@@ -35,14 +35,54 @@ gaia init --profile npu
 This will:
 1. Verify NPU hardware is detected
 2. Install the FLM backend (`flm:npu`)
-3. Download the NPU-optimized models (`gemma4-it-e2b-FLM` for chat, `embed-gemma-300m-FLM` for documents and memory)
+3. Download `gemma4-it-e4b-FLM` (see [Which NPU model](#which-npu-model)) and `embed-gemma-300m-FLM` for documents and memory
 4. Install the [GAIA agent](/guides/gaia) if it is missing, the same agent a bare `gaia init` installs
 5. Run a verification test and make NPU the default device
 
 The Agent UI and terminal UI then have an agent to talk to. If GAIA's download server can't be
 reached, setup still downloads the models, then reports itself incomplete and exits
 `1` — run `gaia init --profile npu` again once the network is back. To return to the GPU, run
-`gaia config set default_device gpu`.
+`gaia init`, then pick a GPU model in the model list (or `gaia config set default_model <id>`).
+
+## Which NPU model
+
+You don't need the NPU profile to use the NPU. On any PC with a Ryzen AI NPU, a plain
+`gaia init` installs Lemonade's NPU backend, and the two NPU models below then appear in
+the Agent UI and terminal UI model lists, ready to download on first use. The GPU model
+stays the default because it answers faster; `gaia init --profile npu` makes the NPU the
+default instead.
+
+GAIA's NPU models are the same two models it runs on the GPU, built for the NPU by
+FastFlowLM. They load into the system RAM Windows or Linux sees (installed RAM less
+any GPU carve-out), so the GPU stays free.
+
+| PC | NPU model | GPU twin | Download | Needs |
+|----|-----------|----------|----------|-------|
+| Larger Ryzen AI PC (e.g. Strix Halo) | `qwen3.6-moe-35b-a3b-FLM` | `Qwen3.6-35B-A3B-GGUF` | 22.1 GB | ~24 GB of system RAM |
+| Every other Ryzen AI PC | `gemma4-it-e4b-FLM` | `Gemma-4-E4B-it-GGUF` | 9.1 GB | ~11 GB of system RAM |
+
+`gaia init --profile npu` picks `gemma4-it-e4b-FLM` on every PC and records it as
+`default_model`; the Qwen model is slower per agent turn, so you choose it yourself. Both see images, call tools
+natively, and load with a 64K context window.
+
+Measured on a Ryzen AI MAX+ 395 (FLM v1.0.7, Lemonade 2026.43.3), a 31K-token prompt:
+
+| Model | Prompt processing | Generation | First answer |
+|-------|-------------------|------------|--------------|
+| `gemma4-it-e4b-FLM` | 472 tokens/s | 7 tokens/s | 67 s |
+| `qwen3.6-moe-35b-a3b-FLM` | 186 tokens/s | 7 tokens/s | 168 s |
+
+In GAIA's agent evals on the same PC, `gemma4-it-e4b-FLM` scored as well as its GPU
+twin (core conversation 12/15, tool selection 3/7 against the GPU's 4/7).
+`qwen3.6-moe-35b-a3b-FLM` matched the GPU on tool selection (4/7), but its multi-step
+turns can take several minutes each.
+
+The NPU trades speed for power: expect long first answers in a fresh chat. For the
+fastest replies, stay on the GPU (`gaia init`).
+
+To switch between them yourself, pick one in the model list of the Agent UI or the
+terminal UI (`/provider`), or run `gaia config set default_model <id>`. Both lists
+show an NPU model only on a PC with an NPU whose RAM holds it.
 
 ## Usage
 
@@ -65,7 +105,7 @@ gaia prompt "Hello" --device npu
 ### Agent UI
 
 1. Launch with `gaia chat --ui`
-2. The Agent UI uses your default device. After `gaia init --profile npu` that is the NPU; switch with `gaia config set default_device gpu` (or `npu`)
+2. The Agent UI uses your default device. After `gaia init --profile npu` that is the NPU; return to the GPU by picking a GPU model in the model list
 
 ### Evaluation
 
@@ -88,7 +128,7 @@ gaia eval agent --compare eval/results/run1/scorecard.json eval/results/run2/sco
 |--------|-------|---------|----------|
 | **GPU** (default) | Gemma-4-E4B-it-GGUF | llamacpp:vulkan | General use, best throughput |
 | **CPU** | Gemma-4-E4B-it-GGUF | llamacpp:cpu | No GPU available (slower) |
-| **NPU** | gemma4-it-e2b-FLM | flm:npu | Power efficiency, background tasks |
+| **NPU** | gemma4-it-e4b-FLM (qwen3.6-moe-35b-a3b-FLM selectable where it fits) | flm:npu | Power efficiency, leaving the GPU free |
 
 ### Fallback Behavior
 
@@ -122,7 +162,7 @@ lemonade backends install flm:npu
 ### Model not available
 
 ```
-Error pulling model: No built-in model with the name 'gemma4-it-e2b-FLM' is registered.
+Error pulling model: No built-in model with the name 'gemma4-it-e4b-FLM' is registered.
 ```
 
 The FLM backend is missing, not the model. Lemonade discovers `*-FLM` models
@@ -131,7 +171,7 @@ exist to pull. Install the backend first, then pull by name:
 
 ```bash
 lemonade backends install flm:npu
-lemonade pull gemma4-it-e2b-FLM
+lemonade pull gemma4-it-e4b-FLM
 ```
 
 <Warning>

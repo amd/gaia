@@ -217,13 +217,13 @@ INIT_PROFILES = {
         # co-resident on the NPU backend. A GGUF embedder would run on Vulkan
         # and evict the FLM chat model every turn (#1744). Both are built-in
         # Lemonade *-FLM models, pulled by name only (no recipe — #1655).
-        "models": ["gemma4-it-e2b-FLM", "embed-gemma-300m-FLM"],
-        "approx_size": "~3 GB",
+        # The chat model is the NPU twin of Gemma 4 E4B, or of Qwen3.6 35B A3B
+        # where the NPU's RAM holds it (``with_chat_model``).
+        "models": ["gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"],
+        "approx_size": "~10 GB",
         "min_lemonade_version": LEMONADE_MIN_VERSION,
-        # NPU context window. Matches GPU/CPU (32768) so the init report and
-        # the runtime load path agree (issue #1745) — the prior 4096 pin made
-        # `gaia init --profile npu` report 4096 while the loader requested
-        # 32768. FLM at 32k is confirmed loading on a Ryzen AI 7 350 / 16 GB.
+        # The floor every profile shares (issue #1745); the chat model itself
+        # loads at its own window, 64K for both NPU twins.
         "min_context_size": 32768,
         # Same as the gaia profile: the daemon and Agent UI the flagship runs in.
         "pip_extras": ["ui"],
@@ -309,7 +309,7 @@ class ChatModelChoice:
 
 
 def resolve_init_chat_model(
-    client, *, reset_corrupt: bool, enforce_fit: bool
+    client, *, reset_corrupt: bool, enforce_fit: bool, profile: str = "gaia"
 ) -> ChatModelChoice:
     """The chat model `gaia init` sets up: the user's ``default_model`` when it
     is a local Lemonade model, else the largest default that fits this machine
@@ -325,8 +325,11 @@ def resolve_init_chat_model(
     from gaia.llm.lemonade_client import (
         cloud_model_provider,
         recommend_default_chat_model,
+        recommend_npu_chat_model,
+        runs_on_npu,
     )
 
+    on_npu = profile == "npu"
     try:
         configured = GaiaConfig.load().default_model
     except GaiaConfigError as e:
@@ -336,16 +339,20 @@ def resolve_init_chat_model(
         configured = None
     # A Claude or cloud default has nothing to download; the local chat model
     # then follows the hardware, and the user's setting is left as it is.
+    # `--profile npu` asks for the NPU, so a GPU default does not hold there;
+    # an NPU model picked in the UI holds on every profile.
     is_local = (
         configured
         and not configured.startswith("claude-")
         and not cloud_model_provider(configured)
+        and (runs_on_npu(configured) or not on_npu)
     )
     if is_local:
         if enforce_fit:
             _refuse_if_it_does_not_fit(client, configured)
         return ChatModelChoice(model_id=configured, user_set=True, skipped=[])
-    model_id, skipped, capacity = recommend_default_chat_model(client)
+    recommend = recommend_npu_chat_model if on_npu else recommend_default_chat_model
+    model_id, skipped, capacity = recommend(client)
     return ChatModelChoice(
         model_id=model_id, user_set=False, skipped=skipped, capacity=capacity
     )
@@ -364,12 +371,14 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
         find_model_requirement,
         kv_cache_for,
         lemonade_server_version,
+        runs_on_npu,
     )
     from gaia.llm.model_fit import (
         ModelFitError,
         capacity_from_system_info,
         check_fit,
         check_server_supports,
+        npu_capacity,
     )
 
     size = None
@@ -383,6 +392,14 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
     size = size or (mr.size_gb if mr else None)
     if size:
         capacity = capacity_from_system_info(client.get_system_info(timeout=15))
+        if runs_on_npu(model_id):
+            capacity = npu_capacity(capacity)
+            if capacity is None:
+                raise ModelFitError(
+                    f"default_model {model_id} runs on an AMD NPU, and Lemonade "
+                    "reports none on this PC. Choose a GPU model with `gaia config "
+                    "set default_model <id>`, then re-run `gaia init`."
+                )
         verdict = check_fit(
             float(size), capacity, kv_cache_for(mr, capacity) if mr else 0.0
         )
@@ -496,6 +513,18 @@ def _size_note(size_gb) -> str:
 HARDWARE_CHAT_PROFILES = frozenset({"gaia", "chat", "rag", "all"})
 
 
+def configured_setup_profile() -> str:
+    """The flagship profile this PC was set up with: ``npu`` after
+    ``gaia init --profile npu``, else ``gaia``.
+
+    The Agent UI and TUI check and re-run setup with it, so an NPU PC is never
+    judged against, or moved back to, the GPU models.
+    """
+    from gaia.config import GaiaConfig
+
+    return "npu" if GaiaConfig.load().profile == "npu" else DEFAULT_INIT_PROFILE
+
+
 def with_chat_model(profile: str, model_ids, resolve_chat) -> list:
     """``model_ids`` plus the chat model ``profile`` needs on this machine.
 
@@ -505,11 +534,20 @@ def with_chat_model(profile: str, model_ids, resolve_chat) -> list:
     name. A ``default_model`` the user chose replaces Gemma: the image tools
     then download Gemma the first time they are used (:func:`skipped_gemma`).
     """
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, _model_ids_match
+    from gaia.llm.lemonade_client import (
+        DEFAULT_MODEL_NAME,
+        NPU_DEFAULT_MODEL_NAME,
+        _model_ids_match,
+    )
 
     ids = list(model_ids)
-    if profile in ("sd", "npu"):
+    if profile == "sd":
         return ids
+    if profile == "npu":
+        # Both NPU models see images, so the pick replaces the floor model.
+        chat = resolve_chat().model_id
+        ids = [m for m in ids if not _model_ids_match(m, NPU_DEFAULT_MODEL_NAME)]
+        return [chat, *(m for m in ids if not _model_ids_match(m, chat))]
     if profile not in HARDWARE_CHAT_PROFILES:
         chat = DEFAULT_MODEL_NAME
     else:
@@ -692,7 +730,7 @@ def check_setup_status(
             profile,
             model_ids,
             lambda: resolve_init_chat_model(
-                client, reset_corrupt=False, enforce_fit=False
+                client, reset_corrupt=False, enforce_fit=False, profile=profile
             ),
         )
 
@@ -1361,6 +1399,11 @@ class InitCommand:
                 if not self._install_backend():
                     return 1
 
+            # Any PC with an NPU gets its backend, so the NPU models show up in
+            # the model pickers without a separate profile.
+            if not has_backend_install and self.profile in HARDWARE_CHAT_PROFILES:
+                self._enable_npu_if_present()
+
             # Step 3+: Download models (unless skipped)
             if not self.skip_models:
                 step_num += 1
@@ -1827,17 +1870,49 @@ class InitCommand:
             self._print_error(self._server_problem_hint())
             return False
 
-    def _install_backend(self) -> bool:
-        """Install the Lemonade backend required by the current profile.
+    def _enable_npu_if_present(self) -> None:
+        """Install Lemonade's NPU backend when Lemonade reports an NPU.
 
-        Only called for profiles with a ``backend`` key (e.g. ``"flm:npu"``).
+        The NPU models are an option beside the GPU default, so a PC whose
+        backend will not install still finishes setup — with a warning that
+        says the NPU models will not be offered and how to retry.
+        """
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+        try:
+            devices = (
+                LemonadeClient(verbose=self.verbose)
+                .get_system_info()
+                .get("devices", {})
+            )
+        except LemonadeClientError as e:
+            self._print_warning(
+                f"Could not ask Lemonade whether this PC has an NPU ({e}), so the "
+                "NPU models will not be offered. Re-run `gaia init` to retry."
+            )
+            return
+        npu = devices.get("amd_npu")
+        if not (isinstance(npu, dict) and npu.get("available")):
+            return
+        self._print(f"   NPU detected: {npu.get('name', 'AMD NPU')}")
+        if not self._install_backend("flm:npu", "flm"):
+            self._print_warning(
+                "The NPU models will not be offered until Lemonade's NPU backend "
+                "installs. Re-run `gaia init` to retry."
+            )
+
+    def _install_backend(
+        self, backend_spec: Optional[str] = None, recipe: Optional[str] = None
+    ) -> bool:
+        """Install a Lemonade backend: *backend_spec*, else the current profile's.
+
         Checks recipe status first to skip if already installed.
 
         Returns:
             True if backend is ready, False on failure.
         """
         profile_config = INIT_PROFILES[self.profile]
-        backend_spec = profile_config.get("backend")
+        backend_spec = backend_spec or profile_config.get("backend")
         if not backend_spec:
             return True
 
@@ -1853,7 +1928,7 @@ class InitCommand:
             spec_recipe, backend_key = split_backend_spec(backend_spec)
 
             # Check if already installed via recipe status
-            recipe_name = profile_config.get("recipe", spec_recipe)
+            recipe_name = recipe or profile_config.get("recipe", spec_recipe)
             recipe_status = client.get_recipe_status(recipe_name)
 
             if recipe_status:
@@ -1904,7 +1979,7 @@ class InitCommand:
         """This machine's chat model; says why on first resolution."""
         if self._chat_choice is None:
             choice = resolve_init_chat_model(
-                client, reset_corrupt=True, enforce_fit=True
+                client, reset_corrupt=True, enforce_fit=True, profile=self.profile
             )
             self._chat_choice = choice
             if choice.user_set:
@@ -1963,7 +2038,7 @@ class InitCommand:
 
             # Include this machine's chat model for profiles that use llamacpp.
             # SD profile has its own LLM and doesn't need the default model.
-            # NPU profile uses FLM models exclusively — don't append GGUF model.
+            # The NPU profile's chat model is its own FLM pick, never a GGUF one.
             if not self.skip_chat_model:
                 model_ids = with_chat_model(
                     self.profile, model_ids, lambda: self._chat_model_choice(client)
@@ -2362,7 +2437,13 @@ class InitCommand:
                 # The window the chat model gets in the memory free right now.
                 min_ctx = fit_ctx_to_free_memory(
                     self._chat_model(client),
-                    resolve_ctx_size(device="npu" if self.profile == "npu" else "gpu"),
+                    # An NPU model's window is its own (64K for the twins, 32K
+                    # for other FLM builds), not one profile-wide number.
+                    (
+                        resolve_ctx_size(self._chat_model(client))
+                        if self.profile == "npu"
+                        else resolve_ctx_size(device="gpu")
+                    ),
                     client.base_url,
                 )
 
@@ -2392,7 +2473,7 @@ class InitCommand:
             else:
                 model_ids = client.get_required_models(profile_config["agent"])
 
-            # Same chat model the download step set up (NPU and SD bring their own).
+            # Same chat model the download step set up (SD brings its own).
             if not self.skip_chat_model:
                 model_ids = with_chat_model(
                     self.profile, model_ids, lambda: self._chat_model_choice(client)
