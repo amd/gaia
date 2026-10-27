@@ -10,7 +10,17 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 _SCAN_ROOTS = [_ROOT / "src" / "gaia", _ROOT / "hub" / "agents", _ROOT / "docs"]
 _STALE_RE = re.compile(r"Settings\s*(?:→|->)\s*Connections\b")
-_SCAN_EXTENSIONS = {".py", ".tsx", ".ts", ".md", ".mdx"}
+_SCAN_EXTENSIONS = {
+    ".py",
+    ".tsx",
+    ".ts",
+    ".js",
+    ".md",
+    ".mdx",
+    ".json",
+    ".yaml",
+    ".yml",
+}
 _SKIP_PATH_PARTS = {"node_modules", "dist", "__pycache__"}
 # The UI still recognises the old wording from agent builds released before the rename.
 _ALLOWED = {
