@@ -200,3 +200,26 @@ def test_a_blocked_scrub_still_drops_the_erased_facts_from_the_agent(
     assert out["status"] == "error"
     assert "Close other GAIA windows and erase again" in out["message"]
     assert sorted(refreshed) == ["index", "prompt"]
+
+
+def test_erasing_again_after_a_blocked_scrub_clears_the_file(store, tmp_path):
+    _Host(store, [])
+    for i in range(20):
+        store.store(category="fact", content=f"Trip to Lisbon number {i}")
+        store.store_turn("s-old", "user", f"My trip to Lisbon {i} is in December")
+    store.store(category="fact", content="User's bank PIN is 4821", sensitive=True)
+    reader = MemoryStore(db_path=tmp_path / "memory.db")
+    reader._conn.execute("PRAGMA busy_timeout=0")
+    store._conn.execute("PRAGMA busy_timeout=0")
+    reader._conn.execute("BEGIN")
+    reader._conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()
+
+    assert _tool("forget_everything")()["status"] == "error"
+    reader._conn.rollback()
+    reader.close()
+    retry = _tool("forget_everything")()
+
+    assert retry["status"] == "cleared"
+    raw = _on_disk(tmp_path)
+    for gone in (b"lisbon", b"4821"):
+        assert gone not in raw, f"{gone!r} still readable after erasing again"

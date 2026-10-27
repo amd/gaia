@@ -5484,7 +5484,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 "message": message,
             }
 
-        logger.info("[MemoryMixin] registered 5 memory tools (v2)")
+        logger.info("[MemoryMixin] registered 6 memory tools (v2)")
 
     # ------------------------------------------------------------------
     # Session Management

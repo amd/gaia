@@ -1946,8 +1946,11 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
   </Accordion>
 
   <Accordion title="DELETE /api/memory/all">
-    Permanently delete all knowledge, tool history, and conversation data.
-    Irreversible.
+    Permanently delete all knowledge, tool history, and conversation data,
+    then scrub the deleted text from the database file. Irreversible. If
+    another open GAIA window keeps the file from being scrubbed, the data is
+    still deleted but the call returns 500 with a message saying so; close the
+    other windows and call it again.
   </Accordion>
 
   <Accordion title="POST /api/memory/reinitialize">
