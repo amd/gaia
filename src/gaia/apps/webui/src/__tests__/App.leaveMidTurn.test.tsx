@@ -38,7 +38,7 @@ beforeEach(() => {
     });
     mocked.checkSetup.mockResolvedValue({ ready: true, steps: [] });
     mocked.requestWarmUp.mockResolvedValue({ state: 'ready' });
-    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false } });
+    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
     mocked.getSetupPlan.mockRejectedValue(new Error('no plan'));
     mocked.getSystemStatus.mockResolvedValue({ lemonade_running: true, model_loaded: 'Gemma-4-E4B-it-GGUF' } as never);
     mocked.listAgents.mockResolvedValue({ agents: [], total: 0 });
@@ -71,21 +71,33 @@ afterEach(() => {
     vi.unstubAllGlobals();
 });
 
-describe.each([
-    ['Memory', 'setShowMemoryDashboard'],
-    ['Scheduled tasks', 'setShowSchedules'],
-] as const)('coming back from %s while the turn still runs', (_page, setter) => {
+describe('coming back from Memory while the turn still runs', () => {
     it('re-attaches once and shows the answer', async () => {
         render(<App />);
         await waitFor(() => expect(attaches).toHaveLength(1));
         act(() => attaches[0].onChunk({ type: 'chunk', content: 'Partial' } as unknown as StreamEvent));
 
-        act(() => useChatStore.getState()[setter](true));
-        act(() => useChatStore.getState()[setter](false));
+        act(() => useChatStore.getState().setShowMemoryDashboard(true));
+        act(() => useChatStore.getState().setShowMemoryDashboard(false));
 
         await waitFor(() => expect(attaches).toHaveLength(2));
         act(() => attaches[1].onDone({ type: 'done', message_id: 7, content: 'Final answer.' } as unknown as StreamEvent));
         expect(await screen.findByText('Final answer.')).toBeInTheDocument();
         expect(attaches).toHaveLength(2);
+    });
+});
+
+describe('closing Scheduled tasks while the turn still runs', () => {
+    it('keeps the answer streaming without re-attaching', async () => {
+        render(<App />);
+        await waitFor(() => expect(attaches).toHaveLength(1));
+        act(() => attaches[0].onChunk({ type: 'chunk', content: 'Partial' } as unknown as StreamEvent));
+
+        act(() => useChatStore.getState().setShowSchedules(true));
+        act(() => useChatStore.getState().setShowSchedules(false));
+
+        expect(await screen.findByText('Partial')).toBeInTheDocument();
+        expect(useChatStore.getState().isStreaming).toBe(true);
+        expect(attaches).toHaveLength(1);
     });
 });
