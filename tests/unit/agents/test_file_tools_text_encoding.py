@@ -101,6 +101,15 @@ class TestBomTextReadsAsText:
         assert result["status"] == "success"
         assert result["content"] == "     2\tsecond line\n"
 
+    @pytest.mark.parametrize("tools", ["search_tools", "io_tools"])
+    def test_size_is_the_file_on_disk(self, request, tools, bom_file, tmp_path):
+        cp1252 = tmp_path / "note.txt"
+        cp1252.write_bytes("Café budget: €250 for the “team lunch”.\n".encode("cp1252"))
+        for path in (bom_file[0], cp1252):
+            result = request.getfixturevalue(tools)["read_file"](str(path))
+            assert result["status"] == "success"
+            assert result["size_bytes"] == path.stat().st_size
+
     def test_plain_utf8_result_is_unchanged(self, search_tools, tmp_path):
         path = tmp_path / "plain.txt"
         path.write_text(SECRET, encoding="utf-8")
