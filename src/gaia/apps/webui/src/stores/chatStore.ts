@@ -4,7 +4,7 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
-import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode } from '../types';
+import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode, ProviderId } from '../types';
 import { applyTheme, resolveTheme, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
@@ -209,6 +209,8 @@ interface ChatState {
     showFileBrowser: boolean;
     /** Open settings section, or null when settings is closed. */
     settingsSection: SettingsSection | null;
+    /** Provider tab Settings > Model opens on; null follows the active model. */
+    settingsProvider: ProviderId | null;
     showMemoryDashboard: boolean;
     showSchedules: boolean;
     /** Permission mode picked on the new-chat screen, applied when the chat is created. */
@@ -240,7 +242,7 @@ interface ChatState {
     syncSystemTheme: () => void;
     setShowDocLibrary: (show: boolean) => void;
     setShowFileBrowser: (show: boolean) => void;
-    openSettings: (section?: SettingsSection) => void;
+    openSettings: (section?: SettingsSection, provider?: ProviderId) => void;
     closeSettings: () => void;
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
@@ -483,6 +485,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showDocLibrary: false,
     showFileBrowser: false,
     settingsSection: null,
+    settingsProvider: null,
     showMemoryDashboard: false,
     showSchedules: false,
     draftPermissionMode: 'ask',
@@ -526,8 +529,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setShowDocLibrary: (show) =>
         set(show ? { ...NO_DESTINATION, showDocLibrary: true } : { showDocLibrary: false }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
-    openSettings: (section = 'general') => set({ settingsSection: section }),
-    closeSettings: () => set({ settingsSection: null }),
+    openSettings: (section = 'general', provider) => set({ settingsSection: section, settingsProvider: provider ?? null }),
+    closeSettings: () => set({ settingsSection: null, settingsProvider: null }),
     setShowMemoryDashboard: (show) =>
         set(show ? { ...NO_DESTINATION, showMemoryDashboard: true } : { showMemoryDashboard: false }),
     setShowSchedules: (show) =>

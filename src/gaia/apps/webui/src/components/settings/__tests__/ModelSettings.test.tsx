@@ -42,7 +42,7 @@ beforeEach(() => {
     mockedApi.getSpending.mockResolvedValue({
         month: '2026-10', total_usd: 0, turns: 0, unpriced_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price',
     });
-    useChatStore.setState({ systemStatus: null });
+    useChatStore.setState({ systemStatus: null, settingsProvider: null });
     withProviders(fireworks());
     mockedApi.listProviderModels.mockResolvedValue({ provider: 'local', models: [] });
     mockedApi.getActiveModel.mockResolvedValue(LOCAL_ACTIVE);
@@ -53,6 +53,14 @@ beforeEach(() => {
 });
 
 describe('ModelSettings provider keys', () => {
+    it('opens on the provider "Add your key" named, not the one in use', async () => {
+        useChatStore.getState().openSettings('model', 'fireworks');
+        render(<ModelSettings />);
+        const card = await screen.findByRole('region', { name: 'Fireworks AI' });
+        expect(within(card).getByLabelText('Fireworks AI API key')).toBeInTheDocument();
+        expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toHaveAttribute('aria-checked', 'true');
+    });
+
     it('takes the key in a password field', async () => {
         const card = await openFireworks();
         expect(within(card).getByLabelText('Fireworks AI API key')).toHaveAttribute('type', 'password');

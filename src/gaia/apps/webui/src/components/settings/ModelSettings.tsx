@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Cloud, Cpu, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useModelStore, displayModelName, distinctModelLabels } from '../../stores/modelStore';
+import { useChatStore } from '../../stores/chatStore';
 import { ModelContextSize } from './ModelContextSize';
 import { STATE_LABELS, isDownloading, placementText } from '../modelMeta';
 import '../ModelPicker.css';
@@ -41,7 +42,8 @@ export function ModelSettings() {
 
     const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
-    const [chosen, setChosen] = useState<ProviderId>(active?.provider ?? 'local');
+    const requested = useChatStore((s) => s.settingsProvider);
+    const [chosen, setChosen] = useState<ProviderId>(requested ?? active?.provider ?? 'local');
     const [models, setModels] = useState<ProviderModel[] | null>(null);
     const [modelsError, setModelsError] = useState<string | null>(null);
     const [query, setQuery] = useState('');
@@ -97,7 +99,7 @@ export function ModelSettings() {
         return () => clearInterval(t);
     }, [awaitingPermission, loadProviders]);
     const activeProvider = active?.provider;
-    useEffect(() => { if (activeProvider) setChosen(activeProvider); }, [activeProvider]);
+    useEffect(() => { if (activeProvider && !requested) setChosen(activeProvider); }, [activeProvider, requested]);
     useEffect(() => {
         setKey('');
         setNotice(null);
