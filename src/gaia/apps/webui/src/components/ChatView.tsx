@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Eye, EyeOff } from 'lucide-react';
+import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
 import { MessageBubble, isErrorContent } from './MessageBubble';
 import { toolActiveLabel } from './AgentActivity';
 import { useChatStore } from '../stores/chatStore';
@@ -30,6 +30,7 @@ import { AnswerComparison } from './AnswerComparison';
 import * as messageQueue from '../utils/messageQueue';
 import type { QueuedMessage } from '../utils/messageQueue';
 import { SessionPanel, SessionPanelToggle } from './session-panel/SessionPanel';
+import { PrivateChatButton } from './PrivateChatButton';
 import { OfflineNotice } from './session-panel/OfflineNotice';
 import { ExportErrorBar } from './ExportErrorBar';
 import { useSessionPanelStore } from '../stores/sessionPanelStore';
@@ -1726,17 +1727,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     )}
                 </div>
                 <div className="task-header-right">
-                    <button
-                        className="btn-icon-sm task-header-private"
-                        onClick={handleTogglePrivate}
-                        title={session?.private
-                            ? "Turn off private chat. This chat isn't saved to memory."
-                            : "Turn on private chat. It won't be saved to memory."}
-                        aria-label={session?.private ? 'Turn off private chat' : 'Turn on private chat'}
-                        data-private={session?.private ? 'true' : undefined}
-                    >
-                        {session?.private ? <EyeOff size={15} /> : <Eye size={15} />}
-                    </button>
+                    <PrivateChatButton isPrivate={!!session?.private} onToggle={handleTogglePrivate} />
                     <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files on this PC" aria-label="Browse files on this PC">
                         <FolderSearch size={15} />
                     </button>
