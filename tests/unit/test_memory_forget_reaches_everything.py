@@ -128,3 +128,48 @@ def test_something_said_after_forget_everything_is_learned(store):
     )
 
     assert applied == 1
+
+
+def _on_disk(tmp_path) -> bytes:
+    return b"".join(p.read_bytes().lower() for p in tmp_path.glob("memory.db*"))
+
+
+def test_forget_everything_leaves_nothing_readable_on_disk(store, tmp_path):
+    _Host(store, [])
+    other = MemoryStore(db_path=tmp_path / "memory.db")  # the UI's own connection
+    for i in range(50):
+        store.store(
+            category="fact", content=f"Trip to Lisbon number {i} at QQZHOTEL{i}"
+        )
+        store.store_turn("s-old", "user", f"My trip to Lisbon {i} is in December " * 5)
+    store.store(category="fact", content="User's bank PIN is 4821", sensitive=True)
+    other.get_all_knowledge(limit=5)
+    assert b"lisbon" in _on_disk(tmp_path)
+
+    _tool("forget_everything")()
+
+    raw = _on_disk(tmp_path)
+    for gone in (b"lisbon", b"qqzhotel", b"4821"):
+        assert gone not in raw, f"{gone!r} still readable in the database files"
+    assert other.get_all_knowledge(limit=5)["total"] == 0
+    other.close()
+
+
+def test_forget_everything_says_so_when_another_reader_blocks_the_scrub(
+    store, tmp_path
+):
+    _Host(store, [])
+    store.store(category="fact", content="User's bank PIN is 4821", sensitive=True)
+    reader = MemoryStore(db_path=tmp_path / "memory.db")
+    reader._conn.execute("PRAGMA busy_timeout=0")
+    store._conn.execute("PRAGMA busy_timeout=0")
+    reader._conn.execute("BEGIN")
+    reader._conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()
+
+    with pytest.raises(RuntimeError, match="was erased, but"):
+        store.clear_all()
+
+    reader._conn.rollback()
+    reader.close()
+    assert store._conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0] == 0
+    assert store._conn.execute("PRAGMA secure_delete").fetchone()[0] == 0
