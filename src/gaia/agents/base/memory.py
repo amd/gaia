@@ -3903,10 +3903,11 @@ class MemoryMixin(ProceduralMemoryMixin):
             r"\d{3,8}\b",
             r"\bpin\s*(?:#|:|=|\(\s*)\s*\d{3,8}\b\s*\)?",
             r"\b\d{3,8}\s+is\s+(?:(?:my|your|their|the)\s+|user(?:'s)?\s+)?pin\b",
-            r"\b(?:passcode|pass code|cvv2?|cvc|security code)\b"
-            r"(?:'s)?(?:\s+(?:number|code))?"
-            r"(?:\s+(?:for|on|at|of)(?:\s+\w+){1,8}?)?"
-            r"\s*(?:is|was|to|:|=|[-\u2013\u2014])?\s*\d{3,8}\b",
+            # Bound optional whitespace so long padding cannot trigger repeated retries.
+            r"\b(?:passcode|pass code|cvv2?|cvc|security code)(?:'s)?\b"
+            r"(?:\s{1,3}(?:number|code)\b)?"
+            r"(?:\s{1,3}(?:for|on|at|of)(?:\s{1,3}\w+){1,8}?)?"
+            r"(?:\s{0,3}(?:is|was|to|:|=|[-\u2013\u2014]))?\s{0,3}\d{3,8}\b",
             r"\b\d{3}-\d{2}-\d{4}\b",  # US social security number
             r"\b(?:ssn|social security(?: number)?)\b(?:\s{0,3}(?:is|was|:|=))?"
             r"\s{0,3}\d{3}[ -]?\d{2}[ -]?\d{4}\b",
