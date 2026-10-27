@@ -607,6 +607,22 @@ in the pane too. The browser pane isn't in the web version of the Agent UI.
 
 - **Tabs.** **+** opens a new tab, which lists the pages you opened recently.
   Links that open a new window open as a new tab in the pane instead.
+- **Each chat has its own tabs.** Tabs you or GAIA open belong to the chat on
+  screen, and a link that opens a new window stays in its page's chat.
+  Switching chats shows that chat's tabs, where you left them; a new chat
+  starts with the pane closed and no tabs. Tabs you open on the new-chat
+  screen move to the chat your first message starts. Sign-ins are shared by
+  every chat.
+- **Other chats' pages keep running** in the background, so going back to a
+  chat doesn't reload them. Past 12 open pages across all chats, the pages of
+  the chat you looked at longest ago close. Its tabs keep their address and
+  history and load again when you open that chat, with the scroll position
+  and form text the page last saved; anything newer, and the page's own
+  running state, such as an unsaved draft or a live connection, starts over.
+  The chat on screen and a chat whose page waits on a box never lose their
+  pages this way.
+- **Deleting a chat** closes its tabs and stops the dev servers only it was
+  using.
 - **Address bar.** Type a full address or just a host. `example.com` opens
   over https; `localhost:5173`, `127.0.0.1` and other addresses on this PC
   open over http, so local dev servers work as typed.
@@ -617,15 +633,16 @@ in the pane too. The browser pane isn't in the web version of the Agent UI.
   and height you type, turned sideways with **Rotate**, and in light or dark
   mode. **Fill pane** and **System** put it back.
 - **Dev servers** lists the [dev servers](#dev-servers) GAIA started, with
-  their status and port, **Open in pane** and **Stop**.
+  their status and port, the chat that started each one, **Open in pane** and
+  **Stop**.
 - **More (⋯)** has **Make this tab private**, **Open in system browser**,
   which hands the page to your default browser, and **Clear browsing data**,
   which deletes the pane's cookies, site data, cache and recent pages. It never
   touches your system browser or GAIA's own data.
 - **Resize** by dragging the pane's left edge, or focus the edge and use the
-  arrow keys; double-click it for the default width. The width and whether the
-  pane is open are remembered. The pane and the session panel share the right
-  side, so opening one closes the other.
+  arrow keys; double-click it for the default width. The width is remembered,
+  and so is whether each chat has its pane open. The pane and the session
+  panel share the right side, so opening one closes the other.
 
 Pages in the pane run sandboxed and apart from GAIA. They can't use your
 camera, microphone, location or notifications, and the pane says so when a page
@@ -676,6 +693,8 @@ each step happen.
   which steps it didn't do, and asks how to go on. Press **Resume** to hand the
   tab back. Any click or keystroke of yours also holds GAIA off that tab for a
   few seconds.
+- **GAIA only sees this chat's tabs.** It can't list, read or act in another
+  chat's tabs, even by their id.
 - **Private tabs are yours alone.** **Make this tab private** in the **⋯** menu
   hides the tab from GAIA: it isn't listed when GAIA asks which tabs are open,
   and GAIA can't read or act in it. A lock shows on the tab.
@@ -776,6 +795,9 @@ the top of the project. When that file exists, GAIA uses it:
   hang the turn. GAIA is told to use the dev server instead, or, outside the
   desktop app, to ask you to run it in your own terminal. The browser does not
   open `file://` pages; GAIA serves the file's folder instead.
+- **Servers belong to the app, not one chat.** Any chat's GAIA can use a
+  running server. **Dev servers** names the chat that started each one, and
+  deleting a chat stops the servers no other chat has asked for.
 - **Quitting GAIA stops every dev server.** If GAIA crashes, the next launch
   stops the servers it left running, checking each process is still the one
   it started.

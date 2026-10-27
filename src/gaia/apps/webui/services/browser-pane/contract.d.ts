@@ -6,6 +6,9 @@
 
 export type TabId = string & { readonly __brand: "TabId" };
 
+/** Whose tabs: a chat's session id, or null for the new-chat screen until its first message makes the chat. */
+export type ChatKey = string | null;
+
 /** Why the pane refused or could not show something; cleared by the tab's next navigation. */
 export type PaneNotice =
   | { kind: "blocked"; url: string; message: string }
@@ -71,11 +74,14 @@ export interface RecentPage {
 
 /** Main owns this and pushes all of it on every change. The renderer only mirrors it. */
 export interface PaneState {
+  /** The chat the window shows; tabs and activeTabId are that chat's alone. */
+  chat: ChatKey;
   visible: boolean;
   occluded: boolean;
-  /** Never empty: closing the last tab leaves a new tab page. */
+  /** Empty only for a chat that never opened the pane; closing a chat's last tab leaves a new tab page. */
   tabs: TabState[];
-  activeTabId: TabId;
+  /** null while the chat has no tabs. */
+  activeTabId: TabId | null;
   recent: RecentPage[];
   /** True while the user picks elements on the active tab (Cmd+Shift+S). */
   picking: boolean;
@@ -117,7 +123,7 @@ export interface DevServerState {
   startedAt: number;
   exitCode: number | null;
   logFile: string;
-  /** Session ids of the chats using it: the one that started it first. */
+  /** Session ids of the chats using it: the one that started it first. Deleting the last one stops it. */
   chats: string[];
 }
 
@@ -187,8 +193,8 @@ export interface PickEvent {
   elements: PickedElement[];
 }
 
-/** Commands main sends the window: the toggle shortcut pressed inside a pane page, or the agent opening a page. */
-export type PaneCommand = "toggle" | "show";
+/** Commands main sends the window: the toggle shortcut pressed inside a pane page, or a chat's agent showing a page. */
+export type PaneCommand = { kind: "toggle" } | { kind: "show"; chat: string };
 
 /** window.gaiaBrowserPane (preload.cjs). Present only in the desktop app. */
 export interface GaiaBrowserPaneAPI {
@@ -197,7 +203,12 @@ export interface GaiaBrowserPaneAPI {
   onState(cb: (state: PaneState) => void): () => void;
   onCommand(cb: (command: PaneCommand) => void): () => void;
   setBounds(rect: CssRect): void;
-  setVisible(visible: boolean): Promise<void>;
+  /** The chat this window shows and whether its pane is open. Only that chat's agent may use the pane. */
+  setView(chat: ChatKey, visible: boolean): void;
+  /** The new-chat screen's first message made this chat: its tabs become the chat's. */
+  claimDraft(sessionId: string): void;
+  /** The user deleted this chat: its tabs close, its dev servers stop, and its id is refused from now on. */
+  forgetChat(sessionId: string): void;
   /** Hides the live page under an app overlay. Resolves with a still frame of it, or null when no page shows. */
   setOccluded(occluded: boolean): Promise<string | null>;
   openTab(url: string | null): Promise<TabId>;
@@ -208,8 +219,6 @@ export interface GaiaBrowserPaneAPI {
   toggleDevTools(tabId: TabId): Promise<void>;
   clearBrowsingData(): Promise<void>;
   openExternal(tabId: TabId): Promise<void>;
-  /** The chat session this window shows; only that chat's agent may use the pane. */
-  setActiveSession(sessionId: string | null): void;
   /** Pause and Resume on the strip, and marking a tab private. */
   setControl(tabId: TabId, control: TabControl): Promise<void>;
   /** The Responsive control. null fills the pane again and lets the agent choose. */
@@ -236,7 +245,7 @@ export interface BridgeDiscovery {
   protocol: number;
 }
 
-/** null in a request means the tab the user is looking at. */
+/** null in a request means the chat's active tab, the one the user is looking at. Any other chat's tab is no_such_tab. */
 export type TabRef = TabId | null;
 
 /**
@@ -245,7 +254,7 @@ export type TabRef = TabId | null;
  */
 export type AllowedOrigins = string[];
 
-/** A tab as the agent sees it. Private tabs are never listed. */
+/** A tab as the agent sees it. Only its own chat's tabs, and never private ones. */
 export interface TabSummary {
   id: TabId;
   url: string | null;
@@ -257,7 +266,7 @@ export interface TabSummary {
 
 export interface TabsReply {
   tabs: TabSummary[];
-  /** null while the user looks at a private tab. */
+  /** null while the user looks at a private tab, or the chat has no tabs. */
   activeTabId: TabId | null;
 }
 
@@ -317,7 +326,7 @@ export interface BridgeOps {
   /** not_in_desktop is an answer here, so Python uses its headless browser; every later op sends sessionId and fails with not_in_desktop once the user switches chats. */
   attach: {
     req: { sessionId: string };
-    res: { status: "attached"; tabId: TabId; paneVisible: boolean } | { status: "not_in_desktop" };
+    res: { status: "attached"; tabId: TabId | null; paneVisible: boolean } | { status: "not_in_desktop" };
   };
   tabs: {
     req:

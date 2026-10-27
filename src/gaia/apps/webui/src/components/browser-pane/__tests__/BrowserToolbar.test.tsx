@@ -33,7 +33,7 @@ function tab(over: Partial<TabState> = {}): TabState {
 }
 
 function pane(tabs: TabState[], active = tabs[0].id): PaneState {
-    return { visible: true, occluded: false, tabs, activeTabId: active, recent: [], picking: false, devServers: [] };
+    return { chat: 'chat-1', visible: true, occluded: false, tabs, activeTabId: active, recent: [], picking: false, devServers: [] };
 }
 
 function fakeApi(): GaiaBrowserPaneAPI {
@@ -43,7 +43,9 @@ function fakeApi(): GaiaBrowserPaneAPI {
         onState: vi.fn(() => () => {}),
         onCommand: vi.fn(() => () => {}),
         setBounds: vi.fn(),
-        setVisible: ok(),
+        setView: vi.fn(),
+        claimDraft: vi.fn(),
+        forgetChat: vi.fn(),
         setOccluded: vi.fn(() => Promise.resolve(null)),
         openTab: vi.fn(() => Promise.resolve(id('tab-9'))),
         closeTab: ok(),
@@ -53,7 +55,6 @@ function fakeApi(): GaiaBrowserPaneAPI {
         toggleDevTools: ok(),
         clearBrowsingData: ok(),
         openExternal: ok(),
-        setActiveSession: vi.fn(),
         setControl: ok(),
         setViewport: ok(),
         togglePicking: ok(),

@@ -3,22 +3,26 @@
 
 /**
  * The browser pane in the renderer: a read-only mirror of the PaneState that
- * Electron main pushes, plus the layout the renderer owns (open, width),
- * remembered like the session panel's. The pane and the docked session panel
- * share the right side, so opening one closes the other.
+ * Electron main pushes, plus the layout the renderer owns. Open or closed is
+ * each chat's own and remembered per chat; the width is shared. The pane and
+ * the docked session panel share the right side, so opening one closes the
+ * other.
  */
 
 import { create } from 'zustand';
 import { log } from '../utils/logger';
 import { useSessionPanelStore } from './sessionPanelStore';
-import type { GaiaBrowserPaneAPI, PaneState } from '../../services/browser-pane/contract';
+import { onSessionRemoved, useChatStore } from './chatStore';
+import type { ChatKey, GaiaBrowserPaneAPI, PaneState } from '../../services/browser-pane/contract';
 
 export const PANE_MIN_WIDTH = 360;
 export const PANE_MAX_WIDTH = 1200;
 export const PANE_DEFAULT_WIDTH = 520;
 
-const OPEN_KEY = 'gaia.browserPane.open';
+const OPEN_CHATS_KEY = 'gaia.browserPane.openChats';
 const WIDTH_KEY = 'gaia.browserPane.width';
+/** Chats remembered with the pane open, most recently opened first; older ones read as closed. */
+export const OPEN_CHATS_LIMIT = 200;
 
 /** The pane exists only in the desktop app, where preload exposes this. */
 export function browserPaneApi(): GaiaBrowserPaneAPI | undefined {
@@ -55,39 +59,96 @@ function chatLeftEdge(): number {
     return document.querySelector('.main-content')?.getBoundingClientRect().left ?? 0;
 }
 
+function readOpenChats(): string[] {
+    const raw = read(OPEN_CHATS_KEY);
+    if (raw === null) return [];
+    try {
+        const ids: unknown = JSON.parse(raw);
+        if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) throw new Error('expected a list of chat ids');
+        return ids.slice(0, OPEN_CHATS_LIMIT);
+    } catch (err) {
+        log.ui.warn(`Ignoring unreadable ${OPEN_CHATS_KEY}; every chat's browser pane starts closed`, err);
+        return [];
+    }
+}
+
 interface BrowserPaneStore {
     /** The last state main pushed. Only connectBrowserPane writes it. */
     pane: PaneState | null;
-    open: boolean;
+    /** Chats whose pane is open, most recently opened first. Every other chat's is closed. */
+    openChats: string[];
+    /** The new-chat screen's pane; its first message hands it to the chat it makes. */
+    draftOpen: boolean;
     width: number;
+    /** Open or close the pane of the chat on screen. */
     setOpen: (open: boolean) => void;
     toggle: () => void;
+    /** The new-chat screen's first message made `sessionId`: the screen's tabs and open pane become that chat's. */
+    claimDraft: (sessionId: string) => void;
+    /** The chat was deleted: forget its pane here and in main. */
+    forgetChat: (sessionId: string) => void;
     setWidth: (width: number) => void;
 }
 
-export const useBrowserPaneStore = create<BrowserPaneStore>((set, get) => ({
-    pane: null,
-    open: browserPaneApi() !== undefined && read(OPEN_KEY) === '1',
-    width: clampPaneWidth(Number(read(WIDTH_KEY)) || PANE_DEFAULT_WIDTH),
-    setOpen: (open) => {
-        write(OPEN_KEY, open ? '1' : '0');
-        set({ open });
-        if (open && useSessionPanelStore.getState().open) useSessionPanelStore.getState().setOpen(false);
-    },
-    toggle: () => get().setOpen(!get().open),
-    setWidth: (width) => {
-        const w = clampPaneWidth(width);
-        write(WIDTH_KEY, String(w));
-        set({ width: w });
-    },
-}));
-
-if (useBrowserPaneStore.getState().open && useSessionPanelStore.getState().open) {
-    useSessionPanelStore.getState().setOpen(false);
+export function isPaneOpen(state: Pick<BrowserPaneStore, 'openChats' | 'draftOpen'>, chat: ChatKey): boolean {
+    return chat === null ? state.draftOpen : state.openChats.includes(chat);
 }
 
+const currentChat = (): ChatKey => useChatStore.getState().currentSessionId;
+
+export const useBrowserPaneStore = create<BrowserPaneStore>((set, get) => {
+    const saveOpenChats = (openChats: string[]) => {
+        const kept = openChats.slice(0, OPEN_CHATS_LIMIT);
+        write(OPEN_CHATS_KEY, JSON.stringify(kept));
+        set({ openChats: kept });
+    };
+    return {
+        pane: null,
+        openChats: browserPaneApi() !== undefined ? readOpenChats() : [],
+        draftOpen: false,
+        width: clampPaneWidth(Number(read(WIDTH_KEY)) || PANE_DEFAULT_WIDTH),
+        setOpen: (open) => {
+            const chat = currentChat();
+            if (chat === null) set({ draftOpen: open });
+            else saveOpenChats([...(open ? [chat] : []), ...get().openChats.filter((id) => id !== chat)]);
+            if (open && useSessionPanelStore.getState().open) useSessionPanelStore.getState().setOpen(false);
+        },
+        toggle: () => get().setOpen(!isPaneOpen(get(), currentChat())),
+        claimDraft: (sessionId) => {
+            if (get().draftOpen) {
+                set({ draftOpen: false });
+                saveOpenChats([sessionId, ...get().openChats.filter((id) => id !== sessionId)]);
+            }
+            browserPaneApi()?.claimDraft(sessionId);
+        },
+        forgetChat: (sessionId) => {
+            if (get().openChats.includes(sessionId)) saveOpenChats(get().openChats.filter((id) => id !== sessionId));
+            browserPaneApi()?.forgetChat(sessionId);
+        },
+        setWidth: (width) => {
+            const w = clampPaneWidth(width);
+            write(WIDTH_KEY, String(w));
+            set({ width: w });
+        },
+    };
+});
+
+export function useBrowserPaneOpen(): boolean {
+    const chat = useChatStore((s) => s.currentSessionId);
+    return useBrowserPaneStore((s) => isPaneOpen(s, chat));
+}
+
+onSessionRemoved((id) => useBrowserPaneStore.getState().forgetChat(id));
+
+// Switching to a chat whose pane is open takes the right side back from the session panel.
+useChatStore.subscribe((now, before) => {
+    if (now.currentSessionId !== before.currentSessionId && isPaneOpen(useBrowserPaneStore.getState(), now.currentSessionId)) {
+        if (useSessionPanelStore.getState().open) useSessionPanelStore.getState().setOpen(false);
+    }
+});
+
 useSessionPanelStore.subscribe((now, before) => {
-    if (now.open && !before.open && useBrowserPaneStore.getState().open) {
+    if (now.open && !before.open && isPaneOpen(useBrowserPaneStore.getState(), currentChat())) {
         useBrowserPaneStore.getState().setOpen(false);
     }
 });

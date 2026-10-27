@@ -302,31 +302,29 @@ function createHandlers({ getHost, devServers, appVersion }) {
     tabs: async (req) => {
       const h = host(req.sessionId);
       if (req.op === "open") return h.agentOpen(req.sessionId, req.url, req.allowedOrigins);
-      if (req.op === "select") {
-        h.agentTab(req.tabId);
-        h.selectTab(req.tabId);
-      }
-      return h.listTabs();
+      if (req.op === "select") return h.agentSelect(req.sessionId, req.tabId);
+      return h.listTabs(req.sessionId);
     },
-    navigate: async (req) => host(req.sessionId).agentNavigate(req.tabId, req.to, req.allowedOrigins),
-    evaluate: async (req) => host(req.sessionId).agentEvaluate(req.tabId, req.script, req.args, req.frames, req.allowedOrigins),
-    origin: async (req) => host(req.sessionId).agentOrigin(req.tabId),
-    screenshot: async (req) => host(req.sessionId).agentScreenshot(req.tabId, req.clip, req.maxWidth, req.allowedOrigins),
+    navigate: async (req) => host(req.sessionId).agentNavigate(req.sessionId, req.tabId, req.to, req.allowedOrigins),
+    evaluate: async (req) => host(req.sessionId).agentEvaluate(req.sessionId, req.tabId, req.script, req.args, req.frames, req.allowedOrigins),
+    origin: async (req) => host(req.sessionId).agentOrigin(req.sessionId, req.tabId),
+    screenshot: async (req) => host(req.sessionId).agentScreenshot(req.sessionId, req.tabId, req.clip, req.maxWidth, req.allowedOrigins),
     logs: async (req) =>
       host(req.sessionId).agentLogs(
+        req.sessionId,
         req.tabId,
         { kind: req.kind, afterSeq: req.afterSeq, errorsOnly: req.errorsOnly, pattern: req.pattern, limit: req.limit },
         req.allowedOrigins
       ),
-    act: async (req) => host(req.sessionId).agentAct(req.tabId, req.action, req.target, req.allowedOrigins),
+    act: async (req) => host(req.sessionId).agentAct(req.sessionId, req.tabId, req.action, req.target, req.allowedOrigins),
     dialog: async (req) => {
       const h = host(req.sessionId);
       if (req.op === "release") return h.releaseDialogs(req.sessionId);
-      if (req.op === "get") return h.agentDialog(req.tabId);
-      return h.agentAnswerDialog(req.tabId, req.accept, req.text, req.allowedOrigins);
+      if (req.op === "get") return h.agentDialog(req.sessionId, req.tabId);
+      return h.agentAnswerDialog(req.sessionId, req.tabId, req.accept, req.text, req.allowedOrigins);
     },
-    script: async (req) => host(req.sessionId).agentScript(req.tabId, req.expression),
-    viewport: async (req) => host(req.sessionId).agentViewport(req.tabId, { size: req.size, colorScheme: req.colorScheme }),
+    script: async (req) => host(req.sessionId).agentScript(req.sessionId, req.tabId, req.expression),
+    viewport: async (req) => host(req.sessionId).agentViewport(req.sessionId, req.tabId, { size: req.size, colorScheme: req.colorScheme }),
     devServers: async (req) => {
       host(req.sessionId);
       if (req.op === "list") return { servers: devServers.list() };

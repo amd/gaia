@@ -51,11 +51,13 @@ function makeHost(overrides = {}) {
     publish: (s) => published.push(s),
     blockedPorts: () => [BACKEND_PORT],
     recentStore: memoryRecentStore(),
+    goneChats: new Set(),
     onToggleRequest: jest.fn(),
     openExternal: jest.fn(),
     ...overrides,
   };
   const host = new PaneHost(deps);
+  host.openTab(null);
   return { host, window, deps, published, last: () => published[published.length - 1] };
 }
 
@@ -66,15 +68,6 @@ beforeEach(() => {
 });
 
 describe("tabs", () => {
-  test("a fresh pane has one new tab page and no native view", () => {
-    const { host } = makeHost();
-    const state = host.state();
-    expect(state.tabs).toHaveLength(1);
-    expect(state.tabs[0]).toMatchObject({ url: null, title: "New tab" });
-    expect(state.activeTabId).toBe(state.tabs[0].id);
-    expect(WebContentsView.instances).toHaveLength(0);
-  });
-
   test("opening a tab loads the page in a sandboxed view on the pane partition with no preload", () => {
     const { host, window, last } = makeHost();
     const id = host.openTab("https://example.com/");
@@ -249,7 +242,7 @@ describe("placement", () => {
     const a = host.openTab("https://a.test/");
     const b = host.openTab("https://b.test/");
     expect(viewOf(host, b).visible).toBe(false);
-    host.setVisible(true);
+    host.setView(null, true);
     expect(viewOf(host, b).visible).toBe(false);
     host.setBounds({ x: 700, y: 90, width: 500, height: 600 });
     expect(viewOf(host, b).visible).toBe(true);
@@ -262,9 +255,9 @@ describe("placement", () => {
   test("hiding the pane uses setVisible(false), never zero or offscreen bounds", () => {
     const { host } = makeHost();
     const view = viewOf(host, host.openTab("https://a.test/"));
-    host.setVisible(true);
+    host.setView(null, true);
     host.setBounds({ x: 700, y: 90, width: 500, height: 600 });
-    host.setVisible(false);
+    host.setView(null, false);
     host.setBounds({ x: 700, y: 90, width: 0, height: 0 });
     host.setBounds({ x: 5000, y: 5000, width: 500, height: 600 });
     expect(view.visible).toBe(false);
@@ -279,7 +272,7 @@ describe("placement", () => {
   test("an app overlay hides the live page and returns a still frame of it", async () => {
     const { host, last } = makeHost();
     const view = viewOf(host, host.openTab("https://a.test/"));
-    host.setVisible(true);
+    host.setView(null, true);
     host.setBounds({ x: 700, y: 90, width: 500, height: 600 });
 
     const frame = await host.setOccluded(true);
@@ -293,7 +286,7 @@ describe("placement", () => {
 
   test("an overlay over a new tab page has no frame to freeze", async () => {
     const { host } = makeHost();
-    host.setVisible(true);
+    host.setView(null, true);
     host.setBounds({ x: 700, y: 90, width: 500, height: 600 });
     expect(await host.setOccluded(true)).toBeNull();
   });
@@ -481,7 +474,7 @@ describe("IPC", () => {
       expect.objectContaining({ activeTabId: id })
     );
     const state = await invoke(CHANNELS.getState, window.webContents);
-    expect(state.tabs.map((t) => t.url)).toEqual([null, "https://a.test/"]);
+    expect(state.tabs.map((t) => t.url)).toEqual(["https://a.test/"]);
   });
 
   test("any other sender is refused", () => {

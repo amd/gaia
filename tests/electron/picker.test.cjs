@@ -205,6 +205,7 @@ describe("PaneHost and the picker", () => {
       publish: jest.fn(),
       blockedPorts: () => [],
       recentStore: { load: () => [], save: () => {} },
+      goneChats: new Set(),
       onToggleRequest: jest.fn(),
       onShowRequest: jest.fn(),
       openExternal: jest.fn(),
@@ -216,7 +217,7 @@ describe("PaneHost and the picker", () => {
         return s;
       },
     });
-    host.navigate(host.activeTabId, "http://127.0.0.1:5000/picker.html");
+    host.openTab("http://127.0.0.1:5000/picker.html");
     return { host, sessions, onPicked, wc: host.tabs.get(host.activeTabId).view.webContents };
   }
 
@@ -247,7 +248,7 @@ describe("PaneHost and the picker", () => {
 
   test.each([
     ["the user switches tabs", (host) => host.selectTab(host.openTab(null))],
-    ["the pane closes", (host) => host.setVisible(false)],
+    ["the pane closes", (host) => host.setView(null, false)],
     ["the page navigates", (host, wc) => wc.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false })],
     ["the toggle runs again", (host) => host.togglePicking()],
   ])("picking ends when %s", async (_what, act) => {

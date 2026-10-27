@@ -259,6 +259,14 @@ interface ChatState {
     setPendingPrompt: (prompt: string | null) => void;
 }
 
+const removedListeners = new Set<(id: string) => void>();
+
+/** Run `listener` with each chat's id when the user deletes it. Returns its unsubscribe. */
+export function onSessionRemoved(listener: (id: string) => void): () => void {
+    removedListeners.add(listener);
+    return () => removedListeners.delete(listener);
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
     agents: [],
     setAgents: (agents) => set({ agents }),
@@ -322,7 +330,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     addSession: (session) =>
         set((state) => ({ sessions: [session, ...state.sessions] })),
     // The chat's queued messages go with it; the delete button says so first.
-    removeSession: (id) =>
+    removeSession: (id) => {
         set((state) => {
             const next: Partial<ChatState> = {
                 sessions: state.sessions.filter((s) => s.id !== id),
@@ -341,7 +349,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 next.queueHolds = queueHolds;
             }
             return next;
-        }),
+        });
+        for (const listener of removedListeners) listener(id);
+    },
     updateSessionInList: (id, updates) =>
         set((state) => ({
             sessions: state.sessions.map((s) => (s.id === id ? { ...s, ...updates } : s)),

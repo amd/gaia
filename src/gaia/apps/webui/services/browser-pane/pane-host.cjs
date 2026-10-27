@@ -8,6 +8,13 @@
  * keeps the native views on top of that placeholder and pushes the whole
  * PaneState to the renderer after every change.
  *
+ * Every tab belongs to one chat: the chat shown when it opened, or the
+ * new-chat screen (chat null) until its first message makes the chat. The
+ * window shows one chat's tabs at a time, and an agent only ever reaches its
+ * own chat's tabs. Other chats' pages stay alive, hidden, up to
+ * LIVE_VIEW_CAP; past it the least recently shown chat's pages close and
+ * load again from their saved history when that chat shows.
+ *
  * Hidden always means view.setVisible(false). Offscreen or zero-size bounds
  * stall or freeze page capture, so they are never used to hide a view.
  */
@@ -22,6 +29,7 @@ const input = require("./input.cjs");
 const { PickerSession } = require("./picker.cjs");
 
 /** @typedef {import("./contract").TabId} TabId */
+/** @typedef {import("./contract").ChatKey} ChatKey */
 /** @typedef {import("./contract").TabState} TabState */
 /** @typedef {import("./contract").PaneState} PaneState */
 /** @typedef {import("./contract").RecentPage} RecentPage */
@@ -62,6 +70,9 @@ const LEAVE_ONCE_MS = 30000;
 const SCRIPT_TIMEOUT_MS = 5000;
 const MAX_SCRIPT_RESULT = 4000;
 const STOPPED_FOR_DIALOG = "A box opened on the page, so GAIA stopped this step there.";
+// Pages kept alive across all chats. Each is a renderer process of roughly 50 to 150 MB,
+// so 12 stays near 1 to 2 GB while holding a QA chat's tabs and a few chats besides.
+const LIVE_VIEW_CAP = 12;
 
 /** True when an agent op may read or land on `url`: loopback, or an origin the user approved. */
 function inScope(url, allowedOrigins) {
@@ -192,8 +203,9 @@ class PaneHost {
    *   publish: (state: PaneState) => void,
    *   blockedPorts: () => number[],
    *   recentStore: { load: () => RecentPage[], save: (pages: RecentPage[]) => void },
+   *   goneChats: Set<string>,
    *   onToggleRequest: () => void,
-   *   onShowRequest: () => void,
+   *   onShowRequest: (chat: string) => void,
    *   openExternal: (url: string) => void,
    *   onPicked: (event: import("./contract").PickEvent) => void,
    *   createCdp?: (webContents: Electron.WebContents) => TabCdp,
@@ -203,8 +215,17 @@ class PaneHost {
   constructor(deps) {
     this.deps = deps;
     this.window = deps.window;
-    /** @type {Map<TabId, { state: TabState, view: Electron.WebContentsView | null }>} */
+    /** Every chat's tabs; each record's `chat` says whose. */
+    /** @type {Map<TabId, { chat: ChatKey, state: TabState, view: Electron.WebContentsView | null }>} */
     this.tabs = new Map();
+    /** Each chat's own active tab. A chat with no tabs has no entry. */
+    /** @type {Map<ChatKey, TabId>} */
+    this.activeByChat = new Map();
+    /** @type {ChatKey} The chat the window shows; the bridge's attach answers from it. */
+    this.shown = null;
+    /** Chats most recently shown first: whose pages to close first past LIVE_VIEW_CAP. */
+    /** @type {ChatKey[]} */
+    this.recency = [null];
     this.nextId = 1;
     this.visible = false;
     this.occluded = false;
@@ -213,22 +234,27 @@ class PaneHost {
     /** @type {RecentPage[]} */
     this.recent = deps.recentStore.load();
     this.disposed = false;
-    /** The chat session the window shows, reported by the renderer; the bridge's attach answers from it. */
-    this.activeSessionId = null;
+    /** Chats the user deleted, shared by every window this app run; their ids never come back. */
+    /** @type {Set<string>} */
+    this.gone = deps.goneChats;
     /** @type {{ tabId: TabId, session: PickerSession } | null} */
     this.picker = null;
     this.pickRuns = 0;
     this.nextPickRef = 1;
-    /** @type {TabId} */
-    this.activeTabId = this.addTab();
+  }
+
+  /** The tab the user sees: the shown chat's active tab, or null while that chat has none. */
+  get activeTabId() {
+    return this.activeByChat.get(this.shown) ?? null;
   }
 
   /** @returns {PaneState} */
   state() {
     return {
+      chat: this.shown,
       visible: this.visible,
       occluded: this.occluded,
-      tabs: [...this.tabs.values()].map((t) => ({ ...t.state })),
+      tabs: this.chatTabs(this.shown).map((t) => ({ ...t.state })),
       activeTabId: this.activeTabId,
       recent: this.recent.slice(),
       picking: this.picker !== null,
@@ -245,12 +271,70 @@ class PaneHost {
     this.syncViews();
   }
 
-  /** @param {boolean} visible */
-  setVisible(visible) {
+  /**
+   * The chat the window shows and whether its pane is open, set together so
+   * a switch never shows one chat's pages under another's open state. An
+   * open pane on a chat with no tabs gets a new tab page.
+   *
+   * @param {ChatKey} chat
+   * @param {boolean} visible
+   */
+  setView(chat, visible) {
+    if (chat !== null) this.requireLiveChat(chat);
+    const before = this.shown;
+    if (chat !== before) {
+      this.stopPicking();
+      this.shown = chat;
+      this.recency = [chat, ...this.recency.filter((c) => c !== chat)];
+      if (before !== null) this.releaseDialogs(before);
+      for (const tab of this.chatTabs(chat)) if (tab.saved) this.restoreView(tab);
+    }
     this.visible = visible;
     if (!visible) this.stopPicking();
+    if (visible && this.activeTabId === null) this.activeByChat.set(chat, this.addTab(chat));
+    this.trimViews(chat);
     this.syncViews();
     this.publish();
+  }
+
+  /**
+   * The new-chat screen's first message made `sessionId`: its tabs, and the
+   * screen itself if it still shows, become that chat's. Idempotent.
+   *
+   * @param {string} sessionId
+   */
+  claimDraft(sessionId) {
+    this.requireLiveChat(sessionId);
+    const moved = this.chatTabs(null);
+    for (const tab of moved) tab.chat = sessionId;
+    const draftActive = this.activeByChat.get(null);
+    this.activeByChat.delete(null);
+    if (draftActive !== undefined && !this.activeByChat.has(sessionId)) this.activeByChat.set(sessionId, draftActive);
+    if (this.shown === null) {
+      this.shown = sessionId;
+      this.recency = [sessionId, ...this.recency.filter((c) => c !== sessionId)];
+    }
+    this.syncViews();
+    this.publish();
+  }
+
+  /**
+   * The user deleted the chat: close its tabs, and refuse its id from now on.
+   *
+   * @param {string} sessionId
+   */
+  forgetChat(sessionId) {
+    this.gone.add(sessionId);
+    for (const tab of this.chatTabs(sessionId)) this.dropTab(tab);
+    this.activeByChat.delete(sessionId);
+    this.recency = this.recency.filter((c) => c !== sessionId);
+    this.syncViews();
+    this.publish();
+  }
+
+  /** @param {string} chat */
+  requireLiveChat(chat) {
+    if (this.gone.has(chat)) throw new Error(`Chat ${chat} was deleted, so the browser pane has no tabs for it.`);
   }
 
   /**
@@ -266,7 +350,8 @@ class PaneHost {
     this.occluded = occluded;
     this.syncViews();
     this.publish();
-    const view = this.activeTab().view;
+    const tab = this.shownTab();
+    const view = tab && tab.view;
     if (!occluded || !wasShown || !view) return null;
     // A hidden view still captures a fresh frame, so hiding first keeps the overlay clear.
     const image = await view.webContents.capturePage();
@@ -276,14 +361,28 @@ class PaneHost {
   // ── Tabs ──────────────────────────────────────────────────────────────
 
   /**
+   * A new tab in the shown chat, from the user.
+   *
    * @param {string | null} url null opens a new tab page.
    * @returns {TabId}
    */
   openTab(url) {
-    this.stopPicking();
-    const id = this.addTab();
-    this.activeTabId = id;
-    if (url !== null) this.navigate(id, url);
+    return this.openTabIn(this.shown, url);
+  }
+
+  /**
+   * A new tab that becomes `chat`'s active tab. A popup opens in its opener's chat.
+   *
+   * @param {ChatKey} chat
+   * @param {string | null} url
+   * @returns {TabId}
+   */
+  openTabIn(chat, url) {
+    if (chat !== null) this.requireLiveChat(chat);
+    if (chat === this.shown) this.stopPicking();
+    const id = this.addTab(chat);
+    this.activeByChat.set(chat, id);
+    if (url !== null) this.navigateTab(this.requireTab(id), url);
     this.syncViews();
     this.publish();
     return id;
@@ -291,17 +390,17 @@ class PaneHost {
 
   /** @param {TabId} id */
   closeTab(id) {
-    const order = [...this.tabs.keys()];
+    const tab = this.userTab(id);
+    const { chat } = tab;
+    const order = this.chatTabs(chat).map((t) => t.state.id);
     const index = order.indexOf(id);
-    const tab = this.requireTab(id);
-    if (this.picker && this.picker.tabId === id) this.stopPicking();
-    this.destroyView(tab.view);
-    this.tabs.delete(id);
-    if (this.tabs.size === 0) {
-      this.activeTabId = this.addTab();
-    } else if (this.activeTabId === id) {
-      const rest = order.filter((t) => t !== id);
-      this.activeTabId = rest[Math.min(index, rest.length - 1)];
+    this.dropTab(tab);
+    const rest = order.filter((t) => t !== id);
+    if (rest.length === 0) {
+      // Closing the chat's last tab leaves a new tab page, never an empty open pane.
+      this.activeByChat.set(chat, this.addTab(chat));
+    } else if (this.activeByChat.get(chat) === id) {
+      this.activeByChat.set(chat, rest[Math.min(index, rest.length - 1)]);
     }
     this.syncViews();
     this.publish();
@@ -309,9 +408,14 @@ class PaneHost {
 
   /** @param {TabId} id */
   selectTab(id) {
-    this.requireTab(id);
-    if (id !== this.activeTabId) this.stopPicking();
-    this.activeTabId = id;
+    const tab = this.userTab(id);
+    this.activate(tab);
+  }
+
+  /** Make `tab` its chat's active tab. */
+  activate(tab) {
+    if (tab.chat === this.shown && tab.state.id !== this.activeTabId) this.stopPicking();
+    this.activeByChat.set(tab.chat, tab.state.id);
     this.syncViews();
     this.publish();
   }
@@ -321,7 +425,10 @@ class PaneHost {
    * @param {string} url Already a full URL; the address bar normalizes what was typed.
    */
   navigate(id, url) {
-    const tab = this.requireTab(id);
+    this.navigateTab(this.userTab(id), url);
+  }
+
+  navigateTab(tab, url) {
     const verdict = classifyNavigation(url, { blockedPorts: this.deps.blockedPorts() });
     if (!verdict.allowed) {
       tab.state.notice = { kind: "blocked", url, message: verdict.message };
@@ -350,8 +457,11 @@ class PaneHost {
    * @param {HistoryAction} action
    */
   history(id, action) {
-    const tab = this.requireTab(id);
-    if (!tab.view) throw new Error(`Tab ${id} has no page to ${action}; open a page in it first.`);
+    this.historyStep(this.userTab(id), action);
+  }
+
+  historyStep(tab, action) {
+    if (!tab.view) throw new Error(`Tab ${tab.state.id} has no page to ${action}; open a page in it first.`);
     const wc = tab.view.webContents;
     if (action !== "stop") tab.leaving = () => this.historyLoad(tab, action);
     if (action === "back") wc.navigationHistory.goBack();
@@ -364,13 +474,13 @@ class PaneHost {
   /** Repeat a history step that "leave this page?" stopped, and wait for its load. */
   historyLoad(tab, action) {
     const done = this.nextLoad(tab.view.webContents);
-    this.history(tab.state.id, action);
+    this.historyStep(tab, action);
     return done;
   }
 
   /** @param {TabId} id */
   toggleDevTools(id) {
-    const tab = this.requireTab(id);
+    const tab = this.userTab(id);
     if (!tab.view) throw new Error(`Tab ${id} has no page to inspect; open a page in it first.`);
     const wc = tab.view.webContents;
     if (wc.isDevToolsOpened()) wc.closeDevTools();
@@ -386,7 +496,7 @@ class PaneHost {
    */
   setControl(id, control) {
     if (!CONTROLS.has(control)) throw new Error(`Unknown tab control "${control}"; use shared, user or private.`);
-    const tab = this.requireTab(id);
+    const tab = this.userTab(id);
     tab.state.control = control;
     // Resume means go now, not after the last click's pause runs out.
     if (control === "shared") tab.userInputAt = 0;
@@ -401,7 +511,7 @@ class PaneHost {
    * @param {import("./contract").ViewportChoice | null} choice null fills the pane again.
    */
   async setUserViewport(id, choice) {
-    const tab = this.requireTab(id);
+    const tab = this.userTab(id);
     tab.state.viewport = choice ? { ...choice, source: "user" } : null;
     this.publish();
     await this.applyViewport(tab);
@@ -414,6 +524,12 @@ class PaneHost {
     this.recent = [];
     this.deps.recentStore.save(this.recent);
     for (const tab of this.tabs.values()) {
+      if (tab.saved) {
+        const current = tab.saved.entries[tab.saved.index];
+        tab.saved = { entries: [{ url: current.url, title: current.title }], index: 0 };
+        tab.state.canGoBack = false;
+        tab.state.canGoForward = false;
+      }
       if (!tab.view) continue;
       tab.view.webContents.navigationHistory.clear();
       this.readNavigation(tab);
@@ -423,7 +539,7 @@ class PaneHost {
 
   /** @param {TabId} id */
   openExternal(id) {
-    const { url } = this.requireTab(id).state;
+    const { url } = this.userTab(id).state;
     if (url === null || !isWebUrl(url)) {
       throw new Error(`Tab ${id} has no web page to open in the system browser.`);
     }
@@ -438,8 +554,8 @@ class PaneHost {
       this.stopPicking();
       return;
     }
-    const tab = this.activeTab();
-    if (!tab.view || tab.state.url === null) {
+    const tab = this.shownTab();
+    if (!tab || !tab.view || tab.state.url === null) {
       throw new Error("There is no page to pick from: open a page in the browser pane first.");
     }
     const wc = tab.view.webContents;
@@ -485,23 +601,19 @@ class PaneHost {
   // the origins Python's site gate approved for that one call. A page on any
   // other origin is never read, and a navigation that would land on one
   // while the op runs is stopped.
-
-  /** @param {string | null} sessionId */
-  setActiveSession(sessionId) {
-    const before = this.activeSessionId;
-    this.activeSessionId = sessionId;
-    if (before !== null && before !== sessionId) this.releaseDialogs(before);
-  }
+  //
+  // Every op names its chat (sessionId) and only ever finds that chat's
+  // tabs: another chat's tab id is "no such tab", like a closed one.
 
   /** @param {string} sessionId */
   attachSession(sessionId) {
-    if (this.disposed || sessionId !== this.activeSessionId) return { status: "not_in_desktop" };
+    if (this.disposed || sessionId !== this.shown || this.gone.has(sessionId)) return { status: "not_in_desktop" };
     return { status: "attached", tabId: this.activeTabId, paneVisible: this.isShown() };
   }
 
   /** @param {string} sessionId */
   requireSession(sessionId) {
-    if (sessionId !== this.activeSessionId) {
+    if (sessionId !== this.shown || this.gone.has(sessionId)) {
       throw new BridgeError(
         "not_in_desktop",
         "The user switched GAIA desktop to another chat, so this chat can't use the browser pane now. Ask the user to switch back to this chat."
@@ -509,33 +621,45 @@ class PaneHost {
     }
   }
 
-  /** The tabs the agent may know about: private ones are left out, and an active private tab reads as none. */
-  listTabs() {
-    const shown = [...this.tabs.values()].filter(({ state }) => state.control !== "private");
+  /**
+   * The tabs the agent may know about: its own chat's, without private ones; an active private tab reads as none.
+   *
+   * @param {string} sessionId
+   */
+  listTabs(sessionId) {
+    const active = this.activeByChat.get(sessionId) ?? null;
+    const visible = this.chatTabs(sessionId).filter(({ state }) => state.control !== "private");
     return {
-      tabs: shown.map(({ state }) => ({
+      tabs: visible.map(({ state }) => ({
         id: state.id,
         url: state.url,
         title: state.title,
-        active: state.id === this.activeTabId,
+        active: state.id === active,
         openedBy: state.openedBy,
         control: state.control,
       })),
-      activeTabId: shown.some(({ state }) => state.id === this.activeTabId) ? this.activeTabId : null,
+      activeTabId: visible.some(({ state }) => state.id === active) ? active : null,
     };
   }
 
-  /** @param {TabId | null} id null means the tab the user is looking at. */
-  agentTab(id) {
-    const tab = this.tabs.get(id === null ? this.activeTabId : id);
+  /**
+   * @param {string} sessionId
+   * @param {TabId | null} id null means the chat's active tab, the one the user sees.
+   */
+  agentTab(sessionId, id) {
+    const active = this.activeByChat.get(sessionId);
+    if (id === null && active === undefined) {
+      throw new BridgeError("no_page", "This chat has no tab in the browser pane yet. Open one with browser_open(url).");
+    }
+    const tab = this.tabs.get(id === null ? active : id);
     if (tab && tab.state.control === "private" && id === null) {
       throw new BridgeError(
         "private_tab",
         "The user marked the tab they are looking at private, so GAIA can't see or use it. Open your own tab with browser_open(url), or ask the user to switch tabs."
       );
     }
-    // A private tab is invisible to the agent, so naming one gets the same answer as a closed tab.
-    if (!tab || tab.state.control === "private") throw new BridgeError("no_such_tab", `No browser pane tab "${id}"; it may have been closed.`);
+    // Another chat's tab and a private tab are invisible to the agent, so naming one gets the same answer as a closed tab.
+    if (!tab || tab.chat !== sessionId || tab.state.control === "private") throw new BridgeError("no_such_tab", `No browser pane tab "${id}"; it may have been closed.`);
     return tab;
   }
 
@@ -618,23 +742,31 @@ class PaneHost {
   /** @param {string} sessionId @param {string} url @param {string[]} allowedOrigins */
   async agentOpen(sessionId, url, allowedOrigins) {
     this.checkAgentUrl(url, allowedOrigins);
-    const id = this.addTab();
+    const id = this.addTab(sessionId);
     const tab = this.requireTab(id);
     tab.state.openedBy = sessionId;
-    this.activeTabId = id;
+    if (sessionId === this.shown) this.stopPicking();
+    this.activeByChat.set(sessionId, id);
     this.syncViews();
-    this.deps.onShowRequest();
+    this.deps.onShowRequest(sessionId);
     await this.withAgent(tab, allowedOrigins, () => this.agentLoad(tab, url));
-    return this.listTabs();
+    return this.listTabs(sessionId);
+  }
+
+  /** browser_tabs(switch_to): show one of the chat's own tabs. */
+  agentSelect(sessionId, id) {
+    this.activate(this.agentTab(sessionId, id));
+    return this.listTabs(sessionId);
   }
 
   /**
+   * @param {string} sessionId
    * @param {TabId | null} id
    * @param {string} to A URL, or back, forward or reload.
    * @param {string[]} allowedOrigins
    */
-  async agentNavigate(id, to, allowedOrigins) {
-    const tab = this.agentTab(id);
+  async agentNavigate(sessionId, id, to, allowedOrigins) {
+    const tab = this.agentTab(sessionId, id);
     this.requireAgentInput(tab);
     this.requireNoDialog(tab);
     if (to === "back" || to === "forward" || to === "reload") {
@@ -645,14 +777,14 @@ class PaneHost {
       if (to === "forward" && !nav.canGoForward()) throw new BridgeError("navigation_failed", "There is no later page in this tab.", { url: wc.getURL() });
       await this.withAgent(tab, allowedOrigins, async () => {
         const done = this.nextLoad(wc);
-        this.history(tab.state.id, to);
+        this.historyStep(tab, to);
         const went = await this.raceDialog(tab, done);
         if (went.dialog) throw this.dialogError(went.dialog);
         await this.settle(wc);
       });
     } else {
       this.checkAgentUrl(to, allowedOrigins);
-      this.deps.onShowRequest();
+      this.deps.onShowRequest(sessionId);
       await this.withAgent(tab, allowedOrigins, () => this.agentLoad(tab, to));
     }
     const wc = tab.view.webContents;
@@ -710,8 +842,8 @@ class PaneHost {
    * Run a script in the page's frames. The script is Python's own (the
    * snapshot or find script), never text from the model.
    */
-  async agentEvaluate(id, script, args, frames, allowedOrigins) {
-    const tab = this.agentTab(id);
+  async agentEvaluate(sessionId, id, script, args, frames, allowedOrigins) {
+    const tab = this.agentTab(sessionId, id);
     const wc = this.requirePage(tab, allowedOrigins);
     this.requireNoDialog(tab);
     return this.withAgent(tab, allowedOrigins, async () => {
@@ -735,17 +867,17 @@ class PaneHost {
     });
   }
 
-  /** @param {TabId | null} id */
-  async agentOrigin(id) {
-    const tab = this.agentTab(id);
+  /** @param {string} sessionId @param {TabId | null} id */
+  async agentOrigin(sessionId, id) {
+    const tab = this.agentTab(sessionId, id);
     const url = tab.view ? tab.view.webContents.getURL() || tab.state.url : tab.state.url;
     const origin = url ? originOf(url) : null;
     const hasCookies = origin ? (await this.deps.session.cookies.get({ url: origin })).length > 0 : false;
     return { tabId: tab.state.id, url, origin, hasCookies };
   }
 
-  async agentScreenshot(id, clip, maxWidth, allowedOrigins) {
-    const tab = this.agentTab(id);
+  async agentScreenshot(sessionId, id, clip, maxWidth, allowedOrigins) {
+    const tab = this.agentTab(sessionId, id);
     const wc = this.requirePage(tab, allowedOrigins);
     this.requireNoDialog(tab);
     return this.withAgent(tab, allowedOrigins, async () => {
@@ -771,8 +903,8 @@ class PaneHost {
     });
   }
 
-  async agentLogs(id, query, allowedOrigins) {
-    const tab = this.agentTab(id);
+  async agentLogs(sessionId, id, query, allowedOrigins) {
+    const tab = this.agentTab(sessionId, id);
     const wc = this.requirePage(tab, allowedOrigins);
     return this.withAgent(tab, allowedOrigins, async () => ({ ...tab.cdp.logs(query), url: wc.getURL() }));
   }
@@ -783,13 +915,14 @@ class PaneHost {
    * touched. Waits for a navigation the action starts, and follows a popup
    * the pane opened as a new tab.
    *
+   * @param {string} sessionId
    * @param {TabId | null} id
    * @param {import("./contract").ActAction} action
    * @param {import("./contract").ActTarget | null} target
    * @param {string[]} allowedOrigins
    */
-  async agentAct(id, action, target, allowedOrigins) {
-    const tab = this.agentTab(id);
+  async agentAct(sessionId, id, action, target, allowedOrigins) {
+    const tab = this.agentTab(sessionId, id);
     this.requireAgentInput(tab);
     const wc = this.requirePage(tab, allowedOrigins);
     this.requireNoDialog(tab);
@@ -799,8 +932,8 @@ class PaneHost {
       const origin = originOf(input.frameUrl(frame)) || frame.url;
       throw new BridgeError("off_scope", `That element is in a frame from ${origin}, which this call was not approved to use.`, { origin });
     }
-    this.deps.onShowRequest();
-    const before = this.activeTabId;
+    this.deps.onShowRequest(sessionId);
+    const before = this.activeByChat.get(sessionId);
     return this.withAgent(
       tab,
       allowedOrigins,
@@ -822,7 +955,8 @@ class PaneHost {
         if (done.dialog) stop.reason = STOPPED_FOR_DIALOG;
         else await this.settle(wc);
         const reply = { tabId: tab.state.id, url: wc.getURL(), title: wc.getTitle() };
-        if (this.activeTabId !== before) reply.adoptedTabId = this.activeTabId;
+        const after = this.activeByChat.get(sessionId);
+        if (after !== before && after !== undefined) reply.adoptedTabId = after;
         if (tab.state.dialog) reply.dialog = tab.state.dialog;
         return reply;
       },
@@ -835,11 +969,12 @@ class PaneHost {
    * return its value as JSON. Only on a page on this computer, and only in a
    * tab the agent may act in; anything else is refused, never asked about.
    *
+   * @param {string} sessionId
    * @param {TabId | null} id
    * @param {string} expression
    */
-  async agentScript(id, expression) {
-    const tab = this.agentTab(id);
+  async agentScript(sessionId, id, expression) {
+    const tab = this.agentTab(sessionId, id);
     this.requireAgentInput(tab);
     const wc = tab.view && tab.view.webContents;
     const url = (wc && wc.getURL()) || tab.state.url;
@@ -914,7 +1049,6 @@ class PaneHost {
     const openedBy = tab.busy > 0 ? "agent" : "page";
     tab.state.dialog = { ...dialog, openedBy };
     tab.dialogAnswer = answer;
-    tab.dialogSession = openedBy === "agent" ? this.activeSessionId : null;
     for (const notify of tab.dialogWaiters) notify(tab.state.dialog);
     this.publish();
   }
@@ -924,7 +1058,6 @@ class PaneHost {
     if (!tab.state.dialog) return;
     tab.state.dialog = null;
     tab.dialogAnswer = null;
-    tab.dialogSession = null;
     this.publish();
   }
 
@@ -950,15 +1083,15 @@ class PaneHost {
     return { dialog, leaving: answer.leave ? answer.leave() : null };
   }
 
-  /** The user's answer from the pane: any tab, any box. */
+  /** The user's answer from the pane: any of the shown chat's tabs, any box. */
   userAnswerDialog(id, accept, text) {
-    const { leaving } = this.answerDialog(this.requireTab(id), accept, text);
+    const { leaving } = this.answerDialog(this.userTab(id), accept, text);
     if (leaving) leaving.catch((err) => console.warn(`[browser-pane] Leaving the page did not finish: ${err.message}`));
   }
 
   /** Python's site gate reads the box before an answer, to decide whether to ask the user. */
-  agentDialog(id) {
-    const tab = this.agentTab(id);
+  agentDialog(sessionId, id) {
+    const tab = this.agentTab(sessionId, id);
     return { tabId: tab.state.id, dialog: tab.state.dialog };
   }
 
@@ -966,13 +1099,14 @@ class PaneHost {
    * The agent answers the box. Dismissing is always allowed; accepting a
    * confirm, prompt or "leave this page?" needs the page's site approved.
    *
+   * @param {string} sessionId
    * @param {TabId | null} id
    * @param {boolean} accept
    * @param {string | null} text
    * @param {string[]} allowedOrigins
    */
-  async agentAnswerDialog(id, accept, text, allowedOrigins) {
-    const tab = this.agentTab(id);
+  async agentAnswerDialog(sessionId, id, accept, text, allowedOrigins) {
+    const tab = this.agentTab(sessionId, id);
     this.requireAgentInput(tab);
     const pending = tab.state.dialog;
     if (pending && accept && pending.type !== "alert" && !inScope(pending.url, allowedOrigins)) {
@@ -1000,12 +1134,12 @@ class PaneHost {
     );
   }
 
-  /** Dismiss the boxes this chat's agent opened and left, in tabs still shared with it. */
+  /** Dismiss the boxes this chat's agent opened and left, in its tabs still shared with it. */
   releaseDialogs(sessionId) {
     let dismissed = 0;
-    for (const tab of this.tabs.values()) {
+    for (const tab of this.chatTabs(sessionId)) {
       const d = tab.state.dialog;
-      if (!d || d.openedBy !== "agent" || tab.dialogSession !== sessionId || tab.state.control !== "shared") continue;
+      if (!d || d.openedBy !== "agent" || tab.state.control !== "shared") continue;
       this.answerDialog(tab, false, null);
       dismissed += 1;
     }
@@ -1028,17 +1162,18 @@ class PaneHost {
    * Emulate a screen size and color scheme for the agent. The user's own
    * Responsive choice wins: then nothing changes and applied is false.
    *
+   * @param {string} sessionId
    * @param {TabId | null} id
    * @param {import("./contract").ViewportChoice} choice
    */
-  async agentViewport(id, choice) {
-    const tab = this.agentTab(id);
+  async agentViewport(sessionId, id, choice) {
+    const tab = this.agentTab(sessionId, id);
     this.requireAgentInput(tab);
     if (!tab.view) throw new BridgeError("no_page", "This tab has no page yet. Open one with browser_open(url) first.");
     const current = tab.state.viewport;
     if (current && current.source === "user") return { tabId: tab.state.id, applied: false, viewport: current };
     tab.state.viewport = choice.size || choice.colorScheme ? { ...choice, source: "agent" } : null;
-    this.deps.onShowRequest();
+    this.deps.onShowRequest(sessionId);
     this.publish();
     await this.applyViewport(tab);
     return { tabId: tab.state.id, applied: true, viewport: tab.state.viewport };
@@ -1074,11 +1209,17 @@ class PaneHost {
 
   // ── Internals ─────────────────────────────────────────────────────────
 
-  /** @returns {TabId} */
-  addTab() {
+  /**
+   * @param {ChatKey} chat
+   * @returns {TabId}
+   */
+  addTab(chat) {
     const id = /** @type {TabId} */ (`tab-${this.nextId++}`);
     this.tabs.set(id, {
+      chat,
       view: null,
+      /** Set while the page is discarded: its history, to load again when its chat shows. */
+      saved: null,
       state: {
         id,
         url: null,
@@ -1104,7 +1245,6 @@ class PaneHost {
       dispatching: false,
       agentEchoUntil: 0,
       dialogAnswer: null,
-      dialogSession: null,
       dialogWaiters: new Set(),
       leaving: null,
       leaveOnceUntil: 0,
@@ -1112,8 +1252,15 @@ class PaneHost {
     return id;
   }
 
-  activeTab() {
-    return this.requireTab(this.activeTabId);
+  /** @param {ChatKey} chat The chat's tabs, in the order they opened. */
+  chatTabs(chat) {
+    return [...this.tabs.values()].filter((t) => t.chat === chat);
+  }
+
+  /** The tab the user sees, or null while the shown chat has none. */
+  shownTab() {
+    const id = this.activeTabId;
+    return id === null ? null : this.requireTab(id);
   }
 
   /** @param {TabId} id */
@@ -1121,6 +1268,70 @@ class PaneHost {
     const tab = this.tabs.get(id);
     if (!tab) throw new Error(`No browser pane tab "${id}"; it may have been closed.`);
     return tab;
+  }
+
+  /** A tab the user acts on from the pane: only the shown chat's tabs are on screen. */
+  userTab(id) {
+    const tab = this.requireTab(id);
+    if (tab.chat !== this.shown) throw new Error(`Browser pane tab "${id}" belongs to another chat than the one showing.`);
+    return tab;
+  }
+
+  /** Close a tab's page and forget the tab. The caller picks the chat's next active tab. */
+  dropTab(tab) {
+    if (this.picker && this.picker.tabId === tab.state.id) this.stopPicking();
+    this.destroyView(tab.view);
+    this.tabs.delete(tab.state.id);
+  }
+
+  /**
+   * Past LIVE_VIEW_CAP live pages, close whole chats' pages, least recently
+   * shown first. Never the shown chat's, `keep`'s, or a chat whose page is
+   * busy with the agent or waiting on a box.
+   *
+   * @param {ChatKey} keep
+   */
+  trimViews(keep) {
+    let live = [...this.tabs.values()].filter((t) => t.view).length;
+    if (live <= LIVE_VIEW_CAP) return;
+    const owners = new Set([...this.tabs.values()].map((t) => t.chat));
+    const oldestFirst = [...owners].filter((c) => !this.recency.includes(c)).concat([...this.recency].reverse());
+    for (const chat of oldestFirst) {
+      if (live <= LIVE_VIEW_CAP) break;
+      if (chat === this.shown || chat === keep) continue;
+      const pages = this.chatTabs(chat).filter((t) => t.view);
+      if (pages.length === 0 || pages.some((t) => t.busy > 0 || t.state.dialog)) continue;
+      for (const tab of pages) this.discard(tab);
+      live -= pages.length;
+    }
+  }
+
+  /**
+   * Close a hidden tab's page but keep its history, which carries each
+   * entry's last saved scroll position and form values, to load it again.
+   */
+  discard(tab) {
+    const nav = tab.view.webContents.navigationHistory;
+    const entries = nav.getAllEntries();
+    // A page that never finished its first load has no entry yet; its address is all there is.
+    tab.saved = entries.length > 0 ? { entries, index: nav.getActiveIndex() } : { entries: [{ url: tab.state.url, title: tab.state.title }], index: 0 };
+    this.destroyView(tab.view);
+    tab.view = null;
+    tab.cdp = null;
+    tab.state.loading = false;
+    tab.state.devToolsOpen = false;
+  }
+
+  /** Load a discarded tab's page again where it was. */
+  restoreView(tab) {
+    const { saved } = tab;
+    tab.saved = null;
+    const wc = this.ensureView(tab).webContents;
+    // did-fail-load puts a failure on the tab; this only keeps the rejection handled.
+    wc.navigationHistory.restore(saved).catch((err) => console.warn(`[browser-pane] Reloading ${tab.state.url} did not finish: ${err.message}`));
+    if (tab.state.viewport) {
+      this.applyViewport(tab).catch((err) => console.error(`[browser-pane] Could not apply the tab's screen size again: ${err.message}`));
+    }
   }
 
   isShown() {
@@ -1158,6 +1369,7 @@ class PaneHost {
     tab.cdp = (this.deps.createCdp || ((wc) => new TabCdp(wc)))(view.webContents);
     this.watch(tab);
     this.window.contentView.addChildView(view);
+    this.trimViews(tab.chat);
     this.syncViews();
     return view;
   }
@@ -1177,15 +1389,17 @@ class PaneHost {
   watch(tab) {
     const wc = tab.view.webContents;
     const s = tab.state;
+    // A discarded or closed page can still send late events; only the tab's current page counts.
+    const live = () => !this.disposed && this.tabs.has(s.id) && tab.view !== null && tab.view.webContents === wc;
     const update = (fn) => (...args) => {
-      if (this.disposed || !this.tabs.has(s.id)) return;
+      if (!live()) return;
       fn(...args);
       this.publish();
     };
 
     attachTabPolicy(wc, {
       blockedPorts: this.deps.blockedPorts,
-      openTab: (url) => this.openTab(url),
+      openTab: (url) => this.openTabIn(tab.chat, url),
       onBlocked: update((url, message) => {
         s.notice = { kind: "blocked", url, message };
       }),
@@ -1199,7 +1413,7 @@ class PaneHost {
 
     wc.removeAllListeners(RUN_DIALOG);
     wc.on(RUN_DIALOG, (info, callback) => {
-      if (this.disposed || !this.tabs.has(s.id)) return callback(false, "");
+      if (!live()) return callback(false, "");
       // Chromium shows one box per page at a time; a second can only come from a frame racing the first.
       if (s.dialog) return callback(false, "");
       const url = (info.frame && info.frame.url) || wc.getURL();
@@ -1209,7 +1423,7 @@ class PaneHost {
       if (s.dialog && s.dialog.type !== "beforeunload") this.dropDialog(tab);
     });
     wc.on("will-prevent-unload", (event) => {
-      if (!this.disposed && this.tabs.has(s.id)) this.onPreventUnload(tab, event);
+      if (live()) this.onPreventUnload(tab, event);
     });
     wc.on("did-start-loading", update(() => { s.loading = true; }));
     wc.on("did-stop-loading", update(() => {
@@ -1264,7 +1478,7 @@ class PaneHost {
     wc.on("devtools-closed", update(() => { s.devToolsOpen = false; }));
     wc.on("input-event", (_event, event) => {
       if (!USER_INPUT.has(event.type) || tab.dispatching || Date.now() < tab.agentEchoUntil) return;
-      if (!this.disposed && this.tabs.has(s.id)) this.noteUserInput(tab);
+      if (live()) this.noteUserInput(tab);
     });
     wc.on("before-input-event", (event, input) => {
       if (isToggleShortcut(input)) {
@@ -1299,6 +1513,7 @@ class PaneHost {
 
 module.exports = {
   ACT_LINGER_MS,
+  LIVE_VIEW_CAP,
   BridgeError,
   CANCEL_DIALOGS,
   LEAVE_MESSAGE,

@@ -320,7 +320,7 @@ class PaneDriver:
         )
 
     def tabs(self) -> Dict[str, Any]:
-        """The pane's tabs, without the ones the user marked private."""
+        """This chat's tabs in the pane, without the ones the user marked private."""
         return self._call("tabs", {"op": "list"})
 
     def select_tab(self, tab_id: str) -> Dict[str, Any]:

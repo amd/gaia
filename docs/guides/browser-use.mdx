@@ -60,7 +60,7 @@ Signing in is a hand-off, not something GAIA does for you:
 | `browser_logs(kind, errors_only, contains, new_only)` | Console messages or network requests ([browser pane](/guides/agent-ui#gaia-uses-the-pane) only) | other sites |
 | `browser_press(key, ref)` | Press one key such as Escape, Enter or PageDown (browser pane only) | other sites |
 | `browser_viewport(preset, width, height, color_scheme)` | Show the page at a phone, tablet or desktop size, or in dark mode (browser pane only) | no |
-| `browser_tabs(switch_to)` | List the pane's tabs, or switch to one; private tabs are never listed (browser pane only) | no |
+| `browser_tabs(switch_to)` | List this chat's tabs in the pane, or switch to one; other chats' tabs and private tabs are never listed (browser pane only) | no |
 | `browser_batch(steps)` | Run several of the steps above in one call (browser pane only) | each step as if run alone |
 | `browser_dialog(accept)` | Answer the page's alert, confirm or "leave this page?" box: OK or Cancel (browser pane only; a page's `prompt()` can't open in the desktop app) | OK on another site's box, or on one that names an action that can't be undone |
 | `browser_eval(expression)` | Run one JavaScript expression in the page and get its value as JSON, to check app state or storage the page doesn't show (browser pane only, pages on this PC only) | no; refused on any other site |

@@ -149,7 +149,8 @@ async function launchApp(appDir, keepUserData = null) {
     });
     // The renderer names its chat to main on every switch; remembered here for `session`.
     await app.evaluate(({ ipcMain }) => {
-        ipcMain.prependListener('pane:set-active-session', (_event, id) => { globalThis.qaPaneSession = id; });
+        ipcMain.prependListener('pane:set-view', (_event, chat) => { globalThis.qaPaneSession = chat; });
+        ipcMain.prependListener('pane:claim-draft', (_event, chat) => { globalThis.qaPaneSession = chat; });
     });
     const page = await app.firstWindow({ timeout: 120_000 });
     await page.locator(CHAT_READY).first().waitFor({ state: 'visible', timeout: 120_000 });
@@ -199,7 +200,7 @@ async function startFixtureServer(app, userDataDir) {
     await app.evaluate(({ BrowserWindow, ipcMain }) => {
         if (globalThis.qaPaneSession) return;
         const win = BrowserWindow.getAllWindows().find((w) => w.isVisible());
-        ipcMain.emit('pane:set-active-session', { sender: win.webContents }, 'qa-perf-quit');
+        ipcMain.emit('pane:set-view', { sender: win.webContents }, 'qa-perf-quit', false);
     });
     return bridgeCall(app, userDataDir, 'devServers', { op: 'ensure', key: 'f1f1f1f1f1f1f1f1', spec });
 }

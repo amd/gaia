@@ -270,6 +270,37 @@ posix("the chats a server belongs to", () => {
     expect(sup.list()[0].chats).toEqual(["chat-a", "chat-b"]);
     expect(() => sup.ensure(KEY, spec(port), undefined)).toThrow(/must be started for a chat/);
   });
+
+  test("deleting a chat stops and forgets the servers only it used, and keeps a server another chat still uses", async () => {
+    const { sup, dir, onChange } = supervisor();
+    await sup.start();
+    const [p1, p2] = [await freePort(), await freePort()];
+    const own = await sup.ensure(KEY, spec(p1), "chat-a");
+    const shared = await sup.ensure("fedcba9876543210", { ...spec(p2), name: "api" }, "chat-a");
+    await sup.ensure("fedcba9876543210", { ...spec(p2), name: "api" }, "chat-b");
+    onChange.mockClear();
+
+    await sup.forgetChat("chat-a");
+
+    expect(alive(own.server.pid)).toBe(false);
+    expect(await portAnswers(p1)).toBe(false);
+    expect(alive(shared.server.pid)).toBe(true);
+    expect(sup.list()).toEqual([expect.objectContaining({ name: "api", status: "ready", chats: ["chat-b"] })]);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, "ledger.json"), "utf8")).servers.map((s) => s.name)).toEqual(["api"]);
+    expect(onChange).toHaveBeenCalled();
+  });
+
+  test("a start already under way when its chat is deleted is stopped once it lands", async () => {
+    const { sup } = supervisor();
+    await sup.start();
+    const port = await freePort();
+    const starting = sup.ensure(KEY, spec(port), "chat-a");
+    const forgotten = sup.forgetChat("chat-a");
+    const { server } = await starting;
+    await forgotten;
+    expect(alive(server.pid)).toBe(false);
+    expect(sup.list()).toEqual([]);
+  });
 });
 
 posix("logs", () => {

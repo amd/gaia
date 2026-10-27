@@ -10,7 +10,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Globe } from 'lucide-react';
-import { useBrowserPaneStore, browserPaneApi, connectBrowserPane, clampPaneWidth, PANE_DEFAULT_WIDTH, PANE_MAX_WIDTH, PANE_MIN_WIDTH } from '../../stores/browserPaneStore';
+import { useBrowserPaneStore, useBrowserPaneOpen, browserPaneApi, connectBrowserPane, clampPaneWidth, PANE_DEFAULT_WIDTH, PANE_MAX_WIDTH, PANE_MIN_WIDTH } from '../../stores/browserPaneStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useAppOverlayOpen } from '../../hooks/useAppOverlayOpen';
 import { useDockedResize } from '../../hooks/useDockedResize';
@@ -26,20 +26,19 @@ function isShortcut(e: KeyboardEvent, key: string): boolean {
     return (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === key;
 }
 
-/** Mounted with the chat in the desktop app; renders the pane while it is open. */
+/** Mounted with the chat in the desktop app; renders the chat's pane while it is open. */
 export function BrowserPane({ api }: { api: GaiaBrowserPaneAPI }) {
-    const open = useBrowserPaneStore((s) => s.open);
+    const chat = useChatStore((s) => s.currentSessionId);
+    const open = useBrowserPaneOpen();
     const pane = useBrowserPaneStore((s) => s.pane);
 
     useEffect(() => connectBrowserPane(api), [api]);
 
-    // Only the chat this window shows may use the pane, so main is told which one that is.
+    // Main shows this chat's tabs, and only this chat's agent may use the pane.
     useEffect(() => {
-        api.setActiveSession(useChatStore.getState().currentSessionId);
-        return useChatStore.subscribe((now, before) => {
-            if (now.currentSessionId !== before.currentSessionId) api.setActiveSession(now.currentSessionId);
-        });
-    }, [api]);
+        api.setView(chat, open);
+    }, [api, chat, open]);
+    useEffect(() => () => api.setView(useChatStore.getState().currentSessionId, false), [api]);
 
     useEffect(() => api.onPicked((event) => usePickedElementsStore.getState().applyPick(event)), [api]);
 
@@ -57,8 +56,9 @@ export function BrowserPane({ api }: { api: GaiaBrowserPaneAPI }) {
         };
         window.addEventListener('keydown', onKey);
         const off = api.onCommand((command) => {
-            if (command === 'toggle') useBrowserPaneStore.getState().toggle();
-            else if (command === 'show') useBrowserPaneStore.getState().setOpen(true);
+            if (command.kind === 'toggle') useBrowserPaneStore.getState().toggle();
+            // An agent's page shows in its own chat only; the user may have switched away since.
+            else if (command.chat === useChatStore.getState().currentSessionId) useBrowserPaneStore.getState().setOpen(true);
         });
         return () => {
             window.removeEventListener('keydown', onKey);
@@ -66,11 +66,13 @@ export function BrowserPane({ api }: { api: GaiaBrowserPaneAPI }) {
         };
     }, [api]);
 
-    if (!open || !pane) return null;
-    return <OpenPane api={api} pane={pane} />;
+    // Main's state lags a chat switch by one push; until it names this chat, show nothing.
+    const active = pane && pane.chat === chat ? pane.tabs.find((t) => t.id === pane.activeTabId) : undefined;
+    if (!open || !pane || !active) return null;
+    return <OpenPane api={api} pane={pane} active={active} />;
 }
 
-function OpenPane({ api, pane }: { api: GaiaBrowserPaneAPI; pane: PaneState }) {
+function OpenPane({ api, pane, active }: { api: GaiaBrowserPaneAPI; pane: PaneState; active: TabState }) {
     const width = useBrowserPaneStore((s) => s.width);
     const setWidth = useBrowserPaneStore((s) => s.setWidth);
     const setOpen = useBrowserPaneStore((s) => s.setOpen);
@@ -86,15 +88,6 @@ function OpenPane({ api, pane }: { api: GaiaBrowserPaneAPI; pane: PaneState }) {
         max: PANE_MAX_WIDTH,
         defaultWidth: PANE_DEFAULT_WIDTH,
     });
-    const active = pane.tabs.find((t) => t.id === pane.activeTabId) as TabState;
-
-    useEffect(() => {
-        api.setVisible(true).catch((err) => log.ui.error('Could not show the browser pane', err));
-        return () => {
-            api.setVisible(false).catch((err) => log.ui.error('Could not hide the browser pane', err));
-        };
-    }, [api]);
-
     useLayoutEffect(() => {
         const el = viewportRef.current;
         if (!el) return;
@@ -212,7 +205,7 @@ function NewTabPage({ pane, onOpen }: { pane: PaneState; onOpen: (url: string) =
 
 /** The chat header's button that shows or hides the browser pane; nothing outside the desktop app. */
 export function BrowserPaneToggle() {
-    const open = useBrowserPaneStore((s) => s.open);
+    const open = useBrowserPaneOpen();
     const toggle = useBrowserPaneStore((s) => s.toggle);
     if (!browserPaneApi()) return null;
     const label = `${open ? 'Hide' : 'Show'} browser pane (${formatShortcut(TOGGLE_SHORTCUT)})`;

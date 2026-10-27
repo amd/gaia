@@ -246,6 +246,12 @@ class MockWebContents extends EventEmitter {
       goBack: jest.fn(),
       goForward: jest.fn(),
       clear: jest.fn(),
+      getAllEntries: jest.fn(() => (this._url ? [{ url: this._url, title: this._url }] : [])),
+      getActiveIndex: jest.fn(() => 0),
+      restore: jest.fn(({ entries, index }) => {
+        this._url = entries[index].url;
+        return Promise.resolve();
+      }),
     };
     this.loadURL = jest.fn((url) => {
       this._url = url;

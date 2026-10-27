@@ -9,6 +9,7 @@
  *
  * Servers are app-wide, but each remembers the chats that use it: the one
  * that started it first, then any that asked for the same server since.
+ * Deleting a chat stops the servers only it was using and forgets them.
  *
  * A ledger file records each server's pids and command lines, so the next
  * launch can stop servers a crash left behind. It only ever signals a pid it
@@ -242,6 +243,28 @@ class DevServerSupervisor {
     const needle = pattern ? pattern.toLowerCase() : null;
     const hits = all.filter((l) => (!errorsOnly || ERROR_LINE.test(l)) && (!needle || l.toLowerCase().includes(needle)));
     return { server: this.stateOf(entry), lines: hits.slice(-limit), matched: hits.length, total: all.length };
+  }
+
+  /**
+   * The chat was deleted: stop the servers no other chat uses and drop
+   * them from the list, after any start already under way finishes.
+   * @param {string} chat
+   */
+  async forgetChat(chat) {
+    await Promise.allSettled([...this.queues.values()]);
+    const used = [...this.entries.values()].filter((e) => e.chats.includes(chat));
+    await Promise.all(
+      used.map((e) =>
+        this.serial(e.key, async () => {
+          e.chats = e.chats.filter((c) => c !== chat);
+          if (e.chats.length > 0) return;
+          if (this.running(e)) await this.halt(e);
+          if (this.entries.get(e.key) === e) this.entries.delete(e.key);
+        })
+      )
+    );
+    await this.recordLedger();
+    this.deps.onChange();
   }
 
   /** Quit: stop every server, then forget the ones that are gone. */

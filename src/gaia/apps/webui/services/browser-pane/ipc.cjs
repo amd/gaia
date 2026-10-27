@@ -21,7 +21,9 @@ const CHANNELS = Object.freeze({
   state: "pane:state",
   command: "pane:command",
   setBounds: "pane:set-bounds",
-  setVisible: "pane:set-visible",
+  setView: "pane:set-view",
+  claimDraft: "pane:claim-draft",
+  forgetChat: "pane:forget-chat",
   setOccluded: "pane:set-occluded",
   openTab: "pane:open-tab",
   closeTab: "pane:close-tab",
@@ -31,7 +33,6 @@ const CHANNELS = Object.freeze({
   toggleDevTools: "pane:toggle-devtools",
   clearData: "pane:clear-data",
   openExternal: "pane:open-external",
-  setActiveSession: "pane:set-active-session",
   setControl: "pane:set-control",
   setViewport: "pane:set-viewport",
   togglePicking: "pane:toggle-picking",
@@ -76,6 +77,8 @@ function fileRecentStore(filePath) {
     },
   };
 }
+
+const isSessionId = (v) => typeof v === "string" && v !== "" && v.length <= 200;
 
 function requireString(value, what) {
   if (typeof value !== "string" || value === "") {
@@ -122,6 +125,8 @@ function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downlo
   let host = null;
   /** The dev servers are app-wide, not the window's, so they join the state here. */
   const withServers = (state) => ({ ...state, devServers: devServers.list() });
+  /** Deleted chats, for every window this run: a window made later must refuse them too. */
+  const goneChats = new Set();
   const recentStore = fileRecentStore(path.join(userDataDir, "browser-pane-recent.json"));
 
   installSessionPolicy(session, {
@@ -146,7 +151,6 @@ function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downlo
   };
 
   handle(CHANNELS.getState, (h) => withServers(h.state()));
-  handle(CHANNELS.setVisible, (h, visible) => h.setVisible(visible === true));
   handle(CHANNELS.setOccluded, (h, occluded) => h.setOccluded(occluded === true));
   handle(CHANNELS.openTab, (h, url) => h.openTab(url === null ? null : requireString(url, "url")));
   handle(CHANNELS.closeTab, (h, id) => h.closeTab(requireString(id, "tab id")));
@@ -183,13 +187,29 @@ function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downlo
     host.setBounds(parsed);
   });
 
-  ipcMain.on(CHANNELS.setActiveSession, (event, sessionId) => {
-    const valid = sessionId === null || (typeof sessionId === "string" && sessionId !== "" && sessionId.length <= 200);
-    if (!host || event.sender !== host.window.webContents || !valid) {
-      console.error(`[browser-pane] Ignored active session ${JSON.stringify(sessionId)} from an unexpected sender or shape`);
-      return;
-    }
-    host.setActiveSession(sessionId);
+  // The three below are fire-and-forget like bounds, so they reach main in the order the renderer sent them.
+  const on = (channel, what, valid, fn) => {
+    ipcMain.on(channel, (event, ...args) => {
+      if (!host || event.sender !== host.window.webContents || !valid(...args)) {
+        console.error(`[browser-pane] Ignored ${what} ${JSON.stringify(args)} from an unexpected sender or shape`);
+        return;
+      }
+      try {
+        fn(host, ...args);
+      } catch (err) {
+        console.error(`[browser-pane] ${what} failed: ${err.message}`);
+      }
+    });
+  };
+
+  on(CHANNELS.setView, "pane view", (chat, visible) => (chat === null || isSessionId(chat)) && typeof visible === "boolean", (h, chat, visible) =>
+    h.setView(chat, visible)
+  );
+  on(CHANNELS.claimDraft, "new chat's tabs", isSessionId, (h, sessionId) => h.claimDraft(sessionId));
+  // Deleting a chat closes its tabs and stops the dev servers only it was using.
+  on(CHANNELS.forgetChat, "deleted chat", isSessionId, (h, sessionId) => {
+    h.forgetChat(sessionId);
+    devServers.forgetChat(sessionId).catch((err) => console.error(`[browser-pane] Stopping the dev servers of deleted chat ${sessionId} failed: ${err.message}`));
   });
 
   return {
@@ -210,9 +230,10 @@ function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downlo
         session,
         recentStore,
         blockedPorts,
+        goneChats,
         publish: (state) => send(CHANNELS.state, withServers(state)),
-        onToggleRequest: () => send(CHANNELS.command, "toggle"),
-        onShowRequest: () => send(CHANNELS.command, "show"),
+        onToggleRequest: () => send(CHANNELS.command, { kind: "toggle" }),
+        onShowRequest: (chat) => send(CHANNELS.command, { kind: "show", chat }),
         onPicked: (event) => send(CHANNELS.picked, event),
         openExternal: (url) => {
           shell.openExternal(url).catch((err) =>

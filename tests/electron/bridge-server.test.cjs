@@ -230,12 +230,16 @@ function makeHost() {
     publish: (s) => published.push(s),
     blockedPorts: () => [4321],
     recentStore: { load: () => [], save: () => {} },
+    goneChats: new Set(),
     onToggleRequest: jest.fn(),
     onShowRequest: jest.fn(),
     openExternal: jest.fn(),
     createCdp: jest.fn(fakeCdp),
   };
-  return { host: new PaneHost(deps), deps, published };
+  const host = new PaneHost(deps);
+  host.setView("chat-1", false);
+  host.openTab(null);
+  return { host, deps, published };
 }
 
 /** Make the next loadURL in `wc` wait until the test resolves or rejects it. */
@@ -251,18 +255,18 @@ function holdLoad(wc) {
 describe("agent ops", () => {
   test("attach answers only for the chat the window shows", () => {
     const { host } = makeHost();
-    expect(host.attachSession("chat-1")).toEqual({ status: "not_in_desktop" });
-    host.setActiveSession("chat-1");
-    expect(host.attachSession("chat-1")).toMatchObject({ status: "attached", tabId: host.activeTabId });
     expect(host.attachSession("chat-2")).toEqual({ status: "not_in_desktop" });
+    expect(host.attachSession("chat-1")).toMatchObject({ status: "attached", tabId: host.activeTabId });
+    host.setView("chat-2", false);
+    expect(host.attachSession("chat-2")).toEqual({ status: "attached", tabId: null, paneVisible: false });
+    expect(host.attachSession("chat-1")).toEqual({ status: "not_in_desktop" });
   });
 
   test("a chat the user switched away from can no longer read the pane", async () => {
     const { host } = makeHost();
-    host.setActiveSession("chat-1");
     const handlers = createHandlers({ getHost: () => host, appVersion: "x" });
     await expect(handlers.origin({ sessionId: "chat-1", tabId: null })).resolves.toMatchObject({ tabId: host.activeTabId });
-    host.setActiveSession("chat-2");
+    host.setView("chat-2", false);
     for (const op of ["origin", "evaluate", "screenshot", "logs", "navigate"]) {
       await expect(handlers[op]({ sessionId: "chat-1", tabId: null })).rejects.toMatchObject({ code: "not_in_desktop" });
     }
@@ -275,7 +279,7 @@ describe("agent ops", () => {
     const opened = tabs.tabs.find((t) => t.active);
     expect(opened).toMatchObject({ url: "http://127.0.0.1:5000/", openedBy: "chat-1" });
     expect(deps.onShowRequest).toHaveBeenCalled();
-    expect(published.some((s) => s.tabs.find((t) => t.id === opened.id).agentBusy)).toBe(true);
+    expect(published.some((s) => s.tabs.find((t) => t.id === opened.id)?.agentBusy)).toBe(true);
     await new Promise((r) => setTimeout(r, 1600));
     expect(published[published.length - 1].tabs.find((t) => t.id === opened.id).agentBusy).toBe(false);
   });
@@ -295,7 +299,7 @@ describe("agent ops", () => {
     host.navigate(id, "http://127.0.0.1:5000/");
     const wc = host.tabs.get(id).view.webContents;
     const held = holdLoad(wc);
-    const op = host.agentNavigate(id, "http://127.0.0.1:5000/redirect", []);
+    const op = host.agentNavigate("chat-1", id, "http://127.0.0.1:5000/redirect", []);
     const redirect = { url: "https://evil.example/landing", preventDefault: jest.fn() };
     wc.emit("will-redirect", redirect);
     held.reject(new Error("ERR_ABORTED (-3) loading 'http://127.0.0.1:5000/redirect'"));
@@ -318,7 +322,7 @@ describe("agent ops", () => {
   test("a page off the approved sites is withheld, naming its origin", async () => {
     const { host } = makeHost();
     host.navigate(host.activeTabId, "https://example.org/");
-    await expect(host.agentEvaluate(null, "() => 1", null, "main", [])).rejects.toMatchObject({
+    await expect(host.agentEvaluate("chat-1", null, "() => 1", null, "main", [])).rejects.toMatchObject({
       code: "off_scope",
       data: { origin: "https://example.org" },
     });
@@ -333,7 +337,7 @@ describe("agent ops", () => {
     const child = { url: "http://localhost:5173/frame", processId: 4, routingId: 7, executeJavaScript: jest.fn(() => Promise.reject(new Error("cross-origin"))) };
     wc.mainFrame.framesInSubtree = [child, wc.mainFrame];
     wc.mainFrame.executeJavaScript.mockResolvedValue({ title: "App" });
-    const res = await host.agentEvaluate(null, "(args) => ({ title: document.title })", { gen: 1 }, "all", []);
+    const res = await host.agentEvaluate("chat-1", null, "(args) => ({ title: document.title })", { gen: 1 }, "all", []);
     expect(wc.mainFrame.executeJavaScript).toHaveBeenCalledWith('((args) => ({ title: document.title }))({"gen":1})', false);
     expect(res.frames).toEqual([
       { frameId: null, url: "", ok: true, value: { title: "App" } },
@@ -343,13 +347,13 @@ describe("agent ops", () => {
 
   test("a new tab page has nothing to read", async () => {
     const { host } = makeHost();
-    await expect(host.agentEvaluate(null, "() => 1", null, "main", [])).rejects.toMatchObject({ code: "no_page" });
+    await expect(host.agentEvaluate("chat-1", null, "() => 1", null, "main", [])).rejects.toMatchObject({ code: "no_page" });
   });
 
   test("origin reports where the page is and whether the pane holds cookies there", async () => {
     const { host, deps } = makeHost();
     host.navigate(host.activeTabId, "https://example.com/a");
-    await expect(host.agentOrigin(null)).resolves.toMatchObject({ origin: "https://example.com", hasCookies: true });
+    await expect(host.agentOrigin("chat-1", null)).resolves.toMatchObject({ origin: "https://example.com", hasCookies: true });
     expect(deps.session.cookies.get).toHaveBeenCalledWith({ url: "https://example.com" });
   });
 

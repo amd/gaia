@@ -15,10 +15,10 @@ import { useAppOverlayOpen } from '../../../hooks/useAppOverlayOpen';
 import { useEscapeToClose } from '../../../hooks/useEscapeToClose';
 import { Popover } from '../../Popover';
 import { BrowserPane } from '../BrowserPane';
-import { useBrowserPaneStore } from '../../../stores/browserPaneStore';
+import { OPEN_CHATS_LIMIT, isPaneOpen, useBrowserPaneStore } from '../../../stores/browserPaneStore';
 import { useSessionPanelStore } from '../../../stores/sessionPanelStore';
 import { useChatStore } from '../../../stores/chatStore';
-import type { GaiaBrowserPaneAPI, PaneState, TabId } from '../../../../services/browser-pane/contract';
+import type { GaiaBrowserPaneAPI, PaneCommand, PaneState, TabId } from '../../../../services/browser-pane/contract';
 
 beforeAll(() => {
     globalThis.ResizeObserver = class {
@@ -118,6 +118,7 @@ describe('every app overlay hides the browser page', () => {
 
 const TAB = 'tab-1' as TabId;
 const PAGE: PaneState = {
+    chat: null,
     visible: true,
     occluded: false,
     tabs: [{
@@ -133,38 +134,48 @@ const PAGE: PaneState = {
 
 function paneApi(state: PaneState) {
     let push: (s: PaneState) => void = () => {};
-    let command: (c: 'toggle' | 'show') => void = () => {};
+    let command: (c: PaneCommand) => void = () => {};
     const api = {
         getState: vi.fn(() => Promise.resolve(state)),
         onState: vi.fn((cb: (s: PaneState) => void) => { push = cb; return () => {}; }),
-        onCommand: vi.fn((cb: (c: 'toggle' | 'show') => void) => { command = cb; return () => {}; }),
+        onCommand: vi.fn((cb: (c: PaneCommand) => void) => { command = cb; return () => {}; }),
         setBounds: vi.fn(),
-        setVisible: vi.fn(() => Promise.resolve()),
+        setView: vi.fn(),
+        claimDraft: vi.fn(),
+        forgetChat: vi.fn(),
         setOccluded: vi.fn((occluded: boolean) => Promise.resolve(occluded ? 'data:image/png;base64,still' : null)),
         openTab: vi.fn(), closeTab: vi.fn(), selectTab: vi.fn(),
         navigate: vi.fn(() => Promise.resolve()), history: vi.fn(), toggleDevTools: vi.fn(),
-        clearBrowsingData: vi.fn(), openExternal: vi.fn(), setActiveSession: vi.fn(),
+        clearBrowsingData: vi.fn(), openExternal: vi.fn(),
         togglePicking: vi.fn(() => Promise.resolve()), onPicked: vi.fn(() => () => {}),
     };
     return {
         api: api as unknown as GaiaBrowserPaneAPI,
         raw: api,
         push: (s: PaneState) => push(s),
-        command: (c: 'toggle' | 'show' = 'toggle') => command(c),
+        command: (c: PaneCommand = { kind: 'toggle' }) => command(c),
     };
 }
 
+const paneShown = () => screen.queryByRole('complementary', { name: 'Browser pane' });
+const openNow = () => isPaneOpen(useBrowserPaneStore.getState(), useChatStore.getState().currentSessionId);
+
 describe('BrowserPane', () => {
     afterEach(() => {
-        act(() => useBrowserPaneStore.setState({ open: false, pane: null }));
+        act(() => {
+            useBrowserPaneStore.setState({ openChats: [], draftOpen: false, pane: null });
+            useChatStore.setState({ currentSessionId: null, sessions: [] });
+        });
+        window.localStorage.clear();
+        delete window.gaiaBrowserPane;
     });
 
     it('swaps the live page for a still frame while an overlay is open', async () => {
         const { api, raw } = paneApi(PAGE);
-        act(() => useBrowserPaneStore.setState({ open: true }));
+        act(() => useBrowserPaneStore.setState({ draftOpen: true }));
         const { container } = render(<BrowserPane api={api} />);
         await screen.findByRole('complementary', { name: 'Browser pane' });
-        expect(raw.setVisible).toHaveBeenCalledWith(true);
+        expect(raw.setView).toHaveBeenLastCalledWith(null, true);
         expect(raw.setBounds).toHaveBeenCalled();
 
         const modal = render(<Modal onClose={() => {}} />);
@@ -182,8 +193,8 @@ describe('BrowserPane', () => {
         await userEvent.keyboard('{Control>}{Shift>}B{/Shift}{/Control}');
         await screen.findByRole('complementary', { name: 'Browser pane' });
         act(() => command());
-        await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Browser pane' })).toBeNull());
-        expect(raw.setVisible).toHaveBeenLastCalledWith(false);
+        await waitFor(() => expect(paneShown()).toBeNull());
+        expect(raw.setView).toHaveBeenLastCalledWith(null, false);
     });
 
     it('a new tab page lists recent pages and opens one in the active tab', async () => {
@@ -193,7 +204,7 @@ describe('BrowserPane', () => {
             recent: [{ url: 'http://localhost:5173/', title: 'My app' }],
         };
         const { api, raw } = paneApi(blank);
-        act(() => useBrowserPaneStore.setState({ open: true }));
+        act(() => useBrowserPaneStore.setState({ draftOpen: true }));
         render(<BrowserPane api={api} />);
         const recent = await screen.findByRole('button', { name: /My app/ });
         expect(screen.getByRole('textbox', { name: 'Address' })).toHaveFocus();
@@ -201,26 +212,47 @@ describe('BrowserPane', () => {
         expect(raw.navigate).toHaveBeenCalledWith(TAB, 'http://localhost:5173/');
     });
 
-    it('tells main which chat the window shows, and again when it changes', () => {
+    it('tells main which chat the window shows, and whether that chat has its pane open', () => {
         act(() => useChatStore.setState({ currentSessionId: 'chat-a' }));
         const { api, raw } = paneApi(PAGE);
         render(<BrowserPane api={api} />);
-        expect(raw.setActiveSession).toHaveBeenLastCalledWith('chat-a');
+        expect(raw.setView).toHaveBeenLastCalledWith('chat-a', false);
+        act(() => useBrowserPaneStore.getState().setOpen(true));
+        expect(raw.setView).toHaveBeenLastCalledWith('chat-a', true);
         act(() => useChatStore.setState({ currentSessionId: 'chat-b' }));
-        expect(raw.setActiveSession).toHaveBeenLastCalledWith('chat-b');
+        expect(raw.setView).toHaveBeenLastCalledWith('chat-b', false);
+        act(() => useChatStore.setState({ currentSessionId: 'chat-a' }));
+        expect(raw.setView).toHaveBeenLastCalledWith('chat-a', true);
         act(() => useChatStore.setState({ currentSessionId: null }));
-        expect(raw.setActiveSession).toHaveBeenLastCalledWith(null);
+        expect(raw.setView).toHaveBeenLastCalledWith(null, false);
     });
 
-    it('opens when the agent opens a page, and says so while it reads', async () => {
-        const { api, push, command } = paneApi(PAGE);
+    it("draws only the shown chat's state, never the chat it just left", async () => {
+        act(() => useChatStore.setState({ currentSessionId: 'chat-a' }));
+        act(() => useBrowserPaneStore.getState().setOpen(true));
+        const { api, push } = paneApi({ ...PAGE, chat: 'chat-a' });
         render(<BrowserPane api={api} />);
-        act(() => command('show'));
+        await screen.findByRole('complementary', { name: 'Browser pane' });
+        act(() => useChatStore.setState({ currentSessionId: 'chat-b' }));
+        act(() => useBrowserPaneStore.getState().setOpen(true));
+        expect(paneShown()).toBeNull();
+        act(() => push({ ...PAGE, chat: 'chat-b', tabs: [{ ...PAGE.tabs[0], id: 'tab-2' as TabId, title: 'B page' }], activeTabId: 'tab-2' as TabId }));
+        await screen.findByRole('complementary', { name: 'Browser pane' });
+        expect(screen.getByRole('tab', { name: /B page/ })).toBeInTheDocument();
+    });
+
+    it('opens when its own agent opens a page, and says so while it reads', async () => {
+        act(() => useChatStore.setState({ currentSessionId: 'chat-a' }));
+        const { api, push, command } = paneApi({ ...PAGE, chat: 'chat-a' });
+        render(<BrowserPane api={api} />);
+        act(() => command({ kind: 'show', chat: 'chat-b' }));
+        expect(openNow()).toBe(false);
+        act(() => command({ kind: 'show', chat: 'chat-a' }));
         await screen.findByRole('complementary', { name: 'Browser pane' });
         expect(screen.queryByText('GAIA is reading this page')).toBeNull();
-        act(() => push({ ...PAGE, tabs: [{ ...PAGE.tabs[0], agentBusy: true }] }));
+        act(() => push({ ...PAGE, chat: 'chat-a', tabs: [{ ...PAGE.tabs[0], agentBusy: true }] }));
         expect(await screen.findByText('GAIA is reading this page')).toBeInTheDocument();
-        act(() => push(PAGE));
+        act(() => push({ ...PAGE, chat: 'chat-a' }));
         await waitFor(() => expect(screen.queryByText('GAIA is reading this page')).toBeNull());
     });
 
@@ -229,6 +261,67 @@ describe('BrowserPane', () => {
         act(() => useBrowserPaneStore.getState().setOpen(true));
         expect(useSessionPanelStore.getState().open).toBe(false);
         act(() => useSessionPanelStore.getState().setOpen(true));
-        expect(useBrowserPaneStore.getState().open).toBe(false);
+        expect(openNow()).toBe(false);
+    });
+});
+
+describe('open or closed per chat', () => {
+    afterEach(() => {
+        act(() => {
+            useBrowserPaneStore.setState({ openChats: [], draftOpen: false, pane: null });
+            useChatStore.setState({ currentSessionId: null, sessions: [] });
+        });
+        window.localStorage.clear();
+        delete window.gaiaBrowserPane;
+    });
+
+    const stored = () => JSON.parse(window.localStorage.getItem('gaia.browserPane.openChats') ?? '[]');
+
+    it('a chat opened elsewhere keeps its own state, remembered across reloads; a new chat starts closed', () => {
+        act(() => useChatStore.setState({ currentSessionId: 'chat-a' }));
+        act(() => useBrowserPaneStore.getState().setOpen(true));
+        act(() => useChatStore.setState({ currentSessionId: 'chat-b' }));
+        expect(openNow()).toBe(false);
+        act(() => useChatStore.setState({ currentSessionId: null }));
+        expect(openNow()).toBe(false);
+        act(() => useChatStore.setState({ currentSessionId: 'chat-a' }));
+        expect(openNow()).toBe(true);
+        expect(stored()).toEqual(['chat-a']);
+        act(() => useBrowserPaneStore.getState().toggle());
+        expect(stored()).toEqual([]);
+    });
+
+    it("the new-chat screen's open pane goes to the chat its first message makes", () => {
+        const api = paneApi(PAGE).raw;
+        window.gaiaBrowserPane = api as unknown as GaiaBrowserPaneAPI;
+        act(() => useBrowserPaneStore.getState().setOpen(true));
+        expect(useBrowserPaneStore.getState().draftOpen).toBe(true);
+        act(() => useBrowserPaneStore.getState().claimDraft('chat-new'));
+        expect(api.claimDraft).toHaveBeenCalledWith('chat-new');
+        act(() => useChatStore.setState({ currentSessionId: 'chat-new' }));
+        expect(openNow()).toBe(true);
+        expect(useBrowserPaneStore.getState().draftOpen).toBe(false);
+        expect(stored()).toEqual(['chat-new']);
+    });
+
+    it("deleting a chat forgets its pane here and tells main to close its tabs", () => {
+        const api = paneApi(PAGE).raw;
+        window.gaiaBrowserPane = api as unknown as GaiaBrowserPaneAPI;
+        act(() => useChatStore.setState({ currentSessionId: 'chat-a', sessions: [{ id: 'chat-a' }, { id: 'chat-b' }] as never }));
+        act(() => useBrowserPaneStore.getState().setOpen(true));
+        act(() => useChatStore.getState().removeSession('chat-a'));
+        expect(api.forgetChat).toHaveBeenCalledWith('chat-a');
+        expect(useBrowserPaneStore.getState().openChats).toEqual([]);
+        expect(stored()).toEqual([]);
+    });
+
+    it('remembers a bounded number of open chats, most recent first', () => {
+        for (let i = 0; i <= OPEN_CHATS_LIMIT; i++) {
+            act(() => useChatStore.setState({ currentSessionId: `chat-${i}` }));
+            act(() => useBrowserPaneStore.getState().setOpen(true));
+        }
+        expect(stored()).toHaveLength(OPEN_CHATS_LIMIT);
+        expect(stored()[0]).toBe(`chat-${OPEN_CHATS_LIMIT}`);
+        expect(stored()).not.toContain('chat-0');
     });
 });

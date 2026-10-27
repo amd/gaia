@@ -13,7 +13,7 @@ import { UpdateIndicator } from './components/UpdateIndicator';
 import { NotificationCenter } from './components/NotificationCenter';
 import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
 import { BrowserPane } from './components/browser-pane/BrowserPane';
-import { browserPaneApi } from './stores/browserPaneStore';
+import { browserPaneApi, useBrowserPaneStore } from './stores/browserPaneStore';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
@@ -421,6 +421,8 @@ function App() {
         store.clearDraftDocuments();
         store.setDraftPrivate(false);
         addSession(session);
+        // Before the switch, so main moves the screen's tabs instead of showing the chat empty.
+        useBrowserPaneStore.getState().claimDraft(session.id);
         setCurrentSession(session.id);
         setMessages([]);
         setDraftText('');

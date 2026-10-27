@@ -411,15 +411,15 @@ describe('NewChat after first-run setup failed', () => {
 describe('NewChat and the browser pane', () => {
     afterEach(() => {
         delete window.gaiaBrowserPane;
-        useBrowserPaneStore.setState({ open: false });
+        useBrowserPaneStore.setState({ draftOpen: false });
     });
 
     it('offers the browser pane button in the desktop app', () => {
         window.gaiaBrowserPane = {} as NonNullable<typeof window.gaiaBrowserPane>;
-        useBrowserPaneStore.setState({ open: false });
+        useBrowserPaneStore.setState({ draftOpen: false });
         render(<NewChat onSend={vi.fn()} />);
         fireEvent.click(screen.getByRole('button', { name: 'Show browser pane' }));
-        expect(useBrowserPaneStore.getState().open).toBe(true);
+        expect(useBrowserPaneStore.getState().draftOpen).toBe(true);
         expect(screen.getByRole('button', { name: 'Hide browser pane' })).toHaveAttribute('aria-pressed', 'true');
     });
 
