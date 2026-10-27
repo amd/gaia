@@ -720,7 +720,7 @@ textarea:focus-visible {
     -webkit-app-region: no-drag;
 }
 /* Windows: minimize, maximize and close sit at the top right. */
-:root[data-titlebar="overlay"] .task-header {
+:root[data-titlebar="overlay"] :is(.task-header, .new-chat-actions) {
     min-height: var(--titlebar-h);
     padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px);
 }

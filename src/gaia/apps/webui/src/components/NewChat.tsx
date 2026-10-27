@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronRight, FileText, Folder, X } from 'lucide-react';
+import { BrowserPaneToggle } from './browser-pane/BrowserPane';
 import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { PermissionModeChip } from './PermissionModeChip';
@@ -257,6 +258,9 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
 
     return (
         <main className="new-chat" aria-label="New chat">
+            <div className="new-chat-actions">
+                <BrowserPaneToggle />
+            </div>
             <div className="new-chat-inner">
                 <h1 className="new-chat-greeting">{greeting()}</h1>
                 {setupError && !remote && <SetupFailed error={setupError} />}
