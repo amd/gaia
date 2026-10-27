@@ -170,3 +170,107 @@ def test_a_relayed_turn_is_measured_for_under_the_hood(
     assert turn["tokens_in"] == 1200
     assert turn["tokens_out"] == 40
     assert turn["time"]["model_seconds"] is not None
+
+
+def _relay_final(monkeypatch, registry, final):
+    """Drive one relayed turn whose sidecar ends on ``final``; return the session's turns."""
+    from gaia.ui.email_sidecar.profiles import profile_for
+    from gaia.ui.email_sidecar.relay import _dispatch_one
+
+    def _fake_dispatch(sse_handler, request, history_pairs, model_id, agent, **kw):
+        _dispatch_one(sse_handler, final, profile_for("gaia"))
+
+    monkeypatch.setattr(chat_helpers_module, "_agent_registry", registry)
+    monkeypatch.setattr(chat_helpers_module, "_dispatch_sidecar_query", _fake_dispatch)
+    monkeypatch.setattr(
+        chat_helpers_module, "_maybe_update_session_title", _noop_retitle
+    )
+    db = ChatDatabase(":memory:")
+    session = db.create_session(agent_type="gaia")
+    request = ChatRequest(
+        session_id=session["id"], message="Hi", stream=True, agent_type="gaia"
+    )
+
+    async def _drive():
+        async for _ in _stream_chat_impl(
+            SimpleNamespace(handler=None), db, session, request
+        ):
+            pass
+
+    asyncio.run(_drive())
+    messages = db.get_messages(session["id"])
+    return db.turn_performance(session["id"]), messages
+
+
+def test_an_older_sidecar_turn_stays_unmeasured(monkeypatch, sidecar_flagship_registry):
+    """No ``performance`` on ``final``: the answer is saved and no figures are invented."""
+    turns, messages = _relay_final(
+        monkeypatch,
+        sidecar_flagship_registry,
+        {"type": "final", "answer": "Hello."},
+    )
+
+    assert turns == []
+    assert any(m["role"] == "assistant" and "Hello." in m["content"] for m in messages)
+
+
+@pytest.mark.parametrize(
+    "performance",
+    [
+        "fast",
+        [],
+        {"timing_summary": "2.5s", "conversation": []},
+        {"timing_summary": {}, "conversation": "stats"},
+        {"timing_summary": {}, "conversation": ["stats"]},
+        {"timing_summary": {}, "conversation": [{"role": "system", "content": "x"}]},
+        {
+            "timing_summary": {},
+            "conversation": [
+                {"role": "system", "content": {"type": "stats", "performance_stats": 7}}
+            ],
+        },
+        {
+            "timing_summary": {},
+            "conversation": [
+                {"role": "system", "content": {"type": "stats", "tools": ["grep"]}}
+            ],
+        },
+    ],
+)
+def test_a_malformed_performance_record_never_breaks_the_turn(
+    monkeypatch, sidecar_flagship_registry, performance
+):
+    turns, messages = _relay_final(
+        monkeypatch,
+        sidecar_flagship_registry,
+        {"type": "final", "answer": "Hello.", "performance": performance},
+    )
+
+    assert turns == []
+    assert any(m["role"] == "assistant" and "Hello." in m["content"] for m in messages)
+
+
+def test_non_numeric_timings_are_shown_as_unknown_not_guessed(
+    monkeypatch, sidecar_flagship_registry
+):
+    stats = {
+        "type": "stats",
+        "step": 1,
+        "performance_stats": {"prompt_tokens": "lots", "completion_tokens": -3},
+    }
+    turns, _ = _relay_final(
+        monkeypatch,
+        sidecar_flagship_registry,
+        {
+            "type": "final",
+            "answer": "Hello.",
+            "performance": {
+                "timing_summary": {"llm_seconds": "NaN", "llm_calls": 1},
+                "conversation": [{"role": "system", "content": stats}],
+            },
+        },
+    )
+
+    [turn] = turns
+    assert turn["tokens_in"] is None and turn["tokens_out"] is None
+    assert turn["time"]["model_seconds"] is None

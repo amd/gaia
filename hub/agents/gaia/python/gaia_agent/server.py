@@ -1567,6 +1567,9 @@ async def query(request: QueryRequest):
         deadline = time.monotonic() + _CONTEXT_WAIT_SECONDS
         while not run.context_done.is_set() and time.monotonic() < deadline:
             await asyncio.sleep(0.05)
+        performance = turn_record(run.result)
+        if performance is not None:
+            final = {**final, "performance": performance}
         if not run.context_done.is_set():
             logger.warning(
                 "run_id=%s: no context measurement within %ss; final goes without it",
@@ -1574,9 +1577,6 @@ async def query(request: QueryRequest):
                 _CONTEXT_WAIT_SECONDS,
             )
             return final
-        performance = turn_record(run.result)
-        if performance is not None:
-            final = {**final, "performance": performance}
         if run.context_error is not None:
             return {**final, "context_error": run.context_error}
         if run.context is None:

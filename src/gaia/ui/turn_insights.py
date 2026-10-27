@@ -303,7 +303,9 @@ def _num(value: Any) -> Optional[float]:
 def _step_stats(conversation: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out = []
     for entry in conversation or []:
-        content = entry.get("content") if isinstance(entry, dict) else None
+        if not isinstance(entry, dict):
+            continue
+        content = entry.get("content")
         if (
             entry.get("role") == "system"
             and isinstance(content, dict)
@@ -377,6 +379,25 @@ def turn_record(result: Any) -> Optional[Dict[str, Any]]:
         "timing_summary": timing,
         "conversation": [{"role": "system", "content": stats} for stats in steps],
     }
+
+
+def is_turn_record(value: Any) -> bool:
+    """Whether ``value`` has the shape :func:`turn_record` builds, so it is safe to summarize."""
+    if not isinstance(value, dict) or not isinstance(value.get("timing_summary"), dict):
+        return False
+    conversation = value.get("conversation")
+    if not isinstance(conversation, list):
+        return False
+    for entry in conversation:
+        content = entry.get("content") if isinstance(entry, dict) else None
+        if not isinstance(content, dict):
+            return False
+        tools = content.get("tools") or []
+        if not isinstance(content.get("performance_stats") or {}, dict):
+            return False
+        if not isinstance(tools, list) or not all(isinstance(t, dict) for t in tools):
+            return False
+    return True
 
 
 def summarize_turn(
