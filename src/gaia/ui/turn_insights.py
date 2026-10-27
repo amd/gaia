@@ -16,6 +16,7 @@ always on changes nothing downstream.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -381,23 +382,34 @@ def turn_record(result: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-def is_turn_record(value: Any) -> bool:
-    """Whether ``value`` has the shape :func:`turn_record` builds, so it is safe to summarize."""
+#: A relayed record above this is refused; a long real turn is a few hundred KB.
+MAX_TURN_RECORD_BYTES = 1_000_000
+
+
+def turn_record_problem(value: Any) -> Optional[str]:
+    """Why ``value`` can't be summarized as a :func:`turn_record`, or ``None`` if it can."""
     if not isinstance(value, dict) or not isinstance(value.get("timing_summary"), dict):
-        return False
+        return "it is not a record with a timing_summary"
+    try:
+        # Refuses NaN/Infinity, which json.loads accepts and int() can't take.
+        size = len(json.dumps(value, allow_nan=False))
+    except (TypeError, ValueError) as exc:
+        return f"it holds a value JSON can't carry ({exc})"
+    if size > MAX_TURN_RECORD_BYTES:
+        return f"it is {size:,} bytes, over the {MAX_TURN_RECORD_BYTES:,}-byte limit"
     conversation = value.get("conversation")
     if not isinstance(conversation, list):
-        return False
+        return "its conversation is not a list"
     for entry in conversation:
         content = entry.get("content") if isinstance(entry, dict) else None
         if not isinstance(content, dict):
-            return False
+            return "a conversation entry has no stats object"
         tools = content.get("tools") or []
         if not isinstance(content.get("performance_stats") or {}, dict):
-            return False
+            return "a step's performance_stats is not an object"
         if not isinstance(tools, list) or not all(isinstance(t, dict) for t in tools):
-            return False
-    return True
+            return "a step's tools is not a list of objects"
+    return None
 
 
 def summarize_turn(

@@ -58,7 +58,7 @@ from gaia.ui.sse_handler import (
     tool_result_failed,
 )
 from gaia.ui.sse_translation import MCP_TOOL_FIELDS, SUMMARY_VIEW_KEYS
-from gaia.ui.turn_insights import is_turn_record
+from gaia.ui.turn_insights import turn_record_problem
 
 logger = get_logger(__name__)
 
@@ -342,12 +342,15 @@ def _dispatch_one(
         elif isinstance(event.get("context_error"), str):
             handler.relay_context_error = event["context_error"]
         performance = event.get("performance")
-        if is_turn_record(performance):
+        problem = None if performance is None else turn_record_problem(performance)
+        if performance is not None and problem is None:
             # What summarize_turn reads, so Under the hood measures this turn.
             handler.relay_performance = performance
-        elif performance is not None:
+        elif problem is not None:
             logger.warning(
-                "Sidecar sent a malformed performance record; the turn shows as not measured"
+                "Sidecar's performance record refused because %s; "
+                "the turn shows as not measured",
+                problem,
             )
         handler._emit(out)
         return True

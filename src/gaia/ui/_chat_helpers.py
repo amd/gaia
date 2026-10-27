@@ -4605,7 +4605,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         model_id=result_holder.get("model") or model_id,
                         loads=result_holder["model_loads"],
                     )
-                except (KeyError, TypeError, ValueError) as exc:
+                except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
                     # The answer is still saved; the panel shows the turn as unmeasured.
                     logger.warning(
                         "Turn performance for session %s not recorded: %s",
