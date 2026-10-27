@@ -252,6 +252,17 @@ chat.add_document("troubleshooting.pdf")
 chat.disable_rag()
 ```
 
+With RAG enabled, `send()` and `send_stream()` raise `RAGContextError` instead of answering without your documents. It fires when retrieval fails, or when the model's window leaves under 500 tokens for document context after the system prompt, history, question and reply reserve. The message says what to shrink or what broke, and history is left as it was.
+
+```python
+from gaia.chat.sdk import AgentSDK, RAGContextError
+
+try:
+    response = chat.send("Summarize the guide")
+except RAGContextError as e:
+    print(f"Not sent: {e}")
+```
+
 ### Advanced RAG Configuration
 
 ```python
