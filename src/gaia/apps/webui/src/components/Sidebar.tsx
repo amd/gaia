@@ -293,10 +293,6 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
             </div>
 
             <div className="sb-actions">
-                <button type="button" className="sb-nav-item" onClick={() => { onNewChat(); closeOnMobile(); }} title={`New chat (${formatShortcut('Mod+Shift+O')})`}>
-                    <SquarePen size={16} aria-hidden="true" />
-                    {!isCollapsed && <span>New chat</span>}
-                </button>
                 {isCollapsed ? (
                     <button type="button" className="sb-nav-item" onClick={() => window.dispatchEvent(new CustomEvent('gaia:focus-search'))} aria-label="Search chats">
                         <Search size={16} aria-hidden="true" />
@@ -316,6 +312,10 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                         />
                     </label>
                 )}
+                <button type="button" className="sb-nav-item" onClick={() => { onNewChat(); closeOnMobile(); }} title={`New chat (${formatShortcut('Mod+Shift+O')})`}>
+                    <SquarePen size={16} aria-hidden="true" />
+                    {!isCollapsed && <span>New chat</span>}
+                </button>
                 {nav.map(({ key, label, icon: Icon, on, onClick }) => (
                     <button
                         key={key}
