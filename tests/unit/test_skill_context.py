@@ -159,6 +159,33 @@ def test_check_write_outside_the_scope_is_refused(agent, tmp_path, allowed, outs
     assert "new.txt" in result["error"] or "outside" in result["error"]
 
 
+def test_a_skill_tool_works_in_a_session_that_never_loaded_the_skill(
+    agent, tmp_path, allowed, home
+):
+    """A later chat sees the tool another chat registered; calling it must work."""
+    body = (
+        "return {'status': 'success', 'text': ctx.check_read(file_path).read_text()}\n"
+    )
+    _load(agent, tmp_path, "shared-probe", [], body)
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        later = _HostAgent(silent_mode=True, skip_lemonade=True)
+    later.path_validator = PathValidator(allowed_paths=[str(allowed)])
+    later._skill_manager = SkillManager(
+        agent_skill_dirs=[tmp_path / "bundled"],
+        user_skills_root=tmp_path / "no-user-skills",
+        include_claude_roots=False,
+    )
+    later._instance_tools = dict(agent._instance_tools)
+    assert "shared-probe" not in later.loaded_skills
+
+    result = later._execute_tool(
+        "shared-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result == {"status": "success", "text": "inside"}
+    assert "shared-probe" in later.loaded_skills
+
+
 def test_context_functions_refuse_outside_a_skill_tool():
     with pytest.raises(skill_context.SkillContextError):
         skill_context.check_read(".")

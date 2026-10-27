@@ -6700,6 +6700,20 @@ Do NOT wrap conversational replies in JSON.
         # scope; a path-named argument outside that scope never reaches it.
         skill_name = (self._tools_registry.get(tool_name) or {}).get("skill")
         skill = self.loaded_skills.get(skill_name) if skill_name else None
+        if skill_name and skill is None:
+            # Skill tools register process-wide, so a later chat can see one its
+            # agent never loaded; load the skill so the call runs in scope.
+            from gaia.skills.errors import SkillError
+
+            try:
+                skill = self.load_skill(skill_name)
+            except SkillError as e:
+                return {
+                    "status": "error",
+                    "error": f"{tool_name} needs the '{skill_name}' skill, which "
+                    f"did not load: {e}",
+                    "tool_name": tool_name,
+                }
         skill_scope: Any = contextlib.nullcontext()
         skill_refusals: tuple = ()
         if skill is not None:
