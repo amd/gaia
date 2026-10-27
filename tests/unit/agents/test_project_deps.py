@@ -120,3 +120,73 @@ def test_a_fully_installed_project_says_so():
 
 def test_an_unchecked_project_says_nothing_about_deps():
     assert deps_line(python_deps=["a"], missing_python_deps=None) == ""
+
+
+def test_setup_py_apostrophe_in_a_comment_invents_no_dependency(tmp_path):
+    """A quote in a comment paired with a marker's quote and named `win32`."""
+    (tmp_path / "setup.py").write_text(
+        "setup(install_requires=[\n"
+        "    # don't pin this\n"
+        "    'pywin32; sys_platform == \"win32\"',\n"
+        "    'asgiref',\n"
+        "])\n"
+    )
+    deps = declared_python_deps(tmp_path)
+    assert "win32" not in deps
+    assert deps == (["pywin32", "asgiref"] if sys.platform == "win32" else ["asgiref"])
+
+
+def test_setup_py_markers_and_extras_never_become_names(tmp_path):
+    (tmp_path / "setup.py").write_text(
+        "from setuptools import setup\n"
+        "setup(\n"
+        "    name='x',\n"
+        "    install_requires=[\n"
+        '        "asgiref>=3.2",\n'
+        "        # keyring's backend isn't win32security\n"
+        "        \"sqlparse[extra]>=1; python_version >= '3.0'\",\n"
+        "        'tzdata; sys_platform == \"nosuchplatform\"',\n"
+        "        '''bracket]in[a string''',\n"
+        "    ],\n"
+        ")\n"
+    )
+    assert declared_python_deps(tmp_path) == ["asgiref", "sqlparse"]
+
+
+def test_setup_py_follows_a_named_list_and_skips_what_it_cannot_evaluate(tmp_path):
+    (tmp_path / "setup.py").write_text(
+        "import os\n"
+        "BASE = ['asgiref']\n"
+        "setup(install_requires=BASE + [f'x{os.sep}', get_dep(), 'sqlparse'])\n"
+    )
+    assert declared_python_deps(tmp_path) == ["asgiref", "sqlparse"]
+
+
+def test_setup_py_self_referencing_name_does_not_loop(tmp_path):
+    (tmp_path / "setup.py").write_text(
+        "REQS = REQS + ['asgiref']\nsetup(install_requires=REQS)\n"
+    )
+    assert declared_python_deps(tmp_path) == ["asgiref"]
+
+
+def test_setup_py_is_read_as_data_never_executed(tmp_path):
+    marker = tmp_path / "ran"
+    (tmp_path / "setup.py").write_text(
+        f"open({str(marker)!r}, 'w').close()\nsetup(install_requires=['asgiref'])\n"
+    )
+    assert declared_python_deps(tmp_path) == ["asgiref"]
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "setup(install_requires=[\n",  # syntax error
+        "setup(name='x')\n",  # no install_requires
+        "setup(install_requires=load_reqs())\n",  # not a literal
+        "x = 1\0\n",  # NUL byte
+    ],
+)
+def test_setup_py_that_cannot_be_read_as_data_declares_nothing(tmp_path, text):
+    (tmp_path / "setup.py").write_text(text)
+    assert declared_python_deps(tmp_path) == []

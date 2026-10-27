@@ -910,18 +910,34 @@ class TestReadToolsSandbox:
         assert self._denied(result)
         assert "not found" not in result.get("error", "").lower()
 
-    def test_search_file_content_rejects_a_file_as_directory(
+    def test_search_file_content_searches_inside_a_file_path(
         self, sandboxed_read_tools
     ):
-        """A file passed as the search directory is an error, not 0 matches."""
+        """A file passed as the search directory is searched, not refused."""
         tools, safe_dir, _ = sandboxed_read_tools
-        target = safe_dir / "notes.txt"
-        target.write_text("TOKEN=abc\n", encoding="utf-8")
+        target = safe_dir / "notes.weird-ext"
+        target.write_text("one\nTOKEN=abc\n", encoding="utf-8")
+        (safe_dir / "other.txt").write_text("TOKEN=elsewhere\n", encoding="utf-8")
 
         result = tools["search_file_content"]("TOKEN", directory=str(target))
 
-        assert result["status"] == "error"
-        assert "not a directory" in result["error"].lower()
+        assert result["status"] == "success"
+        assert [(Path(m["file"]).name, m["line"]) for m in result["matches"]] == [
+            ("notes.weird-ext", 2)
+        ]
+        assert result["files_searched"] == 1
+
+    def test_search_file_content_file_path_outside_sandbox_denied(
+        self, sandboxed_read_tools
+    ):
+        tools, _, secret_dir = sandboxed_read_tools
+        secret = secret_dir / "creds.txt"
+        secret.write_text("TOKEN=abc123\n", encoding="utf-8")
+
+        result = tools["search_file_content"]("TOKEN", directory=str(secret))
+
+        assert self._denied(result)
+        assert "abc123" not in str(result)
 
     def test_get_file_info_outside_sandbox_denied(self, sandboxed_read_tools):
         tools, _, secret_dir = sandboxed_read_tools
@@ -1458,3 +1474,188 @@ def test_browse_directory_status_counts_read_naturally(tmp_path):
     assert result["status"] == "success", result
     assert result["display_message"].endswith("(1 folder, 2 files)")
     assert result["display_message"].startswith("Listing 3 items in ")
+
+
+_SECRET = "ghp_SECRETTOKEN_12345"
+
+
+def _guarded_search(root, pattern, directory=None, **kwargs):
+    """Content search on a mixin sandboxed to *root*, as a real agent runs it."""
+    from unittest.mock import patch
+
+    from gaia.security import PathValidator
+
+    inst = _StubMixin()
+    inst.path_validator = PathValidator(allowed_paths=[str(root)])
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        inst.register_file_search_tools()
+        return _TOOL_REGISTRY["search_file_content"]["function"](
+            pattern, directory=str(directory or root), **kwargs
+        )
+
+
+def _hit_names(result):
+    return sorted(Path(m["file"]).name for m in result["matches"])
+
+
+def _symlink_or_skip(link, target):
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not permitted on this host")
+
+
+@pytest.fixture
+def no_prompt(monkeypatch):
+    from gaia import security as _security
+
+    monkeypatch.setattr(_security, "_is_interactive", lambda: False)
+
+
+class TestContentSearchNeverReadsSecrets:
+    """Grep refuses every file read_file refuses, before opening a byte."""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            ".env",
+            ".ENV",
+            ".Env.Local",
+            "id_rsa",
+            "ID_RSA",
+            "server.pem",
+            "TLS.KEY",
+            "credentials.json",
+            ".npmrc",
+        ],
+    )
+    def test_secret_contents_never_returned_and_counted(
+        self, tmp_path, no_prompt, name
+    ):
+        (tmp_path / name).write_text(f"TOKEN={_SECRET}\n", encoding="utf-8")
+        (tmp_path / "ok.txt").write_text("TOKEN=public\n", encoding="utf-8")
+        result = _guarded_search(tmp_path, "TOKEN")
+        assert result["status"] == "success"
+        assert _SECRET not in str(result)
+        assert _hit_names(result) == ["ok.txt"]
+        assert result["files_skipped_protected"] == 1
+        assert "credentials or keys" in result["message"]
+
+    def test_secret_is_never_opened_even_by_the_binary_sniff(
+        self, tmp_path, no_prompt, monkeypatch
+    ):
+        import builtins
+
+        (tmp_path / "id_rsa").write_text(_SECRET, encoding="utf-8")
+        (tmp_path / "ok.go").write_text("TOKEN\n", encoding="utf-8")
+        opened = []
+        real_open = builtins.open
+
+        def spy(file, *args, **kwargs):
+            opened.append(Path(str(file)).name)
+            return real_open(file, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", spy)
+        # "$14.2M" compiles but misses, so the plain-text retry walks again.
+        _guarded_search(tmp_path, "$14.2M")
+        assert "id_rsa" not in opened and "ok.go" in opened
+
+    def test_regex_miss_retry_counts_a_secret_once(self, tmp_path, no_prompt):
+        (tmp_path / ".env").write_text("price $14.2M\n", encoding="utf-8")
+        result = _guarded_search(tmp_path, "$14.2M")
+        assert result["matches"] == []
+        assert result["files_skipped_protected"] == 1
+
+    def test_file_pattern_aimed_at_a_secret_is_still_blocked(self, tmp_path, no_prompt):
+        (tmp_path / "server.pem").write_text(_SECRET, encoding="utf-8")
+        result = _guarded_search(tmp_path, "ghp", file_pattern="*.pem")
+        assert result["matches"] == [] and _SECRET not in str(result)
+        assert result["files_skipped_protected"] == 1
+
+    def test_secret_nested_deep_is_blocked(self, tmp_path, no_prompt):
+        deep = tmp_path / "a" / "b" / "c"
+        deep.mkdir(parents=True)
+        (deep / "credentials.json").write_text(f'{{"k": "{_SECRET}"}}')
+        result = _guarded_search(tmp_path, "ghp")
+        assert _SECRET not in str(result)
+        assert result["files_skipped_protected"] == 1
+
+    @pytest.mark.parametrize("name", [".env", ".ENV", "id_rsa"])
+    def test_a_secret_passed_as_the_path_is_refused(self, tmp_path, no_prompt, name):
+        (tmp_path / name).write_text(_SECRET, encoding="utf-8")
+        result = _guarded_search(tmp_path, "ghp", tmp_path / name)
+        assert result["status"] == "error" and _SECRET not in str(result)
+
+    def test_innocent_name_linked_to_a_secret_is_blocked(self, tmp_path, no_prompt):
+        (tmp_path / "id_rsa").write_text(_SECRET, encoding="utf-8")
+        _symlink_or_skip(tmp_path / "notes.txt", tmp_path / "id_rsa")
+        result = _guarded_search(tmp_path, "ghp")
+        assert _SECRET not in str(result)
+        assert result["files_skipped_protected"] == 2
+
+    def test_a_link_to_a_secret_passed_as_the_path_is_refused(
+        self, tmp_path, no_prompt
+    ):
+        (tmp_path / "id_rsa").write_text(_SECRET, encoding="utf-8")
+        _symlink_or_skip(tmp_path / "notes.txt", tmp_path / "id_rsa")
+        result = _guarded_search(tmp_path, "ghp", tmp_path / "notes.txt")
+        assert _SECRET not in str(result)
+        assert result.get("matches", []) == []
+
+    def test_link_out_of_the_sandbox_is_blocked(self, tmp_path, no_prompt):
+        root = tmp_path / "root"
+        root.mkdir()
+        outside = tmp_path / "outside.txt"
+        outside.write_text(_SECRET, encoding="utf-8")
+        _symlink_or_skip(root / "inside.txt", outside)
+        result = _guarded_search(root, "ghp")
+        assert _SECRET not in str(result)
+        assert result["files_skipped_protected"] == 1
+
+    def test_lookalike_names_are_still_searched(self, tmp_path, no_prompt):
+        """The gate is the read gate, not a broader guess."""
+        for name in (".env.example", "id_rsa.pub.md", "credentials.md"):
+            (tmp_path / name).write_text("needle\n", encoding="utf-8")
+        result = _guarded_search(tmp_path, "needle")
+        assert "files_skipped_protected" not in result
+        assert len(result["matches"]) == 3
+
+
+class TestContentSearchFilePathAndText:
+    def test_utf16_text_with_an_unlisted_extension_is_searched(self, tmp_path):
+        (tmp_path / "a.ts").write_bytes("needle\n".encode("utf-16"))
+        (tmp_path / "b.go").write_bytes("needle\n".encode("utf-32"))
+        assert _hit_names(_guarded_search(tmp_path, "needle")) == ["a.ts", "b.go"]
+
+    def test_a_utf16_bom_does_not_launder_binary(self, tmp_path):
+        (tmp_path / "fake.ts").write_bytes(
+            "needle".encode("utf-16") + bytes(2) + "x".encode("utf-16-le")
+        )
+        assert _guarded_search(tmp_path, "needle")["matches"] == []
+
+    def test_a_file_path_ignores_the_entry_budget(self, tmp_path, monkeypatch):
+        from gaia.agents.tools import search_scope
+
+        target = tmp_path / "one.txt"
+        target.write_text("needle\n", encoding="utf-8")
+        monkeypatch.setattr(search_scope, "SEARCH_ENTRY_BUDGET", 0)
+        result = _guarded_search(tmp_path, "needle", target)
+        assert _hit_names(result) == ["one.txt"]
+        assert "truncated" not in result
+
+    def test_an_empty_file_path_reports_no_matches(self, tmp_path):
+        target = tmp_path / "empty.txt"
+        target.write_text("", encoding="utf-8")
+        result = _guarded_search(tmp_path, "needle", target)
+        assert result["status"] == "success" and result["files_searched"] == 1
+        assert result["matches"] == []
+
+    def test_entry_budget_of_one_stops_and_says_so(self, tmp_path, monkeypatch):
+        from gaia.agents.tools import search_scope
+
+        for i in range(5):
+            (tmp_path / f"f{i}.txt").write_text("other\n", encoding="utf-8")
+        monkeypatch.setattr(search_scope, "SEARCH_ENTRY_BUDGET", 1)
+        result = _guarded_search(tmp_path, "needle")
+        assert result["status"] == "success" and result["truncated"] is True
+        assert result["files_searched"] < 5

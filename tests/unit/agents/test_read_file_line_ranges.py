@@ -166,3 +166,14 @@ def test_the_last_character_page_has_no_partial_note(read_file, tmp_path):
     path = _text(tmp_path, 1000)
     result = read_file(str(path), limit=8000)
     assert result["next_offset"] is None and "note" not in result
+
+
+@pytest.mark.parametrize("name", ["README.md", "guide.mdx", "NOTES.MD"])
+def test_markdown_comes_back_once_not_restated_as_structure(read_file, tmp_path, name):
+    """Code blocks and links re-listed beside the content doubled the result."""
+    body = "# Title\n\n```py\nprint(1)\n```\n\nSee [docs](https://example.com).\n"
+    (tmp_path / name).write_text(body, encoding="utf-8")
+    result = read_file(str(tmp_path / name))
+    assert result["status"] == "success"
+    assert result["content"] == body and result["file_type"] == "markdown"
+    assert not {"code_blocks", "links", "headers"} & set(result)

@@ -14,6 +14,7 @@ data and the interpreter is asked only which distributions it has.
 
 from __future__ import annotations
 
+import ast
 import configparser
 import json
 import os
@@ -35,8 +36,6 @@ log = get_logger(__name__)
 
 PROBE_TIMEOUT_S = 20
 _NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
-_SETUP_PY_REQUIRES = re.compile(r"install_requires\s*=\s*\[([^\]]*)\]", re.S)
-_QUOTED = re.compile(r"""["']([^"']+)["']""")
 
 
 def _requirement_name(spec: str) -> Optional[str]:
@@ -56,6 +55,48 @@ def _requirement_name(spec: str) -> Optional[str]:
     if req.marker is not None and not req.marker.evaluate():
         return None
     return req.name
+
+
+def _literal_strings(node: ast.AST, assigned: Dict[str, ast.AST]) -> List[str]:
+    """The string items of a list/tuple literal, following one ``NAME = [...]``."""
+    if isinstance(node, ast.Name) and node.id in assigned:
+        node = assigned.pop(node.id)  # popped, so a self-reference cannot loop
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _literal_strings(node.left, assigned) + _literal_strings(
+            node.right, assigned
+        )
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return []
+    return [
+        item.value
+        for item in node.elts
+        if isinstance(item, ast.Constant) and isinstance(item.value, str)
+    ]
+
+
+def _setup_py_requires(text: str) -> List[str]:
+    """``install_requires`` of a ``setup()`` call, read as data, never executed.
+
+    Items that are not string literals (a call, an f-string) are skipped: the
+    alternative is guessing, and a guessed name is a false "not installed".
+
+    Raises:
+        SyntaxError, ValueError: When *text* is not parseable Python.
+    """
+    tree = ast.parse(text)
+    assigned: Dict[str, ast.AST] = {}
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name):
+                    assigned[target.id] = stmt.value
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg == "install_requires":
+                return _literal_strings(kw.value, dict(assigned))
+    return []
 
 
 def declared_python_deps(root: Path) -> List[str]:
@@ -79,14 +120,11 @@ def declared_python_deps(root: Path) -> List[str]:
     setup_py = root / "setup.py"
     if not specs and setup_py.is_file():
         try:
-            match = _SETUP_PY_REQUIRES.search(
+            specs += _setup_py_requires(
                 setup_py.read_text(encoding="utf-8", errors="replace")
             )
-        except OSError as e:
+        except (OSError, SyntaxError, ValueError) as e:
             log.warning("[project-deps] %s unreadable: %s", setup_py, e)
-            match = None
-        if match:
-            specs += _QUOTED.findall(match.group(1))
     requirements = root / "requirements.txt"
     if not specs and requirements.is_file():
         try:

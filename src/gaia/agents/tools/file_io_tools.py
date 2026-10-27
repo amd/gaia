@@ -447,7 +447,6 @@ class FileIOToolsMixin:
             """Read any file, analyzed by type.
 
             - Python (.py): syntax validation + functions/classes
-            - Markdown (.md): headers, code blocks, links
             - Word (.docx), PDF and Excel (.xlsx): extracted text, in parts when
               long; continue at next_offset until it is null
             - Other text files: raw content
@@ -573,8 +572,6 @@ class FileIOToolsMixin:
 
                 # Python file - add syntax validation and symbol extraction
                 if ext == ".py":
-                    import re
-
                     result["file_type"] = "python"
 
                     try:
@@ -612,27 +609,10 @@ class FileIOToolsMixin:
                                 )
                         result["symbols"] = symbols
 
-                # Markdown file - extract structure
-                elif ext == ".md":
-                    import re
-
+                # No extracted headers/code blocks/links: they repeat the content
+                # and push a long document past the result truncation cap.
+                elif ext in (".md", ".mdx"):
                     result["file_type"] = "markdown"
-
-                    # Extract headers
-                    headers = re.findall(r"^#{1,6}\s+(.+)$", content, re.MULTILINE)
-                    result["headers"] = headers
-
-                    # Extract code blocks
-                    code_blocks = re.findall(r"```(\w*)\n(.*?)```", content, re.DOTALL)
-                    result["code_blocks"] = [
-                        {"language": lang, "code": code} for lang, code in code_blocks
-                    ]
-
-                    # Extract links
-                    links = re.findall(r"\[([^\]]+)\]\(([^)]+)\)", content)
-                    result["links"] = [
-                        {"text": text, "url": url} for text, url in links
-                    ]
 
                 # Other text files
                 else:
