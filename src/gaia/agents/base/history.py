@@ -221,6 +221,23 @@ def _clip_message(turn: list[dict], index: int, budget: int) -> int:
     return len(text) - low
 
 
+def _is_protected(message: dict) -> bool:
+    """A refusal or worker answer, as a tool message or as recorded text."""
+    from gaia.agents.base.context_eviction import is_protected_result
+
+    content = message.get("content")
+    if message.get("role") == "tool":
+        return is_protected_result(message)
+    if (
+        message.get("role") == "user"
+        and isinstance(content, str)
+        and content.startswith(_RECORDED_RESULT_PREFIX)
+    ):
+        name, _, text = content[len(_RECORDED_RESULT_PREFIX) :].partition("] ")
+        return is_protected_result({"name": name, "content": text})
+    return False
+
+
 def clip_turn(turn: list[dict], budget: int) -> tuple[list[dict], list[tuple]]:
     """Cut the turn's longest text messages until it fits *budget*, marking each cut.
 
@@ -233,7 +250,10 @@ def clip_turn(turn: list[dict], budget: int) -> tuple[list[dict], list[tuple]]:
 
     turn = [dict(m) for m in turn]
     clips = []
-    for index in sorted(range(len(turn)), key=lambda i: -length(i)):
+    # Refusals and worker answers are cut last: a refusal cut mid-JSON stops reading as one.
+    for index in sorted(
+        range(len(turn)), key=lambda i: (_is_protected(turn[i]), -length(i))
+    ):
         if _turn_cost(turn) <= budget:
             break
         total = length(index)

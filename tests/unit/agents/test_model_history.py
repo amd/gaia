@@ -189,6 +189,39 @@ def test_a_refusal_in_an_oversized_turn_is_not_stubbed():
     assert replayed[-1]["content"] == "I did not run it."
 
 
+@pytest.mark.parametrize("as_text", [False, True])
+def test_a_refusal_longer_than_the_question_is_cut_last(as_text):
+    turn = _bulky_tool_turn("I did not run it.")
+    refusal = json.dumps(
+        {"status": "denied", "message": "User refused: " + "reason " * 600}
+    )
+    turn[2]["content"] = refusal
+    turn[0]["content"] = "run it " * 400
+    if as_text:
+        turn = history.text_tool_history([turn])[0]
+    whole = turn[2]["content"]
+    budget = history.turn_cost(turn) - 100
+
+    clipped, clips = history.clip_turn(turn, budget)
+
+    assert clipped[2]["content"] == whole
+    assert [index for index, _, _ in clips] == [0]
+    assert history.turn_cost(clipped) <= budget
+
+
+def test_a_refusal_is_still_cut_when_nothing_else_is_left():
+    refusal = json.dumps({"status": "denied", "message": "no " * 3000})
+    turn = [
+        {"role": "user", "content": "run it"},
+        {"role": "tool", "tool_call_id": "c", "name": "x", "content": refusal},
+    ]
+
+    clipped, clips = history.clip_turn(turn, 200)
+
+    assert [index for index, _, _ in clips] == [1]
+    assert history.turn_cost(clipped) <= 200
+
+
 def test_a_turn_that_cannot_be_shortened_enough_is_dropped_alone(caplog):
     # Call arguments are replayed as sent, so only a tool result can shrink.
     huge = _tool_turn(1)
