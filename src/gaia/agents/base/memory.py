@@ -3892,11 +3892,14 @@ class MemoryMixin(ProceduralMemoryMixin):
             # A PIN/passcode or card security code in a user-owned context.
             # Keep the PIN forms bounded: generic uses such as GPIO pins,
             # page numbers, and postal-code phrases are ordinary data.
-            r"\bpin(?:'s)?(?:\s+number)?\s+(?:for|on|at)(?:\s+\w+){1,8}?\s*"
+            r"\bpin(?:'s)?(?:\s+number)?\s+(?:for|on|at|of)(?:\s+\w+){1,8}?\s*"
             r"(?:is|was|to|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
+            r"\bpin\s+for(?!\s+page\b)(?:\s+\w+){1,8}?\s+\d{3,8}\b",
+            r"\bpin\s+code\s*(?:(?:is|was|to|:|=|[-\u2013\u2014])\s*)?\d{3,5}\b",
             r"(?<!gpio )\bpin(?:'s)?(?!\s+code\b)(?:\s+number)?\s*"
             r"(?:is|was|to|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
-            r"(?<!gpio )\bpin(?:'s)?(?!\s+(?:code|on|at|for)\b)\s+" r"\d{3,8}\b",
+            r"(?<!gpio )\bpin(?:'s)?(?!\s+(?:code|on|at|for)\b)(?:\s+number)?\s+"
+            r"\d{3,8}\b",
             r"\bpin\s*(?:#|:|=|\(\s*)\s*\d{3,8}\b\s*\)?",
             r"\b\d{3,8}\s+is\s+(?:(?:my|your|their|the)\s+|user(?:'s)?\s+)?pin\b",
             r"\b(?:passcode|pass code|cvv2?|cvc|security code)\b"

@@ -151,6 +151,12 @@ def test_the_conversation_log_keeps_no_secret(store):
         "My Chase card PIN is 4821",
         "Chase bank PIN: 4821",
         "My PIN is 4821",
+        "PIN number 4821",
+        "PIN code: 4821",
+        "PIN code 4821",
+        "PIN of my card is 4821",
+        "PIN for my card 4821",
+        "PIN for Chase 4821",
         "PIN is 4821",
         "4821 is my PIN",
         "pin#4821",
@@ -168,6 +174,7 @@ def test_pin_variants_are_masked(text):
         "GPIO pin 1023",
         "Pin on page 123",
         "My PIN code is 560001",
+        "PIN code 560001",
     ),
 )
 def test_ordinary_pin_phrases_are_not_masked(text):
