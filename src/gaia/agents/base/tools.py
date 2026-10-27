@@ -5,11 +5,14 @@ Tool registry and decorator for agent tools.
 """
 
 import inspect
-import logging
 import re
 import types
 import typing
 from typing import Any, Callable, Dict, Optional
+
+# Set up logging via the project logger; importing this module must not
+# reconfigure the root logger (#4775).
+from gaia.logger import get_logger
 
 # Re-exported for existing callers of this module.
 # pylint: disable=unused-import
@@ -21,9 +24,7 @@ from gaia.tool_cancellation import (  # noqa: F401
     tool_cancelled,
 )
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Tool registry to store registered tools
 _TOOL_REGISTRY: dict[str, dict] = {}

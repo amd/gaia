@@ -4667,6 +4667,10 @@ def _handle_schedule(args):
 
 
 def main():
+    from gaia.logger import configure
+
+    configure()
+
     use_os_trust_store()
     parser = build_parser()
     log = get_logger(__name__)

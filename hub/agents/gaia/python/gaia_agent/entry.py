@@ -94,6 +94,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if selects_http(args):
         # Imported here, not at module scope: this is the branch that may use
         # FastAPI, and it is the only one that should have to have it.
+        from gaia.logger import configure
+
+        configure()
         from gaia_agent.server import serve_http
 
         return serve_http(args)

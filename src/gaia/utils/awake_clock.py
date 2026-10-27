@@ -44,7 +44,7 @@ if sys.platform == "win32":
             AwakeClockError: Windows refused ``QueryUnbiasedInterruptTime``,
                 so no time limit can be measured.
         """
-        ticks = ctypes.c_ulonglong()
+        ticks = ctypes.c_ulonglong(0)
         if not _query(ctypes.byref(ticks)):
             err = ctypes.WinError(ctypes.get_last_error())
             raise AwakeClockError(

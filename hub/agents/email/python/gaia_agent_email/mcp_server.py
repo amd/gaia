@@ -464,6 +464,10 @@ def start_email_mcp(
 def main() -> None:
     import argparse
 
+    from gaia.logger import configure
+
+    configure()
+
     parser = argparse.ArgumentParser(description="GAIA Email Triage MCP Server")
     parser.add_argument(
         "--transport",

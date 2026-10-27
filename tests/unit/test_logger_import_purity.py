@@ -1,0 +1,153 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+"""Importing gaia must not reconfigure the host's root logging (#4775).
+
+An application that embeds the SDK got its root logger reconfigured to INFO,
+with GAIA's console and file handlers attached, just by importing
+``gaia.agents.base``. Three sources contributed: two ``logging.basicConfig``
+calls in ``gaia/agents/base`` and the module-level ``GaiaLogger()``
+instantiation in ``gaia/logger.py``. All three now live behind the explicit
+``gaia.logger.configure`` call that owning entry points make. These tests pin
+the contract: import purity in fresh interpreters, and the behavior of
+``configure`` and the inert ``get_logger`` path.
+"""
+
+import ast
+import logging
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from gaia import logger as gaia_logger
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+_IMPORT_AND_PROBE_ROOT = (
+    "import logging\n"
+    "root = logging.getLogger()\n"
+    "pre = (root.level, len(root.handlers))\n"
+    "{imports}\n"
+    "post = (root.level, len(root.handlers))\n"
+    "print(pre == post, pre)\n"
+)
+
+_IMPORTS = {
+    "gaia-logger": "import gaia.logger",
+    "gaia": "import gaia",
+    "agents-base": "import gaia.agents.base",
+}
+
+
+def _child_env(tmp_path):
+    env = dict(os.environ)
+    # The suite moves GAIA's log file around; these tests are about import
+    # purity and must not depend on (or write to) whichever path is current.
+    env.pop(gaia_logger.LOG_FILE_ENV, None)
+    for key in ("TMP", "TEMP", "TMPDIR"):
+        env[key] = str(tmp_path)
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(REPO_ROOT / "src"), env.get("PYTHONPATH")])
+    )
+    return env
+
+
+def _run_child(code, tmp_path):
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        env=_child_env(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+
+
+def _child_unchanged(result):
+    assert result.returncode == 0, result.stderr
+    line = result.stdout.strip().splitlines()[-1]
+    unchanged, pre = line.split(" ", 1)
+    return unchanged == "True", pre
+
+
+def test_import_gaia_logger_leaves_root_untouched(tmp_path):
+    result = _run_child(
+        _IMPORT_AND_PROBE_ROOT.format(imports=_IMPORTS["gaia-logger"]),
+        tmp_path,
+    )
+    unchanged, pre = _child_unchanged(result)
+    assert unchanged, f"root changed on import; pre-import state was {pre}"
+
+
+def test_import_gaia_leaves_root_untouched(tmp_path):
+    # `gaia/__init__` imports `gaia.agents.base`, the path that used to
+    # reconfigure the root logger via `logging.basicConfig` (#4775).
+    result = _run_child(
+        _IMPORT_AND_PROBE_ROOT.format(imports=_IMPORTS["gaia"]),
+        tmp_path,
+    )
+    unchanged, pre = _child_unchanged(result)
+    assert unchanged, f"root changed on import; pre-import state was {pre}"
+
+
+def test_import_gaia_agents_base_leaves_root_untouched(tmp_path):
+    # The two `logging.basicConfig` calls lived in this package.
+    result = _run_child(
+        _IMPORT_AND_PROBE_ROOT.format(imports=_IMPORTS["agents-base"]),
+        tmp_path,
+    )
+    unchanged, pre = _child_unchanged(result)
+    assert unchanged, f"root changed on import; pre-import state was {pre}"
+
+
+def test_configure_installs_and_is_idempotent(tmp_path):
+    code = (
+        "import logging\n"
+        "from gaia.logger import configure, get_logger\n"
+        "first = configure()\n"
+        "root = logging.getLogger()\n"
+        "root_state = (root.level, [type(h).__name__ for h in root.handlers])\n"
+        "probe = get_logger('gaia.probe')\n"
+        "second = configure()\n"
+        "print(root_state)\n"
+        "print(probe.level == logging.NOTSET, first is second)\n"
+    )
+    result = _run_child(code, tmp_path)
+    assert result.returncode == 0, result.stderr
+    root_state = ast.literal_eval(result.stdout.splitlines()[0])
+    probe_notset, same_manager = result.stdout.splitlines()[1].split()
+    level, handler_names = root_state
+    assert level == logging.INFO
+    assert any("FileHandler" in name for name in handler_names)
+    assert any("StreamHandler" in name for name in handler_names)
+    # get_logger post-configure maps to the manager, which pins the module
+    # default level.
+    assert probe_notset == "False"
+    assert same_manager == "True"
+
+
+def test_get_logger_pre_configure_in_and_of_itself(monkeypatch):
+    monkeypatch.setattr(gaia_logger, "log_manager", None)
+    root = logging.getLogger()
+    before = (root.level, list(root.handlers))
+    logger = gaia_logger.get_logger("gaia.probe.purity")
+    try:
+        assert (root.level, len(root.handlers)) == (before[0], len(before[1]))
+        assert logger.level == logging.NOTSET
+        assert logger.handlers == []
+    finally:
+        root.handlers[:] = before[1]
+
+
+def test_route_console_logging_to_stderr_safe_before_configure(monkeypatch):
+    """Pre-configure the call inspects the root handler list, not the manager."""
+    monkeypatch.setattr(gaia_logger, "log_manager", None)
+    root = logging.getLogger()
+    probe = logging.StreamHandler(sys.stdout)
+    root.addHandler(probe)
+    try:
+        gaia_logger.route_console_logging_to_stderr()
+        assert probe.stream is sys.stderr
+    finally:
+        root.removeHandler(probe)
