@@ -268,3 +268,80 @@ describe('FileBrowser hidden entries', () => {
         expect(await screen.findByText(/Only hidden items here/)).toBeTruthy();
     });
 });
+
+describe('FileBrowser hidden selections from search', () => {
+    const HOME: BrowseResponse = {
+        current_path: '/home/user',
+        parent_path: '/home',
+        entries: [
+            { name: 'Documents', path: '/home/user/Documents', type: 'folder', size: 0, extension: '', modified: '' },
+        ],
+        quick_links: [],
+    };
+    const RESULTS = {
+        results: [
+            { name: '.env', path: '/home/user/.env', size: 10, size_display: '10 B', extension: '', modified: '', directory: '/home/user' },
+            { name: 'notes.txt', path: '/home/user/notes.txt', size: 10, size_display: '10 B', extension: '.txt', modified: '', directory: '/home/user' },
+        ],
+        total: 2,
+        query: 'e',
+        searched_locations: ['/home/user'],
+        truncated: false,
+    };
+
+    const searchAndTick = async (names: string[], showHidden = false) => {
+        mockedApi.browseFiles.mockResolvedValue(HOME);
+        mockedApi.searchFiles.mockResolvedValue(RESULTS);
+        render(<FileBrowser />);
+        await screen.findByText('Documents');
+        if (showHidden) fireEvent.click(screen.getByRole('checkbox', { name: 'Show hidden' }));
+        const input = screen.getByPlaceholderText('Search files on your PC...');
+        fireEvent.change(input, { target: { value: 'e' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        await screen.findByText(/Found 2 result/);
+        for (const name of names) {
+            fireEvent.click(screen.getByRole('checkbox', { name: `Select ${name}` }));
+        }
+    };
+
+    it('keeps a hidden file ticked while its search results are on screen', async () => {
+        await searchAndTick(['.env']);
+        expect(screen.getByText('1 item(s) selected')).toBeInTheDocument();
+    });
+
+    it('drops a hidden file ticked in search on Back to browsing', async () => {
+        await searchAndTick(['.env', 'notes.txt']);
+        fireEvent.click(screen.getByRole('button', { name: 'Back to browsing' }));
+        expect(await screen.findByText('1 item(s) selected')).toBeInTheDocument();
+    });
+
+    it('drops a hidden file ticked in search when the search is cleared', async () => {
+        await searchAndTick(['.env']);
+        fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+        await waitFor(() => expect(screen.getByRole('button', { name: /Index Selected/i })).toBeDisabled());
+    });
+
+    it('drops a hidden file with a Windows path on Back to browsing', async () => {
+        mockedApi.browseFiles.mockResolvedValue(HOME);
+        mockedApi.searchFiles.mockResolvedValue({
+            ...RESULTS,
+            results: [{ ...RESULTS.results[0], path: 'C:' + String.fromCharCode(92) + 'Users' + String.fromCharCode(92) + '.env' }],
+            total: 1,
+        });
+        render(<FileBrowser />);
+        await screen.findByText('Documents');
+        const input = screen.getByPlaceholderText('Search files on your PC...');
+        fireEvent.change(input, { target: { value: 'e' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        await screen.findByText(/Found 1 result/);
+        fireEvent.click(screen.getByRole('checkbox', { name: 'Select .env' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Back to browsing' }));
+        await waitFor(() => expect(screen.getByRole('button', { name: /Index Selected/i })).toBeDisabled());
+    });
+
+    it('keeps a hidden file ticked in search when Show hidden is on', async () => {
+        await searchAndTick(['.env'], true);
+        fireEvent.click(screen.getByRole('button', { name: 'Back to browsing' }));
+        expect(await screen.findByText('1 item(s) selected')).toBeInTheDocument();
+    });
+});

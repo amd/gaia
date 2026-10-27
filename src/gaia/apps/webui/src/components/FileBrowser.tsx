@@ -174,6 +174,8 @@ async function indexAndAttachFiles(
     return { docIds, supported, succeededFiles, unsupported, failed, lastError };
 }
 
+const isHiddenName = (name: string) => name.startsWith('.');
+
 export function FileBrowser() {
     const { setShowFileBrowser, currentSessionId, updateSessionInList, setPendingPrompt } = useChatStore();
     const closeBrowser = useCallback(() => setShowFileBrowser(false), [setShowFileBrowser]);
@@ -429,6 +431,7 @@ export function FileBrowser() {
     const searchScope = formatSearchScope(searchedLocations);
 
     // Items to display: search results or browse entries
+    const visibleEntries = entries.filter(e => !isHiddenName(e.name));
     const displayItems = searchResults
         ? searchResults.map((r: any) => ({
             name: r.name,
@@ -438,15 +441,17 @@ export function FileBrowser() {
             extension: r.extension || '',
             modified: r.modified || '',
         }))
-        : showHidden ? entries : entries.filter(e => !e.name.startsWith('.'));
-    const hiddenCount = entries.length - entries.filter(e => !e.name.startsWith('.')).length;
+        : showHidden ? entries : visibleEntries;
+    const hiddenCount = entries.length - visibleEntries.length;
 
-    const toggleShowHidden = useCallback((checked: boolean) => {
-        setShowHidden(checked);
-        if (!checked) {
-            setSelectedFiles(prev => new Set([...prev].filter(p => !(p.split(/[\\/]/).pop() ?? '').startsWith('.'))));
-        }
-    }, []);
+    // Nothing the user can't see gets indexed: covers Show hidden turned off and leaving a search.
+    useEffect(() => {
+        if (showHidden || searchResults) return;
+        setSelectedFiles(prev => {
+            const kept = [...prev].filter(p => !isHiddenName(p.split(/[\\/]/).pop() ?? ''));
+            return kept.length === prev.size ? prev : new Set(kept);
+        });
+    }, [showHidden, searchResults]);
 
     return (
         <div ref={dialogRef} className="modal-overlay" onClick={() => setShowFileBrowser(false)} role="dialog" aria-modal="true" aria-label="File browser">
@@ -520,36 +525,36 @@ export function FileBrowser() {
                     {/* Breadcrumb */}
                     {!searchResults && (
                         <div className="fb-pathbar">
-                        <div className="fb-breadcrumb">
-                            <button className="fb-crumb" onClick={() => loadDirectory('/')}>
-                                <HardDrive size={12} />
-                            </button>
-                            {breadcrumbs.map((crumb, i) => (
-                                <span key={i} className="fb-crumb-item">
-                                    <ChevronRight size={12} className="fb-crumb-sep" />
-                                    <button className="fb-crumb" onClick={() => loadDirectory(crumb.path)}>
-                                        {crumb.label}
-                                    </button>
-                                </span>
-                            ))}
-                            {parentPath && (
-                                <button
-                                    className="fb-up-btn"
-                                    onClick={() => loadDirectory(parentPath)}
-                                    title="Go up"
-                                >
-                                    <ArrowUp size={14} />
+                            <div className="fb-breadcrumb">
+                                <button className="fb-crumb" onClick={() => loadDirectory('/')}>
+                                    <HardDrive size={12} />
                                 </button>
-                            )}
-                        </div>
-                        <label className="fb-hidden-toggle">
-                            <input
-                                type="checkbox"
-                                checked={showHidden}
-                                onChange={(e) => toggleShowHidden(e.target.checked)}
-                            />
-                            Show hidden
-                        </label>
+                                {breadcrumbs.map((crumb, i) => (
+                                    <span key={i} className="fb-crumb-item">
+                                        <ChevronRight size={12} className="fb-crumb-sep" />
+                                        <button className="fb-crumb" onClick={() => loadDirectory(crumb.path)}>
+                                            {crumb.label}
+                                        </button>
+                                    </span>
+                                ))}
+                                {parentPath && (
+                                    <button
+                                        className="fb-up-btn"
+                                        onClick={() => loadDirectory(parentPath)}
+                                        title="Go up"
+                                    >
+                                        <ArrowUp size={14} />
+                                    </button>
+                                )}
+                            </div>
+                            <label className="fb-hidden-toggle">
+                                <input
+                                    type="checkbox"
+                                    checked={showHidden}
+                                    onChange={(e) => setShowHidden(e.target.checked)}
+                                />
+                                Show hidden
+                            </label>
                         </div>
                     )}
 
