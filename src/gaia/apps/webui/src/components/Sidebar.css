@@ -240,12 +240,10 @@
 
 /* Long titles fade out instead of ending in an ellipsis. The fade covers 24px
  * of padding only overflowing text reaches, so a short title is never dimmed. */
-.sb-row-title,
-.sb-location-text {
+.sb-row-title {
     overflow: hidden;
     white-space: nowrap;
     padding-right: 24px;
-    margin-right: -24px;
     -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
     mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
 }
@@ -408,6 +406,26 @@
     color: var(--text-secondary);
     font-size: 12px;
     text-align: left;
+}
+
+/* The place sits above the model so the model name gets the pill's full width. */
+.sb-location-text {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    line-height: 1.25;
+}
+
+.sb-location-place {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.sb-location-name {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
 }
 
 .sb-location:hover {

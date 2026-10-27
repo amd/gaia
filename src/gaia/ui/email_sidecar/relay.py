@@ -46,6 +46,7 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional
 
+from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.logger import get_logger
 from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
@@ -56,18 +57,9 @@ from gaia.ui.sse_handler import (
     _summarize_tool_result,
     tool_result_failed,
 )
-from gaia.ui.sse_translation import SUMMARY_VIEW_KEYS
+from gaia.ui.sse_translation import MCP_TOOL_FIELDS, SUMMARY_VIEW_KEYS
 
 logger = get_logger(__name__)
-
-#: Terminal error surfaced when the sidecar stream closes unexpectedly — a
-#: crash, a dropped connection, a forced close from the cancel path, or the
-#: stream simply ending without ever producing a ``final``/``error`` event
-#: (the canonical contract's "exactly one terminal event" guarantee broken).
-#: Pinned as a module constant so tests can assert equality and the copy the
-#: user sees stays stable.
-STREAM_ENDED_UNEXPECTEDLY = EMAIL_PROFILE.stream_ended_message
-
 
 #: Surfaced both by the dispatch layer's pre-flight version gate (a pre-2.4
 #: Hub binary passes the manager's MAJOR-only handshake, see
@@ -84,6 +76,10 @@ EMAIL_QUERY_VERSION_UPGRADE_MESSAGE = EMAIL_PROFILE.version_upgrade_message
 #: Root fix (actionable copy sidecar-side) ships via the agent release
 #: pipeline, not this repo — see the #2109 PR notes.
 LEMONADE_CONNECTION_HINT = EMAIL_PROFILE.lemonade_hint
+
+#: ``source`` on the terminal ``error`` the daemon synthesizes when an agent's
+#: stream ends with no terminal event (``gaia.daemon.relay``).
+_DAEMON_RELAY_SOURCE = "daemon_relay"
 
 #: Connection/timeout-shaped fragments of requests/urllib3 error reprs.
 #: Deliberately narrow: a non-match passes through untouched.
@@ -173,6 +169,16 @@ def _kind_re() -> "re.Pattern":
     return re.compile(rf'"kind"\s*:\s*"(?:{alt})"')
 
 
+def _user_wait(event: Dict[str, Any], answers_confirmations: bool) -> Optional[str]:
+    """The prompt or question id the sidecar now waits on the user for, if any."""
+    etype = event.get("type")
+    if etype == "needs_input":
+        return str(event.get("request_id") or "") or None
+    if etype == "needs_confirmation" and answers_confirmations:
+        return str(event.get("confirm_id") or "") or None
+    return None
+
+
 def _dispatch_one(
     handler: Any,
     event: Dict[str, Any],
@@ -188,6 +194,8 @@ def _dispatch_one(
     if answers_confirmations:
         # Any event after a prompt means the sidecar has stopped waiting on it.
         handler.set_relay_confirmation(None)
+    # Likewise for a question: the run is parked until it is answered.
+    handler.set_relay_question(None)
 
     if etype == "needs_confirmation" and answers_confirmations:
         confirm_id = str(event.get("confirm_id") or "")
@@ -207,12 +215,27 @@ def _dispatch_one(
             if event.get("tool_label"):
                 request["tool_label"] = str(event["tool_label"])
             # The whole call: the summary shortens code, and a path prompt is
-            # worded from the path's kind.
-            if isinstance(event.get("args"), dict):
-                request["args"] = event["args"]
+            # worded from the path's kind. The card reads GAIA's folder, risk note
+            # and resolved path from args, as in-process, so prompt_context goes
+            # back there.
+            args = dict(event["args"]) if isinstance(event.get("args"), dict) else {}
+            context = event.get("prompt_context")
+            if isinstance(context, dict):
+                if context.get("working_directory"):
+                    args["working_directory"] = str(context["working_directory"])
+                if context.get("risk_note"):
+                    args[RISK_NOTE_ARG] = str(context["risk_note"])
+                if context.get("file_path"):
+                    args["file_path"] = str(context["file_path"])
+            if args:
+                request["args"] = args
                 if event.get("args_truncated"):
                     request["args_truncated"] = True
             handler._emit(request)
+            if getattr(handler, "background_mode", False) is True:
+                # Unattended run (a schedule): nobody can answer, so deny now
+                # rather than park the sidecar until it times out.
+                handler.resolve_relay_confirmation(False, confirm_id)
             return False
 
     if etype == "status":
@@ -227,11 +250,13 @@ def _dispatch_one(
         tool = str(event.get("tool") or "unknown")
         args = event.get("args") or {}
         label = _tool_label(tool, profile)
-        # The ledger is what the turn's summary, and so the chat's Outputs, is
-        # built from; the in-process handler feeds it from print_tool_usage.
-        handler.turn_ledger.tool_started(tool)
-        handler.turn_ledger.tool_args(args)
-        handler._emit({"type": "tool_start", "tool": tool, "detail": label})
+        # The turn summary and the heartbeat read this state, not the events.
+        handler.record_tool_started(tool)
+        if isinstance(args, dict):
+            handler.record_tool_args(args)
+        start: Dict[str, Any] = {"type": "tool_start", "tool": tool, "detail": label}
+        start.update({k: event[k] for k in MCP_TOOL_FIELDS if event.get(k)})
+        handler._emit(start)
         handler._emit(
             {
                 "type": "tool_args",
@@ -252,7 +277,7 @@ def _dispatch_one(
         tool = str(event.get("tool") or "unknown")
         data = event.get("data")
         success = _derive_success(data)
-        handler.turn_ledger.tool_result(data, success)
+        handler.record_tool_result(data, success)
         out: Dict[str, Any] = {
             "type": "tool_result",
             "tool": tool,
@@ -260,6 +285,8 @@ def _dispatch_one(
             "success": success,
             "data": data if data is not None else {},
         }
+        if isinstance(data, dict) and isinstance(data.get("mcp_output"), dict):
+            out["mcp_output"] = data["mcp_output"]
         render = event.get("render")
         if render:
             out["render"] = render
@@ -280,6 +307,8 @@ def _dispatch_one(
         # answer, so every field the frontend needs to build and submit the
         # prompt must cross this hop; run continues on the same stream.
         options = event.get("options")
+        # Recorded so the chat list shows the chat as waiting on the user.
+        handler.set_relay_question(str(event.get("request_id") or "") or None)
         handler._emit(
             {
                 "type": "needs_input",
@@ -304,18 +333,35 @@ def _dispatch_one(
         usage = event.get("usage")
         if isinstance(usage, dict):
             out.update({k: usage[k] for k in _ANSWER_USAGE_KEYS if k in usage})
+        context = event.get("context")
+        if isinstance(context, dict):
+            # Contract >= 2.21: the composer's meter, as an in-process turn streams it.
+            handler.relay_context = context
+            handler._emit({"type": "context_usage", **context})
+        elif isinstance(event.get("context_error"), str):
+            handler.relay_context_error = event["context_error"]
         handler._emit(out)
         return True
 
     elif etype == "error":
-        detail = (
-            event.get("detail")
-            or f"Unknown error from the {profile.display_name} agent."
-        )
+        if event.get("source") == _DAEMON_RELAY_SOURCE:
+            # The daemon's crash frame is worded for API callers, not chat users.
+            logger.warning(
+                "%s relay: daemon reported the agent ended mid-run: %s",
+                profile.agent_id,
+                event.get("detail"),
+            )
+            content = profile.stream_ended_text()
+        else:
+            detail = (
+                event.get("detail")
+                or f"Unknown error from the {profile.display_name} agent."
+            )
+            content = _augment_error_detail(str(detail), profile)
         handler._emit(
             {
                 "type": "agent_error",
-                "content": _augment_error_detail(str(detail), profile),
+                "content": content,
                 # Ends the turn, unlike an in-process tool's agent_error.
                 "fatal": True,
             }
@@ -387,6 +433,7 @@ def relay_query(
     allowed_paths: Optional[List[str]] = None,
     memory: Optional[str] = None,
     changes_turn_id: Optional[str] = None,
+    surface: Optional[str] = None,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
 
@@ -400,6 +447,9 @@ def relay_query(
 
     *memory* — the chat's memory mode (``on`` / ``private`` / ``off``), for a
     sidecar the caller has established takes it (``profiles.memory_supported``).
+
+    *surface* — the front-end this turn comes from, for a sidecar the caller
+    has established takes it (``profiles.surface_supported``).
 
     *documents* — absolute paths of the chat's attached files, for a sidecar
     the caller has established takes them (``profiles.documents_supported``).
@@ -474,6 +524,8 @@ def relay_query(
         body["memory"] = memory
     if changes_turn_id is not None:
         body["changes_turn_id"] = changes_turn_id
+    if surface is not None:
+        body["surface"] = surface
 
     syncs_mode = full_access is not None and bool(session_id)
     enable_after_start = False
@@ -517,7 +569,10 @@ def relay_query(
 
     terminated = False
     crashed = False
-    crash_message = profile.stream_ended_message
+    crash_message = profile.stream_ended_text()
+    # Gave the chat's model slot up while the sidecar waits on the user.
+    stepped_away = False
+    asked = False
     try:
         events = proxy.query_stream(
             body, read_timeout=read_timeout, on_response=_register_response
@@ -531,9 +586,28 @@ def relay_query(
         for event in events:
             if handler.cancelled.is_set():
                 break
+            if asked:
+                # Any event after a question means the sidecar stopped waiting.
+                handler.set_relay_question(None)
+                asked = False
+            if stepped_away:
+                stepped_away = False
+                # The user answered or the sidecar's wait ended. A last event
+                # needs no model, so the turn ends without waiting in line.
+                if event.get("type") not in ("final", "error"):
+                    handler.come_back_to_model()
+                    if handler.cancelled.is_set():
+                        break
             if _dispatch_one(handler, event, profile, answers_confirmations):
                 terminated = True
                 break
+            waiting_on = _user_wait(event, answers_confirmations)
+            if waiting_on is not None:
+                if event.get("type") == "needs_input":
+                    handler.set_relay_question(waiting_on)
+                    asked = True
+                # The sidecar run stays parked; only this chat's slot is freed.
+                stepped_away = handler.step_away_from_model()
     except _FullAccessNotSet as exc:
         crashed = True
         crash_message = exc.event["content"]
@@ -561,7 +635,7 @@ def relay_query(
                 # Surface the sidecar's own actionable detail (e.g. the
                 # zero-connector 502) instead of masking it as a generic
                 # crash — #2419. Bodyless transport failures still fall
-                # through to STREAM_ENDED_UNEXPECTEDLY.
+                # through to profile.stream_ended_text().
                 crash_message = _augment_error_detail(detail, profile)
             logger.warning(
                 "%s relay: stream failed for run_id=%s: %s",
@@ -588,6 +662,7 @@ def relay_query(
     finally:
         if answers_confirmations:
             handler.set_relay_confirmation(None)
+        handler.set_relay_question(None)
         handler.active_relay_response = None
         handler.active_relay_proxy = None
         handler.active_relay_run_id = None
@@ -607,7 +682,6 @@ def relay_query(
 __all__ = [
     "relay_query",
     "RelayProfile",
-    "STREAM_ENDED_UNEXPECTEDLY",
     "EMAIL_QUERY_VERSION_UPGRADE_MESSAGE",
     "LEMONADE_CONNECTION_HINT",
 ]

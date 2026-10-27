@@ -89,6 +89,13 @@ gaia chat --stats
   </Accordion>
 </AccordionGroup>
 
+`/quit` and `/reset` save the current session first. If saving fails, the
+conversation stays open and unchanged so you can fix the storage problem and
+retry `/save`, then `/quit` or `/reset`. To exit without saving, press `Ctrl-C`;
+unsaved changes will be lost. Document indexing and queries also warn if a new
+document attachment could not be saved to the session, even though the document
+is available in the current conversation.
+
 ### Single Query Mode
 
 ```bash

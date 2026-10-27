@@ -7,6 +7,7 @@ import { create } from 'zustand';
 import type { Schedule, ScheduleResult } from '../types';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { useNotificationStore } from './notificationStore';
 
 /** Extract a human-readable message from an API error. */
 function parseApiError(err: unknown, fallback: string): string {
@@ -23,6 +24,27 @@ function parseApiError(err: unknown, fallback: string): string {
     return raw;
 }
 
+/** Raise an error notification for each schedule that failed since *seen* was taken. */
+function notifyNewFailures(seen: Record<string, number>, list: Schedule[]): void {
+    const { addNotification } = useNotificationStore.getState();
+    for (const s of list) {
+        if (s.error_count <= (seen[s.id] ?? 0) || !s.last_error) continue;
+        addNotification({
+            id: `schedule-error-${s.id}-${s.error_count}`,
+            type: 'error',
+            agentId: 'scheduler',
+            agentName: 'GAIA',
+            title: `Scheduled task "${s.name}" failed`,
+            message: s.last_error,
+            timestamp: Date.now(),
+            read: false,
+            dismissed: false,
+            priority: 'high',
+            ...(s.session_id ? { sessionId: s.session_id } : {}),
+        });
+    }
+}
+
 interface ScheduleState {
     schedules: Schedule[];
     loading: boolean;
@@ -32,6 +54,8 @@ interface ScheduleState {
     selectedSchedule: string | null;
     results: ScheduleResult[];
     resultsLoading: boolean;
+    /** error_count per schedule id at the last load; null before the first. */
+    errorCounts: Record<string, number> | null;
 
     loadSchedules: () => Promise<void>;
     createSchedule: (name: string, interval: string, prompt: string) => Promise<void>;
@@ -48,6 +72,7 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
     selectedSchedule: null,
     results: [],
     resultsLoading: false,
+    errorCounts: null,
 
     loadSchedules: async () => {
         // Only show loading spinner on initial load, not poll refreshes
@@ -56,7 +81,15 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
         set({ error: null });
         try {
             const data = await api.listSchedules();
-            set({ schedules: data.schedules || [], loading: false });
+            const schedules: Schedule[] = data.schedules || [];
+            const seen = get().errorCounts;
+            // The first load is the state at launch, not news.
+            if (seen) notifyNewFailures(seen, schedules);
+            set({
+                schedules,
+                loading: false,
+                errorCounts: Object.fromEntries(schedules.map((s) => [s.id, s.error_count])),
+            });
         } catch (err) {
             log.api.error('Failed to load schedules', err);
             set({ error: 'Failed to load schedules', loading: false });

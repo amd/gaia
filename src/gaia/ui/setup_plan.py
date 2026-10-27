@@ -26,24 +26,32 @@ class SetupPlanError(Exception):
 
 
 def _lemonade() -> Dict[str, Any]:
+    """The server ``gaia init`` will use: the user's, or GAIA's own.
+
+    GAIA's own has no address until it runs. ``url`` is None then, never the
+    default port: that may be another Lemonade, whose downloads aren't GAIA's.
+    """
     from gaia.config import GaiaConfigError
     from gaia.llm import lemonade_choice as choice
-    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+    from gaia.llm.lemonade_client import running_embedded_lemonade_url
 
     try:
         info = choice.describe()
     except (choice.LemonadeChoiceError, GaiaConfigError) as e:
         raise SetupPlanError(str(e)) from e
+    external = info["mode"] == choice.MODE_EXTERNAL
     return {
         "mode": info["mode"],
-        "url": info["base_url"] or resolve_lemonade_base_url(),
+        "url": info["base_url"] if external else running_embedded_lemonade_url(),
     }
 
 
-def _client(url: str):
+def _client(url: Optional[str]):
     """A client for *url* when its server answers, else None."""
     from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
+    if url is None:
+        return None
     client = LemonadeClient(base_url=url, verbose=False)
     try:
         client.health_check()
@@ -51,6 +59,15 @@ def _client(url: str):
         logger.info("Setup plan: no Lemonade at %s yet (%s)", url, e)
         return None
     return client
+
+
+class _NoServer:
+    """Stands in for a server that isn't running, so nothing else is asked."""
+
+    def get_system_info(self, **_kwargs):
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        raise LemonadeClientError("the model server is not running yet")
 
 
 def _registry_size(model_id: str) -> Optional[float]:
@@ -64,10 +81,12 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
     """Each default chat model, and whether this PC and its Lemonade can run it.
 
     Judged as :func:`recommend_default_chat_model` judges them (registry size,
-    then the server's version); the size shown is the server's catalog size.
+    the server's version, then the memory free now); the size shown is the
+    server's catalog size.
     """
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_LADDER,
+        _free_memory_rules_out,
         _model_ids_match,
         find_model_requirement,
         kv_cache_for,
@@ -99,6 +118,10 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
             supported = check_server_supports(mr.min_lemonade_version, server_version)
             if not supported.fits:
                 fits, reason = False, supported.reason
+        if fits and client is not None and mr and model_id != DEFAULT_MODEL_LADDER[-1]:
+            busy = _free_memory_rules_out(client, mr, capacity)
+            if busy:
+                fits, reason = False, busy
         options.append(
             {
                 "id": model_id,
@@ -113,7 +136,7 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
 def build_plan() -> Dict[str, Any]:
     """The Lemonade, chat model and downloads ``gaia init --profile gaia`` will use.
 
-    Before GAIA's own Lemonade is installed the hardware cannot be read, so the
+    Until the server setup will use answers, the hardware cannot be read, so the
     chat model is the one setup starts from and ``decided_after_server`` says
     the final pick comes once the server answers.
     """
@@ -126,7 +149,6 @@ def build_plan() -> Dict[str, Any]:
         with_chat_model,
     )
     from gaia.llm.lemonade_client import (
-        LemonadeClient,
         LemonadeClientError,
         recommend_default_chat_model,
     )
@@ -137,7 +159,7 @@ def build_plan() -> Dict[str, Any]:
     try:
         # With no server this still answers: the user's model, else the floor.
         choice = resolve_init_chat_model(
-            client or LemonadeClient(base_url=lemonade["url"], verbose=False),
+            client or _NoServer(),
             reset_corrupt=False,
             enforce_fit=False,
         )
@@ -190,6 +212,8 @@ def choose_chat_model(model_id: str) -> None:
 
     Clearing it keeps setup's own behaviour for its pick (Gemma is still pulled
     for images); any other ladder model is saved as the user's ``default_model``.
+    The recommendation compared against is judged on capacity alone, so a pick
+    made while memory is busy is not undone by a later, idler `gaia init`.
     """
     from gaia.config import GaiaConfig, GaiaConfigError
     from gaia.llm.lemonade_client import (
@@ -211,12 +235,14 @@ def choose_chat_model(model_id: str) -> None:
             "checked. Start setup; you can change the chat model once it is up."
         )
     try:
-        recommended, _, capacity = recommend_default_chat_model(client)
+        recommended, _, capacity = recommend_default_chat_model(
+            client, judge_free_memory=False
+        )
     except LemonadeClientError as e:
         raise SetupPlanError(
             f"Could not read this PC's memory from Lemonade: {e}"
         ) from e
-    if model_id != recommended:
+    if model_id != DEFAULT_MODEL_LADDER[-1]:
         option = next(o for o in _options(client, capacity) if o["id"] == model_id)
         if option["fits"] is False:
             raise SetupPlanError(f"{model_id} won't fit this PC: {option['reason']}.")

@@ -48,6 +48,7 @@ from gaia.connectors import _refresh_lock
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectionRevokedError,
     ConnectorsError,
 )
@@ -117,10 +118,10 @@ def load_current_connection(
     meanwhile is never the one deleted. ``lock_held`` says the caller holds it;
     otherwise it is taken without waiting, and when anything else holds it
     (another process, or another thread here) the connection is left in place
-    and ``AuthRequiredError`` is raised. An unreadable blob (absent, torn or
-    corrupt) is handed to the store under the lock too, and reads as ``None``
-    while the lock is busy.
-    Blocking keyring I/O.
+    and ``ConnectionBusyError`` is raised. An unreadable blob (absent, torn or
+    corrupt) is handed to the store under the lock too, and raises
+    ``ConnectionBusyError`` while the lock is busy, so "busy" can also mean
+    "unreadable and not yet cleared". Blocking keyring I/O.
     """
     provider = get_provider(provider_id)
     current = peek_connection(provider_id, account_email=account_email)
@@ -134,7 +135,7 @@ def load_current_connection(
                 return load_current_connection(
                     provider_id, account_email=account_email, lock_held=True
                 )
-        return provider, None
+        raise ConnectionBusyError(provider_id)
     if _disagrees(provider, current):
         logger.info(
             "connectors: %s client config changed outside this process "
@@ -155,17 +156,17 @@ def load_current_connection(
             return load_current_connection(
                 provider_id, account_email=account_email, lock_held=True
             )
-    raise AuthRequiredError(
-        AuthRequiredError.Reason.REAUTH_REQUIRED,
-        provider=provider_id,
-        message=(
-            f"The stored {provider_id} connection does not match the configured "
-            "OAuth client or tenant, and another GAIA operation (in this process or "
-            "another) is writing it now, so it was left in place. Retry; if this "
-            "keeps happening, reconnect from "
-            f"Settings → Connections or run `gaia connectors connect {provider_id}`."
-        ),
-    )
+    raise ConnectionBusyError(provider_id, connection=_summary(current))
+
+
+_SUMMARY_FIELDS = ("account_email", "connected_at", "account_type")
+
+
+def _summary(stored: dict) -> dict:
+    """Display metadata of a stored connection: no tokens, and no scopes —
+    a connection mid-save may be about to change, so its scopes can't be
+    trusted for a decision."""
+    return {k: stored.get(k) for k in _SUMMARY_FIELDS}
 
 
 def _load(
@@ -389,7 +390,7 @@ async def _refresh_token(
     if response.status_code == 400:
         try:
             payload = response.json()
-        except Exception:
+        except ValueError:
             payload = {}
         if payload.get("error") == "invalid_grant":
             # The caller clears the stored entry (only if it still holds this
@@ -416,7 +417,7 @@ async def _refresh_token(
         # config-missing branch (#1638).
         try:
             err_payload = response.json()
-        except Exception:
+        except ValueError:
             err_payload = {}
         from gaia.connectors.oauth_pkce import PROVIDERS_REQUIRING_CLIENT_SECRET
 

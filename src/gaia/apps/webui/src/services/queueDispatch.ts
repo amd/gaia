@@ -83,6 +83,19 @@ function hold(sessionId: string): void {
 }
 
 /**
+ * A direct send this chat refused as busy (409) joins its queue and is tried
+ * again shortly. Returns false for any other error, which the caller reports.
+ * A 429 (the model is busy with another chat) keeps its own explanation.
+ */
+export function requeueRefused(sessionId: string, text: string, err: unknown): boolean {
+    if (httpStatus(err) !== 409) return false;
+    log.chat.info(`Chat ${sessionId} was busy; queueing the message to try again`);
+    useChatStore.getState().updateQueue(sessionId, (q) => messageQueue.enqueue(q, text, 'queued'));
+    hold(sessionId);
+    return true;
+}
+
+/**
  * Send the chat's next queued message as its own turn, if it has one and
  * nothing for it is in flight. The caller has already decided the chat's turn
  * is over. Messages offered to that turn are settled against the server's

@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- `get_system_info` reports free disk space (`disk_free_gb`) and available
+  memory (`memory_available_gb`), and computes disk use from free space. On a
+  Mac it reported only the share macOS's system volume uses, so a nearly full
+  disk read as 5% used. Its description now says it answers free-space
+  questions, so the model stops trying `df`, which the shell refuses.
+- `/quit` and `/reset` no longer discard the conversation when the session
+  cannot be saved; chat stays open so storage can be fixed and `/save` retried.
+  Ctrl-C still exits without saving. Document tools warn when an indexed
+  document's session attachment could not be saved (#3288).
+- Saving a Word, PowerPoint or Excel document in a watched folder now updates
+  its index. Office owner files (`~$...`) and temporary save files are ignored;
+  a document saved by renaming a temporary file over it is reindexed (#5478).
+- On macOS, a watched document saved by renaming a new copy over it (as Word
+  and most editors do) no longer drops out of the index right after it was
+  reindexed. macOS reports the replaced file as deleted; a file still on disk
+  is now treated as changed, not deleted.
+- A turn whose local model failed on a base URL the user set
+  (`LEMONADE_BASE_URL` or an external Lemonade) now names that server — "The
+  model server at 192.168.1.20:8080" — instead of "Lemonade on this machine",
+  which pointed at a Lemonade install that wasn't involved (#5295). Only the
+  host and port are shown, never credentials or a query string.
+- In an Agent UI chat with no documents attached, the document tools now say
+  no documents are attached to this chat, and that the user can attach them
+  from the Document library, instead of "No documents are currently indexed".
+  The model used to tell users their index was empty while the library held
+  the files they asked about. Overrides `_no_documents_message`, which the
+  next core release's `RAGToolsMixin` calls; with core 0.25.1 the old message
+  stays.
 - A `run_python` snippet or `execute_python_file` script whose code only reads
   files no longer marks the turn's undo as incomplete, unless files changed in
   the folders it ran in. The check fails closed: an import it doesn't know,
@@ -10,15 +38,21 @@
   comment line instead of its first line of code. Uses `may_write` on
   `note_untracked`, new in core 0.25.1.
 - On Windows, a watched document that another program holds for exclusive
-  access, or has partly locked, is now retried until it can be read, including
-  one saved by renaming a temp file onto it. This covers every format the agent
-  indexes, Word and PowerPoint included, which used to be reported as
-  corrupted. Before, the agent tried a locked file once and never reindexed it.
-  `reindex_file` now raises `PermissionError` for a locked file so the file
-  watcher retries it 1, 2 and 4 windows later. If the file is still locked
-  after that, the watcher logs one error telling the user to close the program
-  and save the file again. Any other failure is still logged: an exception
-  with its traceback, a failed index with RAG's error.
+  access, or has partly locked, is now retried, including one saved by
+  renaming a temp file onto it. Before, the agent tried it once and never
+  reindexed it. `reindex_file` now raises `PermissionError` for a locked file,
+  so the file watcher retries it 1, 2 and 4 windows later. If it is still
+  locked after those three retries, the watcher gives up and logs one error
+  telling the user to close the program and save the file again. This covers
+  the extensions the watcher watches: `.pdf`, `.txt`, `.md`, `.markdown`,
+  `.rst`, `.log`, `.csv`, `.json`, `.xml`, `.yaml`, `.yml`, `.py`, `.js`,
+  `.ts`, `.java`, `.cpp`, `.c`, `.html` and `.css`.
+- Indexing a locked document directly, in any format, now reports it as locked
+  (`error_type: "file_locked"`). A Word or PowerPoint file used to be reported
+  as corrupted, with advice to re-download it, and an Excel file could fail
+  with "File is not a zip file".
+- Any other reindex failure is still logged: an exception with its traceback,
+  a failed index with RAG's error.
 - Needs core 0.25.1, whose file watcher retries, whose RAG reports a locked
   read as `error_type: "file_locked"`, and which ships
   `gaia.utils.file_lock.held_by_another_program`, imported at start;

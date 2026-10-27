@@ -15,7 +15,6 @@ import mimetypes
 import os
 import platform
 import re
-import time
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path, PureWindowsPath
@@ -43,18 +42,120 @@ from gaia.agents.tools.path_access import (
     read_access_error,
     readable_entry,
 )
+from gaia.agents.tools.protected_folders import (
+    ASKING,
+    DENIED,
+    ProtectedFolders,
+    macos_access,
+)
 from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
     confine_roots,
     is_broad_root,
+    is_link,
     root_depth,
     search_roots,
 )
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
+from gaia.filesystem.name_match import fold_name, strip_accents
 from gaia.logger import get_logger
 from gaia.security import BackupError
 
 logger = get_logger(__name__)
+
+#: Version-control and dependency folders content search does not descend into
+#: (thousands of files, none the user wrote); searching one directly still works.
+_CONTENT_SEARCH_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+    }
+)
+
+#: Never text, so content search skips them without opening them.
+_BINARY_SUFFIXES = frozenset(
+    {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".bmp",
+        ".ico",
+        ".webp",
+        ".tif",
+        ".tiff",
+        ".pdf",
+        ".zip",
+        ".gz",
+        ".tgz",
+        ".bz2",
+        ".xz",
+        ".7z",
+        ".rar",
+        ".tar",
+        ".exe",
+        ".dll",
+        ".so",
+        ".dylib",
+        ".pyd",
+        ".pyc",
+        ".o",
+        ".obj",
+        ".a",
+        ".lib",
+        ".bin",
+        ".db",
+        ".sqlite",
+        ".mp3",
+        ".mp4",
+        ".wav",
+        ".mov",
+        ".mkv",
+        ".avi",
+        ".m4a",
+        ".flac",
+        ".ogg",
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".otf",
+        ".docx",
+        ".xlsx",
+        ".pptx",
+        ".xls",
+        ".doc",
+        ".ppt",
+        ".odt",
+        ".ods",
+        ".odp",
+        ".jar",
+        ".class",
+        ".whl",
+        ".npy",
+        ".pkl",
+        ".parquet",
+        ".onnx",
+        ".gguf",
+        ".safetensors",
+    }
+)
+
+
+def _looks_like_text(path: Path) -> bool:
+    """No NUL byte in the first 4 KB, which is how grep tells text from binary."""
+    try:
+        with open(path, "rb") as f:
+            return b"\x00" not in f.read(4096)
+    except OSError:
+        return False
 
 
 def _read_exact(path) -> str:
@@ -265,6 +366,35 @@ class FileSearchToolsMixin:
         """Where a filesystem search should look — see ``search_scope`` (#3576)."""
         return search_roots(self)
 
+    def _resolve_search_directory(self, directory: str):
+        """``(path, None)`` for a directory the model named, or ``(None, error)``.
+
+        A relative directory ("tui/internal", ".") means a folder in the
+        user's workspace, not one under whatever directory this process
+        happens to have been spawned in, so it is resolved against the search
+        roots, most specific first.
+        """
+        scope = Path(directory).expanduser()
+        if scope.is_absolute():
+            return scope.resolve(), None
+        workspace = self._search_roots()
+        matched = next((r for r in workspace if (r / scope).is_dir()), None)
+        if matched is None:
+            # Safe to be specific: no absolute path was supplied, so this is
+            # not an existence oracle.
+            listed = ", ".join(str(r) for r in workspace)
+            return None, {
+                "status": "error",
+                "error": (
+                    f"Directory not found: '{directory}' is not under any "
+                    f"workspace root ({listed}). Nothing was searched — this is "
+                    "not an empty result. Pass an absolute path."
+                ),
+                "searched_paths": [],
+                "workspace_roots": [str(r) for r in workspace],
+            }
+        return (matched / scope).resolve(), None
+
     def _read_access_error(self, path: str):
         """Enforce the ``--allowed-paths`` sandbox on read operations.
 
@@ -340,10 +470,43 @@ class FileSearchToolsMixin:
                         ".rs",
                         ".rb",
                         ".sh",
+                        # Agent work reads logs and configs, not just source and
+                        # documents: CI triage needs `ci.log`, a version bump needs
+                        # `pyproject.toml`, and neither was reachable by name.
+                        ".log",
+                        ".toml",
+                        ".yaml",
+                        ".yml",
+                        ".ini",
+                        ".cfg",
+                        ".xml",
+                        ".sql",
+                        ".html",
+                        ".css",
+                        ".tsx",
+                        ".jsx",
                     }
 
+                # An extension the caller wrote into the pattern is a named file, not a
+                # fuzzy ask, so it outranks the DEFAULT allowlist above: "ci.log" and
+                # "*.log" both mean .log, whatever the list holds. Two things do not
+                # count as naming one -- a pattern built as a regex, whose tail only
+                # looks like an extension ("(ci|build).xyz" is a pattern, not a request
+                # for a .xyz file), and an explicit `file_types`, which stays
+                # authoritative over the pattern.
+                if not file_types:
+                    _named_extension = re.search(
+                        r"\.([A-Za-z][A-Za-z0-9]{0,9})$", file_pattern.strip()
+                    )
+                    if _named_extension and not (
+                        set(file_pattern.strip()[: _named_extension.start()])
+                        & set(r"+[](){}^$|\\")
+                    ):
+                        doc_extensions.add(f".{_named_extension.group(1).lower()}")
+
                 matching_files = []
-                pattern_lower = file_pattern.lower()
+                # Folded, so "resume" finds "résumé.txt" and "CAFE" finds "Café".
+                pattern_lower = fold_name(file_pattern)
                 searched_locations = []
 
                 # Detect pattern type: regex, glob, or plain text.
@@ -354,7 +517,10 @@ class FileSearchToolsMixin:
                 _compiled_re = None
                 if is_regex:
                     try:
-                        _compiled_re = re.compile(pattern_lower, re.IGNORECASE)
+                        # Accents only: casefolding would turn ``\D`` into ``\d``.
+                        _compiled_re = re.compile(
+                            strip_accents(file_pattern), re.IGNORECASE
+                        )
                     except re.error:
                         is_regex = False  # Fall back if invalid regex
                 # Glob: simple wildcards only when not already a regex pattern
@@ -380,12 +546,12 @@ class FileSearchToolsMixin:
                 def matches_pattern_and_type(file_path: Path) -> bool:
                     """Check if file matches pattern and is a document type."""
                     # Match against both filename and stem (without extension)
-                    name_lower = file_path.name.lower()
-                    stem_lower = file_path.stem.lower()
+                    name_lower = fold_name(file_path.name)
+                    stem_lower = fold_name(file_path.stem)
                     # Normalize separators so "employ.*book" matches "employee_handbook"
                     name_normalized = re.sub(r"[_\-.]", "", name_lower)
                     if is_glob:
-                        name_match = fnmatch.fnmatch(name_lower, pattern_lower)
+                        name_match = fnmatch.fnmatchcase(name_lower, pattern_lower)
                     elif is_regex and _compiled_re:
                         # Regex: try against filename, stem, and normalized form
                         name_match = bool(
@@ -414,54 +580,32 @@ class FileSearchToolsMixin:
                     type_match = file_path.suffix.lower() in doc_extensions
                     return name_match and type_match
 
-                budget = {}
+                budget = search_scope.SearchBudget()
 
                 def reset_budget():
-                    budget.update(
-                        started=time.monotonic(),
-                        entries=0,
-                        truncated=False,
-                        reason="",
-                    )
-
-                def budget_exhausted() -> bool:
-                    if budget["truncated"]:
-                        return True
-                    if budget["entries"] >= search_scope.SEARCH_ENTRY_BUDGET:
-                        budget["reason"] = "entries"
-                    elif (
-                        time.monotonic() - budget["started"]
-                        >= search_scope.SEARCH_TIME_BUDGET_S
-                    ):
-                        budget["reason"] = "time"
-                    else:
-                        return False
-                    budget["truncated"] = True
-                    logger.info(
-                        "search_file stopped (%s budget) after %d entries / %.1f s",
-                        budget["reason"],
-                        budget["entries"],
-                        time.monotonic() - budget["started"],
-                    )
-                    return True
+                    nonlocal budget
+                    budget = search_scope.SearchBudget()
 
                 def with_truncation(result: Dict[str, Any]) -> Dict[str, Any]:
                     """Mark a result partial when the walk ran out of budget."""
-                    if not budget["truncated"]:
+                    if guard.skipped:
+                        result["skipped_folders"] = guard.note()
+                    if not budget.truncated:
                         return result
+                    logger.info(
+                        "search_file stopped (%s budget) after %d entries / %.1f s",
+                        budget.reason,
+                        budget.entries,
+                        budget.elapsed(),
+                    )
                     where = "a narrower `directory`" if directory else "`directory`"
-                    if budget["reason"] == "entries":
-                        stopped = (
-                            f"after examining {budget['entries']:,} files and folders"
-                        )
-                    else:
-                        stopped = f"after {time.monotonic() - budget['started']:.1f} s"
                     hint = (
-                        f"Search stopped {stopped} — pass {where} to "
+                        f"Search stopped {budget.stopped_after()} — pass {where} to "
                         "search a specific folder."
                     )
                     result["truncated"] = True
                     result["hint"] = hint
+                    result["unfinished_paths"] = list(budget.unfinished_paths)
                     if not result.get("files"):
                         result["display_message"] = (
                             f"Search for '{file_pattern}' stopped before "
@@ -473,12 +617,15 @@ class FileSearchToolsMixin:
                         )
                     return result
 
-                reset_budget()
                 walked = set()
+                guard = ProtectedFolders(self)
 
                 def search_location(location: Path, max_depth: int = 999):
                     """Search a specific location up to max_depth."""
-                    if not location.exists() or budget_exhausted():
+                    if guard.blocks(location) or not location.exists():
+                        return
+                    if budget.exhausted():
+                        budget.unfinished(location)
                         return
 
                     searched_locations.append(str(location))
@@ -511,8 +658,7 @@ class FileSearchToolsMixin:
 
                         try:
                             for item in current_path.iterdir():
-                                budget["entries"] += 1
-                                if budget_exhausted():
+                                if budget.spend(current_path):
                                     return
                                 # Skip system/hidden directories
                                 if item.name.startswith(
@@ -531,12 +677,18 @@ class FileSearchToolsMixin:
                                     item.is_dir()
                                     and depth < max_depth
                                     and item not in walked
+                                    and not is_link(item)
+                                    and not guard.blocks(item)
                                 ):
                                     search_recursive(item, depth + 1)
+                                    if budget.truncated:
+                                        return
                         except (PermissionError, OSError) as e:
                             logger.debug(f"Skipping {current_path}: {e}")
 
                     search_recursive(location, 0)
+                    if budget.truncated:
+                        budget.unfinished(location)
 
                 home = Path.home()
 
@@ -545,42 +697,17 @@ class FileSearchToolsMixin:
                 # file. It is sandbox-checked and must exist — a search that
                 # silently skipped it would report an honest-looking zero.
                 if directory:
-                    # Resolve BEFORE the sandbox check: "tui/internal" means a
-                    # folder in the user's workspace, not one under whatever
-                    # directory this process happens to have been spawned in.
-                    scope = Path(directory).expanduser()
-                    workspace = self._search_roots()
-                    if not scope.is_absolute():
-                        matched = next(
-                            (r for r in workspace if (r / scope).is_dir()), None
-                        )
-                        if matched is None:
-                            # No root holds it. Say that, rather than resolving
-                            # against this process's cwd and reporting "access
-                            # denied" for an absolute path the user never typed
-                            # — a typo'd folder should read as a typo. Safe to
-                            # be specific: no absolute path was supplied, so
-                            # this is not an existence oracle.
-                            listed = ", ".join(str(r) for r in workspace)
-                            return {
-                                "status": "error",
-                                "error": (
-                                    f"Directory not found: '{directory}' is not "
-                                    f"under any workspace root ({listed}). "
-                                    "Nothing was searched — this is not an "
-                                    "empty result."
-                                ),
-                                "searched_paths": [],
-                                "workspace_roots": [str(r) for r in workspace],
-                            }
-                        scope = matched / scope
-                    scope = scope.resolve()
+                    # Resolve BEFORE the sandbox check, against the workspace.
+                    scope, unresolved = self._resolve_search_directory(directory)
+                    if unresolved:
+                        return unresolved
                     # Sandbox before the existence probe, so an out-of-sandbox
                     # path cannot be used as a directory-existence oracle
                     # (same order as read_file / search_file_content).
                     denied = self._read_access_error(str(scope))
                     if denied:
                         return denied
+                    guard = ProtectedFolders(self, named=[scope])
                     if not scope.is_dir():
                         return {
                             "status": "error",
@@ -615,6 +742,10 @@ class FileSearchToolsMixin:
                         # the sandbox is approvals that accumulated over time,
                         # and a zero-result search would traverse all of them.
                         search_location(root, max_depth=root_depth(root, roots))
+                    for hidden in search_scope.hidden_granted_roots(self, roots):
+                        search_location(
+                            hidden, max_depth=search_scope.SHALLOW_ROOT_DEPTH
+                        )
 
                     # Always also search common locations (Documents, Downloads, etc.)
                     # Wider than the allowed folders on purpose: a name search only
@@ -833,6 +964,9 @@ class FileSearchToolsMixin:
                 )
 
                 matching_dirs = []
+                guard = ProtectedFolders(
+                    self, named=[] if search_root is None else roots
+                )
 
                 def search_recursive(current_path: Path, depth: int):
                     """Recursively search for matching directories."""
@@ -847,30 +981,33 @@ class FileSearchToolsMixin:
                             if directory_name.lower() in item.name.lower():
                                 matching_dirs.append(str(item))
                                 logger.debug(f"Found matching directory: {item}")
-                            if depth < max_depth:
+                            if depth < max_depth and not guard.blocks(item):
                                 search_recursive(item, depth + 1)
                     except (PermissionError, OSError) as e:
                         # Skip directories we can't access
                         logger.debug(f"Skipping {current_path}: {e}")
 
                 for root in roots:
-                    if root.exists():
+                    if not guard.blocks(root) and root.exists():
                         search_recursive(root, 0)
 
                 if matching_dirs:
-                    return {
+                    result = {
                         "status": "success",
                         "directories": matching_dirs[:10],  # Limit to 10 results
                         "count": len(matching_dirs),
                         "message": f"Found {len(matching_dirs)} matching directories",
                     }
                 else:
-                    return {
+                    result = {
                         "status": "success",
                         "directories": [],
                         "count": 0,
                         "message": f"No directories matching '{directory_name}' found",
                     }
+                if guard.skipped:
+                    result["skipped_folders"] = guard.note()
+                return result
 
             except Exception as e:
                 logger.error(f"Error searching for directory: {e}")
@@ -1087,18 +1224,21 @@ class FileSearchToolsMixin:
             Search for text patterns within files (grep-like functionality).
 
             Searches actual file contents on disk, not RAG indexed documents.
+            A relative directory (including the default ".") is a folder in
+            the workspace. file_pattern filters file names, e.g. "*.py".
             """
             try:
-                directory = os.path.expanduser(directory)
+                # Relative to the workspace, not this process's cwd (#3576).
+                directory, unresolved = self._resolve_search_directory(directory or ".")
+                if unresolved:
+                    return unresolved
                 # Enforce the --allowed-paths sandbox before the existence probe
                 # so out-of-sandbox paths can't be used as a directory-existence
                 # oracle (mirrors read_file / get_file_info). Grepping file
                 # contents outside the sandbox leaks the same data as read_file.
-                denied = self._read_access_error(directory)
+                denied = self._read_access_error(str(directory))
                 if denied:
                     return denied
-
-                directory = Path(directory).resolve()
 
                 if not directory.exists():
                     return {
@@ -1141,6 +1281,39 @@ class FileSearchToolsMixin:
                     ".css",
                     ".sql",
                 }
+
+                # "**/*.py" names files, not paths: match the part after "**/"
+                # against the name, and anything still holding a "/" against
+                # the path relative to the searched directory.
+                name_pattern = None
+                if file_pattern:
+                    name_pattern = file_pattern.replace("\\", "/")
+                    while name_pattern.startswith("**/"):
+                        name_pattern = name_pattern[3:]
+
+                def wanted(file_path: Path) -> bool:
+                    if name_pattern:
+                        if "/" in name_pattern:
+                            rel = file_path.relative_to(directory).as_posix()
+                            return fnmatch.fnmatch(rel, name_pattern)
+                        return fnmatch.fnmatch(file_path.name, name_pattern)
+                    suffix = file_path.suffix.lower()
+                    if suffix in text_extensions:
+                        return True
+                    if suffix in _BINARY_SUFFIXES:
+                        return False
+                    # Unlisted types (.ts, .go, .R, .toml, no extension...):
+                    # text unless the first block holds a NUL byte.
+                    return _looks_like_text(file_path)
+
+                def candidates():
+                    """Files to search, lazily, so a search that fills up early
+                    never walks (or sniffs) the rest of the tree."""
+                    for file_path in search_scope.walk_files(
+                        directory, budget, skip_dirs=_CONTENT_SEARCH_SKIP_DIRS
+                    ):
+                        if wanted(file_path):
+                            yield file_path
 
                 matches = []
                 files_searched = 0
@@ -1205,20 +1378,9 @@ class FileSearchToolsMixin:
                         logger.warning("Could not search %s: %s", file_path, exc)
                         return True
 
-                # Search files
-                for file_path in directory.rglob("*"):
-                    if not file_path.is_file():
-                        continue
-
-                    # Filter by file pattern if provided
-                    if file_pattern:
-                        if not fnmatch.fnmatch(file_path.name, file_pattern):
-                            continue
-                    else:
-                        # Only search text files
-                        if file_path.suffix.lower() not in text_extensions:
-                            continue
-
+                # Search files; both passes share one allowance.
+                budget = search_scope.SearchBudget()
+                for file_path in candidates():
                     files_searched += 1
                     if not search_file(file_path):
                         break  # Hit match limit
@@ -1229,36 +1391,52 @@ class FileSearchToolsMixin:
                 if _use_regex and not matches:
                     _use_regex = False
                     _search_plain = pattern if case_sensitive else pattern.lower()
-                    for _fp2 in directory.rglob("*"):
-                        if not _fp2.is_file():
-                            continue
-                        if file_pattern:
-                            if not fnmatch.fnmatch(_fp2.name, file_pattern):
-                                continue
-                        else:
-                            if _fp2.suffix.lower() not in text_extensions:
-                                continue
+                    for _fp2 in candidates():
                         if not search_file(_fp2):
                             break
 
                 if matches:
-                    return {
+                    result = {
                         "status": "success",
                         "pattern": pattern,
                         "matches": matches[:50],  # Return first 50
                         "total_matches": len(matches),
                         "files_searched": files_searched,
+                        "directory": str(directory),
                         "message": f"Found {len(matches)} matches in {files_searched} files",
                     }
                 else:
-                    return {
+                    if not files_searched and not budget.truncated:
+                        which = (
+                            f"matching '{file_pattern}'" if file_pattern else "of text"
+                        )
+                        message = (
+                            f"Nothing was searched: {directory} holds no files "
+                            f"{which}. This is not an empty result; check the "
+                            "directory and file_pattern."
+                        )
+                    else:
+                        message = (
+                            f"No matches found for '{pattern}' in {files_searched} "
+                            f"files under {directory}"
+                        )
+                    result = {
                         "status": "success",
                         "pattern": pattern,
                         "matches": [],
                         "total_matches": 0,
                         "files_searched": files_searched,
-                        "message": f"No matches found for '{pattern}' in {files_searched} files",
+                        "directory": str(directory),
+                        "message": message,
                     }
+                if budget.truncated:
+                    result["truncated"] = True
+                    result["unfinished_paths"] = list(budget.unfinished_paths)
+                    result["message"] += (
+                        f". {budget.note()} Pass a narrower `directory` to "
+                        "search it fully."
+                    )
+                return result
 
             except Exception as e:
                 logger.error(f"Error searching file content: {e}")
@@ -2073,7 +2251,7 @@ class FileSearchToolsMixin:
                     file_content = None
                     used_encoding = None
                     bom_codec = text_encoding(fp)
-                    # latin-1 accepts any bytes, so a BOM-marked file decodes by its BOM.
+                    # latin-1 accepts any bytes, so a BOM-marked or CP1252 file decodes by its codec.
                     for encoding in (
                         (bom_codec,)
                         if bom_codec != "utf-8"
@@ -3005,14 +3183,30 @@ class FileSearchToolsMixin:
                 cutoff = datetime.now() - timedelta(days=days)
                 recent_files = []
                 total_found = 0
+                other_types: Counter = Counter()
                 denied_locations = {}
+                waiting_on_macos: List[str] = []
+                denied_by_macos: List[str] = []
 
+                readable = []
                 for scan_dir in dirs_to_scan:
                     if not scan_dir.exists():
                         continue
                     denied = self._read_access_error(str(scan_dir))
                     if denied:
                         denied_locations[scan_dir.name] = denied["error"]
+                        continue
+                    readable.append(scan_dir)
+                # Listing these is the job, so ask first instead of freezing the turn.
+                access = macos_access(readable)
+
+                for scan_dir in readable:
+                    state = access.get(scan_dir.resolve())
+                    if state == ASKING:
+                        waiting_on_macos.append(scan_dir.name)
+                        continue
+                    if state == DENIED:
+                        denied_by_macos.append(scan_dir.name)
                         continue
 
                     try:
@@ -3024,16 +3218,17 @@ class FileSearchToolsMixin:
                             if item.name.startswith("."):
                                 continue
 
-                            # Filter by extension
-                            if item.suffix.lower() not in allowed_extensions:
-                                continue
-
                             try:
                                 stat_info = item.stat()
                                 modified_dt = datetime.fromtimestamp(stat_info.st_mtime)
 
                                 # Check if within date range
                                 if modified_dt < cutoff:
+                                    continue
+
+                                # Counted, so the answer can say what the type filter left out.
+                                if item.suffix.lower() not in allowed_extensions:
+                                    other_types[item.suffix.lower() or "(none)"] += 1
                                     continue
 
                                 total_found += 1
@@ -3064,13 +3259,40 @@ class FileSearchToolsMixin:
                 locations_searched = [
                     d.name
                     for d in dirs_to_scan
-                    if d.exists() and d.name not in denied_locations
+                    if d.exists()
+                    and d.name not in denied_locations
+                    and d.name not in waiting_on_macos
+                    and d.name not in denied_by_macos
                 ]
-                if denied_locations and not locations_searched:
+                waiting_note = (
+                    "macOS is asking whether GAIA may read "
+                    + ", ".join(f"~/{name}" for name in waiting_on_macos)
+                    + ". Ask the user to answer that dialog, then call "
+                    "list_recent_files again."
+                    if waiting_on_macos
+                    else ""
+                )
+                macos_denied_note = (
+                    "macOS denied GAIA access to "
+                    + ", ".join(f"~/{name}" for name in denied_by_macos)
+                    + ". The user can allow it in System Settings > Privacy & "
+                    "Security > Files and Folders, then ask again."
+                    if denied_by_macos
+                    else ""
+                )
+                if (
+                    denied_locations or waiting_on_macos or denied_by_macos
+                ) and not locations_searched:
                     return {
                         **NOT_EXECUTED,
                         "status": "error",
-                        "error": " ".join(denied_locations.values()),
+                        "error": " ".join(
+                            [
+                                *denied_locations.values(),
+                                waiting_note,
+                                macos_denied_note,
+                            ]
+                        ).strip(),
                         "has_errors": True,
                         "operation": "list_recent_files",
                     }
@@ -3088,11 +3310,24 @@ class FileSearchToolsMixin:
                         f"Showing {len(shown)} of {total_found}; {total_found - len(shown)} "
                         "files omitted. Narrow location, file_types, or days to see other matches."
                     )
+                if other_types:
+                    kinds = ", ".join(
+                        f"{count} {ext}" for ext, count in other_types.most_common(8)
+                    )
+                    display_parts.append(
+                        f"Not listed: {sum(other_types.values())} other recent "
+                        f"file(s) of types outside the filter ({kinds}). Pass "
+                        "file_types to include them."
+                    )
                 if denied_locations:
                     display_parts.append(
                         "Not searched (outside the allowed folders): "
                         + ", ".join(denied_locations)
                     )
+                if waiting_note:
+                    display_parts.append(f"Not searched yet: {waiting_note}")
+                if macos_denied_note:
+                    display_parts.append(f"Not searched: {macos_denied_note}")
 
                 result = {
                     "status": "success",
@@ -3104,8 +3339,15 @@ class FileSearchToolsMixin:
                     "days_range": days,
                     "display_message": "\n".join(display_parts),
                 }
+                if other_types:
+                    # Bounded: any text after a dot counts as a type, so a big tree has many.
+                    result["other_types_not_listed"] = dict(other_types.most_common(20))
                 if denied_locations:
                     result["locations_not_searched"] = denied_locations
+                if waiting_on_macos:
+                    result["locations_waiting_for_macos"] = waiting_on_macos
+                if denied_by_macos:
+                    result["locations_denied_by_macos"] = denied_by_macos
                 return result
 
             except Exception as e:

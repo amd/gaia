@@ -1,9 +1,10 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Pins what the shell sends when a chat starts, and when it shows first-run setup.
+// Pins what the shell sends when a chat starts, when it shows first-run setup,
+// and which sidebar destination is open.
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -87,7 +88,7 @@ beforeEach(() => {
     useChatStore.setState({
         sessions: [], currentSessionId: null, messages: [], agents: [], pendingPrompt: null,
         draftPermissionMode: 'ask', defaultPermissionMode: 'ask', showMemoryDashboard: false, showSchedules: false, settingsSection: null,
-        draftDocumentIds: [],
+        draftDocumentIds: [], draftPrivate: false,
     });
 });
 
@@ -177,6 +178,96 @@ describe('a new chat', () => {
     });
 });
 
+describe('a new chat sent several times before it opens', () => {
+    async function typeFirstMessage(text: string) {
+        const box = await screen.findByLabelText('Message');
+        await waitFor(() => expect(box).toBeEnabled());
+        await userEvent.type(box, text);
+        return box;
+    }
+
+    // One act: all three presses land before React re-renders, like a bouncy key.
+    it('creates one chat and sends the message once on three quick Enters', async () => {
+        render(<App />);
+        const box = await typeFirstMessage('hello there');
+        act(() => {
+            for (let i = 0; i < 3; i++) fireEvent.keyDown(box, { key: 'Enter' });
+        });
+
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
+        expect(mocked.createSession).toHaveBeenCalledOnce();
+        expect(mocked.sendMessageStream).toHaveBeenCalledOnce();
+        expect(useChatStore.getState().sessions).toHaveLength(1);
+    });
+
+    it('creates one chat and sends the message once on three quick Send clicks', async () => {
+        render(<App />);
+        await typeFirstMessage('hello there');
+        const send = screen.getByRole('button', { name: 'Send' });
+        act(() => {
+            for (let i = 0; i < 3; i++) fireEvent.click(send);
+        });
+
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
+        expect(mocked.createSession).toHaveBeenCalledOnce();
+        expect(mocked.sendMessageStream).toHaveBeenCalledOnce();
+        expect(useChatStore.getState().sessions).toHaveLength(1);
+    });
+
+    it('lets the message be sent again, still typed, when the chat could not be created', async () => {
+        mocked.createSession.mockRejectedValueOnce(new Error('backend unreachable'));
+        render(<App />);
+        const box = await typeFirstMessage('hello there');
+        fireEvent.keyDown(box, { key: 'Enter' });
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('backend unreachable');
+        expect(box).toHaveValue('hello there');
+        expect(box).toBeEnabled();
+        const send = screen.getByRole('button', { name: 'Send' });
+        expect(send).toBeEnabled();
+
+        await userEvent.click(send);
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalledOnce());
+        expect(mocked.createSession).toHaveBeenCalledTimes(2);
+        expect(mocked.sendMessageStream.mock.calls[0].slice(0, 2)).toEqual(['sess-new-0001', 'hello there']);
+    });
+});
+
+describe('a private new chat', () => {
+    it('is created private before its first message goes out', async () => {
+        mocked.createSession.mockImplementation(async (data) => session({
+            id: 'sess-new-0001', title: 'New Task', message_count: 0, agent_type: 'gaia', private: !!data?.private,
+        }));
+        render(<App />);
+        const chip = await screen.findByRole('button', { name: 'Private chat' });
+        expect(chip).toHaveAttribute('aria-pressed', 'false');
+        await userEvent.click(chip);
+        expect(chip).toHaveAttribute('aria-pressed', 'true');
+        await sendFirstMessage('Please remember: my bank PIN hint is the dog');
+
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
+        expect(mocked.createSession).toHaveBeenCalledOnce();
+        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ private: true });
+        // The first message goes to the chat that already exists as private.
+        expect(mocked.sendMessageStream.mock.calls[0][0]).toBe('sess-new-0001');
+        expect(mocked.createSession.mock.invocationCallOrder[0])
+            .toBeLessThan(mocked.sendMessageStream.mock.invocationCallOrder[0]);
+        expect(mocked.toggleSessionPrivacy).not.toHaveBeenCalled();
+        expect(useChatStore.getState().sessions.find((s) => s.id === 'sess-new-0001')?.private).toBe(true);
+        expect(await screen.findByRole('button', { name: 'Turn off private chat' })).toHaveAttribute('data-private', 'true');
+        // The next new chat starts non-private again.
+        expect(useChatStore.getState().draftPrivate).toBe(false);
+    });
+
+    it('is not private unless the toggle is on', async () => {
+        render(<App />);
+        await sendFirstMessage('hello');
+
+        await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
+        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ private: false });
+    });
+});
+
 describe('first-run setup', () => {
     it('a cold start shows a neutral loading screen until the setup check answers, never the chat', async () => {
         let answer!: (c: SetupCheck) => void;
@@ -221,6 +312,24 @@ describe('first-run setup', () => {
         await finishSetupWith({ skill: 'summarize', title: 'Summarize something', note: '', prompt: 'Summarize this: ', needs_input: true });
         expect(await screen.findByLabelText('Message')).toHaveValue('Summarize this: ');
         expect(mocked.createSession).not.toHaveBeenCalled();
+    });
+
+    it('re-reads the agents when setup finishes, so the agent it installed counts', async () => {
+        mocked.checkSetup.mockResolvedValue(NOT_READY);
+        mocked.startSetup.mockResolvedValue({ state: 'ready', steps: [] });
+        render(<App />);
+        await waitFor(() => expect(mocked.listAgents).toHaveBeenCalled());
+        mocked.listAgents.mockResolvedValue({
+            agents: [{ id: 'gaia', name: 'GAIA', namespaced_agent_id: 'installed:gaia' }] as never, total: 1,
+        });
+
+        await userEvent.click(await screen.findByRole('button', { name: 'Start setup' }));
+        await userEvent.click(await screen.findByRole('button', { name: 'Start chatting' }));
+
+        expect(await screen.findByLabelText('Message')).toBeInTheDocument();
+        await waitFor(() =>
+            expect(screen.queryByText(/The GAIA agent isn.t installed/)).not.toBeInTheDocument(),
+        );
     });
 
     it('shows the setup screen when GAIA is not set up', async () => {
@@ -284,5 +393,22 @@ describe('opening the app on a chat link', () => {
         await waitFor(() => expect(mocked.listSessions).toHaveBeenCalled());
         await waitFor(() => expect(window.location.hash).toBe(''));
         expect(useChatStore.getState().currentSessionId).toBeNull();
+    });
+});
+
+describe('sidebar destinations', () => {
+    it('opens Scheduled tasks over the chat, and Documents in its place', async () => {
+        mocked.listSchedules.mockResolvedValue({ schedules: [], total: 0 });
+        render(<App />);
+        await userEvent.click(await screen.findByRole('button', { name: 'Scheduled tasks' }));
+
+        expect(await screen.findByRole('dialog', { name: 'Scheduled tasks' })).toBeInTheDocument();
+        expect(screen.getByLabelText('Message')).toBeInTheDocument();
+
+        // The backdrop covers the sidebar for a pointer, not for a screen reader or voice control.
+        fireEvent.click(screen.getByRole('button', { name: 'Documents' }));
+
+        expect(await screen.findByRole('dialog', { name: 'Document library' })).toBeInTheDocument();
+        expect(screen.queryByRole('dialog', { name: 'Scheduled tasks' })).not.toBeInTheDocument();
     });
 });

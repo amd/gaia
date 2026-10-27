@@ -1165,6 +1165,28 @@ def test_manager_level_ensure_errors_map_to_502_with_verbatim_detail(err_cls_nam
     assert distinctive in r.json()["detail"]
 
 
+@pytest.mark.parametrize(
+    ("err_cls_name", "kind"),
+    [
+        ("UnknownAgentError", "not_installed"),
+        ("ModeConflictError", "mode_conflict"),
+        ("DevSrcDirResolutionError", "mode_conflict"),
+        ("CapacityError", "capacity"),
+        ("SidecarSpawnError", "start_failed"),
+        ("HealthTimeoutError", "start_failed"),
+        ("VersionMismatchError", "out_of_date"),
+    ],
+)
+def test_ensure_errors_name_their_kind_in_a_header(err_cls_name, kind):
+    """A client picks the user's next step from this, not from the detail text."""
+    from gaia.daemon.sidecars import errors as sidecar_errors
+
+    reg = _FakeRegistry(ensure_error=getattr(sidecar_errors, err_cls_name)("x"))
+    client = _routes_client(reg)
+    r = client.post("/daemon/v1/agents/email/ensure", headers=_auth(), json={})
+    assert r.headers[sidecar_errors.ERROR_KIND_HEADER] == kind
+
+
 def test_stop_failed_error_maps_to_500_naming_surviving_pid():
     from gaia.daemon.sidecars.errors import StopFailedError
 

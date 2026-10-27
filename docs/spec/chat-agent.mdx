@@ -106,7 +106,7 @@ class ChatAgentConfig:
     model_id: Optional[str] = None  # None = config default_model, else Gemma-4-E4B-it-GGUF
 
     # Execution
-    max_steps: int = 10
+    max_steps: int = field(default_factory=default_max_steps)  # DEFAULT_MAX_STEPS (50)
     streaming: bool = False
 
     # Debug/output
@@ -264,17 +264,20 @@ Agent: {"answer": "According to the Oil & Gas Manual, the vision is..."}
 
 Each watched directory gets a `FileChangeHandler` from `gaia.utils.file_watcher`
 (see the [file change handler spec](/spec/file-change-handler)), with
-`reindex_file` as its created and modified callback:
+`reindex_file` as its created and modified callback. It watches the handler's
+default extensions: `.pdf`, `.txt`, `.md`, `.markdown`, `.rst`, `.log`, `.csv`,
+`.json`, `.xml`, `.yaml`, `.yml`, `.py`, `.js`, `.ts`, `.java`, `.cpp`, `.c`,
+`.html` and `.css` (see [default extensions](/sdk/utils/file-watcher#default-extensions)).
+Word, PowerPoint and Excel files are not watched.
 
 - A created or modified file is reindexed once it has gone a full window
   (`debounce_seconds`, 2 s by default) with no change in size or modification
   time, so a file still being copied in is never indexed half-written.
 - On Windows, if another program holds the file exclusively or has locked part
-  of it, `reindex_file` raises
-  `PermissionError` and the watcher retries the file 1, 2 and 4 windows later.
-  A file saved by renaming a temp file onto it is retried the same way. After
-  the last retry it logs one error telling the user to close the program and
-  save the file again.
+  of it, `reindex_file` raises `PermissionError` and the watcher retries the
+  file 1, 2 and 4 windows later. A file saved by renaming a temp file onto it
+  is retried the same way. After the third retry it gives up and logs one
+  error telling the user to close the program and save the file again.
 - A deleted file is removed from the index, and a moved file is removed under
   its old path and indexed under its new one.
 

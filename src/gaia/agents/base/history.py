@@ -137,10 +137,16 @@ def select_history(
 ) -> list[dict]:
     """Replay whole turns, evicting to half the estimated budget on overflow.
 
+    A turn larger than the whole budget is replayed shortened, never dropped
+    while its question and answer can fit: long tool results become stubs,
+    then its longest texts are cut with a marker the model sees. Only a turn
+    that still does not fit is left out.
+
     Replaying the same prefix makes eviction deterministic across restarts.
     The persistent transcript is never shortened. *on_cut* fires only when
     more turns are hidden than before, so a stable cut is reported once, not
-    per turn. Without a *reporter*, "before" means without the newest turn.
+    per turn; a shortened turn is still in view and is only logged. Without a
+    *reporter*, "before" means without the newest turn.
     """
     reporter = reporter if reporter is not None else CutReporter()
     if budget <= 0:
@@ -157,12 +163,14 @@ def select_history(
         )
         return []
     plan = _plan_history(turns, budget)
-    if plan.evicted or plan.unreplayable:
+    if plan.evicted or plan.unreplayable or plan.shortened:
         logger.warning(
-            "Context budget excluded %d older turn(s) and %d turn(s) larger than "
-            "the whole history budget; full evidence remains in the session "
-            "database (history budget: %d estimated tokens).",
+            "Context budget excluded %d older turn(s), shortened %d turn(s) "
+            "larger than the whole history budget and dropped %d that still did "
+            "not fit; full evidence remains in the session database (history "
+            "budget: %d estimated tokens).",
             plan.evicted,
+            plan.shortened,
             plan.unreplayable,
             budget,
         )
@@ -172,22 +180,166 @@ def select_history(
         plan.hidden_tokens,
         on_cut,
     )
-    return [message for index, _ in plan.retained for message in turns[index]]
+    return [message for index, _ in plan.retained for message in plan.turn(index)]
 
 
 def _turn_cost(turn: list[dict[str, Any]]) -> int:
     return count_tokens(json.dumps(turn, ensure_ascii=False))
 
 
+#: Tool results this short stay whole in a shortened turn; a stub saves little.
+_STUB_MIN_CHARS = 500
+_LEFT_OUT_PREFIX = "[Left out of the conversation history to fit the context window: "
+
+
+def clip_marker(cut: int, total: int) -> str:
+    return (
+        f"\n\n[GAIA cut the last {cut:,} of this message's {total:,} characters "
+        "to fit the model's context window; that part is not visible to you.]"
+    )
+
+
+def _clip_message(turn: list[dict], index: int, budget: int) -> int:
+    """Keep the longest head of ``turn[index]`` that lets *turn* fit *budget*.
+
+    The rest is replaced by a marker; returns how many characters were cut.
+    """
+    text = turn[index]["content"]
+
+    def clipped(keep: int) -> str:
+        return text[:keep] + clip_marker(len(text) - keep, len(text))
+
+    low, high = 0, len(text) - 1
+    while low < high:
+        mid = (low + high + 1) // 2
+        turn[index]["content"] = clipped(mid)
+        if _turn_cost(turn) <= budget:
+            low = mid
+        else:
+            high = mid - 1
+    turn[index]["content"] = clipped(low)
+    return len(text) - low
+
+
+def _is_protected(message: dict) -> bool:
+    """A refusal or worker answer, as a tool message or as recorded text."""
+    from gaia.agents.base.context_eviction import is_protected_result
+
+    content = message.get("content")
+    if message.get("role") == "tool":
+        return is_protected_result(message)
+    if (
+        message.get("role") == "user"
+        and isinstance(content, str)
+        and content.startswith(_RECORDED_RESULT_PREFIX)
+    ):
+        name, _, text = content[len(_RECORDED_RESULT_PREFIX) :].partition("] ")
+        return is_protected_result({"name": name, "content": text})
+    return False
+
+
+def clip_turn(turn: list[dict], budget: int) -> tuple[list[dict], list[tuple]]:
+    """Cut the turn's longest text messages until it fits *budget*, marking each cut.
+
+    Returns the turn and ``(index, cut, total)`` for every message cut.
+    """
+
+    def length(i: int) -> int:
+        content = turn[i].get("content")
+        return len(content) if isinstance(content, str) else 0
+
+    turn = [dict(m) for m in turn]
+    clips = []
+    # Refusals and worker answers are cut last: a refusal cut mid-JSON stops reading as one.
+    for index in sorted(
+        range(len(turn)), key=lambda i: (_is_protected(turn[i]), -length(i))
+    ):
+        if _turn_cost(turn) <= budget:
+            break
+        total = length(index)
+        if total <= len(clip_marker(total, total)):
+            continue
+        clips.append((index, _clip_message(turn, index, budget), total))
+    return turn, clips
+
+
+def _left_out_stub(name: str, arguments: str, text: str) -> str:
+    from gaia.agents.base.context_eviction import _arg_summary, _outcome_line
+
+    summary = _arg_summary(arguments)
+    call = f"{name} {summary}" if summary else name
+    return (
+        f"{_LEFT_OUT_PREFIX}{call}; summary: {_outcome_line(text)}; "
+        f"{len(text)} chars. Run the tool again if you need its text.]"
+    )
+
+
+def _stub_tool_results(turn: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The turn with each long tool result replaced by a one-line stub.
+
+    Call ids, the question, every assistant message, refusals and worker
+    answers stay as they were.
+    """
+    from gaia.agents.base.context_eviction import (
+        _arguments_by_position,
+        is_protected_result,
+    )
+
+    arguments = _arguments_by_position(turn)
+    result = []
+    for index, message in enumerate(turn):
+        content = message.get("content")
+        if isinstance(content, str) and len(content) > _STUB_MIN_CHARS:
+            if message.get("role") == "tool" and not is_protected_result(message):
+                stub = _left_out_stub(
+                    message.get("name") or "tool", arguments.get(index, ""), content
+                )
+                message = {**message, "content": stub}
+            elif message.get("role") == "user" and content.startswith(
+                _RECORDED_RESULT_PREFIX
+            ):
+                # A tool result as text_tool_history renders it.
+                name, _, text = content[len(_RECORDED_RESULT_PREFIX) :].partition("] ")
+                if not is_protected_result({"name": name, "content": text}):
+                    stub = _left_out_stub(name, "", text)
+                    message = {
+                        **message,
+                        "content": f"{_RECORDED_RESULT_PREFIX}{name}] {stub}",
+                    }
+        result.append(message)
+    return result
+
+
+def _shorten_turn(turn: list[dict[str, Any]], target: int) -> list[dict[str, Any]]:
+    """Stub the turn's tool results, then cut its longest text, toward *target*."""
+    stubbed = _stub_tool_results(turn)
+    if _turn_cost(stubbed) <= target:
+        return stubbed
+    return clip_turn(stubbed, target)[0]
+
+
 @dataclass
 class _HistoryPlan:
-    """Which turns ``select_history`` replays, as ``(index, cost)`` pairs."""
+    """Which turns ``select_history`` replays, as ``(index, cost)`` pairs.
 
+    ``replacements`` maps a turn's index to the stubbed, cut copy replayed in
+    its place because the whole turn was larger than the budget.
+    """
+
+    turns: list[list[dict[str, Any]]]
     retained: list[tuple[int, int]]
     evicted: int
     unreplayable: int
     hidden_tokens: int
     hidden_before_newest: int
+    replacements: dict[int, list[dict[str, Any]]]
+
+    @property
+    def shortened(self) -> int:
+        return len(self.replacements)
+
+    def turn(self, index: int) -> list[dict[str, Any]]:
+        return self.replacements.get(index, self.turns[index])
 
 
 def _plan_history(turns: list[list[dict[str, Any]]], budget: int) -> _HistoryPlan:
@@ -195,26 +347,23 @@ def _plan_history(turns: list[list[dict[str, Any]]], budget: int) -> _HistoryPla
     used = 0
     evicted = 0
     unreplayable = 0
-    hole = False
     hidden_tokens = 0
     hidden_before_newest = 0
+    replacements: dict[int, list[dict[str, Any]]] = {}
     for index, turn in enumerate(turns):
         if index == len(turns) - 1:
             hidden_before_newest = evicted + unreplayable
         cost = _turn_cost(turn)
         if cost > budget:
-            hole = True
-            unreplayable += 1
-            hidden_tokens += cost
-            continue
-        if hole:
-            # Replay stays contiguous: nothing before a dropped turn may sit
-            # next to what followed it.
-            evicted += len(retained)
-            hidden_tokens += used
-            retained.clear()
-            used = 0
-            hole = False
+            # To half, where overflow evicts down to, so the next turn keeps it.
+            shortened = _shorten_turn(turn, budget // 2)
+            shortened_cost = _turn_cost(shortened)
+            if shortened_cost > budget:
+                unreplayable += 1
+                hidden_tokens += cost
+                continue
+            replacements[index] = shortened
+            cost = shortened_cost
         retained.append((index, cost))
         used += cost
         if used > budget:
@@ -224,8 +373,15 @@ def _plan_history(turns: list[list[dict[str, Any]]], budget: int) -> _HistoryPla
                 used -= removed
                 hidden_tokens += removed
                 evicted += 1
+    kept = {index for index, _ in retained}
     return _HistoryPlan(
-        list(retained), evicted, unreplayable, hidden_tokens, hidden_before_newest
+        turns,
+        list(retained),
+        evicted,
+        unreplayable,
+        hidden_tokens,
+        hidden_before_newest,
+        {i: t for i, t in replacements.items() if i in kept},
     )
 
 
@@ -297,20 +453,61 @@ def _is_cloud(agent: Any) -> bool:
     )
 
 
-def context_window(agent: Any) -> int:
-    """The context window, in tokens, the agent's model is admitted with."""
+#: Reply room reserved when the answering agent's own setting is not known.
+DEFAULT_REPLY_TOKENS = 8192
+
+
+def model_context_window(
+    model: Optional[str],
+    *,
+    device: Optional[str] = None,
+    claude: bool = False,
+    cloud: bool = False,
+) -> int:
+    """The context window, in tokens, a turn on *model* is admitted with."""
     from gaia.llm.lemonade_client import GPU_CTX_SIZE, resolve_ctx_size
 
-    if getattr(agent, "_use_claude", False):
+    if claude:
         from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
 
         return CLAUDE_CTX_SIZE
-    if _is_cloud(agent):
+    if cloud:
         # Remote admission policy, not a claim about the provider's context ceiling.
         return GPU_CTX_SIZE
-    return resolve_ctx_size(
-        model=getattr(agent, "model_id", None),
+    return resolve_ctx_size(model=model, device=device)
+
+
+def context_window(agent: Any) -> int:
+    """The context window, in tokens, the agent's model is admitted with.
+
+    Re-read each call: the user or a client pin can change it, and the reply
+    cap (``Agent._max_output_tokens``) is sized from this same value.
+    """
+    from gaia.llm.lemonade_client import LemonadeClient
+
+    claude = bool(getattr(agent, "_use_claude", False))
+    cloud = not claude and _is_cloud(agent)
+    if not (claude or cloud):
+        chat = getattr(agent, "chat", None)
+        backend = getattr(getattr(chat, "llm_client", None), "_backend", None)
+        # A client pinned to an exact window loads every model at that size.
+        pin = getattr(backend, "ctx_size_override", None)
+        if (
+            isinstance(backend, LemonadeClient)
+            and isinstance(pin, int)
+            and not isinstance(pin, bool)
+            and pin > 0
+        ):
+            return pin
+        # The model actually sent, so a mid-session switch is sized correctly.
+        model = getattr(chat, "effective_model", None)
+        if isinstance(model, str) and model:
+            return model_context_window(model, device=getattr(agent, "device", None))
+    return model_context_window(
+        getattr(agent, "model_id", None),
         device=getattr(agent, "device", None),
+        claude=claude,
+        cloud=cloud,
     )
 
 
@@ -319,8 +516,20 @@ def _reply_reserve(agent: Any) -> int:
     # provider's own, far larger window, so it takes nothing from history here.
     if _is_cloud(agent) and not getattr(agent, "_use_claude", False):
         return 0
+    # The cap actually sent per reply, which grows with a large local window.
+    max_output = getattr(agent, "_max_output_tokens", None)
+    if callable(max_output):
+        value = max_output()
+        # Only a real positive count; a stand-in agent falls back to the config.
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            # A client cap near the window size must not leave history no room.
+            return min(value, context_window(agent) // 2)
     config = getattr(getattr(agent, "chat", None), "config", None)
-    return getattr(config, "max_tokens", 8192)
+    return getattr(config, "max_tokens", DEFAULT_REPLY_TOKENS)
+
+
+def _budget_in_window(ctx: int, overhead: int, reply_reserve: int) -> int:
+    return min(ctx // 2, ctx - overhead - reply_reserve - 2048)
 
 
 def history_budget(agent: Any, query: str) -> int:
@@ -329,7 +538,53 @@ def history_budget(agent: Any, query: str) -> int:
     prompt = getattr(agent, "system_prompt", "")
     tools = getattr(agent, "_openai_tools", [])
     overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))
-    return min(ctx // 2, ctx - overhead - _reply_reserve(agent) - 2048)
+    return _budget_in_window(ctx, overhead, _reply_reserve(agent))
+
+
+def relayed_history_budget(model: Optional[str], query: str, *, cloud: bool) -> int:
+    """History budget for a turn another process answers with *model*.
+
+    That agent's prompt and tools are not visible here, so only the query is
+    reserved; the ``ctx // 2`` cap leaves the other half of the window for
+    them, as in process. *cloud* is whether *model* is a Lemonade cloud model.
+    """
+    claude = bool(model) and model.startswith("claude-")
+    cloud = cloud and not claude
+    ctx = model_context_window(model, claude=claude, cloud=cloud)
+    reserve = 0 if cloud else DEFAULT_REPLY_TOKENS
+    return _budget_in_window(ctx, count_tokens(query), reserve)
+
+
+def fit_pushed_history(
+    agent: Any,
+    messages: list[dict[str, Any]],
+    query: str,
+    on_cut: Optional[Callable[[HistoryCut], None]] = None,
+) -> list[dict]:
+    """Fit history another process pushed into *agent*'s own budget.
+
+    The sender sized it without this agent's prompt, tools or reply cap, so it
+    can overflow a small window. Each user message starts a turn; only whole
+    older turns are dropped.
+    """
+    if not messages:
+        return []
+    return select_history(pushed_turns(messages), history_budget(agent, query), on_cut)
+
+
+def pushed_turns(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Group a flat message list into turns: each user message starts one."""
+    turns: list[list[dict[str, Any]]] = []
+    for message in messages:
+        if message.get("role") == "user" or not turns:
+            turns.append([])
+        turns[-1].append(message)
+    return turns
+
+
+def turn_cost(turn: list[dict[str, Any]]) -> int:
+    """Estimated tokens one turn takes in the history budget."""
+    return _turn_cost(turn)
 
 
 #: Tools whose results are document text, so the meter can show what files cost.
@@ -451,7 +706,7 @@ def context_usage(
         texts: dict[str, list[str]] = {"documents": [], "tools": [], "history": []}
         for index, cost in plan.retained:
             usage["history_used"] += cost
-            for message in turns[index]:
+            for message in plan.turn(index):
                 texts[_message_kind(message)].append(_message_text(message))
         # One count per kind: *count* may be a request to the model server.
         for kind, parts in texts.items():

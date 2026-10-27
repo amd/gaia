@@ -18,7 +18,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.memory import MemoryMixin
+from gaia.agents.base.tool_grants import SCRATCH_ARG
 from gaia.llm.inference_location import InferenceLocation
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui.email_sidecar import daemon_client as daemon_client_module
@@ -26,7 +28,10 @@ from gaia.ui.email_sidecar import relay
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
+    SIDECAR_AGENT_IDS,
     memory_supported,
+    profile_for,
+    surface_supported,
 )
 from gaia.ui.models import ChatRequest
 from gaia.ui.sse_handler import SSEOutputHandler
@@ -178,6 +183,168 @@ def test_the_relay_hands_the_ui_prompt_its_args_and_label():
     assert "always_scope" not in prompt
 
 
+def test_prompt_only_keys_never_reach_the_wire_args():
+    event = _permission(
+        "run_shell_command",
+        {
+            "command": "git push",
+            RISK_NOTE_ARG: "Sends your commits to the remote repository.",
+            SCRATCH_ARG: "C:\\scratch",
+        },
+    )
+    assert event["args"] == {"command": "git push"}
+    assert event["prompt_context"] == {
+        "risk_note": "Sends your commits to the remote repository."
+    }
+
+
+def test_a_folder_gaia_added_is_context_not_an_argument():
+    event = _permission(
+        "run_shell_command",
+        {"command": "git status", "working_directory": "C:\\repo"},
+        call_args={"command": "git status"},
+    )
+    assert event["args"] == {"command": "git status"}
+    assert event["prompt_context"] == {"working_directory": "C:\\repo"}
+
+    sent = _permission(
+        "run_shell_command",
+        {"command": "ls", "working_directory": "C:\\repo"},
+        call_args={"command": "ls", "working_directory": "C:\\repo"},
+    )
+    assert sent["args"] == {"command": "ls", "working_directory": "C:\\repo"}
+    assert "prompt_context" not in sent
+
+
+def test_without_a_noted_call_the_folder_is_the_models():
+    # Only Agent._execute_tool adds a folder, and it always notes the call
+    # first; every other prompt passes the model's arguments through as-is.
+    event = _permission(
+        "run_shell_command", {"command": "ls", "working_directory": "C:\\repo"}
+    )
+    assert event["args"] == {"command": "ls", "working_directory": "C:\\repo"}
+    assert "prompt_context" not in event
+
+
+def test_a_noted_call_is_used_once_and_only_for_its_tool():
+    handler = SSEOutputHandler()
+    handler.note_call_args("run_shell_command", {"command": "ls"})
+    handler.confirm_tool_execution("run_python", {"code": "1"}, timeout=0.01)
+    handler.confirm_tool_execution(
+        "run_shell_command",
+        {"command": "ls", "working_directory": "C:\\r"},
+        timeout=0.01,
+    )
+    prompts = [e for e in _drain(handler) if e["type"] == "permission_request"]
+    assert [("call_args" in p) for p in prompts] == [False, False]
+
+    handler.note_call_args("run_shell_command", {"command": "ls"})
+    handler.confirm_tool_execution(
+        "run_shell_command",
+        {"command": "ls", "working_directory": "C:\\r"},
+        timeout=0.01,
+    )
+    [prompt] = [e for e in _drain(handler) if e["type"] == "permission_request"]
+    assert prompt["call_args"] == {"command": "ls"}
+
+
+def test_a_noted_call_matching_the_prompt_is_not_sent_twice():
+    handler = SSEOutputHandler()
+    code = {"file_path": "C:\\a.py", "content": "x" * 10_000}
+    handler.note_call_args("write_file", code)
+    handler.confirm_tool_execution("write_file", dict(code), timeout=0.01)
+    [prompt] = [e for e in _drain(handler) if e["type"] == "permission_request"]
+    assert "call_args" not in prompt
+    [wire] = CanonicalTranslator("r1", agent_id="gaia").translate(prompt)
+    assert wire["args"] == code
+
+
+def test_the_relay_puts_gaias_context_back_on_the_ui_prompt():
+    handler = SSEOutputHandler()
+    handler.set_relay_confirmation = lambda _cid: None
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "needs_confirmation",
+            "action": "run_shell_command",
+            "summary": "git push\nin C:\\repo\nSends your commits.",
+            "confirm_id": "c-1",
+            "args": {"command": "git push"},
+            "prompt_context": {
+                "working_directory": "C:\\repo",
+                "risk_note": "Sends your commits.",
+            },
+        },
+        GAIA_PROFILE,
+        answers_confirmations=True,
+    )
+    (prompt,) = _drain(handler)
+    assert prompt["args"] == {
+        "command": "git push",
+        "working_directory": "C:\\repo",
+        RISK_NOTE_ARG: "Sends your commits.",
+    }
+
+
+def test_a_resolved_write_path_is_context_not_an_argument():
+    """rc11: a relayed "Allow writing file?" still named a bare shop2.txt."""
+    event = _permission(
+        "write_file",
+        {"file_path": "/Users/you/shop2.txt", "content": "milk"},
+        call_args={"file_path": "shop2.txt", "content": "milk"},
+    )
+    assert event["args"] == {"file_path": "shop2.txt", "content": "milk"}
+    assert event["prompt_context"] == {"file_path": "/Users/you/shop2.txt"}
+
+    same = _permission(
+        "write_file",
+        {"file_path": "/Users/you/a.txt", "content": "x"},
+        call_args={"file_path": "/Users/you/a.txt", "content": "x"},
+    )
+    assert "prompt_context" not in same
+
+
+def test_the_relay_shows_the_ui_prompt_where_a_write_lands():
+    handler = SSEOutputHandler()
+    handler.set_relay_confirmation = lambda _cid: None
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "needs_confirmation",
+            "action": "write_file",
+            "summary": "shop2.txt",
+            "confirm_id": "c-2",
+            "args": {"file_path": "shop2.txt", "content": "milk"},
+            "prompt_context": {"file_path": "/Users/you/shop2.txt"},
+        },
+        GAIA_PROFILE,
+        answers_confirmations=True,
+    )
+    (prompt,) = _drain(handler)
+    assert prompt["args"] == {"file_path": "/Users/you/shop2.txt", "content": "milk"}
+
+
+def test_a_relative_write_reaches_the_ui_prompt_as_its_full_path():
+    """End to end: the agent's prompt, the sidecar wire, then the UI relay."""
+    agent_side = SSEOutputHandler()
+    agent_side.note_call_args("write_file", {"file_path": "shop2.txt", "content": "m"})
+    agent_side.confirm_tool_execution(
+        "write_file",
+        {"file_path": "/Users/you/shop2.txt", "content": "m"},
+        timeout=0.01,
+    )
+    [prompt] = [e for e in _drain(agent_side) if e["type"] == "permission_request"]
+    [wire] = CanonicalTranslator("r1", agent_id="gaia").translate(prompt)
+    wire["confirm_id"] = "c-3"
+
+    ui_side = SSEOutputHandler()
+    ui_side.set_relay_confirmation = lambda _cid: None
+    relay._dispatch_one(ui_side, wire, GAIA_PROFILE, answers_confirmations=True)
+    (shown,) = _drain(ui_side)
+    assert wire["args"]["file_path"] == "shop2.txt"
+    assert shown["args"]["file_path"] == "/Users/you/shop2.txt"
+
+
 # ── memory mode ────────────────────────────────────────────────────────────
 
 
@@ -249,10 +416,10 @@ class _Handler:
         self.events.append(event)
 
 
-def _dispatch(monkeypatch, api_version, memory):
+def _dispatch(monkeypatch, api_version, memory, agent_type="gaia", proxy=None):
     handle = SimpleNamespace(
         api_version=api_version,
-        proxy=lambda: SimpleNamespace(init=lambda: (200, {})),
+        proxy=lambda: proxy or SimpleNamespace(init=lambda: (200, {})),
     )
     monkeypatch.setattr(
         daemon_client_module, "acquire_handle", lambda _agent_id: handle
@@ -263,10 +430,10 @@ def _dispatch(monkeypatch, api_version, memory):
     handler = _Handler()
     helpers._dispatch_sidecar_query(
         handler,
-        ChatRequest(session_id="s1", message="hi", agent_type="gaia"),
+        ChatRequest(session_id="s1", message="hi", agent_type=agent_type),
         [],
         "m",
-        "gaia",
+        agent_type,
         memory=memory,
     )
     return handler.events, calls
@@ -292,6 +459,143 @@ def test_a_memory_on_turn_still_runs_on_an_older_agent(monkeypatch):
 def test_a_current_agent_is_told_the_mode(monkeypatch):
     _events, calls = _dispatch(monkeypatch, "2.18", "private")
     assert calls[0]["memory"] == "private"
+
+
+def test_every_profile_without_a_memory_floor_explains_the_refusal():
+    for agent_id in SIDECAR_AGENT_IDS:
+        profile = profile_for(agent_id)
+        if profile.min_memory_api_version is None:
+            assert profile.memory_upgrade_message.strip(), agent_id
+
+
+@pytest.mark.parametrize("version", ["2.4", "2.18", "9.9"])
+@pytest.mark.parametrize("memory", ["private", "off"])
+def test_email_refuses_private_turns_before_init_or_query(monkeypatch, version, memory):
+    init_calls = []
+    proxy = SimpleNamespace(init=lambda: (init_calls.append(True) or (200, {})))
+    events, calls = _dispatch(monkeypatch, version, memory, "email", proxy)
+
+    assert init_calls == []
+    assert calls == []
+    assert len(events) == 1 and events[0]["type"] == "agent_error"
+    message = events[0]["content"]
+    assert "email agent" in message
+    assert "private" in message and "memory" in message
+    assert "not sent" in message
+
+
+@pytest.mark.parametrize("version", ["2.4", "2.18", "9.9"])
+def test_email_with_memory_on_still_runs_without_an_unsupported_field(
+    monkeypatch, version
+):
+    init_calls = []
+    proxy = SimpleNamespace(init=lambda: (init_calls.append(True) or (200, {})))
+    events, calls = _dispatch(monkeypatch, version, "on", "email", proxy)
+
+    assert init_calls == [True]
+    assert len(calls) == 1 and calls[0]["memory"] is None
+    assert not [event for event in events if event["type"] == "agent_error"]
+
+
+# ── provider-error wording (#5295) ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "version, expected", [("2.20", True), ("3.0", True), ("2.19", False), (None, False)]
+)
+def test_only_a_flagship_at_2_20_takes_the_surface(version, expected):
+    assert surface_supported(GAIA_PROFILE, version) is expected
+    assert surface_supported(EMAIL_PROFILE, "9.9") is False
+
+
+@pytest.mark.parametrize("version, surface", [("2.20", "agent_ui"), ("2.19", None)])
+def test_the_agent_ui_names_itself_to_an_agent_that_takes_it(
+    monkeypatch, version, surface
+):
+    _events, calls = _dispatch(monkeypatch, version, "on")
+    assert calls[0]["surface"] == surface
+
+
+def test_the_relay_sends_the_surface_only_when_given():
+    proxy = _Proxy()
+    relay.relay_query(
+        SSEOutputHandler(),
+        proxy,
+        query="q",
+        context=[],
+        profile=GAIA_PROFILE,
+        surface="agent_ui",
+    )
+    relay.relay_query(
+        SSEOutputHandler(), proxy, query="q", context=[], profile=GAIA_PROFILE
+    )
+    assert proxy.bodies[0]["surface"] == "agent_ui"
+    assert "surface" not in proxy.bodies[1]
+
+
+# ── what the turn made ─────────────────────────────────────────────────────
+
+
+def _relayed_summary(tool, args, result):
+    """The turn summary a relayed tool call yields, from the sidecar's own events."""
+    sidecar = SSEOutputHandler()
+    sidecar.print_tool_usage(tool)
+    sidecar.pretty_print_json(args, "Arguments")
+    sidecar.pretty_print_json(result)
+    sidecar.print_tool_complete()
+    translator = CanonicalTranslator("r1", agent_id="gaia")
+    canonical = [c for e in _drain(sidecar) for c in translator.translate(e)]
+    ui = SSEOutputHandler()
+    for event in canonical + translator.flush():
+        relay._dispatch_one(ui, event, GAIA_PROFILE)
+    ledger = TurnLedger()
+    for event in _drain(ui):
+        if event["type"] == "tool_start":
+            ledger.tool_started(event["tool"])
+        elif event["type"] == "tool_args":
+            ledger.tool_args(event["args"])
+        elif event["type"] == "tool_result":
+            ledger.tool_result(event["data"], event["success"])
+    return ledger.summary(location=None)
+
+
+def _relayed_outputs(tool, args, result):
+    """The Outputs a relayed tool call adds."""
+    return _relayed_summary(tool, args, result)["outputs"]
+
+
+_FACT = "my locker combination hint is heron-plum-604"
+
+
+def test_a_memory_a_private_chat_refused_to_save_is_not_listed():
+    outputs = _relayed_outputs(
+        "remember",
+        {"fact": _FACT},
+        {
+            "status": "skipped",
+            "message": "This is a private chat, so nothing is saved to memory.",
+        },
+    )
+    assert outputs == []
+
+
+def test_a_memory_the_relayed_turn_saved_is_listed():
+    outputs = _relayed_outputs(
+        "remember",
+        {"fact": _FACT},
+        {"status": "stored", "stored": 1, "knowledge_id": "k1", "message": "ok"},
+    )
+    assert [(o["kind"], o["name"]) for o in outputs] == [("memory", _FACT)]
+
+
+def test_a_relayed_call_the_user_denied_contacted_nothing():
+    summary = _relayed_summary(
+        "fetch_page",
+        {"url": "https://example.com/page"},
+        {"status": "denied", "message": "The user declined this action."},
+    )
+    assert summary["sites"] == []
+    assert summary["live_data"] == {"attempted": 0, "failed": 0}
 
 
 # ── automatic memory writes ────────────────────────────────────────────────
@@ -342,6 +646,88 @@ def test_automatic_errors_are_still_saved_with_memory_on():
     host = _Host(incognito=False)
     host._auto_store_error("run_python", "NameError: x is not defined")
     assert [w[0] for w in host._memory_store.writes] == ["store"]
+
+
+# ── the turn summary and tool timer ────────────────────────────────────────
+
+
+def _sidecar_events(tool, args, result):
+    """The canonical events a flagship sidecar sends for one tool call: its
+    own handler's events run through the same translator its /query uses."""
+    agent_side = SSEOutputHandler()
+    agent_side.print_tool_usage(tool)
+    agent_side.pretty_print_json(args, title="Arguments")
+    agent_side.pretty_print_json(result)
+    agent_side.print_tool_complete()
+    translator = CanonicalTranslator("run-1", agent_id="gaia")
+    canonical = []
+    for event in _drain(agent_side):
+        canonical.extend(translator.translate(event))
+    canonical.extend(translator.flush())
+    assert [e["type"] for e in canonical] == ["tool_call", "tool_result"]
+    return canonical
+
+
+def _relay(handler, events):
+    for event in events:
+        relay._dispatch_one(handler, event, GAIA_PROFILE)
+
+
+def test_a_relayed_page_fetch_names_its_site_in_the_turn_summary():
+    handler = SSEOutputHandler()
+    for url in ("https://www.example.com/a", "https://docs.python.org/3/"):
+        _relay(
+            handler,
+            _sidecar_events(
+                "fetch_page", {"url": url}, {"status": "success", "url": url}
+            ),
+        )
+    summary = handler.turn_ledger.summary(location=None)
+    assert summary["sites"] == ["example.com", "docs.python.org"]
+    assert summary["live_data"] == {"attempted": 2, "failed": 0}
+
+
+def test_a_relayed_write_lists_the_file_in_the_turn_summary(tmp_path):
+    path = tmp_path / "notes.md"
+    path.write_text("hi", encoding="utf-8")
+    handler = SSEOutputHandler()
+    _relay(
+        handler,
+        _sidecar_events(
+            "write_file",
+            {"file_path": str(path), "content": "hi"},
+            {"status": "success", "file_path": str(path)},
+        ),
+    )
+    files = handler.turn_ledger.summary(location=None)["files"]
+    assert [f["path"] for f in files] == [str(path)]
+
+
+def test_a_failed_relayed_write_lists_no_file(tmp_path):
+    path = tmp_path / "notes.md"
+    path.write_text("hi", encoding="utf-8")
+    handler = SSEOutputHandler()
+    _relay(
+        handler,
+        _sidecar_events(
+            "write_file",
+            {"file_path": str(path), "content": "hi"},
+            {"status": "error", "error": "disk full"},
+        ),
+    )
+    assert handler.turn_ledger.summary(location=None)["files"] == []
+
+
+def test_a_relayed_tool_counts_as_running_until_its_result():
+    handler = SSEOutputHandler()
+    call, result = _sidecar_events(  # pylint: disable=unbalanced-tuple-unpacking
+        "fetch_page", {"url": "https://example.com"}, {"status": "success"}
+    )
+    assert not handler.tool_running()
+    relay._dispatch_one(handler, call, GAIA_PROFILE)
+    assert handler.tool_running()
+    relay._dispatch_one(handler, result, GAIA_PROFILE)
+    assert not handler.tool_running()
 
 
 # ── files the turn wrote ───────────────────────────────────────────────────

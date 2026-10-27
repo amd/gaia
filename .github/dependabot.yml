@@ -24,6 +24,11 @@ updates:
       python-dependencies:
         patterns:
           - "*"
+    # setup.py keeps Intel Macs on cryptography <49 on purpose: 49+ ships no
+    # x86_64 macOS wheel (test_dependency_major_caps.py guards it).
+    ignore:
+      - dependency-name: "cryptography"
+        versions: [">=49"]
 
   # JavaScript dependencies - main package.json (if exists)
   - package-ecosystem: "npm"

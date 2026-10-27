@@ -1228,6 +1228,74 @@ def test_recent_files_below_limit_is_complete(tmp_path, monkeypatch):
     assert result["total_found"] == result["count"] == 1
     assert result["truncated"] is False
     assert "omitted" not in result["display_message"]
+    assert "other_types_not_listed" not in result
+    assert "Not listed" not in result["display_message"]
+
+
+def test_recent_files_says_what_the_type_filter_left_out(tmp_path, monkeypatch):
+    """A .dmg the default filter skips is reported, so "only one file" isn't claimed."""
+    from unittest.mock import patch
+
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    (downloads / "notes.txt").write_text("fact")
+    (downloads / "installer.dmg").write_bytes(b"\0")
+    (downloads / "setup.pkg").write_bytes(b"\0")
+    (downloads / "other.pkg").write_bytes(b"\0")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        result = _TOOL_REGISTRY["list_recent_files"]["function"]()
+    assert result["total_found"] == 1
+    assert result["other_types_not_listed"] == {".pkg": 2, ".dmg": 1}
+    assert "Not listed: 3 other recent file(s)" in result["display_message"]
+    assert "2 .pkg, 1 .dmg" in result["display_message"]
+
+
+def test_recent_files_an_explicit_filter_lists_what_it_asked_for(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    (tmp_path / "Downloads").mkdir()
+    (tmp_path / "Downloads" / "installer.dmg").write_bytes(b"\0")
+    (tmp_path / "Downloads" / "notes.txt").write_text("fact")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        result = _TOOL_REGISTRY["list_recent_files"]["function"](file_types="dmg")
+    assert [f["file_name"] for f in result["files"]] == ["installer.dmg"]
+    assert result["other_types_not_listed"] == {".txt": 1}
+
+
+def test_recent_files_bounds_the_skipped_type_counts(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    for index in range(30):
+        (downloads / f"report.v{index:02}").write_bytes(b"\0")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        result = _TOOL_REGISTRY["list_recent_files"]["function"]()
+    assert len(result["other_types_not_listed"]) == 20
+    assert "Not listed: 30 other recent file(s)" in result["display_message"]
+
+
+def test_recent_files_does_not_count_old_files_of_other_types(tmp_path, monkeypatch):
+    import os
+    import time
+    from unittest.mock import patch
+
+    (tmp_path / "Downloads").mkdir()
+    old = tmp_path / "Downloads" / "old.dmg"
+    old.write_bytes(b"\0")
+    stale = time.time() - 90 * 86400
+    os.utime(old, (stale, stale))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        result = _TOOL_REGISTRY["list_recent_files"]["function"]()
+    assert "other_types_not_listed" not in result
 
 
 def test_unreadable_content_search_reports_reason(tmp_path, caplog):

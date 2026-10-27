@@ -58,6 +58,8 @@ on:
       - 'eval/corpus/**'
       - 'data/pdf/**'
       - 'tests/test_rag*.py'
+      - 'tests/integration/conftest.py'
+      - 'tests/integration/test_rag_no_break_spaces.py'
       - 'tests/unit/conftest.py'
       - 'tests/unit/denied_folder.py'
       - 'tests/unit/rag/**'
@@ -118,6 +120,8 @@ on:
       - 'eval/corpus/**'
       - 'data/pdf/**'
       - 'tests/test_rag*.py'
+      - 'tests/integration/conftest.py'
+      - 'tests/integration/test_rag_no_break_spaces.py'
       - 'tests/unit/conftest.py'
       - 'tests/unit/denied_folder.py'
       - 'tests/unit/rag/**'
@@ -252,6 +256,10 @@ jobs:
             Write-Host "`n=== Running RAG Integration Tests ==="
             python tests/test_rag_integration.py
             if ($LASTEXITCODE -ne 0) { throw "Tests failed with exit code $LASTEXITCODE" }
+
+            Write-Host "`n=== Dense no-break-space embedding regression ==="
+            python -m pytest tests/integration/test_rag_no_break_spaces.py -v --tb=short
+            if ($LASTEXITCODE -ne 0) { throw "No-break-space regression failed with exit code $LASTEXITCODE" }
 
             # Offline, retrieval-only subset over committed documents, compared to
             # the committed baseline. The full suite runs on release tags (eval_retrieval.yml).

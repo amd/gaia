@@ -75,6 +75,7 @@ const shareImage = new URL('/gaia-icon.png', Astro.site);
     />
 
     <title>{title}</title>
+    <slot name="head" />
   </head>
   <body class="min-h-screen bg-g-bg font-sans text-g-text antialiased">
     <!-- Skip to main content link for accessibility -->

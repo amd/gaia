@@ -240,6 +240,9 @@ class GaiaMetadata:
     requirements: SkillRequirements = field(default_factory=SkillRequirements)
     tools: list[SkillTool] = field(default_factory=list)
     tools_required: list[str] = field(default_factory=list)
+    #: Skills this one combines with on a single request. Names that are not
+    #: installed are ignored where the list is used, never an error here.
+    pairs_with: list[str] = field(default_factory=list)
     #: ``metadata.gaia`` keys GAIA does not model, preserved for round-trip.
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -260,6 +263,8 @@ class GaiaMetadata:
             out["tools"] = [t.to_dict() for t in self.tools]
         if self.tools_required:
             out["tools_required"] = list(self.tools_required)
+        if self.pairs_with:
+            out["pairs_with"] = list(self.pairs_with)
         out.update(self.extra)
         return out
 
@@ -308,12 +313,21 @@ class GaiaMetadata:
                 f"See {FORMAT_DOCS_URL}#tools-vs-tools_required"
             )
 
+        pairs_with = data.get("pairs_with") or []
+        if not isinstance(pairs_with, list):
+            raise SkillValidationError(
+                f"Skill '{skill_name}': metadata.gaia.pairs_with must be a list of "
+                f"skill names, got {type(pairs_with).__name__}. "
+                f"See {FORMAT_DOCS_URL}#field-reference"
+            )
+
         known = {
             "security_tier",
             "permissions",
             "requirements",
             "tools",
             "tools_required",
+            "pairs_with",
         }
         return cls(
             security_tier=tier,
@@ -323,6 +337,7 @@ class GaiaMetadata:
             ),
             tools=[SkillTool.from_dict(t, skill_name=skill_name) for t in tools],
             tools_required=[str(t) for t in tools_required],
+            pairs_with=[str(p) for p in pairs_with],
             extra={k: v for k, v in data.items() if k not in known},
         )
 

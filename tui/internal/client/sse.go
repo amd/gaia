@@ -227,6 +227,8 @@ type queryRequest struct {
 	// absence -- a minted id is never "", so plain omitempty is enough. Sent
 	// only once negotiation proves the peer is >= 2.12 (#2829).
 	SessionID string `json:"session_id,omitempty"`
+	// Sent only to a peer proven >= 2.20 (negotiate.go); empty omits it.
+	Surface string `json:"surface,omitempty"`
 }
 
 // Send starts one turn. The returned channel carries the canonical event types
@@ -288,6 +290,11 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		}
 	}
 
+	var surface string
+	if peer.supportsSurface {
+		surface = "tui"
+	}
+
 	payload, err := json.Marshal(queryRequest{
 		Query:              query,
 		RunID:              runID,
@@ -296,6 +303,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		MaxSteps:           s.opts.MaxSteps,
 		CanAnswerQuestions: canAnswer,
 		SessionID:          sessionID,
+		Surface:            surface,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not encode the '%s' query request: %w", s.agentID, err)
@@ -355,6 +363,16 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 			return nil, fmt.Errorf(
 				"the '%s' agent is still finishing the previous turn on this session (%s). "+
 					"Wait a moment and try again",
+				s.agentID, detail)
+		case http.StatusBadGateway:
+			if strings.Contains(detail, "did not answer") && !strings.Contains(detail, "Timeout") {
+				// The agent died between turns; the next send respawns it.
+				// A timeout means it is alive but slow, and keeps the relay's reason.
+				s.opts.Logf("sse: the '%s' agent did not answer: %s", s.agentID, detail)
+				return nil, errors.New(event.AgentStoppedBeforeAnswerDetail)
+			}
+			return nil, fmt.Errorf(
+				"the daemon relay refused the '%s' query (%s). Check `gaia daemon status`",
 				s.agentID, detail)
 		default:
 			return nil, fmt.Errorf(
@@ -475,6 +493,9 @@ func (s *SSEClient) consume(
 			s.opts.Logf("trace: %v", err)
 		}
 		evt := event.ParseCanonicalEvent(payload)
+		if crashed, ok := evt.(event.CanonicalErrorEvent); ok && crashed.RawDetail != "" {
+			s.opts.Logf("sse: the '%s' agent stopped mid-turn: %s", s.agentID, crashed.RawDetail)
+		}
 		if malformed, bad := evt.(event.CanonicalMalformedEvent); bad {
 			// Visible, but never fatal: one broken frame must not kill the run.
 			s.opts.Logf("sse: unparseable '%s' frame (%s) — skipped", s.agentID, malformed.Reason)

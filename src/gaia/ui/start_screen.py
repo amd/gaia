@@ -5,7 +5,8 @@
 
 Cards come from what is installed and set up on this PC — skills, indexed
 documents, connected mail accounts — never from a model call, so the screen
-costs nothing to open. A card only appears for a skill the agent has.
+costs nothing to open. A card's task runs on the agent's own tools; its skill,
+when installed, only sharpens it.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ MAIL_CONNECTORS = ("google", "microsoft", "microsoft_work")
 
 @dataclass(frozen=True)
 class Card:
+    #: The skill that sharpens this task when installed; also the card's id.
     skill: str
     title: str
     note: str
@@ -93,7 +95,10 @@ def _summarize(_ctx: Context) -> Card:
     )
 
 
-def _check_in(_ctx: Context) -> Card:
+def _check_in(ctx: Context) -> Optional[Card]:
+    # Without its skill, "Let's check in." is a greeting, not a task.
+    if "check-in" not in ctx.skills:
+        return None
     return Card(
         "check-in",
         "Check in",
@@ -114,11 +119,11 @@ _RULES: List[Callable[[Context], Optional[Card]]] = [
 
 
 def pick_cards(ctx: Context) -> List[Dict[str, Any]]:
-    """Up to :data:`MAX_CARDS` cards, each for a skill the agent has."""
+    """Up to :data:`MAX_CARDS` cards for what this PC is set up to do."""
     cards = []
     for rule in _RULES:
         card = rule(ctx)
-        if card is not None and card.skill in ctx.skills:
+        if card is not None:
             cards.append(asdict(card))
         if len(cards) == MAX_CARDS:
             break
@@ -138,6 +143,7 @@ def working_folder() -> Dict[str, Any]:
 
 
 def _mail_connected() -> bool:
+    from gaia.connectors.credential_wait import CredentialStoreWaiting, read_within
     from gaia.connectors.errors import ConnectorsError
     from gaia.connectors.registry import REGISTRY
     from gaia.connectors.store import peek_connection
@@ -145,9 +151,15 @@ def _mail_connected() -> bool:
     try:
         for connector_id in MAIL_CONNECTORS:
             spec = REGISTRY.get(connector_id)
-            if peek_connection(spec.oauth_provider_ref or spec.id) is not None:
+            ref = spec.oauth_provider_ref or spec.id
+            found = read_within(
+                f"connection:{ref}",
+                lambda ref=ref: peek_connection(ref),
+                f"your {spec.display_name} connection",
+            )
+            if found is not None:
                 return True
-    except ConnectorsError as e:
+    except (ConnectorsError, CredentialStoreWaiting) as e:
         # The inbox card is a hint; an unreadable keyring must not blank the screen.
         logger.warning("New-chat inbox card skipped: can't read connections: %s", e)
     return False
