@@ -1155,11 +1155,15 @@ describe('Chat App Integration', () => {
     });
 
     it('should convert policy_alert events into policy steps and notifications', () => {
-      expect(chatContent).toContain("case 'policy_alert'");
-      expect(chatContent).toContain("type: 'policy_alert'");
-      expect(chatContent).toContain('ruleIds: event.rule_ids ?? []');
-      expect(chatContent).toContain('policyVersion: event.policy_version');
-      expect(chatContent).toContain('receiptId: event.receipt_id');
+      const stepsContent = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/utils/streamSteps.ts'),
+        'utf8'
+      );
+      expect(stepsContent).toContain("case 'policy_alert'");
+      expect(stepsContent).toContain("type: 'policy_alert'");
+      expect(stepsContent).toContain('ruleIds: event.rule_ids ?? []');
+      expect(stepsContent).toContain('policyVersion: event.policy_version');
+      expect(stepsContent).toContain('receiptId: event.receipt_id');
       expect(chatContent).toContain('showPolicyToast');
       expect(chatContent).toContain('View receipt');
       expect(chatContent).toContain('Receipt unavailable');
