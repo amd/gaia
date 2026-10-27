@@ -146,6 +146,11 @@ def test_the_conversation_log_keeps_no_secret(store):
     "text",
     (
         "User's PIN for their Chase debit card is 4821",
+        "I changed my PIN to 4821",
+        "PIN 4821",
+        "My Chase card PIN is 4821",
+        "Chase bank PIN: 4821",
+        "My PIN is 4821",
         "PIN is 4821",
         "4821 is my PIN",
         "pin#4821",
@@ -175,6 +180,7 @@ def test_ordinary_pin_phrases_are_not_masked(text):
     (
         "4111 - 1111 - 1111 - 1111",
         "4111   1111   1111   1111",
+        "4111\t1111\t1111\t1111",
     ),
 )
 def test_card_grouped_with_spaced_separators_is_masked(text):

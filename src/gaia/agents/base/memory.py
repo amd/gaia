@@ -3892,16 +3892,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             # A PIN/passcode or card security code in a user-owned context.
             # Keep the PIN forms bounded: generic uses such as GPIO pins,
             # page numbers, and postal-code phrases are ordinary data.
-            r"\b(?:my|your|their|user(?:'s)?|bank|atm|debit|credit|card)\s+"
-            r"(?:bank\s+|debit\s+|credit\s+|atm\s+)?"
-            r"pin(?:'s)?(?:\s+number)?(?:\s+for(?:\s+\w+){1,8}?)?\s*"
-            r"(?:is|was|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
-            r"\bpin(?:'s)?\s+for(?:\s+\w+){1,8}?\s+"
-            r"(?:is|was|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
-            r"\bpin(?:'s)?(?!\s+code\b)(?:\s+number)?\s*"
-            r"(?:is|was|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
+            r"\bpin(?:'s)?(?:\s+number)?\s+(?:for|on|at)(?:\s+\w+){1,8}?\s*"
+            r"(?:is|was|to|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
+            r"(?<!gpio )\bpin(?:'s)?(?!\s+code\b)(?:\s+number)?\s*"
+            r"(?:is|was|to|:|=|[-\u2013\u2014])\s*\d{3,8}\b",
+            r"(?<!gpio )\bpin(?:'s)?(?!\s+(?:code|on|at|for)\b)\s+" r"\d{3,8}\b",
             r"\bpin\s*(?:#|:|=|\(\s*)\s*\d{3,8}\b\s*\)?",
-            r"(?<!gpio )\bpin\s+(?!code\b)\d{3,8}\b",
             r"\b\d{3,8}\s+is\s+(?:(?:my|your|their|the)\s+|user(?:'s)?\s+)?pin\b",
             r"\b(?:passcode|pass code|cvv2?|cvc|security code)\b"
             r"(?:'s)?\s*(?:is|was|:|=|[-\u2013\u2014])?\s*\d{3,8}\b",
@@ -3916,7 +3912,7 @@ class MemoryMixin(ProceduralMemoryMixin):
     #: and length and passes the Luhn check, so a tracking number, a timestamp
     #: or a 15-digit IMEI is not one.
     _CARD_NUMBER: ClassVar[re.Pattern] = re.compile(
-        r"(?<!\d)\d(?:[ .\u00a0\u2010-\u2015-]{0,8}\d){12,}(?!\d)"
+        r"(?<!\d)\d(?:[\t .\u00a0\u2010-\u2015-]{0,8}\d){12,}(?!\d)"
     )
     #: Visa, Mastercard, Amex, Discover, JCB, Diners Club, UnionPay, by length.
     _CARD_PREFIX: ClassVar[re.Pattern] = re.compile(
