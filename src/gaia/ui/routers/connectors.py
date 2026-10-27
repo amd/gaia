@@ -439,7 +439,7 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
             config_error = (
                 f"OAuth credentials for {provider_ref!r} are not configured. "
                 f"Set GAIA_{_pref}_CLIENT_ID and GAIA_{_pref}_CLIENT_SECRET, "
-                "or use Settings → Connections to configure them."
+                "or use Settings → Connectors to configure them."
             )
         except KeyError:
             configurable = False

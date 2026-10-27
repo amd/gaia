@@ -1414,7 +1414,7 @@ def build_parser():
             "Email Triage Agent — read, organize, and reply to Gmail or "
             "Outlook with all body inference running locally on Lemonade. "
             "Requires the Google or Microsoft connector to be configured "
-            "(Settings → Connections)."
+            "(Settings → Connectors)."
         ),
         parents=[
             parent_parser,
