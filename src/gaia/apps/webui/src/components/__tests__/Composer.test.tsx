@@ -106,7 +106,10 @@ describe('Composer', () => {
         const input = container.querySelector('input[type="file"]') as HTMLInputElement;
         fireEvent.change(input, { target: { files: [new File(['x'], 'big.bin')] } });
 
-        expect(await screen.findByRole('alert')).toHaveTextContent('File too large');
+        const alert = await screen.findByRole('alert');
+        expect(alert).toHaveTextContent('File too large');
+        expect(alert).toHaveAttribute('title', 'File too large');
+        expect(screen.getByRole('button', { name: 'Remove big.bin' })).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     });
 

@@ -1057,9 +1057,10 @@ export async function uploadFile(file: File): Promise<{
     });
 
     if (!res.ok) {
-        const errorText = await res.text().catch(() => 'Upload failed');
+        const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
-        throw new Error(`Upload failed: ${errorText}`);
+        const detail = parseErrorDetail(errorText);
+        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
     }
 
     const data = await res.json();

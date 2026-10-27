@@ -154,6 +154,8 @@
 }
 
 .composer-attachment.has-error {
+    flex-wrap: wrap;
+    align-content: flex-start;
     background: var(--danger-dim);
 }
 
@@ -176,8 +178,21 @@
     white-space: nowrap;
 }
 
+/* The error gets its own line under the name, so the name and remove button stay visible. */
 .composer-attachment.has-error .composer-attachment-state {
+    order: 1;
+    flex-basis: 100%;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    white-space: normal;
+    padding: 0 4px 2px 0;
     color: var(--danger);
+}
+
+.composer-attachment.has-error .composer-attachment-name {
+    flex: 1;
 }
 
 .composer-attachment .composer-icon-btn {
