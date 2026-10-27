@@ -1981,10 +1981,12 @@ async function installBackend(opts = {}) {
 // ── Version-aware ensure ─────────────────────────────────────────────────────
 
 /**
- * Run `<gaiaBin> --version` and extract the installed version string.
- * Returns null on failure.
+ * The installed backend version, or null when it is not installed.
+ * For the app's own venv this reads the package record instead of running
+ * `gaia --version`, which starts Python and can take 20 s+ on a busy PC.
  */
 function getInstalledVersion(gaiaBin) {
+  if (gaiaBin === GAIA_BIN) return venvPackageVersion();
   try {
     const result = spawnSync(gaiaBin, ["--version"], {
       stdio: ["ignore", "pipe", "pipe"],
@@ -1997,10 +1999,40 @@ function getInstalledVersion(gaiaBin) {
       const match = result.stdout.toString().trim().match(/(\d+\.\d+\.\d+(?:rc\d+)?)/);
       return match ? match[1] : null;
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    logError(`Could not run ${gaiaBin} --version: ${err.message}`);
   }
   return null;
+}
+
+/** Entries of `dir`, or none when it does not exist. */
+function listDir(dir) {
+  try {
+    return fs.readdirSync(dir);
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+}
+
+/** The version in the venv's `amd_gaia-<version>.dist-info` record, or null when there is none. */
+function venvPackageVersion() {
+  const sitePackages = IS_WINDOWS
+    ? [path.join(GAIA_VENV, "Lib", "site-packages")]
+    : listDir(path.join(GAIA_VENV, "lib")).map((py) =>
+        path.join(GAIA_VENV, "lib", py, "site-packages")
+      );
+  const versions = sitePackages.flatMap((dir) =>
+    listDir(dir)
+      .map((entry) => /^amd_gaia-(.+)\.dist-info$/.exec(entry))
+      .filter(Boolean)
+      .map((m) => m[1])
+  );
+  if (versions.length > 1) {
+    log(`More than one amd-gaia install in ${GAIA_VENV_DISPLAY} (${versions.join(", ")}) — treating it as not installed`);
+    return null;
+  }
+  return versions[0] || null;
 }
 
 /**
