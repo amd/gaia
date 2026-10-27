@@ -95,6 +95,11 @@ function readQueues(): Record<string, QueuedMessage[]> {
     }
 }
 
+export interface PendingPrompt {
+    sessionId: string;
+    text: string;
+}
+
 /** A question the agent is blocked on; `expiresAt` is when the backend stops waiting (ms), or null. */
 export interface LiveQuestion {
     sessionId: string;
@@ -228,8 +233,8 @@ interface ChatState {
     sidebarOpen: boolean;
     sidebarCollapsed: boolean;
     isLoadingMessages: boolean;
-    /** A first message queued before its chat view mounted; ChatView sends it. */
-    pendingPrompt: string | null;
+    /** A message queued for one chat; only that chat's view sends it. */
+    pendingPrompt: PendingPrompt | null;
     setThemePreference: (pref: ThemePreference) => void;
     /** Color palette; `default` is the built-in warm gray look. */
     palette: PaletteId;
@@ -259,7 +264,7 @@ interface ChatState {
     toggleSidebarCollapsed: () => void;
     setSidebarCollapsed: (collapsed: boolean) => void;
     setLoadingMessages: (loading: boolean) => void;
-    setPendingPrompt: (prompt: string | null) => void;
+    setPendingPrompt: (prompt: PendingPrompt | null) => void;
 }
 
 /** The sidebar's Memory, Scheduled tasks and Documents: opening one closes the others. */

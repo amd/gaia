@@ -484,7 +484,7 @@ function App() {
             return false;
         }
         store.resetDraftPermissionMode();
-        setPendingPrompt(text);
+        setPendingPrompt({ sessionId: session.id, text });
         return true;
     }, [addSession, setCurrentSession, setMessages, setPendingPrompt, loadAgents, loadDefaultPermissionMode]);
 
@@ -678,7 +678,7 @@ function App() {
 
             {showSchedules && <Suspense fallback={null}><ScheduleManager /></Suspense>}
             {showDocLibrary && <Suspense fallback={null}><DocumentLibrary /></Suspense>}
-            {showFileBrowser && <Suspense fallback={null}><FileBrowser /></Suspense>}
+            {showFileBrowser && <Suspense fallback={null}><FileBrowser onStartChat={startChat} /></Suspense>}
             {showNotificationPanel && (
                 <div className="notification-center-popover">
                     <NotificationCenter onClose={() => setShowNotificationPanel(false)} />

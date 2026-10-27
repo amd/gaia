@@ -173,7 +173,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const notificationPanelVisible = useNotificationStore((s) => s.showPanel);
     const setNotificationPanelVisible = useNotificationStore((s) => s.setShowPanel);
     const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
-    const pendingPrompt = useChatStore((s) => s.pendingPrompt);
+    const pendingPrompt = useChatStore((s) => (s.pendingPrompt?.sessionId === sessionId ? s.pendingPrompt : null));
     const liveStatus = useChatStore((s) => s.liveStatus);
     const awaitingUser = useChatStore((s) => s.awaitingUser);
     // Other events can arrive while a question waits; it still waits on the user.
@@ -380,9 +380,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
         return () => { mountedRef.current = false; };
     }, []);
     useEffect(() => {
-        const { pendingPrompt: pending, isLoadingMessages: loading } = useChatStore.getState();
+        const pending = pendingPrompt?.text;
         // Wait for the history load, or it would replace the message just sent.
-        if (!pending || loading) return;
+        if (!pending || useChatStore.getState().isLoadingMessages) return;
         useChatStore.getState().setPendingPrompt(null);
         openingRef.current = true;
         // A timer, not rAF: rAF never fires while the window is hidden, and
