@@ -226,3 +226,18 @@ def test_a_one_slide_markdown_build_is_one_slide(tools, tmp_path):
         )
     assert r["status"] == "ok", r
     assert r["slides"] == 1
+
+
+def test_the_procedure_checks_a_fresh_build_once(tools, tmp_path):
+    """The build already runs the check; a second verify_deck is a wasted model turn."""
+    skill, fns, _r = tools
+    body = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    assert "The build result's `verify` is the check" in body
+    assert "only after\n   `add_slide` or `update_slide`" in body
+    with bind(_Host(), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown="## Ferry service grows to a network\n- Four piers\n",
+            output_path=str(tmp_path / "f.pptx"),
+            expected_slides=1,
+        )
+    assert r["verify"]["status"] == "pass"

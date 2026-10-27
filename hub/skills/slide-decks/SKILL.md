@@ -262,12 +262,13 @@ Use this for stages, steps, levels or options instead of a wall of bullets.
 4. **Build** with Markdown, or `build_deck` with JSON for timelines, flows,
    2x2 matrices and combo charts. Big decks: 6-8 slides first, then
    `add_slide`.
-5. **Verify** with `verify_deck(path, expected_slides=N, required_items=[...])`.
-   Fix every error, rebuild (or `update_slide`) and verify until `status` is
-   `pass`.
-6. **Report** the path, one line per slide from `slides_overview`, the verify
-   status and anything not done. On style feedback call
-   `update_deck_prefs(feedback=...)` and say whether it was saved.
+5. **Check.** The build result's `verify` is the check. Fix every error it
+   lists and rebuild (or `update_slide`) until its `status` is `pass`. Call
+   `verify_deck(path, expected_slides=N, required_items=[...])` only after
+   `add_slide` or `update_slide`, or for a deck you did not build.
+6. **Report** the path, one line per slide, the check status and anything not
+   done. On style feedback call `update_deck_prefs(feedback=...)` and say
+   whether it was saved.
 
 ## References (paths relative to this skill's folder)
 
