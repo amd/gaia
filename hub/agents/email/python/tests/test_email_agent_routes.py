@@ -138,7 +138,7 @@ class _FakeAgent:
                 "agent, or it was revoked/withdrawn. Connect and grant it "
                 "in one command — no Agent UI required: `gaia connectors "
                 "connect microsoft --scopes <scopes> --grant-agent "
-                "installed:email`, or use Settings -> Connections in the "
+                "installed:email`, or use Settings -> Connectors in the "
                 "Agent UI."
             )
         if action_id == "raise-revoked":
