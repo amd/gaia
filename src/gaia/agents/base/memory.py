@@ -3800,21 +3800,25 @@ class MemoryMixin(ProceduralMemoryMixin):
             # HALIBUT-4417-ZULU: 2+ alnum groups with at least one numeric group.
             r"\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b",
             # a PIN, passcode or card security code next to its digits, also
-            # worded as a memory model writes it: "PIN for Chase is 4821"
+            # worded as a memory model writes it: "PIN for Chase is 4821".
+            # Whitespace is bounded so the optional parts can't trade it back
+            # and forth on a long run of spaces.
             r"\b(?:pin|passcode|pass code|cvv2?|cvc|security code)(?:'s)?\b"
-            r"(?:\s+(?:number|code))?(?:\s+(?:for|on|at|of)(?:\s+\w+){1,3}?)?"
-            r"\s*(?:is|was|:|=|to|[-\u2013\u2014])?\s*\d{3,8}\b",
+            r"(?:\s{1,3}(?:number|code)\b)?"
+            r"(?:\s{1,3}(?:for|on|at|of)(?:\s{1,3}\w+){1,3}?)?"
+            r"(?:\s{0,3}(?:is|was|:|=|to|[-\u2013\u2014]))?\s{0,3}\d{3,8}\b",
             r"\b\d{3}-\d{2}-\d{4}\b",  # US social security number
-            r"\b(?:ssn|social security(?: number)?)\b(?:\s*(?:is|was|:|=))?"
-            r"\s*\d{3}[ -]?\d{2}[ -]?\d{4}\b",
+            r"\b(?:ssn|social security(?: number)?)\b(?:\s{0,3}(?:is|was|:|=))?"
+            r"\s{0,3}\d{3}[ -]?\d{2}[ -]?\d{4}\b",
         )
     )
 
-    #: 13-19 digits, optionally grouped by spaces, dashes or dots: a card number
-    #: when it also has a card network's prefix and length and passes the Luhn
-    #: check, so a tracking number, a timestamp or a 15-digit IMEI does not.
+    #: A run of 13+ digits, optionally grouped by spaces, dashes or dots. A card
+    #: number is a 13-19-digit stretch of it that has a card network's prefix
+    #: and length and passes the Luhn check, so a tracking number, a timestamp
+    #: or a 15-digit IMEI is not one.
     _CARD_NUMBER: ClassVar[re.Pattern] = re.compile(
-        r"(?<!\d)\d(?:[\s.\u2010-\u2015-]{0,2}\d){12,18}(?!\d)"
+        r"(?<!\d)\d(?:[\s.\u2010-\u2015-]{0,2}\d){12,}(?!\d)"
     )
     #: Visa, Mastercard, Amex, Discover, JCB, Diners Club, UnionPay, by length.
     _CARD_PREFIX: ClassVar[re.Pattern] = re.compile(
@@ -3823,24 +3827,69 @@ class MemoryMixin(ProceduralMemoryMixin):
         r"|(?:30[0-5]|36|38)\d{11,16}"
     )
 
-    @staticmethod
-    def _luhn_valid(digits: str) -> bool:
-        total = 0
-        for i, ch in enumerate(reversed(digits)):
-            d = int(ch)
-            if i % 2:
-                d = d * 2 - 9 if d > 4 else d * 2
-            total += d
-        return total % 10 == 0
+    #: How a card number is written in groups: unbroken, 4-4-4-4(-3), 4-4-5 for
+    #: a 13-digit Visa, Amex and Diners Club 4-6-5 and 4-6-4, UnionPay 6-13.
+    _CARD_GROUPINGS: ClassVar[frozenset] = frozenset(
+        {(k,) for k in range(13, 20)}
+        | {(4, 4, 4, 4), (4, 4, 4, 4, 3), (4, 4, 5), (4, 6, 5), (4, 6, 4), (6, 13)}
+    )
+    _CARD_GROUPING_PREFIXES: ClassVar[frozenset] = frozenset(
+        g[:k] for g in _CARD_GROUPINGS for k in range(1, len(g) + 1)
+    )
 
     @classmethod
     def _card_spans(cls, text: str) -> List[tuple]:
         spans = []
         for m in cls._CARD_NUMBER.finditer(text):
+            run = m.group()
+            pos = [i for i, c in enumerate(run) if c.isdigit()]
             # Full-width and other script digits are the same card number.
-            digits = "".join(str(int(c)) for c in m.group() if c.isdigit())
-            if cls._CARD_PREFIX.fullmatch(digits) and cls._luhn_valid(digits):
-                spans.append(m.span())
+            values = [int(run[i]) for i in pos]
+            digits = "".join(map(str, values))
+            n = len(digits)
+            # Luhn sums by index parity, plain and doubled, so any window's
+            # checksum is a few subtractions rather than a pass over its digits.
+            plain = [[0] * (n + 1), [0] * (n + 1)]
+            doubled = [[0] * (n + 1), [0] * (n + 1)]
+            for k, d in enumerate(values):
+                for parity in (0, 1):
+                    on = k % 2 == parity
+                    plain[parity][k + 1] = plain[parity][k] + (d if on else 0)
+                    doubled[parity][k + 1] = doubled[parity][k] + (
+                        (d * 2 - 9 if d > 4 else d * 2) if on else 0
+                    )
+            # A card inside a longer run starts and ends at a separator and is
+            # grouped like one, so "4111 1111 1111 1111 12/29" is found but an
+            # IMEI or two phone numbers side by side are not read as a card.
+            edges = [0] + [k for k in range(1, n) if pos[k] != pos[k - 1] + 1] + [n]
+            resume = 0
+            for i, start in enumerate(edges[:-1]):
+                if start < resume:
+                    continue
+                ends = []
+                groups: tuple = ()
+                for j in range(i + 1, len(edges)):
+                    groups += (edges[j] - edges[j - 1],)
+                    if groups not in cls._CARD_GROUPING_PREFIXES:
+                        break
+                    if groups in cls._CARD_GROUPINGS:
+                        ends.append(edges[j])
+                for end in reversed(ends):
+                    last = (end - 1) % 2
+                    checksum = (
+                        plain[last][end]
+                        - plain[last][start]
+                        + doubled[1 - last][end]
+                        - doubled[1 - last][start]
+                    )
+                    if checksum % 10 == 0 and cls._CARD_PREFIX.fullmatch(
+                        digits[start:end]
+                    ):
+                        spans.append(
+                            (m.start() + pos[start], m.start() + pos[end - 1] + 1)
+                        )
+                        resume = end
+                        break
         return spans
 
     @classmethod

@@ -11,6 +11,8 @@ reads them back. Runs against a real ``MemoryStore``; only the model is stubbed.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from gaia.agents.base.memory import MemoryMixin
@@ -40,6 +42,11 @@ SECRETS = [
     "４" + "１" * 15,  # full-width digits
     "card4111111111111111",
     "Amex 3782 822463 10005",
+    # Other digits right next to the card number.
+    "Card: 4111 1111 1111 1111 12/29 123",
+    "4111111111111111 12/29",
+    "call 5 4111 1111 1111 1111",
+    "Amex 3782 822463 10005 0425",
 ]
 
 NOT_SECRETS = [
@@ -59,6 +66,10 @@ NOT_SECRETS = [
     "See pages 4111-4122",
     "the security code review is 2026 Q4",
     "pin the tab to slot 2",
+    # Numbers side by side that a card could hide in, but not grouped like one.
+    "408-555-0123 408-555-0199",
+    "IMEI 356938035643809 12",
+    "IMEI 356938035643809 12/29",
 ]
 
 
@@ -79,6 +90,35 @@ def test_a_secret_is_recognised(text):
 def test_an_ordinary_number_is_left_alone(text):
     assert not MemoryMixin._looks_like_credential(text)
     assert MemoryMixin._mask_credentials(text) == text
+
+
+def test_every_card_in_a_long_list_is_masked():
+    text = "4111 1111 1111 1111 " * 500
+
+    assert MemoryMixin._mask_credentials(text).count("[secret removed]") == 500
+
+
+LONG_INPUTS = {
+    "keyword then spaces": "pin" + " " * 100_000,
+    "keyword words and spaces": "pin  number  for   the  is   " * 3_500,
+    "ssn then spaces": "social security number" + " " * 100_000,
+    "password then spaces": "password" + " " * 100_000,
+    "spaced digits": "4 " * 50_000,
+    "dotted digits": "1." * 50_000,
+    "card-grouped digits": "4111 " * 20_000,
+    "unbroken digits": "4" * 100_000,
+}
+
+
+@pytest.mark.parametrize("name", LONG_INPUTS)
+def test_masking_stays_fast_on_long_input(name):
+    text = LONG_INPUTS[name]
+    started = time.perf_counter()
+
+    MemoryMixin._mask_credentials(text)
+    MemoryMixin._looks_like_credential(text)
+
+    assert time.perf_counter() - started < 1.0
 
 
 def test_remember_refuses_a_pin(store):
