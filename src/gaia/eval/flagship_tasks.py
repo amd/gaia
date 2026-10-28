@@ -57,6 +57,7 @@ from gaia.llm.lemonade_client import (
     resolve_lemonade_api_key,
     resolve_lemonade_base_url,
 )
+from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -1466,6 +1467,7 @@ def judge_batch(
     else:
         head = [RUBRIC, f"=== THE ORIGINAL PROJECT ===\n{project_snapshot()}"]
     payload = "\n\n".join([*head, *(_attempt_section(a) for a in attempts)])
+    assert_provider_permitted("the Claude Code CLI")
     # An empty working directory: the repo's CLAUDE.md is not the judge's brief.
     with tempfile.TemporaryDirectory(prefix="gaia-judge-") as cwd:
         proc = subprocess.run(

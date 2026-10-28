@@ -2962,7 +2962,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         from gaia.agents.base.tools import tool
 
         has_npx = shutil.which("npx") is not None
-        has_perplexity = bool(os.environ.get("PERPLEXITY_API_KEY"))
+        from gaia.llm.local_only import cloud_blocked
+
+        # Perplexity answers with a cloud LLM, so Local only drops the tool.
+        has_perplexity = (
+            bool(os.environ.get("PERPLEXITY_API_KEY")) and not cloud_blocked()
+        )
 
         if has_npx:
             from gaia.mcp.external_services import get_context7_service
@@ -3011,7 +3016,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
         logger.debug(
             f"External tools: search_documentation={'registered' if has_npx else 'skipped (no npx)'},"
-            f" search_web={'registered' if has_perplexity else 'skipped (no PERPLEXITY_API_KEY)'}"
+            f" search_web={'registered' if has_perplexity else 'skipped (no PERPLEXITY_API_KEY, or Local only)'}"
         )
 
     def _index_documents(self, documents: List[str]) -> None:

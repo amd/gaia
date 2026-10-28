@@ -1333,3 +1333,14 @@ def test_selecting_a_local_model_still_works_under_local_only(
     resp = client.post("/api/providers/select", json={"model": _CUSTOM})
     assert resp.status_code == 200, resp.json()
     assert db.get_setting("custom_model") == _CUSTOM
+
+
+def test_restore_does_not_bring_back_a_cloud_model_under_local_only(
+    client, lemonade, keys, db, local_only_on
+):
+    _write_config({"last_model": "fireworks.glm-5p3-flash"})
+    body = client.get("/api/providers/active").json()
+    assert body["restore"]["status"] == "failed", body["restore"]
+    assert "Local only is on" in body["restore"]["message"]
+    assert db.get_setting("custom_model") is None
+    assert keys["ensure"] == []  # no key replay attempted for the cloud model

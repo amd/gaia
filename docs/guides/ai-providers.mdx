@@ -7,7 +7,8 @@ GAIA's terminal UI offers **Local**, **Fireworks AI**, and **AMD LLM Gateway**.
 Lemonade runs local models and routes cloud chat requests. The header names the
 active provider and marks remote inference; document and memory embeddings stay
 on your Lemonade server. With a cloud chat model selected, GAIA does not load a
-local chat model when it starts.
+local chat model when it starts. [Local only](#keep-every-ai-request-off-the-cloud)
+turns the cloud choices off.
 
 ## Connect from the TUI
 
@@ -175,6 +176,20 @@ and neither pick shows a TheRock figure: those runs exist but have not been
 published, and an unpublished number is not a citable measurement. Fireworks chat
 still sends conversation history to Fireworks and incurs usage charges — see
 [`/cost`](/guides/tui#what-a-session-costs) for what a session has spent.
+
+## Keep every AI request off the cloud
+
+To guarantee that no AI request reaches a cloud model, turn on **Local only**:
+
+```bash
+gaia config set network_policy local_ai_only
+```
+
+GAIA then refuses Fireworks AI, the AMD LLM Gateway and Claude models, stops
+handing your saved keys to Lemonade, and says why when you try. `/provider` and
+the Agent UI won't connect a cloud provider or switch to a cloud model. Undo it
+with `gaia config set network_policy cloud_allowed`. Details and limits:
+[Local only](/reference/cli#local-only).
 
 ## Keys and settings
 

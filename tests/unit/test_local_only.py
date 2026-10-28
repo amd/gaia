@@ -235,7 +235,6 @@ def test_the_error_says_how_to_turn_it_off(local_only_on, client, no_network):
     with pytest.raises(CloudDisabledError) as e:
         client.chat_completions("fireworks.glm-5p3-flash", [])
     assert "gaia config set network_policy cloud_allowed" in str(e.value)
-    assert "Settings › Privacy" in str(e.value)
 
 
 # ── Every inference method, every way of naming the model ─────────────────

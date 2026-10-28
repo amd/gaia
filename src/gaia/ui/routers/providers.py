@@ -556,6 +556,8 @@ def _check_model_available(model_id: str) -> Optional[str]:
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
 
     provider = provider_of(model_id)
+    if provider != LOCAL and cloud_blocked():
+        return "Local only is on, so cloud models can't run"
     try:
         if provider != LOCAL:
             _require_loopback(_base_url())

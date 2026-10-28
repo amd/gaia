@@ -302,6 +302,8 @@ func TestMain(m *testing.M) {
 	if runtime.GOOS == "" { // keeps the import used on every platform
 		return
 	}
+	// A developer's own Local only must not change what these tests write.
+	os.Setenv("GAIA_POLICY_FILE", filepath.Join(os.TempDir(), "gaia-preflight-test-no-policy.json"))
 	// A down Lemonade must never start the developer's real one: by default
 	// the starter finds nothing to start. Tests of the starter opt back in via
 	// autoStartForTest.

@@ -85,6 +85,9 @@ func (m ChatModel) switchRelayedModel(sw client.TurnModelSwitcher, target string
 // checkRelayedSwitch returns Lemonade's id for target, or why it cannot be
 // switched to.
 func checkRelayedSwitch(ctx context.Context, sw client.TurnModelSwitcher, base, provider, target string) (string, error) {
+	if lemonade.LocalOnly() && (provider != "local" || client.IsClaudeModelID(target)) {
+		return "", errors.New("Local only is on, so cloud models are off. " + lemonade.LocalOnlyHint)
+	}
 	if client.IsClaudeModelID(target) {
 		return "", errors.New("Claude is not available when GAIA runs through the background service")
 	}

@@ -19,7 +19,7 @@ Anyone can build an agent harness with GAIA. The **GAIA agent** is the one we bu
 | **Use GAIA**: run the flagship agent in the desktop app or terminal | [Install GAIA](https://amd-gaia.ai/docs/guides/install), then the [GAIA agent guide](https://amd-gaia.ai/docs/guides/gaia) |
 | **Build with GAIA**: make an agent harness with skills, evals and the SDK | [Composing skills](https://amd-gaia.ai/docs/guides/composing-skills), [Agent evals](https://amd-gaia.ai/docs/guides/eval), [SDK reference](https://amd-gaia.ai/docs/sdk) |
 
-The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** chat through Lemonade. Use `/provider` to connect and choose a model; cloud chat sends conversation history to the selected provider. See [AI provider setup](docs/guides/ai-providers.mdx).
+The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** chat through Lemonade. Use `/provider` to connect and choose a model; cloud chat sends conversation history to the selected provider. See [AI provider setup](docs/guides/ai-providers.mdx). To make GAIA refuse every cloud AI model, run `gaia config set network_policy local_ai_only`.
 
 <p align="center">
   <a href="https://amd-gaia.ai/docs/quickstart"><strong>Get Started →</strong></a>

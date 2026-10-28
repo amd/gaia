@@ -60,6 +60,16 @@ print(response)
 Use `create_client(use_claude=True)` for the Claude provider. Local and on-prem
 models use `create_client("lemonade", base_url=..., model=...)`.
 
+### Local only
+
+When the user has set `network_policy` to `local_ai_only`, `LemonadeClient`'s
+inference methods (`chat_completions`, `completions`, `responses`, `embeddings`,
+`generate_image`) raise `gaia.llm.local_only.CloudDisabledError` for any model
+Lemonade's catalog doesn't list as local, before sending anything.
+`create_client("claude")` and `ClaudeProvider` raise it too. Model management
+(`pull_model`, `load_model`, `delete_model`) is unaffected. The message names the
+model and how to change the setting; see [Local only](/reference/cli#local-only).
+
 ## Gateway migration
 
 The `openai` and `litellm` provider adapters have been removed because they

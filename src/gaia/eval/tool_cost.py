@@ -598,6 +598,17 @@ def _schemas_for(
         agent._instance_tools = prev
 
 
+def _refuse_unless_local(model: str, base_url: str) -> None:
+    """The raw OpenAI client below skips LemonadeClient's Local only guard."""
+    from gaia.llm.lemonade_client import LemonadeClient
+    from gaia.llm.local_only import assert_model_permitted, catalog_recipes
+
+    assert_model_permitted(
+        model,
+        lambda m: catalog_recipes(LemonadeClient(base_url=base_url, verbose=False), m),
+    )
+
+
 def measure_prefill_ttft(
     agent: "ChatAgent",
     base_url: Optional[str] = None,
@@ -627,6 +638,7 @@ def measure_prefill_ttft(
     )
 
     base_url = resolve_lemonade_base_url(base_url)
+    _refuse_unless_local(model, base_url)
     tools = _schemas_for(agent, filter_to)
     # The OpenAI client needs a non-empty key; an open Lemonade ignores it.
     api_key = resolve_lemonade_api_key(base_url=base_url) or "not-needed-for-lemonade"

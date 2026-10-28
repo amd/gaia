@@ -6817,6 +6817,7 @@ def handle_config_command(args):
 
 def _handle_network_policy(action, value) -> None:
     """``gaia config get|set network_policy``: lives in policy.json, not config.json."""
+    from gaia.config import GaiaConfigError
     from gaia.llm import local_only
 
     if action == "get":
@@ -6829,8 +6830,33 @@ def _handle_network_policy(action, value) -> None:
         sys.exit(1)
     print(f"✅ Set network_policy = {stored.value}")
     print(f"   Saved to {local_only.policy_path()}")
-    if stored is local_only.NetworkPolicy.LOCAL_AI_ONLY:
-        print("   No GAIA AI request will reach a cloud model.")
+    if stored is not local_only.NetworkPolicy.LOCAL_AI_ONLY:
+        return
+    print("   No GAIA AI request will reach a cloud model.")
+    try:
+        cleared = local_only.clear_saved_cloud_models()
+    except GaiaConfigError as e:
+        print(f"⚠️  Saved models were not checked: {e}", file=sys.stderr)
+        return
+    if cleared:
+        from gaia.llm.lemonade_client import resolve_default_chat_model
+
+        for key, model in cleared:
+            print(f"   Cleared {key} (was {model}): it is a cloud model.")
+        print(f"   GAIA now uses {resolve_default_chat_model()} by default.")
+    from gaia.llm.cloud_keys import CloudKeyError, drop_runtime_keys
+
+    try:
+        dropped = drop_runtime_keys()
+    except CloudKeyError as e:
+        print(
+            f"⚠️  Lemonade still holds any cloud key GAIA gave it ({e}). GAIA "
+            "won't use it; restart Lemonade to drop it.",
+            file=sys.stderr,
+        )
+        return
+    for provider in dropped:
+        print(f"   Removed the {provider} key from the running Lemonade Server.")
 
 
 #: Keys that pick which Lemonade GAIA uses; setting one probes and switches.

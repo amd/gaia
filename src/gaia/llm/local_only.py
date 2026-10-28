@@ -24,7 +24,7 @@ import os
 import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.logger import get_logger
 
@@ -71,8 +71,8 @@ LOCAL_RECIPES = frozenset(
 
 POLICY_KEY = "network_policy"
 SETTINGS_HINT = (
-    "To allow cloud models, change it in the Agent UI under Settings › Privacy, "
-    "or run `gaia config set network_policy cloud_allowed`."
+    "To allow cloud models again, run "
+    "`gaia config set network_policy cloud_allowed`."
 )
 
 
@@ -85,12 +85,12 @@ def policy_path() -> Path:
     override = os.environ.get("GAIA_POLICY_FILE", "").strip()
     if override:
         return Path(os.path.expanduser(override))
-    config_dir = os.environ.get("GAIA_CONFIG_DIR", "").strip()
-    if config_dir:
-        return Path(os.path.expanduser(config_dir)) / "policy.json"
     from gaia.config import gaia_home
 
     return gaia_home() / "policy.json"
+
+
+_last_read_error: List[Optional[str]] = [None]
 
 
 def _read(path: Path) -> NetworkPolicy:
@@ -102,11 +102,15 @@ def _read(path: Path) -> NetworkPolicy:
     except FileNotFoundError:
         return NetworkPolicy.CLOUD_ALLOWED
     except (OSError, ValueError, AttributeError) as e:
-        log.error(
+        message = (
             f"Could not read the network policy in {path} ({e}). Treating it as "
             f"Local only until the file is fixed or rewritten with "
             f"`gaia config set network_policy <level>`."
         )
+        # Read on every request: say it once per problem, not once per call.
+        if message != _last_read_error[0]:
+            _last_read_error[0] = message
+            log.error(message)
         return NetworkPolicy.LOCAL_AI_ONLY
 
 
@@ -138,7 +142,7 @@ def set_policy(value: str) -> NetworkPolicy:
         raise ValueError(
             "network_policy 'offline' isn't available yet: GAIA can't yet block "
             "its non-AI network features, so it would promise more than it "
-            "enforces. Use 'local_ai_only' to keep every AI request on this PC."
+            "enforces. Use 'local_ai_only' to block every cloud AI model."
         )
     path = policy_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -164,6 +168,39 @@ def set_policy(value: str) -> NetworkPolicy:
     return policy
 
 
+#: config.json keys that can hold a model id GAIA runs or restores.
+SAVED_MODEL_KEYS = ("default_model", "last_model")
+
+
+def clear_saved_cloud_models() -> List[Tuple[str, str]]:
+    """Unset saved cloud model ids in config.json; return ``(key, model)`` cleared.
+
+    A saved cloud default would otherwise make every later request fail under
+    Local only. ``last_provider`` goes with a cleared ``last_model``.
+
+    Raises:
+        GaiaConfigError: config.json exists but can't be read or written.
+    """
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import cloud_model_provider
+
+    cfg = GaiaConfig.load()
+    cleared = []
+    for key in SAVED_MODEL_KEYS:
+        model = (getattr(cfg, key) or "").strip()
+        is_claude = model.lower().startswith("claude") or (
+            key == "last_model" and (cfg.last_provider or "").lower() == "claude"
+        )
+        if model and (cloud_model_provider(model) or is_claude):
+            setattr(cfg, key, None)
+            cleared.append((key, model))
+    if any(key == "last_model" for key, _ in cleared):
+        cfg.last_provider = None
+    if cleared:
+        cfg.save()
+    return cleared
+
+
 def is_local_recipe(recipe: Optional[str]) -> bool:
     return bool(recipe) and recipe in LOCAL_RECIPES
 
@@ -183,14 +220,14 @@ def assert_model_permitted(
     if not model:
         raise CloudDisabledError(
             "Local only is on and this request names no model, so GAIA can't "
-            f"confirm it stays on this PC. {SETTINGS_HINT}"
+            f"confirm it isn't a cloud model. {SETTINGS_HINT}"
         )
     try:
         recipes = recipes_of(model)
     except Exception as e:  # any catalog failure means "unconfirmed"
         raise CloudDisabledError(
             f"Local only is on and GAIA couldn't read Lemonade's model catalog to "
-            f"confirm that '{model}' runs on this PC ({e}). Start Lemonade and "
+            f"confirm that '{model}' isn't a cloud model ({e}). Start Lemonade and "
             f"retry. {SETTINGS_HINT}"
         ) from e
     if recipes and all(is_local_recipe(r) for r in recipes):
@@ -201,7 +238,7 @@ def assert_model_permitted(
     elif len(set(recipes)) > 1:
         why = (
             f"its name matches several catalog entries ({', '.join(map(str, recipes))}) "
-            "and not all of them run on this PC"
+            "and not all of them are local models"
         )
     elif remote[0] is None:
         why = "Lemonade's catalog lists it without saying where it runs"
@@ -210,7 +247,7 @@ def assert_model_permitted(
     elif str(remote[0]).startswith("collection."):
         why = f"it is a '{remote[0]}' model, which can forward requests to the cloud"
     else:
-        why = f"its recipe '{remote[0]}' isn't one GAIA knows runs on this PC"
+        why = f"its recipe '{remote[0]}' isn't one GAIA knows is a local model"
     raise CloudDisabledError(
         f"Local only is on, so '{model}' was blocked: {why}. Pick a local "
         f"model. {SETTINGS_HINT}"
@@ -218,28 +255,50 @@ def assert_model_permitted(
 
 
 def catalog_recipes(client: Any, model: str) -> List[Optional[str]]:
-    """Recipes of the catalog entries *model* names on *client*'s server.
+    """Recipes of the catalog entries *model* names on a ``LemonadeClient``'s server."""
+    return recipes_in_catalog(
+        model, client._model_metadata, lambda: client.list_models(show_all=True)
+    )
+
+
+def recipes_in_catalog(
+    model: str,
+    cached: Dict[str, Dict[str, Any]],
+    fetch_catalog: Callable[[], Dict[str, Any]],
+) -> List[Optional[str]]:
+    """Recipes of the catalog entries *model* names.
 
     An exact id wins. Otherwise every entry equal under Lemonade's lenient
-    matching (case, ``user.`` prefix) counts. A miss re-reads the catalog once.
+    matching (case, ``user.`` prefix) counts. *cached* is consulted first; a
+    miss reads the catalog once through *fetch_catalog* (``{"data": [...]}``).
     """
-    from gaia.llm.lemonade_client import _model_ids_match
+    from gaia.llm.lemonade_client import MODELS, _model_ids_match
 
     def lookup(entries: Dict[str, Dict[str, Any]]) -> List[Optional[str]]:
         exact = entries.get(model)
         if exact is not None:
             return [exact.get("recipe")]
+        # A snapshot: another thread's list_models may be adding entries.
         return [
             e.get("recipe")
-            for mid, e in entries.items()
+            for mid, e in list(entries.items())
             if _model_ids_match(mid, model)
         ]
 
-    found = lookup(client._model_metadata)
+    found = lookup(cached)
     if found:
         return found
-    catalog = client.list_models(show_all=True)
-    return lookup({e["id"]: e for e in catalog.get("data", []) if e.get("id")})
+    catalog = fetch_catalog()
+    found = lookup({e["id"]: e for e in catalog.get("data", []) if e.get("id")})
+    if found:
+        return found
+    # A user.* model GAIA declares is listed only after its first pull; its
+    # declared recipe says where it will run, so a fresh machine can pull it.
+    return [
+        req.recipe
+        for req in MODELS.values()
+        if req.recipe and _model_ids_match(req.model_id, model)
+    ]
 
 
 def assert_provider_permitted(provider: str) -> None:
@@ -284,7 +343,15 @@ def guard_inference(default_model: Optional[Callable[[Any], Optional[str]]] = No
                 follow = getattr(self, "_follow_gaia_lemonade", None)
                 if follow is not None:
                     follow()
-                assert_model_permitted(model, lambda m: catalog_recipes(self, m))
+                survive = getattr(self, "_survive_gaia_lemonade_stop", None)
+
+                def recipes_of(m: str) -> List[Optional[str]]:
+                    if survive is None:
+                        return catalog_recipes(self, m)
+                    # Wait out a daemon-driven restart, as the request would.
+                    return survive(lambda: catalog_recipes(self, m), m)
+
+                assert_model_permitted(model, recipes_of)
             return method(self, *args, **kwargs)
 
         wrapper.__local_only_guarded__ = True

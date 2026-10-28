@@ -112,6 +112,14 @@ icon: "bug"
     [Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run).
   </Accordion>
 
+  <Accordion title="A cloud model or provider is refused: 'Local only is on'" icon="lock">
+    `network_policy` is set to `local_ai_only`, so GAIA refuses every cloud AI model
+    and won't hand Lemonade a cloud key. Check it with `gaia config get
+    network_policy`, and allow cloud models again with `gaia config set
+    network_policy cloud_allowed`. If you never set it, look at `~/.gaia/policy.json`:
+    a file GAIA can't read counts as Local only. See [Local only](/reference/cli#local-only).
+  </Accordion>
+
   <Accordion title="Connecting a cloud provider fails while GAIA uses my Lemonade" icon="plug-circle-xmark">
     While GAIA uses a Lemonade you run, it never changes that server's setup, so it
     won't register Fireworks AI or the AMD LLM Gateway there or hand it a key. The

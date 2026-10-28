@@ -499,6 +499,7 @@ class LemonadeASRClient(LemonadeAudioService):
         # process to evict it mid-flight, or to interleave its own request
         # between two of ours if we re-acquired per chunk. A no-op in
         # standalone mode, where there is no broker to coordinate.
+        self._refuse_unless_local()
         with self._slot_lease():
             if len(chunks) == 1:
                 # The common case, byte-for-byte unchanged: the original file

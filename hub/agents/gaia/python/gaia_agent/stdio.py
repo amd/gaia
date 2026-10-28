@@ -883,6 +883,14 @@ def switch_model(
     *on_status* receives a plain-language line while the switch waits for
     GAIA's model server to come back after a restart.
     """
+    from gaia.llm.lemonade_client import cloud_model_provider
+    from gaia.llm.local_only import SETTINGS_HINT, cloud_blocked
+
+    if cloud_blocked() and (is_claude_model(target) or cloud_model_provider(target)):
+        raise RuntimeError(
+            f"Local only is on, so GAIA won't switch to the cloud model {target}. "
+            f"{SETTINGS_HINT}"
+        )
     if is_claude_model(target):
         return _apply_claude_switch(agent, target)
     return _apply_local_switch(agent, target, on_status)

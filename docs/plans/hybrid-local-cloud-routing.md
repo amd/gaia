@@ -41,9 +41,9 @@ quality**. Cost is secondary, and it matters only with a premium cloud model.
    it for the UI, and Go computes it for the TUI, pinned by shared golden fixtures.
    Neither client routes.
 
-Builds on [`lemonade-routing-integration.md`](lemonade-routing-integration.md)
-(tier at the skill boundary; Lemonade's router as a guardrail only) and
-[`skill-bound-task-execution.md`](skill-bound-task-execution.md) (`requires.class`).
+Builds on [`skill-bound-task-execution.md`](skill-bound-task-execution.md)
+(`requires.class`): the tier is decided at the skill boundary, and Lemonade's own
+router is used only as a guardrail, never to pick the tier.
 
 ---
 
@@ -104,7 +104,7 @@ ids, or catalog metadata when it's passed. Anything else returns "not cloud": Cl
 ids, a provider such as `vercel.*`, or a Lemonade router alias with no dot. A blocklist
 built on it would leak, so the switch uses an **allowlist** instead.
 
-- **`gaia.llm.local_only.assert_permitted(model_id)`.** While the switch is on, a
+- **`gaia.llm.local_only.assert_model_permitted(model, recipes_of)`.** While the switch is on, a
   model is permitted only if Lemonade's cached `/v1/models` lists it as **local**: a
   non-cloud, non-router recipe.
   - Unknown ids, unlisted ids, and an unreadable catalog are all refused with
@@ -119,7 +119,7 @@ built on it would leak, so the switch uses an **allowlist** instead.
 
 | Path | Today | Change |
 |---|---|---|
-| `LemonadeClient` | **No single request funnel.** `chat_completions`, `completions` and `responses` each make their own `requests.post`, and the streaming paths build their own `OpenAI(...)` client (`_stream_chat_chunks`, `_stream_completions_with_openai`) | `@local_only_guard` decorates an **explicit list of inference methods**: `chat_completions`, `completions`, `responses`, `embeddings`, the VLM/ASR inference calls, and the streaming helpers they use. **Model management is exempt by name** (`pull_model`, `pull_model_stream`, `load_model`, `unload_model`, `delete_model`), so downloading a local model still works while Local only is on. A test fails if a method that issues an inference request (it touches an inference endpoint or builds an `OpenAI(` client) isn't on the guarded list, so a new one can't skip the check |
+| `LemonadeClient` | **No single request funnel.** `chat_completions`, `completions` and `responses` each make their own `requests.post`, and the streaming paths build their own `OpenAI(...)` client (`_stream_chat_chunks`, `_stream_completions_with_openai`) | `@guard_inference` decorates an **explicit list of inference methods**: `chat_completions`, `completions`, `responses`, `embeddings`, the VLM/ASR inference calls, and the streaming helpers they use. **Model management is exempt by name** (`pull_model`, `pull_model_stream`, `load_model`, `unload_model`, `delete_model`), so downloading a local model still works while Local only is on. A test fails if a method that issues an inference request (it touches an inference endpoint or builds an `OpenAI(` client) isn't on the guarded list, so a new one can't skip the check |
 | `create_client("claude")` | Builds `ClaudeProvider` | Refused while on |
 | Session auto-titling (`ui/_chat_helpers.py`) | Raw `POST /chat/completions` with the session's model | Goes through `LemonadeClient`, **pinned local in every mode**. A title never needs the cloud, and today it would leak a local turn's text in hybrid |
 | Eval judge and scenario runner | `anthropic.Anthropic` (`eval/claude.py`), a `claude -p` subprocess (`eval/judge_client.py`, `eval/runner.py`), an `OpenAI` client (`eval/tool_cost.py`) | Each calls `assert_permitted` before its request or subprocess |
@@ -544,7 +544,7 @@ cloud mode.
   Answer-quality triggers are excluded, because they fire after text has already
   streamed to the user.
 - **Each cloud call is re-checked, in two layers:**
-  - **Local only** is checked by `@local_only_guard` on the `LemonadeClient` inference
+  - **Local only** is checked by `@guard_inference` on the `LemonadeClient` inference
     methods (§2.1.2), which needs no session context.
   - **The stage-B gates** (privacy taint that appeared mid-turn, the AMD-network
     rule, a grant revoked mid-turn, the turn's provider lost, the per-call cap
@@ -877,7 +877,7 @@ confirmation (§2.1.5).
 ### 3.4 CLI and docs
 
 - **CLI:**
-  - `gaia config set network_policy cloud_allowed|local_ai_only|offline`, `privacy_mode`, `share_routing_stats` and the `routing_*` keys go in
+  - `gaia config set network_policy cloud_allowed|local_ai_only` (`offline` once §2.1.7 lands), `privacy_mode`, `share_routing_stats` and the `routing_*` keys go in
     `docs/reference/cli.mdx`;
   - `gaia llm` / `gaia prompt` with a cloud model fail with the kill-switch error when
     it's on.
@@ -1245,7 +1245,7 @@ flagship baseline and re-running lone flips.
 
 | Phase | Deliverable | Exit |
 |---|---|---|
-| 0 | **Local only** switch, scoped to what exists today: `policy.json` + atomic config writers; `@local_only_guard` on the listed `LemonadeClient` inference methods (model management exempt, plus the inference-method test) and in `create_client`; auto-titling through `LemonadeClient`; judge/runner/`tool_cost` checks; census scan; one gated key re-send function (Python) + Go key-path checks; stored-cloud-id rewrite and refusal of cloud **model ids** on every existing write path; sidecar `/version` `policy_enforced` check; option state (`local_only`, `no_local_model` codes only) for the **existing** provider and model surfaces, in Python and Go with shared fixtures; docs | Kill-switch, census and option-state tests pass; a network-level assertion shows zero cloud requests. **No dependency on later phases:** `routing_*` fields, availability reason codes and the mode selector don't exist yet, and each is born with its Local only check in the phase that adds it |
+| 0 | **Local only** switch, scoped to what exists today: `policy.json` + atomic config writers; `@guard_inference` on the listed `LemonadeClient` inference methods (model management exempt, plus the inference-method test) and in `create_client`; auto-titling through `LemonadeClient`; judge/runner/`tool_cost` checks; census scan; one gated key re-send function (Python) + Go key-path checks; stored-cloud-id rewrite and refusal of cloud **model ids** on every existing write path; sidecar `/version` `policy_enforced` check; option state (`local_only`, `no_local_model` codes only) for the **existing** provider and model surfaces, in Python and Go with shared fixtures; docs | Kill-switch, census and option-state tests pass; a network-level assertion shows zero cloud requests. **No dependency on later phases:** `routing_*` fields, availability reason codes and the mode selector don't exist yet, and each is born with its Local only check in the phase that adds it |
 | 0b | **Offline** + **AMD-network rule** + managed policy file. **UI and TUI:** the three-level network-policy selector (replacing Phase 0's toggle), the Offline badge and list of turned-off features, "Set by your organization" locks, "Not allowed on the AMD network" rows, and the option codes `offline`, `needs_os_confinement`, `managed_by_org`, `blocked_on_corporate_network` in Python and Go with shared fixtures (§3.2, §3.3). **Backend:** `network=True` / `reads_user_data=True` tool tags; the `is_offline()` guards on background paths; in-process loopback guards (Python audit hook, Go transport, Electron); Linux network-namespace child confinement; Windows AppContainer if resolved (open question 9); the marker check in the request guard | Offline, AMD-network and option-state tests (both clients, every new code) pass; the OS packet capture shows zero egress |
 | 1 | `llm/pricing.py` (single rate card) + SQLite ledger; `chat` suite + replayed multi-turn set + frozen holdout; `hybrid-grid` job; local and cloud arms (Fireworks public, gateway internal); oracle | Ledger reconciles with the **Fireworks usage export** within ±5%; kill check passes per machine class |
 | 2 | Rebind in `base/` + fast path; `current_route`; call-site pinning + census; call-level retry; cache decision from Phase 1 data | Rebind-equivalence and side-effect-once tests pass; `gaia eval agent` shows no regression |
@@ -1253,6 +1253,19 @@ flagship baseline and re-running lone flips.
 | 4 | Escalation and consent prompts (pre-routed and escalation); `route` in `status`; SSE spec; opt-in **routing stats** (schema, preview, upload, once open question 1 is resolved) | Bounds and side-effect-once tests pass; stats schema test passes |
 | 5 | UI and TUI hybrid surfaces, labelled **Preview**; guide | Parity test; the `driving-the-tui` harness asserts route notes |
 | 6 | **Four arms on the holdout** (local-only, cloud-only, hybrid, hybrid + privacy mode), 5 repeats each, per machine class → §5 bars → drop the Preview label per class | All §5 rows met for that class |
+
+**Status of Phase 0 (shipped in #5956):** `policy.json` with atomic writes and a
+fail-closed read; the catalog allowlist via `@guard_inference` on every
+`LemonadeClient` inference method (with a static test), `ClaudeProvider`, the eval
+Claude client, every `claude` CLI launch, speech-to-text and text-to-speech, the
+tool-cost benchmark, and Perplexity search; cloud keys withheld in Python
+(`cloud_keys`, `gateway`) and Go (`RefuseRequest`, the gateway screen); Agent UI and
+daemon key routes answering 409; a saved cloud model cleared from `config.json` and
+not restored by the Agent UI; the outbound-AI census test; `gaia config` CLI and
+docs. **Not yet:** a Settings toggle and the shared Python/Go option-state fixtures
+(§3), and the sidecar `/version` probe (§2.1.2). The email sidecar has no saved cloud
+model, but a per-request model sent to an email sidecar built before #5956 is
+unguarded until that probe lands.
 
 - **Rollback** at any point: `routing_mode=local`, or Local only.
 - Phases 0 and 1 are worth shipping even if hybrid is killed: a provable "no cloud"
