@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Asked for a slide or deck, the agent asks whether you want PowerPoint (.pptx)
+  or HTML when you didn't say, then builds that file. It no longer reaches for
+  `generate_image`, which can't render readable text. A successful image is
+  reported by its saved path.
 - `get_system_info` reports free disk space (`disk_free_gb`) and available
   memory (`memory_available_gb`), and computes disk use from free space. On a
   Mac it reported only the share macOS's system volume uses, so a nearly full
