@@ -481,7 +481,7 @@ def summarize_turn(
         )
     if tokens_in is None or tokens_out is None:
         unknown["tokens"] = "Not every model call reported its token counts."
-    return {
+    summary = {
         "model": model_id,
         "time": split,
         **speeds,
@@ -499,6 +499,11 @@ def summarize_turn(
         "cost": _cost(model_id, tokens_in, cached, tokens_out),
         "unknown": unknown,
     }
+    # A finite input can still produce infinity in a derived speed or prompt
+    # size.  Reject the complete record so the caller stores the turn as
+    # unmeasured instead of persisting a value the API cannot serialize.
+    json.dumps(summary, allow_nan=False)
+    return summary
 
 
 def _weighted_rate(pairs: List[Tuple[float, float]]) -> Optional[float]:

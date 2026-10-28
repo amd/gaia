@@ -181,7 +181,9 @@ def test_turn_token_totals_that_overflow_are_not_measured(caplog):
                     "prompt_tokens": 1e308,
                     "cache_tokens": 1e308,
                     "input_tokens": 1e308,
-                    "output_tokens": 10,
+                    "output_tokens": 1e308,
+                    "time_to_first_token": 1.0,
+                    "tokens_per_second": 10.0,
                 },
             ),
             _stats(
@@ -190,18 +192,17 @@ def test_turn_token_totals_that_overflow_are_not_measured(caplog):
                     "prompt_tokens": 1e308,
                     "cache_tokens": 1e308,
                     "input_tokens": 1e308,
-                    "output_tokens": 20,
+                    "output_tokens": 1e308,
+                    "time_to_first_token": 1.0,
+                    "tokens_per_second": 10.0,
                 },
             ),
         ],
     }
 
-    perf = turn_insights.summarize_turn(result, wall_seconds=1.0, model_id="M-GGUF")
+    with pytest.raises(ValueError, match="Out of range float values"):
+        turn_insights.summarize_turn(result, wall_seconds=1.0, model_id="M-GGUF")
 
-    assert perf["tokens_in"] is None
-    assert perf["tokens_cached"] is None
-    assert perf["tokens_new"] is None
-    assert perf["tokens_out"] == 30
     assert "turn input tokens overflowed" in caplog.text
 
 
