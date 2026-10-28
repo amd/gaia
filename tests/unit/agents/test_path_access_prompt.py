@@ -5,6 +5,7 @@
 import json
 import threading
 import time
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
@@ -541,31 +542,91 @@ def test_the_hint_never_makes_the_home_folder_itself_askable(layout, home):
     assert console.calls == []
 
 
-class _UnattendedConsole(_RecordingConsole):
-    blocking_confirmation = False
+def _sidecar_handler(*, session, can_answer_questions):
+    """The handler the GAIA sidecar's /query builds, told who can answer."""
+    from gaia_agent.server import QueryRequest, _declare_who_answers
+
+    handler = SSEOutputHandler()
+    request = QueryRequest(
+        query="q",
+        run_id=str(uuid.uuid4()),
+        context=[],
+        can_answer_questions=can_answer_questions,
+    )
+    _declare_who_answers(handler, session, request)
+    return handler
 
 
-def test_home_folder_refusal_names_no_folder_on_a_console_nobody_answers(layout, home):
-    console = _UnattendedConsole(True)
+def _named(refused, home, name):
+    return json.dumps(str(home / name))[1:-1] in refused
+
+
+def test_a_background_run_is_offered_no_folder_it_would_be_refused(layout, home):
+    console = SSEOutputHandler(background_mode=True)
     agent = _BrowseAgent(layout["scope"], console)
+
+    refused = _browse(agent, home)
+    asked = _browse(agent, home / "Movies")
+
+    assert "too broad" in refused
+    assert not _named(refused, home, "Movies")
+    # The folder the hint would have named is refused on this run.
+    assert "Access denied" in asked
+
+
+@pytest.mark.parametrize(
+    "session, can_answer_questions",
+    [(None, None), (object(), False), (None, True)],
+    ids=["sessionless", "cannot_answer", "sessionless_even_if_watched"],
+)
+def test_an_unattended_sidecar_run_is_offered_no_folder(
+    layout, home, session, can_answer_questions
+):
+    console = _sidecar_handler(
+        session=session, can_answer_questions=can_answer_questions
+    )
+    agent = _BrowseAgent(layout["scope"], console)
+
+    refused = _browse(agent, home)
+
+    assert console.answers_confirmations is False
+    assert "too broad" in refused
+    assert not _named(refused, home, "Movies")
+
+
+def test_an_attended_sidecar_run_is_still_offered_the_folder(layout, home):
+    console = _sidecar_handler(session=object(), can_answer_questions=True)
+    agent = _BrowseAgent(layout["scope"], console)
+
+    assert _named(_browse(agent, home), home, "Movies")
+
+
+def test_an_agent_ui_chat_is_still_offered_the_folder(layout, home):
+    # In process, the Agent UI asks through its modal with answers_confirmations unset.
+    agent = _BrowseAgent(layout["scope"], SSEOutputHandler())
+
+    assert _named(_browse(agent, home), home, "Movies")
+
+
+def test_a_terminal_nobody_is_at_is_offered_no_folder(layout, home):
+    agent = _BrowseAgent(layout["scope"], SilentConsole())
 
     with patch("gaia.agents.base.agent.terminal_is_interactive", return_value=False):
         refused = _browse(agent, home)
 
     assert "too broad" in refused
-    assert "Movies" not in refused
-    assert console.calls == []
+    assert not _named(refused, home, "Movies")
 
 
-def test_home_folder_refusal_names_folders_under_full_access_unattended(layout, home):
-    console = _UnattendedConsole(True)
+def test_full_access_on_a_background_run_is_offered_the_folder(layout, home):
+    console = SSEOutputHandler(background_mode=True)
     console.full_access = True
     agent = _BrowseAgent(layout["scope"], console)
 
-    with patch("gaia.agents.base.agent.terminal_is_interactive", return_value=False):
-        refused = _browse(agent, home)
+    refused = _browse(agent, home)
 
-    assert "Movies" in refused
+    assert _named(refused, home, "Movies")
+    assert "Access denied" not in _browse(agent, home / "Movies")
 
 
 def test_home_folder_refusal_names_no_folder_when_tools_are_preapproved(layout, home):

@@ -3180,6 +3180,11 @@ Do NOT wrap conversational replies in JSON.
         if self._path_access_refusal_unasked(path):
             return True
         console = self.console
+        # A background run or an unattended sidecar query denies every prompt.
+        if getattr(console, "background_mode", False) is True:
+            return True
+        if getattr(console, "nobody_answers", False) is True:
+            return True
         if getattr(console, "blocking_confirmation", False):
             return False
         # A terminal console asks only on an interactive terminal; others deny.

@@ -534,6 +534,10 @@ class SSEOutputHandler(OutputHandler):
     #: permission mode; ``None`` when no relayed run is doing so.
     active_relay_mode_session: Optional[str] = None
 
+    #: Set by a transport that knows no person can answer a confirmation on
+    #: this run (an unattended sidecar query), so nothing offers to ask one.
+    nobody_answers: bool = False
+
     def __init__(self, background_mode: bool = False):
         self.event_queue: queue.Queue = queue.Queue()
         self.cancelled = threading.Event()
