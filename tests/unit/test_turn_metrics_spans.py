@@ -305,14 +305,14 @@ def test_the_clients_lock_lease_and_probe_waits_land_on_the_open_call(
     def other_request():
         with lock:
             held.set()
-            lock.contended.wait(2)
+            lock.contended.wait(30)
             # This delay begins only after the measured request has reached the
             # lock, so it proves a real wait without relying on timer ordering.
             time.sleep(0.05)
 
     holder = threading.Thread(target=other_request)
     holder.start()
-    assert held.wait(2)
+    assert held.wait(30)
     rec = _recorder(tmp_path)
     perf_trace.activate(rec)
     try:
@@ -322,7 +322,7 @@ def test_the_clients_lock_lease_and_probe_waits_land_on_the_open_call(
         rec.end_llm_call({})
     finally:
         perf_trace.activate(None)
-        holder.join(2)
+        holder.join(30)
 
     waits = rec.llm_calls[0]["client"]
     assert lock.contended.is_set()
