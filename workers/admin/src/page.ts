@@ -386,8 +386,8 @@ function drawOverview(){var d=D.downloads,t=D.traction,h='';
   var fin=rr2.filter(function(r){return !r.rc;}).map(function(r){return r.tag;}),rcs=rr2.filter(function(r){return r.rc;}),shipped=rcs.filter(function(r){return fin.indexOf(r.tag.replace(/-rc\.?\d+$/i,''))>=0;}).length;
   var base=function(r){return r.tag.replace(/-rc\.?\d+$/i,'');},withRc=fin.filter(function(t){return rcs.some(function(r){return base(r)===t;});}).length;
   var nf=fin.length,nrc=rcs.length,open=nrc-shipped,rcp=withRc?shipped/withRc:null;
-  h+=kpi('rels','Releases',fmt(nf),'plus '+plural(nrc,'release candidate')+(rcp!=null?' (<b>'+(Math.round(rcp*10)/10)+' per release</b>'+(open?', '+open+' for a version not yet released':'')+')':'')+' · '+rangeText(),level(rcp,{good:3,warn:6,higher:false}),rcp==null?'':(Math.round(rcp*10)/10)+' release candidates per final release');
-  if(rcp!=null)attnValue('rels',(Math.round(rcp*10)/10)+' RCs per release');
+  h+=kpi('rels','Releases',fmt(nf),'plus '+plural(nrc,'release candidate')+(rcp!=null?' (<b>'+(Math.round(rcp*10)/10)+' per release</b>'+(withRc<nf?' across the '+plural(withRc,'release')+' that used them':'')+(open?', '+open+' for a version not yet released':'')+')':'')+' · '+rangeText(),level(rcp,{good:3,warn:6,higher:false}),rcp==null?'':(Math.round(rcp*10)/10)+' release candidates per final release');
+  if(rcp!=null)attnValue('rels',(Math.round(rcp*10)/10)+' RCs per release'+(withRc<nf?' (the '+withRc+' that used them)':''));
   el('ov').innerHTML=h+'</div></div>';}
 
 DRAW.rel=drawReleases;
