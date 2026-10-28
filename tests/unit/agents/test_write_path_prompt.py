@@ -159,6 +159,35 @@ def test_a_write_inside_scope_carries_no_location_note(layout):
     assert RISK_NOTE_ARG not in console.calls[0][1]
 
 
+def test_a_relative_write_in_the_chat_workspace_asks_nothing_about_location(
+    layout, monkeypatch
+):
+    """The location check resolves a relative path where the write lands (#5861)."""
+    monkeypatch.chdir(layout["docs"])
+    console = _RecordingConsole(True)
+    agent = _WriteAgent(layout["scope"], console)
+    agent.working_directory = str(layout["scope"])
+
+    assert _write(agent, "notes.txt")["status"] == "success"
+    assert (layout["scope"] / "notes.txt").read_text(encoding="utf-8") == "hello"
+    assert not (layout["docs"] / "notes.txt").exists()
+    assert RISK_NOTE_ARG not in console.calls[0][1]
+
+
+def test_a_relative_write_names_the_workspace_target_not_the_cwd(layout, monkeypatch):
+    monkeypatch.chdir(layout["scope"])
+    console = _RecordingConsole(True)
+    agent = _WriteAgent(layout["scope"], console)
+    agent.working_directory = str(layout["docs"])
+
+    assert _write(agent, "notes.txt")["status"] == "success"
+    shown = console.calls[0][1]
+    assert shown["file_path"] == str((layout["docs"] / "notes.txt").resolve())
+    assert "outside" in shown[RISK_NOTE_ARG]
+    assert (layout["docs"] / "notes.txt").exists()
+    assert not (layout["scope"] / "notes.txt").exists()
+
+
 def _answer_next_prompt(handler, **decision):
     deadline = time.monotonic() + 5
     while handler._confirm_event is None and time.monotonic() < deadline:
