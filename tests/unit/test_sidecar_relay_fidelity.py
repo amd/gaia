@@ -687,6 +687,137 @@ def test_a_relayed_page_fetch_names_its_site_in_the_turn_summary():
     assert summary["live_data"] == {"attempted": 2, "failed": 0}
 
 
+_SEARCH_RESULT = (
+    'Web search results for: "2024 nobel physics"\n\n'
+    "1. The Nobel Prize in Physics 2024 - NobelPrize.org\n"
+    "   https://www.nobelprize.org/prizes/physics/2024/summary/\n"
+    "   The Nobel Prize in Physics 2024 was awarded jointly to John J. Hopfield"
+    " and Geoffrey Hinton for foundational discoveries and inventions.\n\n"
+    "2. Hopfield and Hinton win physics Nobel - Reuters\n"
+    "   https://www.reuters.com/science/nobel-physics-2024/\n"
+    "   The two scientists were honoured for work that enables machine learning"
+    " with artificial neural networks.\n\n"
+    "Use fetch_page(url) to read the full content of any result."
+)
+
+
+def test_a_relayed_web_search_lists_its_hits_as_sources_and_names_its_site():
+    handler = SSEOutputHandler()
+    _relay(
+        handler,
+        _sidecar_events("search_web", {"query": "2024 nobel physics"}, _SEARCH_RESULT),
+    )
+    summary = handler.turn_ledger.summary(location=None)
+    assert summary["pages"] == [
+        {
+            "url": "https://www.nobelprize.org/prizes/physics/2024/summary/",
+            "title": "The Nobel Prize in Physics 2024 - NobelPrize.org",
+            "kind": "search_result",
+        },
+        {
+            "url": "https://www.reuters.com/science/nobel-physics-2024/",
+            "title": "Hopfield and Hinton win physics Nobel - Reuters",
+            "kind": "search_result",
+        },
+    ]
+    assert summary["sites"] == ["duckduckgo.com"]
+    assert summary["live_data"] == {"attempted": 1, "failed": 0}
+
+
+def _real_search_web(hits):
+    """What the built-in ``search_web`` tool returns for *hits*, from the tool
+    itself with only DuckDuckGo stubbed."""
+    from unittest.mock import MagicMock, patch
+
+    from gaia.agents.tools.browser_tools import BrowserToolsMixin
+
+    tools = {}
+
+    class _Host(BrowserToolsMixin):
+        def __init__(self, web_client):
+            self._web_client = web_client
+            self._path_validator = None
+            self._tools = {}
+
+    def capture(atomic=True):
+        def decorator(func):
+            tools[func.__name__] = func
+            return func
+
+        return decorator
+
+    client = MagicMock()
+    client.search_duckduckgo.return_value = hits
+    with patch("gaia.agents.base.tools.tool", capture):
+        _Host(client).register_browser_tools()
+    return tools["search_web"]("q", num_results=10)
+
+
+def _relayed_search(result):
+    handler = SSEOutputHandler()
+    _relay(handler, _sidecar_events("search_web", {"query": "q"}, result))
+    return handler.turn_ledger.summary(location=None)
+
+
+def test_the_real_search_tool_output_reaches_a_relayed_turn_as_sources():
+    hits = [
+        {
+            "title": f"Result {i}",
+            "url": f"https://site{i}.example.org/p",
+            "snippet": "s",
+        }
+        for i in range(10)
+    ]
+    summary = _relayed_search(_real_search_web(hits))
+    assert [p["url"] for p in summary["pages"]] == [h["url"] for h in hits]
+    assert [p["title"] for p in summary["pages"]] == [h["title"] for h in hits]
+    assert summary["sites"] == ["duckduckgo.com"]
+
+
+def test_a_relayed_search_with_no_results_lists_no_sources():
+    summary = _relayed_search(_real_search_web([]))
+    assert summary["pages"] == []
+    assert summary["live_data"] == {"attempted": 1, "failed": 0}
+
+
+def test_a_relayed_search_lists_a_repeated_hit_once():
+    hit = {"title": "Same", "url": "https://dup.example.org/", "snippet": ""}
+    summary = _relayed_search(_real_search_web([hit, dict(hit)]))
+    assert summary["pages"] == [
+        {"url": "https://dup.example.org/", "title": "Same", "kind": "search_result"}
+    ]
+
+
+def test_a_relayed_search_hit_that_is_not_a_web_link_is_dropped():
+    events = _sidecar_events("search_web", {"query": "q"}, _SEARCH_RESULT)
+    events[-1]["data"]["sources"] = [
+        {"title": "script", "url": "javascript:alert(1)"},
+        {"title": "file", "url": "file:///C:/Windows/win.ini"},
+        {"title": "no url"},
+        {"title": "not a string", "url": ["https://a.example.org/"]},
+        "https://bare-string.example.org/",
+        {"title": {"x": 1}, "url": "https://ok.example.org/"},
+    ]
+    handler = SSEOutputHandler()
+    _relay(handler, events)
+    assert handler.turn_ledger.summary(location=None)["pages"] == [
+        {"url": "https://ok.example.org/", "title": None, "kind": "search_result"}
+    ]
+
+
+def test_search_shaped_text_from_another_tool_is_not_a_source():
+    summary = _relayed_summary("read_file", {"path": "notes.txt"}, _SEARCH_RESULT)
+    assert all(p["kind"] != "search_result" for p in summary["pages"])
+    assert summary["sites"] == []
+
+
+def test_a_relayed_search_the_service_refused_names_no_sources():
+    refused = {"status": "error", "error": "Web search is temporarily unavailable"}
+    summary = _relayed_search(refused)
+    assert summary["pages"] == []
+    assert summary["sites"] == []
+
+
 def test_a_relayed_write_lists_the_file_in_the_turn_summary(tmp_path):
     path = tmp_path / "notes.md"
     path.write_text("hi", encoding="utf-8")

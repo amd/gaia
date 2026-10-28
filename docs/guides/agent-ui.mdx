@@ -346,6 +346,10 @@ and where that model runs.
   mail account), then research, code and summaries, which work on a fresh
   install, and a check-in once its skill is installed. A task with a subject
   to fill in is typed into the message box; the others start straight away.
+  Click the folder under the message box to give the chat another folder it
+  may read and write from its first message, the same as **Add folder** in the
+  session panel. When the GAIA agent runs as its own process, it keeps its own
+  limits, so the folder shows as plain text instead.
 - **The session panel** on the right keeps the facts about this chat in view;
   see [The session panel](#the-session-panel).
 - **"Loading Qwen3.6-35B-A3B on your GPU… 12s"** under the message box means
@@ -717,31 +721,41 @@ GAIA's own** is refused, with nothing changed, when GAIA's own server isn't
 installed; `gaia init --gaia-lemonade` installs it and switches. See
 [Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run).
 
-## Roll back to a previous version
+## Updates and installing a specific version
 
-If an update introduces a regression, you can roll back to a specific earlier release directly from the app — no need to hunt down an old installer on GitHub.
+GAIA offers each new release and waits for you: auto-update is **off by default**.
+Everything lives in **Settings → General → Updates** (desktop installer only):
 
-**How to roll back (desktop installer only):**
+- **Install updates automatically** — off by default. The Terminal UI follows the
+  same setting.
+- **Include release candidates** — off by default. On, GAIA also offers `vX.Y.Z-rcN`
+  test builds; they still wait for you unless auto-update is on. A release
+  candidate build is offered newer candidates either way.
+- **Check for updates**, then **Update to vX** when one is waiting. The corner chip
+  offers the same **Update now**.
+- **Install a specific version…** — pick any published release, newer or older
+  (useful to step back from a regression). The app downloads it and shows a native
+  "Restart now?" prompt.
 
-1. Open **Settings → Advanced**.
-2. Click **"Roll back to a previous version"**.
-3. The app fetches the list of published releases from GitHub and shows them newest-first, with your currently installed version marked.
-4. Click an older release to open a confirmation step.
-5. Confirm — the app downloads the selected version and shows a native "Restart now?" prompt when ready. Click Restart and the older version launches.
+**Pinning:** after installing a specific version, GAIA stays on it and offers no
+updates. The Updates section shows "Pinned to vX.Y.Z"; click **Unpin** to resume.
 
-**Version pinning (AC2):** After a manual rollback, auto-update is automatically paused. The About section shows "Auto-update paused (pinned to vX.Y.Z)" so you know it's held. Click **Resume updates** in the same section to re-enable normal auto-updates.
+Checks read the [GitHub releases](https://github.com/amd/gaia/releases) and take the
+newest one on your channel that publishes this platform's update. When none does,
+the Updates section says so rather than "up to date", and you install from the
+releases page instead.
 
 ### Platform support
 
-| Platform | Rollback support |
+| Platform | Specific-version install |
 |----------|-----------------|
 | Windows (NSIS installer) | Full — download + reinstall works end-to-end |
-| macOS (DMG/ZIP, signed builds) | Works on signed release builds; unsigned dev builds download but cannot apply the update |
+| macOS | Not yet — releases don't publish the `.zip` the macOS updater installs from ([#5682](https://github.com/amd/gaia/issues/5682)); install the `.dmg` from [Releases](https://github.com/amd/gaia/releases) |
 | Linux AppImage | Supported (self-replacing) |
 | Linux .deb | Not supported via in-app rollback — use `sudo apt install ./gaia-agent-ui-<version>-amd64.deb` from [Releases](https://github.com/amd/gaia/releases) |
 
 <Note>
-The rollback list only shows releases that have an installer for your current platform. Releases without a matching artifact are filtered out automatically.
+The version list only shows releases that have an installer for your current platform. Releases without a matching artifact are filtered out automatically.
 </Note>
 
 ---
@@ -789,7 +803,7 @@ Chats, documents and schedules are saved on disk as you go. What happens to work
 
 | What happened | A reply being written | A document being indexed |
 |---------------|-----------------------|--------------------------|
-| You switch chats or close the browser tab | Keeps going; reopen the chat to watch it finish | Keeps going |
+| You switch chats, open Memory or Scheduled tasks, or close the browser tab | Keeps going; reopen the chat to watch it finish | Keeps going |
 | You close the desktop window | Keeps going: the window hides to the tray (unless you turned that off) and GAIA keeps running | Keeps going |
 | You quit GAIA, it crashes, or the PC shuts down | Stops. On the next start the reply shows what it had written so far, which tools it had started, then "This answer was interrupted when GAIA closed. Send again to retry." A scheduled run cut short shows the same in its chat. | Stops. On the next start it shows as **Failed** with **Retry**, and "Indexing was interrupted when GAIA closed" under the document |
 

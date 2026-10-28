@@ -93,7 +93,7 @@ describe('ChatView dispatch', () => {
 
     it('sends the opening message ahead of one queued while the chat was created (#5712)', async () => {
         useChatStore.setState({
-            pendingPrompt: 'first',
+            pendingPrompt: { sessionId: SESSION.id, text: 'first' },
             messageQueues: { [SESSION.id]: [{ id: 1, text: 'second', state: 'queued' }] },
         });
 
@@ -105,5 +105,18 @@ describe('ChatView dispatch', () => {
         expect(mockedApi.sendMessageStream).toHaveBeenCalledTimes(1);
         expect(mockedApi.sendMessageStream.mock.calls[0][1]).toBe('first');
         expect(useChatStore.getState().messageQueues[SESSION.id]?.map((m) => m.text)).toEqual(['second']);
+    });
+
+    it('leaves a message meant for another chat unsent (#5924)', async () => {
+        const meant = { sessionId: 'another-chat', text: 'not for this chat' };
+        useChatStore.setState({ pendingPrompt: meant });
+
+        await act(async () => {
+            render(<ChatView sessionId={SESSION.id} />);
+            await new Promise((r) => setTimeout(r, 0));
+        });
+
+        expect(mockedApi.sendMessageStream).not.toHaveBeenCalled();
+        expect(useChatStore.getState().pendingPrompt).toEqual(meant);
     });
 });

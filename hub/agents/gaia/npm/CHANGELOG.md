@@ -12,6 +12,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on every step. On Gemma, on the GPU or the NPU, they are now left out, along
   with the skills built on them; larger models keep everything.
   `GAIA_FEATURE_TIER=full` or `compact` forces one set for any model.
+- **The Agent UI's "Under the hood" figures cover GAIA chats.** It said every
+  answer was "not measured", because only the agent saw its own step timings.
+  `final` now carries `performance` with them: the turn's model and tool
+  seconds and each model call's token counts. Older binaries never send it.
 - **`GET /v1/gaia/skills` says where each skill came from.** Each skill now
   carries a `source` (`agent-bundled`, `user` or `claude-import`; `null` for
   any other root), so the Agent UI can group the Skills list by origin. An
@@ -36,6 +40,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   write resolves to in `prompt_context.file_path`, so a front-end can show
   `/Users/you/shop2.txt` instead of a bare name. `args` still holds exactly the
   model's `file_path`.
+- **A web search's results reach the client.** The Agent UI listed no Sources
+  for a GAIA web search, because a `search_web` `tool_result` carried only a
+  300-character summary. Its `data` now also carries `sources`, a list of
+  `{ title, url }` for each hit. Older binaries never send it.
 
 - **An old failure in memory no longer stops a request you make now.** A note
   like "this page returned 503, don't waste tool calls on it" was obeyed as a
@@ -94,6 +102,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sent when the cancel lands is dropped.
 ### Fixed
 
+- **"Save it to my Documents folder" saves to the user's Documents folder.**
+  The system prompt told GAIA that "my documents" meant its own documents
+  folder (`~/.gaia/documents`), so a new file the user asked for in Documents
+  went into GAIA's hidden folder, where they would never find it. Finding an
+  existing file still checks GAIA's folders first.
 - **Secrets stay out of memory and the conversation log.** A bank PIN was saved
   as a memory, because the filter knew passwords and API keys but not PINs. The
   conversation log also kept the PIN, a password the agent had refused, a card

@@ -55,7 +55,7 @@ beforeEach(() => {
     });
     mocked.checkSetup.mockResolvedValue(READY);
     mocked.requestWarmUp.mockResolvedValue({ state: 'ready' });
-    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false } });
+    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
     mocked.getSetupPlan.mockRejectedValue(new Error('no plan'));
     mocked.getSystemStatus.mockResolvedValue({
         lemonade_running: true,
@@ -150,6 +150,16 @@ describe('a new chat', () => {
         expect(useChatStore.getState().draftDocumentIds).toEqual([]);
     });
 
+    it('starts with the folder picked on the new-chat page, then forgets it', async () => {
+        useChatStore.setState({ draftFolder: '/home/u/site' });
+        render(<App />);
+        await sendFirstMessage('list the pages');
+
+        await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
+        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ folders: ['/home/u/site'] });
+        expect(useChatStore.getState().draftFolder).toBeNull();
+    });
+
     it('sends "ask" too, so a full-access default in config cannot hide behind the chip', async () => {
         render(<App />);
         await sendFirstMessage('go');
@@ -175,6 +185,16 @@ describe('a new chat', () => {
 
         expect(await screen.findByRole('alert')).toHaveTextContent(/permission mode could not be set.*backend said no/);
         expect(mocked.sendMessageStream).not.toHaveBeenCalled();
+        // The unsent message waits in the new chat's own box, not back in New Chat.
+        expect(await screen.findByLabelText('Message')).toHaveValue('go');
+        expect(localStorage.getItem('gaia:draft:new-chat')).toBeNull();
+    });
+
+    it('forgets the first message once sent, so New Chat does not offer it again', async () => {
+        render(<App />);
+        await sendFirstMessage('summarise my notes');
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
+        expect(localStorage.getItem('gaia:draft:new-chat')).toBeNull();
     });
 });
 
@@ -295,7 +315,7 @@ describe('first-run setup', () => {
     async function finishSetupWith(card: StartCard) {
         mocked.checkSetup.mockResolvedValue(NOT_READY);
         mocked.startSetup.mockResolvedValue({ state: 'ready', steps: [] });
-        mocked.getStartScreen.mockResolvedValue({ cards: [card], working_folder: { path: '/w', name: 'w', gaia_folder: false } });
+        mocked.getStartScreen.mockResolvedValue({ cards: [card], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
         render(<App />);
         await userEvent.click(await screen.findByRole('button', { name: 'Start setup' }));
         await userEvent.click(await screen.findByRole('button', { name: new RegExp(card.title) }));
