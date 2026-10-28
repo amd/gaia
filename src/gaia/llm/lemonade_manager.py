@@ -1015,6 +1015,8 @@ class LemonadeManager:
                         return False
 
                 if is_cloud:
+                    # Lemonade holds cloud keys in memory only; a fresh start has none.
+                    client._replay_cloud_key(chat_model)
                     cls._ready_for_cloud = True
                     cls._remember_server(client)
                     cls._log.debug(
