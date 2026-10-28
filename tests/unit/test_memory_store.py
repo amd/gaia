@@ -5285,6 +5285,26 @@ class TestIterSessions:
         assert s["attempt_count"] == 4
         assert "bad" not in s["tools"]
 
+    def test_denied_calls_do_not_count_toward_synthesis_attempts(self, store):
+        """Pre-execution denials do not lower a synthesis success rate."""
+        store.store_turn("sessDenied", "user", "do work")
+        for i in range(3):
+            store.log_tool_call("sessDenied", f"good{i}", {}, "ok", True)
+        store.log_tool_call(
+            "sessDenied",
+            "write_file",
+            {},
+            "{'status': 'denied'}",
+            False,
+            error="permission denied",
+            executed=False,
+        )
+
+        s = store.iter_sessions(min_steps=3)[0]
+        assert s["success_count"] == 3
+        assert s["attempt_count"] == 3
+        assert "write_file" not in s["tools"]
+
     def test_since_watermark_excludes_older_rows(self, store):
         """since= counts only tool calls strictly newer than the watermark."""
         store.store_turn("sessW", "user", "goal")

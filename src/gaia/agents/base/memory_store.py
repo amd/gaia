@@ -4114,6 +4114,7 @@ class MemoryStore:
                 )
             ) g ON g.session_id = th.session_id
             WHERE (:since IS NULL OR th.timestamp > :since)
+              AND th.executed = 1
             ORDER BY th.session_id, th.id
         """
         params = {"since": since, "min_steps": min_steps}
