@@ -63,7 +63,13 @@ test("restarts when nothing would be lost", async () => {
   expect(mockUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
 });
 
+function saveConfig(cfg) {
+  fs.mkdirSync(path.join(tmpHome, ".gaia"), { recursive: true });
+  fs.writeFileSync(path.join(tmpHome, ".gaia", "update-config.json"), JSON.stringify(cfg));
+}
+
 test("Keep running puts the restart off; the update installs on the next quit", async () => {
+  saveConfig({ autoUpdate: true });
   const confirmRestart = jest.fn(async () => false);
   initUpdater({ confirmRestart });
   await downloadedAndRestartChosen();
@@ -110,4 +116,73 @@ test("main.cjs hands init the restart check", () => {
     "utf8"
   );
   expect(main).toContain("autoUpdater.init(mainWindow, { confirmRestart: confirmUpdateRestart })");
+});
+
+test("turning auto-update off stops an unasked download from installing on quit", async () => {
+  saveConfig({ autoUpdate: true });
+  const m = initUpdater({ confirmRestart: jest.fn(async () => false) });
+  await downloadedAndRestartChosen();
+  await m.setAutoUpdate(false);
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
+  expect(mockUpdater.autoDownload).toBe(false);
+});
+
+test("auto-update switched off by the Terminal UI stops the next download", async () => {
+  saveConfig({ autoUpdate: true });
+  const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+  expect(mockUpdater.autoDownload).toBe(true);
+  saveConfig({ autoUpdate: false, feedUrl: "https://example.test/feed/" });
+  await m.checkForUpdates();
+  expect(mockUpdater.autoDownload).toBe(false);
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
+  expect(m.getState().autoUpdate).toBe(false);
+});
+
+test("an unreadable settings file pauses checks instead of ignoring a pin", async () => {
+  const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+  fs.mkdirSync(path.join(tmpHome, ".gaia"), { recursive: true });
+  fs.writeFileSync(path.join(tmpHome, ".gaia", "update-config.json"), "{ not json");
+  mockUpdater.checkForUpdates = jest.fn(async () => null);
+  await m.checkForUpdates();
+  expect(mockUpdater.checkForUpdates).not.toHaveBeenCalled();
+  expect(m.getState().status).toBe("error");
+  expect(m.getState().error).toMatch(/cannot be read/);
+});
+
+test("a save waits for the Terminal UI's lock, then fails loudly if it is held", async () => {
+  const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+  saveConfig({ tuiPinnedVersion: "v0.24.0" });
+  const lock = path.join(tmpHome, ".gaia", "update-config.json.lock");
+  fs.writeFileSync(lock, "");
+  await expect(m.setAutoUpdate(true)).rejects.toThrow(/busy/);
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(lock, old, old); // a crashed app's lock is taken over
+  await m.setAutoUpdate(true);
+  const saved = JSON.parse(fs.readFileSync(path.join(tmpHome, ".gaia", "update-config.json"), "utf8"));
+  expect(saved).toEqual({ tuiPinnedVersion: "v0.24.0", autoUpdate: true });
+  expect(fs.existsSync(lock)).toBe(false);
+});
+
+test("an update the user asked for still installs on quit with auto-update off", async () => {
+  const m = initUpdater({ confirmRestart: jest.fn(async () => false) });
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
+  mockUpdater.downloadUpdate = jest.fn(async () => null);
+  mockUpdater.emit("update-available", { version: "0.26.0" });
+  await flush();
+  await m.downloadUpdate();
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
+  expect(mockUpdater.autoDownload).toBe(false);
+});
+
+test("a pin in a file that was broken at launch is honoured once the file is fixed", async () => {
+  fs.mkdirSync(path.join(tmpHome, ".gaia"), { recursive: true });
+  fs.writeFileSync(path.join(tmpHome, ".gaia", "update-config.json"), "{ half-writ");
+  const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+  mockUpdater.checkForUpdates = jest.fn(async () => null);
+  global.fetch = jest.fn();
+  saveConfig({ autoUpdate: true, pinnedVersion: "v0.24.0" });
+  await m.checkForUpdates();
+  expect(m.getState().pinnedVersion).toBe("v0.24.0");
+  expect(mockUpdater.autoDownload).toBe(false);
+  expect(global.fetch).not.toHaveBeenCalled(); // stays on the pinned feed
 });

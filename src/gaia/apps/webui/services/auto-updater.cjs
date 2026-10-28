@@ -176,6 +176,10 @@ let mainWindowRef = null;
 /** Asks before an update restart would cut off running work (set by init). */
 let confirmRestartRef = null;
 let checkInProgress = false;
+// The user asked for this download, so it may install on quit with auto-update off.
+let installRequested = false;
+// The file was unreadable at launch, so a pin it holds was never loaded.
+let pinUnknown = false;
 let scheduledTimeout = null;
 let initialCheckTimeout = null;
 let ipcHandlersRegistered = false;
@@ -224,7 +228,7 @@ function _loadPin() {
     const cfg = JSON.parse(raw);
     return cfg.pinnedVersion || null;
   } catch (err) {
-    log("warn", "Failed to read version pin — treating as unpinned:", err && err.message);
+    log("warn", "Failed to read version pin — update checks pause until the file is fixed:", err && err.message);
     return null;
   }
 }
@@ -251,6 +255,41 @@ function _loadAutoUpdate() {
     log("error", error);
     return { autoUpdate: false, includePrereleases: false, error };
   }
+}
+
+/**
+ * Re-read the shared settings before acting on them: the Terminal UI can turn
+ * auto-update off while this app runs, and that must stop the next download.
+ */
+function _refreshPreferences() {
+  const loaded = _loadAutoUpdate();
+  setState({
+    autoUpdate: loaded.autoUpdate,
+    includePrereleases: loaded.includePrereleases,
+    configError: loaded.error,
+  });
+  if (pinUnknown && !loaded.error) {
+    pinUnknown = false;
+    const pin = _loadPin();
+    if (pin) {
+      log("info", `Settings file readable again — honouring its pin to ${pin}`);
+      setState({ pinnedVersion: pin });
+      if (autoUpdaterRef) {
+        autoUpdaterRef.setFeedURL({
+          provider: "generic",
+          url: `https://github.com/amd/gaia/releases/download/${pin}/`,
+        });
+      }
+    }
+  }
+  _applyInstallPolicy();
+}
+
+function _applyInstallPolicy() {
+  if (!autoUpdaterRef) return;
+  autoUpdaterRef.autoDownload = state.autoUpdate && !state.pinnedVersion;
+  autoUpdaterRef.autoInstallOnAppQuit = state.autoUpdate || installRequested;
+  autoUpdaterRef.allowPrerelease = _prereleasesAllowed();
 }
 
 /** "0.25.2-rc.3" → true. A candidate build keeps being offered candidates. */
@@ -286,6 +325,10 @@ function _savePin(pinnedVersion) {
  */
 function _writeConfig(patch) {
   fs.mkdirSync(path.dirname(UPDATE_CONFIG_PATH), { recursive: true });
+  _withConfigLock(() => _mergeConfig(patch));
+}
+
+function _mergeConfig(patch) {
   let existing = {};
   if (fs.existsSync(UPDATE_CONFIG_PATH)) {
     try {
@@ -303,9 +346,61 @@ function _writeConfig(patch) {
       );
     }
   }
-  const tmp = `${UPDATE_CONFIG_PATH}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ ...existing, ...patch }, null, 2), "utf8");
-  fs.renameSync(tmp, UPDATE_CONFIG_PATH);
+  const tmp = `${UPDATE_CONFIG_PATH}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ ...existing, ...patch }, null, 2), "utf8");
+    fs.renameSync(tmp, UPDATE_CONFIG_PATH);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
+// The Terminal UI (tui/internal/update/config.go) honours the same lock file,
+// so neither app's read-modify-write drops the other's change.
+// Short: the wait blocks the main process. The Terminal UI holds it for milliseconds.
+const LOCK_WAIT_MS = 500;
+const LOCK_STALE_MS = 10000;
+
+function _withConfigLock(fn) {
+  const lock = `${UPDATE_CONFIG_PATH}.lock`;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lock, "wx"));
+      break;
+    } catch (err) {
+      // Windows reports a lock still being deleted as EPERM/EACCES.
+      if (!err || !["EEXIST", "EPERM", "EACCES"].includes(err.code)) throw err;
+    }
+    let stat = null;
+    try {
+      stat = fs.statSync(lock);
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+    }
+    if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+      // Left by a crashed app. Only one taker's rename wins.
+      const aside = `${lock}.${process.pid}.stale`;
+      try {
+        fs.renameSync(lock, aside);
+        fs.rmSync(aside, { force: true });
+      } catch (err) {
+        if (!["ENOENT", "EPERM", "EACCES"].includes(err.code)) throw err;
+      }
+      continue;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `${UPDATE_CONFIG_PATH} is busy (another GAIA app holds ${lock}) — try again in a moment.`
+      );
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  try {
+    return fn();
+  } finally {
+    fs.rmSync(lock, { force: true });
+  }
 }
 
 // ── Forward-update feed resolution (issue #1724) ────────────────────────────────
@@ -386,7 +481,7 @@ function _compareVersions(a, b) {
 function _platformManifest() {
   if (process.platform === "win32") return "latest.yml";
   if (process.platform === "darwin") return "latest-mac.yml";
-  return "latest-linux.yml";
+  return process.arch === "arm64" ? "latest-linux-arm64.yml" : "latest-linux.yml";
 }
 
 /**
@@ -474,7 +569,7 @@ function _platformAssetPattern() {
   if (process.platform === "win32") return /setup\.exe$/i;
   if (process.platform === "darwin") return /\.zip$/i;
   // Linux: AppImage (deb is apt-managed, electron-updater can't downgrade it)
-  return /\.AppImage$/i;
+  return process.arch === "arm64" ? /(arm64|aarch64)\.AppImage$/i : /(x86_64|amd64)\.AppImage$/i;
 }
 
 function _releaseHasPlatformAsset(release) {
@@ -605,7 +700,8 @@ async function installVersion(tag) {
   }
   setState({ pinnedVersion: tag });
   // A pin always stops background downloads; this one is downloaded below.
-  autoUpdaterRef.autoDownload = false;
+  installRequested = true;
+  _applyInstallPolicy();
 
   checkInProgress = true;
   try {
@@ -691,9 +787,10 @@ function clearPin() {
     log("warn", "Failed to clear pin file:", err && err.message);
   }
   setState({ pinnedVersion: null });
+  installRequested = false;
 
   if (autoUpdaterRef) {
-    autoUpdaterRef.autoDownload = state.autoUpdate;
+    _applyInstallPolicy();
     autoUpdaterRef.allowDowngrade = false;
     // Restore the forward channel (overrides any generic/tagged rollback feed
     // set by installVersion); unconfigured means GitHub releases.
@@ -721,10 +818,7 @@ async function setAutoUpdate(enabled) {
     );
   }
   setState({ autoUpdate: enabled });
-  if (autoUpdaterRef) {
-    autoUpdaterRef.autoDownload = enabled && !state.pinnedVersion;
-    autoUpdaterRef.allowPrerelease = _prereleasesAllowed();
-  }
+  _applyInstallPolicy();
   log("info", `Auto-update ${enabled ? "enabled" : "disabled"}`);
   // Turning it on with an update already offered means "install it".
   if (enabled && !state.pinnedVersion && state.status === STATES.AVAILABLE) {
@@ -765,11 +859,15 @@ async function downloadUpdate() {
     );
   }
   log("info", `User asked to install ${state.version}`);
+  installRequested = true;
+  _applyInstallPolicy();
   setState({ status: STATES.DOWNLOADING, progress: 0, error: null });
   try {
     await autoUpdaterRef.downloadUpdate();
   } catch (err) {
     const message = (err && err.message) || String(err);
+    installRequested = false;
+    _applyInstallPolicy();
     setState({ status: STATES.ERROR, error: message });
     throw new Error(`Downloading GAIA ${state.version || ""} failed: ${message}`);
   }
@@ -806,6 +904,12 @@ async function checkForUpdates() {
   }
   if (checkInProgress) {
     log("info", "Skipping check — another check is already in progress");
+    return;
+  }
+  _refreshPreferences();
+  if (state.configError) {
+    // An unreadable file may hold a pin; checking anyway could offer past it.
+    setState({ status: STATES.ERROR, error: state.configError });
     return;
   }
   checkInProgress = true;
@@ -1070,6 +1174,7 @@ function init(mainWindow, options = {}) {
   state.autoUpdate = loaded.autoUpdate;
   state.includePrereleases = loaded.includePrereleases;
   state.configError = loaded.error;
+  pinUnknown = Boolean(loaded.error);
 
   // Lazy-load Electron and electron-updater. Any failure here is logged
   // and the updater stays in `idle` — we never crash the app.
@@ -1113,11 +1218,9 @@ function init(mainWindow, options = {}) {
   try {
     // Off by default; a pin always suppresses it so the scheduled forward-only
     // check cannot silently download/install a newer version (AC2).
-    autoUpdaterRef.autoDownload = !savedPin && state.autoUpdate;
-    autoUpdaterRef.autoInstallOnAppQuit = true;
+    _applyInstallPolicy();
     autoUpdaterRef.disableWebInstaller = true;
     autoUpdaterRef.allowDowngrade = false;
-    autoUpdaterRef.allowPrerelease = _prereleasesAllowed();
 
     autoUpdaterRef.logger = {
       info: (m) => log("info", String(m)),
