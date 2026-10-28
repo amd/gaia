@@ -317,6 +317,92 @@ def test_performance_endpoint_serializes_overflowed_token_totals(db, monkeypatch
     json.dumps(result, allow_nan=False)
 
 
+def _saved_turn(**overrides):
+    record = {
+        "time": {"wall_seconds": 1.0, "model_seconds": 1.0, "gaia_seconds": 0.0},
+        "tokens_in": 10,
+        "tokens_cached": 0,
+        "tokens_out": 5,
+        "tool_calls": 1,
+        "cost": {"kind": "local", "usd": 0.0},
+    }
+    for key, value in overrides.items():
+        if key == "wall_seconds":
+            record["time"]["wall_seconds"] = value
+        else:
+            record[key] = value
+    return record
+
+
+@pytest.mark.parametrize(
+    "bad, field",
+    [
+        ({"tokens_in": float("inf")}, "tokens_in"),
+        ({"wall_seconds": float("nan")}, "time.wall_seconds"),
+        ({"tool_calls": float("inf")}, "tool_calls"),
+        ({"cost": {"kind": "estimate", "usd": float("-inf")}}, "cost.usd"),
+    ],
+)
+def test_a_non_finite_turn_saved_before_the_fix_is_skipped_not_a_500(
+    db, monkeypatch, caplog, bad, field
+):
+    # Rows #5955 wrote: the stored JSON already holds Infinity or NaN.
+    sid = db.create_session(model="M-GGUF")["id"]
+    db.add_message(
+        sid, "assistant", "good", inference_stats={"performance": _saved_turn()}
+    )
+    bad_id = db.add_message(
+        sid, "assistant", "bad", inference_stats={"performance": _saved_turn(**bad)}
+    )
+    monkeypatch.setattr(turn_insights, "model_now", lambda model: {"model": model})
+
+    result = asyncio.run(chat.get_chat_performance(sid, db))
+
+    json.dumps(result, allow_nan=False)
+    assert bad_id not in [t["message_id"] for t in result["turns"]]
+    assert result["totals"]["turns"] == 1
+    assert result["totals"]["tokens_in"] == 10
+    assert f"message {bad_id} in chat {sid}: {field} is not finite" in caplog.text
+
+
+def test_huge_saved_costs_that_overflow_the_chat_total_are_not_measured(
+    db, monkeypatch, caplog
+):
+    sid = db.create_session(model="M-GGUF")["id"]
+    for text in ("one", "two"):
+        db.add_message(
+            sid,
+            "assistant",
+            text,
+            inference_stats={
+                "performance": _saved_turn(
+                    cost={"kind": "estimate", "usd": 1e308}, tool_calls=1e308
+                )
+            },
+        )
+    monkeypatch.setattr(turn_insights, "model_now", lambda model: {"model": model})
+
+    result = asyncio.run(chat.get_chat_performance(sid, db))
+
+    json.dumps(result, allow_nan=False)
+    assert result["totals"]["usd"] is None
+    assert result["totals"]["tool_calls"] is None
+    assert result["totals"]["turns"] == 2
+    assert "chat cost overflowed" in caplog.text
+    assert "chat tool calls overflowed" in caplog.text
+
+
+def test_finite_saved_costs_still_add_up():
+    turns = [_saved_turn(cost={"kind": "estimate", "usd": 0.25}) for _ in range(2)]
+
+    totals = turn_insights.chat_totals(turns)
+
+    assert totals["usd"] == 0.5
+    assert totals["tool_calls"] == 2
+    assert turn_insights.chat_totals([])["usd"] == 0
+    assert turn_insights.chat_totals([])["tool_calls"] == 0
+
+
 # ── Context ────────────────────────────────────────────────────────────────
 
 

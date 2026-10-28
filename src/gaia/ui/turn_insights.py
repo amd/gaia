@@ -579,6 +579,15 @@ def _speeds(steps: List[Dict[str, Any]], calls: List[Dict[str, Any]]) -> Dict[st
     }
 
 
+def _finite_sum(values: Iterable[float], *, what: str) -> Optional[float]:
+    """The sum, or None with a warning when many huge values overflow it."""
+    total = sum(values)
+    if not math.isfinite(total):
+        logger.warning("%s overflowed; reporting it as not measured", what)
+        return None
+    return total
+
+
 def chat_totals(turns: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Sums over a chat's measured turns; a total of nothing measured is None."""
 
@@ -594,6 +603,7 @@ def chat_totals(turns: List[Dict[str, Any]]) -> Dict[str, Any]:
         return round(total, _ROUND)
 
     costs = [t.get("cost") or {} for t in turns]
+    usd = _finite_sum((c.get("usd") or 0.0 for c in costs), what="chat cost")
     return {
         "turns": len(turns),
         "wall_seconds": total(
@@ -610,13 +620,15 @@ def chat_totals(turns: List[Dict[str, Any]]) -> Dict[str, Any]:
             lambda t: t.get("tokens_cached"), what="chat cached tokens"
         ),
         "tokens_out": total(lambda t: t.get("tokens_out"), what="chat output tokens"),
-        "tool_calls": sum(t.get("tool_calls") or 0 for t in turns),
+        "tool_calls": _finite_sum(
+            (t.get("tool_calls") or 0 for t in turns), what="chat tool calls"
+        ),
         "loads": sum(len(t.get("loads") or []) for t in turns),
         "load_seconds": total(
             lambda t: sum(e["seconds"] for e in t.get("loads") or []) or None,
             what="chat model-load time",
         ),
-        "usd": round(sum(c.get("usd") or 0.0 for c in costs), 6),
+        "usd": None if usd is None else round(usd, 6),
         "unpriced_turns": sum(1 for c in costs if c.get("kind") == "unknown"),
     }
 
