@@ -55,10 +55,10 @@ function drawKpis(runs){var e=D.evals,h='';
   h+=kpi('e-release','Latest release eval',rel?pct(rel.passRate):'—',rel?esc(rel.ref)+' · '+esc(rel.tierLabel)+' · '+fmt(rel.scenarios)+' scenarios'+scope:'none in this view',rel?level(rel.passRate,PASS):'',rel?esc(rel.ref)+' passed '+pct(rel.passRate)+' (target 80%)':'');
   h+=kpi('e-score','Judge score',last&&last.avgScore!=null?last.avgScore.toFixed(2):'—',last?'out of 10 · '+esc(short(last)):'no runs shown',last&&last.avgScore!=null?level(last.avgScore,{good:8,warn:6.5}):'',last&&last.avgScore!=null?'average judge score '+last.avgScore.toFixed(2)+' of 10':'');
   var cs=0,cn=0,cr=0;runs.forEach(function(r){if(r.costUsd!=null&&r.costPerAttempted){cs+=r.costUsd;cn+=r.costUsd/r.costPerAttempted;cr++;}});
-  h+=kpi('e-cost','Cost per scenario',cn?'$'+(cs/cn).toFixed(3):'—','$'+cs.toFixed(2)+' across '+fmt(cr)+' runs with costs','');
+  h+=kpi('e-cost','Cost per scenario',cn?'$'+(cs/cn).toFixed(3):'—','$'+cs.toFixed(2)+' across '+plural(cr,'run')+' with costs','');
   h+=kpi('e-time','Time per scenario',e.medianScenarioSeconds!=null?dur(Math.round(e.medianScenarioSeconds)):'—','median of every scenario shown','');
   var inf=runs.filter(function(r){return r.infra>0;}).length,ir=runs.length?inf/runs.length:null;
-  h+=kpi('e-infra','Infrastructure errors',fmt(inf),'of '+fmt(runs.length)+' runs had scenarios with no answer',level(ir,{good:0,warn:.2,higher:false}),inf+' of '+runs.length+' runs lost scenarios to infrastructure errors');
+  h+=kpi('e-infra','Infrastructure errors',fmt(inf),'of '+plural(runs.length,'run')+' had scenarios with no answer',level(ir,{good:0,warn:.2,higher:false}),inf+' of '+runs.length+' runs lost scenarios to infrastructure errors');
   el('ov').innerHTML='<div class="strip">'+h+'</div>';}
 
 function drawCharts(runs){

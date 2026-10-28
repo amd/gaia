@@ -83,7 +83,7 @@ function drawKpis(){var g=D.growth;if(!g){el('ov').innerHTML='<div class="card e
   var nc=g.newcomers,hh='';
   hh+=kpi('g-ret','Newcomer retention',pct(nc.rate,0),nc.rate==null?'no newcomers 3 to 6 months ago':fmt(nc.returned)+' of '+fmt(nc.cohort)+' newcomers from 3–6 months ago came back',level(nc.rate,rule(T.retention)),nc.rate==null?'':pct(nc.rate,0)+' of newcomers opened another PR within 90 days');
   hh+=kpi('g-ext','Outside PRs',pct(c.externalShare,0),'of '+fmt(c.prsMerged)+' merged PRs · '+rt+(MINE.length?'':' · no maintainer list set'),level(c.externalShare,rule(T.external)),pct(c.externalShare,0)+' of merged PRs came from outside the core team');
-  hh+=kpi('g-bus','Bus factor',c.busFactor==null?'—':fmt(c.busFactor),c.busFactor==null?'no commits in the window':'people made half the commits · '+rt,level(c.busFactor,rule(T.busFactor)),c.busFactor==null?'':fmt(c.busFactor)+' people made half the commits');
+  hh+=kpi('g-bus','Bus factor',c.busFactor==null?'—':fmt(c.busFactor),c.busFactor==null?'no commits in the window':(c.busFactor===1?'person':'people')+' made half the commits · '+rt,level(c.busFactor,rule(T.busFactor)),c.busFactor==null?'':fmt(c.busFactor)+(c.busFactor===1?' person made':' people made')+' half the commits');
   el('hv').innerHTML='<div class="strip">'+hh+'</div>';}
 /* Each period against the mean of the up-to-four before it (at least two); null for the period in progress. */
 function trail(keys,val,now){var out=[];for(var i=0;i<keys.length;i++){var v=val(keys[i]);if(v==null||keys[i]===now){out.push(null);continue;}
