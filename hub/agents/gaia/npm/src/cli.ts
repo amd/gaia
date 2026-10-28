@@ -64,7 +64,8 @@ const VALUE_FLAGS = new Set([
 export class UsageError extends Error {}
 
 export function parseArgs(argv: string[]): ParsedArgs {
-  const out: ParsedArgs = { _: [], flags: {}, passthrough: [] };
+  // No prototype, so `--__proto__` or `--constructor` is stored as an own key.
+  const out: ParsedArgs = { _: [], flags: Object.create(null), passthrough: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--") {
@@ -206,7 +207,7 @@ const FLAG_SCOPE = { ...VALUE_FLAG_SCOPE, ...BOOLEAN_FLAG_SCOPE };
 /** Refuse an unknown option or one the chosen command would otherwise ignore. */
 function assertFlagsInScope(args: ParsedArgs, cmd: string): void {
   for (const flag of Object.keys(args.flags)) {
-    const scope = FLAG_SCOPE[flag];
+    const scope = Object.hasOwn(FLAG_SCOPE, flag) ? FLAG_SCOPE[flag] : undefined;
     if (scope === undefined) {
       throw new UsageError(
         `unknown option '--${flag}'. Run \`gaia --help\` to see supported options; ` +

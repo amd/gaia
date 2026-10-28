@@ -270,6 +270,13 @@ describe("main dispatch", () => {
     }
   });
 
+  it("refuses option names that collide with Object.prototype keys", async () => {
+    for (const flag of ["--constructor", "--toString", "--hasOwnProperty", "--__proto__"]) {
+      await expect(main([flag])).rejects.toThrow(`unknown option '${flag}'`);
+      await expect(main([flag, "--help"])).rejects.toThrow(/unknown option/);
+    }
+  });
+
   it("rejects an unknown command even when help is requested", async () => {
     await expect(main(["fecth", "--help"])).rejects.toThrow("unknown command 'fecth'");
   });
