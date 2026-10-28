@@ -2305,14 +2305,14 @@ class InitCommand:
                     steps=1,  # Minimal steps for quick test
                     size="512x512",
                 )
-                # Check if we got a valid image in b64_json format
-                if (
-                    response
-                    and response.get("data")
-                    and response["data"][0].get("b64_json")
-                ):
-                    return (True, None)
-                return (False, "No image generated")
+                from gaia.sd import decode_image_response, image_problem
+
+                image_bytes, problem = decode_image_response(response)
+                if problem is None:
+                    problem = image_problem(image_bytes)
+                if problem is not None:
+                    return (False, f"No usable image: {problem}")
+                return (True, None)
             elif is_embedding_model:
                 # Test embedding model with a simple text
                 response = client.embeddings(

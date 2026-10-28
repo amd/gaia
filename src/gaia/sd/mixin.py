@@ -40,6 +40,45 @@ from gaia.logger import get_logger
 logger = get_logger(__name__)
 
 
+def decode_image_response(
+    response: Any,
+) -> Tuple[bytes, Optional[str]]:
+    """Pull the PNG bytes out of an ``/images/generations`` reply.
+
+    Returns ``(bytes, None)``, or ``(b"", reason)`` naming what came back
+    instead of an image.
+    """
+    data = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+        return b"", f"the server reply had no image data ({str(response)[:200]})"
+    image_b64 = data[0].get("b64_json")
+    if not image_b64:
+        return b"", f"the server reply had an empty image ({str(data[0])[:200]})"
+    try:
+        return base64.b64decode(image_b64), None
+    except (binascii.Error, ValueError) as e:
+        return b"", f"the image data is not valid base64 ({e})"
+
+
+def image_problem(image_bytes: bytes) -> Optional[str]:
+    """Return why ``image_bytes`` is not a real picture, or None if it is.
+
+    A single-colour frame is rejected too: SDXL decoding in fp16 can
+    overflow to an all-black image while the server still reports 200.
+    """
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            img.load()
+            extrema = img.convert("RGB").getextrema()
+    except (OSError, SyntaxError, ValueError) as e:
+        return f"the data is not a readable image ({e})"
+    if all(low == high for low, high in extrema):
+        return "the image is a single flat colour, so generation failed on the server"
+    return None
+
+
 class SDToolsMixin:
     """
     Mixin providing Stable Diffusion image generation tools.
@@ -362,11 +401,14 @@ class SDToolsMixin:
 
             generation_time_s = round(time.time() - start_time, 1)
 
-            image_bytes, problem = self._decode_image_response(response)
+            image_bytes, problem = decode_image_response(response)
             if problem is None:
-                problem = self._check_image_bytes(image_bytes)
+                problem = image_problem(image_bytes)
             if problem is not None:
-                error_msg = f"{model} returned no usable image: {problem}"
+                error_msg = (
+                    f"{model} returned no usable image: {problem}. Retry, or "
+                    "pick a different model with list_sd_models"
+                )
                 if console and hasattr(console, "print_error"):
                     console.print_error(error_msg)
                 logger.error(error_msg)
@@ -454,48 +496,6 @@ class SDToolsMixin:
 
             logger.error(error_msg, exc_info=True)
             return {"status": "error", "error": error_msg}
-
-    @staticmethod
-    def _decode_image_response(
-        response: Any,
-    ) -> Tuple[bytes, Optional[str]]:
-        """Pull the PNG bytes out of an ``/images/generations`` reply.
-
-        Returns ``(bytes, None)``, or ``(b"", reason)`` naming what came back
-        instead of an image.
-        """
-        data = response.get("data") if isinstance(response, dict) else None
-        if not isinstance(data, list) or not data or not isinstance(data[0], dict):
-            return b"", f"the server reply had no image data ({str(response)[:200]})"
-        image_b64 = data[0].get("b64_json")
-        if not image_b64:
-            return b"", f"the server reply had an empty image ({str(data[0])[:200]})"
-        try:
-            return base64.b64decode(image_b64), None
-        except (binascii.Error, ValueError) as e:
-            return b"", f"the image data is not valid base64 ({e})"
-
-    @staticmethod
-    def _check_image_bytes(image_bytes: bytes) -> Optional[str]:
-        """Return why ``image_bytes`` is not a real picture, or None if it is.
-
-        A single-colour frame is rejected too: SDXL decoding in fp16 can
-        overflow to an all-black image while the server still reports 200.
-        """
-        from PIL import Image
-
-        try:
-            with Image.open(io.BytesIO(image_bytes)) as img:
-                img.load()
-                extrema = img.convert("RGB").getextrema()
-        except (OSError, SyntaxError, ValueError) as e:
-            return f"the data is not a readable image ({e})"
-        if all(low == high for low, high in extrema):
-            return (
-                "the image is a single flat colour, so generation failed on "
-                "the server. Retry, or pick a different model with list_sd_models"
-            )
-        return None
 
     @staticmethod
     def _describe_client_error(error: Exception, model: str) -> str:
