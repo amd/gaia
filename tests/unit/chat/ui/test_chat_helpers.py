@@ -1224,10 +1224,15 @@ class TestSessionTitleRequest:
         sent = self._sent_kwargs(LARGE_DEFAULT_MODEL_NAME)
         assert sent["chat_template_kwargs"] == {"enable_thinking": False}
 
-    def test_other_models_get_no_template_switch(self):
+    def test_a_model_with_no_registered_switch_titles_with_thinking_off(self):
+        """Gemma 4 reasoned through all 24 tokens on "hi" (measured)."""
         sent = self._sent_kwargs("Gemma-4-E4B-it-GGUF")
-        assert "chat_template_kwargs" not in sent
+        assert sent["chat_template_kwargs"] == {"enable_thinking": False}
         assert sent["max_tokens"] == 24
+
+    def test_a_model_off_llama_cpp_gets_no_template_switch(self):
+        sent = self._sent_kwargs("gemma4-it-e2b-FLM")
+        assert "chat_template_kwargs" not in sent
 
     def test_a_model_that_always_reasons_gets_room_for_it(self):
         """gpt-oss cannot stop reasoning: at 24 tokens, ~6 went to reasoning
@@ -1239,8 +1244,9 @@ class TestSessionTitleRequest:
         assert sent["max_tokens"] > 24
 
     @pytest.mark.parametrize("content", [None, "", "  \n "])
-    def test_reasoning_that_eats_the_budget_still_names_the_chat(self, content):
-        """If gpt-oss reasons past the budget, the reply carries no title text."""
+    def test_reasoning_that_eats_the_budget_is_a_failed_try(self, content):
+        """If gpt-oss reasons past the budget, the reply carries no title text;
+        the chat keeps its question as the name and a later turn asks again."""
         from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
         from gaia.ui import _chat_helpers as ch
 
@@ -1254,7 +1260,7 @@ class TestSessionTitleRequest:
                     "ok",
                 )
             )
-        assert title == "plan a trip to Lisbon"
+        assert title is None
 
     @staticmethod
     def _sent_prompt(model_id, user_msg):
@@ -1314,14 +1320,16 @@ class TestGuardModelTitles:
             )
 
     @pytest.mark.parametrize("verdict", ["safe", "unsafe\nS1", "unsafe S1,S10", "Yes"])
-    def test_classifier_verdict_falls_back_to_the_question(self, verdict):
-        assert self._title_reply(verdict) == "How do I reset my router password"
+    def test_classifier_verdict_is_not_a_title(self, verdict):
+        assert self._title_reply(verdict) is None
 
-    def test_empty_reply_falls_back_to_the_question(self):
-        assert self._title_reply("   ") == "How do I reset my router password"
+    def test_empty_reply_is_not_a_title(self):
+        assert self._title_reply("   ") is None
 
     def test_long_question_is_cut_at_a_word(self):
-        title = self._title_reply("safe", user_msg="word " * 40)
+        from gaia.ui import _chat_helpers as ch
+
+        title = ch._title_from_question("word " * 40)
         assert title.endswith("…") and len(title) <= 64
         assert "wor…" not in title
 

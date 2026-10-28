@@ -535,7 +535,7 @@ class UploadStaticFiles(StaticFiles):
         return response
 
 
-_UPLOAD_LINK_RE = re.compile(
+UPLOAD_LINK_RE = re.compile(
     r"(?P<bang>!?)\[(?P<label>[^\]\n]*)\]\("
     + re.escape(UPLOAD_URL_PREFIX)
     + r"(?P<name>[^)\s]+)\)"
@@ -565,7 +565,7 @@ def resolve_upload_links(message: str) -> str:
             return match.group(0)
         return f"{match.group('bang')}[{match.group('label')}]({path})"
 
-    return _UPLOAD_LINK_RE.sub(_sub, message)
+    return UPLOAD_LINK_RE.sub(_sub, message)
 
 
 def attached_upload_paths(message: str) -> List[str]:

@@ -106,6 +106,21 @@ def test_an_attachment_link_is_named_by_its_file():
     )
 
 
+def test_attachments_are_left_out_of_a_question_title():
+    """It read "hi !red.png notes.txt" with an image and a file attached."""
+    sent = (
+        "hi\n\n![red.png](/api/files/uploads/ab12_red.png) "
+        "[notes.txt](/api/files/uploads/cd34_notes.txt)"
+    )
+    assert ch._title_from_question(sent) == "hi"
+
+
+def test_an_image_sent_alone_is_named_by_its_file():
+    assert ch._title_from_question("![red.png](/api/files/uploads/ab12_red.png)") == (
+        "red.png"
+    )
+
+
 # ── The titler replaces the provisional name ─────────────────────────────
 
 
@@ -156,18 +171,53 @@ def test_a_rename_during_titling_wins():
     assert db.get_session(sid)["title"] == "My tea notes"
 
 
-def test_a_failed_title_is_not_requested_again_next_turn():
-    """Each retry would be another billed call on a cloud model."""
+def _provisional_chat():
     db = ChatDatabase(":memory:")
     sid = db.create_session(title="New Task")["id"]
     db.begin_turn(sid, ESSAY)
     ch._set_provisional_title(db, sid, ESSAY)
+    return db, sid
 
-    first = _retitle(db, sid, CLOUD_MODEL, reply=None)
-    second = _retitle(db, sid, CLOUD_MODEL)
 
-    first.assert_awaited_once()
-    second.assert_not_awaited()
+def test_a_failed_title_is_requested_again_next_turn():
+    db, sid = _provisional_chat()
+
+    _retitle(db, sid, CLOUD_MODEL, reply=None)
+    retry = _retitle(db, sid, CLOUD_MODEL)
+
+    retry.assert_awaited_once()
+    assert db.get_session(sid)["title"] == "History of Tea Essay"
+
+
+def test_a_title_that_keeps_failing_stops_being_requested():
+    """Each retry would be another billed call on a cloud model."""
+    db, sid = _provisional_chat()
+
+    tries = [_retitle(db, sid, CLOUD_MODEL, reply=None) for _ in range(4)]
+
+    assert [t.await_count for t in tries] == [1, 1, 1, 0]
+    assert db.get_session(sid)["title"] == PROVISIONAL
+
+
+def test_small_talk_stops_being_titled_after_a_while():
+    """A chat of greetings would otherwise bill a cloud title every turn."""
+    db, sid = _provisional_chat()
+
+    def _no_topic():
+        gen = AsyncMock(side_effect=ch._NoTopicYet)
+        with (
+            patch.object(ch, "_generate_session_title", gen),
+            patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
+                return_value=LEMONADE,
+            ),
+        ):
+            asyncio.run(ch._maybe_update_session_title(db, sid, ESSAY, "", CLOUD_MODEL))
+        return gen.await_count
+
+    counts = [_no_topic() for _ in range(ch._AUTO_TITLE_MAX_NO_TOPIC + 1)]
+
+    assert counts[:-1] == [1] * ch._AUTO_TITLE_MAX_NO_TOPIC and counts[-1] == 0
     assert db.get_session(sid)["title"] == PROVISIONAL
 
 
@@ -254,8 +304,38 @@ def test_a_cloud_reply_cut_short_is_logged_with_its_reason(lemonade, caplog):
         title = asyncio.run(
             ch._generate_session_title(LEMONADE, CLOUD_MODEL, ESSAY, "Tea")
         )
-    assert title == PROVISIONAL
+    # A failed try, so the next turn asks again instead of keeping the question.
+    assert title is None
     assert "finish_reason=length" in caplog.text
+
+
+def test_a_greeting_waits_for_the_question_that_names_the_chat(lemonade):
+    """Gemma titled "hi" as "User Greeting Input", and the chat kept that name
+    after the user asked about Lisbon."""
+    lisbon = "Can you help me plan a weekend trip to Lisbon?"
+    for reply in ("none", "Plan Lisbon weekend trip"):
+        lemonade.add(responses.POST, f"{LEMONADE}/chat/completions", json=_reply(reply))
+    db = ChatDatabase(":memory:")
+    sid = db.create_session(title="New Task")["id"]
+    db.begin_turn(sid, "hi")
+    ch._set_provisional_title(db, sid, "hi")
+
+    def _turn(question, answer):
+        with patch(
+            "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
+            return_value=LEMONADE,
+        ):
+            asyncio.run(
+                ch._maybe_update_session_title(db, sid, question, answer, CLOUD_MODEL)
+            )
+        return db.get_session(sid)["title"]
+
+    assert _turn("hi", "Hey! What can I do?") == "hi"
+    db.add_message(sid, "assistant", "Hey! What can I do?", ends_turn=True)
+    db.begin_turn(sid, lisbon)
+    assert _turn(lisbon, "Sure, here is a plan") == "Plan Lisbon weekend trip"
+    prompt = json.loads(lemonade.calls[1].request.body)["messages"][0]["content"]
+    assert "User: hi" in prompt and lisbon in prompt
 
 
 def test_a_failed_title_request_is_a_warning(lemonade, caplog):
@@ -349,3 +429,155 @@ def test_a_relayed_cloud_turn_is_titled_by_its_cloud_model(
     titles = [c for c in lemonade.calls if c.request.url.endswith("/chat/completions")]
     assert [json.loads(c.request.body)["model"] for c in titles] == [CLOUD_MODEL]
     assert db.get_session(session["id"])["title"] == "History of Tea Essay"
+
+
+# ── A local title request ────────────────────────────────────────────────
+
+LOCAL_MODEL = "Gemma-4-E4B-it-GGUF"
+
+
+def _health(slots):
+    args = "--parallel 2 --kv-unified" if slots == 2 else ""
+    return {
+        "status": "ok",
+        "all_models_loaded": [
+            {"model_name": LOCAL_MODEL, "recipe_options": {"llamacpp_args": args}}
+        ],
+    }
+
+
+@pytest.fixture
+def local_lemonade(monkeypatch):
+    monkeypatch.setenv("LEMONADE_BASE_URL", LEMONADE)
+    monkeypatch.setenv("LEMONADE_API_KEY", "test-lemonade-key")
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_manager.LemonadeManager.get_base_url", lambda: LEMONADE
+    )
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as http:
+        yield http
+
+
+def _title_calls(http):
+    return [
+        json.loads(c.request.body)
+        for c in http.calls
+        if c.request.url.endswith("/chat/completions")
+    ]
+
+
+def test_a_local_title_request_turns_thinking_off(local_lemonade):
+    """Gemma reasoned through all 24 tokens on a short question and titled nothing."""
+    local_lemonade.add(responses.GET, f"{LEMONADE}/health", json=_health(2))
+    local_lemonade.add(
+        responses.POST, f"{LEMONADE}/chat/completions", json=_reply("Greeting")
+    )
+
+    title = asyncio.run(ch._generate_session_title(LEMONADE, LOCAL_MODEL, "hi", ""))
+
+    assert title == "Greeting"
+    (body,) = _title_calls(local_lemonade)
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+    assert body["id_slot"] == 1
+
+
+def test_a_busy_model_is_waited_out(local_lemonade, monkeypatch):
+    """Another chat held the model past the wait limit; the title came later."""
+    from contextlib import contextmanager
+
+    from gaia.daemon.broker_client import BrokerUnavailableError
+
+    waits = []
+
+    @contextmanager
+    def _busy_once(model, **_kw):
+        waits.append(model)
+        if len(waits) == 1:
+            raise BrokerUnavailableError(
+                f"no model-slot lease for '{model}': not granted within its "
+                "30s wait limit",
+                status_code=504,
+            )
+        yield None
+
+    monkeypatch.setattr("gaia.daemon.broker_client.model_lease", _busy_once)
+    monkeypatch.setattr(ch, "_TITLE_BUSY_RETRY_S", 0, raising=False)
+    local_lemonade.add(responses.GET, f"{LEMONADE}/health", json=_health(2))
+    local_lemonade.add(
+        responses.POST,
+        f"{LEMONADE}/chat/completions",
+        json=_reply("History of Tea Essay"),
+    )
+    db, sid = _provisional_chat()
+
+    asyncio.run(ch._maybe_update_session_title(db, sid, ESSAY, "Tea", LOCAL_MODEL))
+
+    assert db.get_session(sid)["title"] == "History of Tea Essay"
+
+
+# ── Titled when the turn starts ──────────────────────────────────────────
+
+
+def _relayed_local_turn(monkeypatch, http, slots):
+    """Run one relayed turn; returns the title the chat had before the answer."""
+    import time
+
+    seen = {}
+    db = ChatDatabase(":memory:")
+    db.set_setting("custom_model", LOCAL_MODEL)
+    session = db.create_session(title="New Task", agent_type="gaia")
+    sid = session["id"]
+
+    def _fake_dispatch(sse_handler, request, history_pairs, model_id, agent, **kw):
+        # A long answer: give a turn-start title time to land first.
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and db.get_session(sid)["title"] in (
+            PROVISIONAL,
+            "New Task",
+        ):
+            time.sleep(0.05)
+        seen["title"] = db.get_session(sid)["title"]
+        seen["title_calls"] = len(_title_calls(http))
+        sse_handler._emit({"type": "answer", "content": "Tea began in China."})
+
+    monkeypatch.setattr(ch, "_dispatch_sidecar_query", _fake_dispatch)
+    http.add(responses.GET, f"{LEMONADE}/health", json=_health(slots))
+    http.add(
+        responses.POST,
+        f"{LEMONADE}/chat/completions",
+        json=_reply("History of Tea Essay"),
+    )
+    db.begin_turn(sid, ESSAY)
+    ch._set_provisional_title(db, sid, ESSAY)
+    request = ChatRequest(session_id=sid, message=ESSAY, stream=True, agent_type="gaia")
+
+    async def _drive():
+        async for _ in ch._stream_chat_impl(
+            SimpleNamespace(handler=None), db, session, request
+        ):
+            pass
+        await asyncio.gather(*list(ch._background_tasks))
+
+    asyncio.run(_drive())
+    return seen, db.get_session(sid)["title"]
+
+
+def test_a_new_chat_is_titled_while_its_first_answer_runs(
+    monkeypatch, local_lemonade, sidecar_flagship
+):
+    seen, final = _relayed_local_turn(monkeypatch, local_lemonade, slots=2)
+
+    assert seen["title"] == "History of Tea Essay"
+    assert final == "History of Tea Essay"
+    # Titled from the question alone: no answer existed yet.
+    (body,) = _title_calls(local_lemonade)
+    assert "Assistant:" not in body["messages"][0]["content"]
+
+
+def test_a_one_slot_model_is_titled_after_the_answer(
+    monkeypatch, local_lemonade, sidecar_flagship
+):
+    """With no side slot, a title would evict the conversation's cache mid-turn."""
+    seen, final = _relayed_local_turn(monkeypatch, local_lemonade, slots=1)
+
+    assert seen == {"title": PROVISIONAL, "title_calls": 0}
+    assert final == "History of Tea Essay"
