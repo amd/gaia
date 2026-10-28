@@ -258,10 +258,33 @@ ProcessResult runSimple(const std::string& command, size_t maxOutputBytes) {
 
 #ifdef _WIN32
 
+constexpr int kCancelPollMs = 100;
+
+struct JobHandle {
+    HANDLE h = nullptr;
+    ~JobHandle() {
+        if (h) CloseHandle(h);
+    }
+};
+
+// timeoutMs <= 0 means no time limit (used when only a cancel hook is set).
 ProcessResult runWithTimeout(const std::string& command,
                              int timeoutMs,
-                             size_t maxOutputBytes) {
+                             size_t maxOutputBytes,
+                             const ProcessCancelCheck& cancelled) {
     ProcessResult result;
+
+    // The job holds the command and everything it starts, so a timeout or
+    // cancel can end the whole tree; kill-on-close covers this process dying.
+    JobHandle job{CreateJobObjectA(nullptr, nullptr)};
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!job.h || !SetInformationJobObject(job.h, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
+        result.exitCode = -1;
+        result.stderr_output = "Could not create a Windows job object for the command (error " +
+                               std::to_string(GetLastError()) + ")";
+        return result;
+    }
 
     // Create pipes for stdout and stderr
     SECURITY_ATTRIBUTES sa;
@@ -306,7 +329,7 @@ ProcessResult runWithTimeout(const std::string& command,
         nullptr,
         nullptr,
         TRUE,          // inherit handles
-        0,             // creation flags
+        CREATE_SUSPENDED,  // joins the job before it can start anything
         nullptr,       // use parent environment
         nullptr,       // use parent working directory
         &si,
@@ -324,6 +347,20 @@ ProcessResult runWithTimeout(const std::string& command,
         result.stderr_output = "CreateProcess failed for: " + command;
         return result;
     }
+    if (!AssignProcessToJobObject(job.h, pi.hProcess)) {
+        const DWORD err = GetLastError();
+        TerminateProcess(pi.hProcess, 1);
+        WaitForSingleObject(pi.hProcess, 5000);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        CloseHandle(stdoutReadH);
+        CloseHandle(stderrReadH);
+        result.exitCode = -1;
+        result.stderr_output = "Could not place the command in a Windows job object (error " +
+                               std::to_string(err) + "); it was not run";
+        return result;
+    }
+    ResumeThread(pi.hThread);
 
     // Read stdout and stderr from pipes using file descriptors
     // Convert HANDLEs to FILE* for readStream()
@@ -348,19 +385,47 @@ ProcessResult runWithTimeout(const std::string& command,
         capturedStderr = readStream(stderrFile, maxOutputBytes);
     });
 
-    // Wait for process with timeout
-    DWORD waitResult = WaitForSingleObject(pi.hProcess,
-                                           static_cast<DWORD>(timeoutMs));
+    // Wait in short slices so the cancel hook is polled.
+    std::string capturedStderrNote;
+    const auto start = std::chrono::steady_clock::now();
+    bool exited = false;
+    for (;;) {
+        DWORD slice = INFINITE;
+        if (cancelled) slice = kCancelPollMs;
+        if (timeoutMs > 0) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start).count();
+            if (elapsed >= timeoutMs) {
+                result.timedOut = true;
+                break;
+            }
+            slice = std::min<DWORD>(slice, static_cast<DWORD>(timeoutMs - elapsed));
+        }
+        if (WaitForSingleObject(pi.hProcess, slice) == WAIT_OBJECT_0) {
+            exited = true;
+            break;
+        }
+        if (cancelled && cancelled()) {
+            result.cancelled = true;
+            break;
+        }
+    }
 
-    if (waitResult == WAIT_TIMEOUT) {
-        result.timedOut = true;
-        TerminateProcess(pi.hProcess, 1);
-        WaitForSingleObject(pi.hProcess, 5000);  // wait for termination
+    if (!exited) {
+        TerminateJobObject(job.h, 1);  // the whole tree, not just cmd.exe
+        WaitForSingleObject(pi.hProcess, 5000);
         result.exitCode = -1;
     } else {
         DWORD exitCodeDw = 0;
         GetExitCodeProcess(pi.hProcess, &exitCodeDw);
         result.exitCode = static_cast<int>(exitCodeDw);
+        // A finished command may leave a background process on purpose (start /b);
+        // closing the job must not kill it.
+        limits.BasicLimitInformation.LimitFlags = 0;
+        if (!SetInformationJobObject(job.h, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
+            capturedStderrNote = "\n[background processes this command started were stopped: the job object "
+                                 "could not be released (error " + std::to_string(GetLastError()) + ")]";
+        }
     }
 
     // Wait for reader threads to finish (process is dead, pipes will EOF)
@@ -368,7 +433,7 @@ ProcessResult runWithTimeout(const std::string& command,
     convergentStderr.join();
 
     result.stdout_output = std::move(capturedStdout);
-    result.stderr_output = std::move(capturedStderr);
+    result.stderr_output = std::move(capturedStderr) + capturedStderrNote;
 
     if (stdoutFile) std::fclose(stdoutFile);
     else CloseHandle(stdoutReadH);
@@ -384,9 +449,13 @@ ProcessResult runWithTimeout(const std::string& command,
 
 #else  // POSIX
 
+constexpr int kCancelPollMs = 100;
+
+// timeoutMs <= 0 means no time limit (used when only a cancel hook is set).
 ProcessResult runWithTimeout(const std::string& command,
                              int timeoutMs,
-                             size_t maxOutputBytes) {
+                             size_t maxOutputBytes,
+                             const ProcessCancelCheck& cancelled) {
     ProcessResult result;
 
     // Create pipes for stdout and stderr
@@ -447,13 +516,23 @@ ProcessResult runWithTimeout(const std::string& command,
     std::string stderrBuf;
     std::array<char, 4096> readBuf;
 
+    auto lastPoll = startTime;
     while (!processFinished) {
-        // Check timeout
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - startTime).count();
-
-        if (elapsed >= timeoutMs) {
+        // Check timeout and, every kCancelPollMs, the cancel hook
+        const auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
+        bool stop = false;
+        if (timeoutMs > 0 && elapsed >= timeoutMs) {
             result.timedOut = true;
+            stop = true;
+        } else if (cancelled && now - lastPoll >= std::chrono::milliseconds(kCancelPollMs)) {
+            lastPoll = now;
+            if (cancelled()) {
+                result.cancelled = true;
+                stop = true;
+            }
+        }
+        if (stop) {
             kill(-pid, SIGKILL);  // the whole group, not just the shell
             kill(pid, SIGKILL);   // backstop if setpgid did not take
             waitpid(pid, nullptr, 0);
@@ -538,7 +617,8 @@ ProcessResult ProcessRunner::run(
         int timeoutMs,
         const std::string& cwd,
         const std::map<std::string, std::string>& env,
-        size_t maxOutputBytes) {
+        size_t maxOutputBytes,
+        const ProcessCancelCheck& cancelled) {
 
     // Handle empty command
     if (command.empty()) {
@@ -568,8 +648,8 @@ ProcessResult ProcessRunner::run(
 
     // Run the command
     ProcessResult result;
-    if (timeoutMs > 0) {
-        result = runWithTimeout(command, timeoutMs, maxOutputBytes);
+    if (timeoutMs > 0 || cancelled) {
+        result = runWithTimeout(command, timeoutMs, maxOutputBytes, cancelled);
     } else {
         result = runSimple(command, maxOutputBytes);
     }
@@ -1005,7 +1085,8 @@ ShellSession& ShellSession::shared() {
 
 ProcessResult ShellSession::run(const std::string& command,
                                 int timeoutMs,
-                                size_t maxOutputBytes) {
+                                size_t maxOutputBytes,
+                                const ProcessCancelCheck& cancelled) {
     ProcessResult result;
 
     if (command.empty()) {
@@ -1058,7 +1139,7 @@ ProcessResult ShellSession::run(const std::string& command,
 
     // No cwd/env arguments: the script applies both inside the child, so the
     // calling process is never mutated and concurrent sessions cannot collide.
-    result = ProcessRunner::run(invocation, timeoutMs, "", {}, maxOutputBytes);
+    result = ProcessRunner::run(invocation, timeoutMs, "", {}, maxOutputBytes, cancelled);
 
     impl_->absorbState(readFileContents(stateFile));
 

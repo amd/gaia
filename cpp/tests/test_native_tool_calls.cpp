@@ -17,8 +17,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
+#include <future>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "support/mock_llm_server.h"
@@ -144,6 +147,12 @@ TEST(ModelGateTest, MirrorsThePythonModelTableExactly) {
     // src/gaia/llm/lemonade_client.py.
     const std::vector<std::pair<std::string, bool>> expected = {
         {"Gemma-4-E4B-it-GGUF", true},
+        {"user.Qwen3.8-Flash-Next-GGUF", true},
+        {"Qwen3.6-35B-A3B-GGUF", true},
+        {"user.ggml-gpt-oss-20b-MXFP4-GGUF", true},
+        {"gpt-oss-20b-GGUF", true},
+        {"gpt-oss-120b-mxfp-GGUF", true},
+        {"gpt-oss-120b-GGUF", true},
         {"gemma4-it-e2b-FLM", false},
         {"Qwen3.5-35B-A3B-GGUF", true},
         {"Qwen3-0.6B-GGUF", true},
@@ -1152,4 +1161,135 @@ TEST(ToolSchemaTest, AllParamTypesMapToJsonSchemaTypes) {
     EXPECT_EQ(props["b"]["type"], "boolean");
     EXPECT_EQ(props["a"]["type"], "array");
     EXPECT_EQ(props["o"]["type"], "object");
+}
+
+// ---------------------------------------------------------------------------
+// The streaming path keeps the non-streaming loop guards, and stops on cancel
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::string sseContent(const std::string& text, const char* finish = nullptr) {
+    json choice = {{"index", 0}, {"delta", {{"content", text}}}};
+    choice["finish_reason"] = finish ? json(finish) : json(nullptr);
+    return json{{"choices", json::array({choice})}}.dump();
+}
+
+std::string sseReasoning(const std::string& text) {
+    return json{{"choices", json::array({{{"index", 0}, {"delta", {{"reasoning_content", text}}}}})}}.dump();
+}
+
+std::string sseFinish(const char* finish) {
+    return json{{"choices", json::array({{{"index", 0}, {"delta", json::object()}, {"finish_reason", finish}}})}}.dump();
+}
+
+AgentConfig streamingCfg(const std::string& url) {
+    AgentConfig cfg = makeCfg(url, kToolCallingModel);
+    cfg.streaming = true;
+    cfg.stripThinking = true;
+    cfg.finalAnswerGuards = true;
+    cfg.responseMode = ResponseMode::Conversational;
+    return cfg;
+}
+
+} // namespace
+
+TEST(SseParserTest, ReportsFinishReasonAndKeepsReasoningOutOfTheTokens) {
+    std::string tokens;
+    SseParser parser([&](const std::string& t) { tokens += t; });
+    const std::string sse = "data: " + sseReasoning("thinking...") + "\n\n" + "data: " + sseContent("Hi") +
+                            "\n\n" + "data: " + sseFinish("length") + "\n\n" + "data: [DONE]\n\n";
+    parser.feed(sse.data(), sse.size());
+    EXPECT_EQ(tokens, "Hi");
+    EXPECT_EQ(parser.reasoning(), "thinking...");
+    EXPECT_EQ(parser.finishReason(), "length");
+}
+
+TEST(StreamingLoopTest, ReasoningOnlyStreamIsAnsweredLikeTheNonStreamingPath) {
+    bench::MockLlmServer mock;
+    mock.pushSseStream({sseReasoning("The answer "), sseReasoning("is 42."), sseFinish("stop")});
+    ToolAgent agent(streamingCfg(mock.baseUrl()));
+    agent.initForTest();
+    const json r = agent.processQuery("what is it?");
+    EXPECT_FALSE(r.contains("error")) << r.dump();
+    EXPECT_EQ(r["result"], "The answer is 42.");
+    EXPECT_EQ(mock.requestCount(), 1);
+}
+
+TEST(StreamingLoopTest, CutOffStreamIsContinuedNotTakenAsTheAnswer) {
+    bench::MockLlmServer mock;
+    mock.pushSseStream({sseContent("Here is the first half of"), sseFinish("length")});
+    mock.pushSseStream({sseContent("All done."), sseFinish("stop")});
+    ToolAgent agent(streamingCfg(mock.baseUrl()));
+    agent.initForTest();
+    const json r = agent.processQuery("write it out");
+    EXPECT_EQ(r["result"], "All done.");
+    ASSERT_EQ(mock.requestCount(), 2);
+    EXPECT_NE(mock.receivedBodies()[1].find("cut off at the output-token limit"), std::string::npos);
+}
+
+TEST(StreamingLoopTest, CancelStopsAStreamMidReply) {
+    bench::MockLlmServer mock;
+    std::vector<std::string> chunks;
+    for (int i = 0; i < 40; ++i) chunks.push_back(sseContent("word "));
+    mock.pushSseStream(chunks);
+    mock.setSseEventDelay(std::chrono::milliseconds(100));
+    ToolAgent agent(streamingCfg(mock.baseUrl()));
+    agent.initForTest();
+    std::thread canceller([&] {
+        while (mock.sseEventsSent() < 2) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        agent.requestCancel();
+    });
+    const auto started = std::chrono::steady_clock::now();
+    const json r = agent.processQuery("talk for a while");
+    canceller.join();
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(3));
+    EXPECT_NE(r["result"].get<std::string>().find("[Cancelled"), std::string::npos) << r.dump();
+    EXPECT_EQ(mock.requestCount(), 1);
+}
+
+TEST(StreamingLoopTest, CancelDuringTheModelCallNeverRunsTheToolItAskedFor) {
+    bench::MockLlmServer mock;
+    std::promise<void> release;
+    // The held reply is a prompt-JSON tool call.
+    mock.holdNextResponse(release.get_future().share(),
+                          R"({"choices":[{"message":{"content":"{\"tool\":\"echo\",\"tool_args\":{\"message\":\"x\"}}"}}]})");
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kNonToolCallingModel);
+    cfg.responseMode = ResponseMode::Conversational;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    std::thread canceller([&] {
+        while (mock.requestCount() < 1) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        agent.requestCancel();
+        release.set_value();
+    });
+    const json r = agent.processQuery("echo x");
+    canceller.join();
+    EXPECT_TRUE(agent.executed.empty());
+    EXPECT_NE(r["result"].get<std::string>().find("[Cancelled"), std::string::npos) << r.dump();
+}
+
+// ---------------------------------------------------------------------------
+// The model is checked every turn, and a failed load ends the turn loudly
+// ---------------------------------------------------------------------------
+
+TEST(ModelLoadTest, LoadIsRecheckedEveryTurn) {
+    bench::MockLlmServer mock(/*reportModelLoaded=*/false);
+    mock.pushResponses(kPlainAnswer, 2);
+    ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
+    agent.initForTest();
+    agent.processQuery("one");
+    agent.processQuery("two");
+    EXPECT_EQ(mock.loadRequestCount(), 2);
+}
+
+TEST(ModelLoadTest, AFailedLoadIsAnErrorNotAWarning) {
+    bench::MockLlmServer mock(/*reportModelLoaded=*/false);
+    mock.setLoadStatus(500);
+    ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
+    agent.initForTest();
+    const json r = agent.processQuery("hello");
+    ASSERT_TRUE(r.contains("error")) << r.dump();
+    EXPECT_NE(r["error"].get<std::string>().find(kToolCallingModel), std::string::npos);
+    EXPECT_EQ(mock.requestCount(), 0);  // no chat request against the wrong model
 }

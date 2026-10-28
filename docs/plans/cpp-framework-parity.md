@@ -1,6 +1,8 @@
 # C++ Framework Parity: Retrieval, Skills, and MCP
 
-**Status:** Proposed
+**Status:** Proposed. Superseded for the flagship by
+[`cpp-flagship-binary.md`](cpp-flagship-binary.md): `gaia-bash` and `cpp/agents/bash/` are
+removed, and `gaia-agent` (`cpp/agents/gaia/`) is the one native harness.
 **Date:** 2026-08-04
 **Milestone:** C++ Framework: Domain Agent Parity [OEM]
 **Supersedes nothing.** Extends `docs/plans/cpp-webui-integration.md`, which explicitly scoped

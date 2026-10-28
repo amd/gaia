@@ -22,6 +22,9 @@ on:
       # this workflow and main goes red on the next unrelated push (#2693).
       - 'tests/fixtures/skills/**'
       - 'tests/fixtures/*_skills/**'
+      # Compiled into gaia-native (GAIA_BUNDLED_SKILL_DIRS).
+      - 'hub/skills/**'
+      - 'hub/agents/gaia/python/gaia_agent/skills/**'
       - '.github/workflows/build_cpp.yml'
       - '.github/workflows/benchmark_cpp.yml'
       - '.github/actions/setup-venv/**'
@@ -36,6 +39,8 @@ on:
       - 'cpp/**'
       - 'tests/fixtures/skills/**'
       - 'tests/fixtures/*_skills/**'
+      - 'hub/skills/**'
+      - 'hub/agents/gaia/python/gaia_agent/skills/**'
       - '.github/workflows/build_cpp.yml'
       - '.github/workflows/benchmark_cpp.yml'
       - '.github/actions/setup-venv/**'
@@ -122,6 +127,40 @@ jobs:
 
       - name: Test
         run: ctest --test-dir cpp/build -C Release --output-on-failure
+
+  # gaia-native ships from the zig `tiny-*` presets; build two of them on every
+  # change so a musl, cross-compile or size break shows up before a release tag.
+  tiny-cross:
+    name: gaia-native tiny builds (zig)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install the zig toolchain
+        run: python -m pip install ziglang==0.16.0 cmake==4.4.4 ninja==1.13.0
+
+      - name: Build and check size
+        shell: bash
+        working-directory: cpp
+        run: |
+          set -euo pipefail
+          for preset in tiny-linux-x64 tiny-windows-x64; do
+            cmake --preset "$preset"
+            cmake --build --preset "$preset"
+            bin="build/$preset/gaia-agent"; [ -f "$bin.exe" ] && bin="$bin.exe"
+            size=$(stat -c%s "$bin")
+            echo "$preset: $size bytes"
+            if [ "$size" -gt 6291456 ]; then
+              echo "::error::$preset gaia-agent is $size bytes, over the 6 MB budget"; exit 1
+            fi
+          done
+          build/tiny-linux-x64/gaia-agent --version
 
   # Verify cmake --install + find_package round-trip works
   install-test:

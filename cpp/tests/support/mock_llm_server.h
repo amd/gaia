@@ -96,11 +96,11 @@ public:
     /// Hold the next /chat/completions response until `release` is ready.
     /// Used to deterministically test concurrent entry: the first call
     /// blocks inside the handler while the second thread attempts entry.
-    /// The handler consumes this hold once and returns the default answer.
-    void holdNextResponse(std::shared_future<void> release) {
+    /// The handler consumes this hold once and returns @p body.
+    void holdNextResponse(std::shared_future<void> release, const std::string& body = kDefaultAnswer) {
         std::lock_guard<std::mutex> lk(mu_);
         QueuedResponse qr;
-        qr.body = kDefaultAnswer;
+        qr.body = body;
         qr.status = 200;
         qr.releaseHold = std::move(release);
         responseQueue_.push_back(std::move(qr));
@@ -109,6 +109,29 @@ public:
     /// Serve /api/v1/chat/completions as a real SSE stream when the request
     /// body asks for one. Off by default so non-streaming tests are unaffected.
     void enableSseStreaming(bool enabled) { sseStreaming_ = enabled; }
+
+    /// Script the next streamed reply: each entry is one `data:` payload (a
+    /// chat.completion.chunk JSON); [DONE] follows. Implies enableSseStreaming.
+    void pushSseStream(std::vector<std::string> payloads) {
+        std::lock_guard<std::mutex> lk(mu_);
+        sseQueue_.push_back(std::move(payloads));
+        sseStreaming_ = true;
+    }
+
+    /// Pause before each scripted SSE event (drives mid-stream cancel tests).
+    void setSseEventDelay(std::chrono::milliseconds delay) { sseDelayMs_ = static_cast<int>(delay.count()); }
+
+    /// Number of SSE events the server has written so far.
+    int sseEventsSent() const { return sseEventsSent_.load(); }
+
+    /// Replace the GET /api/v1/models body.
+    void setModelsList(const std::string& body) {
+        std::lock_guard<std::mutex> lk(mu_);
+        modelsList_ = body;
+    }
+
+    /// Answer POST /api/v1/load with this status (200 by default).
+    void setLoadStatus(int status) { loadStatus_ = status; }
 
     void clearQueue() {
         std::lock_guard<std::mutex> lk(mu_);
@@ -140,11 +163,13 @@ private:
 
         server_->Post("/api/v1/load", [this](const httplib::Request&, httplib::Response& res) {
             ++loadCount_;
-            res.set_content(kLoadOk, "application/json");
+            res.status = loadStatus_.load();
+            res.set_content(res.status == 200 ? kLoadOk : R"({"error":"model failed to load"})", "application/json");
         });
 
-        server_->Get("/api/v1/models", [](const httplib::Request&, httplib::Response& res) {
-            res.set_content(kModelsList, "application/json");
+        server_->Get("/api/v1/models", [this](const httplib::Request&, httplib::Response& res) {
+            std::lock_guard<std::mutex> lk(mu_);
+            res.set_content(modelsList_, "application/json");
         });
 
         server_->Post("/api/v1/chat/completions",
@@ -161,7 +186,19 @@ private:
 
                           if (sseStreaming_ &&
                               req.body.find("\"stream\":true") != std::string::npos) {
-                              sendSseChatStream(res);
+                              std::vector<std::string> scripted;
+                              {
+                                  std::lock_guard<std::mutex> lk(mu_);
+                                  if (!sseQueue_.empty()) {
+                                      scripted = std::move(sseQueue_.front());
+                                      sseQueue_.pop_front();
+                                  }
+                              }
+                              if (scripted.empty()) {
+                                  sendSseChatStream(res);
+                              } else {
+                                  sendScriptedSse(res, std::move(scripted));
+                              }
                               return;
                           }
 
@@ -200,6 +237,25 @@ private:
                 if (*index < events.size()) {
                     const std::string& event = events[(*index)++];
                     sink.write(event.data(), event.size());
+                } else {
+                    sink.done();
+                }
+                return true;
+            });
+    }
+
+    void sendScriptedSse(httplib::Response& res, std::vector<std::string> payloads) {
+        auto events = std::make_shared<std::vector<std::string>>();
+        for (auto& p : payloads) events->push_back("data: " + p + "\n\n");
+        events->push_back("data: [DONE]\n\n");
+        auto index = std::make_shared<size_t>(0);
+        res.set_chunked_content_provider(
+            "text/event-stream", [this, events, index](size_t /*offset*/, httplib::DataSink& sink) {
+                if (*index < events->size()) {
+                    if (sseDelayMs_ > 0) std::this_thread::sleep_for(std::chrono::milliseconds(sseDelayMs_.load()));
+                    const std::string& event = (*events)[(*index)++];
+                    if (!sink.write(event.data(), event.size())) return false;
+                    ++sseEventsSent_;
                 } else {
                     sink.done();
                 }
@@ -287,6 +343,11 @@ private:
     std::atomic<int> requestCount_{0};
     std::atomic<int> loadCount_{0};
     std::atomic<bool> sseStreaming_{false};
+    std::deque<std::vector<std::string>> sseQueue_;
+    std::atomic<int> sseDelayMs_{0};
+    std::atomic<int> sseEventsSent_{0};
+    std::string modelsList_ = kModelsList;
+    std::atomic<int> loadStatus_{200};
 };
 
 } // namespace bench

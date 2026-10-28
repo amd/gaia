@@ -11,6 +11,12 @@ const std::vector<ModelCapability>& knownModels() {
     // OpenAI ``tools`` payload; the embedders are false because they never chat.
     static const std::vector<ModelCapability> kModels = {
         {"Gemma-4-E4B-it-GGUF",        true},
+        {"user.Qwen3.8-Flash-Next-GGUF", true},
+        {"Qwen3.6-35B-A3B-GGUF",       true},
+        {"user.ggml-gpt-oss-20b-MXFP4-GGUF", true},
+        {"gpt-oss-20b-GGUF",           true},
+        {"gpt-oss-120b-mxfp-GGUF",     true},
+        {"gpt-oss-120b-GGUF",          true},
         {"gemma4-it-e2b-FLM",          false},
         {"Qwen3.5-35B-A3B-GGUF",       true},
         {"Qwen3-0.6B-GGUF",            true},

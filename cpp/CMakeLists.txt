@@ -38,6 +38,30 @@ if(MSVC AND DEFINED VCPKG_TARGET_TRIPLET AND VCPKG_TARGET_TRIPLET MATCHES "-stat
 endif()
 
 # ---------------------------------------------------------------------------
+# Tiny build (the `tiny` presets): smallest self-contained binaries
+# ---------------------------------------------------------------------------
+# Sections per function/datum let the linker drop everything unreferenced, and
+# symbols are stripped. Pair with CMAKE_BUILD_TYPE=MinSizeRel (-Os).
+option(GAIA_TINY "Optimize the agent binaries for size (section GC, stripped, static runtime)" OFF)
+if(GAIA_TINY)
+    if(MSVC)
+        add_compile_options(/Gy /Gw)
+        add_link_options(/OPT:REF /OPT:ICF)
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+    else()
+        add_compile_options(-ffunction-sections -fdata-sections)
+        if(APPLE)
+            add_link_options(-Wl,-dead_strip)
+        else()
+            add_link_options(-Wl,--gc-sections -s)
+        endif()
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            add_link_options(-static-libstdc++ -static-libgcc)
+        endif()
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Options -- default ON when this is the top-level project, OFF as a sub-
 # project so consumers only get the library.
 # ---------------------------------------------------------------------------
@@ -147,6 +171,17 @@ if(NOT yaml-cpp_FOUND)
     endif()
 endif()
 
+# miniz (private) — Flate for PDF streams and zip for DOCX/XLSX/PPTX. The release
+# zip is the single-file amalgamation and has no CMakeLists, so it is only
+# downloaded here and compiled below as an OBJECT library, like SQLite.
+FetchContent_Declare(
+    miniz
+    URL      https://github.com/richgel999/miniz/releases/download/3.0.2/miniz-3.0.2.zip
+    URL_HASH SHA256=ada38db0b703a56d3dd6d57bf84a9c5d664921d870d8fea4db153979fb5332c5
+    SOURCE_SUBDIR _gaia_no_cmake
+)
+FetchContent_MakeAvailable(miniz)
+
 # FTXUI — reactive TUI framework (optional, gated behind GAIA_BUILD_TUI)
 # FTXUI must always be built static — it doesn't export symbols for DLL builds,
 # so BUILD_SHARED_LIBS=ON causes LNK1181 on Windows.
@@ -228,6 +263,14 @@ target_compile_options(gaia_sqlite3 PRIVATE
     $<$<NOT:$<C_COMPILER_ID:MSVC>>:-w>
 )
 
+add_library(gaia_miniz OBJECT ${miniz_SOURCE_DIR}/miniz.c)
+target_include_directories(gaia_miniz PRIVATE ${miniz_SOURCE_DIR})
+set_target_properties(gaia_miniz PROPERTIES POSITION_INDEPENDENT_CODE ON C_STANDARD 99)
+target_compile_options(gaia_miniz PRIVATE
+    $<$<C_COMPILER_ID:MSVC>:/W0>
+    $<$<NOT:$<C_COMPILER_ID:MSVC>>:-w>
+)
+
 # Google Test (unit tests and/or integration tests)
 if(GAIA_BUILD_TESTS OR GAIA_BUILD_INTEGRATION_TESTS)
     find_package(GTest QUIET)
@@ -274,13 +317,24 @@ add_library(gaia_core
     src/skill_yaml.cpp
     src/skill_sets.cpp
     src/database.cpp
+    src/tool_output.cpp
+    src/flagship_config.cpp
+    src/secrets.cpp
+    src/memory.cpp
+    src/skill_manager.cpp
+    src/flagship_tools.cpp
+    src/web_tools.cpp
+    src/documents.cpp
+    src/data_file.cpp
+    src/rag.cpp
 )
 
 # SQLite is compiled straight into gaia_core. Consuming the OBJECT library via
 # $<TARGET_OBJECTS:> rather than target_link_libraries keeps gaia_sqlite3 out of
 # gaia_core's link interface, so install(EXPORT) has nothing extra to resolve —
 # the same approach this file already takes for the fetched httplib/json.
-target_sources(gaia_core PRIVATE $<TARGET_OBJECTS:gaia_sqlite3>)
+target_sources(gaia_core PRIVATE $<TARGET_OBJECTS:gaia_sqlite3> $<TARGET_OBJECTS:gaia_miniz>)
+target_include_directories(gaia_core PRIVATE ${miniz_SOURCE_DIR})
 target_include_directories(gaia_core PRIVATE ${GAIA_SQLITE_INCLUDE_DIR})
 target_compile_definitions(gaia_core PRIVATE ${GAIA_SQLITE_DEFINITIONS})
 
@@ -359,7 +413,8 @@ if(UNIX)
     target_link_libraries(gaia_core PRIVATE ${CMAKE_DL_LIBS})
 endif()
 if(WIN32)
-    target_link_libraries(gaia_core PRIVATE ws2_32)
+    # winhttp: HTTPS for the web tools from the OS, so no TLS library ships.
+    target_link_libraries(gaia_core PRIVATE ws2_32 winhttp)
 endif()
 
 # FTXUI (TUI console — optional)
@@ -385,32 +440,52 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# gaia-bash agent binary
+# gaia-agent — the flagship as one native binary
 # ---------------------------------------------------------------------------
-option(GAIA_BUILD_BASH_AGENT "Build the gaia-bash coding agent" ON)
-if(GAIA_BUILD_BASH_AGENT)
-    add_executable(gaia-bash
-        agents/bash/main.cpp
-        agents/bash/bash_agent.cpp
-        agents/bash/bash_tools.cpp
-        agents/bash/api_server.cpp
-        agents/bash/mcp_server.cpp
+option(GAIA_BUILD_FLAGSHIP "Build gaia-agent, the native flagship agent" ON)
+# Bundled skills, highest precedence first. A standalone checkout of cpp/ has no
+# hub/ beside it; missing folders embed nothing.
+set(GAIA_BUNDLED_SKILL_DIRS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../hub/agents/gaia/python/gaia_agent/skills;${CMAKE_CURRENT_SOURCE_DIR}/../hub/skills"
+    CACHE STRING "Folders whose */SKILL.md are compiled into gaia-agent")
+if(GAIA_BUILD_FLAGSHIP)
+    set(_gaia_skill_files "")
+    foreach(_dir IN LISTS GAIA_BUNDLED_SKILL_DIRS)
+        file(GLOB _found CONFIGURE_DEPENDS "${_dir}/*/SKILL.md")
+        list(APPEND _gaia_skill_files ${_found})
+    endforeach()
+    list(LENGTH _gaia_skill_files _gaia_skill_count)
+    message(STATUS "gaia-agent: embedding ${_gaia_skill_count} bundled skill(s)")
+    set(_gaia_skills_cpp "${CMAKE_CURRENT_BINARY_DIR}/gaia_embedded_skills.cpp")
+    add_custom_command(
+        OUTPUT  "${_gaia_skills_cpp}"
+        COMMAND ${CMAKE_COMMAND} "-DSKILL_DIRS=${GAIA_BUNDLED_SKILL_DIRS}" "-DOUTPUT=${_gaia_skills_cpp}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_skills.cmake"
+        DEPENDS ${_gaia_skill_files} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_skills.cmake"
+        COMMENT "Embedding bundled skills into gaia-agent"
+        VERBATIM)
+    add_executable(gaia-agent
+        agents/gaia/main.cpp
+        agents/gaia/flagship_agent.cpp
+        agents/gaia/stdio_server.cpp
+        agents/common/api_server.cpp
+        agents/common/mcp_server.cpp
+        "${_gaia_skills_cpp}"
     )
-    target_include_directories(gaia-bash PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/agents/bash
+    target_include_directories(gaia-agent PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/agents/gaia
+        ${CMAKE_CURRENT_SOURCE_DIR}/agents/common
     )
-    target_link_libraries(gaia-bash PRIVATE gaia::gaia_core)
-
-    # API server needs httplib (already a dependency of gaia_core but PRIVATE)
+    target_link_libraries(gaia-agent PRIVATE gaia::gaia_core)
     if(httplib_FOUND)
-        target_link_libraries(gaia-bash PRIVATE httplib::httplib)
+        target_link_libraries(gaia-agent PRIVATE httplib::httplib)
     else()
-        target_include_directories(gaia-bash SYSTEM PRIVATE
+        target_include_directories(gaia-agent SYSTEM PRIVATE
             $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>)
     endif()
     if(OpenSSL_FOUND)
-        target_compile_definitions(gaia-bash PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
-        target_link_libraries(gaia-bash PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+        target_compile_definitions(gaia-agent PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+        target_link_libraries(gaia-agent PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     endif()
 endif()
 
@@ -472,6 +547,14 @@ if(GAIA_BUILD_TESTS)
         tests/test_skill.cpp
         tests/test_skill_sets.cpp
         tests/test_database.cpp
+        tests/test_tool_output.cpp
+        tests/test_secrets.cpp
+        tests/test_memory.cpp
+        tests/test_skill_manager.cpp
+        tests/test_flagship_tools.cpp
+        tests/test_documents.cpp
+        tests/test_data_file.cpp
+        tests/test_rag.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE
@@ -498,11 +581,28 @@ if(GAIA_BUILD_TESTS)
         # the repo root. test_skill.cpp discovers them from disk: skills/ must
         # conform, <vendor>_skills/ are third-party inputs that need not.
         GAIA_REPO_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures"
-        # test_skill_sets.cpp parses cpp/agents/bash/gaia-agent.yaml to prove a
+        # test_skill_sets.cpp parses cpp/agents/gaia/gaia-agent.yaml to prove a
         # real shipped manifest that declares no skills stays empty and falsy.
         GAIA_CPP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     )
     target_include_directories(tests_mock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+
+    # The flagship agent class lives with its binary; its end-to-end test
+    # compiles it in directly.
+    if(GAIA_BUILD_FLAGSHIP)
+        target_sources(tests_mock PRIVATE
+            tests/test_flagship_agent.cpp
+            tests/test_stdio_server.cpp
+            tests/test_mcp_server.cpp
+            tests/test_api_server.cpp
+            agents/gaia/flagship_agent.cpp
+            agents/gaia/stdio_server.cpp
+            agents/common/mcp_server.cpp
+            agents/common/api_server.cpp
+        )
+        target_include_directories(tests_mock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/agents/gaia
+            ${CMAKE_CURRENT_SOURCE_DIR}/agents/common)
+    endif()
 
     # TUI tests (conditional -- requires FTXUI)
     if(GAIA_BUILD_TUI)

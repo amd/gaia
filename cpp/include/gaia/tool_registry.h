@@ -126,4 +126,14 @@ private:
     static std::string toLower(const std::string& s);
 };
 
+/// True when @p s is well-formed UTF-8 (no overlongs, surrogates or code points past U+10FFFF).
+GAIA_API bool isValidUtf8(const std::string& s);
+
+/// @p s with every ill-formed UTF-8 byte replaced by U+FFFD.
+GAIA_API std::string toValidUtf8(const std::string& s);
+
+/// @p value with every string and object key made valid UTF-8, so a strict
+/// json::dump() of a tool result can never throw.
+GAIA_API json toValidUtf8(const json& value);
+
 } // namespace gaia

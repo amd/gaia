@@ -69,7 +69,7 @@ jobs:
             -DGAIA_BUILD_TESTS=OFF \
             -DGAIA_BUILD_INTEGRATION_TESTS=OFF \
             -DGAIA_BUILD_TUI=OFF \
-            -DGAIA_BUILD_BASH_AGENT=OFF | tee cpp-benchmark-configure.log
+            -DGAIA_BUILD_FLAGSHIP=OFF | tee cpp-benchmark-configure.log
           grep -q "GAIA SSL: enabled" cpp-benchmark-configure.log || { echo "::error::OpenSSL not found; benchmark binaries would build without HTTPS"; exit 1; }
 
       - name: Build (static + benchmarks)
@@ -86,7 +86,7 @@ jobs:
             -DGAIA_BUILD_EXAMPLES=OFF \
             -DGAIA_BUILD_BENCHMARKS=OFF \
             -DGAIA_BUILD_TUI=OFF \
-            -DGAIA_BUILD_BASH_AGENT=OFF | tee cpp-benchmark-shared-configure.log
+            -DGAIA_BUILD_FLAGSHIP=OFF | tee cpp-benchmark-shared-configure.log
           grep -q "GAIA SSL: enabled" cpp-benchmark-shared-configure.log || { echo "::error::OpenSSL not found; benchmark shared library would build without HTTPS"; exit 1; }
 
       - name: Build (shared library)

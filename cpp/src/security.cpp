@@ -179,11 +179,19 @@ AllowedToolsStore::AllowedToolsStore(const std::string& dir) {
     load();
 }
 
+AllowedToolsStore::AllowedToolsStore(std::nullptr_t, std::set<std::string> neverGranted)
+    : neverGranted_(std::move(neverGranted)) {}
+
+std::shared_ptr<AllowedToolsStore> AllowedToolsStore::sessionOnly(std::set<std::string> neverGranted) {
+    return std::shared_ptr<AllowedToolsStore>(new AllowedToolsStore(nullptr, std::move(neverGranted)));
+}
+
 bool AllowedToolsStore::isAlwaysAllowed(const std::string& toolName) const {
     return allowed_.count(toolName) > 0;
 }
 
 void AllowedToolsStore::addAlwaysAllowed(const std::string& toolName) {
+    if (neverGranted_.count(toolName)) return;
     allowed_.insert(toolName);
     save();
 }
@@ -203,6 +211,7 @@ std::vector<std::string> AllowedToolsStore::allAllowed() const {
 }
 
 void AllowedToolsStore::load() {
+    if (filePath_.empty()) return;
     std::ifstream f(filePath_);
     if (!f.is_open()) {
         return; // File doesn't exist yet — start empty
@@ -223,6 +232,7 @@ void AllowedToolsStore::load() {
 }
 
 void AllowedToolsStore::save() const {
+    if (filePath_.empty()) return;
     json j;
     j["version"] = 1;
     j["allowed_tools"] = json::array();

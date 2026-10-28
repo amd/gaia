@@ -69,7 +69,7 @@ type Agent struct {
 	Version     string // semver, e.g. "0.1.0"
 	Status      AgentStatus
 	Transport   Transport
-	BinaryPath  string   // e.g. "gaia-bash" (subprocess transport only)
+	BinaryPath  string   // e.g. "gaia-agent" (subprocess transport only)
 	BinaryArgs  []string // e.g. ["--json-events"] (subprocess transport only)
 	// CanonicalEvents marks a subprocess agent that writes the CANONICAL event
 	// vocabulary over the pipe rather than the frozen legacy one. Only canonical

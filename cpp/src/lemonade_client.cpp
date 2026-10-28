@@ -57,6 +57,14 @@ LemonadeClient::LemonadeClient(const LemonadeClientConfig& config)
     setBaseUrl(url);
     http_.setDebug(debug_);
 
+    // A Lemonade started with LEMONADE_API_KEY rejects every request without it.
+    std::string apiKey = config.apiKey.empty() ? getEnvVar("LEMONADE_API_KEY") : config.apiKey;
+    apiKey.erase(0, apiKey.find_first_not_of(" \t\r\n"));
+    apiKey.erase(apiKey.find_last_not_of(" \t\r\n") + 1);
+    if (!apiKey.empty()) {
+        http_.setDefaultHeader("Authorization", "Bearer " + apiKey);
+    }
+
     // Resolve model: config → env LEMONADE_MODEL → empty
     model_ = config.model;
     if (model_.empty()) {
@@ -68,7 +76,7 @@ LemonadeClient::LemonadeClient(const LemonadeClientConfig& config)
 
 // Legacy constructor — delegates to config-based constructor.
 LemonadeClient::LemonadeClient(const std::string& baseUrl, bool debug)
-    : LemonadeClient(LemonadeClientConfig{baseUrl, "", 0, debug}) {}
+    : LemonadeClient(LemonadeClientConfig{baseUrl, "", 0, debug, ""}) {}
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -180,6 +188,36 @@ json LemonadeClient::listModels(bool showAll) {
     if (showAll) path += "?show_all=true";
     std::string body = httpGet(path, 10);
     return json::parse(body);
+}
+
+std::vector<std::vector<float>> LemonadeClient::embeddings(const std::vector<std::string>& inputs,
+                                                           const std::string& model, int timeoutSec) {
+    std::vector<std::vector<float>> out;
+    if (inputs.empty()) return out;
+    const json payload = {{"model", model}, {"input", inputs}};
+    std::string body;
+    try {
+        body = httpPost("/embeddings", payload.dump(-1, ' ', false, json::error_handler_t::replace), timeoutSec);
+    } catch (const std::exception& e) {
+        std::string why = e.what();
+        while (!why.empty() && (why.back() == '.' || why.back() == ' ')) why.pop_back();
+        throw std::runtime_error("Embedding with " + model + " failed: " + why +
+                                 ". The embedding model must be installed on this Lemonade (`gaia init` installs it).");
+    }
+    const json j = json::parse(body, nullptr, false);
+    if (j.is_discarded() || !j.contains("data") || !j["data"].is_array() || j["data"].size() != inputs.size()) {
+        throw std::runtime_error("Embedding with " + model + " returned an unexpected reply: " + body.substr(0, 200));
+    }
+    out.resize(inputs.size());
+    for (std::size_t i = 0; i < j["data"].size(); ++i) {
+        const json& item = j["data"][i];
+        const std::size_t idx = item.value("index", i);
+        if (idx >= out.size() || !item.contains("embedding") || !item["embedding"].is_array()) {
+            throw std::runtime_error("Embedding with " + model + " returned an entry without a vector.");
+        }
+        out[idx] = item["embedding"].get<std::vector<float>>();
+    }
+    return out;
 }
 
 json LemonadeClient::getModelDetails(const std::string& modelId) {
@@ -364,28 +402,43 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
                                                       std::vector<ToolCall>& outToolCalls,
                                                       int timeoutSec) {
     outToolCalls.clear();
+    ChatStreamResult r = chatCompletionsStream(requestBody, std::move(onToken), {}, timeoutSec);
+    outToolCalls = std::move(r.toolCalls);
+    return std::move(r.raw);
+}
 
+ChatStreamResult LemonadeClient::chatCompletionsStream(const json& requestBody,
+                                                       StreamCallback onToken,
+                                                       std::function<bool()> shouldStop,
+                                                       int timeoutSec) {
     json body = requestBody;
     body["stream"] = true;
 
     SseParser parser(onToken);
-    std::string rawBytes;
+    ChatStreamResult out;
 
     httpPostStreaming(
         "/chat/completions",
         body.dump(),
-        [&parser, &rawBytes](const char* data, size_t len) -> bool {
-            rawBytes.append(data, len);
+        [&parser, &out, &shouldStop](const char* data, size_t len) -> bool {
+            if (shouldStop && shouldStop()) {
+                out.stopped = true;
+                return false;
+            }
+            out.raw.append(data, len);
             return parser.feed(data, len);
         },
         timeoutSec
     );
+    out.finishReason = parser.finishReason();
+    out.reasoning = parser.reasoning();
+    if (out.stopped) return out;
 
     // If no tokens were extracted, the server may have returned an error or a
     // non-streaming response. Apply the same embedded-error check as chatCompletions().
-    if (!parser.hasTokens() && !parser.hasToolCalls() && !rawBytes.empty()) {
+    if (!parser.hasTokens() && !parser.hasToolCalls() && !out.raw.empty()) {
         try {
-            const json responseJson = json::parse(rawBytes);
+            const json responseJson = json::parse(out.raw);
             if (responseJson.contains("error")) {
                 std::string errMsg = "LLM server error";
                 try {
@@ -427,8 +480,8 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
             "arguments are incomplete and must not be executed. Check the "
             "server connection and retry.");
     }
-    outToolCalls = parser.toolCalls();
-    return rawBytes;
+    out.toolCalls = parser.toolCalls();
+    return out;
 }
 
 } // namespace gaia

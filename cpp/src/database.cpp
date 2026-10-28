@@ -106,6 +106,10 @@ DatabaseError::DatabaseError(const std::string& message,
 // Statement
 // ---------------------------------------------------------------------------
 
+bool Statement::readOnly() const {
+    return stmt_ && sqlite3_stmt_readonly(stmt_) != 0;
+}
+
 Statement::Statement(sqlite3* db, sqlite3_stmt* stmt, std::string sql, std::string dbPath)
     : db_(db), stmt_(stmt), sql_(std::move(sql)), dbPath_(std::move(dbPath)) {}
 

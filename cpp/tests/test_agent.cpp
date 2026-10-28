@@ -308,6 +308,25 @@ TEST(AgentTest, EnvVarGaiaModelIdOverridesDefault) {
 }
 #endif
 
+TEST(AgentTest, LegacyEnvOverridesCanBeTurnedOff) {
+#ifdef _WIN32
+    _putenv_s("GAIA_MODEL_ID", "env-model");
+#else
+    setenv("GAIA_MODEL_ID", "env-model", 1);
+#endif
+    AgentConfig cfg;
+    cfg.silentMode = true;
+    cfg.modelId = "flag-model";
+    cfg.legacyEnvOverrides = false;
+    MockAgent agent(cfg);
+#ifdef _WIN32
+    _putenv_s("GAIA_MODEL_ID", "");
+#else
+    unsetenv("GAIA_MODEL_ID");
+#endif
+    EXPECT_EQ(agent.config().modelId, "flag-model");
+}
+
 // Note: processQuery tests require an LLM server running,
 // so they are not included here. Use integration tests for full loop testing.
 // The tests above verify the components independently.

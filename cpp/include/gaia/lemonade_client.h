@@ -27,6 +27,8 @@ using json = nlohmann::json;
 // ---- Constants (mirrors Python LemonadeClient defaults) ----
 
 inline constexpr const char* LEMONADE_DEFAULT_URL        = "http://localhost:13305/api/v1";
+/// Python's DEFAULT_EMBEDDING_MODEL: memory and documents both embed with it.
+inline constexpr const char* LEMONADE_EMBEDDING_MODEL    = "user.embeddinggemma-300m-GGUF";
 inline constexpr const char* LEMONADE_DEFAULT_MODEL      = "Qwen3-0.6B-GGUF";
 inline constexpr int         LEMONADE_REQUEST_TIMEOUT    = 900;   // 15 min  (matches Python)
 inline constexpr int         LEMONADE_MODEL_LOAD_TIMEOUT = 12000; // ~200 min (matches Python)
@@ -40,6 +42,7 @@ struct GAIA_API LemonadeClientConfig {
     std::string model;         // empty → env LEMONADE_MODEL → ""
     int         contextSize = 0; // 0 → server default
     bool        debug = false;
+    std::string apiKey;        // empty → env LEMONADE_API_KEY → none
 };
 
 // ---- Health status ----
@@ -63,6 +66,15 @@ struct GAIA_API LemonadeStatus {
     std::vector<json> loadedModels;
     json healthData;
     std::string error;
+};
+
+/// Everything a streamed chat completion produced besides its content tokens.
+struct GAIA_API ChatStreamResult {
+    std::string raw;                  ///< the raw response bytes
+    std::vector<ToolCall> toolCalls;  ///< native calls, complete only when the stream finished
+    std::string finishReason;         ///< choices[0].finish_reason; "length" = cut off
+    std::string reasoning;            ///< delta.reasoning_content, joined
+    bool stopped = false;             ///< shouldStop() ended the stream early; toolCalls is empty
 };
 
 // ---- Client ----
@@ -128,6 +140,13 @@ public:
     /// @param showAll  Also include models not currently loaded
     /// Mirrors Python list_models().
     json listModels(bool showAll = false);
+
+    /// Embedding vectors for @p inputs, in order. Mirrors Python embeddings():
+    /// POST /embeddings {model, input}.
+    /// @throws std::runtime_error naming the model and what the server said.
+    std::vector<std::vector<float>> embeddings(const std::vector<std::string>& inputs,
+                                               const std::string& model = LEMONADE_EMBEDDING_MODEL,
+                                               int timeoutSec = 120);
 
     /// Get details for a specific model by ID.
     /// Mirrors Python get_model_details().
@@ -219,6 +238,14 @@ public:
                                          StreamCallback onToken,
                                          std::vector<ToolCall>& outToolCalls,
                                          int timeoutSec = LEMONADE_REQUEST_TIMEOUT);
+
+    /// The full streaming call. @p shouldStop is polled per received chunk;
+    /// returning true ends the stream early (a cancel), and the partial
+    /// tool calls are dropped rather than reported.
+    ChatStreamResult chatCompletionsStream(const json& requestBody,
+                                           StreamCallback onToken,
+                                           std::function<bool()> shouldStop = {},
+                                           int timeoutSec = LEMONADE_REQUEST_TIMEOUT);
 
     // ---- Configuration ----
 

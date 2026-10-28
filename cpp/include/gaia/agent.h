@@ -27,6 +27,7 @@
 #include "mcp_registry.h"
 #include "security.h"
 #include "skill_sets.h"
+#include "tool_output.h"
 #include "tool_registry.h"
 #include "types.h"
 #include "gaia/export.h"
@@ -160,8 +161,9 @@ public:
     void setHistory(std::vector<Message> history);
 
     /// Request cancellation of the current processQuery() run.
-    /// The agent loop checks this flag between steps and exits early
-    /// with a partial result. Safe to call from any thread.
+    /// The loop checks it between steps, before each tool call, and while a
+    /// reply streams in, then exits with a partial result. Safe to call from
+    /// any thread.
     /// The flag is automatically reset at the start of the next processQuery().
     void requestCancel() { cancelled_.store(true); }
 
@@ -173,6 +175,10 @@ public:
 
     /// Get the Lemonade client (for explicit model loading at startup).
     LemonadeClient& lemonade() { return lemonade_; }
+
+    /// Full text of tool results that were cut short (AgentConfig::toolOutputPaging).
+    /// Register ToolOutputStore::readTool(toolOutputs()) to let the model page them.
+    ToolOutputStore& toolOutputs() { return *toolOutputs_; }
 
     // ---- Skill sets ----
 
@@ -262,7 +268,7 @@ public:
     /// Changes take effect on the next processQuery() call.
     void setConfig(const AgentConfig& newConfig);
 
-    /// Change the active model. Resets modelEnsured_ so the next processQuery() reloads it.
+    /// Change the active model. The next processQuery() loads it if Lemonade has another resident.
     void setModel(const std::string& modelId);
 
     /// Convenience setters — take effect on the next processQuery() call.
@@ -301,6 +307,14 @@ protected:
     /// computed an undeclared name is a wiring bug, not a reason to guess.
     virtual std::optional<std::string> selectSkillSet() const { return std::nullopt; }
 
+    /// Called once per processQuery() with the user's text and the final
+    /// answer, after history is saved. Runs on the querying thread.
+    virtual void onTurnComplete(const std::string& /*userInput*/, const std::string& /*answer*/) {}
+
+    /// Called once per processQuery() before the first model call, with the
+    /// user's text. Runs on the querying thread.
+    virtual void onTurnStart(const std::string& /*userInput*/) {}
+
 private:
     /// Unified entry point for all processQuery overloads. Owns the full
     /// conversation turn: concurrency guard, empty-input validation,
@@ -316,6 +330,8 @@ private:
         /// Native OpenAI tool calls, when the model answered with them.
         /// Always empty on the prompt-JSON path.
         std::vector<ToolCall> toolCalls;
+        /// choices[0].finish_reason when the server sent one ("length" = cut off).
+        std::string finishReason = {};
     };
 
     /// Send messages to the LLM and get a response with usage stats.
@@ -359,7 +375,6 @@ private:
     ToolRegistry tools_;
     std::unique_ptr<OutputHandler> console_;
     LemonadeClient lemonade_;
-    std::atomic<bool> modelEnsured_{false};
 
     // Concurrency guard — Agent is NOT re-entrant. A second processQuery
     // call on the same Agent (from any thread) throws std::runtime_error.
@@ -380,6 +395,7 @@ private:
 
     // Security: persistent allowed-tools store (shared with tools_)
     std::shared_ptr<AllowedToolsStore> allowedToolsStore_;
+    std::unique_ptr<ToolOutputStore> toolOutputs_ = std::make_unique<ToolOutputStore>();
 
     // MCP clients and their configs (configs stored for reconnect)
     std::map<std::string, std::unique_ptr<MCPClient>> mcpClients_;

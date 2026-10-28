@@ -261,12 +261,82 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
         }
     }
 
-    // 4. Execute
+    // 4. Execute. Results reach strict json::dump() in every front end.
     try {
-        return tool->callback(effectiveArgs);
+        return toValidUtf8(tool->callback(effectiveArgs));
     } catch (const std::exception& e) {
-        return json{{"status", "error"}, {"error", std::string("Tool execution failed: ") + e.what()}};
+        return toValidUtf8(json{{"status", "error"}, {"error", std::string("Tool execution failed: ") + e.what()}});
     }
+}
+
+namespace {
+
+// Length of the well-formed UTF-8 sequence at @p i, or 0 when it is ill-formed.
+std::size_t utf8SeqLen(const std::string& s, std::size_t i) {
+    const auto at = [&s](std::size_t k) { return static_cast<unsigned char>(s[k]); };
+    const auto cont = [&](std::size_t k) { return i + k < s.size() && (at(i + k) & 0xC0) == 0x80; };
+    const unsigned char c = at(i);
+    if (c < 0x80) return 1;
+    if (c >= 0xC2 && c <= 0xDF) return cont(1) ? 2 : 0;
+    if (c >= 0xE0 && c <= 0xEF) {
+        if (!cont(1) || !cont(2)) return 0;
+        const unsigned char d = at(i + 1);
+        if ((c == 0xE0 && d < 0xA0) || (c == 0xED && d > 0x9F)) return 0;  // overlong, surrogate
+        return 3;
+    }
+    if (c >= 0xF0 && c <= 0xF4) {
+        if (!cont(1) || !cont(2) || !cont(3)) return 0;
+        const unsigned char d = at(i + 1);
+        if ((c == 0xF0 && d < 0x90) || (c == 0xF4 && d > 0x8F)) return 0;  // overlong, past U+10FFFF
+        return 4;
+    }
+    return 0;
+}
+
+}  // namespace
+
+bool isValidUtf8(const std::string& s) {
+    for (std::size_t i = 0; i < s.size();) {
+        const std::size_t n = utf8SeqLen(s, i);
+        if (n == 0) return false;
+        i += n;
+    }
+    return true;
+}
+
+std::string toValidUtf8(const std::string& s) {
+    if (isValidUtf8(s)) return s;
+    std::string out;
+    out.reserve(s.size() + 16);
+    for (std::size_t i = 0; i < s.size();) {
+        const std::size_t n = utf8SeqLen(s, i);
+        if (n == 0) {
+            out += "\xEF\xBF\xBD";
+            ++i;
+        } else {
+            out.append(s, i, n);
+            i += n;
+        }
+    }
+    return out;
+}
+
+json toValidUtf8(const json& value) {
+    if (value.is_string()) {
+        const auto& s = value.get_ref<const std::string&>();
+        return isValidUtf8(s) ? value : json(toValidUtf8(s));
+    }
+    if (value.is_array()) {
+        json out = json::array();
+        for (const auto& v : value) out.push_back(toValidUtf8(v));
+        return out;
+    }
+    if (value.is_object()) {
+        json out = json::object();
+        for (auto it = value.begin(); it != value.end(); ++it) out[toValidUtf8(it.key())] = toValidUtf8(it.value());
+        return out;
+    }
+    return value;
 }
 
 void ToolRegistry::setConfirmCallback(ToolConfirmCallback cb) {

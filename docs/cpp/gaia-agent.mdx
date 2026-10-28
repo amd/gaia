@@ -1,0 +1,124 @@
+---
+title: "gaia-native"
+description: "The GAIA flagship agent as one ~3 MB static binary: chat, files, documents, data, web, memory and skills, with no Python"
+icon: "bolt"
+---
+
+<Info>
+  **Source Code:** [`cpp/agents/gaia/`](https://github.com/amd/gaia/tree/main/cpp/agents/gaia) in the GAIA repository.
+</Info>
+
+`gaia-native` is the GAIA flagship agent compiled to a single executable. It does what the Python flagship does — conversation, file work, document Q&A with page citations, data analysis, web research, memory across sessions, and the skill library — with the same tool names, defaults and skill catalogue, in a binary of about 3 MB with no runtime to install. It talks to a local [Lemonade Server](https://lemonade-server.ai), or to any OpenAI-compatible server.
+
+## Install
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/amd/gaia/main/cpp/packaging/install.sh | sh
+    ```
+  </Tab>
+  <Tab title="Windows">
+    ```powershell
+    irm https://raw.githubusercontent.com/amd/gaia/main/cpp/packaging/install.ps1 | iex
+    ```
+  </Tab>
+</Tabs>
+
+The installer downloads the newest `gaia-native-v*` release asset for your platform, checks it against the release's `SHA256SUMS`, and installs it as `gaia-native`. Set `GAIA_NATIVE_VERSION` to pin a version or `GAIA_NATIVE_DIR` to choose the folder. On Windows it also adds the install folder to your user `PATH`; on macOS and Linux it tells you if `~/.local/bin` is not on it. You can also download the asset from the [releases page](https://github.com/amd/gaia/releases) yourself — it is the whole program. On Linux and macOS the web tools call the system `curl`, which every supported OS ships.
+
+| Platform | Asset |
+|---|---|
+| Windows x64 | `gaia-native-windows-x64.exe` |
+| Linux x64 (static, any distro) | `gaia-native-linux-x64` |
+| Linux arm64 (static, any distro) | `gaia-native-linux-arm64` |
+| macOS, Apple silicon | `gaia-native-macos-arm64` |
+
+## Use
+
+```bash
+gaia-native                                  # interactive chat
+gaia-native "which files in here changed this week?"
+gaia-native -p --prompt-file task.txt        # print only the answer (scripts, pipes, evals)
+gaia-native --serve --port 8150              # OpenAI-compatible HTTP API
+gaia-native --mcp                            # MCP server over stdio
+gaia-native --list-skills                    # what was found, loaded, and refused, and why
+```
+
+Tools that change things — `write_file`, `edit_file`, `run_shell_command`, `run_python`, `download_file`, and `dump_document` (it writes a file) — ask before each run. `--yes` approves them all for the session; without a person at a terminal (piped stdin, `--serve`, `--mcp`) they are refused unless `--yes` is given. An "always" answer lasts only for the session: it covers one file for an edit, and never covers the shell or Python. Grants saved by other GAIA C++ agents in `~/.gaia/security/allowed_tools.json` do not apply here.
+
+| Option | What it does |
+|---|---|
+| `--model <id>` | Model to use. Default: `default_model` in `~/.gaia/config.json`, else `Gemma-4-E4B-it-GGUF` |
+| `--skill <name>` | Load a skill at start (repeatable) |
+| `--fast` | Conversation only: no tools, skills or memory tools (`GAIA_FAST`) |
+| `--allow <folder>` | Folder the file tools may use (repeatable). Default: your home folder and the working folder |
+| `--no-web`, `--no-memory` | Leave out the web tools, or memory, for this session |
+| `--max-steps <n>` | Step limit per turn (default 150, or `GAIA_AGENT_MAX_STEPS`) |
+| `--resume <id>`, `--list-sessions` | Continue a saved chat |
+| `--yes` (or `--full-access`, `-y`) | Approve every tool call without asking (`GAIA_AUTO_APPROVE_TOOLS=1`) |
+| `--accept-edits` | With `--stdio`, file edits inside the working folder run without asking — except hidden files and folders (`.git`, `.github`, …), files in a folder on `PATH`, and a script that would stand in for a command. Started in your home folder or a drive root, every edit still asks |
+| `-p`, `--print`, `--prompt-file <f>` | Print only the final answer; with no question, answer each line of stdin |
+| `--serve [--port N]` | OpenAI-compatible HTTP API on `127.0.0.1` (default port 8150) |
+| `--stdio` | The flagship's TUI protocol (also the default when stdin is a pipe) |
+| `--json-events [--query <text>]` | Line-delimited JSON events for older clients |
+| `--tui`, `--no-tui` | Force the built-in full-screen UI or a plain console |
+| `--debug` | Log model requests to stderr |
+
+| Variable | Effect |
+|---|---|
+| `GAIA_ALLOWED_PATHS` | Folders the file tools may use, separated like `PATH`; overrides the default |
+| `GAIA_MEMORY_DISABLED=1` | Same as `--no-memory` |
+| `GAIA_NATIVE_MEMORY_DB` | Memory database file (default `~/.gaia/native/memory.db`) |
+| `GAIA_HOME` | GAIA's state folder (default `~/.gaia`) |
+
+## Connect the GAIA terminal UI
+
+`gaia-native` speaks the same stdio protocol as the Python flagship's `gaia-agent` child — queries, permission prompts answered mid-turn, `/model`, `/clear`, `/memory`, and the same event stream — so the Go TUI drives it unchanged. The TUI launches the Python flagship by default; start it with `--mock <path-to-gaia-native>` to drive the native binary instead.
+
+## Model server
+
+| Variable | Default |
+|---|---|
+| `LEMONADE_BASE_URL` | `lemonade_base_url` in `~/.gaia/config.json` when `lemonade_mode` is `external`, else GAIA's own Lemonade (from `~/.gaia/lemonade/state.json`) when it is running, else `http://localhost:13305/api/v1`. `GAIA_LEMONADE_EMBEDDED=1` skips the first two |
+| `LEMONADE_API_KEY` | GAIA's own Lemonade key, sent only to that server; set it for any other server that needs one |
+| `GAIA_CTX_SIZE` | 65536 |
+
+Any OpenAI-compatible endpoint works: point `LEMONADE_BASE_URL` at its full base path (for example `http://host:8000/v1` — a URL with no path gets `/api/v1` added), set `LEMONADE_API_KEY`, and pass `--model`. Model loading is only managed on Lemonade-style (`/api/v1`) endpoints. Memory ranking and document search embed with `user.embeddinggemma-300m-GGUF`; on a server without it, document search reports the problem and memory falls back to keyword ranking, saying so in each result.
+
+## What it can do
+
+| Area | Tools |
+|---|---|
+| Files | `read_file` (text, PDF, Word, Excel, PowerPoint, with page markers; scanned PDF pages are read with the vision model), `write_file`, `edit_file`, `search_file`, `find_files`, `search_file_content`, `browse_directory`, `tree`, `get_file_info`, `file_info`, `list_recent_files`, `search_directory` |
+| Documents | `index_document`, `index_directory`, `query_documents`, `query_specific_file`, `search_indexed_chunks`, `summarize_document`, `dump_document`, `list_indexed_documents`, `rag_status` |
+| Data | `analyze_data_file` (CSV/TSV/XLSX totals, group-by, date ranges), `create_table`, `insert_data`, `query_data`, `list_tables`, `drop_table` |
+| Code | `run_shell_command`, `run_python`, `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
+| Web | `search_web`, `fetch_page`, `fetch_webpage`, `download_file` |
+| Memory | `remember`, `recall`, `update_memory`, `forget`, `search_past_conversations` |
+| Skills | `list_skills`, `load_skill`, `unload_skill`, `skill_status` |
+| Images | `analyze_image`, `answer_question_about_image` (the session model must accept images; the default Gemma-4 does) |
+| Other | `read_tool_output`, `request_user_input`, `sleep` |
+
+The starter skills are compiled in. Skills in `~/.gaia/skills` and `.claude/skills` are found too. A skill that ships Python tools, or asks for a permission GAIA cannot enforce, is refused with the reason; a skill that needs a tool this build lacks stays loadable but is left out of the catalogue the model sees.
+
+## Differences from the Python flagship
+
+- **Not included:** image generation, audio transcription, email and other connectors, browser automation, and the skill hub (install/capture). Skills that depend on them are not offered.
+- **Scanned pages:** a page that is only an image is sent to the session model, so its numbers come from a vision read; `read_file` reads up to 10 such pages and `index_document` up to 20. Pages whose image is in an encoding GAIA cannot unpack (JBIG2, CCITT, CMYK) are reported as unread.
+- **`--serve`** answers only requests from this machine: a page on another site, or a request through another host name, is refused. It runs one request at a time (a second one gets `409`), refuses bodies over 16 MB (`413`), and answers `502` with an error body when the model could not be reached, instead of returning the failure as a reply.
+- **Memory** lives in `~/.gaia/native/memory.db`, separate from the Python agent's database.
+- **Shell:** every command asks for approval; Python's per-command allowlists are not ported.
+
+## Build it yourself
+
+The `tiny` presets cross-compile every platform from any host with zig:
+
+```bash
+pip install ziglang==0.16.0 cmake ninja
+cd cpp
+cmake --preset tiny && cmake --build --preset tiny     # this machine
+cmake --preset tiny-linux-x64 && cmake --build --preset tiny-linux-x64
+```
+
+Add `-DGAIA_BUILD_TUI=ON` (or use the `tiny-tui` preset) for the built-in full-screen terminal UI. A regular CMake build with MSVC, GCC or Clang works as well; see [Setup](/cpp/setup).

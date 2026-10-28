@@ -1,5 +1,9 @@
 # Readiness assessment: `gaia-agent`, the generic skill-programmable native agent
 
+> **Status (2026-10-27):** historical. The agent this assesses shipped as
+> [`cpp/agents/gaia/`](../../cpp/agents/gaia/); see [`cpp-flagship-binary.md`](cpp-flagship-binary.md).
+> `gaia-bash` and `cpp/agents/bash/`, cited below as templates, have been removed.
+
 Scoping review of [#2804](https://github.com/amd/gaia/issues/2804), the Phase 5 milestone
 deliverable of [`cpp-framework-parity.md`](cpp-framework-parity.md). Assessed against `main` at
 `b38f5e60` (2026-08-12), after the day's C++ merges.

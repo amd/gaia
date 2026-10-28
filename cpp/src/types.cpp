@@ -255,6 +255,8 @@ void AgentConfig::validate() const {
     // "none" is deliberately rejected: it would declare tools, forbid their use,
     // AND suppress the prompt-JSON template, leaving the agent no way to call
     // anything. Set nativeToolCalls = "never" to turn native tool calling off.
+    if (malformedToolCallRetries < 0)
+        throw std::invalid_argument("malformedToolCallRetries must be >= 0");
     if (toolChoice != "auto" && toolChoice != "required")
         throw std::invalid_argument(
             "toolChoice must be \"auto\" or \"required\", got \"" + toolChoice +
@@ -280,6 +282,13 @@ AgentConfig AgentConfig::fromJson(const json& j) {
     c.toolChoice            = j.value("toolChoice",            c.toolChoice);
     c.skillSet              = j.value("skillSet",              c.skillSet);
     c.skillManifest         = j.value("skillManifest",         c.skillManifest);
+    c.toolOutputPaging      = j.value("toolOutputPaging",      c.toolOutputPaging);
+    c.stripThinking         = j.value("stripThinking",         c.stripThinking);
+    c.stepBudgetGuidance    = j.value("stepBudgetGuidance",    c.stepBudgetGuidance);
+    c.malformedToolCallRetries =
+        j.value("malformedToolCallRetries", c.malformedToolCallRetries);
+    c.historyTokenBudget    = j.value("historyTokenBudget",    c.historyTokenBudget);
+    c.finalAnswerGuards     = j.value("finalAnswerGuards",     c.finalAnswerGuards);
     if (j.contains("responseMode")) {
         c.responseMode = responseModeFromString(j.at("responseMode").get<std::string>());
     }
@@ -326,7 +335,13 @@ json AgentConfig::toJson() const {
         {"nativeToolCalls",       nativeToolCallsToString(nativeToolCalls)},
         {"toolChoice",            toolChoice},
         {"skillSet",              skillSet},
-        {"skillManifest",         skillManifest}
+        {"skillManifest",         skillManifest},
+        {"toolOutputPaging",      toolOutputPaging},
+        {"stripThinking",         stripThinking},
+        {"stepBudgetGuidance",    stepBudgetGuidance},
+        {"malformedToolCallRetries", malformedToolCallRetries},
+        {"historyTokenBudget",    historyTokenBudget},
+        {"finalAnswerGuards",     finalAnswerGuards}
     };
 }
 
