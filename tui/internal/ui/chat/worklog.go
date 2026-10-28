@@ -381,7 +381,7 @@ func commandKey(cmd string, depth int) string {
 // outputFilter reports a program that only trims what a pipe shows.
 func outputFilter(program string) bool {
 	switch program {
-	case "head", "tail", "more", "less":
+	case "head", "tail", "more", "less", "select-object":
 		return true
 	}
 	return false

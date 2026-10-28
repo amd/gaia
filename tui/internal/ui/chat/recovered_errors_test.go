@@ -387,6 +387,7 @@ func TestAChainedCommandIsRecoveredOnlyByTheSameChain(t *testing.T) {
 		{"cat data.csv | python process.py", "cat data.csv | head"},
 		{"cat data.csv | python process.py", "cat data.csv | python report.py"},
 		{"make | tee a.log", "make | tee b.log"},
+		{"npm test | Select-Object -First 5", "npm ls | Select-Object -First 5"},
 		{`bash -c "cd build && make"`, `bash -c "cd build && ls"`},
 		// A quoted ; is text, not a second command.
 		{`git commit -m "fix; ok"`, `git push origin "main; ok"`},
@@ -407,6 +408,7 @@ func TestAChainedCommandIsRecoveredOnlyByTheSameChain(t *testing.T) {
 		{"make 2>&1 | tail", "make 2>&1"},
 		{"cat data.csv | python process.py", "cat data.csv | python process.py | head -5"},
 		{"git log | less", "git log | head -20 | more"},
+		{"npm test | Select-Object -First 5", "npm test | select-object -Last 50"},
 		{`bash -c "cd build && make"`, `bash -lc 'cd build && make'`},
 	}
 	for _, p := range same {
