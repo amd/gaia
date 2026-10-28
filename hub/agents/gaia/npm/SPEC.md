@@ -421,6 +421,14 @@ measurement that failed carries `context_error`, one sentence saying why, and
 the answer still stands. Older binaries send neither, so read `context` only
 when `/version` reports 2.21 or later.
 
+`final` also carries `performance`: the turn's step timings, as
+`{ "timing_summary", "conversation" }`. `timing_summary` holds the run's model
+and tool seconds and its model call count; `conversation` holds one
+`{ "role": "system", "content": { "type": "stats", ... } }` entry per model
+call, with that call's token counts and speed. The Agent UI turns it into the
+Context panel's "Under the hood" figures. A run that timed nothing
+carries none, and older binaries never send it, so read it only when present.
+
 ### 5.2 `session_id` and agent retention
 
 `POST /v1/gaia/query` accepts an optional `session_id` in the request body.

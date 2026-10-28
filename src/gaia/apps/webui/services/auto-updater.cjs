@@ -4,14 +4,12 @@
 /**
  * auto-updater.cjs — GAIA Agent UI auto-update service.
  *
- * Wraps `electron-updater` against a CONFIGURABLE generic feed (R2-primary —
- * issue #1724). The forward-update channel URL is resolved at runtime from
- * `GAIA_UPDATE_FEED_URL` or `feedUrl` in ~/.gaia/update-config.json, and the
- * app fetches the mutable `latest*.yml` channel pointer from it. When no feed
- * is configured the updater enters a loud `no-channel` state (no silent
- * no-op). The actual R2 publish feed + mutable channel pointer is milestone-52
- * work (#1719); until it lands, point the env var at any generic feed (a local
- * mock works) to exercise the path.
+ * Wraps `electron-updater` against a generic feed. A feed set in
+ * `GAIA_UPDATE_FEED_URL` or `feedUrl` in ~/.gaia/update-config.json (the R2
+ * channel of #1724) wins. Otherwise each check reads the GitHub releases and
+ * points the feed at the newest one on this install's channel that publishes
+ * this platform's `latest*.yml`; when none does, the updater enters the
+ * `no-channel` state and says so (no silent "up to date").
  *
  * Implements §4 Layer 3 + §7 Phase F of docs/plans/desktop-installer.mdx.
  * Issue #1336: in-app rollback to a specific previous release still lists and
@@ -23,7 +21,9 @@
  *     `app.whenReady`)
  *   - Subsequent checks every 4 hours via re-scheduling setTimeout
  *   - Concurrent-check guard so checks never overlap
- *   - Download silently in the background
+ *   - Auto-update is OFF by default (`autoUpdate` in ~/.gaia/update-config.json,
+ *     shared with the Terminal UI). Off, a found update is only offered: the
+ *     renderer's "Update now" calls downloadUpdate(). On, it downloads silently.
  *   - On `update-downloaded`, show a native dialog: "Update ready — restart?"
  *   - Renderer integration via IPC channel `gaia:update:status`
  *   - Disabled entirely via GAIA_DISABLE_UPDATE=1 env var (CI / dev / corp)
@@ -38,6 +38,9 @@
  *   - listReleases()          → fetch available releases from GitHub
  *   - installVersion(tag)     → downgrade/install a specific tagged release
  *   - clearPin()              → resume auto-updates (clear the version pin)
+ *   - setAutoUpdate(enabled)  → persist the auto-update preference
+ *   - downloadUpdate()        → download the offered update ("Update now")
+ *   - restartToInstall()      → restart into a downloaded update
  *   - STATES                  → string constants for valid states
  *
  * Design note: `electron` and `electron-updater` are lazy-required inside
@@ -80,6 +83,62 @@ const GITHUB_API_RELEASES =
 // release unreachable.
 const MAX_RELEASES_SHOWN = 10;
 
+const RELEASES_PAGE = "https://github.com/amd/gaia/releases";
+
+// A black-holed connection must fail, not leave "Checking…" up forever.
+const GITHUB_TIMEOUT_MS = 20 * 1000;
+
+/**
+ * GET the release list within GITHUB_TIMEOUT_MS. Resolves to the parsed JSON;
+ * rejects with `.kind` set to "timeout", "network", "http" (with `.status`)
+ * or "garbled", so each caller can word its own message.
+ */
+async function _fetchReleases() {
+  let resp;
+  try {
+    resp = await fetch(GITHUB_API_RELEASES, {
+      headers: { Accept: "application/vnd.github+json", "User-Agent": "GAIA-Agent-UI" },
+      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+    });
+  } catch (err) {
+    const timedOut = err && (err.name === "TimeoutError" || err.name === "AbortError");
+    throw Object.assign(new Error((err && err.message) || String(err)), {
+      kind: timedOut ? "timeout" : "network",
+    });
+  }
+  if (!resp.ok) {
+    throw Object.assign(new Error(`HTTP ${resp.status}`), { kind: "http", status: resp.status });
+  }
+  try {
+    return await resp.json();
+  } catch (err) {
+    const timedOut = err && (err.name === "TimeoutError" || err.name === "AbortError");
+    throw Object.assign(new Error((err && err.message) || String(err)), {
+      kind: timedOut ? "timeout" : "garbled",
+    });
+  }
+}
+
+/** The user-facing sentence for a _fetchReleases failure while `doing`. */
+function _releasesErrorMessage(err, doing) {
+  switch (err && err.kind) {
+    case "timeout":
+      return `GitHub didn't answer within ${GITHUB_TIMEOUT_MS / 1000} seconds when GAIA tried to ${doing} — try again later, or download an installer from ${RELEASES_PAGE}.`;
+    case "http": {
+      const limited = err.status === 403 || err.status === 429;
+      return (
+        `GitHub answered HTTP ${err.status} when GAIA tried to ${doing}` +
+        (limited ? " — its hourly limit for this network may be used up; try again later" : " — try again later") +
+        `, or download an installer from ${RELEASES_PAGE}.`
+      );
+    }
+    case "garbled":
+      return `GitHub sent a response GAIA couldn't read when it tried to ${doing} (${err.message}) — try again later, or download an installer from ${RELEASES_PAGE}.`;
+    default:
+      return `Couldn't reach GitHub to ${doing} (${(err && err.message) || err}) — check your connection, or download an installer from ${RELEASES_PAGE}.`;
+  }
+}
+
 const STATES = Object.freeze({
   IDLE: "idle",
   CHECKING: "checking",
@@ -88,7 +147,8 @@ const STATES = Object.freeze({
   DOWNLOADED: "downloaded",
   ERROR: "error",
   DISABLED: "disabled",
-  // No forward-update feed configured — loud, actionable, never a silent no-op.
+  // No release publishes a desktop update for this platform — said in
+  // Settings, never shown as "up to date".
   NO_CHANNEL: "no-channel",
 });
 
@@ -103,6 +163,13 @@ const state = {
   error: null,
   currentVersion: null,
   pinnedVersion: null,
+  autoUpdate: false,
+  // Offer release candidates too; off by default. A release-candidate build
+  // is offered newer candidates without it.
+  includePrereleases: false,
+  // update-config.json could not be read; kept apart from `error` so a later
+  // check's status never hides it.
+  configError: null,
 };
 
 let mainWindowRef = null;
@@ -163,26 +230,82 @@ function _loadPin() {
 }
 
 /**
- * Persist the version pin. Propagates write errors to the caller so that a
- * failed pin write can abort a rollback (AC2 must not be silently broken).
- * Callers that can tolerate a failed write (e.g. clearPin) should catch.
+ * Off unless the user turned it on: the app still changes fast. An unreadable
+ * file is reported (Settings shows it), and auto-update stays off until fixed.
  */
-function _savePin(pinnedVersion) {
-  fs.mkdirSync(path.dirname(UPDATE_CONFIG_PATH), { recursive: true });
-  // Merge into any existing config so we don't clobber a persisted feedUrl.
-  let existing = {};
-  try {
-    if (fs.existsSync(UPDATE_CONFIG_PATH)) {
-      existing = JSON.parse(fs.readFileSync(UPDATE_CONFIG_PATH, "utf8")) || {};
-    }
-  } catch {
-    existing = {};
+function _loadAutoUpdate() {
+  if (!fs.existsSync(UPDATE_CONFIG_PATH)) {
+    return { autoUpdate: false, includePrereleases: false, error: null };
   }
-  fs.writeFileSync(
-    UPDATE_CONFIG_PATH,
-    JSON.stringify({ ...existing, pinnedVersion }, null, 2),
-    "utf8"
+  try {
+    const cfg = JSON.parse(fs.readFileSync(UPDATE_CONFIG_PATH, "utf8"));
+    return {
+      autoUpdate: Boolean(cfg && cfg.autoUpdate === true),
+      includePrereleases: Boolean(cfg && cfg.includePrereleases === true),
+      error: null,
+    };
+  } catch (err) {
+    const error =
+      `${UPDATE_CONFIG_PATH} cannot be read (${(err && err.message) || err}), so auto-update is off — ` +
+      "fix the file by hand or delete it.";
+    log("error", error);
+    return { autoUpdate: false, includePrereleases: false, error };
+  }
+}
+
+/** "0.25.2-rc.3" → true. A candidate build keeps being offered candidates. */
+function _isPrereleaseVersion(version) {
+  return typeof version === "string" && /^\d+\.\d+\.\d+-/.test(version);
+}
+
+/**
+ * Whether release candidates are offered: the user opted in, this build is
+ * itself a candidate, or GAIA_UPDATE_PRERELEASE=1. A channel, not an install
+ * trigger: with auto-update off an offered candidate still waits to be asked.
+ */
+function _prereleasesAllowed() {
+  return (
+    process.env.GAIA_UPDATE_PRERELEASE === "1" ||
+    state.includePrereleases ||
+    _isPrereleaseVersion(state.currentVersion)
   );
+}
+
+function _savePin(pinnedVersion) {
+  _writeConfig({ pinnedVersion });
+}
+
+/**
+ * Merge `patch` into update-config.json. Propagates write errors so a failed
+ * pin write can abort a rollback (AC2 must not be silently broken). Callers
+ * that can tolerate a failed write (e.g. clearPin) should catch.
+ *
+ * A file that can't be read or parsed is refused, never overwritten: it holds
+ * keys this app doesn't own (feedUrl, the Terminal UI's pin). The write goes
+ * to a temp file and is renamed over, so a crash never leaves half a file.
+ */
+function _writeConfig(patch) {
+  fs.mkdirSync(path.dirname(UPDATE_CONFIG_PATH), { recursive: true });
+  let existing = {};
+  if (fs.existsSync(UPDATE_CONFIG_PATH)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(UPDATE_CONFIG_PATH, "utf8"));
+    } catch (err) {
+      throw new Error(
+        `${UPDATE_CONFIG_PATH} cannot be read (${(err && err.message) || err}), so the setting was not saved — ` +
+          "fix the file by hand or delete it."
+      );
+    }
+    if (!existing || typeof existing !== "object" || Array.isArray(existing)) {
+      throw new Error(
+        `${UPDATE_CONFIG_PATH} does not hold a settings object, so the setting was not saved — ` +
+          "fix the file by hand or delete it."
+      );
+    }
+  }
+  const tmp = `${UPDATE_CONFIG_PATH}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ ...existing, ...patch }, null, 2), "utf8");
+  fs.renameSync(tmp, UPDATE_CONFIG_PATH);
 }
 
 // ── Forward-update feed resolution (issue #1724) ────────────────────────────────
@@ -209,25 +332,19 @@ function _resolveFeedUrl() {
 
 /**
  * Point electron-updater at the configured generic (R2) feed + mutable channel.
- * When nothing is configured, enter the loud NO_CHANNEL state and set no feed —
- * an unconfigured updater must never silently pretend it's up to date.
+ * With nothing configured, each check instead reads the newest GitHub release
+ * on this install's channel (_applyGithubFeed) — where releases publish their
+ * latest*.yml today.
  *
- * @returns {boolean} true when a feed was applied, false when NO_CHANNEL.
+ * @returns {boolean} true when a feed is ready, false when setting it failed.
  */
 function _applyForwardFeed() {
   if (!autoUpdaterRef) return false;
   const url = _resolveFeedUrl();
   if (!url) {
     forwardFeedUrl = null;
-    setState({
-      status: STATES.NO_CHANNEL,
-      error:
-        "No update channel configured — set GAIA_UPDATE_FEED_URL (or feedUrl " +
-        "in ~/.gaia/update-config.json) to your R2 channel base URL. " +
-        "Auto-update is paused until a feed is configured.",
-    });
-    log("warn", "No update feed configured — auto-update paused (NO_CHANNEL)");
-    return false;
+    log("info", "No update feed configured — checks read GitHub releases");
+    return true;
   }
   try {
     autoUpdaterRef.setFeedURL({
@@ -247,6 +364,79 @@ function _applyForwardFeed() {
     log("error", "Failed to set feed URL:", err && err.message);
     return false;
   }
+}
+
+/** -1, 0 or 1 comparing "0.25.2-rc.3"-style versions; candidates sort before their final. */
+function _compareVersions(a, b) {
+  const parse = (v) => {
+    const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-rc\.?(\d+))?$/.exec(String(v || ""));
+    if (!m) return null;
+    return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] === undefined ? Infinity : Number(m[4])];
+  };
+  const x = parse(a);
+  const y = parse(b);
+  if (!x || !y) return NaN;
+  for (let i = 0; i < 4; i++) {
+    if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
+  }
+  return 0;
+}
+
+/** The update manifest electron-updater reads on this platform. */
+function _platformManifest() {
+  if (process.platform === "win32") return "latest.yml";
+  if (process.platform === "darwin") return "latest-mac.yml";
+  return "latest-linux.yml";
+}
+
+/**
+ * Point the feed at the newest GitHub release on this install's channel that
+ * carries this platform's installer and update manifest; returns its tag.
+ * Throws an actionable error when GitHub can't be read. Returns null, in the
+ * NO_CHANNEL state, when no release has an update for this platform.
+ */
+async function _applyGithubFeed() {
+  const allowPrerelease = _prereleasesAllowed();
+  let releases;
+  try {
+    releases = await _fetchReleases();
+  } catch (err) {
+    throw new Error(_releasesErrorMessage(err, "check for updates"));
+  }
+  if (!Array.isArray(releases)) {
+    throw new Error(
+      `GitHub sent a response GAIA couldn't read when it tried to check for updates (not a list) — try again later, or see ${RELEASES_PAGE}.`
+    );
+  }
+  const manifest = _platformManifest();
+  const candidates = releases.filter(
+    (r) =>
+      r &&
+      !r.draft &&
+      TAG_RE.test(r.tag_name || "") &&
+      !Number.isNaN(_compareVersions(r.tag_name, "0.0.0")) &&
+      (allowPrerelease || !r.prerelease) &&
+      _releaseHasPlatformAsset(r) &&
+      Array.isArray(r.assets) &&
+      r.assets.some((a) => a && a.name === manifest)
+  );
+  if (candidates.length === 0) {
+    const error =
+      `No GAIA release publishes a desktop update for this platform yet (it needs ${manifest} ` +
+      `and its installer), so GAIA can't update itself here — download an installer from ${RELEASES_PAGE}.`;
+    setState({ status: STATES.NO_CHANNEL, error });
+    log("warn", error);
+    return null;
+  }
+  candidates.sort((a, b) => _compareVersions(b.tag_name, a.tag_name));
+  const tag = candidates[0].tag_name;
+  autoUpdaterRef.setFeedURL({
+    provider: "generic",
+    url: `https://github.com/amd/gaia/releases/download/${tag}/`,
+    channel: DEFAULT_CHANNEL,
+  });
+  log("info", `Update feed set from GitHub: ${tag}`);
+  return tag;
 }
 
 // ── State management ─────────────────────────────────────────────────────────
@@ -307,7 +497,7 @@ function _releaseHasPlatformAsset(release) {
  * @returns {Promise<Array<ReleaseInfo> | { error: string }>}
  */
 async function listReleases() {
-  const allowPrerelease = process.env.GAIA_UPDATE_PRERELEASE === "1";
+  const allowPrerelease = _prereleasesAllowed();
   const pinnedVersion = _loadPin();
 
   // Get the running version — use the cached electronApi if available, else
@@ -330,23 +520,13 @@ async function listReleases() {
 
   let releases;
   try {
-    const resp = await fetch(GITHUB_API_RELEASES, {
-      headers: {
-        Accept: "application/vnd.github+json",
-        "User-Agent": "GAIA-Agent-UI",
-      },
-    });
-    if (!resp.ok) {
-      return {
-        error: `Couldn't reach GitHub to list releases (HTTP ${resp.status}) — check your connection; you can still download installers from the Releases page.`,
-      };
-    }
-    releases = await resp.json();
+    releases = await _fetchReleases();
   } catch (err) {
+    return { error: _releasesErrorMessage(err, "list releases") };
+  }
+  if (!Array.isArray(releases)) {
     return {
-      error: `Couldn't reach GitHub to list releases — check your connection; you can still download installers from the Releases page. (${
-        err && err.message
-      })`,
+      error: `GitHub sent a response GAIA couldn't read when it tried to list releases (not a list) — try again later, or see ${RELEASES_PAGE}.`,
     };
   }
 
@@ -414,6 +594,7 @@ async function installVersion(tag) {
   // the download completes but the user dismisses the restart prompt. If the
   // pin can't be persisted we ABORT — proceeding would let the next launch
   // silently auto-upgrade past the rollback (no silent fallbacks).
+  const previousPin = state.pinnedVersion;
   try {
     _savePin(tag);
   } catch (err) {
@@ -423,6 +604,8 @@ async function installVersion(tag) {
     );
   }
   setState({ pinnedVersion: tag });
+  // A pin always stops background downloads; this one is downloaded below.
+  autoUpdaterRef.autoDownload = false;
 
   checkInProgress = true;
   try {
@@ -441,12 +624,52 @@ async function installVersion(tag) {
     // in-flight rollback download (which outlives this checkInProgress window),
     // so it's intentionally deferred.
 
-    // Kick off the targeted check — will fire update-available → downloads →
-    // update-downloaded → our existing dialog prompts restart.
+    // Targeted check → update-available. autoDownload is off (default, and
+    // always while pinned), so download explicitly; update-downloaded then
+    // prompts the restart.
     await autoUpdaterRef.checkForUpdates();
+    if (state.status !== STATES.AVAILABLE) {
+      throw new Error(
+        `GAIA ${tag} has no installer for this platform at its release feed` +
+          (state.error ? `: ${state.error}` : ".") +
+          " Download it from https://github.com/amd/gaia/releases instead."
+      );
+    }
+    setState({ status: STATES.DOWNLOADING, progress: 0, error: null });
+    await autoUpdaterRef.downloadUpdate();
+  } catch (err) {
+    // Don't leave the app pinned to a version that never installed.
+    const pinNote = _restorePinAfterFailedInstall(previousPin, tag);
+    const msg = (err && err.message) || String(err);
+    setState({ status: STATES.ERROR, error: msg });
+    throw new Error(`${msg} ${pinNote}`);
   } finally {
     checkInProgress = false;
   }
+}
+
+/** Undo the pin a failed install wrote; returns the sentence saying where things stand. */
+function _restorePinAfterFailedInstall(previousPin, failedTag) {
+  try {
+    _savePin(previousPin || null);
+  } catch (err) {
+    // The file still pins failedTag; say so rather than claim otherwise.
+    log("error", "Failed to restore the pin after a failed install:", err && err.message);
+    return (
+      `The pin to ${failedTag} could not be undone in ${UPDATE_CONFIG_PATH} ` +
+      `(${(err && err.message) || err}) — fix that file, then use Unpin in Settings → General → Updates.`
+    );
+  }
+  if (!previousPin) {
+    clearPin();
+    return "Updates are not paused.";
+  }
+  setState({ pinnedVersion: previousPin });
+  autoUpdaterRef.setFeedURL({
+    provider: "generic",
+    url: `https://github.com/amd/gaia/releases/download/${previousPin}/`,
+  });
+  return `Still pinned to ${previousPin}.`;
 }
 
 // ── clearPin / resumeUpdates ──────────────────────────────────────────────────
@@ -456,8 +679,8 @@ async function installVersion(tag) {
  *
  * Restores the configured forward (R2 generic) feed, sets autoDownload=true,
  * and clears allowDowngrade so the next check is the normal forward-only flow.
- * If no feed is configured, resume lands in the loud NO_CHANNEL state rather
- * than silently reverting to a stale rollback feed.
+ * With no feed configured, the next check reads GitHub releases again rather
+ * than staying on the rollback feed.
  */
 function clearPin() {
   // A failed clear is non-fatal — worst case the stale pin re-pauses updates
@@ -470,14 +693,99 @@ function clearPin() {
   setState({ pinnedVersion: null });
 
   if (autoUpdaterRef) {
-    autoUpdaterRef.autoDownload = true;
+    autoUpdaterRef.autoDownload = state.autoUpdate;
     autoUpdaterRef.allowDowngrade = false;
     // Restore the forward channel (overrides any generic/tagged rollback feed
-    // set by installVersion). Loud NO_CHANNEL if unconfigured.
+    // set by installVersion); unconfigured means GitHub releases.
     _applyForwardFeed();
   }
 
   log("info", "Version pin cleared — auto-updates resumed");
+}
+
+// ── Auto-update preference / user-driven install ─────────────────────────────
+
+/**
+ * Persist the auto-update preference. Throws when it can't be saved, so the
+ * Settings toggle never shows a value the next launch won't honour.
+ */
+async function setAutoUpdate(enabled) {
+  if (typeof enabled !== "boolean") {
+    throw new TypeError(`setAutoUpdate expects true or false, got ${typeof enabled}`);
+  }
+  try {
+    _writeConfig({ autoUpdate: enabled });
+  } catch (err) {
+    throw new Error(
+      `Couldn't save the auto-update setting to ${UPDATE_CONFIG_PATH}: ${(err && err.message) || err}`
+    );
+  }
+  setState({ autoUpdate: enabled });
+  if (autoUpdaterRef) {
+    autoUpdaterRef.autoDownload = enabled && !state.pinnedVersion;
+    autoUpdaterRef.allowPrerelease = _prereleasesAllowed();
+  }
+  log("info", `Auto-update ${enabled ? "enabled" : "disabled"}`);
+  // Turning it on with an update already offered means "install it".
+  if (enabled && !state.pinnedVersion && state.status === STATES.AVAILABLE) {
+    await downloadUpdate();
+  }
+}
+
+/**
+ * Persist whether release candidates are offered as updates. Independent of
+ * auto-update: it changes what is offered, not whether it installs unasked.
+ */
+async function setIncludePrereleases(enabled) {
+  if (typeof enabled !== "boolean") {
+    throw new TypeError(`setIncludePrereleases expects true or false, got ${typeof enabled}`);
+  }
+  try {
+    _writeConfig({ includePrereleases: enabled });
+  } catch (err) {
+    throw new Error(
+      `Couldn't save the release-candidate setting to ${UPDATE_CONFIG_PATH}: ${(err && err.message) || err}`
+    );
+  }
+  setState({ includePrereleases: enabled });
+  if (autoUpdaterRef) {
+    autoUpdaterRef.allowPrerelease = _prereleasesAllowed();
+  }
+  log("info", `Release-candidate updates ${enabled ? "enabled" : "disabled"}`);
+}
+
+/** "Update now": download the update a check found; the restart dialog follows. */
+async function downloadUpdate() {
+  if (!autoUpdaterRef) {
+    throw new Error("downloadUpdate called before auto-updater was initialised");
+  }
+  if (state.status !== STATES.AVAILABLE) {
+    throw new Error(
+      `No update is waiting to download (status: ${state.status}) — check for updates first.`
+    );
+  }
+  log("info", `User asked to install ${state.version}`);
+  setState({ status: STATES.DOWNLOADING, progress: 0, error: null });
+  try {
+    await autoUpdaterRef.downloadUpdate();
+  } catch (err) {
+    const message = (err && err.message) || String(err);
+    setState({ status: STATES.ERROR, error: message });
+    throw new Error(`Downloading GAIA ${state.version || ""} failed: ${message}`);
+  }
+}
+
+/** Restart into a downloaded update, asking first if work would be cut off. */
+async function restartToInstall() {
+  if (!autoUpdaterRef || state.status !== STATES.DOWNLOADED) {
+    throw new Error(`No downloaded update to install (status: ${state.status}).`);
+  }
+  if (!(await confirmRestartRef())) {
+    log("info", "Restart put off: work is still running — will install on next quit");
+    return;
+  }
+  log("info", "User chose to restart from the update chip — calling quitAndInstall");
+  autoUpdaterRef.quitAndInstall(false, true);
 }
 
 // ── Core check ───────────────────────────────────────────────────────────────
@@ -492,15 +800,9 @@ async function checkForUpdates() {
     log("warn", "checkForUpdates called before init — ignoring");
     return;
   }
-  // No forward feed and not pinned → surface the loud NO_CHANNEL state instead
-  // of asking electron-updater to check a feed that doesn't exist. Re-resolve
-  // first so a feed written to config after init() is picked up here.
+  // Re-resolve so a feed written to config after init() is picked up here.
   if (!forwardFeedUrl && !state.pinnedVersion) {
     if (!_applyForwardFeed()) return;
-    // Feed just became available after a no-feed (NO_CHANNEL) start — init()
-    // skipped arming the periodic scheduler, so arm it now or background checks
-    // never resume once the feed goes live.
-    if (!scheduledTimeout) scheduleNextCheck();
   }
   if (checkInProgress) {
     log("info", "Skipping check — another check is already in progress");
@@ -509,6 +811,11 @@ async function checkForUpdates() {
   checkInProgress = true;
   setState({ status: STATES.CHECKING, error: null });
   try {
+    // No configured feed: aim at the newest GitHub release on this channel,
+    // re-read every check so a new release is found.
+    if (!forwardFeedUrl && !state.pinnedVersion && !(await _applyGithubFeed())) {
+      return;
+    }
     log("info", "Checking for updates...");
     await autoUpdaterRef.checkForUpdates();
   } catch (err) {
@@ -669,6 +976,22 @@ function registerIpcHandlers() {
     clearPin();
     return getState();
   });
+  ipcMain.handle("gaia:update:set-auto-update", async (_event, enabled) => {
+    await setAutoUpdate(enabled);
+    return getState();
+  });
+  ipcMain.handle("gaia:update:set-include-prereleases", async (_event, enabled) => {
+    await setIncludePrereleases(enabled);
+    return getState();
+  });
+  ipcMain.handle("gaia:update:download", async () => {
+    await downloadUpdate();
+    return getState();
+  });
+  ipcMain.handle("gaia:update:restart", async () => {
+    await restartToInstall();
+    return getState();
+  });
 
   ipcHandlersRegistered = true;
 }
@@ -682,6 +1005,10 @@ function unregisterIpcHandlers() {
     "gaia:update:list-releases",
     "gaia:update:install-version",
     "gaia:update:resume",
+    "gaia:update:set-auto-update",
+    "gaia:update:set-include-prereleases",
+    "gaia:update:download",
+    "gaia:update:restart",
   ];
   for (const ch of channels) {
     try {
@@ -739,6 +1066,10 @@ function init(mainWindow, options = {}) {
     state.pinnedVersion = savedPin;
     log("info", `Found persisted version pin: ${savedPin} — autoDownload will be paused`);
   }
+  const loaded = _loadAutoUpdate();
+  state.autoUpdate = loaded.autoUpdate;
+  state.includePrereleases = loaded.includePrereleases;
+  state.configError = loaded.error;
 
   // Lazy-load Electron and electron-updater. Any failure here is logged
   // and the updater stays in `idle` — we never crash the app.
@@ -780,14 +1111,13 @@ function init(mainWindow, options = {}) {
 
   // Configure electron-updater.
   try {
-    // When pinned, suppress autoDownload so the scheduled forward-only check
-    // cannot silently download/install a newer version (AC2).
-    autoUpdaterRef.autoDownload = savedPin ? false : true;
+    // Off by default; a pin always suppresses it so the scheduled forward-only
+    // check cannot silently download/install a newer version (AC2).
+    autoUpdaterRef.autoDownload = !savedPin && state.autoUpdate;
     autoUpdaterRef.autoInstallOnAppQuit = true;
     autoUpdaterRef.disableWebInstaller = true;
     autoUpdaterRef.allowDowngrade = false;
-    autoUpdaterRef.allowPrerelease =
-      process.env.GAIA_UPDATE_PRERELEASE === "1";
+    autoUpdaterRef.allowPrerelease = _prereleasesAllowed();
 
     autoUpdaterRef.logger = {
       info: (m) => log("info", String(m)),
@@ -812,10 +1142,9 @@ function init(mainWindow, options = {}) {
     log("warn", "Failed to register IPC handlers:", err && err.message);
   }
 
-  // Point the updater at the configured R2 generic feed (#1724). When a pin is
-  // active, installVersion() owns the feed (rollback path), so skip. With no
-  // pin and no feed, _applyForwardFeed enters the loud NO_CHANNEL state and we
-  // don't schedule checks against a nonexistent feed.
+  // Point the updater at the configured R2 generic feed (#1724), or at GitHub
+  // releases when none is configured. When a pin is active, installVersion()
+  // owns the feed (rollback path), so skip.
   let feedReady = true;
   if (!savedPin) {
     feedReady = _applyForwardFeed();
@@ -823,11 +1152,8 @@ function init(mainWindow, options = {}) {
 
   initialized = true;
 
-  if (!feedReady && !savedPin) {
-    log(
-      "info",
-      "Auto-updater initialized without a channel — checks paused until a feed is configured"
-    );
+  if (!feedReady) {
+    log("error", "Auto-updater initialized but its feed could not be set — see the error above");
     return;
   }
 
@@ -872,5 +1198,9 @@ module.exports = {
   listReleases,
   installVersion,
   clearPin,
+  setAutoUpdate,
+  setIncludePrereleases,
+  downloadUpdate,
+  restartToInstall,
   STATES,
 };
