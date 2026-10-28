@@ -32,6 +32,10 @@ class MockAutoUpdater extends EventEmitter {
     return null;
   }
 
+  async downloadUpdate() {
+    return [];
+  }
+
   quitAndInstall() {}
 }
 

@@ -597,6 +597,12 @@ error. To run the chat model in the cloud instead, see
     - Ensure document path is correct
   </Accordion>
 
+  <Accordion title="Embedding model not downloaded (memory off)" icon="triangle-exclamation">
+    When an agent with memory starts and Lemonade is running but doesn't have the embedding model, the agent shows `Downloading the embedding model ... for memory`, downloads it (about 330 MB), and memory starts normally.
+
+    If that download fails, you see `Memory is unavailable this session: the embedding model ... has not been pulled into Lemonade`, with the reason the download failed. Fix that cause (for example, free disk space or reconnect to the network), then restart the agent; it retries the download.
+  </Accordion>
+
   <Accordion title="Embedding model downloaded but won't load (memory and document search off)" icon="triangle-exclamation">
     You see `Memory is unavailable this session: the embedding model ... is downloaded but would not load`, or indexing fails with `model_load_error` / `llama-server failed to start`.
 
@@ -765,7 +771,9 @@ error. To run the chat model in the cloud instead, see
     less smooth.
 
     **The window is missing its frame, draws wrong, or won't resize on
-    Wayland:** run the app under XWayland instead:
+    Wayland:** on Linux the app uses your desktop's own title bar and
+    window controls. If they still look wrong, update the app first, then
+    run it under XWayland:
     ```bash
     ./gaia-agent-ui-*.AppImage --ozone-platform=x11   # AppImage
     gaia-desktop --ozone-platform=x11                 # .deb install

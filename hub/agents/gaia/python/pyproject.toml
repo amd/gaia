@@ -30,7 +30,7 @@ requires-python = ">=3.10"
 # import the class. RAG's real dependencies come from `gaia init` into the
 # active interpreter (#2358).
 dependencies = [
-  "amd-gaia>=0.25.1",
+  "amd-gaia>=0.25.2",
   "gaia-agent-chat>=0.2.0",
 ]
 

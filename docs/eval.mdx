@@ -148,7 +148,7 @@ flowchart TD
 
 ```
 effective_timeout = max(base_timeout,
-                        120s startup overhead
+                        240s startup overhead
                         + num_docs × 90s
                         + num_turns × 200s)
                     capped at 7200s

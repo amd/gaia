@@ -427,7 +427,7 @@ def load_connection(
         delete_connection(provider, account_email=account_email)
         raise ConnectorsError(
             f"Stored connection blob for provider={provider!r} is not valid "
-            "JSON. Cleared the entry; reconnect via Settings → Connections "
+            "JSON. Cleared the entry; reconnect via Settings → Connectors "
             f"or `gaia connectors connect {provider}`."
         ) from e
 

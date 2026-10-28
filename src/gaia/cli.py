@@ -35,6 +35,7 @@ from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
 from gaia.log_rotation import log_family
 from gaia.logger import get_logger
+from gaia.login_path import apply_login_path
 from gaia.mcp.ports import (
     AGENT_UI_MCP_PORT,
     MCP_BRIDGE_PORT,
@@ -1410,9 +1411,10 @@ def build_parser():
     email_parser = subparsers.add_parser(
         "email",
         help=(
-            "Email Triage Agent — read, organize, and reply to Gmail with "
-            "all body inference running locally on Lemonade. Requires the "
-            "Google connector to be configured (Settings → Connections)."
+            "Email Triage Agent — read, organize, and reply to Gmail or "
+            "Outlook with all body inference running locally on Lemonade. "
+            "Requires the Google or Microsoft connector to be configured "
+            "(Settings → Connectors)."
         ),
         parents=[
             parent_parser,
@@ -4596,6 +4598,7 @@ def main():
     log = get_logger(__name__)
 
     args = parser.parse_args()
+    apply_login_path()  # after parsing, so --version and -h skip the shell
     if args.action == "engineering":
         from gaia.engineering.cli import run as run_engineering
 
@@ -6675,12 +6678,16 @@ def handle_perf_vis_command(args):
         sys.exit(exit_code)
 
 
-def _print_knowledge_usage(client):
+def _print_knowledge_usage(client, show_session=True):
     """Print a one-line credit-usage summary for a Tavily client."""
     usage = client.usage()
     cap = usage["cap"]
     cap_str = "unlimited" if cap is None else str(cap)
-    print(f"\n💳 Credits used: {usage['total_credits']} (cap: {cap_str})")
+    # A bare `usage` run spends nothing, so its session figure would always be 0.
+    session = f", {usage['session_credits']} this session" if show_session else ""
+    print(
+        f"\n💳 Credits used: {usage['total_credits']} total{session} (cap: {cap_str})"
+    )
 
 
 def handle_knowledge_command(args):
@@ -6727,7 +6734,7 @@ def handle_knowledge_command(args):
             print(json.dumps(result, indent=2))
             _print_knowledge_usage(client)
         elif action == "usage":
-            _print_knowledge_usage(client)
+            _print_knowledge_usage(client, show_session=False)
     except TavilyBudgetExceeded as e:
         print(f"🛑 {e}")
         sys.exit(1)

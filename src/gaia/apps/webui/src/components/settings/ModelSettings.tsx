@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Cloud, Cpu, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useModelStore, displayModelName, distinctModelLabels } from '../../stores/modelStore';
+import { useChatStore } from '../../stores/chatStore';
 import { ModelContextSize } from './ModelContextSize';
 import { STATE_LABELS, isDownloading, placementText } from '../modelMeta';
 import '../ModelPicker.css';
@@ -41,10 +42,12 @@ export function ModelSettings() {
 
     const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
-    const [chosen, setChosen] = useState<ProviderId>(active?.provider ?? 'local');
+    const requested = useChatStore((s) => s.settingsProvider);
+    const [chosen, setChosen] = useState<ProviderId>(requested ?? active?.provider ?? 'local');
     const [models, setModels] = useState<ProviderModel[] | null>(null);
     const [modelsError, setModelsError] = useState<string | null>(null);
     const [query, setQuery] = useState('');
+    const [showAllFireworksModels, setShowAllFireworksModels] = useState(false);
     const [key, setKey] = useState('');
     const [amd, setAmd] = useState({ base_url: '', auth_header_name: '', auth_header_prefix: '' });
     const [busy, setBusy] = useState<string | null>(null);
@@ -96,11 +99,12 @@ export function ModelSettings() {
         return () => clearInterval(t);
     }, [awaitingPermission, loadProviders]);
     const activeProvider = active?.provider;
-    useEffect(() => { if (activeProvider) setChosen(activeProvider); }, [activeProvider]);
+    useEffect(() => { if (activeProvider && !requested) setChosen(activeProvider); }, [activeProvider, requested]);
     useEffect(() => {
         setKey('');
         setNotice(null);
         setQuery('');
+        setShowAllFireworksModels(false);
     }, [chosen]);
     useEffect(() => {
         if (connected) void loadModels(chosen);
@@ -196,6 +200,11 @@ export function ModelSettings() {
         );
     }, [models, query]);
     const runnable = filtered.filter((m) => m.available !== false);
+    const fireworksCollapsed = chosen === 'fireworks' && !showAllFireworksModels && !query.trim()
+        && runnable.some((m) => m.rank !== null);
+    const inCollapsedView = (m: ProviderModel) => m.rank !== null || m.id === active?.model;
+    const visibleRunnable = fireworksCollapsed ? runnable.filter(inCollapsedView) : runnable;
+    const hiddenFireworksModels = fireworksCollapsed ? runnable.filter((m) => !inCollapsedView(m)) : [];
     const unavailable = filtered.filter((m) => m.available === false);
     const labels = distinctModelLabels(models ?? []);
     const activeLocal = active && !active.remote && active.model ? active.model : null;
@@ -378,7 +387,25 @@ export function ModelSettings() {
                             {modelsError && <p className="settings-error" role="alert">{modelsError}</p>}
                             {!models && !modelsError && <p className="settings-hint"><Loader2 size={13} className="spin" /> Loading…</p>}
                             {models && filtered.length === 0 && <p className="settings-hint">No models match.</p>}
-                            <ul className="model-list">{runnable.map(renderRow)}</ul>
+                            <ul className="model-list">{visibleRunnable.map(renderRow)}</ul>
+                            {fireworksCollapsed && hiddenFireworksModels.length > 0 && (
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => setShowAllFireworksModels(true)}
+                                >
+                                    Show all models
+                                </button>
+                            )}
+                            {chosen === 'fireworks' && showAllFireworksModels && !query.trim() && (
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => setShowAllFireworksModels(false)}
+                                >
+                                    Show recommended models
+                                </button>
+                            )}
                             {unavailable.length > 0 && (
                                 <details className="model-unavailable">
                                     <summary>Not available on this PC ({unavailable.length})</summary>

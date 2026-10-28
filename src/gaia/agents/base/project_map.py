@@ -596,7 +596,11 @@ def render_project_map(
     # they must survive the sub-cap even when the longer lists do not.
     commands: List[str] = []
     if pm.tools_absent:
-        commands.append(f"NOT installed, do not invoke: {', '.join(pm.tools_absent)}")
+        commands.append(
+            "Not on the agent's PATH, do not invoke (they may still be installed; "
+            "say they are not reachable from the agent's shell, never that the "
+            f"user lacks them): {', '.join(pm.tools_absent)}"
+        )
     if has_shell_tool:
         allowed = set(pm.shell_commands)
         if pm.shell_commands:
@@ -607,7 +611,7 @@ def render_project_map(
         needs_approval = [t for t in pm.tools_present if t not in allowed]
         if needs_approval:
             commands.append(
-                "Also installed; run_shell_command runs them once the user "
+                "Also on the PATH; run_shell_command runs them once the user "
                 f"approves: {', '.join(needs_approval)}"
             )
     elif pm.tools_present:

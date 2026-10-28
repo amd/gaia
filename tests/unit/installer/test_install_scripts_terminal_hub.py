@@ -1442,3 +1442,159 @@ def test_add_to_path_does_not_write_a_file_an_unknown_shell_ignores(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert _rc_files(home) == []
     assert "Add these two directories to your PATH by hand" in result.stdout
+
+
+# ── functional: install.ps1's Add-ToPath against a scratch registry key ────
+#
+# Add-ToPath edits the key named by $USER_ENV_KEY, so pointing that at a
+# throwaway HKCU subkey exercises the real registry code without touching the
+# runner's own PATH.
+
+needs_windows_registry = pytest.mark.skipif(
+    sys.platform != "win32" or _PS_EXE is None, reason="needs the Windows registry"
+)
+
+
+@pytest.fixture
+def scratch_env_key(tmp_path):
+    import uuid
+    import winreg
+
+    subkey = rf"Software\GAIA-install-test-{uuid.uuid4().hex}"
+    real = _real_user_path()
+    yield subkey
+    try:
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, subkey)
+    except FileNotFoundError:
+        pass
+    # Catches the scratch-key hook going stale and writing the real PATH.
+    after = _real_user_path()
+    if after != real and after is not None and str(tmp_path) in after[0]:
+        if real is None:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
+            ) as key:
+                winreg.DeleteValue(key, "Path")
+        else:
+            _seed_user_path("Environment", *real)
+        pytest.fail("Add-ToPath changed the runner's real user PATH; restored it")
+
+
+def _real_user_path():
+    try:
+        return _read_user_path("Environment")
+    except FileNotFoundError:
+        return None
+
+
+def _seed_user_path(subkey, value, kind):
+    import winreg
+
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, subkey) as key:
+        winreg.SetValueEx(key, "Path", 0, kind, value)
+
+
+def _read_user_path(subkey):
+    import winreg
+
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, subkey) as key:
+        return winreg.QueryValueEx(key, "Path")
+
+
+def _run_add_to_path(tmp_path, subkey, times=1, broadcast=""):
+    # Stubbed so a test run never broadcasts WM_SETTINGCHANGE to the desktop.
+    snippet = (
+        f"$USER_ENV_KEY = '{subkey}'\n"
+        '$GAIA_BIN = "$GAIA_HOME\\bin"\n'
+        f"function Send-EnvironmentChange {{ {broadcast} }}\n" + "Add-ToPath\n" * times
+    )
+    result, _ = _run_ps1(tmp_path, "http://127.0.0.1:1", snippet)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Failed to add GAIA to PATH" not in result.stdout, result.stdout
+    return result
+
+
+@needs_windows_registry
+def test_ps1_add_to_path_keeps_unexpanded_entries(tmp_path, scratch_env_key):
+    """Reading PATH expanded and writing it back as REG_SZ froze %VARS%."""
+    import winreg
+
+    _seed_user_path(
+        scratch_env_key,
+        r"%USERPROFILE%\tools;%LOCALAPPDATA%\other",
+        winreg.REG_EXPAND_SZ,
+    )
+
+    _run_add_to_path(tmp_path, scratch_env_key)
+
+    value, kind = _read_user_path(scratch_env_key)
+    assert kind == winreg.REG_EXPAND_SZ
+    entries = value.split(";")
+    assert entries[:2] == [r"%USERPROFILE%\tools", r"%LOCALAPPDATA%\other"]
+    profile = tmp_path / "profile"
+    assert entries[2:] == [
+        str(profile / ".gaia" / "venv" / "Scripts"),
+        str(profile / ".gaia" / "bin"),
+    ]
+
+
+@needs_windows_registry
+def test_ps1_add_to_path_matches_whole_entries(tmp_path, scratch_env_key):
+    """A substring check counted .gaia/bin2 as .gaia/bin."""
+    import winreg
+
+    bin2 = str(tmp_path / "profile" / ".gaia" / "bin2")
+    _seed_user_path(scratch_env_key, bin2, winreg.REG_SZ)
+
+    _run_add_to_path(tmp_path, scratch_env_key)
+
+    value, kind = _read_user_path(scratch_env_key)
+    assert kind == winreg.REG_EXPAND_SZ
+    assert str(tmp_path / "profile" / ".gaia" / "bin") in value.split(";")
+    assert value.split(";")[0] == bin2
+
+
+@needs_windows_registry
+def test_ps1_add_to_path_recognises_an_unexpanded_gaia_entry(tmp_path, scratch_env_key):
+    """An entry written with %USERPROFILE% names the same directory."""
+    import winreg
+
+    seeded = r"%USERPROFILE%\.gaia\venv\Scripts;%USERPROFILE%\.gaia\bin\;"
+    _seed_user_path(scratch_env_key, seeded, winreg.REG_EXPAND_SZ)
+
+    result = _run_add_to_path(tmp_path, scratch_env_key, times=2)
+
+    assert _read_user_path(scratch_env_key) == (seeded, winreg.REG_EXPAND_SZ)
+    assert "GAIA is already in PATH" in result.stdout
+
+
+@needs_windows_registry
+def test_ps1_add_to_path_is_idempotent(tmp_path, scratch_env_key):
+    import winreg
+
+    _seed_user_path(scratch_env_key, r"%USERPROFILE%\tools", winreg.REG_EXPAND_SZ)
+
+    _run_add_to_path(tmp_path, scratch_env_key, times=2)
+
+    value, _ = _read_user_path(scratch_env_key)
+    assert len(value.split(";")) == 3
+
+
+@needs_windows_registry
+def test_ps1_add_to_path_a_failed_broadcast_still_reports_the_saved_path(
+    tmp_path, scratch_env_key
+):
+    """A blocked Add-Type used to print "add it manually" over a saved PATH."""
+    import winreg
+
+    _seed_user_path(scratch_env_key, r"%USERPROFILE%\tools", winreg.REG_EXPAND_SZ)
+
+    result = _run_add_to_path(
+        tmp_path, scratch_env_key, broadcast="throw 'Add-Type blocked'"
+    )
+
+    assert "Added GAIA to PATH" in result.stdout
+    assert "PATH saved, but Windows could not be notified" in result.stdout
+    assert "Add-Type blocked" in result.stdout
+    value, _ = _read_user_path(scratch_env_key)
+    assert len(value.split(";")) == 3

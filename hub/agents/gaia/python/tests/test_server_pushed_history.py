@@ -125,3 +125,23 @@ def test_history_that_fits_reaches_the_agent_unchanged(client):
     assert response.status_code == 200
     assert agents[-1].seen_history == context
     assert _warnings(response) == []
+
+
+def test_a_pushed_turn_bigger_than_the_budget_keeps_its_answer(client):
+    http, agents = client
+    own = history.history_budget(_PromptHeavyAgent(), "shorten that")
+    context = _context(2, 5)
+    context.append({"role": "user", "content": "summarize: " + "log " * (own * 2)})
+    context.append({"role": "assistant", "content": "revenue grew 12%"})
+
+    response = http.post(
+        "/v1/gaia/query",
+        json={"query": "shorten that", "run_id": str(uuid.uuid4()), "context": context},
+    )
+
+    assert response.status_code == 200
+    seen = agents[-1].seen_history
+    assert seen[:4] == context[:4]
+    assert seen[4]["content"].startswith("summarize: ")
+    assert "to fit the model's context window" in seen[4]["content"]
+    assert seen[5] == {"role": "assistant", "content": "revenue grew 12%"}

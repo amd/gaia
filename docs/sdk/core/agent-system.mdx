@@ -362,7 +362,7 @@ agent = MyAgent(
     # API key is read from environment: ANTHROPIC_API_KEY
 
     # === Agent Behavior ===
-    max_steps=20,                  # Max reasoning loop iterations
+    max_steps=50,                  # Max reasoning loop iterations (DEFAULT_MAX_STEPS, overridable via GAIA_AGENT_MAX_STEPS)
     streaming=True,                # Stream responses token-by-token
     silent_mode=False,             # Suppress console output
 
@@ -445,7 +445,7 @@ provider.
 
 | Parameter | Low Value | High Value | Trade-off |
 |-----------|-----------|------------|-----------|
-| `max_steps` | `3` - Quick tasks | `20` - Complex workflows | Speed vs. thoroughness |
+| `max_steps` | `3` - Quick tasks | `50` - Complex workflows | Speed vs. thoroughness |
 | `streaming` | `False` - Wait for complete response | `True` - See tokens as generated | Latency vs. responsiveness |
 | `silent_mode` | `False` - See all output | `True` - Only get results | Visibility vs. clean output |
 
@@ -908,7 +908,7 @@ than a successful saved turn.
 When you call `agent.process_query(user_input)`, here's the detailed flow:
 
 ```python
-def process_query(self, user_input, max_steps=None):  # defaults to self.max_steps (20)
+def process_query(self, user_input, max_steps=None):  # defaults to self.max_steps (50, via DEFAULT_MAX_STEPS)
     # 1. Add user message to conversation history
     self.conversation_history.append({
         "role": "user",

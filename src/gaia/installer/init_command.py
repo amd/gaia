@@ -1087,6 +1087,8 @@ class InitCommand:
         # Set when the hub has no build of the profile's agent for this machine:
         # setup is otherwise done, and nothing the user runs can change that.
         self._no_hub_build_for_machine = False
+        # Set when a runtime step failed and the agent installs on the way out.
+        self._runtime_failed = False
 
     def _print(self, message: str, end: str = "\n"):
         """Print message to stdout."""
@@ -1335,10 +1337,10 @@ class InitCommand:
         try:
             step_num = 1
             if not self._choose_lemonade():
-                return 1
+                return self._fail_before_agent(has_hub_agent_check)
             self._print_step(step_num, total_steps, "Starting Lemonade Server...")
             if not self._ensure_lemonade_ready():
-                return 1
+                return self._fail_before_agent(has_hub_agent_check)
 
             # NPU-specific: Detect hardware
             if has_device_check:
@@ -1346,7 +1348,7 @@ class InitCommand:
                 self._print("")
                 self._print_step(step_num, total_steps, "Detecting NPU hardware...")
                 if not self._check_device_available():
-                    return 1
+                    return self._fail_before_agent(has_hub_agent_check)
 
             # NPU-specific: Install backend
             if has_backend_install:
@@ -1359,7 +1361,7 @@ class InitCommand:
                     f"Installing {backend_spec} backend...",
                 )
                 if not self._install_backend():
-                    return 1
+                    return self._fail_before_agent(has_hub_agent_check)
 
             # Step 3+: Download models (unless skipped)
             if not self.skip_models:
@@ -1371,7 +1373,7 @@ class InitCommand:
                     f"Downloading models for '{self.profile}' profile...",
                 )
                 if not self._download_models():
-                    return 1
+                    return self._fail_before_agent(has_hub_agent_check)
 
             # Install pip extras (after models, before verify)
             if has_pip_extras:
@@ -1381,7 +1383,7 @@ class InitCommand:
                     step_num, total_steps, "Installing Python dependencies..."
                 )
                 if not self._install_pip_extras():
-                    return 1
+                    return self._fail_before_agent(has_hub_agent_check)
 
             # Ensure the profile's hub agent (chat's standalone wheel) is
             # installed (#2358). Independent of the pip-extras step above:
@@ -1492,6 +1494,33 @@ class InitCommand:
 
                 traceback.print_exc()
             return 1
+
+    def _fail_before_agent(self, installs_agent: bool) -> int:
+        """Exit 1 for a failed runtime step, installing the profile's agent first.
+
+        The agent download needs neither Lemonade nor the models. Without it the
+        Agent UI cannot start a chat at all, even once the runtime is fixed, so a
+        Lemonade or model failure must not also leave the agent missing. An agent
+        install failure here is reported as a second error, after the first.
+        """
+        if installs_agent:
+            from gaia.hub.installer import InstallError
+
+            agent_id = INIT_PROFILES[self.profile]["agent"]
+            self._runtime_failed = True
+            self._print("")
+            self._print(
+                f"   Setup did not finish; installing the '{agent_id}' agent anyway..."
+            )
+            try:
+                self._ensure_hub_agent_installed()
+            except InstallError as e:
+                self._print_error(
+                    f"The '{agent_id}' agent did not install either: {e}. Fix the "
+                    f"failure above, then run `{self._flagship_install_command()}` "
+                    "again."
+                )
+        return 1
 
     def _choose_lemonade(self) -> bool:
         """Settle which Lemonade this machine uses before anything is installed.
@@ -2692,9 +2721,20 @@ class InitCommand:
             self._ensure_release_candidate_flagship(agent_id, rc_source)
             return
 
+        from gaia.hub import installer as hub_installer
+
+        replacing = None
         if self._is_hub_agent_available(agent_id):
-            self._print_success(f"{agent_id} agent is installed")
-            return
+            installed = hub_installer.read_sentinel(agent_id)
+            if not self._installed_agent_is_stale(agent_id, installed):
+                self._print_success(f"{agent_id} agent is installed")
+                return
+            # The hub publishes other bytes: a newer release, or a candidate's build left behind.
+            replacing = installed
+            self._print(
+                f"   Replacing the installed '{agent_id}' agent ({installed.version}) "
+                "with the published build..."
+            )
 
         hub_url = hub_catalog.get_hub_base_url()
         try:
@@ -2716,9 +2756,8 @@ class InitCommand:
             )
             return
 
-        from gaia.hub import installer as hub_installer
-
-        self._print(f"   Installing the '{agent_id}' agent...")
+        if replacing is None:
+            self._print(f"   Installing the '{agent_id}' agent...")
         # Curated first-run profile agent: a hardcoded INIT_PROFILES id, not user
         # input, so GAIA's own curation is the trust decision. Pass the trust
         # opt-in explicitly — every non-verified agent now needs it, and the
@@ -2744,11 +2783,12 @@ class InitCommand:
             self._print_warning(
                 f"The '{agent_id}' agent has no build for this machine: {exc}"
             )
-            self._print_warning(
-                f"Everything else is set up. Run "
-                f"`{self._flagship_install_command()}` again once a build is "
-                f"available."
-            )
+            if not self._runtime_failed:
+                self._print_warning(
+                    f"Everything else is set up. Run "
+                    f"`{self._flagship_install_command()}` again once a build is "
+                    f"available."
+                )
             return
         self._print_success(f"Installed the '{agent_id}' agent")
         self._restart_replaced_agent(agent_id, result, before)
@@ -2770,6 +2810,38 @@ class InitCommand:
                 if sp not in sys.path:
                     sys.path.append(sp)
                     importlib.invalidate_caches()
+
+    def _installed_agent_is_stale(self, agent_id: str, installed) -> bool:
+        """True when the installed build isn't the one the hub publishes now.
+
+        A release candidate's flagship carries the final release's version
+        number, so only the bytes tell them apart. A hub that can't be read
+        leaves the working install in place, and says so.
+        """
+        if installed is None or not installed.artifact_sha256:
+            return False
+        import requests
+
+        from gaia.hub import catalog as hub_catalog
+        from gaia.hub import installer as hub_installer
+
+        try:
+            want = hub_installer.published_artifact_sha256(
+                agent_id, fetcher=hub_catalog.fetch_bytes
+            )
+        except (
+            hub_catalog.CatalogError,
+            hub_installer.InstallError,
+            requests.RequestException,
+            ValueError,
+        ) as exc:
+            self._print_warning(
+                f"Could not compare the installed '{agent_id}' agent with the "
+                f"download server ({exc}); keeping it ({installed.version}). Run "
+                f"`{self._flagship_install_command()}` again to retry."
+            )
+            return False
+        return bool(want) and want.lower() != installed.artifact_sha256.lower()
 
     def _ensure_release_candidate_flagship(self, agent_id: str, rc_source) -> None:
         """Install the release candidate's own flagship unless it already is.

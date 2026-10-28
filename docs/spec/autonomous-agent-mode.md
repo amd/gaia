@@ -209,6 +209,10 @@ AgentLoop
   chat of origin, and before #5711 a tick ran in whichever chat was most recent, not the goal's
 - A turn in a private chat never triggers a tick — **always, unconditionally**
 - No tick runs without approved pending goals (avoids pointless LLM calls)
+- A tick that fails marks the goals it was given `failed`, with the error in their progress
+  notes, and the loop goes idle — it never reruns the failure at once (#5840)
+- Ticks run the flagship in-process only. Where it is installed as a daemon sidecar (the
+  desktop app) they fail with that reason until ticks are relayed (#5840)
 
 **Startup gate:** The loop does not process triggers until after the
 initialized marker exists (`~/.gaia/chat/initialized`). On first launch,

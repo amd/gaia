@@ -937,8 +937,12 @@ class LemonadeManager:
                                     min_context_size,
                                     MessageType.WARNING,
                                 )
+                    except LemonadeClientError:
+                        # Auth and other client errors say the server is not
+                        # usable; propagate like the first-init path below.
+                        raise
                     except Exception as e:
-                        cls._log.debug(f"Failed to re-check status: {e}")
+                        cls._log.warning(f"Failed to re-check Lemonade status: {e}")
                     return True
 
             cls._log.debug(f"Initializing Lemonade (min context: {min_context_size})")
@@ -1011,6 +1015,8 @@ class LemonadeManager:
                         return False
 
                 if is_cloud:
+                    # Lemonade holds cloud keys in memory only; a fresh start has none.
+                    client._replay_cloud_key(chat_model)
                     cls._ready_for_cloud = True
                     cls._remember_server(client)
                     cls._log.debug(
