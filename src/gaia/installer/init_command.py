@@ -2721,9 +2721,20 @@ class InitCommand:
             self._ensure_release_candidate_flagship(agent_id, rc_source)
             return
 
+        from gaia.hub import installer as hub_installer
+
+        replacing = None
         if self._is_hub_agent_available(agent_id):
-            self._print_success(f"{agent_id} agent is installed")
-            return
+            installed = hub_installer.read_sentinel(agent_id)
+            if not self._installed_agent_is_stale(agent_id, installed):
+                self._print_success(f"{agent_id} agent is installed")
+                return
+            # The hub publishes other bytes: a newer release, or a candidate's build left behind.
+            replacing = installed
+            self._print(
+                f"   Replacing the installed '{agent_id}' agent ({installed.version}) "
+                "with the published build..."
+            )
 
         hub_url = hub_catalog.get_hub_base_url()
         try:
@@ -2745,9 +2756,8 @@ class InitCommand:
             )
             return
 
-        from gaia.hub import installer as hub_installer
-
-        self._print(f"   Installing the '{agent_id}' agent...")
+        if replacing is None:
+            self._print(f"   Installing the '{agent_id}' agent...")
         # Curated first-run profile agent: a hardcoded INIT_PROFILES id, not user
         # input, so GAIA's own curation is the trust decision. Pass the trust
         # opt-in explicitly — every non-verified agent now needs it, and the
@@ -2800,6 +2810,38 @@ class InitCommand:
                 if sp not in sys.path:
                     sys.path.append(sp)
                     importlib.invalidate_caches()
+
+    def _installed_agent_is_stale(self, agent_id: str, installed) -> bool:
+        """True when the installed build isn't the one the hub publishes now.
+
+        A release candidate's flagship carries the final release's version
+        number, so only the bytes tell them apart. A hub that can't be read
+        leaves the working install in place, and says so.
+        """
+        if installed is None or not installed.artifact_sha256:
+            return False
+        import requests
+
+        from gaia.hub import catalog as hub_catalog
+        from gaia.hub import installer as hub_installer
+
+        try:
+            want = hub_installer.published_artifact_sha256(
+                agent_id, fetcher=hub_catalog.fetch_bytes
+            )
+        except (
+            hub_catalog.CatalogError,
+            hub_installer.InstallError,
+            requests.RequestException,
+            ValueError,
+        ) as exc:
+            self._print_warning(
+                f"Could not compare the installed '{agent_id}' agent with the "
+                f"download server ({exc}); keeping it ({installed.version}). Run "
+                f"`{self._flagship_install_command()}` again to retry."
+            )
+            return False
+        return bool(want) and want.lower() != installed.artifact_sha256.lower()
 
     def _ensure_release_candidate_flagship(self, agent_id: str, rc_source) -> None:
         """Install the release candidate's own flagship unless it already is.

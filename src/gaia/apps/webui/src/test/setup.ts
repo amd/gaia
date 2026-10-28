@@ -24,4 +24,10 @@ configure({ asyncUtilTimeout: 10_000 });
 // we register the cleanup hook explicitly.
 afterEach(() => {
     cleanup();
+    // Saved drafts and the last open chat outlive a render by design; one
+    // test's typing must not prefill the next test's text box.
+    if (typeof localStorage === 'undefined') return; // node-environment test files
+    for (const key of Object.keys(localStorage)) {
+        if (key.startsWith('gaia:draft:') || key === 'gaia:last-session') localStorage.removeItem(key);
+    }
 });

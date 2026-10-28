@@ -6,6 +6,7 @@
 GAIA RAG SDK - Simple PDF document retrieval and Q&A
 """
 
+import codecs
 import errno
 import hashlib
 import hmac
@@ -60,6 +61,35 @@ from gaia.utils.file_lock import (
     write_bytes_atomic,
     write_text_atomic,
 )
+
+_TEXT_BOM_ENCODINGS = (
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+_TEXT_FALLBACK_ENCODINGS = ("utf-8", "cp1252", "latin-1")
+_TEXT_TRIED_ENCODINGS = ", ".join(
+    dict.fromkeys([e for _, e in _TEXT_BOM_ENCODINGS] + list(_TEXT_FALLBACK_ENCODINGS))
+)
+
+
+def _decode_text_bytes(data: bytes) -> str:
+    """Decode text bytes without letting latin-1 hide Windows encodings."""
+    for bom, encoding in _TEXT_BOM_ENCODINGS:
+        if data.startswith(bom):
+            return data.decode(encoding)
+
+    for encoding in _TEXT_FALLBACK_ENCODINGS:
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    # latin-1 never fails; only a corrupt BOM-tagged file raises (above).
+    raise UnicodeDecodeError("text", data, 0, len(data), "unsupported encoding")
+
 
 # --- PDF extraction errors ---------------------------------------------------
 # These inherit from ValueError so existing `except ValueError` blocks in
@@ -1978,27 +2008,20 @@ These positions indicate where to split the text."""
     def _extract_text_from_text_file(self, file_path: str) -> str:
         """Extract text from text-based file (txt, md, etc.)."""
         try:
-            encodings = ["utf-8", "utf-8-sig", "latin-1", "cp1252"]
-            text = None
+            with self._safe_open(file_path, "rb") as f:
+                data = f.read()
 
-            for encoding in encodings:
-                try:
-                    # Use _safe_open with binary mode, then decode
-                    with self._safe_open(file_path, "rb") as f:
-                        text = f.read().decode(encoding)
-                    break
-                except (UnicodeDecodeError, AttributeError):
-                    continue
-
-            if text is None:
+            try:
+                text = _decode_text_bytes(data)
+            except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode file: {file_path}\n"
-                    f"Tried encodings: {', '.join(encodings)}\n"
+                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Convert the file to UTF-8 encoding\n"
                     "  2. Check if the file is corrupted\n"
                     "  3. Ensure the file is a text file (not binary)"
-                )
+                ) from exc
 
             if self.config.show_stats:
                 print(f"  ✅ Loaded text file ({len(text):,} characters)")
@@ -2017,57 +2040,52 @@ These positions indicate where to split the text."""
             import csv
 
             text_parts = []
-            encodings = ["utf-8", "utf-8-sig", "latin-1", "cp1252"]
 
-            for encoding in encodings:
-                try:
-                    # Use _safe_open with binary mode, then decode for csv.reader
-                    from io import StringIO
+            from io import StringIO
 
-                    with self._safe_open(csv_path, "rb") as f:
-                        text = f.read().decode(encoding)
-                        reader = csv.reader(StringIO(text))
-                        rows = list(reader)
+            with self._safe_open(csv_path, "rb") as f:
+                data = f.read()
 
-                        if not rows:
-                            raise ValueError("CSV file is empty")
+            try:
+                decoded = _decode_text_bytes(data)
+            except UnicodeDecodeError as exc:
+                raise ValueError(
+                    f"Failed to decode CSV file: {csv_path}\n"
+                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
+                    "Suggestions:\n"
+                    "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
+                    "  2. Check if the file is a valid CSV (not corrupted)\n"
+                    "  3. Try opening and re-saving in a text editor"
+                ) from exc
 
-                        # Include header as context
-                        if rows:
-                            header = rows[0]
-                            text_parts.append(f"Columns: {', '.join(header)}\n")
+            reader = csv.reader(StringIO(decoded))
+            rows = list(reader)
 
-                        # Convert rows to readable text
-                        for row in rows[1:]:
-                            # Create a readable row format
-                            row_text = []
-                            for i, cell in enumerate(row):
-                                if i < len(header):
-                                    row_text.append(f"{header[i]}: {cell}")
-                                else:
-                                    row_text.append(cell)
-                            text_parts.append(" | ".join(row_text))
+            if not rows:
+                raise ValueError("CSV file is empty")
 
-                        text = "\n".join(text_parts)
+            # Include header as context
+            header = rows[0]
+            text_parts.append(f"Columns: {', '.join(header)}\n")
 
-                        if self.config.show_stats:
-                            print(
-                                f"  ✅ Loaded CSV file ({len(rows)} rows, {len(header)} columns)"
-                            )
+            # Convert rows to readable text
+            for row in rows[1:]:
+                # Create a readable row format
+                row_text = []
+                for i, cell in enumerate(row):
+                    if i < len(header):
+                        row_text.append(f"{header[i]}: {cell}")
+                    else:
+                        row_text.append(cell)
+                text_parts.append(" | ".join(row_text))
 
-                        self.log.info(f"📊 Extracted {len(rows)} rows from CSV")
-                        return text
-                except UnicodeDecodeError:
-                    continue
+            text = "\n".join(text_parts)
 
-            raise ValueError(
-                f"Failed to decode CSV file: {csv_path}\n"
-                f"Tried encodings: {', '.join(encodings)}\n"
-                "Suggestions:\n"
-                "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
-                "  2. Check if the file is a valid CSV (not corrupted)\n"
-                "  3. Try opening and re-saving in a text editor"
-            )
+            if self.config.show_stats:
+                print(f"  ✅ Loaded CSV file ({len(rows)} rows, {len(header)} columns)")
+
+            self.log.info(f"📊 Extracted {len(rows)} rows from CSV")
+            return text
         except Exception as e:
             self._log_read_failure(e, csv_path, f"Error reading CSV {csv_path}: {e}")
             raise
@@ -2533,7 +2551,11 @@ These positions indicate where to split the text."""
         vlm_paragraphs = set()
         for idx, para in enumerate(paragraphs):
             # Check if this paragraph contains VLM markers
-            if "### 🖼️ IMAGE" in para or "**Content Extracted from Images:**" in para:
+            if (
+                "### 🖼️ IMAGE" in para
+                or "**Content Extracted from Images:**" in para
+                or any(block["placeholder"] in para for block in vlm_blocks)
+            ):
                 vlm_paragraphs.add(idx)
                 self.log.debug(
                     f"Paragraph {idx} marked as VLM content (will keep atomic)"

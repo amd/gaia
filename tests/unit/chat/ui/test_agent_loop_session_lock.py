@@ -55,6 +55,8 @@ def env(monkeypatch, tmp_path):
     registry = MagicMock()
     registry.canonical_id.side_effect = lambda t: t
     registry.resolve_model.return_value = None
+    # An in-process install: the flagship's wheel is importable.
+    registry.get.return_value.is_sidecar = False
     monkeypatch.setattr(helpers, "_agent_registry", registry)
 
     initialized = tmp_path / ".gaia" / "chat" / "initialized"

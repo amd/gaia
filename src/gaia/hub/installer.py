@@ -1283,6 +1283,29 @@ def resolve_installable_version(
     return version
 
 
+def published_artifact_sha256(
+    agent_id: str,
+    *,
+    manifest: Optional[Dict[str, Any]] = None,
+    base_url: Optional[str] = None,
+    fetcher: Optional[catalog_mod.Fetcher] = None,
+    platform_key: Optional[str] = None,
+) -> str:
+    """The sha256 of the artifact :func:`install` would fetch for this machine now.
+
+    Same selection as an install with no *version*: the newest published
+    version this core can run, and its artifact for *platform_key*. Raises
+    :class:`catalog_mod.CatalogError` when the hub can't be read and
+    :class:`InstallError` when it has nothing for this machine.
+    """
+    if manifest is None:
+        manifest = catalog_mod.fetch_manifest(
+            agent_id, base_url=base_url, fetcher=fetcher
+        )
+    _, artifact = _resolve_version(manifest, None, platform_key=platform_key)
+    return str(artifact.get("sha256") or "")
+
+
 def _resolve_version(
     manifest: Dict[str, Any],
     version: Optional[str],

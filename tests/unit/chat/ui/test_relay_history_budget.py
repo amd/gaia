@@ -358,3 +358,23 @@ def test_a_pushed_assistant_message_without_a_question_stays_in_its_turn(
     ]
 
     assert history.fit_pushed_history(_sidecar_agent(10), pushed, "q") == pushed
+
+
+def test_a_pushed_turn_larger_than_the_budget_keeps_its_answer(monkeypatch):
+    _window(monkeypatch, 32768)
+    agent = _sidecar_agent(500)
+    budget = history.history_budget(agent, "q")
+    pasted = "log line " * (budget * 2)
+    pushed = [
+        {"role": "user", "content": "q0"},
+        {"role": "assistant", "content": "a0"},
+        {"role": "user", "content": pasted},
+        {"role": "assistant", "content": "the log stops at batch 34"},
+    ]
+
+    fitted = history.fit_pushed_history(agent, pushed, "q")
+
+    assert fitted[:2] == pushed[:2]
+    assert fitted[2]["content"].startswith("log line ")
+    assert len(fitted[2]["content"]) < len(pasted)
+    assert fitted[3] == pushed[3]

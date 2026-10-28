@@ -747,6 +747,23 @@ def test_still_reports_rather_than_negates():
     assert not claims_success("Two tests still fail, so it is not done.")
 
 
+@pytest.mark.parametrize(
+    "answer",
+    (
+        "The task isn't done.",
+        "The task wasn't done.",
+        "I haven't done it.",
+        "The task isn’t done.",
+        "The task wasn’t done.",
+        "I haven’t done it.",
+    ),
+)
+def test_contracted_negation_does_not_claim_success(answer):
+    # Each sentence includes a success claim that the old detector matched, so
+    # this regression test proves the contraction is recognized as negation.
+    assert not claims_success(answer)
+
+
 # ---------------------------------------------------------------------------
 # Precision: a coding agent's honest answers about handed-over material
 # ---------------------------------------------------------------------------

@@ -272,15 +272,16 @@ typed `EmailClient` yet** — call it directly with `fetch` against the sidecar'
 
 ```js
 const base = "http://127.0.0.1:8131";
+const auth = `Bearer ${sidecar.authToken}`;
 // 1. Start a session (builds the agent; reports memory availability).
 await fetch(`${base}/v1/email/agent/session`, {
-  method: "POST", headers: { "content-type": "application/json" },
+  method: "POST", headers: { "content-type": "application/json", authorization: auth },
   body: JSON.stringify({ session_id: "s1" }),
 });
 
 // 2. Run a turn — the reply streams back as Server-Sent Events.
 const res = await fetch(`${base}/v1/email/agent/query`, {
-  method: "POST", headers: { "content-type": "application/json", accept: "text/event-stream" },
+  method: "POST", headers: { "content-type": "application/json", accept: "text/event-stream", authorization: auth },
   body: JSON.stringify({ session_id: "s1", message: "Triage my inbox" }),
 });
 const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
@@ -294,7 +295,7 @@ for (;;) {
     const ev = JSON.parse(line.slice(6));           // {type: "thinking"|"step"|"permission_request"|"run_complete"|...}
     if (ev.type === "permission_request") {         // a gated tool (send/forward/delete/...) is waiting
       await fetch(`${base}/v1/email/agent/confirm-tool`, {
-        method: "POST", headers: { "content-type": "application/json" },
+        method: "POST", headers: { "content-type": "application/json", authorization: auth },
         body: JSON.stringify({ session_id: "s1", approved: true }),
       });
     }
@@ -323,13 +324,13 @@ Turn it on and inspect the earned trust:
 ```js
 // Turn on full autonomy (levels: off | suggest | earn_trust | full; "off" = kill switch)
 await fetch(`${base}/v1/email/agent/autonomy`, {
-  method: "POST", headers: { "content-type": "application/json" },
+  method: "POST", headers: { "content-type": "application/json", authorization: auth },
   body: JSON.stringify({ session_id: "s1", level: "earn_trust" }),
 });
 
 // Run one observe→decide→act cycle now (the daemon/scheduler drives this in production)
 const r = await fetch(`${base}/v1/email/agent/autonomy/run`, {
-  method: "POST", headers: { "content-type": "application/json" },
+  method: "POST", headers: { "content-type": "application/json", authorization: auth },
   body: JSON.stringify({ session_id: "s1", max_messages: 25 }),
 });
 const report = await r.json();
@@ -337,7 +338,9 @@ const report = await r.json();
 // decisions[] explains EVERY candidate considered: { message_id, tool, action, outcome, reason, sender }
 
 // Inspect the earned-trust ledger — autonomy is never a black box
-const status = await (await fetch(`${base}/v1/email/agent/autonomy/s1`)).json();
+const status = await (await fetch(`${base}/v1/email/agent/autonomy/s1`, {
+  headers: { authorization: auth },
+})).json();
 // { level, enabled, trust_min_samples, trust_threshold, trusted_scope_count, scopes:[…] }
 ```
 
@@ -429,8 +432,8 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
   carries it automatically; a client you construct yourself must pass `authToken`
   (from `sidecar.authToken`) or every call is **401**. Absent or non-loopback
   `Host` → 400,
-  non-loopback browser `Origin` → 403. `/health` · `/version` · `/v1/email/spec` ·
-  `/v1/email/playground` are exempt.
+  non-loopback browser `Origin` → 403. `/health` · `/version` · `/v1/email/health` ·
+  `/v1/email/version` · `/v1/email/spec` · `/v1/email/playground` are exempt.
 - **`health()` is liveness-only.** A green `/health` means the REST surface is up,
   NOT that triage will work. For real readiness call **`init()`** (`GET
   /v1/email/init`, #1795) — it probes Lemonade + the triage model and returns the

@@ -37,6 +37,11 @@ function loadInstaller(previousState, initRun = { code: 0 }) {
     existsSync: (file) => String(file).includes("/venv") || files.has(String(file)),
     readFileSync: (file, enc) =>
       files.has(String(file)) ? files.get(String(file)) : fs.readFileSync(file, enc),
+    readdirSync: (dir) =>
+      ({
+        "/fixture/.gaia/venv/lib": ["python3.12"],
+        "/fixture/.gaia/venv/lib/python3.12/site-packages": ["amd_gaia-0.25.0.dist-info"],
+      })[String(dir)] || [],
     writeFileSync: (file, data) => files.set(String(file), String(data)),
     mkdirSync: jest.fn(),
     statfsSync: () => ({ bavail: 1e9, bsize: 4096 }),

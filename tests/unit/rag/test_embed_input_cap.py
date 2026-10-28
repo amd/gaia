@@ -173,6 +173,32 @@ def test_llm_chunking_output_is_also_cut_to_fit(tmp_path):
     assert max(len(c) for c in chunks) <= EMBED_MAX_CHARS
 
 
+def test_section_chunking_keeps_vlm_blocks_out_of_body_chunks(tmp_path):
+    sdk = _make(tmp_path, chunk_size=50, chunk_overlap=10)
+    image_marker = "\U0001f5bc\ufe0f"
+    vlm_text = (
+        "IMAGE-CONTENT " + " ".join(f"imgword{i}" for i in range(80)) + " IMAGE-END"
+    )
+    text = (
+        "# Section A\nAlpha body.\n\n"
+        "# Section B\nBeta body.\n\n"
+        "# Section C\nGamma body.\n\n"
+        "# Section D\nDelta body.\n\n"
+        "# Figure\n"
+        f"[Page 1] ### {image_marker} IMAGE 1\n\n"
+        f"{vlm_text}\n\n"
+        "[Page 2]\n# Section E\nEpsilon body."
+    )
+
+    chunks = sdk._split_text_into_chunks(text)
+
+    vlm_chunks = [chunk for chunk in chunks if "IMAGE-CONTENT" in chunk]
+    assert len(vlm_chunks) == 1
+    assert "IMAGE-END" in vlm_chunks[0]
+    assert "Delta body." not in vlm_chunks[0]
+    assert "Epsilon body." not in vlm_chunks[0]
+
+
 def test_oversized_input_is_refused_not_truncated(tmp_path):
     sdk = _make(tmp_path)
     sdk._load_embedder()
