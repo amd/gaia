@@ -374,7 +374,8 @@ func TestCopiedWorkMatchesTheScreenForARetriedStep(t *testing.T) {
 
 // A chained command is the whole chain: the shell tool tells the model to
 // write `cd build && make`, so a later `cd build && ls` passing says nothing
-// about make. A cd becomes the folder, and only a pipe's left side counts.
+// about make. A cd becomes the folder, and every pipe stage counts except a
+// trailing output filter.
 func TestAChainedCommandIsRecoveredOnlyByTheSameChain(t *testing.T) {
 	red := colour(t)
 	differ := [][2]string{
@@ -383,6 +384,9 @@ func TestAChainedCommandIsRecoveredOnlyByTheSameChain(t *testing.T) {
 		{"make || echo done", "ls || echo done"},
 		{"cd a && make", "cd b && make"},
 		{"npm test | tail -5", "npm ls | tail -5"},
+		{"cat data.csv | python process.py", "cat data.csv | head"},
+		{"cat data.csv | python process.py", "cat data.csv | python report.py"},
+		{"make | tee a.log", "make | tee b.log"},
 		{`bash -c "cd build && make"`, `bash -c "cd build && ls"`},
 		// A quoted ; is text, not a second command.
 		{`git commit -m "fix; ok"`, `git push origin "main; ok"`},
@@ -401,6 +405,8 @@ func TestAChainedCommandIsRecoveredOnlyByTheSameChain(t *testing.T) {
 		{"npm test | tail -5", "npm test | tail -50"},
 		{"cd build && make;", "cd build ;; && make"},
 		{"make 2>&1 | tail", "make 2>&1"},
+		{"cat data.csv | python process.py", "cat data.csv | python process.py | head -5"},
+		{"git log | less", "git log | head -20 | more"},
 		{`bash -c "cd build && make"`, `bash -lc 'cd build && make'`},
 	}
 	for _, p := range same {
@@ -438,8 +444,9 @@ func TestShellSegments(t *testing.T) {
 	cases := map[string]string{
 		`cd build && make`:        "cd build|make",
 		`a; b || c & d`:           "a|b|c|d",
-		`echo "a; b && c" | tail`: "echo a; b && c",
-		`make 2>&1 | tail`:        "make 2>&1",
+		`echo "a; b && c" | tail`: "echo a; b && c / tail",
+		`make 2>&1 | tail`:        "make 2>&1 / tail",
+		`a | | b |`:               "a / b",
 		` ; ; make ;`:             "make",
 		`git commit -m 'x | y'`:   "git commit -m x | y",
 		`cmd /c "npm run build"`:  "cmd /c npm run build",
@@ -447,8 +454,12 @@ func TestShellSegments(t *testing.T) {
 	}
 	for in, want := range cases {
 		var segs []string
-		for _, words := range shellSegments(in) {
-			segs = append(segs, strings.Join(words, " "))
+		for _, stages := range shellSegments(in) {
+			var parts []string
+			for _, words := range stages {
+				parts = append(parts, strings.Join(words, " "))
+			}
+			segs = append(segs, strings.Join(parts, " / "))
 		}
 		if got := strings.Join(segs, "|"); got != want {
 			t.Errorf("shellSegments(%q) = %q, want %q", in, got, want)
