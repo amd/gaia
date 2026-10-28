@@ -119,16 +119,24 @@ LONG_INPUTS = {
 }
 
 
-@pytest.mark.parametrize("name", LONG_INPUTS)
-def test_masking_stays_fast_on_long_input(name):
-    text = LONG_INPUTS[name]
+def _masking_elapsed(text):
     started = time.perf_counter()
-
     MemoryMixin._mask_credentials(text)
     MemoryMixin._looks_like_credential(text)
+    return time.perf_counter() - started`r`n`r`n@pytest.mark.parametrize("name", LONG_INPUTS)
+def test_masking_scales_linearly_on_long_input(name):
+    text = LONG_INPUTS[name]
+    # Compare like-for-like inputs and keep the fastest sample so a temporarily
+    # busy parallel runner cannot turn this ReDoS guard into a timing flake.
+    one_size = min(_masking_elapsed(text) for _ in range(3))
+    two_sizes = min(_masking_elapsed(text * 2) for _ in range(3))
 
-    # ~0.2s locally; the bound catches runaway backtracking, not a busy CI runner.
-    assert time.perf_counter() - started < 5.0
+    # Keep a generous absolute backstop for a genuine hang, but make the
+    # regression criterion scale-based: linear work is about 2x, while
+    # pathological backtracking grows far faster when the input doubles.
+    assert one_size < 10.0
+    assert two_sizes < 10.0
+    assert two_sizes / one_size < 4.0
 
 
 def test_remember_refuses_a_pin(store):
