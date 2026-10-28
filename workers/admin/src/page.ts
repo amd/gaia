@@ -99,7 +99,7 @@ svg.c{width:100%;height:auto;display:block;overflow:visible;user-select:none;-we
 .share h4:not(:first-of-type){margin-top:18px}
 .srow{display:grid;grid-template-columns:90px 1fr 38px;gap:8px;align-items:center;font-size:12.5px;margin:6px 0}
 .srow .b{height:6px;background:var(--line2);border-radius:3px;overflow:hidden}.srow .b i{display:block;height:100%;border-radius:3px}
-.srow .p{text-align:right;color:var(--ink2)}
+.srow .p{text-align:right;color:var(--ink2)}.srow .p.good{color:var(--good)}.srow .p.bad{color:var(--bad)}
 details.tv{border-top:1px solid var(--line)}details.tv summary{cursor:pointer;color:var(--ink2);padding:9px 18px;font-size:12.5px}details.tv summary:hover{color:var(--accent)}
 .scroll{max-height:340px;overflow:auto;padding:0 18px 12px;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
 table{border-collapse:collapse;width:100%;font-size:12.5px}
