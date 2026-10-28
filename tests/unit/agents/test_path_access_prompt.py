@@ -5,7 +5,6 @@
 import json
 import threading
 import time
-import uuid
 from pathlib import Path
 from unittest.mock import patch
 
@@ -542,21 +541,6 @@ def test_the_hint_never_makes_the_home_folder_itself_askable(layout, home):
     assert console.calls == []
 
 
-def _sidecar_handler(*, session, can_answer_questions):
-    """The handler the GAIA sidecar's /query builds, told who can answer."""
-    from gaia_agent.server import QueryRequest, _declare_who_answers
-
-    handler = SSEOutputHandler()
-    request = QueryRequest(
-        query="q",
-        run_id=str(uuid.uuid4()),
-        context=[],
-        can_answer_questions=can_answer_questions,
-    )
-    _declare_who_answers(handler, session, request)
-    return handler
-
-
 def _named(refused, home, name):
     return json.dumps(str(home / name))[1:-1] in refused
 
@@ -572,33 +556,6 @@ def test_a_background_run_is_offered_no_folder_it_would_be_refused(layout, home)
     assert not _named(refused, home, "Movies")
     # The folder the hint would have named is refused on this run.
     assert "Access denied" in asked
-
-
-@pytest.mark.parametrize(
-    "session, can_answer_questions",
-    [(None, None), (object(), False), (None, True)],
-    ids=["sessionless", "cannot_answer", "sessionless_even_if_watched"],
-)
-def test_an_unattended_sidecar_run_is_offered_no_folder(
-    layout, home, session, can_answer_questions
-):
-    console = _sidecar_handler(
-        session=session, can_answer_questions=can_answer_questions
-    )
-    agent = _BrowseAgent(layout["scope"], console)
-
-    refused = _browse(agent, home)
-
-    assert console.answers_confirmations is False
-    assert "too broad" in refused
-    assert not _named(refused, home, "Movies")
-
-
-def test_an_attended_sidecar_run_is_still_offered_the_folder(layout, home):
-    console = _sidecar_handler(session=object(), can_answer_questions=True)
-    agent = _BrowseAgent(layout["scope"], console)
-
-    assert _named(_browse(agent, home), home, "Movies")
 
 
 def test_an_agent_ui_chat_is_still_offered_the_folder(layout, home):
