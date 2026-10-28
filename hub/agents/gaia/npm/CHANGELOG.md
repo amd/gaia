@@ -6,6 +6,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Unknown or misplaced switches are refused.** `gaia --forse` and
+  `gaia fetch --developer-mode` now exit 2 instead of silently starting the TUI;
+  pass terminal-UI arguments after a bare `--`.
+
 - **The Agent UI's "Under the hood" figures cover GAIA chats.** It said every
   answer was "not measured", because only the agent saw its own step timings.
   `final` now carries `performance` with them: the turn's model and tool
