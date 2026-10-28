@@ -8,8 +8,9 @@ merge, rendering); the desktop app's main process runs the browser (tabs,
 CDP, the console and network buffers). The agent reads the tab the user is
 looking at, so "the page open in the browser pane" means what it says.
 
-Every op that reads or loads a page carries ``allowedOrigins``. Loopback
-needs no entry. Main refuses to read a page on any other origin, and stops a
+Every op that reads or loads a page carries ``allowedOrigins``. The chat's
+own running dev servers need no entry; localhost otherwise does, like any
+site. Main refuses to read a page on any other origin, and stops a
 navigation that would land on one during the op, so a page that wanders off
 while the agent reads it is never handed to the model.
 """
@@ -20,9 +21,19 @@ import base64
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Literal, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Dict,
+    FrozenSet,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
-from gaia.browser._pane_bridge import PaneBridge, is_loopback_origin, origin_of
+from gaia.browser._pane_bridge import PaneBridge, dev_server_origins, origin_of
 from gaia.browser.errors import (
     BrowserError,
     ElementNotFound,
@@ -122,7 +133,7 @@ class PaneDriver:
 
     @contextmanager
     def scoped(self, origins: Sequence[str]) -> Iterator[None]:
-        """Let the ops inside read pages on ``origins`` as well as loopback."""
+        """Let the ops inside read pages on ``origins`` as well as the chat's dev servers."""
         before = self._allowed
         self._allowed = tuple(origins)
         try:
@@ -359,7 +370,9 @@ class PaneDriver:
     def run_script(self, expression: str) -> ScriptResult:
         """browser_eval: the expression in the page's main world. Main refuses any page off loopback."""
         self._require_op("script")
-        res = self._call("script", {"tabId": None, "expression": expression})
+        res = self._call(
+            "script", {"tabId": None, "expression": expression, **self._scope()}
+        )
         if res.get("dialog"):
             raise PageDialogOpen(res["dialog"], done=True)
         if res["ok"]:
@@ -369,7 +382,19 @@ class PaneDriver:
     # ------------------------------------------------------------ dev servers
 
     def dev_servers(self) -> List[Dict[str, Any]]:
+        """The dev servers this chat started or reused; main hides other chats'."""
         return self._dev("list")["servers"]
+
+    def trusted_origins(self) -> FrozenSet[str]:
+        """Where this chat's running dev servers answer: read and acted on with no ask."""
+        if self._bridge.ops and "devServers" not in self._bridge.ops:
+            return frozenset()
+        return frozenset(
+            origin
+            for server in self.dev_servers()
+            if server["status"] in ("starting", "ready")
+            for origin in dev_server_origins(server["port"])
+        )
 
     def dev_server_ensure(self, key: str, spec: Dict[str, Any]) -> Dict[str, Any]:
         """Start ``spec``, or return it running; waits until its port answers."""
@@ -446,8 +471,9 @@ class PaneDriver:
     def _check_scope(self, url: str) -> None:
         """Main checks too; this covers a page that moved while it was read."""
         origin = origin_of(url)
-        if origin and not is_loopback_origin(origin) and origin not in self._allowed:
-            raise PageOffScope(origin)
+        if origin and origin not in self._allowed:
+            if origin not in self.trusted_origins():
+                raise PageOffScope(origin)
 
     def _call(
         self, op: str, body: Dict[str, Any], *, timeout_s: Optional[float] = None

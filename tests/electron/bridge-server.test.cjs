@@ -18,9 +18,9 @@ const { BrowserWindow } = require("electron");
 const WEBUI = path.resolve(__dirname, "..", "..", "src", "gaia", "apps", "webui");
 const PANE = path.join(WEBUI, "services", "browser-pane");
 const FIXTURES = path.resolve(__dirname, "..", "fixtures", "browser_pane", "bridge");
-const { BRIDGE_PROTOCOL, PARSERS, createHandlers, discoveryPath, parseRequest, startBridge } = require(path.join(PANE, "bridge-server.cjs"));
+const { BRIDGE_PROTOCOL, PARSERS, createHandlers, devServerOrigins, discoveryPath, parseRequest, startBridge } = require(path.join(PANE, "bridge-server.cjs"));
 const { BridgeError, PaneHost, inScope } = require(path.join(PANE, "pane-host.cjs"));
-const { isApprovalFreeHost } = require(path.join(PANE, "navigation-policy.cjs"));
+const { isLocalPageHost } = require(path.join(PANE, "navigation-policy.cjs"));
 const { Ring, TabCdp } = require(path.join(PANE, "cdp-session.cjs"));
 
 const fixture = (name) => JSON.parse(fs.readFileSync(path.join(FIXTURES, name), "utf8"));
@@ -177,7 +177,7 @@ describe("parsing", () => {
   });
 
   test("every op has a parser, a handler, and a place in the contract", () => {
-    const handlers = createHandlers({ getHost: () => null, appVersion: "x" });
+    const handlers = createHandlers({ getHost: () => null, devServers: { list: () => [] }, appVersion: "x" });
     const contractOps = [...CONTRACT.split("export interface BridgeOps {")[1].split("\n}\n")[0].matchAll(/^  (\w+): \{/gm)].map((m) => m[1]);
     expect(Object.keys(handlers).sort()).toEqual(Object.keys(PARSERS).sort());
     expect(contractOps.sort()).toEqual(Object.keys(PARSERS).sort());
@@ -196,14 +196,19 @@ describe("parsing", () => {
     for (const code of sent) expect(contract).toContain(code);
   });
 
-  test("approval-free hosts match the list Python uses", () => {
+  test("pages on this computer match the list Python uses", () => {
     for (const [origin, expected] of fixture("loopback.json").cases) {
-      expect([origin, isApprovalFreeHost(new URL(origin).hostname)]).toEqual([origin, expected]);
+      expect([origin, isLocalPageHost(new URL(origin).hostname)]).toEqual([origin, expected]);
     }
   });
 
+  test("a dev server's origins match the ones Python trusts", () => {
+    const { port, origins } = fixture("dev_server_origins.json");
+    expect(devServerOrigins(port)).toEqual(origins);
+  });
+
   test("attach says not_in_desktop while no window is open", async () => {
-    const handlers = createHandlers({ getHost: () => null, appVersion: "x" });
+    const handlers = createHandlers({ getHost: () => null, devServers: { list: () => [] }, appVersion: "x" });
     await expect(handlers.attach({ sessionId: "chat-1" })).resolves.toEqual({ status: "not_in_desktop" });
     await expect(handlers.evaluate({ sessionId: "chat-1", tabId: null })).rejects.toMatchObject({ code: "no_page" });
   });
@@ -264,7 +269,7 @@ describe("agent ops", () => {
 
   test("a chat the user switched away from can no longer read the pane", async () => {
     const { host } = makeHost();
-    const handlers = createHandlers({ getHost: () => host, appVersion: "x" });
+    const handlers = createHandlers({ getHost: () => host, devServers: { list: () => [] }, appVersion: "x" });
     await expect(handlers.origin({ sessionId: "chat-1", tabId: null })).resolves.toMatchObject({ tabId: host.activeTabId });
     host.setView("chat-2", false);
     for (const op of ["origin", "evaluate", "screenshot", "logs", "navigate"]) {
@@ -275,7 +280,7 @@ describe("agent ops", () => {
 
   test("the agent opens its own tab, shows the pane, and the strip says it is reading", async () => {
     const { host, deps, published } = makeHost();
-    const tabs = await host.agentOpen("chat-1", "http://127.0.0.1:5000/", []);
+    const tabs = await host.agentOpen("chat-1", "http://127.0.0.1:5000/", ["http://127.0.0.1:5000"]);
     const opened = tabs.tabs.find((t) => t.active);
     expect(opened).toMatchObject({ url: "http://127.0.0.1:5000/", openedBy: "chat-1" });
     expect(deps.onShowRequest).toHaveBeenCalled();
@@ -299,7 +304,7 @@ describe("agent ops", () => {
     host.navigate(id, "http://127.0.0.1:5000/");
     const wc = host.tabs.get(id).view.webContents;
     const held = holdLoad(wc);
-    const op = host.agentNavigate("chat-1", id, "http://127.0.0.1:5000/redirect", []);
+    const op = host.agentNavigate("chat-1", id, "http://127.0.0.1:5000/redirect", ["http://127.0.0.1:5000"]);
     const redirect = { url: "https://evil.example/landing", preventDefault: jest.fn() };
     wc.emit("will-redirect", redirect);
     held.reject(new Error("ERR_ABORTED (-3) loading 'http://127.0.0.1:5000/redirect'"));
@@ -337,7 +342,7 @@ describe("agent ops", () => {
     const child = { url: "http://localhost:5173/frame", processId: 4, routingId: 7, executeJavaScript: jest.fn(() => Promise.reject(new Error("cross-origin"))) };
     wc.mainFrame.framesInSubtree = [child, wc.mainFrame];
     wc.mainFrame.executeJavaScript.mockResolvedValue({ title: "App" });
-    const res = await host.agentEvaluate("chat-1", null, "(args) => ({ title: document.title })", { gen: 1 }, "all", []);
+    const res = await host.agentEvaluate("chat-1", null, "(args) => ({ title: document.title })", { gen: 1 }, "all", ["http://localhost:5173"]);
     expect(wc.mainFrame.executeJavaScript).toHaveBeenCalledWith('((args) => ({ title: document.title }))({"gen":1})', false);
     expect(res.frames).toEqual([
       { frameId: null, url: "", ok: true, value: { title: "App" } },
@@ -357,8 +362,10 @@ describe("agent ops", () => {
     expect(deps.session.cookies.get).toHaveBeenCalledWith({ url: "https://example.com" });
   });
 
-  test("scope: loopback always, others only by exact origin", () => {
-    expect(inScope("http://127.0.0.1:9/x", [])).toBe(true);
+  test("scope: only by exact origin, localhost included", () => {
+    expect(inScope("http://127.0.0.1:9/x", [])).toBe(false);
+    expect(inScope("http://127.0.0.1:9/x", ["http://127.0.0.1:9"])).toBe(true);
+    expect(inScope("http://localhost:9/x", ["http://127.0.0.1:9"])).toBe(false);
     expect(inScope("https://example.com/x", ["https://example.com"])).toBe(true);
     expect(inScope("https://example.com:8443/x", ["https://example.com"])).toBe(false);
     expect(inScope("file:///etc/passwd", ["https://example.com"])).toBe(false);

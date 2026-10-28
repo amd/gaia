@@ -737,18 +737,21 @@ each step happen.
   **Delete**, **Place order** or **Create account**, you get an **Allow once**
   prompt, even on a page on this PC.
 
-- **Pages on this PC need no approval.** `localhost`, `*.localhost`,
-  `127.0.0.1` and `[::1]` are read straight away, so local dev servers just work.
-- **Any other site asks first,** with **Allow once**, **Always allow** (pages
-  on that site, for this chat) or **Deny**. GAIA never reads a site you
-  haven't approved: if a page moves to another site while GAIA is reading it,
+- **Dev servers GAIA started need no approval.** A server GAIA started for
+  this chat is read straight away, so previewing what it built just works.
+- **Any other site asks first, `localhost` included,** with **Allow once**,
+  **Always allow** (pages on that site, for this chat) or **Deny**. Other
+  programs on this PC listen on `localhost` too, so a local page is not
+  assumed to be yours. GAIA never reads a site you haven't approved: if a
+  page moves to another site while GAIA is reading it,
   the move is stopped, and if it moves on its own later, you still see it but
   GAIA is told only where it went.
 - **GAIA can take a picture of the page** and read its console messages and
   network requests, which helps when a page you're building misbehaves. On a
   page on this PC it can also run a short script to check what the page doesn't
-  show, such as its stored data or app state. It never runs scripts on any other
-  site.
+  show, such as its stored data or app state: freely on its own dev servers,
+  and after you approve the page otherwise. It never runs scripts on a site
+  that isn't on this PC.
 - **Boxes a page opens show above the page.** When a page shows an `alert` or
   `confirm`, or asks before you leave it, a bar above the page shows the
   message with **OK** and **Cancel** (**Leave** and **Stay**). The page waits
@@ -829,7 +832,9 @@ the top of the project. When that file exists, GAIA uses it:
   open `file://` pages; GAIA serves the file's folder instead.
 - **Servers belong to the app, not one chat.** Any chat's GAIA can use a
   running server. **Dev servers** names the chat that started each one, and
-  deleting a chat stops the servers no other chat has asked for.
+  deleting a chat stops the servers no other chat has asked for. GAIA in one
+  chat sees, stops and reads the logs of only the servers it started or reused
+  in that chat.
 - **Quitting GAIA stops every dev server.** If GAIA crashes, the next launch
   stops the servers it left running, checking each process is still the one
   it started.

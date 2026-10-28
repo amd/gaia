@@ -254,7 +254,12 @@ const PARSERS = {
     if (text !== null && (typeof text !== "string" || text.length > MAX_TYPED_CHARS)) throw bad(`"text" must be null or text of at most ${MAX_TYPED_CHARS} characters.`);
     return { sessionId, op, tabId: tabIdOrActive(b), accept: bool(b, "accept"), text, allowedOrigins: origins(b) };
   },
-  script: (b) => ({ sessionId: session(b), tabId: tabIdOrActive(b), expression: str(b, "expression", { max: MAX_EXPRESSION_CHARS }) }),
+  script: (b) => ({
+    sessionId: session(b),
+    tabId: tabIdOrActive(b),
+    expression: str(b, "expression", { max: MAX_EXPRESSION_CHARS }),
+    allowedOrigins: origins(b),
+  }),
   viewport: (b) => ({
     sessionId: session(b),
     tabId: tabIdOrActive(b),
@@ -285,7 +290,20 @@ function parseRequest(op, body) {
  *   appVersion: string,
  * }} deps
  */
+// Dev servers in these states may still answer on their port.
+const LIVE_SERVER = new Set(["starting", "ready"]);
+
+/** Where a dev server GAIA started answers. Python's dev_server_origins is the same rule (bridge/dev_server_origins.json). */
+function devServerOrigins(port) {
+  return ["localhost", "127.0.0.1", "[::1]"].map((host) => `http://${host}:${port}`);
+}
+
 function createHandlers({ getHost, devServers, appVersion }) {
+  // The chat's own running dev servers need no approval; any other page, localhost included, does.
+  const scope = (req) => [
+    ...req.allowedOrigins,
+    ...devServers.list(req.sessionId).filter((s) => LIVE_SERVER.has(s.status)).flatMap((s) => devServerOrigins(s.port)),
+  ];
   // Every op after attach is checked again: the user may have switched chats since.
   const host = (sessionId) => {
     const h = getHost();
@@ -301,35 +319,35 @@ function createHandlers({ getHost, devServers, appVersion }) {
     },
     tabs: async (req) => {
       const h = host(req.sessionId);
-      if (req.op === "open") return h.agentOpen(req.sessionId, req.url, req.allowedOrigins);
+      if (req.op === "open") return h.agentOpen(req.sessionId, req.url, scope(req));
       if (req.op === "select") return h.agentSelect(req.sessionId, req.tabId);
       return h.listTabs(req.sessionId);
     },
-    navigate: async (req) => host(req.sessionId).agentNavigate(req.sessionId, req.tabId, req.to, req.allowedOrigins),
-    evaluate: async (req) => host(req.sessionId).agentEvaluate(req.sessionId, req.tabId, req.script, req.args, req.frames, req.allowedOrigins),
+    navigate: async (req) => host(req.sessionId).agentNavigate(req.sessionId, req.tabId, req.to, scope(req)),
+    evaluate: async (req) => host(req.sessionId).agentEvaluate(req.sessionId, req.tabId, req.script, req.args, req.frames, scope(req)),
     origin: async (req) => host(req.sessionId).agentOrigin(req.sessionId, req.tabId),
-    screenshot: async (req) => host(req.sessionId).agentScreenshot(req.sessionId, req.tabId, req.clip, req.maxWidth, req.allowedOrigins),
+    screenshot: async (req) => host(req.sessionId).agentScreenshot(req.sessionId, req.tabId, req.clip, req.maxWidth, scope(req)),
     logs: async (req) =>
       host(req.sessionId).agentLogs(
         req.sessionId,
         req.tabId,
         { kind: req.kind, afterSeq: req.afterSeq, errorsOnly: req.errorsOnly, pattern: req.pattern, limit: req.limit },
-        req.allowedOrigins
+        scope(req)
       ),
-    act: async (req) => host(req.sessionId).agentAct(req.sessionId, req.tabId, req.action, req.target, req.allowedOrigins),
+    act: async (req) => host(req.sessionId).agentAct(req.sessionId, req.tabId, req.action, req.target, scope(req)),
     dialog: async (req) => {
       const h = host(req.sessionId);
       if (req.op === "release") return h.releaseDialogs(req.sessionId);
       if (req.op === "get") return h.agentDialog(req.sessionId, req.tabId);
-      return h.agentAnswerDialog(req.sessionId, req.tabId, req.accept, req.text, req.allowedOrigins);
+      return h.agentAnswerDialog(req.sessionId, req.tabId, req.accept, req.text, scope(req));
     },
-    script: async (req) => host(req.sessionId).agentScript(req.sessionId, req.tabId, req.expression),
+    script: async (req) => host(req.sessionId).agentScript(req.sessionId, req.tabId, req.expression, scope(req)),
     viewport: async (req) => host(req.sessionId).agentViewport(req.sessionId, req.tabId, { size: req.size, colorScheme: req.colorScheme }),
     devServers: async (req) => {
       host(req.sessionId);
-      if (req.op === "list") return { servers: devServers.list() };
-      if (req.op === "stop") return { server: await devServers.stop(req.key) };
-      if (req.op === "logs") return devServers.logs(req.key, { errorsOnly: req.errorsOnly, pattern: req.pattern, limit: req.limit });
+      if (req.op === "list") return { servers: devServers.list(req.sessionId) };
+      if (req.op === "stop") return { server: await devServers.stop(req.key, req.sessionId) };
+      if (req.op === "logs") return devServers.logs(req.key, { errorsOnly: req.errorsOnly, pattern: req.pattern, limit: req.limit }, req.sessionId);
       return devServers.ensure(req.key, req.spec, req.sessionId, req.searchPath);
     },
   };
@@ -467,6 +485,7 @@ module.exports = {
   DISCOVERY_ENV,
   PARSERS,
   createHandlers,
+  devServerOrigins,
   discoveryPath,
   parseRequest,
   startBridge,

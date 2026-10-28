@@ -44,6 +44,8 @@ def _isolated(monkeypatch):
 @pytest.fixture
 def bridge(tmp_path, monkeypatch):
     fake = FakeBridge()
+    # The fixtures' page, 127.0.0.1:5000, is the user's app on this chat's dev server.
+    fake.serve(5000)
     path = tmp_path / "run" / "browser-pane.json"
     monkeypatch.setenv(DISCOVERY_ENV, str(path))
     fake.write_discovery(path)
@@ -80,7 +82,7 @@ def test_steps_share_the_refs_of_the_snapshot_before_the_batch(agent, bridge):
     assert [a["action"]["kind"] for a in acts(bridge)] == ["fill", "click"]
     assert acts(bridge)[0]["action"]["text"] == "ada@example.com"
     # One read at the end, after both actions.
-    assert bridge.ops()[-1] == "evaluate"
+    assert bridge.page_ops()[-1] == "evaluate"
     assert out.splitlines()[:2] == ["(in the browser pane)", "Ran 2 of 2 steps:"]
     assert "Page: Pane fixture form" in out
 

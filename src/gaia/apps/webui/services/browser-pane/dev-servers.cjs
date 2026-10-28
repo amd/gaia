@@ -181,9 +181,13 @@ class DevServerSupervisor {
     return this.started;
   }
 
-  /** @returns {DevServerState[]} */
-  list() {
-    return [...this.entries.values()].map((e) => this.stateOf(e));
+  /**
+   * Every server for the user's menu, or only the ones a chat's agent started or reused.
+   * @param {string | null} chat
+   * @returns {DevServerState[]}
+   */
+  list(chat = null) {
+    return [...this.entries.values()].filter((e) => chat === null || e.chats.includes(chat)).map((e) => this.stateOf(e));
   }
 
   /**
@@ -220,10 +224,10 @@ class DevServerSupervisor {
     });
   }
 
-  /** @param {string} key */
-  stop(key) {
+  /** @param {string} key @param {string | null} chat The asking agent's chat, or null for the user. */
+  stop(key, chat = null) {
     return this.serial(key, async () => {
-      const entry = this.require(key);
+      const entry = this.require(key, chat);
       if (this.running(entry)) {
         await this.halt(entry);
         await this.recordLedger();
@@ -236,9 +240,10 @@ class DevServerSupervisor {
    * The newest lines of one server's log, optionally only errors or lines holding `pattern`.
    * @param {string} key
    * @param {{ errorsOnly: boolean, pattern: string | null, limit: number }} q
+   * @param {string | null} chat The asking agent's chat, or null for the user.
    */
-  logs(key, { errorsOnly, pattern, limit }) {
-    const entry = this.require(key);
+  logs(key, { errorsOnly, pattern, limit }, chat = null) {
+    const entry = this.require(key, chat);
     const all = readLines(entry.logFile);
     const needle = pattern ? pattern.toLowerCase() : null;
     const hits = all.filter((l) => (!errorsOnly || ERROR_LINE.test(l)) && (!needle || l.toLowerCase().includes(needle)));
@@ -345,9 +350,10 @@ class DevServerSupervisor {
     });
   }
 
-  require(key) {
+  /** Another chat's server is "not started" to an agent, never a hint that it exists. */
+  require(key, chat = null) {
     const entry = this.entries.get(key);
-    if (!entry) throw new BridgeError("no_such_server", "GAIA has not started that dev server. Call dev_server(action=\"list\") to see the ones it has.");
+    if (!entry || (chat !== null && !entry.chats.includes(chat))) throw new BridgeError("no_such_server", "GAIA has not started that dev server. Call dev_server(action=\"list\") to see the ones it has.");
     return entry;
   }
 

@@ -18,7 +18,7 @@ const PANE = path.resolve(__dirname, "..", "..", "src", "gaia", "apps", "webui",
 const FIXTURES = path.resolve(__dirname, "..", "fixtures", "browser_pane", "bridge");
 const { PaneHost, USER_PAUSE_MS } = require(path.join(PANE, "pane-host.cjs"));
 const { KEYS, frameFor } = require(path.join(PANE, "input.cjs"));
-const { createHandlers, parseRequest } = require(path.join(PANE, "bridge-server.cjs"));
+const { createHandlers, devServerOrigins, parseRequest } = require(path.join(PANE, "bridge-server.cjs"));
 
 const fixture = (name) => JSON.parse(fs.readFileSync(path.join(FIXTURES, name), "utf8"));
 const CONTRACT = fs.readFileSync(path.join(PANE, "contract.d.ts"), "utf8");
@@ -26,6 +26,8 @@ const requests = fixture("requests.json");
 const SEL = '[data-gaia-ref="g1e2"]';
 const TARGET = { frameId: null, selector: SEL };
 const POINT = { x: 120, y: 48, tag: "button", type: "submit", editable: false };
+// The form page and its frames are served by the chat's own dev server on port 5000.
+const APP = devServerOrigins(5000);
 
 function makeHost() {
   const ses = new EventEmitter();
@@ -67,7 +69,7 @@ describe("trusted input", () => {
   test("a click is a real mouse press and release at the element's centre", async () => {
     const { host, wc, cdp } = makeHost();
     pageSays(wc, POINT);
-    const reply = await host.agentAct("chat-1", null, { kind: "click" }, TARGET, []);
+    const reply = await host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP);
     expect(inputSent(cdp)).toEqual([
       ["Input.dispatchMouseEvent", { type: "mouseMoved", x: 120, y: 48 }],
       ["Input.dispatchMouseEvent", { type: "mousePressed", x: 120, y: 48, button: "left", buttons: 1, clickCount: 1 }],
@@ -80,7 +82,7 @@ describe("trusted input", () => {
   test("typing clicks into the field, selects what it held, and inserts the text", async () => {
     const { host, wc, cdp } = makeHost();
     pageSays(wc, { ...POINT, tag: "input", type: "email" });
-    await host.agentAct("chat-1", null, { kind: "fill", text: "ada@example.com", pressEnter: true }, TARGET, []);
+    await host.agentAct("chat-1", null, { kind: "fill", text: "ada@example.com", pressEnter: true }, TARGET, APP);
     const sent = inputSent(cdp).map(([m, p]) => `${m}:${p.type || p.text}`);
     expect(sent).toEqual([
       "Input.dispatchMouseEvent:mouseMoved",
@@ -96,14 +98,14 @@ describe("trusted input", () => {
   test("a dropdown option is picked by its label, with no mouse events", async () => {
     const { host, wc, cdp } = makeHost();
     pageSays(wc, { ...POINT, tag: "select", type: "" });
-    await host.agentAct("chat-1", null, { kind: "fill", text: "Pro", pressEnter: false }, TARGET, []);
+    await host.agentAct("chat-1", null, { kind: "fill", text: "Pro", pressEnter: false }, TARGET, APP);
     expect(inputSent(cdp)).toEqual([]);
     expect(wc.mainFrame.executeJavaScript.mock.calls.some(([code]) => code.includes('"Pro"'))).toBe(true);
   });
 
   test("a key press with no target goes to whatever has focus", async () => {
     const { host, wc, cdp } = makeHost();
-    await host.agentAct("chat-1", null, { kind: "press", key: "Escape" }, null, []);
+    await host.agentAct("chat-1", null, { kind: "press", key: "Escape" }, null, APP);
     expect(wc.mainFrame.executeJavaScript).not.toHaveBeenCalled();
     expect(inputSent(cdp)).toEqual([
       ["Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }],
@@ -114,7 +116,7 @@ describe("trusted input", () => {
   test("the strip says GAIA is using the tab, and the pane is shown", async () => {
     const { host, tab, wc } = makeHost();
     pageSays(wc, POINT);
-    await host.agentAct("chat-1", null, { kind: "click" }, TARGET, []);
+    await host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP);
     expect(tab.state.agentActing).toBe(true);
     expect(host.deps.onShowRequest).toHaveBeenCalled();
   });
@@ -129,14 +131,14 @@ describe("checks before input lands", () => {
   ])("%j is refused as %s, and nothing is clicked", async (probe, code, message) => {
     const { host, wc, cdp } = makeHost();
     pageSays(wc, probe);
-    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, [])).rejects.toMatchObject({ code, message: expect.stringMatching(message) });
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP)).rejects.toMatchObject({ code, message: expect.stringMatching(message) });
     expect(inputSent(cdp)).toEqual([]);
   });
 
   test("a password field is never typed into", async () => {
     const { host, wc, cdp } = makeHost();
     pageSays(wc, { ...POINT, tag: "input", type: "password" });
-    await expect(host.agentAct("chat-1", null, { kind: "fill", text: "hunter2", pressEnter: false }, TARGET, [])).rejects.toMatchObject({
+    await expect(host.agentAct("chat-1", null, { kind: "fill", text: "hunter2", pressEnter: false }, TARGET, APP)).rejects.toMatchObject({
       code: "not_actionable",
       message: expect.stringMatching(/never types passwords/),
     });
@@ -146,7 +148,7 @@ describe("checks before input lands", () => {
   test("a checkbox takes a click, not typing", async () => {
     const { host, wc, cdp } = makeHost();
     pageSays(wc, { ...POINT, tag: "input", type: "checkbox" });
-    await expect(host.agentAct("chat-1", null, { kind: "fill", text: "yes", pressEnter: false }, TARGET, [])).rejects.toMatchObject({
+    await expect(host.agentAct("chat-1", null, { kind: "fill", text: "yes", pressEnter: false }, TARGET, APP)).rejects.toMatchObject({
       code: "not_actionable",
       message: expect.stringMatching(/browser_click/),
     });
@@ -156,7 +158,7 @@ describe("checks before input lands", () => {
   test("a page off the approved sites is not acted on", async () => {
     const { host, wc, cdp } = makeHost();
     wc._url = "https://example.org/";
-    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, [])).rejects.toMatchObject({ code: "off_scope" });
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP)).rejects.toMatchObject({ code: "off_scope" });
     expect(wc.mainFrame.executeJavaScript).not.toHaveBeenCalled();
     expect(inputSent(cdp)).toEqual([]);
   });
@@ -202,7 +204,7 @@ describe("elements inside frames", () => {
   test("a click in a cross-site frame lands at the element's point plus the frame's offset in the page", async () => {
     const { host, wc, cdp } = makeHost();
     const { target } = frameChain(wc, { boxes: [{ left: 26, top: 433 }] });
-    await host.agentAct("chat-1", null, { kind: "click" }, target, []);
+    await host.agentAct("chat-1", null, { kind: "click" }, target, APP);
     expect(inputSent(cdp)[0]).toEqual(["Input.dispatchMouseEvent", { type: "mouseMoved", x: 120 + 26, y: 48 + 433 }]);
     const asked = wc.mainFrame.executeJavaScript.mock.calls.map(([code]) => code).find((code) => code.includes("contentWindow"));
     expect(asked).toContain("[0,120,48]");
@@ -211,14 +213,14 @@ describe("elements inside frames", () => {
   test("each frame up the chain adds its own offset", async () => {
     const { host, wc, cdp } = makeHost();
     const { target } = frameChain(wc, { depth: 2, boxes: [{ left: 100, top: 200 }, { left: 7, top: 9 }] });
-    await host.agentAct("chat-1", null, { kind: "click" }, target, []);
+    await host.agentAct("chat-1", null, { kind: "click" }, target, APP);
     expect(inputSent(cdp)[0][1]).toMatchObject({ x: 120 + 7 + 100, y: 48 + 9 + 200 });
   });
 
   test("typing in a frame clicks into the field there, selects in that frame, and inserts the text", async () => {
     const { host, wc, cdp } = makeHost();
     const { leaf, target } = frameChain(wc, { probe: { ...POINT, tag: "input", type: "text" } });
-    await host.agentAct("chat-1", null, { kind: "fill", text: "Ada", pressEnter: false }, target, []);
+    await host.agentAct("chat-1", null, { kind: "fill", text: "Ada", pressEnter: false }, target, APP);
     expect(inputSent(cdp).map(([m, p]) => `${m}:${p.type || p.text}`)).toEqual([
       "Input.dispatchMouseEvent:mouseMoved",
       "Input.dispatchMouseEvent:mousePressed",
@@ -235,7 +237,7 @@ describe("elements inside frames", () => {
   ])("the parent answering %j refuses the click, and nothing is sent", async (box, code, message) => {
     const { host, wc, cdp } = makeHost();
     const { target } = frameChain(wc, { boxes: [box] });
-    await expect(host.agentAct("chat-1", null, { kind: "click" }, target, [])).rejects.toMatchObject({ code, message: expect.stringMatching(message) });
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, target, APP)).rejects.toMatchObject({ code, message: expect.stringMatching(message) });
     expect(inputSent(cdp)).toEqual([]);
   });
 
@@ -244,20 +246,20 @@ describe("elements inside frames", () => {
     const { leaf, target } = frameChain(wc);
     const answer = leaf.executeJavaScript.getMockImplementation();
     leaf.executeJavaScript.mockImplementation((code) => (code.includes("parent.length") ? Promise.resolve(-1) : answer(code)));
-    await expect(host.agentAct("chat-1", null, { kind: "click" }, target, [])).rejects.toMatchObject({ code: "unsupported" });
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, target, APP)).rejects.toMatchObject({ code: "unsupported" });
     expect(inputSent(cdp)).toEqual([]);
   });
 
   test("acting in a frame from a site that is not approved is refused before the page is touched", async () => {
     const { host, wc, cdp } = makeHost();
     const { leaf, target } = frameChain(wc, { origin: "https://pay.example" });
-    await expect(host.agentAct("chat-1", null, { kind: "click" }, target, [])).rejects.toMatchObject({
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, target, APP)).rejects.toMatchObject({
       code: "off_scope",
       data: { origin: "https://pay.example" },
     });
     expect(leaf.executeJavaScript).not.toHaveBeenCalled();
     expect(inputSent(cdp)).toEqual([]);
-    await expect(host.agentAct("chat-1", null, { kind: "click" }, target, ["https://pay.example"])).resolves.toBeTruthy();
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, target, [...APP, "https://pay.example"])).resolves.toBeTruthy();
     expect(inputSent(cdp)).toHaveLength(3);
   });
 
@@ -273,7 +275,7 @@ describe("elements inside frames", () => {
     const image = { getSize: () => ({ width: 40, height: 10 }), toPNG: () => Buffer.from("png") };
     nativeImage.createFromBuffer = jest.fn(() => image);
     cdp.screenshot.mockResolvedValue(Buffer.from("png"));
-    await expect(host.agentScreenshot("chat-1", null, target, 1280, [])).resolves.toMatchObject({ width: 40, height: 10 });
+    await expect(host.agentScreenshot("chat-1", null, target, 1280, APP)).resolves.toMatchObject({ width: 40, height: 10 });
     // Box (5, 6, 40x10) in the frame, plus the frame's offset, plus the page's scroll of 300.
     expect(cdp.screenshot).toHaveBeenCalledWith({ x: 5 + 26, y: 6 + 33 + 300, width: 40, height: 10 });
   });
@@ -306,16 +308,16 @@ describe("the user takes over", () => {
   test("a tab the user paused refuses agent input and navigation with user_active", async () => {
     const { host, wc, cdp } = makeHost();
     host.setControl(host.activeTabId, "user");
-    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, [])).rejects.toMatchObject({
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP)).rejects.toMatchObject({
       code: "user_active",
       message: expect.stringMatching(/Stop using the browser/),
     });
-    await expect(host.agentNavigate("chat-1", null, "http://127.0.0.1:5000/", [])).rejects.toMatchObject({ code: "user_active" });
+    await expect(host.agentNavigate("chat-1", null, "http://127.0.0.1:5000/", APP)).rejects.toMatchObject({ code: "user_active" });
     expect(wc.mainFrame.executeJavaScript).not.toHaveBeenCalled();
     expect(inputSent(cdp)).toEqual([]);
     host.setControl(host.activeTabId, "shared");
     pageSays(wc, POINT);
-    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, [])).resolves.toBeTruthy();
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP)).resolves.toBeTruthy();
   });
 
   test("a click by the user holds the agent off that tab for a few seconds", async () => {
@@ -327,9 +329,9 @@ describe("the user takes over", () => {
       expect(tab.userInputAt).toBe(0);
       wc.emit("input-event", {}, { type: "mouseDown" });
       now.mockReturnValue(1_000_000 + USER_PAUSE_MS - 1);
-      await expect(host.agentAct("chat-1", null, { kind: "press", key: "Tab" }, null, [])).rejects.toMatchObject({ code: "user_active" });
+      await expect(host.agentAct("chat-1", null, { kind: "press", key: "Tab" }, null, APP)).rejects.toMatchObject({ code: "user_active" });
       now.mockReturnValue(1_000_000 + USER_PAUSE_MS + 1);
-      await expect(host.agentAct("chat-1", null, { kind: "press", key: "Tab" }, null, [])).resolves.toBeTruthy();
+      await expect(host.agentAct("chat-1", null, { kind: "press", key: "Tab" }, null, APP)).resolves.toBeTruthy();
       expect(tab.state.control).toBe("shared");
     } finally {
       now.mockRestore();
@@ -339,12 +341,12 @@ describe("the user takes over", () => {
   test("touching the page while GAIA is using it hands the tab to the user until Resume", async () => {
     const { host, tab, wc } = makeHost();
     pageSays(wc, POINT);
-    await host.agentAct("chat-1", null, { kind: "click" }, TARGET, []);
+    await host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP);
     wc.emit("input-event", {}, { type: "keyDown" });
     expect(tab.state.control).toBe("user");
-    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, [])).rejects.toMatchObject({ code: "user_active" });
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP)).rejects.toMatchObject({ code: "user_active" });
     host.setControl(tab.state.id, "shared");
-    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, [])).resolves.toBeTruthy();
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP)).resolves.toBeTruthy();
   });
 
   test("the agent's own input echoing back is not mistaken for the user", async () => {
@@ -354,9 +356,9 @@ describe("the user takes over", () => {
       if (params && params.type === "mousePressed") wc.emit("input-event", {}, { type: "mouseDown" });
       return Promise.resolve({});
     });
-    await host.agentAct("chat-1", null, { kind: "click" }, TARGET, []);
+    await host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP);
     expect(tab.state.control).toBe("shared");
-    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, [])).resolves.toBeTruthy();
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP)).resolves.toBeTruthy();
   });
 });
 
@@ -376,7 +378,7 @@ describe("private tabs", () => {
     const { host, wc } = makeHost();
     const id = host.activeTabId;
     host.setControl(id, "private");
-    const handlers = createHandlers({ getHost: () => host, appVersion: "x" });
+    const handlers = createHandlers({ getHost: () => host, devServers: { list: () => [] }, appVersion: "x" });
     for (const op of ["evaluate", "screenshot", "logs", "origin", "navigate"]) {
       await expect(handlers[op]({ ...requests[op], tabId: null })).rejects.toMatchObject({ code: "private_tab" });
     }

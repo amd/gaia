@@ -21,6 +21,9 @@ const BRIDGE_FIXTURES = path.resolve(__dirname, "..", "fixtures", "browser_pane"
 const { CappedLog, DevServerSupervisor, ENV_NAMES, ENV_PREFIXES, childEnv, portAnswers } = require(path.join(PANE, "dev-servers.cjs"));
 const { parseRequest, createHandlers } = require(path.join(PANE, "bridge-server.cjs"));
 const { BridgeError } = require(path.join(PANE, "bridge-error.cjs"));
+const { PaneHost } = require(path.join(PANE, "pane-host.cjs"));
+const { EventEmitter } = require("events");
+const { BrowserWindow } = require("electron");
 const { listProcesses } = require(path.join(WEBUI, "services", "process-tree.cjs"));
 
 const posix = process.platform === "win32" ? describe.skip : describe;
@@ -271,6 +274,22 @@ posix("the chats a server belongs to", () => {
     expect(() => sup.ensure(KEY, spec(port), undefined)).toThrow(/must be started for a chat/);
   });
 
+  test("an agent sees, stops and reads only its own chat's servers; the user's menu sees all", async () => {
+    const { sup } = supervisor();
+    await sup.start();
+    const port = await freePort();
+    await sup.ensure(KEY, spec(port), "chat-a");
+    expect(sup.list("chat-a").map((s) => s.key)).toEqual([KEY]);
+    expect(sup.list("chat-b")).toEqual([]);
+    expect(sup.list()).toHaveLength(1);
+    const q = { errorsOnly: false, pattern: null, limit: 10 };
+    expect(() => sup.logs(KEY, q, "chat-b")).toThrow(/has not started that dev server/);
+    await expect(sup.stop(KEY, "chat-b")).rejects.toMatchObject({ code: "no_such_server" });
+    expect(await portAnswers(port)).toBe(true);
+    expect(sup.logs(KEY, q, "chat-a").server.key).toBe(KEY);
+    expect((await sup.stop(KEY, "chat-a")).status).not.toBe("ready");
+  });
+
   test("deleting a chat stops and forgets the servers only it used, and keeps a server another chat still uses", async () => {
     const { sup, dir, onChange } = supervisor();
     await sup.start();
@@ -365,5 +384,92 @@ describe("bridge op", () => {
       requests.devServers_ensure.sessionId,
       requests.devServers_ensure.searchPath
     );
+
+    for (const name of ["devServers_list", "devServers_stop", "devServers_logs"]) {
+      await handlers.devServers(parseRequest("devServers", requests[name]).req);
+    }
+    const chat = requests.devServers_ensure.sessionId;
+    expect(devServers.list).toHaveBeenCalledWith(chat);
+    expect(devServers.stop).toHaveBeenCalledWith(KEY, chat);
+    expect(devServers.logs).toHaveBeenCalledWith(KEY, expect.any(Object), chat);
+  });
+});
+
+posix("which local pages the agent may use without asking", () => {
+  const requests = fixture("requests.json");
+  const POINT = { x: 10, y: 10, tag: "button", type: "submit", editable: false };
+
+  /** The pane showing `url` in `chat`, with handlers backed by a real supervisor. */
+  function paneShowing(sup, chat, url) {
+    const ses = new EventEmitter();
+    ses.cookies = { get: jest.fn(() => Promise.resolve([])) };
+    const host = new PaneHost({
+      window: new BrowserWindow(),
+      session: ses,
+      publish: jest.fn(),
+      blockedPorts: () => [],
+      recentStore: { load: () => new Map(), save: () => {} },
+      goneChats: new Set(),
+      onToggleRequest: jest.fn(),
+      onShowRequest: jest.fn(),
+      openExternal: jest.fn(),
+      createCdp: () => ({ send: jest.fn(() => Promise.resolve({})), onNavigationStarted: jest.fn(), logs: jest.fn(), screenshot: jest.fn() }),
+    });
+    host.setView(chat, false);
+    host.openTab(url);
+    const wc = host.tabs.get(host.activeTabId).view.webContents;
+    wc.mainFrame.executeJavaScript.mockImplementation((code) =>
+      Promise.resolve(code.includes("scrollIntoView") ? POINT : code.includes("slice(0, 4000)") ? { text: "1", truncated: false } : true)
+    );
+    return { handlers: createHandlers({ getHost: () => host, devServers: sup, appVersion: "x" }), wc };
+  }
+
+  const ops = (handlers, chat, allowedOrigins) => {
+    const req = (op, body) => parseRequest(op, { ...body, sessionId: chat, allowedOrigins }).req;
+    return {
+      read: () => handlers.evaluate(req("evaluate", requests.evaluate)),
+      act: () => handlers.act(req("act", requests.act_click)),
+      script: () => handlers.script(req("script", requests.script)),
+    };
+  };
+
+  async function chatAServer() {
+    const { sup } = supervisor();
+    await sup.start();
+    const port = await freePort();
+    await sup.ensure(KEY, spec(port), "chat-a");
+    return { sup, port };
+  }
+
+  test("a localhost page the chat did not start is refused for read, act and script until the user approves it", async () => {
+    const { sup } = await chatAServer();
+    const other = `http://localhost:${await freePort()}`;
+    const { handlers, wc } = paneShowing(sup, "chat-a", `${other}/admin`);
+    for (const run of Object.values(ops(handlers, "chat-a", []))) {
+      await expect(run()).rejects.toMatchObject({ code: "off_scope", data: { origin: other } });
+    }
+    expect(wc.mainFrame.executeJavaScript).not.toHaveBeenCalled();
+    for (const run of Object.values(ops(handlers, "chat-a", [other]))) await expect(run()).resolves.toBeTruthy();
+  });
+
+  test.each(["localhost", "127.0.0.1", "[::1]"])("the chat's own running dev server on %s needs no approval", async (hostname) => {
+    const { sup, port } = await chatAServer();
+    const { handlers } = paneShowing(sup, "chat-a", `http://${hostname}:${port}/`);
+    for (const run of Object.values(ops(handlers, "chat-a", []))) await expect(run()).resolves.toBeTruthy();
+  });
+
+  test("another chat's dev server is refused", async () => {
+    const { sup, port } = await chatAServer();
+    const { handlers, wc } = paneShowing(sup, "chat-b", `http://localhost:${port}/`);
+    for (const run of Object.values(ops(handlers, "chat-b", []))) await expect(run()).rejects.toMatchObject({ code: "off_scope" });
+    expect(wc.mainFrame.executeJavaScript).not.toHaveBeenCalled();
+  });
+
+  test("a stopped dev server's port is refused", async () => {
+    const { sup, port } = await chatAServer();
+    await sup.stop(KEY, "chat-a");
+    const { handlers, wc } = paneShowing(sup, "chat-a", `http://localhost:${port}/`);
+    for (const run of Object.values(ops(handlers, "chat-a", []))) await expect(run()).rejects.toMatchObject({ code: "off_scope" });
+    expect(wc.mainFrame.executeJavaScript).not.toHaveBeenCalled();
   });
 });

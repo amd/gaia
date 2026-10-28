@@ -610,14 +610,51 @@ def _drive(agent, handler, tool_name, args, answer=(False, False)):
 
 
 @pytest.mark.allow_network
-def test_loopback_pages_need_no_approval(pane):
+def test_this_chats_running_dev_server_needs_no_approval(pane):
     agent, handler, bridge = pane
+    bridge.serve(5000)
     result, prompts = _drive(
         agent, handler, "browser_open", {"url": "http://127.0.0.1:5000/form.html"}
     )
     assert prompts == []
     assert result.startswith("(in the browser pane)")
     assert bridge.last("evaluate")["body"]["allowedOrigins"] == []
+
+
+@pytest.mark.allow_network
+def test_a_localhost_page_that_is_not_this_chats_dev_server_asks_first(pane):
+    agent, handler, bridge = pane
+    bridge.serve(3000)
+    result, [prompt] = _drive(
+        agent, handler, "browser_open", {"url": "http://127.0.0.1:5000/admin"}
+    )
+    assert prompt["args"][SITE_ARG] == "http://127.0.0.1:5000"
+    assert result["status"] == "denied"
+    assert "evaluate" not in bridge.ops()
+
+
+@pytest.mark.allow_network
+def test_an_approved_localhost_page_is_read_for_that_call(pane):
+    agent, handler, bridge = pane
+    _drive(
+        agent,
+        handler,
+        "browser_open",
+        {"url": "http://127.0.0.1:5000/admin"},
+        answer=(True, False),
+    )
+    assert bridge.last("evaluate")["body"]["allowedOrigins"] == [
+        "http://127.0.0.1:5000"
+    ]
+
+
+@pytest.mark.allow_network
+def test_a_stopped_dev_servers_port_asks_first(pane):
+    agent, handler, bridge = pane
+    bridge.serve(5000, status="stopped")
+    _, prompts = _drive(agent, handler, "browser_snapshot", {})
+    assert [p["args"][SITE_ARG] for p in prompts] == ["http://127.0.0.1:5000"]
+    assert "evaluate" not in bridge.ops()
 
 
 @pytest.mark.allow_network
@@ -712,7 +749,8 @@ def test_the_agent_can_look_at_its_own_screenshot_without_asking(
 
     from gaia.security import PathValidator
 
-    agent, handler, _bridge = pane
+    agent, handler, bridge = pane
+    bridge.serve(5000)
     monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia"))
     agent.path_validator = PathValidator(allowed_paths=[str(tmp_path / "work")])
     result, prompts = _drive(agent, handler, "browser_screenshot", {})

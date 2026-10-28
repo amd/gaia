@@ -91,6 +91,8 @@ PYTHON_SERVERS = [
     "import uvicorn\nuvicorn.run(app)",
     "import subprocess\nsubprocess.run(['python3', '-m', 'http.server'])",
     "from aiohttp import web\nweb.run_app(app)",
+    "import os\nos.system('python3 -m http.server 8000')",
+    "import http.server\nhttp.server.test(HandlerClass=H)",
 ]
 
 NOT_PYTHON_SERVERS = [
@@ -98,6 +100,10 @@ NOT_PYTHON_SERVERS = [
     "import requests\nprint(requests.get('http://localhost:8000').status_code)",
     "from http import HTTPStatus\nprint(HTTPStatus.OK)",
     "result = pipeline.run(data)",
+    "code = '''\nfrom flask import Flask\napp.run(port=5000)\n'''\nopen('app.py', 'w').write(code)",
+    "# start it later with app.run()\nprint('ready')",
+    "print('run python3 -m http.server to preview')",
+    "this is not python app.run(",
 ]
 
 

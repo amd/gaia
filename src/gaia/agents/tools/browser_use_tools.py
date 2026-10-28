@@ -109,6 +109,7 @@ _PANE_SITE_TOOLS = frozenset(
         "browser_type",
         "browser_press",
         "browser_dialog",
+        "browser_eval",
     }
 )
 
@@ -277,14 +278,18 @@ class BrowserUseToolsMixin:
     def _pane_site(
         self, pane, tool_name: str, tool_args: Optional[dict]
     ) -> Tuple[str, ...]:
-        """The non-loopback origins this pane call would use, the one it acts on first.
+        """The origins this pane call would use that need the user's OK, the one it acts on first.
+
+        Every site needs it, localhost included, except where this chat's own
+        dev servers answer: another program listening locally is not the
+        user's app just because it is local.
 
         ``browser_open`` reads the site it is asked to open; ``browser_dialog``
         needs the box's site only to accept a confirm, prompt or "leave this
         page?"; every other tool reads whatever page the pane shows now, which
         the user may have changed, and a click or typing in a frame also acts
         on that frame's site. A lookup failure gives none: no approval is
-        recorded, so main then refuses anything off loopback for this call.
+        recorded, so main then refuses anything but this chat's dev servers.
         """
         from gaia.browser._pane_bridge import is_loopback_origin, origin_of
 
@@ -309,9 +314,17 @@ class BrowserUseToolsMixin:
             ref = str(args.get("ref") or "")
             if tool_name in _PANE_ELEMENT_TOOLS and ref:
                 origins.insert(0, pane.frame_origin(ref))
-        return tuple(
-            dict.fromkeys(o for o in origins if o and not is_loopback_origin(o))
-        )
+        origins = [o for o in origins if o]
+        if tool_name == "browser_eval":
+            # Main refuses browser_eval off this computer, so the user is never asked.
+            origins = [o for o in origins if is_loopback_origin(o)]
+        trusted: frozenset = frozenset()
+        if any(is_loopback_origin(o) for o in origins):
+            try:
+                trusted = pane.trusted_origins()
+            except BrowserError as e:
+                logger.warning("Could not read this chat's dev servers: %s", e)
+        return tuple(dict.fromkeys(o for o in origins if o not in trusted))
 
     def _gate_dialog(self, pane, tool_args) -> Optional[dict]:
         """The box browser_dialog would answer, read once per call; unreadable reads as an unknown confirm."""
@@ -633,7 +646,8 @@ class BrowserUseToolsMixin:
     ) -> bool:
         """The site gate, plus the irreversible-click check headless has.
 
-        A pane call asks before it reads or acts on a page off loopback;
+        A pane call asks before it reads or acts on a page that is not one of
+        this chat's dev servers, localhost included;
         "Always" is a ``_site_scope`` grant on that origin, answered by the
         console before any prompt. A click on a control labelled with an
         irreversible action ("Delete", "Place order", "Create account") asks

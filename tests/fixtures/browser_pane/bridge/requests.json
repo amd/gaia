@@ -199,6 +199,7 @@
   "script": {
     "sessionId": "chat-1",
     "tabId": null,
-    "expression": "localStorage.getItem('cartId')"
+    "expression": "localStorage.getItem('cartId')",
+    "allowedOrigins": []
   }
 }

@@ -1,5 +1,5 @@
 {
-  "_doc": "Origins the pane reads with no approval. navigation-policy.cjs isApprovalFreeHost and _pane_bridge.is_loopback_origin both test against this list.",
+  "_doc": "Pages on this computer, the only ones browser_eval runs on. navigation-policy.cjs isLocalPageHost and _pane_bridge.is_loopback_origin both test against this list.",
   "cases": [
     [
       "http://localhost:5173",

@@ -42,7 +42,10 @@ class FakeBridge:
             "logs": fixture("logs_console.json"),
             "act": fixture("act.json"),
             "viewport": fixture("viewport.json"),
+            "devServers": self._dev_servers,
         }
+        #: The dev servers this chat's ``devServers`` list op reports.
+        self.servers: List[Dict[str, Any]] = []
         bridge = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -84,8 +87,32 @@ class FakeBridge:
         )
         self._thread.start()
 
+    def serve(self, port: int, status: str = "ready") -> None:
+        """This chat started a dev server on ``port``."""
+        self.servers.append(
+            {
+                "key": f"{port:016x}",
+                "name": "web",
+                "status": status,
+                "port": port,
+                "url": f"http://localhost:{port}/",
+            }
+        )
+
+    def _dev_servers(self, body: Dict[str, Any]) -> Reply:
+        if body.get("op") == "list":
+            return {"servers": list(self.servers)}
+        return (
+            404,
+            {"error": {"code": "unknown_op", "message": "devServers", "data": {}}},
+        )
+
     def ops(self) -> List[str]:
         return [r["op"] for r in self.requests]
+
+    def page_ops(self) -> List[str]:
+        """The ops sent, leaving out the dev server lookups that check a page's scope."""
+        return [op for op in self.ops() if op != "devServers"]
 
     def last(self, op: str) -> Dict[str, Any]:
         return [r for r in self.requests if r["op"] == op][-1]

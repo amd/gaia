@@ -22,7 +22,7 @@
 "use strict";
 
 const { WebContentsView, nativeImage } = require("electron");
-const { attachTabPolicy, classifyNavigation, isApprovalFreeHost } = require("./navigation-policy.cjs");
+const { attachTabPolicy, classifyNavigation, isLocalPageHost } = require("./navigation-policy.cjs");
 const { TabCdp } = require("./cdp-session.cjs");
 const { BridgeError } = require("./bridge-error.cjs");
 const input = require("./input.cjs");
@@ -76,7 +76,7 @@ const STOPPED_FOR_DIALOG = "A box opened on the page, so GAIA stopped this step 
 // so 12 stays near 1 to 2 GB while holding a QA chat's tabs and a few chats besides.
 const LIVE_VIEW_CAP = 12;
 
-/** True when an agent op may read or land on `url`: loopback, or an origin the user approved. */
+/** True when an agent op may read or land on `url`: an origin the user approved, or one of the chat's dev servers (the bridge adds those). */
 function inScope(url, allowedOrigins) {
   let parsed;
   try {
@@ -86,14 +86,14 @@ function inScope(url, allowedOrigins) {
   }
   if (parsed.href === "about:blank") return true;
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-  return isApprovalFreeHost(parsed.hostname) || allowedOrigins.includes(parsed.origin);
+  return allowedOrigins.includes(parsed.origin);
 }
 
 /** True for a page on this computer (localhost, 127.x, ::1, *.localhost): the only pages browser_eval runs on. */
 function isLoopbackUrl(url) {
   try {
     const parsed = new URL(url);
-    return (parsed.protocol === "http:" || parsed.protocol === "https:") && isApprovalFreeHost(parsed.hostname);
+    return (parsed.protocol === "http:" || parsed.protocol === "https:") && isLocalPageHost(parsed.hostname);
   } catch {
     return false;
   }
@@ -981,8 +981,9 @@ class PaneHost {
    * @param {string} sessionId
    * @param {TabId | null} id
    * @param {string} expression
+   * @param {string[]} allowedOrigins
    */
-  async agentScript(sessionId, id, expression) {
+  async agentScript(sessionId, id, expression, allowedOrigins) {
     const tab = this.agentTab(sessionId, id);
     this.requireAgentInput(tab);
     const wc = tab.view && tab.view.webContents;
@@ -996,10 +997,11 @@ class PaneHost {
         `browser_eval runs only on the user's own app on this computer (localhost), and this page is on ${originOf(url) || url}. Read it with browser_snapshot instead.`
       );
     }
+    this.requirePage(tab, allowedOrigins);
     this.requireNoDialog(tab);
     return this.withAgent(
       tab,
-      [],
+      allowedOrigins,
       async () => {
         const reply = { tabId: tab.state.id, url: wc.getURL() };
         let ran;

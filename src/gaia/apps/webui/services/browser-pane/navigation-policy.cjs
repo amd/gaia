@@ -30,11 +30,11 @@ function isLoopbackHost(hostname) {
 }
 
 /**
- * Hosts an agent may read in the pane with no approval: localhost,
- * *.localhost, 127.0.0.0/8 and [::1]. Python's is_loopback_origin is the
- * same rule; both are tested against tests/fixtures/browser_pane/bridge/loopback.json.
+ * Hosts on this computer: localhost, *.localhost, 127.0.0.0/8 and [::1].
+ * browser_eval runs only on these. Python's is_loopback_origin is the same
+ * rule; both are tested against tests/fixtures/browser_pane/bridge/loopback.json.
  */
-function isApprovalFreeHost(hostname) {
+function isLocalPageHost(hostname) {
   const host = hostname.toLowerCase().replace(/\.$/, "");
   return (
     host === "localhost" ||
@@ -172,7 +172,7 @@ module.exports = {
   attachTabPolicy,
   classifyNavigation,
   installSessionPolicy,
-  isApprovalFreeHost,
+  isLocalPageHost,
   isAppServiceUrl,
   isLoopbackHost,
   isPermissionAllowed,

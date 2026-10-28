@@ -21,6 +21,7 @@ from gaia.browser._pane_bridge import (
     DISCOVERY_ENV,
     ERROR_CODES,
     PaneBridge,
+    dev_server_origins,
     discover,
     is_loopback_origin,
 )
@@ -51,6 +52,8 @@ CONTRACT = (
 @pytest.fixture
 def bridge():
     fake = FakeBridge()
+    # The fixtures' page, 127.0.0.1:5000, is the user's app on this chat's dev server.
+    fake.serve(5000)
     yield fake
     fake.close()
 
@@ -245,6 +248,33 @@ def test_the_driver_withholds_a_page_that_moved_off_its_scope(bridge, discovery_
         _driver(bridge, discovery_file).snapshot()
 
 
+def test_a_localhost_page_that_is_not_this_chats_dev_server_is_withheld(
+    bridge, discovery_file
+):
+    bridge.servers[:] = []
+    bridge.serve(3000)
+    driver = _driver(bridge, discovery_file)
+    with pytest.raises(PageOffScope, match="http://127.0.0.1:5000"):
+        driver.snapshot()
+    with driver.scoped(["http://127.0.0.1:5000"]):
+        assert driver.snapshot()["title"] == "Pane fixture form"
+
+
+def test_a_stopped_dev_servers_port_is_withheld(bridge, discovery_file):
+    bridge.servers[:] = []
+    bridge.serve(5000, status="stopped")
+    with pytest.raises(PageOffScope, match="http://127.0.0.1:5000"):
+        _driver(bridge, discovery_file).snapshot()
+
+
+def test_an_app_without_dev_servers_trusts_no_local_page(bridge, discovery_file):
+    driver = _driver(bridge, discovery_file)
+    driver._bridge.ops = frozenset({"hello", "attach", "tabs", "evaluate"})
+    assert driver.trusted_origins() == frozenset()
+    with pytest.raises(PageOffScope):
+        driver.snapshot()
+
+
 def test_main_withholding_a_page_reaches_the_model_naming_the_origin(
     bridge, discovery_file
 ):
@@ -290,8 +320,8 @@ def test_a_blocked_redirect_names_where_the_page_tried_to_go(bridge, discovery_f
 
 def test_goto_never_navigates_away_from_the_users_page(bridge, discovery_file):
     _driver(bridge, discovery_file).goto("http://127.0.0.1:5000/form.html")
-    assert bridge.ops()[-2:] == ["tabs", "evaluate"]
-    opened = bridge.requests[-2]["body"]
+    assert bridge.page_ops()[-2:] == ["tabs", "evaluate"]
+    opened = bridge.last("tabs")["body"]
     assert opened == {
         "sessionId": "chat-1",
         "op": "open",
@@ -337,7 +367,7 @@ def test_a_click_is_one_act_on_the_snapshot_ref_then_a_fresh_read(
     driver.snapshot()
     snap = driver.click("g1e2")
     assert bridge.last("act")["body"] == fixture("requests.json")["act_click"]
-    assert bridge.ops()[-2:] == ["act", "evaluate"]
+    assert bridge.page_ops()[-2:] == ["act", "evaluate"]
     assert snap["title"] == "Pane fixture form"
 
 
@@ -436,6 +466,11 @@ def test_keys_match_the_contract_and_the_fixture():
     )
     assert list(PANE_KEYS) == fixture("keys.json")["keys"]
     assert set(re.findall(r'"([A-Za-z]+)"', allowed)) == set(PANE_KEYS)
+
+
+def test_dev_server_origins_match_the_shared_fixture():
+    shared = fixture("dev_server_origins.json")
+    assert list(dev_server_origins(shared["port"])) == shared["origins"]
 
 
 @pytest.mark.parametrize("origin,expected", fixture("loopback.json")["cases"])

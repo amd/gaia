@@ -17,7 +17,7 @@ const WEBUI = path.resolve(__dirname, "..", "..", "src", "gaia", "apps", "webui"
 const PANE = path.join(WEBUI, "services", "browser-pane");
 const FIXTURES = path.resolve(__dirname, "..", "fixtures", "browser_pane", "bridge");
 const { PaneHost, RUN_DIALOG, CANCEL_DIALOGS, LEAVE_MESSAGE } = require(path.join(PANE, "pane-host.cjs"));
-const { createHandlers, parseRequest } = require(path.join(PANE, "bridge-server.cjs"));
+const { createHandlers, devServerOrigins, parseRequest } = require(path.join(PANE, "bridge-server.cjs"));
 
 const fixture = (name) => JSON.parse(fs.readFileSync(path.join(FIXTURES, name), "utf8"));
 const requests = fixture("requests.json");
@@ -25,6 +25,9 @@ const SEL = '[data-gaia-ref="g1e2"]';
 const TARGET = { frameId: null, selector: SEL };
 const POINT = { x: 120, y: 48, tag: "button", type: "button", editable: false };
 const PAGE = "http://127.0.0.1:5000/dialogs.html";
+// The pages here are served by chat-1's own dev server on port 5000.
+const APP = devServerOrigins(5000);
+const OWN_SERVER = { list: (chat) => (chat === "chat-1" ? [{ key: "app", port: 5000, status: "ready" }] : []) };
 
 // Electron versions whose lib/browser/api/web-contents.ts was read for RUN_DIALOG and CANCEL_DIALOGS.
 const READ_IN_ELECTRON = ["45"];
@@ -133,7 +136,7 @@ describe("the agent and page boxes", () => {
     const { host, wc, cdp } = makeHost();
     clickOpens(wc, cdp, "confirm", "Delete account? This cannot be undone.");
     const started = Date.now();
-    const reply = await host.agentAct("chat-1", null, { kind: "click" }, TARGET, []);
+    const reply = await host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP);
     expect(Date.now() - started).toBeLessThan(2000);
     expect(reply.dialog).toEqual({ type: "confirm", message: "Delete account? This cannot be undone.", defaultText: "", url: PAGE, openedBy: "agent" });
   });
@@ -142,7 +145,7 @@ describe("the agent and page boxes", () => {
     const { host, tab, wc, cdp } = makeHost();
     wc.mainFrame.executeJavaScript.mockImplementation((code) => Promise.resolve(code.includes("el.disabled") ? { ...POINT, tag: "input", type: "text" } : true));
     clickOpens(wc, cdp, "alert", "Focus moved");
-    const reply = await host.agentAct("chat-1", null, { kind: "fill", text: "Ada", pressEnter: true }, TARGET, []);
+    const reply = await host.agentAct("chat-1", null, { kind: "fill", text: "Ada", pressEnter: true }, TARGET, APP);
     expect(reply.dialog.type).toBe("alert");
     host.userAnswerDialog(tab.state.id, true, null);
     await flush();
@@ -154,7 +157,7 @@ describe("the agent and page boxes", () => {
     const { host, wc } = makeHost();
     pageOpens(wc, "confirm", "Save this draft?");
     wc.mainFrame.executeJavaScript.mockClear();
-    const handlers = createHandlers({ getHost: () => host, appVersion: "x" });
+    const handlers = createHandlers({ getHost: () => host, devServers: OWN_SERVER, appVersion: "x" });
     await expect(handlers[op](parseRequest(op, requests[op]).req)).rejects.toMatchObject({
       code: "dialog_open",
       data: { dialog: expect.objectContaining({ type: "confirm", message: "Save this draft?" }) },
@@ -165,14 +168,14 @@ describe("the agent and page boxes", () => {
   test("an act while a box is open is refused before any input", async () => {
     const { host, wc, cdp } = makeHost();
     pageOpens(wc, "alert", "Hi");
-    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, [])).rejects.toMatchObject({ code: "dialog_open" });
+    await expect(host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP)).rejects.toMatchObject({ code: "dialog_open" });
     expect(inputSent(cdp)).toEqual([]);
   });
 
   test("the agent answers: OK with prompt text, and the reply names the box it answered", async () => {
     const { host, wc } = makeHost();
     const answered = pageOpens(wc, "prompt", "What should we call you?", "friend");
-    const handlers = createHandlers({ getHost: () => host, appVersion: "x" });
+    const handlers = createHandlers({ getHost: () => host, devServers: OWN_SERVER, appVersion: "x" });
     const reply = await handlers.dialog(parseRequest("dialog", requests.dialog_answer).req);
     await expect(answered).resolves.toEqual({ accept: true, text: "Ada" });
     expect(reply).toMatchObject({ answered: { type: "prompt", message: "What should we call you?" }, dialog: null, url: PAGE });
@@ -198,14 +201,14 @@ describe("the agent and page boxes", () => {
     const { host, tab, wc } = makeHost();
     pageOpens(wc, "confirm", "Save this draft?");
     host.setControl(tab.state.id, "user");
-    await expect(host.agentAnswerDialog("chat-1", null, false, null, [])).rejects.toMatchObject({ code: "user_active" });
+    await expect(host.agentAnswerDialog("chat-1", null, false, null, APP)).rejects.toMatchObject({ code: "user_active" });
     expect(host.releaseDialogs("chat-1")).toEqual({ dismissed: 0 });
     expect(tab.state.dialog).not.toBeNull();
   });
 
   test("no box to answer is said plainly", async () => {
     const { host } = makeHost();
-    await expect(host.agentAnswerDialog("chat-1", null, true, null, [])).rejects.toMatchObject({ code: "not_actionable", message: expect.stringMatching(/no box open/) });
+    await expect(host.agentAnswerDialog("chat-1", null, true, null, APP)).rejects.toMatchObject({ code: "not_actionable", message: expect.stringMatching(/no box open/) });
   });
 
   test("the end of the agent's turn dismisses the box its own action opened, and only that one", async () => {
@@ -215,8 +218,8 @@ describe("the agent and page boxes", () => {
     const pageBox = pageOpens(otherWc, "alert", "From a timer");
     host.selectTab(tab.state.id);
     const click = clickOpens(wc, cdp, "confirm", "Save this draft?");
-    await host.agentAct("chat-1", null, { kind: "click" }, TARGET, []);
-    const handlers = createHandlers({ getHost: () => host, appVersion: "x" });
+    await host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP);
+    const handlers = createHandlers({ getHost: () => host, devServers: OWN_SERVER, appVersion: "x" });
     await expect(handlers.dialog(parseRequest("dialog", requests.dialog_release).req)).resolves.toEqual({ dismissed: 1 });
     await flush();
     expect(click.value).toEqual({ accept: false, text: "" });
@@ -228,7 +231,7 @@ describe("the agent and page boxes", () => {
   test("switching the window to another chat dismisses the boxes the old chat's agent left", async () => {
     const { host, tab, wc, cdp } = makeHost();
     const click = clickOpens(wc, cdp, "alert", "Done");
-    await host.agentAct("chat-1", null, { kind: "click" }, TARGET, []);
+    await host.agentAct("chat-1", null, { kind: "click" }, TARGET, APP);
     host.setView("chat-2", false);
     await flush();
     expect(click.value).toEqual({ accept: false, text: "" });
@@ -250,7 +253,7 @@ describe('"leave this page?"', () => {
       leaveAsked(wc);
       return Promise.reject(new Error("ERR_ABORTED (-3)"));
     });
-    await expect(host.agentNavigate("chat-1", null, to, [])).rejects.toMatchObject({
+    await expect(host.agentNavigate("chat-1", null, to, APP)).rejects.toMatchObject({
       code: "dialog_open",
       data: { dialog: { type: "beforeunload", message: LEAVE_MESSAGE, url: "http://127.0.0.1:5000/unsaved.html", openedBy: "agent", defaultText: "" } },
     });
@@ -260,7 +263,7 @@ describe('"leave this page?"', () => {
       wc._url = url;
       return Promise.resolve();
     });
-    const reply = await host.agentAnswerDialog("chat-1", null, true, null, []);
+    const reply = await host.agentAnswerDialog("chat-1", null, true, null, APP);
     expect(wc.loadURL).toHaveBeenLastCalledWith(to);
     expect(reply).toMatchObject({ answered: { type: "beforeunload" }, url: to, dialog: null });
   });
@@ -292,7 +295,7 @@ describe("browser_eval scripts", () => {
   test("run in the page's main world on loopback, and come back as capped JSON", async () => {
     const { host, wc } = makeHost("http://127.0.0.1:5000/app-state.html");
     wc.mainFrame.executeJavaScript.mockResolvedValue({ text: '"c-4821"', truncated: false });
-    const handlers = createHandlers({ getHost: () => host, appVersion: "x" });
+    const handlers = createHandlers({ getHost: () => host, devServers: OWN_SERVER, appVersion: "x" });
     const reply = await handlers.script(parseRequest("script", requests.script).req);
     expect(reply).toEqual(fixture("script_ok.json"));
     const [code, gesture] = wc.mainFrame.executeJavaScript.mock.calls[0];
@@ -304,28 +307,28 @@ describe("browser_eval scripts", () => {
   test("a page error comes back as text", async () => {
     const { host, wc } = makeHost("http://127.0.0.1:5000/app-state.html");
     wc.mainFrame.executeJavaScript.mockResolvedValue({ error: "ReferenceError: cart is not defined" });
-    await expect(host.agentScript("chat-1", null, "cart.length")).resolves.toEqual(fixture("script_error.json"));
+    await expect(host.agentScript("chat-1", null, "cart.length", APP)).resolves.toEqual(fixture("script_error.json"));
     wc.mainFrame.executeJavaScript.mockRejectedValue(new SyntaxError("Unexpected token ')'"));
-    await expect(host.agentScript("chat-1", null, "if (")).resolves.toMatchObject({ ok: false, error: "Unexpected token ')'" });
+    await expect(host.agentScript("chat-1", null, "if (", APP)).resolves.toMatchObject({ ok: false, error: "Unexpected token ')'" });
   });
 
   test("a trailing semicolon still makes an expression", async () => {
     const { host, wc } = makeHost("http://127.0.0.1:5000/app-state.html");
     wc.mainFrame.executeJavaScript.mockResolvedValue({ text: "1", truncated: false });
-    await host.agentScript("chat-1", null, "  window.app.cart.length;  ");
+    await host.agentScript("chat-1", null, "  window.app.cart.length;  ", APP);
     expect(wc.mainFrame.executeJavaScript.mock.calls[0][0]).toMatch(/\nwindow\.app\.cart\.length\n/);
   });
 
   test("anything off this computer is refused without running, and never asked about", async () => {
     const { host, wc } = makeHost("https://shop.example/");
-    await expect(host.agentScript("chat-1", null, "document.cookie")).rejects.toMatchObject({ code: "unsupported", message: expect.stringMatching(/only on the user's own app/) });
+    await expect(host.agentScript("chat-1", null, "document.cookie", ["https://shop.example"])).rejects.toMatchObject({ code: "unsupported", message: expect.stringMatching(/only on the user's own app/) });
     expect(wc.mainFrame.executeJavaScript).not.toHaveBeenCalled();
   });
 
   test("a tab the user holds refuses scripts like clicks", async () => {
     const { host, tab, wc } = makeHost("http://127.0.0.1:5000/app-state.html");
     host.setControl(tab.state.id, "user");
-    await expect(host.agentScript("chat-1", null, "1")).rejects.toMatchObject({ code: "user_active" });
+    await expect(host.agentScript("chat-1", null, "1", APP)).rejects.toMatchObject({ code: "user_active" });
     expect(wc.mainFrame.executeJavaScript).not.toHaveBeenCalled();
   });
 

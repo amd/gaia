@@ -45,6 +45,8 @@ def _restore_tool_registry():
 @pytest.fixture
 def bridge():
     fake = FakeBridge()
+    # The fixtures' page, 127.0.0.1:5000, is the user's app on this chat's dev server.
+    fake.serve(5000)
     yield fake
     fake.close()
 

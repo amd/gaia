@@ -26,6 +26,7 @@ editing the file approves nothing.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -398,24 +399,37 @@ SHELL_SERVERS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = tuple(
     )
 )
 
-#: The same, in Python source run by run_python or execute_python_file.
-PYTHON_SERVERS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = tuple(
-    (what, re.compile(pattern))
-    for what, pattern in (
-        ("serve_forever()", r"\.serve_forever\s*\("),
-        (
-            "an http.server / socketserver server",
-            r"\b(HTTPServer|ThreadingHTTPServer|TCPServer|ThreadingTCPServer)\s*\(",
-        ),
-        (
-            "Python's http.server",
-            r"""http\.server\.test\s*\(|['"](-m\s+)?http\.server\b""",
-        ),
-        ("app.run()", r"\bapp\.run\s*\("),
-        ("uvicorn.run()", r"\buvicorn\.run\s*\("),
-        ("aiohttp's run_app()", r"\bweb\.run_app\s*\("),
-        ("waitress.serve()", r"\bwaitress\.serve\s*\("),
-    )
+#: The same, in Python source run by run_python or execute_python_file: the
+#: calls that start one, by dotted name. Matched on the parsed code, so a
+#: server written into a string (a file about to be saved) is not one.
+PYTHON_SERVERS: Tuple[Tuple[str, Callable[[str], bool]], ...] = (
+    ("serve_forever()", lambda name: name.endswith(".serve_forever")),
+    (
+        "an http.server / socketserver server",
+        lambda name: name.rsplit(".", 1)[-1]
+        in {"HTTPServer", "ThreadingHTTPServer", "TCPServer", "ThreadingTCPServer"},
+    ),
+    ("Python's http.server", lambda name: name.endswith("http.server.test")),
+    ("app.run()", lambda name: name == "app.run"),
+    ("uvicorn.run()", lambda name: name == "uvicorn.run"),
+    (
+        "aiohttp's run_app()",
+        lambda name: name in ("web.run_app", "aiohttp.web.run_app"),
+    ),
+    ("waitress.serve()", lambda name: name == "waitress.serve"),
+)
+
+#: Calls that run a command line: one holding ``http.server`` starts Python's server.
+_COMMAND_CALLS = frozenset(
+    {
+        "subprocess.run",
+        "subprocess.Popen",
+        "subprocess.call",
+        "subprocess.check_call",
+        "subprocess.check_output",
+        "os.system",
+        "os.popen",
+    }
 )
 
 _SEPARATORS = frozenset({"&&", "||", ";", "|", "&", "(", ")", ";;"})
@@ -521,11 +535,44 @@ def _flag_value(argv: List[str], flags: Tuple[str, ...]) -> Optional[str]:
 
 
 def server_in_python(source: str) -> Optional[ServerMatch]:
-    """The never-ending server this Python source starts, or None."""
-    for what, pattern in PYTHON_SERVERS:
-        if pattern.search(source):
-            return ServerMatch(what)
+    """The never-ending server this Python source starts, or None.
+
+    Source that does not parse never runs, so it starts nothing.
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = _dotted(node.func)
+        if name is None:
+            continue
+        for what, matches in PYTHON_SERVERS:
+            if matches(name):
+                return ServerMatch(what)
+        if name in _COMMAND_CALLS and any(
+            isinstance(arg, ast.Constant)
+            and isinstance(arg.value, str)
+            and re.search(r"\bhttp\.server\b", arg.value)
+            for part in node.args
+            for arg in ast.walk(part)
+        ):
+            return ServerMatch("Python's http.server")
     return None
+
+
+def _dotted(func: ast.expr) -> Optional[str]:
+    """``a.b.c`` for a call on a plain name or attribute chain, else None."""
+    parts = []
+    while isinstance(func, ast.Attribute):
+        parts.append(func.attr)
+        func = func.value
+    if not isinstance(func, ast.Name):
+        return None
+    parts.append(func.id)
+    return ".".join(reversed(parts))
 
 
 def dev_server_offered(agent: Any) -> bool:

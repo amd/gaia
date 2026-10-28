@@ -43,7 +43,7 @@ function makeHost({ recent = new Map() } = {}) {
       screenshot: jest.fn(() => Promise.resolve(Buffer.from(""))),
     }),
   });
-  return { host, published, handlers: createHandlers({ getHost: () => host, appVersion: "x" }) };
+  return { host, published, handlers: createHandlers({ getHost: () => host, devServers: { list: () => [] }, appVersion: "x" }) };
 }
 
 const wcOf = (host, id) => host.tabs.get(id).view.webContents;
@@ -244,7 +244,7 @@ describe("an agent only reaches its own chat's tabs", () => {
     const made = makeHost();
     const { host } = made;
     host.setView("chat-a", false);
-    const { tabs } = await host.agentOpen("chat-a", `${LOCAL}/secret`, []);
+    const { tabs } = await host.agentOpen("chat-a", `${LOCAL}/secret`, [LOCAL]);
     const theirs = tabs.find((t) => t.active).id;
     host.setView("chat-b", true);
     const wc = wcOf(host, theirs);
@@ -252,7 +252,7 @@ describe("an agent only reaches its own chat's tabs", () => {
     return { ...made, theirs, wc };
   }
 
-  const scope = { allowedOrigins: [] };
+  const scope = { allowedOrigins: [LOCAL] };
   const opsOn = (tabId) => [
     ["evaluate", { tabId, script: "() => document.title", args: null, frames: "main", ...scope }],
     ["screenshot", { tabId, clip: null, maxWidth: 800, ...scope }],
@@ -260,7 +260,7 @@ describe("an agent only reaches its own chat's tabs", () => {
     ["act", { tabId, action: { kind: "click" }, target: { frameId: null, selector: "button" }, ...scope }],
     ["navigate", { tabId, to: `${LOCAL}/elsewhere`, ...scope }],
     ["origin", { tabId }],
-    ["script", { tabId, expression: "document.title" }],
+    ["script", { tabId, expression: "document.title", ...scope }],
     ["viewport", { tabId, size: null, colorScheme: "dark" }],
     ["dialog", { op: "get", tabId }],
     ["dialog", { op: "answer", tabId, accept: false, text: null, ...scope }],
@@ -334,7 +334,7 @@ describe("an agent only reaches its own chat's tabs", () => {
       }
       return Promise.resolve(probe ? POINT : true);
     });
-    const reply = await host.agentAct("chat-b", null, { kind: "click" }, { frameId: null, selector: "button" }, []);
+    const reply = await host.agentAct("chat-b", null, { kind: "click" }, { frameId: null, selector: "button" }, [LOCAL]);
     expect(reply.adoptedTabId).toBe(host.state().activeTabId);
     expect(host.listTabs("chat-b").tabs.map((t) => t.url)).toEqual([`${LOCAL}/b`, `${LOCAL}/b-popup`]);
     expect(host.listTabs("chat-a").tabs.map((t) => t.url)).toEqual([`${LOCAL}/secret`]);

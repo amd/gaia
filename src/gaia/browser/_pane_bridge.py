@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 from gaia.browser.errors import (
@@ -104,7 +104,7 @@ def discover() -> Optional[Discovery]:
 def is_loopback_origin(origin_or_url: str) -> bool:
     """True for localhost, ``*.localhost``, 127.0.0.0/8 and ``[::1]``.
 
-    The pane reads these with no approval. ``bridge-server.cjs`` applies the
+    browser_eval runs only on these. ``navigation-policy.cjs`` applies the
     same rule, and both test it against ``bridge/loopback.json``.
     """
     host = (urlsplit(origin_or_url).hostname or "").lower().rstrip(".")
@@ -115,6 +115,17 @@ def is_loopback_origin(origin_or_url: str) -> bool:
         len(parts) == 4
         and parts[0] == "127"
         and all(p.isdigit() and int(p) <= 255 for p in parts)
+    )
+
+
+def dev_server_origins(port: int) -> Tuple[str, ...]:
+    """Where a dev server GAIA started answers: the agent reads and acts there with no ask.
+
+    ``bridge-server.cjs`` devServerOrigins is the same rule, and both test it
+    against ``bridge/dev_server_origins.json``.
+    """
+    return tuple(
+        f"http://{host}:{port}" for host in ("localhost", "127.0.0.1", "[::1]")
     )
 
 
@@ -245,6 +256,7 @@ __all__: List[str] = [
     "Discovery",
     "PaneBridge",
     "discover",
+    "dev_server_origins",
     "discovery_path",
     "is_loopback_origin",
     "origin_of",

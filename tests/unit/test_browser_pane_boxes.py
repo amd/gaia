@@ -50,6 +50,8 @@ def _isolated(monkeypatch):
 @pytest.fixture
 def bridge(tmp_path, monkeypatch):
     fake = FakeBridge()
+    # The fixtures' page, 127.0.0.1:5000, is the user's app on this chat's dev server.
+    fake.serve(5000)
     path = tmp_path / "run" / "browser-pane.json"
     monkeypatch.setenv(DISCOVERY_ENV, str(path))
     fake.write_discovery(path)
@@ -177,7 +179,7 @@ def test_accepting_a_confirm_sends_ok_and_reads_the_page(agent, bridge):
     sent = bridge.last("dialog")["body"]
     assert sent["op"] == "answer" and sent["accept"] is True
     assert 'Pressed OK on "Save this draft?".' in out
-    assert bridge.ops()[-1] == "evaluate"
+    assert bridge.page_ops()[-1] == "evaluate"
     assert "Page: Pane fixture form" in out
 
 
@@ -371,6 +373,7 @@ def test_a_page_error_comes_back_as_text(agent, bridge):
 
 
 def test_eval_off_loopback_is_refused_and_never_asked_about(agent, bridge):
+    bridge.replies["origin"] = fixture("origin_remote.json")
     bridge.replies["script"] = (
         409,
         {
@@ -387,6 +390,30 @@ def test_eval_off_loopback_is_refused_and_never_asked_about(agent, bridge):
     )
     out = tool(agent, "browser_eval")(expression="document.cookie")
     assert "runs only on the user's own app" in out
+
+
+def test_eval_on_a_localhost_page_that_is_not_this_chats_dev_server_asks(agent, bridge):
+    bridge.servers.clear()
+    args = {"expression": "localStorage.getItem('cartId')"}
+    assert agent.browser_call_needs_confirmation("browser_eval", args) is True
+    assert agent.confirmation_args_for_call("browser_eval", args)[SITE_ARG] == (
+        "http://127.0.0.1:5000"
+    )
+
+
+def test_eval_on_this_chats_dev_server_does_not_ask(agent, bridge):
+    assert (
+        agent.browser_call_needs_confirmation("browser_eval", {"expression": "1"})
+        is False
+    )
+
+
+def test_eval_sends_only_the_origins_the_user_approved(agent, bridge):
+    bridge.replies["script"] = fixture("script_ok.json")
+    driver = agent._ensure_driver()
+    with driver.scoped(["http://127.0.0.1:5000"]):
+        driver.run_script("1")
+    assert bridge.last("script")["body"]["allowedOrigins"] == ["http://127.0.0.1:5000"]
 
 
 def test_eval_is_not_a_batch_step(agent, bridge):

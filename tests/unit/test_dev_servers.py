@@ -291,11 +291,10 @@ def bridge(tmp_path, monkeypatch):
         if body["op"] == "list":
             return {"servers": fake.servers}
         if body["op"] == "ensure":
-            return {
-                "server": {**server_state_from_wire(body), "status": "ready"},
-                "reused": False,
-                "ms": 820,
-            }
+            server = {**server_state_from_wire(body), "status": "ready"}
+            fake.servers.append(server)
+            fake.replies["evaluate"] = page_at(server["url"])
+            return {"server": server, "reused": False, "ms": 820}
         if body["op"] == "stop":
             return {"server": {**fake.servers[0], "status": "stopped", "pid": None}}
         return {
@@ -311,6 +310,12 @@ def bridge(tmp_path, monkeypatch):
     fake.write_discovery(path)
     yield fake
     fake.close()
+
+
+def page_at(url):
+    """The fixture page, served from ``url``."""
+    text = json.dumps(fixture("evaluate_snapshot.json"))
+    return json.loads(text.replace("http://127.0.0.1:5000/", url))
 
 
 def server_state_from_wire(body):
