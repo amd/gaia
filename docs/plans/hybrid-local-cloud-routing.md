@@ -123,7 +123,7 @@ built on it would leak, so the switch uses an **allowlist** instead.
 | `create_client("claude")` | Builds `ClaudeProvider` | Refused while on |
 | Session auto-titling (`ui/_chat_helpers.py`) | Raw `POST /chat/completions` with the session's model | Goes through `LemonadeClient`, **pinned local in every mode**. A title never needs the cloud, and today it would leak a local turn's text in hybrid |
 | Eval judge and scenario runner | `anthropic.Anthropic` (`eval/claude.py`), a `claude -p` subprocess (`eval/judge_client.py`, `eval/runner.py`), an `OpenAI` client (`eval/tool_cost.py`) | Each calls `assert_permitted` before its request or subprocess |
-| Frozen sidecars (email) | Bundle their own `gaia` and expose an auth-exempt `GET /version` (`hub/agents/email/python/CONTRACT.md`) | Sidecars built against a `gaia` with the guards add `"policy_enforced": ["local_only", "offline", "amd_network"]` to their `/version` body. They read the same `~/.gaia/policy.json`. While the switch is on, the launcher (daemon or UI) probes `/version` **before routing any request** to a sidecar. If an entry the current policy needs is missing, it stops the sidecar and reports "*<agent>* can't enforce Local only — update it with `gaia agent install <id>`". Turning the switch on also re-probes running sidecars |
+| Frozen sidecars (email) | Bundle their own `gaia` and expose an auth-exempt `GET /version` (`hub/agents/email/python/CONTRACT.md`) | Sidecars built against a `gaia` with the guards add `"policy_enforced": ["local_only", "offline", "amd_network"]` to their `/version` body. They read the same `~/.gaia/policy.json`. While the switch is on, the launcher (daemon or UI) probes `/version` **before routing any request** to a sidecar. If an entry the current policy needs is missing, it stops the sidecar and reports "`<agent>` can't enforce Local only — update it with `gaia agent install <id>`". Turning the switch on also re-probes running sidecars |
 | Go TUI | Makes no LLM inference calls, but posts keys to Lemonade (`lemonade/cloud.go` `Configure`) | Its key paths check the switch (§2.1.3) |
 
 **Census test:** a static scan fails CI when any of the following appears outside the
@@ -208,7 +208,7 @@ A cloud id can be stored in several places:
 Turning the switch on:
 
 1. lists the stored cloud ids it found;
-2. asks **once**: "Switch these to *<local model>*? Hybrid/Cloud mode will be set to
+2. asks **once**: "Switch these to `<local model>`? Hybrid/Cloud mode will be set to
    Local.";
 3. in the same operation, rewrites them all and sets `routing_mode=local`.
 

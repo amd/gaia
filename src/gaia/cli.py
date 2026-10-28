@@ -6855,8 +6855,10 @@ def _handle_network_policy(action, value) -> None:
             file=sys.stderr,
         )
         return
-    for provider in dropped:
-        print(f"   Removed the {provider} key from the running Lemonade Server.")
+    # Names come from a fixed table, never from the key-handling call.
+    for provider, name in (("fireworks", "Fireworks AI"), ("amd", "AMD LLM Gateway")):
+        if provider in dropped:
+            print(f"   Removed the {name} key from the running Lemonade Server.")
 
 
 #: Keys that pick which Lemonade GAIA uses; setting one probes and switches.
