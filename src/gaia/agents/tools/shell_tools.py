@@ -2810,13 +2810,20 @@ class ShellToolsMixin:
         """
         return self._path_allowed
 
+    def _session_start_cwd(self) -> Optional[str]:
+        """Return a permitted chat workspace, or let the session use cwd."""
+        workspace = _workspace_default(self)
+        if workspace and self._path_allowed(workspace, prompt_user=False):
+            return workspace
+        return None
+
     @property
     def shell_session(self) -> ShellSession:
         """This agent's shell session, created on first use."""
         session = getattr(self, "_shell_session", None)
         if session is None or session.closed:
             session = ShellSession(
-                start_cwd=_workspace_default(self),
+                start_cwd=self._session_start_cwd(),
                 cwd_guard=self._session_cwd_guard(),
             )
             self._shell_session = session

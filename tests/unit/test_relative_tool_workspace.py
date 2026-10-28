@@ -5,6 +5,7 @@ from gaia.agents.base import project_map
 from gaia.agents.tools.file_tools import FileSearchToolsMixin
 from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
 from gaia.agents.tools.shell_session import ShellSession
+from gaia.agents.tools.shell_tools import ShellToolsMixin
 from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 
 
@@ -166,3 +167,98 @@ def test_browse_without_workspace_defaults_to_home(tmp_path, monkeypatch):
     result = registered["browse_directory"]()
     assert str(Path.home().resolve()) in result
     assert str(sidecar) not in result
+
+
+def _register_tools(host, register):
+    registered = {}
+
+    def fake_tool(**_kwargs):
+        def decorate(fn):
+            registered[fn.__name__] = fn
+            return fn
+
+        return decorate
+
+    with patch("gaia.agents.base.tools.tool", fake_tool):
+        register(host)
+    return registered
+
+
+def test_file_search_tools_resolve_browse_and_file_info_in_chat_workspace(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / "chat"
+    sidecar = tmp_path / "sidecar"
+    workspace.mkdir()
+    sidecar.mkdir()
+    (workspace / "helper.py").write_text("chat copy\n", encoding="utf-8")
+    (sidecar / "helper.py").write_text("sidecar copy\n", encoding="utf-8")
+    monkeypatch.chdir(sidecar)
+
+    class Host(FileSearchToolsMixin):
+        pass
+
+    host = Host()
+    host.config = _Config(workspace)
+    registered = _register_tools(host, FileSearchToolsMixin.register_file_search_tools)
+
+    listing = registered["browse_directory"](".")
+    info = registered["get_file_info"]("helper.py")
+
+    assert Path(listing["current_path"]) == workspace.resolve()
+    assert Path(info["file_path"]) == (workspace / "helper.py").resolve()
+
+
+def test_filesystem_tools_resolve_tree_and_file_info_in_chat_workspace(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / "chat"
+    sidecar = tmp_path / "sidecar"
+    workspace.mkdir()
+    sidecar.mkdir()
+    (workspace / "helper.py").write_text("chat copy\n", encoding="utf-8")
+    (sidecar / "helper.py").write_text("sidecar copy\n", encoding="utf-8")
+    monkeypatch.chdir(sidecar)
+
+    class Host(FileSystemToolsMixin):
+        config = _Config(workspace)
+
+    host = Host()
+    host._bookmarks = {}
+    host._fs_index = None
+    registered = _register_tools(host, FileSystemToolsMixin.register_filesystem_tools)
+
+    tree = registered["tree"](".")
+    info = registered["file_info"]("helper.py")
+
+    assert str(workspace.resolve()) in tree
+    assert str((workspace / "helper.py").resolve()) in info
+
+
+def test_shell_uses_workspace_only_when_it_is_allowed(tmp_path, monkeypatch):
+    workspace = tmp_path / "chat"
+    sidecar = tmp_path / "sidecar"
+    allowed = tmp_path / "allowed"
+    workspace.mkdir()
+    sidecar.mkdir()
+    allowed.mkdir()
+    monkeypatch.chdir(sidecar)
+
+    class Validator:
+        def __init__(self, allowed_path):
+            self.allowed_path = allowed_path
+
+        def is_path_allowed(self, path, prompt_user=True):
+            return Path(path).resolve() == self.allowed_path.resolve()
+
+    class Host(ShellToolsMixin):
+        pass
+
+    host = Host()
+    host.config = _Config(workspace)
+    host.path_validator = Validator(allowed)
+    assert Path(host.shell_session.cwd) == sidecar.resolve()
+
+    host.close_shell_session()
+    host.path_validator = Validator(workspace)
+    assert Path(host.shell_session.cwd) == workspace.resolve()

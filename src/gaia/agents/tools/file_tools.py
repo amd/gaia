@@ -258,11 +258,6 @@ def _python_syntax_error(source: str, filename: str) -> str | None:
     return None
 
 
-def _resolved_target(args: Dict[str, Any]) -> Path:
-    """The file write_file / edit_file act on, resolved as they resolve it."""
-    return Path(args["file_path"]).expanduser().resolve()
-
-
 DATE_RANGE_FORMATS = (
     "quarter ('2025-Q1', 'Q1 2025', 'Q1-2025', '2025 Q1', \"Q1'25\", "
     "'first quarter 2025'), year ('2025'), month ('2025-03'), "
@@ -1066,7 +1061,7 @@ class FileSearchToolsMixin:
             Returns:
                 Dictionary with file content and type-specific metadata
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(_resolve_target(file_path, None, _workspace_default(self)))
             try:
                 # Enforce the --allowed-paths sandbox on reads. Checked before
                 # the existence probe so paths outside the sandbox can't be used
@@ -1475,9 +1470,12 @@ class FileSearchToolsMixin:
                     "operation": "search_file_content",
                 }
 
+        def _workspace_target(args: Dict[str, Any]) -> Path:
+            return _resolve_target(args["file_path"], None, _workspace_default(self))
+
         @tool(
             atomic=True,
-            preflight=read_first_preflight(self, _resolved_target, "overwriting"),
+            preflight=read_first_preflight(self, _workspace_target, "overwriting"),
         )
         def write_file(
             file_path: str, content: str, create_dirs: bool = True
@@ -1496,7 +1494,7 @@ class FileSearchToolsMixin:
             6. Backup creation before overwrite
             7. Audit logging of all write operations
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(_resolve_target(file_path, None, _workspace_default(self)))
             try:
                 resolved_path = Path(file_path).resolve()
                 content_size = len(content.encode("utf-8"))
@@ -1820,7 +1818,7 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            preflight=read_first_preflight(self, _resolved_target),
+            preflight=read_first_preflight(self, _workspace_target),
         )
         def edit_file(
             file_path: str, old_content: str, new_content: str
@@ -1843,7 +1841,7 @@ class FileSearchToolsMixin:
             4. Backup creation before edit
             5. Audit logging
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(_resolve_target(file_path, None, _workspace_default(self)))
             try:
                 import difflib
 
@@ -2039,7 +2037,9 @@ class FileSearchToolsMixin:
                 if directory_path is None:
                     directory_path = str(Path.home())
 
-                dir_path = Path(directory_path).expanduser().resolve()
+                dir_path = _resolve_target(
+                    directory_path, None, _workspace_default(self)
+                )
 
                 # Before the existence probe, as in read_file.
                 denied = self._read_access_error(str(dir_path))
@@ -2192,7 +2192,7 @@ class FileSearchToolsMixin:
                 Dictionary with file metadata and optional preview
             """
             try:
-                fp = Path(file_path).expanduser()
+                fp = _resolve_target(file_path, None, _workspace_default(self))
 
                 # Enforce the --allowed-paths sandbox: get_file_info returns a
                 # content preview, so it must honor the same read boundary.
@@ -2372,7 +2372,8 @@ class FileSearchToolsMixin:
                 Dictionary with analysis results based on the requested type
             """
             try:
-                fp = Path(file_path).expanduser()
+                raw_path = Path(file_path).expanduser()
+                fp = _resolve_target(file_path, None, _workspace_default(self))
 
                 def _resolve_indexed_basename(target: Path):
                     """Return an already-indexed document Path whose basename
@@ -2393,9 +2394,10 @@ class FileSearchToolsMixin:
                     not Path(file_path).is_absolute()
                     and len(Path(file_path).parts) == 1
                 ):
-                    attached = _resolve_indexed_basename(fp)
+                    attached = _resolve_indexed_basename(raw_path)
                 if (
                     attached is not None
+                    and not fp.exists()
                     and attached.is_file()
                     and read_access_error(self, str(attached), prompt_user=False)
                     is None

@@ -247,7 +247,7 @@ class FileSystemToolsMixin:
 
     def _validate_path(self, path: str) -> Path:
         """Validate and resolve a path. Raises ValueError if blocked."""
-        resolved = Path(path).expanduser().resolve()
+        resolved = _resolve_target(path, None, _workspace_default(self))
         denied = read_access_error(self, resolved)
         if denied:
             raise ValueError(f"Access denied: {denied['error']}")
