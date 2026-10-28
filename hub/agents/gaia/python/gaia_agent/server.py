@@ -90,7 +90,8 @@ AGENT_ID = "gaia"
 #: 2.21 added ``context`` to ``/query``'s ``final`` event.
 #: 2.22 added ``/query``'s ``reasoning`` field.
 #: 2.23 added ``/query``'s ``internet_off`` field and ``/sessions/{id}/internet``.
-API_VERSION = "2.23"
+#: 2.24 added ``working_directory`` to ``/query``.
+API_VERSION = "2.24"
 
 #: How long ``final`` waits for the turn's context measurement before going without.
 _CONTEXT_WAIT_SECONDS = 15.0
@@ -206,10 +207,31 @@ class QueryRequest(_Strict):
             ">= 2.18), so the agent works where the caller's UI says it does. "
             "Absolute paths. Builds a new session with exactly this scope; a "
             "retained session gains any entry it lacks and keeps what the user "
-            "granted. GAIA_ALLOWED_PATHS still narrows it. Omit for the agent's "
-            "default scope."
+            "granted. GAIA_ALLOWED_PATHS still narrows it. This is an access "
+            "allowlist, not a relative-path working directory. Omit for the "
+            "agent's default scope."
         ),
     )
+    working_directory: Optional[str] = Field(
+        default=None,
+        description=(
+            "Absolute chat workspace used to resolve relative file paths on this "
+            "turn (contract >= 2.24). It is separate from allowed_paths: an "
+            "allowlist grants access but does not choose which folder a bare "
+            "file name belongs in."
+        ),
+    )
+
+    @field_validator("working_directory")
+    @classmethod
+    def _working_directory_absolute(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and (not v or not Path(v).is_absolute()):
+            raise ValueError(
+                "working_directory must be an absolute path; the agent's working "
+                "directory is not the caller's, so a relative path would name a "
+                "different folder."
+            )
+        return v
 
     @field_validator("allowed_paths")
     @classmethod
@@ -1320,6 +1342,8 @@ async def query(request: QueryRequest):
             kwargs["model_id"] = request.model
         if request.allowed_paths is not None:
             kwargs["allowed_paths"] = request.allowed_paths
+        if request.working_directory is not None:
+            kwargs["working_directory"] = request.working_directory
         if request.surface is not None:
             kwargs["surface"] = request.surface
         if request.session_id:
@@ -1379,6 +1403,10 @@ async def query(request: QueryRequest):
                     display,
                 )
             agent = session.agent
+            if request.working_directory is not None:
+                config = getattr(agent, "config", None)
+                if config is not None:
+                    config.working_directory = request.working_directory
             if request.allowed_paths:
                 # Built on an earlier turn's scope; this turn's may hold more.
                 validator = getattr(agent, "path_validator", None)

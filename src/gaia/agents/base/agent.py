@@ -6307,7 +6307,9 @@ Do NOT wrap conversational replies in JSON.
             scratch = getattr(
                 reader() if callable(reader) else None, "scratch_dir", None
             )
-            target = edit_target(tool_args)
+            # Resolve as the tool will, so a session workspace can't move the write.
+            preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
+            target = edit_target(_with_resolved_target(tool_args, preflight))
             if scratch and target and edit_is_inside(target, (str(scratch),)):
                 logger.info("Writing %s in the agent's scratch folder unasked", target)
                 return True
