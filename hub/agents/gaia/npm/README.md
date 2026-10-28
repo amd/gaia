@@ -202,11 +202,25 @@ else beside them. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 errors and lessons the agent records on its own; omit it and memory stays as the
 agent has it. Send `allowed_paths` with the folders your UI shows the chat can
 read, so the agent works in the same scope. Send `working_directory` (contract
-≥ 2.23) with the absolute chat workspace so bare file names resolve in the same
+≥ 2.24) with the absolute chat workspace so bare file names resolve in the same
 folder the UI shows; it is separate from the access allowlist. Binaries older
-than 2.18 reject `allowed_paths` and older than 2.23 reject `working_directory`,
+than 2.18 reject `allowed_paths` and older than 2.24 reject `working_directory`,
 so probe `/version` first. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Internet switched off for the chat? Send `internet_off`** (contract ≥
+2.23) every turn: `true` refuses web search, page fetches, the browser,
+connector, mailbox and Agent Hub tools and commands that contact another host;
+`false` allows them.
+Omit it and the agent keeps its own setting. Binaries older than 2.23 reject
+the field with `422`, so probe `/version` first, do not answer an
+internet-off turn on an older one, and cancel its running turn when the switch
+goes off. If the user flips the switch while a turn is
+running, `POST /v1/gaia/sessions/{session_id}/internet` with
+`{"internet_off": true}` so the next tool call follows it rather than the next
+turn. Post it only once `/query` has answered: before then the turn's own
+`internet_off` replaces it, so re-read the switch at that point and post it if
+it changed. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Showing what a turn changed, with undo? Send `changes_turn_id`** (contract ≥
 2.19) along with `session_id`: the agent copies each file before it writes it,

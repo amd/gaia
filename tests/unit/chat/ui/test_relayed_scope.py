@@ -139,9 +139,9 @@ def test_only_a_flagship_at_2_18_takes_the_scope(version, expected):
 
 
 @pytest.mark.parametrize(
-    "version, expected", [("2.23", True), ("3.0", True), ("2.22", False), (None, False)]
+    "version, expected", [("2.24", True), ("3.0", True), ("2.23", False), (None, False)]
 )
-def test_only_a_flagship_at_2_23_takes_the_working_directory(version, expected):
+def test_only_a_flagship_at_2_24_takes_the_working_directory(version, expected):
     assert working_directory_supported(GAIA_PROFILE, version) is expected
     assert working_directory_supported(EMAIL_PROFILE, "9.9") is False
 
@@ -149,8 +149,8 @@ def test_only_a_flagship_at_2_23_takes_the_working_directory(version, expected):
 def test_the_relay_sends_the_workspace_only_to_a_supporting_flagship(monkeypatch):
     workspace = "/tmp/workspace"
 
-    new = _dispatch(monkeypatch, "2.23", [workspace])
-    old = _dispatch(monkeypatch, "2.22", [workspace])
+    new = _dispatch(monkeypatch, "2.24", [workspace])
+    old = _dispatch(monkeypatch, "2.23", [workspace])
 
     assert new["working_directory"] == workspace
     assert "working_directory" not in old
