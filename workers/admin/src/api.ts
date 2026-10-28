@@ -305,6 +305,7 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
   }
 
   if (path === "/api/tests") {
+    base = (await collectedAt("tests")) ?? base;
     const rows = await all(
       "SELECT day, passed, failed, skipped, errors, total, jobs FROM test_results WHERE day >= ? ORDER BY day",
       sinceDay(days),
@@ -313,6 +314,7 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
   }
 
   if (path === "/api/evals") {
+    base = (await collectedAt("evals")) ?? base;
     const f = parseFilter(url.searchParams);
     const SCEN_COLS =
       "s.run_id, s.category, s.scenario_id, s.status, s.score, s.elapsed_s, s.cost_usd, s.tps, s.ttft_s, s.input_tokens, s.output_tokens, s.tool_calls, s.turns, s.root_cause, s.kind";

@@ -109,8 +109,9 @@ function drawCharts(){var g=D.growth,rows=inRange();
   chart('outside',{keys:K,gran:gr,type:'line',title:'Outside share of merged PRs',h:220,ymin:0,ymax:1,yfmt:function(x){return pct(x,0);},target:T.external.good,targetLabel:'target',
     series:[{name:'Outside share',color:'var(--s2)',vals:v(function(r){return r.prsMerged?r.externalMerged/r.prsMerged:null;}),fmt:function(x){return pct(x,0);}}]});}
 function drawBench(){var g=D.growth,box=el('bench');if(!g){box.innerHTML='';return;}var c=g.current,last=g.periods[g.periods.length-1],n30=c.newContributors*30/g.days;
+  var wk=g.days<7?'pick 7d or longer':null;
   var mine={stars:g.days<30?'pick 30d or longer':pct(c.starRate30),ratio:last&&last.starsTotal?(last.forksTotal/last.starsTotal).toFixed(2):'—',new:g.days<30?'pick 30d or longer':fmt(Math.round(n30))+(last&&last.starsTotal?' ('+pct(n30/last.starsTotal)+' of its stars)':''),
-    ext:pct(c.externalShare,0),ret:pct(g.newcomers.rate,0),bus:c.busFactor==null?'—':fmt(c.busFactor),resp:'Not collected yet'};
+    ext:wk||pct(c.externalShare,0),ret:pct(g.newcomers.rate,0),bus:wk||(c.busFactor==null?'—':fmt(c.busFactor)),resp:'Not collected yet'};
   box.innerHTML='<div class="scroll" style="max-height:none"><table><tr><th>Metric</th><th>GAIA</th><th>Target</th><th>Hermes Agent</th><th>Peers</th></tr>'+BENCH.map(function(b){
     return '<tr><td>'+esc(b.metric)+'</td><td class="num">'+esc(mine[b.key])+'</td><td>'+esc(b.target)+'</td><td>'+esc(b.hermes)+'</td><td style="white-space:normal">'+esc(b.peers)+'</td></tr>';}).join('')+'</table></div>';}
 function render(){ATTN=[];setUrl({});syncShell();drawKpis();drawCharts();drawBench();drawAttention();drawStatus();}

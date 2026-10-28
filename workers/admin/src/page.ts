@@ -101,7 +101,7 @@ svg.c{width:100%;height:auto;display:block;overflow:visible;user-select:none;-we
 .srow .b{height:6px;background:var(--line2);border-radius:3px;overflow:hidden}.srow .b i{display:block;height:100%;border-radius:3px}
 .srow .p{text-align:right;color:var(--ink2)}
 details.tv{border-top:1px solid var(--line)}details.tv summary{cursor:pointer;color:var(--ink2);padding:9px 18px;font-size:12.5px}details.tv summary:hover{color:var(--accent)}
-.scroll{max-height:340px;overflow:auto;padding:0 18px 12px}
+.scroll{max-height:340px;overflow:auto;padding:0 18px 12px;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
 table{border-collapse:collapse;width:100%;font-size:12.5px}
 td,th{padding:6px 10px;border-bottom:1px solid var(--line2);text-align:left;white-space:nowrap}
 th{font-family:"JetBrains Mono",monospace;color:var(--mute);font-weight:500;font-size:10px;letter-spacing:.1em;text-transform:uppercase;position:sticky;top:0;background:var(--bg)}
@@ -153,7 +153,10 @@ var RANGE_TEXT={'1':'last 24 hours','7':'last 7 days','30':'last 30 days','90':'
 function fmt(n){return n==null?'—':Number(n).toLocaleString('en-US');}
 function plural(n,one,many){return fmt(n)+' '+(n===1?one:(many||one+'s'));}
 /* Day charts end on the day of the last collection: later days have no data yet, not zero activity. */
-function dataEnd(){var o=D.status,t=today();if(!o||!o.log.length)return t;var d=o.log.filter(function(l){return l.ok;}).map(function(l){return l.finished_at.slice(0,10);}).sort().pop();return d&&d<t?d:t;}
+/* When the main data (issues, commits, CI runs, releases) was last collected; windows count back from here. */
+function asOfMs(){var o=D.status;if(!o||!o.log.length)return Date.now();var latest={};o.log.forEach(function(l){if(!latest[l.source])latest[l.source]=l;});
+  var t=['issues','commits','runs','releases'].map(function(k){return latest[k]&&latest[k].ok?Date.parse(latest[k].finished_at):null;}).filter(function(x){return x;});return t.length?Math.min.apply(null,t):Date.now();}
+function dataEnd(){var d=new Date(asOfMs()).toISOString().slice(0,10),t=today();return d<t?d:t;}
 /* The attention bar shows the figure that set a card's colour. */
 function attnValue(key,v){var e=ATTN.filter(function(x){return x.key===key;})[0];if(e)e.value=v;}
 function cmp(n){if(n==null)return '—';var a=Math.abs(n);return a>=1e6?(n/1e6).toFixed(a>=1e7?0:1).replace(/\.0$/,'')+'M':a>=1e4?(n/1e3).toFixed(a>=1e5?0:1).replace(/\.0$/,'')+'k':fmt(Math.round(n*100)/100);}
@@ -164,10 +167,10 @@ function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp
 function el(id){return document.getElementById(id);}
 function rangeText(){return RANGE_TEXT[S.range]||('last '+S.range+' days');}
 /* Daily data: the last N calendar days, today included (24h covers yesterday and today, since days are whole). */
-function sinceDay(){if(S.range==='all')return '0000-00-00';var n=Math.max(2,Number(S.range));return new Date(Date.now()-(n-1)*864e5).toISOString().slice(0,10);}
+function sinceDay(){if(S.range==='all')return '0000-00-00';var n=Math.max(2,Number(S.range));return new Date(asOfMs()-(n-1)*864e5).toISOString().slice(0,10);}
 function today(){return new Date().toISOString().slice(0,10);}
 function dayText(){return S.range==='1'?'since yesterday':S.range==='all'?'all time':'last '+S.range+' days';}
-function sinceMs(){return S.range==='all'?0:Date.now()-Number(S.range)*864e5;}
+function sinceMs(){return S.range==='all'?0:asOfMs()-Number(S.range)*864e5;}
 function weekKey(d){var t=Date.parse(d+'T00:00:00Z'),w=(new Date(t).getUTCDay()+6)%7;return new Date(t-w*864e5).toISOString().slice(0,10);}
 function granFor(n){if(S.gran!=='auto')return S.gran;return n<=45?'day':n<=400?'week':'month';}
 /* Group daily rows into day/week/month buckets. how: {field:'sum'|'last'}; a bucket whose values are all null stays null. */
@@ -236,7 +239,7 @@ function draw(id){
       s+='<line x1="'+x+'" x2="'+x+'" y1="'+(H-B)+'" y2="'+(H-B+5)+'" class="axis"/><text x="'+x+'" y="'+(H-9)+'" class="tick" text-anchor="middle">'+esc(tx)+'</text>';}
     else if(cw>=4)s+='<line x1="'+x+'" x2="'+x+'" y1="'+(H-B)+'" y2="'+(H-B+3)+'" class="axis"/>';}
   var labels=[];
-  if(spec.selected!=null&&spec.selected>=a&&spec.selected<=b)s+='<rect x="'+(L+(spec.selected-a)*cw).toFixed(1)+'" y="'+T+'" width="'+cw.toFixed(1)+'" height="'+(H-T-B)+'" fill="var(--accent-soft)"/>';
+  if(n>1&&spec.selected!=null&&spec.selected>=a&&spec.selected<=b)s+='<rect x="'+(L+(spec.selected-a)*cw).toFixed(1)+'" y="'+T+'" width="'+cw.toFixed(1)+'" height="'+(H-T-B)+'" fill="var(--accent-soft)"/>';
   if(spec.type==='area'){var acc=[];for(i=0;i<n;i++)acc.push(0);
     S2.forEach(function(se){var top=[],bot=[],k;for(k=0;k<n;k++){var v=se.vals[k]||0;bot.push(acc[k]);acc[k]+=v;top.push(acc[k]);}
       var d='M'+X(0).toFixed(1)+','+Y(top[0]).toFixed(1);for(k=1;k<n;k++)d+=' L'+X(k).toFixed(1)+','+Y(top[k]).toFixed(1);for(k=n-1;k>=0;k--)d+=' L'+X(k).toFixed(1)+','+Y(bot[k]).toFixed(1);
@@ -341,7 +344,7 @@ var INFO={` + INFO_COMMON + String.raw`
 'stars':['Stars added','Stars added in the selected days, against the same number of days just before. Green: at least 90% of the earlier pace. Amber: 60 to 90%. Red: below 60%. The total is GitHub’s own count.'],
 'pkg':['Package downloads','PyPI (pypistats.org, mirrors excluded) plus npm, over the selected days up to the newest day PyPI has published, against the same number of days just before. Includes CI and automated installs, so treat it as reach rather than users. Green: flat or up, or down less than 10%. Amber: down 10 to 30%. Red: down more than 30%.'],
 'latest':['Latest release','The newest final release and its installs so far. Its installs keep growing for a few weeks after it ships. Coloured by days since it shipped, for a monthly release cadence. Green: within 35 days. Amber: 35 to 60. Red: more than 60.'],
-'rels':['Releases','Final releases and release candidates published in the selected range, on the main product line (agent packages excluded). Coloured by release candidates per final release: many means stabilising late. Green: 3 or fewer. Amber: 4 to 6. Red: 7 or more. A proposed default; no published benchmark exists.'],
+'rels':['Releases','Final releases and release candidates published in the selected range, on the main product line (agent packages excluded). Coloured by release candidates per final release, counting only candidates for a version released in the range: many means stabilising late. Green: 3 or fewer. Amber: 4 to 6. Red: 7 or more. A proposed default; no published benchmark exists.'],
 'per-release':['Downloads per release','One bar per release or release candidate at its publish date; its height is every download it has had so far, so older releases have had longer to accumulate. Files are grouped by OS and product from their names; unknown files show as Unclassified. Click a legend entry to hide or show it.'],
 'share':['Install share','Each OS or product’s share of install-file downloads, for releases published in the selected range.'],
 'daily':['Downloads per day','GitHub only reports running totals, so this is the change between nightly snapshots. History starts with the first snapshot; a missed night is a gap, not a zero.'],
@@ -380,8 +383,9 @@ function drawOverview(){var d=D.downloads,t=D.traction,h='';
   var age=last?(Date.now()-Date.parse(last.publishedAt))/864e5:null;
   h+=kpi('latest','Latest release',last?esc(last.tag):'—',last?'<b class="num">'+fmt(last.install)+'</b> installs · '+ago(last.publishedAt):'',level(age,{good:35,warn:60,higher:false}),age==null?'':Math.round(age)+' days since the last final release');
   var rr2=d.releases.filter(function(r){return r.main&&Date.parse(r.publishedAt)>=sinceMs();});
-  var nf=rr2.filter(function(r){return !r.rc;}).length,nrc=rr2.filter(function(r){return r.rc;}).length,rcp=nf?nrc/nf:null;
-  h+=kpi('rels','Releases',fmt(nf),'plus '+plural(nrc,'release candidate')+(rcp!=null?' (<b>'+(Math.round(rcp*10)/10)+' per release</b>)':'')+' · '+rangeText(),level(rcp,{good:3,warn:6,higher:false}),rcp==null?'':(Math.round(rcp*10)/10)+' release candidates per final release');
+  var fin=rr2.filter(function(r){return !r.rc;}).map(function(r){return r.tag;}),rcs=rr2.filter(function(r){return r.rc;}),shipped=rcs.filter(function(r){return fin.indexOf(r.tag.replace(/-rc\.?\d+$/i,''))>=0;}).length;
+  var nf=fin.length,nrc=rcs.length,open=nrc-shipped,rcp=nf?shipped/nf:null;
+  h+=kpi('rels','Releases',fmt(nf),'plus '+plural(nrc,'release candidate')+(rcp!=null?' (<b>'+(Math.round(rcp*10)/10)+' per release</b>'+(open?', '+open+' for a version not yet released':'')+')':'')+' · '+rangeText(),level(rcp,{good:3,warn:6,higher:false}),rcp==null?'':(Math.round(rcp*10)/10)+' release candidates per final release');
   if(rcp!=null)attnValue('rels',(Math.round(rcp*10)/10)+' RCs per release');
   el('ov').innerHTML=h+'</div></div>';}
 
@@ -656,10 +660,10 @@ function drawTime(){var ct=D.citime;
 function drawTable(){var ci=D.ci,box=el('wtable');if(!ci||!ci.coverage||!ci.coverage.first){box.innerHTML='<div class="empty">No workflow runs collected yet.</div>';return;}
   var w=ci.main.workflows,rows=P.allWf?w:w.slice(0,10);
   if(!w.length){box.innerHTML='<div class="empty">No push or nightly runs on main in this range.</div>';return;}
-  function st(p){if(p==null)return '<span class="st"><span class="dot" style="background:var(--mute)"></span>no result</span>';if(p>=.9)return '<span class="st good"><span class="dot" style="background:var(--good)"></span>healthy</span>';if(p>=.8)return '<span class="st warnc"><span class="dot" style="background:var(--warn)"></span>watch</span>';return '<span class="st bad"><span class="dot" style="background:var(--bad)"></span>failing</span>';}
+  function st(p,n){if(p!=null&&n<5)return '<span class="st" title="Fewer than 5 passed or failed runs in the window"><span class="dot" style="background:var(--mute)"></span>too few runs</span>';if(p==null)return '<span class="st"><span class="dot" style="background:var(--mute)"></span>no result</span>';if(p>=.9)return '<span class="st good"><span class="dot" style="background:var(--good)"></span>healthy</span>';if(p>=.8)return '<span class="st warnc"><span class="dot" style="background:var(--warn)"></span>watch</span>';return '<span class="st bad"><span class="dot" style="background:var(--bad)"></span>failing</span>';}
   var h='<div class="scroll" style="max-height:none"><table><tr><th>Workflow</th><th>Status</th><th class="n">Pass rate</th><th class="n">Runs</th><th class="n">Failed</th><th class="n" title="Cancelled, skipped or still running; not in the pass rate">Cancelled</th><th class="n">Flaky</th><th class="n">Runtime median</th><th class="n">Runtime P90</th></tr>';
-  rows.forEach(function(x){var c=x.passRate==null?'var(--mute)':x.passRate>=.9?'var(--good)':x.passRate>=.8?'var(--warn)':'var(--bad)';
-    h+='<tr><td class="trunc" title="'+esc(x.workflow)+'">'+esc(x.workflow)+'</td><td>'+st(x.passRate)+'</td><td class="n"><span class="pb"><i style="width:'+(x.passRate==null?0:x.passRate*100)+'%;background:'+c+'"></i></span>'+pct(x.passRate)+'</td><td class="n">'+fmt(x.passed+x.failed)+'</td><td class="n">'+x.failed+'</td><td class="n">'+fmt(Math.max(0,x.runs-x.passed-x.failed))+'</td><td class="n">'+x.flaky+'</td><td'+cellLv(x.p50==null?null:x.p50/60,{good:10,warn:20,higher:false})+'>'+dur(x.p50)+'</td><td class="n">'+dur(x.p90)+'</td></tr>';});
+  rows.forEach(function(x){var c=x.passRate==null||x.passed+x.failed<5?'var(--mute)':x.passRate>=.9?'var(--good)':x.passRate>=.8?'var(--warn)':'var(--bad)';
+    h+='<tr><td class="trunc" title="'+esc(x.workflow)+'">'+esc(x.workflow)+'</td><td>'+st(x.passRate,x.passed+x.failed)+'</td><td class="n"><span class="pb"><i style="width:'+(x.passRate==null?0:x.passRate*100)+'%;background:'+c+'"></i></span>'+pct(x.passRate)+'</td><td class="n">'+fmt(x.passed+x.failed)+'</td><td class="n">'+x.failed+'</td><td class="n">'+fmt(Math.max(0,x.runs-x.passed-x.failed))+'</td><td class="n">'+x.flaky+'</td><td'+cellLv(x.p50==null?null:x.p50/60,{good:10,warn:20,higher:false})+'>'+dur(x.p50)+'</td><td class="n">'+dur(x.p90)+'</td></tr>';});
   box.innerHTML=h+'</table></div>'+(w.length>10?'<button class="more" id="more">'+(P.allWf?'Show fewer':'Show all '+w.length+' workflows')+'</button>':'');
   var mb=el('more');if(mb)mb.addEventListener('click',function(){P.allWf=!P.allWf;drawTable();});}
 function render(){ATTN=[];setUrl({om:P.om!=='count'?P.om:'',wf:P.wf,br:P.br!=='main'?P.br:'',tm:P.tm!=='total'?P.tm:'',ctm:P.ctm!=='hours'?P.ctm:''});syncShell();drawKpis();drawOutcomes();drawTests();drawTime();drawTable();drawAttention();drawStatus();}
