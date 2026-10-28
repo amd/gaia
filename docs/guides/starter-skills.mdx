@@ -143,6 +143,10 @@ review, pitch, project status, training, research readout, decision, roadmap,
 one-slide framework) scale to the exact slide count asked for, and
 `verify_deck` checks the saved file for fit, overlaps, contrast, chart data,
 missing sources and style, rendering it with LibreOffice when installed.
+Every number on a slide must come from what you said or from a file, page or
+calculation the agent ran; a number it would have made up is refused and
+rebuilt without it, unless you asked for illustrative figures, which are then
+labelled as such on the slide.
 
 - **Demonstrates** — a tool-providing skill built on `gaia.skills.context`:
   scope-checked paths, a declared program (`program:run:soffice`), per-call
@@ -152,7 +156,8 @@ missing sources and style, rendering it with LibreOffice when installed.
   `verify_deck` (including `required_items`: what the request needs visible on
   the slides, not only in the notes), `add_slide`, `update_slide`,
   `list_blueprints`, `outline_from_blueprint`, `deck_outline_from_markdown`,
-  `update_deck_prefs`.
+  `update_deck_prefs`, and `export_slide_image` (a slide as a PNG, or a JPEG
+  if you ask, drawn from the real slide; needs LibreOffice).
 - **Configure** — nothing. Saved preferences (theme, brand colours, density,
   notes, template) apply automatically; pairs with `report-from-sources`.
 

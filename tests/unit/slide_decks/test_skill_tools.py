@@ -30,6 +30,7 @@ TOOL_NAMES = {
     "outline_from_blueprint",
     "deck_outline_from_markdown",
     "update_deck_prefs",
+    "export_slide_image",
 }
 
 
@@ -380,7 +381,7 @@ def test_the_models_first_guess_never_overrides_the_users_count(tools, tmp_path)
 
 def test_without_a_count_in_the_request_the_model_chooses(tools, tmp_path):
     skill, fns, _r = tools
-    with bind(_Asking("Make a deck about the ferry service."), skill):
+    with bind(_Asking("Make a deck about the ferry service: 1, 2 and 6 boats."), skill):
         two = fns["build_deck_from_markdown"](
             markdown=_SPLIT, output_path=str(tmp_path / "b.pptx"), expected_slides=2
         )
@@ -582,7 +583,10 @@ def test_content_under_the_only_title_is_the_slide_not_a_cover(tools, tmp_path):
     """'# Title' over KPIs with no '## ' slide used to become a cover with no KPIs."""
     skill, fns, _r = tools
     md = "# October KPIs\n\n- Revenue: $12.4M\n- Churn: 2.1%\n- NPS: 48\n"
-    with bind(_Asking("One slide with October KPIs."), skill):
+    with bind(
+        _Asking("One slide with October KPIs: $12.4M revenue, 2.1% churn, NPS 48."),
+        skill,
+    ):
         r = fns["build_deck_from_markdown"](
             markdown=md,
             output_path=str(tmp_path / "k.pptx"),
@@ -656,3 +660,157 @@ def test_a_chart_type_on_its_own_line_is_read(tools, tmp_path):
             markdown=md, output_path=str(tmp_path / "c.pptx")
         )
     assert r["status"] == "ok", r
+
+
+class _Seeing(_Asking):
+    """A stand-in agent that has also seen tool results, as Agent.seen_sources keeps."""
+
+    def __init__(self, request: str, seen=()) -> None:
+        super().__init__(request)
+        self._seen = [("user", {}, request), *seen]
+
+    def seen_sources(self):
+        return list(self._seen)
+
+
+_REGIONS = "Q3 revenue in $M: West 5.6, East 4.1, North 3.2. Two slides."
+
+
+def _share_slide(claim: str) -> str:
+    return (
+        f"## West drove {claim} of Q3 revenue\n"
+        "```chart bar\nsource: finance_q3.xlsx\nRegion,Revenue ($M)\n"
+        "West,5.6\nEast,4.1\nNorth,3.2\n```\n"
+        "## Next steps\n- Hire sales reps in North\n"
+    )
+
+
+def test_a_number_nobody_gave_is_refused(tools, tmp_path):
+    """45% is mental arithmetic (the data gives 43%): nothing grounds it."""
+    skill, fns, _r = tools
+    with bind(_Seeing(_REGIONS), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=_share_slide("45%"), output_path=str(tmp_path / "s.pptx")
+        )
+    assert r["status"] == "error"
+    assert "45" in r["problems"][0] and "run_python" in r["problems"][0]
+
+
+def test_a_number_a_tool_computed_is_grounded_even_rounded(tools, tmp_path):
+    skill, fns, _r = tools
+    computed = ("run_python", {"code": "5.6/12.9"}, '{"stdout": "0.4341085"}')
+    with bind(_Seeing(_REGIONS, [computed]), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=_share_slide("43%"), output_path=str(tmp_path / "s.pptx")
+        )
+    assert r["status"] == "ok", r
+
+
+def test_a_number_from_a_file_read_is_grounded(tools, tmp_path):
+    skill, fns, _r = tools
+    read = ("read_file", {"path": "kpis.txt"}, "NPS this quarter: 48")
+    md = "## NPS reached 48 this quarter\n- Up from last quarter\n"
+    with bind(_Seeing("One slide on our NPS from kpis.txt.", [read]), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "n.pptx")
+        )
+    assert r["status"] == "ok", r
+
+
+def test_the_skills_own_outputs_and_instructions_do_not_ground_numbers(tools, tmp_path):
+    """The SKILL.md example says 'Revenue $12.4M'; that must not excuse inventing it."""
+    skill, fns, _r = tools
+    own = [
+        ("load_skill", {"name": "slide-decks"}, "Revenue $12.4M; West +37%"),
+        ("slide-decks/build_deck_from_markdown", {}, '{"slides": 12.4}'),
+    ]
+    md = "## Revenue hit $12.4M\n- A strong quarter\n"
+    with bind(_Seeing("One slide on how the quarter went.", own), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "r.pptx")
+        )
+    assert r["status"] == "error"
+    assert "12.4" in r["problems"][0]
+
+
+def test_a_count_of_the_slides_own_parts_in_its_title_is_fine(tools, tmp_path):
+    skill, fns, _r = tools
+    md = _STAGES.replace(
+        "## Ferry service grows from one pier to a network",
+        "## 3 stages from one pier to a network",
+    )
+    with bind(_Seeing("One slide: the ferry stages."), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "c.pptx")
+        )
+    assert r["status"] == "ok", r
+
+
+def test_invented_dates_are_refused_like_any_number(tools, tmp_path):
+    skill, fns, _r = tools
+    md = "## The move wraps up in March\n- Jan 15: lease signed\n- Mar 10: go live\n"
+    with bind(_Seeing("One slide on our office move to Austin in March."), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "d.pptx")
+        )
+    assert r["status"] == "error"
+    assert "15" in r["problems"][0] and "10" in r["problems"][0]
+
+
+def test_emoji_the_user_did_not_use_are_refused(tools, tmp_path):
+    """They render as empty boxes in LibreOffice and in the exported image."""
+    skill, fns, _r = tools
+    md = "## Three priorities for 2027\n- 🇲🇽 Grow in Mexico\n- 📱 Launch the app\n"
+    with bind(_Seeing("One slide: grow in Mexico, launch the app."), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "e.pptx")
+        )
+    assert r["status"] == "error"
+    assert "📱" in r["problems"][0]
+
+
+def test_bold_in_a_table_cell_is_bold_not_asterisks(out):
+    from pptx import Presentation
+    from slidedeck.build import build_deck
+    from slidedeck.markdown import outline_from_markdown
+
+    md = "## Model B is the pick\n| Model | RAM |\n|---|---|\n| A | 16 GB |\n| B | **32 GB** |\n"
+    path = out("t.pptx")
+    assert build_deck(outline_from_markdown(md), path)["status"] in (
+        "ok",
+        "built_with_issues",
+    )
+    table = next(s for s in Presentation(path).slides[0].shapes if s.has_table).table
+    cell = table.cell(2, 1).text_frame.paragraphs[0]
+    assert cell.text == "32 GB" and all(r.font.bold for r in cell.runs)
+
+
+def test_export_slide_image_saves_a_png_by_default_and_jpeg_on_request(
+    tools, tmp_path, soffice, monkeypatch
+):
+    import tempfile
+
+    # LibreOffice's profile path must stay short; pytest's tmp_path is not.
+    short = tempfile.mkdtemp(prefix="g")
+    monkeypatch.setenv("GAIA_HOME", short)
+    skill, fns, _r = tools
+    deck = str(tmp_path / "s.pptx")
+    with bind(_Asking(), skill):
+        built = fns["build_deck_from_markdown"](markdown=_STAGES, output_path=deck)
+        png = fns["export_slide_image"](deck_path=deck)
+        jpg = fns["export_slide_image"](
+            deck_path=deck, image_format="jpeg", output_path=str(tmp_path / "s.jpg")
+        )
+        bad = fns["export_slide_image"](deck_path=deck, image_format="gif")
+        missing = fns["export_slide_image"](deck_path=deck, slide=4)
+    assert built["status"] == "ok", built
+    assert png["status"] == "ok", png
+    p = png["images"][0]["path"]
+    assert p.endswith(".png") and open(p, "rb").read(8) == b"\x89PNG\r\n\x1a\n"
+    assert png["images"][0]["width"] == 1920
+    assert (
+        jpg["status"] == "ok"
+        and open(jpg["images"][0]["path"], "rb").read(3) == b"\xff\xd8\xff"
+    )
+    assert bad["status"] == "error" and "png" in bad["problems"][0]
+    assert missing["status"] == "error" and "has 1" in missing["problems"][0]

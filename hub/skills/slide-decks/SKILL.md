@@ -1,6 +1,6 @@
 ---
 name: slide-decks
-description: Build and check PowerPoint slide decks (.pptx) - quarterly or business reviews, executive briefings, pitches, project status, training, research readouts, option comparisons, roadmaps, one-slide frameworks. Use when the user asks for a deck, slides, a presentation, a pitch, or a slide or two from their data. Plans the storyline, builds native editable charts, tables, KPI tiles and diagrams from a short outline, then verifies fit, data, sources and style.
+description: Build and check PowerPoint slide decks (.pptx) - quarterly or business reviews, executive briefings, pitches, project status, training, research readouts, option comparisons, roadmaps, one-slide frameworks. Use when the user asks for a deck, slides, a presentation, a pitch, a slide or two from their data, or an image (PNG/JPEG) of a slide. Plans the storyline, builds native editable charts, tables, KPI tiles and diagrams from a short outline, then verifies fit, data, sources and style.
 license: MIT
 version: 1.0.0
 metadata:
@@ -81,6 +81,30 @@ metadata:
           required_items:
             type: array
             required: false
+        returns:
+          type: object
+      - name: export_slide_image
+        description: Save a built slide as a PNG (default) or JPEG image.
+        parameters:
+          deck_path:
+            type: string
+            required: true
+          slide:
+            type: integer
+            required: false
+            default: 1
+          image_format:
+            type: string
+            required: false
+            default: png
+          output_path:
+            type: string
+            required: false
+            default: ""
+          width:
+            type: integer
+            required: false
+            default: 1920
         returns:
           type: object
       - name: build_deck_from_markdown

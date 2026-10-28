@@ -391,3 +391,39 @@ def test_the_audit_still_flags_a_raw_subprocess(tmp_path):
     body = "import subprocess\nsubprocess.run(['soffice'])\nreturn {}\n"
     skill_dir = _write_skill(tmp_path, "raw-probe", ["program:run:soffice"], body)
     assert audit_skill(skill_dir).verdict != "ALLOW"
+
+
+def _bare_agent():
+    from gaia.agents.base.agent import Agent
+
+    class _Agent(Agent):
+        def _register_tools(self):
+            pass
+
+    return _Agent.__new__(_Agent)
+
+
+def test_the_agent_records_what_the_user_said_and_tools_returned():
+    """Skill tools check facts against this; the agent's own words never count."""
+    agent = _bare_agent()
+    agent.conversation_history = [
+        {"role": "user", "content": "earlier: churn was 2.9%"},
+        {"role": "assistant", "content": "I think churn fell 18%"},
+    ]
+    agent.note_seen("user", {}, "now: make a slide")
+    agent.note_seen("read_file", {"path": "kpis.txt"}, {"text": "NPS 48"})
+    seen = agent.seen_sources()
+    assert [s for s, _a, _t in seen] == ["user", "user", "read_file"]
+    assert "2.9%" in seen[0][2] and "NPS 48" in seen[2][2]
+    assert not any("18%" in text for _s, _a, text in seen)
+
+
+def test_the_record_keeps_only_the_latest_entries():
+    from gaia.agents.base.agent import Agent
+
+    agent = _bare_agent()
+    for i in range(Agent.SEEN_SOURCES_MAX + 5):
+        agent.note_seen("tool", {}, str(i))
+    seen = agent.seen_sources()
+    assert len(seen) == Agent.SEEN_SOURCES_MAX
+    assert seen[-1][2] == str(Agent.SEEN_SOURCES_MAX + 4)

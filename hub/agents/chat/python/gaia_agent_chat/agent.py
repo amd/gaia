@@ -1188,7 +1188,9 @@ class ChatAgent(
             "current_base_url",
             None,
         )
-        label = _endpoint_label(live() if callable(live) else resolve_lemonade_base_url())
+        label = _endpoint_label(
+            live() if callable(live) else resolve_lemonade_base_url()
+        )
         if not label:
             return "The configured model server"
         return f"The model server at {label}"
@@ -1434,7 +1436,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         # A rule about a tool the session lacks made the model offer images.
         if getattr(self.config, "enable_sd_tools", False):
             data_file_rules += """
-**IMAGE GENERATION:** `generate_image` is only for a picture the user asked for (draw, photo, illustration, art). A slide, deck, framework, chart or document is a file, never a picture: load its skill and build the file. For a picture, call `generate_image` instead of pre-announcing it. If it errors, say so and give its error in 1-2 sentences; don't apologize or describe what you would have done.
+**IMAGE GENERATION:** `generate_image` is only for a picture the user asked for (draw, photo, illustration, art). A slide, deck, framework, chart or document is a file, never a picture, even when the user asks for an image of one: load its skill, build the file, then export the image with its export tool. For a picture, call `generate_image` instead of pre-announcing it. If it errors, say so and give its error in 1-2 sentences; don't apologize or describe what you would have done.
 """
         else:
             data_file_rules += """

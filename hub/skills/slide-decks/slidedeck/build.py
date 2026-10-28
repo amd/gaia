@@ -2068,11 +2068,15 @@ class DeckBuilder:
                 tf.word_wrap = True
                 p = tf.paragraphs[0]
                 p.text = ""
-                r = p.add_run()
-                r.text = str(row[j])
-                r.font.size = Pt(size)
-                r.font.bold = bool(is_header or is_total or hl)
-                r.font.name = self.font.family
+                # "**32 GB**" in a cell is emphasis, as it is in a bullet.
+                runs = []
+                for part, strong in _split_bold(str(row[j])) or [("", False)]:
+                    r = p.add_run()
+                    r.text = part
+                    r.font.size = Pt(size)
+                    r.font.bold = bool(is_header or is_total or hl or strong)
+                    r.font.name = self.font.family
+                    runs.append(r)
                 align = t["align"].get(j)
                 if align == "center":
                     p.alignment = PP_ALIGN.CENTER
@@ -2080,16 +2084,17 @@ class DeckBuilder:
                     p.alignment = PP_ALIGN.RIGHT
                 else:
                     p.alignment = PP_ALIGN.LEFT
-                if is_header:
-                    fill_shape(cell, self.theme.primary)
-                    _apply_color(r.font.color, self.theme.text_on(self.theme.primary))
-                else:
-                    fill = (
+                fill = (
+                    self.theme.primary
+                    if is_header
+                    else (
                         zebra
                         if (is_total or hl or data_i % 2 == 1)
                         else self.theme.background
                     )
-                    fill_shape(cell, fill)
+                )
+                fill_shape(cell, fill)
+                for r in runs:
                     _apply_color(r.font.color, self.theme.text_on(fill))
         gf._element.nvGraphicFramePr.cNvPr.set(
             "descr",

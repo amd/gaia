@@ -46,6 +46,7 @@ did not declare.
 from __future__ import annotations
 
 import contextvars
+import json
 import os
 import platform
 import re
@@ -134,6 +135,30 @@ class SkillCall:
     def request(self) -> str:
         """The user message the agent is answering, or "" outside a turn."""
         return str(getattr(self.agent, "_current_query", "") or "")
+
+    def sources(self) -> List[str]:
+        """What the user said and what other tools returned this conversation.
+
+        This skill's own tool results, its loaded instructions and reads of its
+        folder are left out: their example values are not facts.
+        """
+        seen = getattr(self.agent, "seen_sources", None)
+        if seen is None:
+            return [self.request] if self.request else []
+        own = f"{self.skill_name}/"
+
+        def norm(text: str) -> str:
+            return re.sub(r"[\\/]+", "/", text).lower()
+
+        folder = norm(str(getattr(self.skill, "directory", "") or ""))
+        out = []
+        for source, args, text in seen():
+            if source.startswith(own) or source == "load_skill":
+                continue
+            if folder and folder in norm(json.dumps(args, default=str)):
+                continue
+            out.append(text)
+        return out
 
     def declares(self, domain: str, level: str, scope: Optional[str] = None) -> bool:
         for permission in self.skill.parsed_permissions():

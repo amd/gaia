@@ -31,6 +31,7 @@ TOOLS = {
         "outline_from_blueprint",
         "deck_outline_from_markdown",
         "update_deck_prefs",
+        "export_slide_image",
     )
 }
 

@@ -14,17 +14,18 @@ Each tool returns a dict; a problem the model can fix comes back as
 
 from __future__ import annotations
 
+import csv
+import datetime
 import hashlib
+import io
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from slidedeck import blueprints as _bp
-from slidedeck import build as _build
 from slidedeck import markdown as _md
 from slidedeck import style as _style
-from slidedeck import verify as _verify
 from slidedeck.outline import OutlineError, load_outline, normalize_outline
 
 from gaia.agents.base.tools import tool
@@ -44,6 +45,26 @@ from gaia.skills.context import (
 from gaia.skills.errors import SkillPermissionError
 
 log = get_logger(__name__)
+
+
+def _build_engine() -> Any:
+    """The python-pptx half of the engine, imported when a tool runs, not at skill load."""
+    from slidedeck import build
+
+    return build
+
+
+def _verify_engine() -> Any:
+    from slidedeck import verify
+
+    return verify
+
+
+def _image_engine() -> Any:
+    from slidedeck import image
+
+    return image
+
 
 #: LibreOffice's first start builds its profile; a long deck takes a while.
 RENDER_TIMEOUT_S = 240
@@ -215,28 +236,140 @@ _LABELLED = re.compile(
 )
 
 
-def _unlabelled_invented(slides: List[Dict[str, Any]]) -> Optional[str]:
-    """Data slides built on numbers the user said to make up, without saying so."""
+#: A number as written: "1,450", "12.4", "-3"; "Q3" and "v2" are labels, not numbers.
+_NUMBER = re.compile(r"(?<![\w.])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
+#: Outline keys that hold layout settings, not words or values shown on the slide.
+_NOT_SHOWN = {
+    "notes", "index", "type", "diagram", "layout", "chart_type", "theme", "style",
+    "level", "highlight", "columns_n", "numbered", "direction", "expected_slides",
+    "required_items", "allow_split", "slide_numbers", "require_notes", "path",
+}  # fmt: skip
+
+
+def _numbers_in(text: str) -> List[Tuple[str, float]]:
+    out = []
+    for m in _NUMBER.finditer(text):
+        token = m.group(0)
+        try:
+            out.append((token, abs(float(token.replace(",", "")))))
+        except ValueError:
+            continue
+    return out
+
+
+def _shown_numbers(node: Any, where: str, out: List[Tuple[str, float, str]]) -> None:
+    """Every number a slide shows, as (token, value, where it is)."""
+    if isinstance(node, bool) or node is None:
+        return
+    if isinstance(node, (int, float)):
+        out.append((format_value(node), abs(float(node)), where))
+    elif isinstance(node, str):
+        out += [(t, v, where) for t, v in _numbers_in(node)]
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            if k in _NOT_SHOWN:
+                continue
+            if k == "csv" and isinstance(v, str):
+                # Cell by cell: "Q1,3.4" is a label and a value, not "1,3".
+                for row in csv.reader(io.StringIO(v)):
+                    for cell in row:
+                        _shown_numbers(cell.strip(), where, out)
+                continue
+            _shown_numbers(k, where, out)
+            _shown_numbers(v, "title" if k in ("title", "subtitle") else where, out)
+    elif isinstance(node, (list, tuple)):
+        for v in node:
+            _shown_numbers(v, where, out)
+
+
+def format_value(v: float) -> str:
+    return str(int(v)) if float(v).is_integer() else str(v)
+
+
+def _grounded(value: float, token: str, known: List[float]) -> bool:
+    places = len(token.split(".", 1)[1]) if "." in token else 0
+    for e in known:
+        # The same figure rounded, as a percent of a fraction, or in K/M/B units.
+        for scaled in (e, e * 100, e / 1e3, e / 1e6, e / 1e9, e * 1e3, e * 1e6):
+            if round(scaled, places) == value:
+                return True
+    return False
+
+
+def _invented_numbers(slides: List[Dict[str, Any]]) -> Optional[str]:
+    """Numbers on the slides that nothing the user said or a tool returned contains."""
+    try:
+        call = current()
+    except SkillContextError:
+        return None
+    if not call.request:
+        # No user message to check against: a library call, not a chat turn.
+        return None
+    known = [v for text in call.sources() for _t, v in _numbers_in(text)]
+    this_year = datetime.date.today().year
+    invited = bool(_INVENTED.search(call.request))
+    problems: List[str] = []
+    for i, s in enumerate(slides, 1):
+        shown: List[Tuple[str, float, str]] = []
+        _shown_numbers(s, "body", shown)
+        parts = max(
+            len(s.get(k) or [])
+            for k in ("items", "bullets", "rows", "categories", "kpis", "steps")
+        )
+        bad = sorted(
+            {
+                t
+                for t, v, where in shown
+                if not _grounded(v, t, known)
+                and not (v.is_integer() and this_year - 1 <= v <= this_year + 1)
+                and not (where == "title" and v.is_integer() and 0 < v <= parts)
+            }
+        )
+        if not bad:
+            continue
+        label = s.get("title") or f"slide {i}"
+        if invited:
+            if not _LABELLED.search(
+                json.dumps({k: v for k, v in s.items() if k != "notes"})
+            ):
+                problems.append(
+                    f"The user asked for made-up numbers, so '{label}' must say so "
+                    "where it is seen: set its source to 'Illustrative data, not "
+                    "actual results', and say so in the reply."
+                )
+            continue
+        problems.append(f"'{label}': {', '.join(bad)}")
+    if not problems or invited:
+        return " ".join(problems) or None
+    return (
+        "These numbers are not in anything the user said or a tool returned, so "
+        f"they would be invented: {'; '.join(problems)}. Use only numbers from "
+        "the user's messages or a file, page or calculation you ran; compute a "
+        "share, growth or total with run_python and use its result; otherwise "
+        "drop the number or say it in words. Never make numbers up."
+    )
+
+
+#: Pictographs and flags: many slide viewers and the image export draw them as empty boxes.
+_EMOJI = re.compile("[🀀-🫿☀-➿🇦-🇿️]")
+
+
+def _stray_emoji(slides: List[Dict[str, Any]]) -> Optional[str]:
+    """Emoji on the slides that the user did not use themselves."""
     try:
         request = current().request
     except SkillContextError:
         return None
-    if not _INVENTED.search(request):
-        return None
-    bare = [
-        s.get("title") or f"slide {i}"
-        for i, s in enumerate(slides, 1)
-        if s.get("type") in ("chart", "kpi", "table")
-        and not _LABELLED.search(
-            json.dumps({k: v for k, v in s.items() if k != "notes"})
-        )
-    ]
-    if not bare:
+    shown = json.dumps(
+        [{k: v for k, v in s.items() if k != "notes"} for s in slides],
+        ensure_ascii=False,
+    )
+    stray = sorted({e for e in _EMOJI.findall(shown) if e not in request and e != "️"})
+    if not stray:
         return None
     return (
-        "The user asked for made-up numbers, so a slide showing them must say "
-        f"so where it is seen: {'; '.join(bare)}. Set its source to "
-        "'Illustrative data, not actual results', and say so in the reply."
+        f"Remove the emoji {' '.join(stray)} from the slides: many viewers and the "
+        "image export draw them as empty boxes, and they read as informal."
     )
 
 
@@ -484,8 +617,9 @@ def _build_from(
                     "change the slides. " + _merge_hint(count)
                 ]
             )
-        missing = _missing_axis(data.get("slides") or []) or _unlabelled_invented(
-            data.get("slides") or []
+        slides = data.get("slides") or []
+        missing = (
+            _missing_axis(slides) or _invented_numbers(slides) or _stray_emoji(slides)
         )
         if missing:
             raise OutlineError([missing])
@@ -508,7 +642,7 @@ def _build_from(
                     *failed[1],
                 ]
             )
-        result = _build.build_deck(
+        result = _build_engine().build_deck(
             data, str(out), theme or None, template_path or None, saved
         )
         if result.get("status") == "built_with_issues":
@@ -633,7 +767,7 @@ def verify_deck(
             png_dir = check_write(png_dir / "slide_01.png").parent
         count = _hold_slide_count(_whole(expected_slides))
         renderer = _renderer() if render else None
-        report = _verify.verify_deck(
+        report = _verify_engine().verify_deck(
             str(deck),
             expected_slides=count or None,
             require_native_charts=require_native_charts,
@@ -660,6 +794,71 @@ def verify_deck(
         return {
             "status": "error",
             "error": f"Could not check {path}: {type(exc).__name__}: {exc}",
+        }
+
+
+@tool(display_label="Saving slide as an image", timeout=RENDER_TIMEOUT_S + 60)
+def export_slide_image(
+    deck_path: str,
+    slide: int = 1,
+    image_format: str = "png",
+    output_path: str = "",
+    width: int = 1920,
+) -> dict:
+    """Save a built slide as a PNG (default) or JPEG; the way to give a picture of a slide.
+
+    Build the deck first, then export it. Never draw a slide with image
+    generation: this is the real slide, text and charts as built.
+
+    Args:
+        deck_path: The .pptx to draw, from a build result's path.
+        slide: Which slide, from 1; 0 saves every slide.
+        image_format: png, or jpeg if the user asked for it.
+        output_path: Where to save the image (one slide); empty saves beside the deck.
+        width: Image width in pixels; the height follows the slide.
+    """
+    try:
+        deck = _readable(deck_path, "deck_path")
+        fmt = _image_engine().image_format(image_format)
+        renderer = _renderer()
+        if renderer is None:
+            raise OutlineError(
+                [
+                    "LibreOffice is not installed, so the slide cannot be drawn as an "
+                    f"image. The deck at {deck} is ready; install LibreOffice "
+                    "(https://www.libreoffice.org/download/) to export images."
+                ]
+            )
+        pdf = renderer(deck)
+        total = _image_engine().page_count(pdf)
+        n = _whole(slide)
+        if n > total:
+            raise OutlineError([f"slide {n} does not exist; the deck has {total}."])
+        pages = list(range(1, total + 1)) if n == 0 else [n]
+        ext = "jpg" if fmt == "jpeg" else "png"
+        if output_path and len(pages) == 1:
+            outs = [_absolute(output_path, "output_path")]
+            if outs[0].suffix.lower().lstrip(".") not in ("png", "jpg", "jpeg"):
+                outs = [outs[0].with_suffix(f".{ext}")]
+        else:
+            outs = [deck.with_name(f"{deck.stem} - slide {k}.{ext}") for k in pages]
+        outs = [check_write(o) for o in outs]
+        images = _image_engine().save_pages(
+            pdf, pages, outs, fmt, max(320, min(_whole(width) or 1920, 4096))
+        )
+        return {
+            "status": "ok",
+            "format": fmt,
+            "images": images,
+            "next": "Give the user the image path; it shows the slide exactly as built.",
+        }
+    except (OutlineError, SkillPermissionError) as exc:
+        return _error(exc)
+    except Exception as exc:  # noqa: BLE001 - reported to the model, not swallowed
+        log.exception("export_slide_image failed")
+        return {
+            "status": "error",
+            "error": f"Could not save {deck_path} as an image: {type(exc).__name__}: {exc}",
         }
 
 
@@ -700,7 +899,8 @@ def add_slide(deck_path: str, slide: dict, position: int = 0) -> dict:
         except OutlineError as exc:
             return _error(exc)
     return _edit(
-        deck_path, lambda d, prefs: _build.add_slide(d, specs, position or None, prefs)
+        deck_path,
+        lambda d, prefs: _build_engine().add_slide(d, specs, position or None, prefs),
     )
 
 
@@ -719,7 +919,8 @@ def update_slide(deck_path: str, index: int, slide: dict) -> dict:
         except OutlineError as exc:
             return _error(exc)
     return _edit(
-        deck_path, lambda d, prefs: _build.update_slide(d, index, slide, prefs)
+        deck_path,
+        lambda d, prefs: _build_engine().update_slide(d, index, slide, prefs),
     )
 
 
