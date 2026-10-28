@@ -363,7 +363,7 @@ class GaiaLogger:
 
 
 #: Set by :func:`configure`. Importing this module must have no side effect on
-#: the host process's logging (#4775).
+#: the host process's logging.
 log_manager: Optional[GaiaLogger] = None
 
 
@@ -375,7 +375,7 @@ def configure(log_file=None):
     files; entry points that own the process (``gaia.cli:main``, the
     ``gaia-mcp`` console script, ``gaia.ui.server:main``, the eval tools, the
     LLM app runner) call this first, so an application embedding the SDK
-    keeps its own logging setup intact (#4775). Idempotent: calls after the
+    keeps its own logging setup intact. Idempotent: calls after the
     first return the already-installed manager.
     """
     global log_manager

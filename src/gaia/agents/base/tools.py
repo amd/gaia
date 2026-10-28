@@ -11,7 +11,7 @@ import typing
 from typing import Any, Callable, Dict, Optional
 
 # Set up logging via the project logger; importing this module must not
-# reconfigure the root logger (#4775).
+# reconfigure the root logger.
 from gaia.logger import get_logger
 
 # Re-exported for existing callers of this module.

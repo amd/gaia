@@ -1,7 +1,7 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Importing gaia must not reconfigure the host's root logging (#4775).
+"""Importing gaia must not reconfigure the host's root logging.
 
 An application that embeds the SDK got its root logger reconfigured to INFO,
 with GAIA's console and file handlers attached, just by importing
@@ -19,6 +19,9 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from gaia import logger as gaia_logger
 
@@ -151,3 +154,40 @@ def test_route_console_logging_to_stderr_safe_before_configure(monkeypatch):
         assert probe.stream is sys.stderr
     finally:
         root.removeHandler(probe)
+
+
+def test_flagship_sidecar_writes_gaia_log(monkeypatch, tmp_path):
+    """Regression: the HTTP sidecar calls configure() so the log file gets
+    written. Before the fix, importing the entry point left log_manager as
+    None and no log file was created."""
+    entry = pytest.importorskip("gaia_agent.entry")
+    log_file = tmp_path / "sidecar.log"
+    monkeypatch.setenv("GAIA_LOG_FILE", str(log_file))
+    monkeypatch.setenv("GAIA_ALLOWED_PATHS", str(tmp_path))
+
+    # Reset the singleton so configure() installs a fresh manager with our
+    # temp log file (configure() is idempotent).
+    monkeypatch.setattr(gaia_logger, "log_manager", None)
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    saved_level = root.level
+    root.handlers.clear()
+
+    try:
+        with patch("uvicorn.run"):
+            entry.main(["--serve", "--host", "127.0.0.1", "--port", "1"])
+
+        assert log_file.exists(), "configure() should have created gaia.log"
+
+        # Verify a gaia_agent.* logger can write to the file post-configure.
+        logger = gaia_logger.get_logger("gaia_agent.sidecar_test")
+        logger.info("regression check")
+        assert "regression check" in log_file.read_text(encoding="utf-8")
+    finally:
+        # Close and remove the file handler configure() installed, and close
+        # the console handler, so later tests don't inherit them.
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+            handler.close()
+        root.handlers.extend(saved_handlers)
+        root.setLevel(saved_level)

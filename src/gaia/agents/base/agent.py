@@ -190,7 +190,7 @@ if TYPE_CHECKING:
     from gaia.skills.binaries import BinaryGrants
 
 # Set up logging via the project logger; importing this module must not
-# reconfigure the root logger (#4775).
+# reconfigure the root logger.
 logger = get_logger(__name__)
 
 
