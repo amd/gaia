@@ -113,6 +113,8 @@ SUMMARY_VIEW_KEYS = (
     # What the tool wrote (``RESULT_PATH_KEYS`` in ``gaia.ui.sse_handler``).
     "file_path",
     "image_path",
+    # A ``search_web`` result's hits, so a relayed turn can cite them.
+    "sources",
 )
 
 #: Which connector an MCP tool call belongs to, carried from ``tool_start``.
