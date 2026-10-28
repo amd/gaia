@@ -338,6 +338,32 @@ def test_a_greeting_waits_for_the_question_that_names_the_chat(lemonade):
     assert "User: hi" in prompt and lisbon in prompt
 
 
+@pytest.mark.parametrize(
+    "reply", ["none", "None", "NONE", "none.", '"none"', "Title: none", "none\nTitle"]
+)
+def test_a_none_reply_means_no_topic_yet(lemonade, reply):
+    lemonade.add(responses.POST, f"{LEMONADE}/chat/completions", json=_reply(reply))
+    with pytest.raises(ch._NoTopicYet):
+        asyncio.run(ch._generate_session_title(LEMONADE, CLOUD_MODEL, "hi", ""))
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "None values in pandas",
+        "None vs null in JavaScript",
+        "Nonexistent file error",
+        "Handling none and empty strings",
+    ],
+)
+def test_a_real_title_starting_with_none_is_kept(lemonade, reply):
+    lemonade.add(responses.POST, f"{LEMONADE}/chat/completions", json=_reply(reply))
+    title = asyncio.run(
+        ch._generate_session_title(LEMONADE, CLOUD_MODEL, "a pandas question", "")
+    )
+    assert title == reply
+
+
 def test_a_failed_title_request_is_a_warning(lemonade, caplog):
     lemonade.add(
         responses.POST,

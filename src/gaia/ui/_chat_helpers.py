@@ -839,7 +839,8 @@ async def _generate_session_title(
             choice.get("finish_reason"),
         )
         return None
-    if title.split()[0].lower() == "none":
+    # Exact match: a real title can start with "None" ("None values in pandas").
+    if title.lower() == "none":
         raise _NoTopicYet
     return title[:64]
 
