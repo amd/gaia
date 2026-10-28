@@ -9,6 +9,10 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A note the model writes before a tool call no longer shows as
+  `[unmapped agent event: commentary]`.** The host's output handler now marks
+  that text as `commentary`; the translator drops it, since the words already
+  went out as `token` events.
 - **Connect prompts name the right Settings tab.** The agent sent users to a
   "Connections" tab in Settings, which the Agent UI doesn't have; it now says
   "Settings → Connectors".

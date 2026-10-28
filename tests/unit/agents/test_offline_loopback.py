@@ -7,9 +7,16 @@ merely looks local — a look-alike name, userinfo, a numeric form the resolver
 might read differently, a second command on the same line — is refused.
 """
 
+import ast
+from pathlib import Path
+
 import pytest
 
-from gaia.agents.base.offline import _is_loopback, offline_refusal
+from gaia.agents.base.offline import (
+    ONLINE_SERVICE_TOOLS,
+    _is_loopback,
+    offline_refusal,
+)
 
 
 def _refused(name, **args):
@@ -197,3 +204,47 @@ class TestToolArguments:
         assert not _refused(
             "write_file", file_path="notes.md", content="see https://example.com"
         )
+
+
+def _tool_names(path):
+    """Every ``@tool``-decorated function defined in *path*."""
+    tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for deco in node.decorator_list:
+                target = deco.func if isinstance(deco, ast.Call) else deco
+                if isinstance(target, ast.Name) and target.id == "tool":
+                    names.add(node.name)
+    return names
+
+
+_TOOLS = Path(__file__).resolve().parents[3] / "src" / "gaia" / "agents" / "tools"
+
+
+class TestOnlineServiceTools:
+    @pytest.mark.parametrize("tool", sorted(ONLINE_SERVICE_TOOLS))
+    def test_refused_with_no_url_in_sight(self, tool):
+        assert _refused(tool, query="invoice")
+
+    @pytest.mark.parametrize("tool", sorted(ONLINE_SERVICE_TOOLS))
+    def test_a_local_url_argument_does_not_clear_it(self, tool):
+        assert _refused(tool, url="http://localhost/")
+
+    def test_every_mailbox_tool_is_covered(self):
+        mailbox = _tool_names(_TOOLS / "email_tools.py")
+        assert mailbox, "found no mailbox tools to check"
+        assert mailbox <= ONLINE_SERVICE_TOOLS
+
+    @pytest.mark.parametrize(
+        "tool",
+        ["list_skills", "load_skill", "unload_skill", "skill_status", "remove_skill"],
+    )
+    def test_skills_already_on_this_pc_still_run(self, tool):
+        assert tool in _tool_names(_TOOLS / "skill_library_tools.py")
+        assert offline_refusal(tool, {"name": "pdf-tools"}) is None
+
+    def test_the_refusal_names_the_tool(self):
+        result = offline_refusal("list_inbox", {})
+        assert "list_inbox" in result["error"]
+        assert "Internet is off for this chat" in result["error"]

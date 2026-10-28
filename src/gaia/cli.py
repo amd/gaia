@@ -6678,12 +6678,16 @@ def handle_perf_vis_command(args):
         sys.exit(exit_code)
 
 
-def _print_knowledge_usage(client):
+def _print_knowledge_usage(client, show_session=True):
     """Print a one-line credit-usage summary for a Tavily client."""
     usage = client.usage()
     cap = usage["cap"]
     cap_str = "unlimited" if cap is None else str(cap)
-    print(f"\n💳 Credits used: {usage['total_credits']} (cap: {cap_str})")
+    # A bare `usage` run spends nothing, so its session figure would always be 0.
+    session = f", {usage['session_credits']} this session" if show_session else ""
+    print(
+        f"\n💳 Credits used: {usage['total_credits']} total{session} (cap: {cap_str})"
+    )
 
 
 def handle_knowledge_command(args):
@@ -6730,7 +6734,7 @@ def handle_knowledge_command(args):
             print(json.dumps(result, indent=2))
             _print_knowledge_usage(client)
         elif action == "usage":
-            _print_knowledge_usage(client)
+            _print_knowledge_usage(client, show_session=False)
     except TavilyBudgetExceeded as e:
         print(f"🛑 {e}")
         sys.exit(1)

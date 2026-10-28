@@ -103,6 +103,15 @@ LONG_INPUTS = {
     "keyword words and spaces": "pin  number  for   the  is   " * 3_500,
     "ssn then spaces": "social security number" + " " * 100_000,
     "password then spaces": "password" + " " * 100_000,
+    "cvv then spaces": "cvv" + " " * 20_000,
+    "cvc then spaces": "cvc" + " " * 20_000,
+    "passcode then spaces": "passcode" + " " * 20_000,
+    "security code then spaces": "security code" + " " * 20_000,
+    "pin parentheses then spaces": "pin (" + " " * 20_000,
+    "pin code then spaces": "pin code" + " " * 100_000,
+    "pin code for then spaces": "pin code for x" + " " * 100_000,
+    "pin code for then words": "pin code for " + "word " * 20_000,
+    "narrow-space digits": "4\u202f" * 50_000,
     "spaced digits": "4 " * 50_000,
     "dotted digits": "1." * 50_000,
     "card-grouped digits": "4111 " * 20_000,
@@ -118,7 +127,8 @@ def test_masking_stays_fast_on_long_input(name):
     MemoryMixin._mask_credentials(text)
     MemoryMixin._looks_like_credential(text)
 
-    assert time.perf_counter() - started < 1.0
+    # ~0.2s locally; the bound catches runaway backtracking, not a busy CI runner.
+    assert time.perf_counter() - started < 5.0
 
 
 def test_remember_refuses_a_pin(store):
@@ -140,3 +150,112 @@ def test_the_conversation_log_keeps_no_secret(store):
     )
     assert "4821" not in logged and "4111" not in logged
     assert "Remember them" in logged
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "User's PIN for their Chase debit card is 4821",
+        "I changed my PIN to 4821",
+        "PIN 4821",
+        "My Chase card PIN is 4821",
+        "Chase bank PIN: 4821",
+        "My PIN is 4821",
+        "PIN number 4821",
+        "PIN code: 4821",
+        "PIN code 4821",
+        "PIN of my card is 4821",
+        "PIN for my card 4821",
+        "PIN for Chase 4821",
+        "PIN on card 4821",
+        "pin on chase 4821",
+        "PIN at my bank 4821",
+        "PIN of my chase card 4821",
+        "PIN is 4821",
+        "4821 is my PIN",
+        "pin#4821",
+        "PIN (4821)",
+        "PIN number on my card 4821",
+        "PIN number for Chase is 4821",
+        "CVV for my Visa is 123",
+        "CVV on my card: 123",
+        "cvc for amex 1234",
+        "security code on the back is 123",
+        "passcode for the alarm is 4821",
+        "Passcode number 4821",
+        "pass code is 4821",
+        "PIN code for Chase is 4821",
+        "PIN code on my card: 4821",
+        "PIN code at my bank 4821",
+        "PIN code of my card is 4821",
+        "PIN code is 48219",
+        "PIN code is 4821937",
+        "PIN code is 123456",
+        "My PIN code: 123456",
+        "PIN code for my Chase card is 123456",
+        "My PIN code is 560001",
+        "PIN code 560001",
+        # A capitalised name after "PIN code for/of" is as often a bank as a
+        # town, so a six-digit value there is masked too.
+        "PIN code for Chase is 123456",
+        "PIN code of HDFC Bank: 482193",
+        "PIN code for Wells Fargo 482193",
+        "PIN code of Bangalore is 560001",
+    ),
+)
+def test_pin_variants_are_masked(text):
+    assert MemoryMixin._looks_like_credential(text)
+    assert "[secret removed]" in MemoryMixin._mask_credentials(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "GPIO pin 1023",
+        "Pin on page 123",
+        "Pin code on page 123",
+    ),
+)
+def test_ordinary_pin_phrases_are_not_masked(text):
+    assert not MemoryMixin._looks_like_credential(text)
+    assert MemoryMixin._mask_credentials(text) == text
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "4111 - 1111 - 1111 - 1111",
+        "4111   1111   1111   1111",
+        "4111\t1111\t1111\t1111",
+        "4111\u202f1111\u202f1111\u202f1111",
+        "4111\u20091111\u20091111\u20091111",
+        "4111\u30001111\u30001111\u30001111",
+        "4111\u00a01111\u00a01111\u00a01111",
+    ),
+)
+def test_card_grouped_with_spaced_separators_is_masked(text):
+    assert MemoryMixin._looks_like_credential(text)
+    assert "[secret removed]" in MemoryMixin._mask_credentials(text)
+
+
+def test_amex_4_4_4_3_is_masked():
+    text = "3782 8224 6310 005"
+    assert MemoryMixin._looks_like_credential(text)
+    assert "[secret removed]" in MemoryMixin._mask_credentials(text)
+
+
+@pytest.mark.parametrize("newline", ("\n", "\r\n", "\u2028", "\x85"))
+def test_card_groups_do_not_cross_a_newline(newline):
+    text = newline.join(("4111", "1111", "1111", "1111"))
+    assert not MemoryMixin._looks_like_credential(text)
+    assert MemoryMixin._mask_credentials(text) == text
+
+
+def test_phone_lists_and_tracking_numbers_are_not_masked():
+    texts = (
+        "+49 30 12345678 or +49 89 98765432",
+        "9400 1000 0000 0000 0000 00",
+    )
+    for text in texts:
+        assert not MemoryMixin._looks_like_credential(text)
+        assert MemoryMixin._mask_credentials(text) == text

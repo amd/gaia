@@ -332,12 +332,18 @@ and where that model runs.
   marks the chat in the sidebar, and a click turns private off. A private chat
   isn't saved to memory. To keep a new chat's first message out too, turn on
   **Private** next to the message box before you send it.
-- **Tool steps** show as one quiet line ("3 steps · 1 tool") you can open for
-  the detail. "Steps" is the agent's own count, the same figure the TUI and
-  evals report.
-- **The line under an answer** says how long it took, where it ran and when
-  the first word came ("Answered in 40 s on your GPU · first word in 1 s", or
-  "via Fireworks AI" for a cloud model). Click it for the exact numbers,
+- **While GAIA works** the reply builds up as a timeline. Short notes GAIA
+  writes before a tool call ("I'll check the forecast first") appear in full,
+  each step shows as one line with its own timer, and live reasoning scrolls
+  by under **Thinking**. A line at the end says what the model is doing between
+  steps. Picking up a skill gets its own highlighted line.
+- **Once the answer is in**, the steps between two notes fold into one line
+  ("Read web page, read file") you can open for the detail, and reasoning
+  folds to "Thought for 8s".
+- **The line under an answer** says how long it took, where it ran, when
+  the first word came and how many steps GAIA took ("Answered in 40 s on your
+  GPU · first word in 1 s · 3 steps", or "via Fireworks AI" for a cloud model).
+  "Steps" is the agent's own count, the same figure the TUI and evals report. Click it for the exact numbers,
   including the tokens the whole turn read and wrote across every model call.
   Files the answer names by full path,
   such as a saved deliverable, open in your file explorer when clicked.
@@ -348,8 +354,14 @@ and where that model runs.
   to fill in is typed into the message box; the others start straight away.
   Click the folder under the message box to give the chat another folder it
   may read and write from its first message, the same as **Add folder** in the
-  session panel. When the GAIA agent runs as its own process, it keeps its own
-  limits, so the folder shows as plain text instead.
+  session panel. The chat's agent is told which folder the chat is working
+  in, so "this folder" means the one you picked. This works when GAIA runs
+  its agent as its own process too,
+  as an installed GAIA does. Only an agent too old to be given folders shows
+  the folder as plain text; update GAIA to pick one. In the desktop app this
+  opens your computer's own folder picker; in a browser GAIA shows its own,
+  where hidden folders (names starting with a dot) stay out of the list until
+  you tick **Show hidden**.
 - **The session panel** on the right keeps the facts about this chat in view;
   see [The session panel](#the-session-panel).
 - **"Loading Qwen3.6-35B-A3B on your GPU… 12s"** under the message box means
@@ -569,13 +581,15 @@ reads nothing.
   - **Runs on:** this PC with its device and backend (for example
     `GPU · Vulkan`), the model and the memory in use, or the cloud provider.
   - **Can read and write:** the folders and files GAIA may use in this chat,
-    and where each came from. **Add folder** gives it another folder;
+    and where each came from. **Add folder** gives it another folder, picked
+    the same way as from a new chat's folder;
     **Remove** takes one away. A removed folder is refused by every file and
     shell tool, even under full access and even inside a wider folder, until
     you add it back. A document attached to the chat is removed from the
     document bar instead, which also takes it out of the chat's search.
   - **Internet:** turn it off and GAIA won't search the web, open pages,
-    use the browser or connectors, or run commands that go online (such as
+    use the browser, connectors or your mailbox, search or install skills
+    from the Agent Hub, or run commands that go online (such as
     `git push`, `pip install` or `npx`). Commands that talk only to this PC,
     such as `curl http://localhost:3000`, still run. The check reads what a
     command names, so a script that connects to the internet by itself (for
@@ -586,9 +600,18 @@ reads nothing.
   - **Permission mode:** Ask or Full access, the same setting as the shield in
     the message box.
 
-  An agent that runs as its own process, such as the email agent, isn't held
-  to the folder and internet settings, and the section says so instead of
-  offering them.
+  A Hub-installed GAIA, which runs as its own process, is held to the
+  internet setting. It can be given another folder, but a folder can't be
+  taken away from it. Turning the internet off while it is working,
+  or while your message is still starting, stops its next web search, not
+  only the next message. If GAIA can't be reached to tell it, the panel or
+  the chat says so and the Agent UI ends that turn; the setting still
+  applies from your next message. It needs a GAIA agent at
+  contract 2.23 or later: with the internet off, the Agent UI doesn't send
+  your message to an older one and asks you to update GAIA instead, and
+  turning the internet off while an older one is working ends that turn. An
+  agent that keeps its own network rules, such as the email agent, isn't
+  held to either setting.
 - **Context & performance** is the breakdown described in
   [See how full the context is](#see-how-full-the-context-is).
 - **Outputs** lists everything the chat produced, newest first: files created
@@ -721,31 +744,41 @@ GAIA's own** is refused, with nothing changed, when GAIA's own server isn't
 installed; `gaia init --gaia-lemonade` installs it and switches. See
 [Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run).
 
-## Roll back to a previous version
+## Updates and installing a specific version
 
-If an update introduces a regression, you can roll back to a specific earlier release directly from the app — no need to hunt down an old installer on GitHub.
+GAIA offers each new release and waits for you: auto-update is **off by default**.
+Everything lives in **Settings → General → Updates** (desktop installer only):
 
-**How to roll back (desktop installer only):**
+- **Install updates automatically** — off by default. The Terminal UI follows the
+  same setting.
+- **Include release candidates** — off by default. On, GAIA also offers `vX.Y.Z-rcN`
+  test builds; they still wait for you unless auto-update is on. A release
+  candidate build is offered newer candidates either way.
+- **Check for updates**, then **Update to vX** when one is waiting. The corner chip
+  offers the same **Update now**.
+- **Install a specific version…** — pick any published release, newer or older
+  (useful to step back from a regression). The app downloads it and shows a native
+  "Restart now?" prompt.
 
-1. Open **Settings → Advanced**.
-2. Click **"Roll back to a previous version"**.
-3. The app fetches the list of published releases from GitHub and shows them newest-first, with your currently installed version marked.
-4. Click an older release to open a confirmation step.
-5. Confirm — the app downloads the selected version and shows a native "Restart now?" prompt when ready. Click Restart and the older version launches.
+**Pinning:** after installing a specific version, GAIA stays on it and offers no
+updates. The Updates section shows "Pinned to vX.Y.Z"; click **Unpin** to resume.
 
-**Version pinning (AC2):** After a manual rollback, auto-update is automatically paused. The About section shows "Auto-update paused (pinned to vX.Y.Z)" so you know it's held. Click **Resume updates** in the same section to re-enable normal auto-updates.
+Checks read the [GitHub releases](https://github.com/amd/gaia/releases) and take the
+newest one on your channel that publishes this platform's update. When none does,
+the Updates section says so rather than "up to date", and you install from the
+releases page instead.
 
 ### Platform support
 
-| Platform | Rollback support |
+| Platform | Specific-version install |
 |----------|-----------------|
 | Windows (NSIS installer) | Full — download + reinstall works end-to-end |
-| macOS (DMG/ZIP, signed builds) | Works on signed release builds; unsigned dev builds download but cannot apply the update |
+| macOS | Not yet — releases don't publish the `.zip` the macOS updater installs from ([#5682](https://github.com/amd/gaia/issues/5682)); install the `.dmg` from [Releases](https://github.com/amd/gaia/releases) |
 | Linux AppImage | Supported (self-replacing) |
 | Linux .deb | Not supported via in-app rollback — use `sudo apt install ./gaia-agent-ui-<version>-amd64.deb` from [Releases](https://github.com/amd/gaia/releases) |
 
 <Note>
-The rollback list only shows releases that have an installer for your current platform. Releases without a matching artifact are filtered out automatically.
+The version list only shows releases that have an installer for your current platform. Releases without a matching artifact are filtered out automatically.
 </Note>
 
 ---
