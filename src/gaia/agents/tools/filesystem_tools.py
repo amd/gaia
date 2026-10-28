@@ -41,6 +41,7 @@ from gaia.filesystem.name_match import (
     fts_name_terms,
     glob_matches_mid_word,
 )
+from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -308,7 +309,7 @@ class FileSystemToolsMixin:
 
         @tool(atomic=True)
         def browse_directory(
-            path: str = "~",
+            path: str = ".",
             show_hidden: bool = False,
             sort_by: str = "name",
             filter_type: str = None,
@@ -317,16 +318,17 @@ class FileSystemToolsMixin:
             """Browse a directory and list its contents with metadata.
 
             Returns files and subdirectories with size, modification date, and type info.
-            Use this to explore what's inside a folder. Default path is user's home directory.
+            Use this to explore what's inside a folder. A bare path (including the default) is relative to the chat workspace.
 
             Args:
-                path: Directory to browse (default: home directory ~)
+                path: Directory to browse (default: chat workspace)
                 show_hidden: Include hidden files/directories (default: False)
                 sort_by: Sort order - name, size, modified, or type (default: name)
                 filter_type: Filter by extension without dot, e.g. 'pdf', 'py' (default: all)
                 max_items: Maximum items to return (default: 50)
             """
             try:
+                path = str(_resolve_target(path, None, _workspace_default(mixin)))
                 resolved = mixin._validate_path(path)
 
                 if not resolved.is_dir():

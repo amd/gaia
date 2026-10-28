@@ -89,6 +89,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     WaitToolsMixin,
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
+from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.agents.tools.rag_tools import documents_still_indexing
 from gaia.env import child_env
 from gaia.llm.inference_location import (
@@ -1875,7 +1876,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 Returns:
                     Dictionary with files, directories, and total count
                 """
-                path = os.path.expanduser(path)
+                path = str(_resolve_target(path, None, _workspace_default(self)))
                 denied = read_access_error(self, path)
                 if denied:
                     return denied
@@ -1937,7 +1938,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except ValueError as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
 
-                file_path = os.path.expanduser(file_path)
+                file_path = str(_resolve_target(file_path, None, _workspace_default(self)))
                 if not self.path_validator.is_path_allowed(file_path):
                     return {
                         "status": "error",

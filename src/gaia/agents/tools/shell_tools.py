@@ -53,6 +53,7 @@ from gaia.agents.tools.shell_deletes import (
     split_exact,
 )
 from gaia.agents.tools.shell_session import ShellSession
+from gaia.agents.tools.workspace_paths import _workspace_default
 from gaia.env import child_env
 from gaia.tool_cancellation import tool_cancelled
 
@@ -2818,14 +2819,20 @@ class ShellToolsMixin:
         """This agent's shell session, created on first use."""
         session = getattr(self, "_shell_session", None)
         if session is None or session.closed:
-            session = ShellSession(cwd_guard=self._session_cwd_guard())
+            session = ShellSession(
+                start_cwd=_workspace_default(self),
+                cwd_guard=self._session_cwd_guard(),
+            )
             self._shell_session = session
         return session
 
     def reset_shell_session(self) -> ShellSession:
         """Replace the session with a clean one and return it."""
         previous = getattr(self, "_shell_session", None)
-        self._shell_session = ShellSession(cwd_guard=self._session_cwd_guard())
+        self._shell_session = ShellSession(
+            start_cwd=_workspace_default(self),
+            cwd_guard=self._session_cwd_guard(),
+        )
         if previous is not None:
             previous.close()
         return self._shell_session

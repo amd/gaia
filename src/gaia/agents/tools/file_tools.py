@@ -59,6 +59,7 @@ from gaia.agents.tools.search_scope import (
 )
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
 from gaia.filesystem.name_match import fold_name, strip_accents
+from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.logger import get_logger
 from gaia.security import BackupError
 
@@ -377,7 +378,12 @@ class FileSearchToolsMixin:
 
     def _search_roots(self) -> List[Path]:
         """Where a filesystem search should look — see ``search_scope`` (#3576)."""
-        return search_roots(self)
+        roots = search_roots(self)
+        workspace = _workspace_default(self)
+        if not workspace:
+            return roots
+        preferred = Path(workspace).resolve()
+        return [preferred] + [root for root in roots if root != preferred]
 
     def _resolve_search_directory(self, directory: str, allow_file: bool = False):
         """``(path, None)`` for a directory the model named, or ``(None, error)``.
@@ -964,7 +970,7 @@ class FileSearchToolsMixin:
                 if search_root is None:
                     roots = self._search_roots()
                 else:
-                    roots = [Path(search_root).expanduser().resolve()]
+                    roots = [_resolve_target(search_root, None, _workspace_default(self))]
                     # Before the existence probe, as in read_file.
                     denied = self._read_access_error(str(roots[0]))
                     if denied:
