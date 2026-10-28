@@ -202,3 +202,57 @@ func TestSettleFailuresLeavesTheStoredLogUntouched(t *testing.T) {
 		t.Errorf("settleFailures must work on a copy: got %+v, stored %+v", settled[0], items[0])
 	}
 }
+
+// A file tool is recovered only by a success on the same file: clean.py
+// failing is not fixed by report.py running, and back to back the failure
+// must not fold under the other file's success and vanish.
+func TestAFileToolFailureIsRecoveredOnlyByTheSameFile(t *testing.T) {
+	red := colour(t)
+	m := feed(t, newTestChat(t),
+		call("run_python_file", `{"file_path":"clean.py"}`),
+		result("run_python_file", scriptError),
+		call("run_python_file", `{"file_path":"report.py"}`),
+		result("run_python_file", `{"success":true}`),
+		turnEnds,
+	)
+	record := workRecord(t, m)
+	got := ansi.Strip(record)
+	if strings.Contains(got, "retried") || !strings.Contains(got, "└ failed") ||
+		!strings.Contains(got, "Length mismatch") {
+		t.Errorf("another file's success recovered or hid the clean.py failure:\n%s", got)
+	}
+	if !strings.Contains(record, red) {
+		t.Errorf("the unrecovered failure must be red")
+	}
+
+	// The same file under another spelling of its path is the same retry.
+	m = feed(t, newTestChat(t),
+		call("run_python_file", `{"file_path":"scripts\\clean.py"}`),
+		result("run_python_file", scriptError),
+		call("write_file", `{"file_path":"scripts/clean.py"}`),
+		result("write_file", `{"success":true}`),
+		call("run_python_file", `{"file_path":"./scripts/clean.py"}`),
+		result("run_python_file", `{"success":true}`),
+		turnEnds,
+	)
+	if got := ansi.Strip(workRecord(t, m)); !strings.Contains(got, "error, retried") ||
+		strings.Contains(got, "failed") {
+		t.Errorf("a retry of the same file must settle it:\n%s", got)
+	}
+}
+
+func TestRetryKeyBoundaries(t *testing.T) {
+	cases := []struct{ a, b string }{
+		{`{"path":"a.txt"}`, `{"path":"b.txt"}`},
+		{`{"command":"python -m pip"}`, `{"command":"python -c x"}`},
+		{`{"file_path":"a.py"}`, `{}`},
+	}
+	for _, c := range cases {
+		if retryKey("t", json.RawMessage(c.a)) == retryKey("t", json.RawMessage(c.b)) {
+			t.Errorf("%s and %s must not share a retry key", c.a, c.b)
+		}
+	}
+	if retryKey("t", json.RawMessage(`not json`)) != "t" {
+		t.Errorf("unparseable args must fall back to the tool name")
+	}
+}

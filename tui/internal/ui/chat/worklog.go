@@ -6,6 +6,7 @@ package chat
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -306,26 +307,35 @@ func stepRetryKey(item ActivityItem) string {
 }
 
 // retryKey is the tool, plus — for a shell command — its program and first
-// argument. A failed `pip install` is not recovered by a later `dir`, or by
-// `python -c` succeeding after `python -m pip` failed.
+// argument, or for a file tool the file. A failed `pip install` is not
+// recovered by a later `dir`, `python -c` succeeding after `python -m pip`
+// failed, or report.py running after clean.py failed.
 func retryKey(tool string, args json.RawMessage) string {
 	var fields struct {
-		Command string `json:"command"`
+		Command  string `json:"command"`
+		FilePath string `json:"file_path"`
+		Path     string `json:"path"`
 	}
 	if json.Unmarshal(args, &fields) != nil {
 		return tool
 	}
-	words := strings.Fields(fields.Command)
-	if len(words) == 0 {
-		return tool
+	if words := strings.Fields(fields.Command); len(words) > 0 {
+		program := strings.ToLower(filepath.Base(strings.ReplaceAll(words[0], "\\", "/")))
+		program = strings.TrimSuffix(program, ".exe")
+		key := tool + " " + program
+		if len(words) > 1 {
+			key += " " + words[1]
+		}
+		return key
 	}
-	program := strings.ToLower(filepath.Base(strings.ReplaceAll(words[0], "\\", "/")))
-	program = strings.TrimSuffix(program, ".exe")
-	key := tool + " " + program
-	if len(words) > 1 {
-		key += " " + words[1]
+	file := fields.FilePath
+	if file == "" {
+		file = fields.Path
 	}
-	return key
+	if file = strings.TrimSpace(file); file != "" {
+		return tool + " " + path.Clean(strings.ReplaceAll(file, "\\", "/"))
+	}
+	return tool
 }
 
 // calmDetail rewords a recovered step's failure line: the state leads instead
