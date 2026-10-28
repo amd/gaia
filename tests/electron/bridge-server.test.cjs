@@ -229,7 +229,7 @@ function makeHost() {
     session: fakeSession(),
     publish: (s) => published.push(s),
     blockedPorts: () => [4321],
-    recentStore: { load: () => [], save: () => {} },
+    recentStore: { load: () => new Map(), save: () => {} },
     goneChats: new Set(),
     onToggleRequest: jest.fn(),
     onShowRequest: jest.fn(),

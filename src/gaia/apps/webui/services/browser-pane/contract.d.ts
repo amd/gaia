@@ -82,6 +82,7 @@ export interface PaneState {
   tabs: TabState[];
   /** null while the chat has no tabs. */
   activeTabId: TabId | null;
+  /** The shown chat's recently visited pages, newest first. */
   recent: RecentPage[];
   /** True while the user picks elements on the active tab (Cmd+Shift+S). */
   picking: boolean;

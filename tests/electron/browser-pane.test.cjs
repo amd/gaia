@@ -37,8 +37,8 @@ function fakeSession() {
   return ses;
 }
 
-function memoryRecentStore(initial = []) {
-  const store = { pages: initial, load: () => store.pages.slice(), save: jest.fn((p) => { store.pages = p; }) };
+function memoryRecentStore(initial = new Map()) {
+  const store = { pages: initial, load: () => new Map(store.pages), save: jest.fn((p) => { store.pages = new Map(p); }) };
   return store;
 }
 
@@ -198,14 +198,14 @@ describe("tabs", () => {
   });
 
   test("clearing browsing data clears the pane session, histories and recent pages", async () => {
-    const { host, deps, last } = makeHost({ recentStore: memoryRecentStore([{ url: "https://x.test/", title: "X" }]) });
+    const { host, deps, last } = makeHost({ recentStore: memoryRecentStore(new Map([[null, [{ url: "https://x.test/", title: "X" }]]])) });
     const wc = viewOf(host, host.openTab("https://a.test/")).webContents;
     await host.clearBrowsingData();
     expect(deps.session.clearStorageData).toHaveBeenCalled();
     expect(deps.session.clearCache).toHaveBeenCalled();
     expect(wc.navigationHistory.clear).toHaveBeenCalled();
     expect(last().recent).toEqual([]);
-    expect(deps.recentStore.save).toHaveBeenLastCalledWith([]);
+    expect(deps.recentStore.save).toHaveBeenLastCalledWith(new Map());
   });
 
   test("open in system browser hands over web pages only", () => {
@@ -496,17 +496,24 @@ describe("IPC", () => {
     expect([...used].sort()).toEqual(Object.values(CHANNELS).sort());
   });
 
-  test("recent pages survive a restart and a corrupt file is ignored with an error", () => {
+  test("each chat's recent pages survive a restart, and a corrupt or old shared file is ignored with an error", () => {
     const dir = fs.mkdtempSync(path.join(require("os").tmpdir(), "pane-recent-"));
     const file = path.join(dir, "recent.json");
     const store = fileRecentStore(file);
-    expect(store.load()).toEqual([]);
-    store.save([{ url: "https://a.test/", title: "A" }]);
-    expect(fileRecentStore(file).load()).toEqual([{ url: "https://a.test/", title: "A" }]);
-    fs.writeFileSync(file, "{not json");
+    expect(store.load()).toEqual(new Map());
+    const pages = new Map([
+      [null, [{ url: "https://draft.test/", title: "Draft" }]],
+      ["chat-a", [{ url: "https://a.test/", title: "A" }]],
+    ]);
+    store.save(pages);
+    expect(fileRecentStore(file).load()).toEqual(pages);
     const error = jest.spyOn(console, "error").mockImplementation(() => {});
-    expect(store.load()).toEqual([]);
-    expect(error).toHaveBeenCalledWith(expect.stringContaining(file));
+    for (const bad of ["{not json", JSON.stringify([{ url: "https://old.test/", title: "Old" }])]) {
+      fs.writeFileSync(file, bad);
+      error.mockClear();
+      expect(store.load()).toEqual(new Map());
+      expect(error).toHaveBeenCalledWith(expect.stringContaining(file));
+    }
     error.mockRestore();
   });
 });

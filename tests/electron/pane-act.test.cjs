@@ -36,7 +36,7 @@ function makeHost() {
     session: ses,
     publish: jest.fn(),
     blockedPorts: () => [],
-    recentStore: { load: () => [], save: () => {} },
+    recentStore: { load: () => new Map(), save: () => {} },
     goneChats: new Set(),
     onToggleRequest: jest.fn(),
     onShowRequest: jest.fn(),

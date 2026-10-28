@@ -40,6 +40,8 @@ const PANE_PARTITION = "persist:gaia-browser-pane";
 // Docks DevTools inside the tab's own view, so it stays in the pane and moves with it.
 const DEVTOOLS_MODE = "bottom";
 const RECENT_LIMIT = 8;
+// Chats whose recent pages are kept; the least recently visited drop first.
+const RECENT_CHATS = 50;
 const ERR_ABORTED = -3;
 // Size a page lays out at before the pane has ever been shown; hidden, it still captures.
 const HIDDEN_BOUNDS = { x: 0, y: 0, width: 1024, height: 768 };
@@ -202,7 +204,7 @@ class PaneHost {
    *   session: Electron.Session,
    *   publish: (state: PaneState) => void,
    *   blockedPorts: () => number[],
-   *   recentStore: { load: () => RecentPage[], save: (pages: RecentPage[]) => void },
+   *   recentStore: { load: () => Map<ChatKey, RecentPage[]>, save: (pages: Map<ChatKey, RecentPage[]>) => void },
    *   goneChats: Set<string>,
    *   onToggleRequest: () => void,
    *   onShowRequest: (chat: string) => void,
@@ -231,7 +233,8 @@ class PaneHost {
     this.occluded = false;
     /** @type {Electron.Rectangle | null} */
     this.bounds = null;
-    /** @type {RecentPage[]} */
+    /** Each chat's recent pages, the chat visited last at the end. */
+    /** @type {Map<ChatKey, RecentPage[]>} */
     this.recent = deps.recentStore.load();
     this.disposed = false;
     /** Chats the user deleted, shared by every window this app run; their ids never come back. */
@@ -256,7 +259,7 @@ class PaneHost {
       occluded: this.occluded,
       tabs: this.chatTabs(this.shown).map((t) => ({ ...t.state })),
       activeTabId: this.activeTabId,
-      recent: this.recent.slice(),
+      recent: (this.recent.get(this.shown) ?? []).slice(),
       picking: this.picker !== null,
     };
   }
@@ -310,6 +313,11 @@ class PaneHost {
     const draftActive = this.activeByChat.get(null);
     this.activeByChat.delete(null);
     if (draftActive !== undefined && !this.activeByChat.has(sessionId)) this.activeByChat.set(sessionId, draftActive);
+    const draftPages = this.recent.get(null);
+    if (draftPages) {
+      this.recent.delete(null);
+      for (const page of [...draftPages].reverse()) this.remember(sessionId, page.url, page.title);
+    }
     if (this.shown === null) {
       this.shown = sessionId;
       this.recency = [sessionId, ...this.recency.filter((c) => c !== sessionId)];
@@ -328,6 +336,7 @@ class PaneHost {
     for (const tab of this.chatTabs(sessionId)) this.dropTab(tab);
     this.activeByChat.delete(sessionId);
     this.recency = this.recency.filter((c) => c !== sessionId);
+    if (this.recent.delete(sessionId)) this.deps.recentStore.save(this.recent);
     this.syncViews();
     this.publish();
   }
@@ -521,7 +530,7 @@ class PaneHost {
   async clearBrowsingData() {
     const ses = this.deps.session;
     await Promise.all([ses.clearStorageData(), ses.clearCache(), ses.clearAuthCache()]);
-    this.recent = [];
+    this.recent.clear();
     this.deps.recentStore.save(this.recent);
     for (const tab of this.tabs.values()) {
       if (tab.saved) {
@@ -1442,7 +1451,7 @@ class PaneHost {
     wc.on("did-navigate", update((_event, url) => {
       s.url = url;
       this.readNavigation(tab);
-      this.remember(url, wc.getTitle());
+      this.remember(tab.chat, url, wc.getTitle());
     }));
     wc.on("did-navigate-in-page", update((_event, url, isMainFrame) => {
       if (!isMainFrame) return;
@@ -1451,7 +1460,7 @@ class PaneHost {
     }));
     wc.on("page-title-updated", update((_event, title) => {
       s.title = title;
-      if (s.url) this.remember(s.url, title);
+      if (s.url) this.remember(tab.chat, s.url, title);
     }));
     wc.on("did-fail-load", update((_event, code, description, url, isMainFrame) => {
       if (!isMainFrame || code === ERR_ABORTED) return;
@@ -1491,11 +1500,13 @@ class PaneHost {
     });
   }
 
-  /** Put a visited page at the top of the new tab page's list. */
-  remember(url, title) {
+  /** Put a visited page at the top of its chat's new tab page list. */
+  remember(chat, url, title) {
     if (!isWebUrl(url)) return;
-    const rest = this.recent.filter((p) => p.url !== url);
-    this.recent = [{ url, title: title || url }, ...rest].slice(0, RECENT_LIMIT);
+    const rest = (this.recent.get(chat) ?? []).filter((p) => p.url !== url);
+    this.recent.delete(chat);
+    this.recent.set(chat, [{ url, title: title || url }, ...rest].slice(0, RECENT_LIMIT));
+    for (const old of [...this.recent.keys()].slice(0, -RECENT_CHATS)) this.recent.delete(old);
     this.deps.recentStore.save(this.recent);
   }
 

@@ -204,7 +204,7 @@ describe("PaneHost and the picker", () => {
       session: Object.assign(new EventEmitter(), { cookies: { get: jest.fn(() => Promise.resolve([])) } }),
       publish: jest.fn(),
       blockedPorts: () => [],
-      recentStore: { load: () => [], save: () => {} },
+      recentStore: { load: () => new Map(), save: () => {} },
       goneChats: new Set(),
       onToggleRequest: jest.fn(),
       onShowRequest: jest.fn(),

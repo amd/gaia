@@ -15,6 +15,7 @@ const { PaneHost, PANE_PARTITION } = require("./pane-host.cjs");
 const { installSessionPolicy } = require("./navigation-policy.cjs");
 
 /** @typedef {import("./contract").RecentPage} RecentPage */
+/** @typedef {import("./contract").ChatKey} ChatKey */
 
 const CHANNELS = Object.freeze({
   getState: "pane:get-state",
@@ -43,33 +44,45 @@ const CHANNELS = Object.freeze({
 
 const HISTORY_ACTIONS = new Set(["back", "forward", "reload", "stop"]);
 
-/** Recent pages kept as a small JSON file, so the new tab page survives a restart. */
+// The new-chat screen's pages, under a key no chat id can be.
+const DRAFT_KEY = "";
+
+/** Each chat's recent pages, kept as a small JSON file so the new tab page survives a restart. */
 function fileRecentStore(filePath) {
   return {
-    /** @returns {RecentPage[]} */
+    /** @returns {Map<ChatKey, RecentPage[]>} */
     load() {
       let raw;
       try {
         raw = fs.readFileSync(filePath, "utf8");
       } catch (err) {
-        if (err.code === "ENOENT") return [];
+        if (err.code === "ENOENT") return new Map();
         console.error(`[browser-pane] Could not read recent pages from ${filePath}: ${err.message}`);
-        return [];
+        return new Map();
       }
       try {
-        const pages = JSON.parse(raw);
-        if (!Array.isArray(pages)) throw new Error("expected a list");
-        return pages.filter((p) => p && typeof p.url === "string" && typeof p.title === "string");
+        const byChat = JSON.parse(raw);
+        if (byChat === null || typeof byChat !== "object" || Array.isArray(byChat)) {
+          throw new Error("expected recent pages keyed by chat (an older version kept one shared list)");
+        }
+        const pages = new Map();
+        for (const [key, list] of Object.entries(byChat)) {
+          if (!Array.isArray(list)) continue;
+          const valid = list.filter((p) => p && typeof p.url === "string" && typeof p.title === "string");
+          if (valid.length) pages.set(key === DRAFT_KEY ? null : key, valid);
+        }
+        return pages;
       } catch (err) {
         console.error(`[browser-pane] Ignoring unreadable recent pages in ${filePath}: ${err.message}`);
-        return [];
+        return new Map();
       }
     },
-    /** @param {RecentPage[]} pages */
+    /** @param {Map<ChatKey, RecentPage[]>} pages */
     save(pages) {
+      const byChat = Object.fromEntries([...pages].map(([chat, list]) => [chat ?? DRAFT_KEY, list]));
       const tmp = `${filePath}.tmp`;
       try {
-        fs.writeFileSync(tmp, JSON.stringify(pages));
+        fs.writeFileSync(tmp, JSON.stringify(byChat));
         fs.renameSync(tmp, filePath);
       } catch (err) {
         console.error(`[browser-pane] Could not save recent pages to ${filePath}: ${err.message}`);

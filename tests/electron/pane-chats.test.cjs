@@ -22,7 +22,7 @@ const { CHANNELS, createBrowserPaneService } = require(path.join(PANE, "ipc.cjs"
 const LOCAL = "http://127.0.0.1:5000";
 const POINT = { x: 10, y: 10, tag: "button", type: "submit", editable: false };
 
-function makeHost() {
+function makeHost({ recent = new Map() } = {}) {
   const session = new EventEmitter();
   session.cookies = { get: jest.fn(() => Promise.resolve([])) };
   const published = [];
@@ -31,7 +31,7 @@ function makeHost() {
     session,
     publish: (s) => published.push(s),
     blockedPorts: () => [],
-    recentStore: { load: () => [], save: () => {} },
+    recentStore: { load: () => new Map(recent), save: jest.fn() },
     goneChats: new Set(),
     onToggleRequest: jest.fn(),
     onShowRequest: jest.fn(),
@@ -131,6 +131,61 @@ describe("each chat shows its own tabs", () => {
     host.setView("chat-a", true);
     expect(urls(host.state())).toEqual([`${LOCAL}/a`, `${LOCAL}/popup-1`, `${LOCAL}/popup-2`]);
     expect(host.state().tabs.find((t) => t.id === host.state().activeTabId).url).toBe(`${LOCAL}/popup-2`);
+  });
+});
+
+describe("recently visited pages", () => {
+  const visit = (host, id, url, title) => {
+    wcOf(host, id).emit("did-navigate", {}, url);
+    wcOf(host, id).emit("page-title-updated", {}, title);
+  };
+
+  test("each chat lists only the pages its own tabs visited", () => {
+    const { host } = makeHost();
+    host.setView("chat-a", true);
+    visit(host, host.openTab(`${LOCAL}/qa`), `${LOCAL}/qa`, "QA app");
+    host.setView("chat-b", true);
+    expect(host.state().recent).toEqual([]);
+    visit(host, host.openTab(`${LOCAL}/water`), `${LOCAL}/water`, "Hydration");
+    expect(host.state().recent).toEqual([{ url: `${LOCAL}/water`, title: "Hydration" }]);
+    host.setView("chat-a", true);
+    expect(host.state().recent).toEqual([{ url: `${LOCAL}/qa`, title: "QA app" }]);
+  });
+
+  test("a page a hidden chat's tab visits goes to that chat, not the one on screen", () => {
+    const { host } = makeHost();
+    host.setView("chat-a", true);
+    const a = host.openTab(`${LOCAL}/a`);
+    host.setView("chat-b", true);
+    visit(host, a, `${LOCAL}/a/next`, "A next");
+    expect(host.state().recent).toEqual([]);
+    host.setView("chat-a", true);
+    expect(host.state().recent[0]).toEqual({ url: `${LOCAL}/a/next`, title: "A next" });
+  });
+
+  test("the new-chat screen's pages go to the chat its first message makes", () => {
+    const { host } = makeHost();
+    host.setView(null, true);
+    visit(host, host.openTab(`${LOCAL}/draft`), `${LOCAL}/draft`, "Draft");
+    host.claimDraft("chat-new");
+    expect(host.state().recent).toEqual([{ url: `${LOCAL}/draft`, title: "Draft" }]);
+    host.setView(null, false);
+    expect(host.state().recent).toEqual([]);
+  });
+
+  test("deleting a chat drops its pages and saves", () => {
+    const { host } = makeHost({ recent: new Map([["chat-a", [{ url: `${LOCAL}/a`, title: "A" }]]]) });
+    host.forgetChat("chat-a");
+    expect(host.recent.has("chat-a")).toBe(false);
+    expect(host.deps.recentStore.save).toHaveBeenLastCalledWith(new Map());
+  });
+
+  test("only the most recently visited chats keep their lists", () => {
+    const { host } = makeHost();
+    for (let i = 0; i < 60; i++) host.remember(`chat-${i}`, `${LOCAL}/${i}`, `Page ${i}`);
+    expect(host.recent.size).toBe(50);
+    expect(host.recent.has("chat-9")).toBe(false);
+    expect(host.recent.has("chat-10")).toBe(true);
   });
 });
 
