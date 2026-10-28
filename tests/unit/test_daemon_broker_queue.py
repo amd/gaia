@@ -972,12 +972,14 @@ def test_an_upload_queued_behind_a_chat_is_not_stopped_as_stalled(
 
     daemon = daemon_factory()
     monkeypatch.setattr(broker_routes, "QUEUE_UPDATE_EVERY_S", 0.1)
-    monkeypatch.setattr(helpers, "_INDEX_TIMEOUT_S", 0.8)
+    # A 0.1 s queue update is live progress, not a sub-second deadline.
+    # Leave enough scheduling headroom for an xdist worker under load.
+    monkeypatch.setattr(helpers, "_INDEX_TIMEOUT_S", 2.0)
     monkeypatch.setattr("gaia.rag.sdk.RAGSDK", _rag_that_leases("embed-model"))
     doc = tmp_path / "doc.txt"
     doc.write_text("content", encoding="utf-8")
 
-    holder, released = _hold_in_thread("chat-model", 2.5)
+    holder, released = _hold_in_thread("chat-model", 5.0)
     assert asyncio.run(asyncio.wait_for(helpers._index_document(doc), 15)) == 1
     assert "at" in released, "indexed before the chat let go of the slot"
     holder.join(10)
@@ -1035,7 +1037,9 @@ def test_an_upload_queued_behind_a_dead_holder_still_indexes(
 
     daemon = daemon_factory(ModelSlotBroker(heartbeat_ttl_s=1.5))
     monkeypatch.setattr(broker_routes, "QUEUE_UPDATE_EVERY_S", 0.1)
-    monkeypatch.setattr(helpers, "_INDEX_TIMEOUT_S", 0.8)
+    # A 0.1 s queue update is live progress, not a sub-second deadline.
+    # Leave enough scheduling headroom for an xdist worker under load.
+    monkeypatch.setattr(helpers, "_INDEX_TIMEOUT_S", 2.0)
     monkeypatch.setattr("gaia.rag.sdk.RAGSDK", _rag_that_leases("embed-model"))
     doc = tmp_path / "doc.txt"
     doc.write_text("content", encoding="utf-8")

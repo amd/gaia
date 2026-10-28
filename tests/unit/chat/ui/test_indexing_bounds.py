@@ -167,14 +167,16 @@ async def test_waiting_in_line_for_the_embedder_counts_as_progress(slow_rag):
 
     def index_after_a_long_queue(self, path, progress_callback=None, heartbeat=None):
         # Queued behind a long chat for the embedder: the broker reports the
-        # wait every so often, but no page or batch moves for 1.5 s.
-        for _ in range(15):
+        # wait every so often, but no page or batch moves for 4 s. Keep this
+        # well beyond the watchdog window so a busy CI worker cannot turn a
+        # live queue into a false stall.
+        for _ in range(40):
             broker_client.notify_wait({"event": "queued", "scope": "daemon"})
             time.sleep(0.1)
         return real_index(self, path, progress_callback, heartbeat)
 
     rag.index_document = index_after_a_long_queue
-    with patch.object(helpers, "_INDEX_TIMEOUT_S", 0.4):
+    with patch.object(helpers, "_INDEX_TIMEOUT_S", 1.5):
         assert await asyncio.wait_for(helpers._index_document(doc), 10) == 1
 
 
