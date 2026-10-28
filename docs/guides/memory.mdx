@@ -43,7 +43,7 @@ Before using Agent Memory, make sure you have the following in place:
 
 ## Turn Memory On or Off
 
-Memory is on by default, in the terminal UI and the Agent UI alike. Turning it off stops all memory writes on this machine until you turn it back on; a private chat pauses it for that chat only. To keep even a chat's first message out of memory, turn on **Private** next to the message box before you send it; an open chat can be made private with the eye button in its header, which stays filled while the chat is private. Either switch takes effect on the next message, in open chats as well as new ones; the Agent UI's background goal runs and scheduled tasks follow it too.
+Memory is on by default, in the terminal UI and the Agent UI alike. Turning it off stops all memory writes on this machine until you turn it back on; a private chat pauses it for that chat only. To keep even a chat's first message out of memory, click **Memory on** next to the message box so it reads **Private** before you send it (while memory is turned off it reads **Memory off** and can't be clicked); an open chat can be made private with the eye button in its header, which stays filled while the chat is private. Either switch takes effect on the next message, in open chats as well as new ones; the Agent UI's background goal runs and scheduled tasks follow it too.
 
 ### Via the Agent UI (recommended)
 
@@ -423,7 +423,7 @@ The **Advanced** tab keeps the full view for troubleshooting:
 
 - **Stats overview** -- total memories, sessions, tool calls, success rate, and embedding coverage
 - **Knowledge browser** -- filterable, sortable table of all memory entries, including confidence and source, with inline editing
-- **Tool performance** -- per-tool success rates, error history, average duration. Memory tools (`remember`, `recall`, `update_memory`, `forget`, `search_past_conversations`) are not logged, so they never appear here or in the **Tool Calls** count
+- **Tool performance** -- per-tool success rates, error history, average duration. Memory tools (`remember`, `recall`, `update_memory`, `forget`, `search_past_conversations`) are not logged, so they never appear here or in the **Tool Calls** count. A call that was denied or refused before it ran is listed under **Denied** and is left out of the call count, success rate and error history, since the tool never ran
 - **Upcoming and overdue** -- time-sensitive items due soon or past due
 - **Conversation history** -- searchable archive of all past sessions with consolidation status
 - **Superseded items** -- toggle to see fact history and how knowledge evolved over time

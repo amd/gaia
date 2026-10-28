@@ -328,6 +328,9 @@ class ChatAgentConfig:
 
     # Security
     allowed_paths: Optional[List[str]] = None
+    # Chat workspace used for resolving relative file paths. This is separate
+    # from allowed_paths, which is an access allowlist rather than a base dir.
+    working_directory: Optional[str] = None
 
     # File System settings
     enable_filesystem: bool = (
