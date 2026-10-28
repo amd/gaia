@@ -86,7 +86,10 @@ from .session_environment import (
     held_internet_off,
 )
 from .session_environment import load as load_environment
-from .session_environment import with_folder_note, withheld_refusal
+from .session_environment import (
+    with_folder_note,
+    withheld_refusal,
+)
 from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
 from .utils import attached_upload_paths, managed_documents_dir
