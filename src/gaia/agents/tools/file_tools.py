@@ -378,12 +378,11 @@ class FileSearchToolsMixin:
 
     def _search_roots(self) -> List[Path]:
         """Where a filesystem search should look — see ``search_scope`` (#3576)."""
-        roots = search_roots(self)
         workspace = _workspace_default(self)
-        if not workspace:
-            return roots
-        preferred = Path(workspace).resolve()
-        return [preferred] + [root for root in roots if root != preferred]
+        return search_roots(
+            self,
+            preferred_workspace=Path(workspace) if workspace else None,
+        )
 
     def _resolve_search_directory(self, directory: str, allow_file: bool = False):
         """``(path, None)`` for a directory the model named, or ``(None, error)``.
@@ -970,7 +969,9 @@ class FileSearchToolsMixin:
                 if search_root is None:
                     roots = self._search_roots()
                 else:
-                    roots = [_resolve_target(search_root, None, _workspace_default(self))]
+                    roots = [
+                        _resolve_target(search_root, None, _workspace_default(self))
+                    ]
                     # Before the existence probe, as in read_file.
                     denied = self._read_access_error(str(roots[0]))
                     if denied:

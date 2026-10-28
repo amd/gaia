@@ -318,17 +318,20 @@ class FileSystemToolsMixin:
             """Browse a directory and list its contents with metadata.
 
             Returns files and subdirectories with size, modification date, and type info.
-            Use this to explore what's inside a folder. A bare path (including the default) is relative to the chat workspace.
+            Use this to explore what's inside a folder. A bare path is relative to the chat workspace; without one, the default opens the home directory.
 
             Args:
-                path: Directory to browse (default: chat workspace)
+                path: Directory to browse (default: chat workspace, otherwise home directory)
                 show_hidden: Include hidden files/directories (default: False)
                 sort_by: Sort order - name, size, modified, or type (default: name)
                 filter_type: Filter by extension without dot, e.g. 'pdf', 'py' (default: all)
                 max_items: Maximum items to return (default: 50)
             """
             try:
-                path = str(_resolve_target(path, None, _workspace_default(mixin)))
+                workspace = _workspace_default(mixin)
+                if not workspace and path == ".":
+                    path = "~"
+                path = str(_resolve_target(path, None, workspace))
                 resolved = mixin._validate_path(path)
 
                 if not resolved.is_dir():
