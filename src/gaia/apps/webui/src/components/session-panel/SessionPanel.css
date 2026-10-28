@@ -412,7 +412,17 @@
     color: var(--text-secondary);
 }
 
-.sp-picker-quick { display: flex; flex-wrap: wrap; gap: var(--sp-space-1); }
+.sp-picker-quick { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-space-1); }
+
+.sp-picker-hidden {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-space-1);
+    margin-left: auto;
+    font-size: var(--sp-fs-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+}
 
 .sp-picker-list {
     list-style: none;

@@ -1,9 +1,8 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useState } from 'react';
 import { ChevronDown, Folder, X } from 'lucide-react';
-import { FolderPicker } from './session-panel/FolderPicker';
+import { useFolderPicker } from '../hooks/useFolderPicker';
 import { useChatStore } from '../stores/chatStore';
 import type { StartScreen } from '../types';
 
@@ -15,7 +14,7 @@ const baseName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? 
 export function FolderChip({ folder, disabled }: { folder: WorkingFolder; disabled?: boolean }) {
     const picked = useChatStore((s) => s.draftFolder);
     const setPicked = useChatStore((s) => s.setDraftFolder);
-    const [picking, setPicking] = useState(false);
+    const { open, picker, error } = useFolderPicker(setPicked);
 
     const where = folder.gaia_folder
         ? `GAIA works in its own folder, ${folder.path}.`
@@ -40,7 +39,7 @@ export function FolderChip({ folder, disabled }: { folder: WorkingFolder; disabl
             <button
                 type="button"
                 className={`new-chat-folder is-button${picked ? ' is-on' : ''}`}
-                onClick={() => setPicking(true)}
+                onClick={() => open(folder.path)}
                 disabled={disabled}
                 aria-haspopup="dialog"
                 aria-label={picked
@@ -66,12 +65,8 @@ export function FolderChip({ folder, disabled }: { folder: WorkingFolder; disabl
                     <X size={12} />
                 </button>
             )}
-            {picking && (
-                <FolderPicker
-                    onPick={(path) => { setPicked(path); setPicking(false); }}
-                    onClose={() => setPicking(false)}
-                />
-            )}
+            {error && <span className="new-chat-folder-error" role="alert">{error}</span>}
+            {picker}
         </>
     );
 }

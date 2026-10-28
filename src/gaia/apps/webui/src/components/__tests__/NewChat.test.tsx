@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
@@ -303,6 +303,41 @@ describe('NewChat empty state', () => {
         fireEvent.click(screen.getByRole('button', { name: "Don't give this chat site" }));
         expect(useChatStore.getState().draftFolder).toBeNull();
         expect(screen.getByRole('button', { name: 'Folder for this chat: my-project' })).toBeInTheDocument();
+    });
+
+    describe('in the desktop app', () => {
+        const pickFolder = vi.fn<(defaultPath?: string) => Promise<string | null>>();
+        beforeEach(() => {
+            useChatStore.setState({ draftFolder: null });
+            window.gaiaAPI = { dialog: { pickFolder } } as unknown as NonNullable<typeof window.gaiaAPI>;
+        });
+        afterEach(() => {
+            delete window.gaiaAPI;
+        });
+
+        it('picks the folder in the OS picker, starting from the working folder', async () => {
+            pickFolder.mockResolvedValue('/home/u/site');
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Folder for this chat: my-project' }));
+
+            expect(await screen.findByRole('button', { name: 'Folder for this chat: my-project, plus site' })).toBeInTheDocument();
+            expect(pickFolder).toHaveBeenCalledWith('/home/u/my-project');
+            expect(useChatStore.getState().draftFolder).toBe('/home/u/site');
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+            expect(api.browseFiles).not.toHaveBeenCalled();
+        });
+
+        it('keeps the folder as it was when the OS picker is cancelled', async () => {
+            pickFolder.mockResolvedValue(null);
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Folder for this chat: my-project' }));
+
+            await waitFor(() => expect(pickFolder).toHaveBeenCalledTimes(1));
+            expect(useChatStore.getState().draftFolder).toBeNull();
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        });
     });
 
     it("shows the folder as plain text when this chat's agent can't be given another", async () => {

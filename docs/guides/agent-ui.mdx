@@ -350,7 +350,10 @@ and where that model runs.
   may read and write from its first message, the same as **Add folder** in the
   session panel. This works when GAIA runs its agent as its own process too,
   as an installed GAIA does. Only an agent too old to be given folders shows
-  the folder as plain text; update GAIA to pick one.
+  the folder as plain text; update GAIA to pick one. In the desktop app this
+  opens your computer's own folder picker; in a browser GAIA shows its own,
+  where hidden folders (names starting with a dot) stay out of the list until
+  you tick **Show hidden**.
 - **The session panel** on the right keeps the facts about this chat in view;
   see [The session panel](#the-session-panel).
 - **"Loading Qwen3.6-35B-A3B on your GPU… 12s"** under the message box means
@@ -570,7 +573,8 @@ reads nothing.
   - **Runs on:** this PC with its device and backend (for example
     `GPU · Vulkan`), the model and the memory in use, or the cloud provider.
   - **Can read and write:** the folders and files GAIA may use in this chat,
-    and where each came from. **Add folder** gives it another folder;
+    and where each came from. **Add folder** gives it another folder, picked
+    the same way as from a new chat's folder;
     **Remove** takes one away. A removed folder is refused by every file and
     shell tool, even under full access and even inside a wider folder, until
     you add it back. A document attached to the chat is removed from the
