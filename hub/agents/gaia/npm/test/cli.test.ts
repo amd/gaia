@@ -266,6 +266,7 @@ describe("main dispatch", () => {
   it("refuses unknown boolean switches instead of silently running", async () => {
     for (const argv of [["--forse"], ["fetch", "--developer-mode"]]) {
       await expect(main(argv)).rejects.toThrow(/unknown option/);
+      await expect(main(argv)).rejects.toThrow(/bare `--`/);
     }
   });
 

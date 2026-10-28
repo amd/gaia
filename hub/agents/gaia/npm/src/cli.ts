@@ -208,7 +208,10 @@ function assertFlagsInScope(args: ParsedArgs, cmd: string): void {
   for (const flag of Object.keys(args.flags)) {
     const scope = FLAG_SCOPE[flag];
     if (scope === undefined) {
-      throw new UsageError(`unknown option '--${flag}'. Run \`gaia --help\` to see supported options.`);
+      throw new UsageError(
+        `unknown option '--${flag}'. Run \`gaia --help\` to see supported options; ` +
+          "arguments for the terminal UI go after a bare `--`.",
+      );
     }
     if (scope.commands.includes(cmd)) continue;
     throw new UsageError(
