@@ -344,7 +344,7 @@ var INFO={` + INFO_COMMON + String.raw`
 'stars':['Stars added','Stars added in the selected days, against the same number of days just before. Green: at least 90% of the earlier pace. Amber: 60 to 90%. Red: below 60%. The total is GitHub’s own count.'],
 'pkg':['Package downloads','PyPI (pypistats.org, mirrors excluded) plus npm, over the selected days up to the newest day PyPI has published, against the same number of days just before. Includes CI and automated installs, so treat it as reach rather than users. Green: flat or up, or down less than 10%. Amber: down 10 to 30%. Red: down more than 30%.'],
 'latest':['Latest release','The newest final release and its installs so far. Its installs keep growing for a few weeks after it ships. Coloured by days since it shipped, for a monthly release cadence. Green: within 35 days. Amber: 35 to 60. Red: more than 60.'],
-'rels':['Releases','Final releases and release candidates published in the selected range, on the main product line (agent packages excluded). Coloured by release candidates per final release, counting only candidates for a version released in the range: many means stabilising late. Green: 3 or fewer. Amber: 4 to 6. Red: 7 or more. A proposed default; no published benchmark exists.'],
+'rels':['Releases','Final releases and release candidates published in the selected range, on the main product line (agent packages excluded). Coloured by release candidates per final release that had any, counting only candidates for a version released in the range: many means stabilising late. Green: 3 or fewer. Amber: 4 to 6. Red: 7 or more. A proposed default; no published benchmark exists.'],
 'per-release':['Downloads per release','One bar per release or release candidate at its publish date; its height is every download it has had so far, so older releases have had longer to accumulate. Files are grouped by OS and product from their names; unknown files show as Unclassified. Click a legend entry to hide or show it.'],
 'share':['Install share','Each OS or product’s share of install-file downloads, for releases published in the selected range.'],
 'daily':['Downloads per day','GitHub only reports running totals, so this is the change between nightly snapshots. History starts with the first snapshot; a missed night is a gap, not a zero.'],
@@ -384,7 +384,8 @@ function drawOverview(){var d=D.downloads,t=D.traction,h='';
   h+=kpi('latest','Latest release',last?esc(last.tag):'—',last?'<b class="num">'+fmt(last.install)+'</b> installs · '+ago(last.publishedAt):'',level(age,{good:35,warn:60,higher:false}),age==null?'':Math.round(age)+' days since the last final release');
   var rr2=d.releases.filter(function(r){return r.main&&Date.parse(r.publishedAt)>=sinceMs();});
   var fin=rr2.filter(function(r){return !r.rc;}).map(function(r){return r.tag;}),rcs=rr2.filter(function(r){return r.rc;}),shipped=rcs.filter(function(r){return fin.indexOf(r.tag.replace(/-rc\.?\d+$/i,''))>=0;}).length;
-  var nf=fin.length,nrc=rcs.length,open=nrc-shipped,rcp=nf?shipped/nf:null;
+  var base=function(r){return r.tag.replace(/-rc\.?\d+$/i,'');},withRc=fin.filter(function(t){return rcs.some(function(r){return base(r)===t;});}).length;
+  var nf=fin.length,nrc=rcs.length,open=nrc-shipped,rcp=withRc?shipped/withRc:null;
   h+=kpi('rels','Releases',fmt(nf),'plus '+plural(nrc,'release candidate')+(rcp!=null?' (<b>'+(Math.round(rcp*10)/10)+' per release</b>'+(open?', '+open+' for a version not yet released':'')+')':'')+' · '+rangeText(),level(rcp,{good:3,warn:6,higher:false}),rcp==null?'':(Math.round(rcp*10)/10)+' release candidates per final release');
   if(rcp!=null)attnValue('rels',(Math.round(rcp*10)/10)+' RCs per release');
   el('ov').innerHTML=h+'</div></div>';}
