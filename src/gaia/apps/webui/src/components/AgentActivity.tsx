@@ -29,6 +29,7 @@ import {
     MessageCircleQuestionMark,
     Circle,
     Sparkles,
+    Link,
     type LucideIcon,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -83,8 +84,8 @@ const TOOL_META: Record<string, ToolMeta> = {
     // Web
     web_search:            { label: 'Searched web',       activeLabel: 'Searching web',       icon: Globe },
     search_web:            { label: 'Searched web',       activeLabel: 'Searching web',       icon: Globe },
-    fetch_page:            { label: 'Read web page',      activeLabel: 'Reading web page',    icon: Globe },
-    fetch_webpage:         { label: 'Read web page',      activeLabel: 'Reading web page',    icon: Globe },
+    fetch_page:            { label: 'Read web page',      activeLabel: 'Reading web page',    icon: Link },
+    fetch_webpage:         { label: 'Read web page',      activeLabel: 'Reading web page',    icon: Link },
     analyze_data:          { label: 'Analyzed data',      activeLabel: 'Analyzing data',      icon: BarChart3 },
     // GAIA agent: files, memory, questions
     find_files:            { label: 'Found files',        activeLabel: 'Finding files',       icon: Search },
@@ -804,14 +805,11 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }:
                 }
             >
                 <div className="flow-tool-left">
-                    {waiting ? (
-                        <Icon size={13} className="flow-tool-icon" />
-                    ) : step.active ? (
+                    {/* What the step did, not whether it worked: only a running or failed step says otherwise. */}
+                    {step.active && !waiting ? (
                         <Loader2 size={13} className="flow-tool-spinner" />
                     ) : step.success === false ? (
                         <AlertCircle size={13} style={{ color: 'var(--danger)' }} />
-                    ) : step.success === true ? (
-                        <CheckCircle2 size={13} style={{ color: 'var(--accent-green)' }} />
                     ) : (
                         <Icon size={13} className="flow-tool-icon" />
                     )}

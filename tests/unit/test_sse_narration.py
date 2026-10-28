@@ -649,3 +649,55 @@ class TestRelayedNarration:
 
         events = {e["type"]: e for e in _drain(handler)}
         assert events["tool_start"]["narration"] == "Reading file: a.txt"
+
+
+class TestReasoningOnRequest:
+    """The translator streams reasoning only to a client that asked for it."""
+
+    def test_asked_for_it_keeps_each_piece_as_it_came(self):
+        tr = _tr(reasoning=True)
+
+        assert tr.translate({"type": "thinking", "content": " the forecast"}) == [
+            {"type": "reasoning", "delta": " the forecast"}
+        ]
+
+    def test_not_asked_for_it_folds_into_a_status_line(self):
+        out = _tr().translate({"type": "thinking", "content": " the forecast"})
+
+        assert out == [{"type": "status", "message": "the forecast"}]
+
+
+class TestRelayedPhase:
+    """A relayed turn's live line names the model's phase, as an in-process one does."""
+
+    def test_the_relay_keeps_the_phase_and_its_counts(self):
+        from gaia.ui.email_sidecar import relay
+        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+
+        handler = SSEOutputHandler()
+        relay._dispatch_one(
+            handler,
+            {
+                "type": "status",
+                "message": "Reading your request (18,641 tokens)",
+                "phase": "reading",
+                "chars": 74564,
+            },
+            GAIA_PROFILE,
+        )
+
+        [event] = _drain(handler)
+        assert event["phase"] == "reading"
+        assert event["chars"] == 74564
+        assert event["message"] == "Reading your request (18,641 tokens)"
+
+    def test_a_plain_status_stays_plain(self):
+        from gaia.ui.email_sidecar import relay
+        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+
+        handler = SSEOutputHandler()
+        relay._dispatch_one(
+            handler, {"type": "status", "message": "Done."}, GAIA_PROFILE
+        )
+
+        assert _drain(handler) == [{"type": "status", "message": "Done."}]

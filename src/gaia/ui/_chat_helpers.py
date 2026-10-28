@@ -64,6 +64,7 @@ from gaia.ui.email_sidecar.profiles import (
     documents_supported,
     memory_supported,
     profile_for,
+    reasoning_supported,
     scope_supported,
     surface_supported,
 )
@@ -2410,6 +2411,7 @@ def _dispatch_sidecar_query(
         surface=(
             "agent_ui" if surface_supported(profile, handle.api_version) else None
         ),
+        reasoning=reasoning_supported(profile, handle.api_version),
         max_steps=max_steps,
     )
     if session_id and profile.min_context_api_version is not None:

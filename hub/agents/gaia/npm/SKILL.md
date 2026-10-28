@@ -251,7 +251,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.21**; the stream is
+package — call it with plain `fetch`. Contract version **2.22**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -267,6 +267,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `memory` | no | Contract ≥ 2.18. `"on"`, `"private"` or `"off"`. Under `"private"` or `"off"` the turn saves nothing to memory, including errors and lessons the agent saves on its own. A retained session keeps the last value: send it every turn. |
 | `changes_turn_id` | no | Contract ≥ 2.19. Needs `session_id`. The agent copies each file before changing it, under `<GAIA home>/snapshots/<session_id>/<changes_turn_id>/`, so the turn can be reviewed and undone; the copies are complete before the terminal event. Format: 14 digits of local time, `-`, 8 hex digits (`YYYYmmddHHMMSS-xxxxxxxx`); anything else is a **422**. Omit it to copy nothing. |
 | `surface` | no | Contract ≥ 2.20. `"agent_ui"`, `"tui"` or `"cli"` — the front-end the turn comes from. With `"agent_ui"` the agent points recurring requests at the Agent UI's **Scheduled tasks** page. It also picks where a model-provider error tells the user to fix it; omitted (a headless caller), that is the model server the GAIA host uses (`LEMONADE_BASE_URL`). Read when a session is built. |
+| `reasoning` | no | Contract ≥ 2.22. `true` streams the model's reasoning as `reasoning` events (`{ delta }`), apart from `status` lines and the answer's `token`s. Join the deltas as they come: each keeps its own spacing. Omit it and reasoning folds into `status` lines as before. |
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
 | `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
 | `provider` | no | `"lemonade"` (the default backend) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. When you name it, `model` must agree: under `"claude"` it must be a `claude-*` id, under `"lemonade"` it must not be. A mismatch is a **400**, on a new session or an existing one. Omit it and the `model` decides instead — a `claude-*` id alone reaches Anthropic, any other id runs locally — so there is nothing to mismatch. On a retained `session_id`, naming a different provider switches the session to it in place, onto `model` or, without one, the provider's default model; omitting both leaves the session where it is. |
@@ -327,6 +328,7 @@ The canonical event shapes, as emitted:
 |---|---|
 | `status` | `{ type, message, phase?, words?, chars?, queue? }` — progress and reasoning narration. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`, `model_queue`) names what the model is doing; show it as the live line, not as narration. `model_queue` means the turn is waiting for the model behind another request: it repeats every ~2 s with a `queue` object (`event`, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`), so its steady arrival means queued, not stuck |
 | `token` | `{ type, delta }` — answer text to append |
+| `reasoning` | `{ type, delta }` — the model's reasoning, only when the request set `reasoning: true` (contract ≥ 2.22); join the deltas as they come and keep them apart from the answer |
 | `tool_call` | `{ type, tool, args, mcp_server?, mcp_server_label?, mcp_tool? }` — an MCP tool names its connector (`mcp_server_label`, e.g. `"Git"`) and the server's own tool name (`mcp_tool`, e.g. `"git_log"`); label the call with those, not the prefixed `tool` |
 | `tool_result` | `{ type, tool, data, render? }` — an MCP tool that returned text carries it in `data.mcp_output` (`{ text, truncated }`); a `search_web` result lists its hits in `data.sources` (`[{ title, url }]`) |
 | `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say), `risk_note` (why GAIA's checks don't cover the call) and `file_path` (the absolute path a write lands at, when the model gave a relative one) |
@@ -688,7 +690,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.21","agentVersion":"0.3.1"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.22","agentVersion":"0.3.1"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \

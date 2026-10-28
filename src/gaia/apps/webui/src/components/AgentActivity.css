@@ -20,7 +20,8 @@
 }
 
 /* A note the agent wrote mid-turn reads like the answer it leads to. */
-.flow-note {
+/* Motion marks what is arriving now; opening a saved turn or a folded run never replays it. */
+.agent-activity.active .flow-note {
     animation: thoughtSlideIn var(--duration) var(--ease);
 }
 .flow-note > :first-child { margin-top: 0; }
@@ -185,6 +186,8 @@
 .flow-tool {
     width: 100%;
     border-radius: var(--radius-xs);
+}
+.flow-steps.live .flow-tool {
     animation: toolSlideIn var(--duration) var(--ease) both;
 }
 
@@ -193,11 +196,6 @@
     to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-.flow-tool:nth-child(1) { animation-delay: 0s; }
-.flow-tool:nth-child(2) { animation-delay: var(--stagger); }
-.flow-tool:nth-child(3) { animation-delay: calc(var(--stagger) * 2); }
-.flow-tool:nth-child(4) { animation-delay: calc(var(--stagger) * 3); }
-.flow-tool:nth-child(5) { animation-delay: calc(var(--stagger) * 4); }
 
 /* Picking up a skill changes how the agent works from here, so it stands out. */
 .flow-tool.skill .flow-tool-left > svg:not(.flow-tool-spinner),
@@ -238,7 +236,7 @@
     transition: transform var(--duration) var(--ease), color var(--duration) var(--ease);
     flex-shrink: 0;
 }
-.flow-tool-left > svg:not(.flow-tool-spinner) {
+.flow-steps.live .flow-tool-left > svg:not(.flow-tool-spinner) {
     animation: toolStatusPop var(--duration) var(--ease);
 }
 
@@ -396,16 +394,11 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    animation: detailExpand var(--duration) var(--ease);
+    animation: fadeIn var(--duration-fast) var(--ease);
     overflow: hidden;
     border-radius: var(--radius-xs);
     background: var(--bg-secondary);
     border: 1px solid var(--border);
-}
-
-@keyframes detailExpand {
-    from { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; }
-    to { opacity: 1; max-height: 500px; }
 }
 
 /* ── Flow: Plan ──────────────────────────────────────────────── */
@@ -509,6 +502,10 @@
     font-size: 12px;
     font-family: var(--font-mono);
     color: var(--danger);
+}
+
+.flow-steps.live .flow-error,
+.flow-steps.live .flow-policy-alert {
     animation: errorSlideIn var(--duration-slow) var(--ease);
 }
 
@@ -528,7 +525,6 @@
     background: color-mix(in srgb, var(--accent-yellow) 6%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-yellow) 22%, transparent);
     font-family: var(--font-mono);
-    animation: errorSlideIn var(--duration-slow) var(--ease);
 }
 
 [data-theme="dark"] .flow-policy-alert {
@@ -1033,12 +1029,13 @@
         animation: none;
     }
 
-    .flow-note,
+    .agent-activity.active .flow-note,
     .flow-thought-hacker,
-    .flow-tool,
+    .flow-steps.live .flow-tool,
     .flow-tool-detail,
     .flow-plan,
-    .flow-error {
+    .flow-steps.live .flow-error,
+    .flow-steps.live .flow-policy-alert {
         animation: none;
     }
 
@@ -1048,7 +1045,7 @@
     }
 
     .flow-tool-left > svg,
-    .flow-tool-left > svg:not(.flow-tool-spinner) {
+    .flow-steps.live .flow-tool-left > svg:not(.flow-tool-spinner) {
         animation: none;
         transition: none;
     }

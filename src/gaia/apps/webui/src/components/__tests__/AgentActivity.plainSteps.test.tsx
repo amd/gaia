@@ -458,3 +458,36 @@ describe('timeline review fixes', () => {
         expect(container.querySelector('.flow-note')).toHaveTextContent('Done.');
     });
 });
+
+it('plays entry motion only on steps arriving live, never when a folded run is opened', () => {
+    const rules = [...activityCss.matchAll(/([^{}]+)\{[^}]*animation:\s*(toolSlideIn|toolStatusPop|errorSlideIn|thoughtSlideIn)\b/g)];
+
+    expect(rules.length).toBeGreaterThan(0);
+    for (const [, selector] of rules) {
+        expect(selector.trim()).toMatch(/\.flow-steps\.live|\.agent-activity\.active/);
+    }
+});
+
+describe('step icons', () => {
+    it('show what a finished step did, not a checkmark', () => {
+        const steps = [
+            call(1, 'Searching web: weather', { tool: 'web_search' }),
+            call(2, 'Reading web page: nps.gov', { tool: 'fetch_page' }),
+        ];
+        const { container } = render(<AgentActivity steps={steps} isActive={false} />);
+        fireEvent.click(screen.getByRole('button', { name: /^Searched web, read web page$/ }));
+
+        const icons = [...container.querySelectorAll('.flow-tool-left > svg')].map((svg) => svg.getAttribute('class'));
+        expect(icons[0]).toContain('lucide-globe');
+        expect(icons[1]).toContain('lucide-link');
+        expect(container.querySelector('.flow-tool .lucide-circle-check')).toBeNull();
+    });
+
+    it('keep the warning icon for a failed step', () => {
+        const { container } = render(
+            <AgentActivity steps={[call(1, 'Reading web page: nps.gov', { tool: 'fetch_page', success: false })]} isActive={false} />,
+        );
+
+        expect(container.querySelector('.flow-tool-left > svg')?.getAttribute('class')).toContain('lucide-circle-alert');
+    });
+});

@@ -179,8 +179,11 @@ class CanonicalTranslator:
         action_labels: Optional[Dict[str, str]] = None,
         summary_renderer: Optional[Callable[[str, Dict[str, Any]], str]] = None,
         debug: Optional[bool] = None,
+        reasoning: bool = False,
     ) -> None:
         self._run_id = run_id
+        # The client asked for the model's reasoning as ``reasoning`` events.
+        self._reasoning = reasoning
         self._agent_id = agent_id
         self._debug = _debug_enabled_by_env() if debug is None else bool(debug)
         self._render_tool_map = dict(render_tool_map or {})
@@ -380,6 +383,10 @@ class CanonicalTranslator:
         return self._debug_status(msg)
 
     def _on_thinking(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if self._reasoning:
+            # Pieces carry their own spacing, so they go out as they came.
+            delta = str(event.get("content", ""))
+            return [{"type": "reasoning", "delta": delta}] if delta else []
         # Reasoning narration folds to status, NOT token (token is answer text the
         # UI commits to the message). See spec §6.2 / Q1.
         content = str(event.get("content", "")).strip()
