@@ -275,7 +275,7 @@ def _run_browser_flow(
     if not flow_id:
         raise RuntimeError(
             f"Starting the {label} sign-in did not return a flow to wait on. "
-            "Retry, or connect from Settings → Connections in the Agent UI."
+            "Retry, or connect from Settings → Connectors in the Agent UI."
         )
 
     narrate(
@@ -362,7 +362,7 @@ def _run_microsoft_setup(agent: Any) -> Dict[str, Any]:
             # fail as a legible message, never a crash or a silent no-op.
             raise RuntimeError(
                 "No guided walkthrough exists for Microsoft yet. Connect from "
-                f"Settings → Connections in the Agent UI, or see {OAUTH_DOCS_URL}."
+                f"Settings → Connectors in the Agent UI, or see {OAUTH_DOCS_URL}."
             )
         collected, _trace = sw.run_setup_walkthrough(agent, route)
         run_sync(
@@ -407,7 +407,7 @@ def _run_google_setup(agent: Any) -> Dict[str, Any]:
             # legible message, never a crash or a silent no-op.
             raise RuntimeError(
                 "No guided walkthrough exists for Google yet. Connect from "
-                f"Settings → Connections in the Agent UI, or see {OAUTH_DOCS_URL}."
+                f"Settings → Connectors in the Agent UI, or see {OAUTH_DOCS_URL}."
             )
         collected, _trace = sw.run_setup_walkthrough(
             agent, route, sign_in=SIGN_IN_LOOPBACK
@@ -720,7 +720,7 @@ def _setup_mailbox_access(agent: Any, wanted: str) -> str:
                 "message": (
                     f"{label} is connected now, but I couldn't allow myself "
                     f"to use it: {exc.reason} Try again, or grant it manually "
-                    "from Settings → Connections in the Agent UI."
+                    "from Settings → Connectors in the Agent UI."
                 ),
             }
         )
@@ -833,7 +833,7 @@ def _setup_flow(agent: Any, wanted: str) -> str:
         # the user ends up back at the same error one question later.
         return _envelope_err(
             f"{label} still isn't usable after that: {final['detail']} "
-            "Try again, or connect from Settings → Connections in the Agent UI."
+            "Try again, or connect from Settings → Connectors in the Agent UI."
         )
 
     who = f" as {final['account_email']}" if final.get("account_email") else ""

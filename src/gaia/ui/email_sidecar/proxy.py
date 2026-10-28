@@ -231,7 +231,7 @@ class SidecarProxy:
             ) from exc
 
     def set_internet(self, session_id: str, internet_off: bool) -> dict:
-        """Turn the sidecar session's internet on or off (contract >= 2.22).
+        """Turn the sidecar session's internet on or off (contract >= 2.23).
 
         Raises on any failure, including the 404 for a session the sidecar has
         not created yet.

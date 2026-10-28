@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **The Agent UI's "Under the hood" figures cover GAIA chats.** It said every
+  answer was "not measured", because only the agent saw its own step timings.
+  `final` now carries `performance` with them: the turn's model and tool
+  seconds and each model call's token counts. Older binaries never send it.
+- **`GET /v1/gaia/skills` says where each skill came from.** Each skill now
+  carries a `source` (`agent-bundled`, `user` or `claude-import`; `null` for
+  any other root), so the Agent UI can group the Skills list by origin. An
+  older agent omits it and the UI shows the list flat.
 - **One very long turn no longer vanishes from the conversation.** A turn
   bigger than the whole history budget, like a pasted log or a long document
   read, was dropped from what the model saw next, answer included, so "now
@@ -13,21 +21,29 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   become a short note naming the tool, and its longest messages are cut with
   a note saying how much.
 
-### For integrators: contract 2.22
+### For integrators: contract 2.23
 
-- **`/query` takes `internet_off`** (contract **2.22**, #5883). The Agent UI
+- **`/query` takes `internet_off`** (contract **2.23**, #5883). The Agent UI
   never told the agent when a chat's Internet switch was off, so the switch
   stayed locked in every GAIA chat on a standard install. `true` refuses web
   search, page fetches, the browser, connector tools and commands that contact
   another host, as it does when the agent runs inside the Agent UI. `false`
   allows them, and omitting it leaves the agent as it is. A retained session
   keeps the last value. Older binaries `422` the field.
-- **`POST /v1/gaia/sessions/{session_id}/internet`** (contract **2.22**)
+- **`POST /v1/gaia/sessions/{session_id}/internet`** (contract **2.23**)
   reaches a turn already running. Without it, a user who turned the internet
   off mid-turn watched the agent keep searching until the turn ended. Body
   `{"internet_off": bool}`; the session's next tool call follows it. An
   unknown session is a `404`, as for `/bypass`. Post it only once `/query`
   has answered: until then the turn's own `internet_off` replaces it.
+
+### For integrators: contract 2.22
+
+- **A client can show the model's reasoning.** Over `/query` the reasoning
+  only arrived folded into `status` lines, so the Agent UI showed none of it
+  for an installed GAIA. A request with `reasoning: true` now gets it as
+  `reasoning` events, `{ delta }`, kept apart from the answer. Without the
+  field nothing changes. Older binaries reject it with `422`.
 
 ### For integrators: contract 2.21
 
@@ -42,6 +58,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   write resolves to in `prompt_context.file_path`, so a front-end can show
   `/Users/you/shop2.txt` instead of a bare name. `args` still holds exactly the
   model's `file_path`.
+- **A web search's results reach the client.** The Agent UI listed no Sources
+  for a GAIA web search, because a `search_web` `tool_result` carried only a
+  300-character summary. Its `data` now also carries `sources`, a list of
+  `{ title, url }` for each hit. Older binaries never send it.
 
 - **An old failure in memory no longer stops a request you make now.** A note
   like "this page returned 503, don't waste tool calls on it" was obeyed as a
@@ -100,6 +120,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sent when the cancel lands is dropped.
 ### Fixed
 
+- **"Save it to my Documents folder" saves to the user's Documents folder.**
+  The system prompt told GAIA that "my documents" meant its own documents
+  folder (`~/.gaia/documents`), so a new file the user asked for in Documents
+  went into GAIA's hidden folder, where they would never find it. Finding an
+  existing file still checks GAIA's folders first.
 - **Secrets stay out of memory and the conversation log.** A bank PIN was saved
   as a memory, because the filter knew passwords and API keys but not PINs. The
   conversation log also kept the PIN, a password the agent had refused, a card

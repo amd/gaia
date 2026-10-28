@@ -38,9 +38,9 @@ from gaia.ui.sse_handler import SSEOutputHandler
 
 
 @pytest.mark.parametrize(
-    "version, expected", [("2.22", True), ("3.0", True), ("2.21", False), (None, False)]
+    "version, expected", [("2.23", True), ("3.0", True), ("2.22", False), (None, False)]
 )
-def test_only_a_flagship_at_2_22_takes_the_switch(version, expected):
+def test_only_a_flagship_at_2_23_takes_the_switch(version, expected):
     assert internet_supported(GAIA_PROFILE, version) is expected
 
 
@@ -63,6 +63,9 @@ class _Proxy:
         yield {"type": "final", "answer": "ok"}
 
     def cancel_query(self, _rid):
+        pass
+
+    def set_bypass(self, _session_id, _on):
         pass
 
 
@@ -92,16 +95,17 @@ def _dispatch(monkeypatch, version, internet_off, agent_type="gaia"):
 
 @pytest.mark.parametrize("internet_off", [True, False])
 def test_a_current_flagship_is_told_the_switch_every_turn(monkeypatch, internet_off):
-    bodies, events = _dispatch(monkeypatch, "2.22", internet_off)
+    bodies, events = _dispatch(monkeypatch, "2.23", internet_off)
     [body] = bodies
     assert body["internet_off"] is internet_off
     assert not [e for e in events if e["type"] == "agent_error"]
 
 
+@pytest.mark.parametrize("version", ["2.21", "2.22"])
 def test_an_internet_off_turn_is_stopped_before_a_flagship_too_old_to_honour_it(
-    monkeypatch,
+    monkeypatch, version
 ):
-    bodies, events = _dispatch(monkeypatch, "2.21", True)
+    bodies, events = _dispatch(monkeypatch, version, True)
     assert bodies == []
     assert events == [
         {"type": "agent_error", "content": GAIA_PROFILE.internet_upgrade_message}
@@ -109,7 +113,7 @@ def test_an_internet_off_turn_is_stopped_before_a_flagship_too_old_to_honour_it(
 
 
 def test_an_internet_on_turn_still_runs_on_an_older_flagship(monkeypatch):
-    bodies, events = _dispatch(monkeypatch, "2.21", False)
+    bodies, events = _dispatch(monkeypatch, "2.22", False)
     [body] = bodies
     assert "internet_off" not in body
     assert not [e for e in events if e["type"] == "agent_error"]
@@ -227,10 +231,11 @@ def test_a_relayed_flagship_chat_can_switch_the_internet(relayed_db):
     assert session_environment.describe(relayed_db, session)["internet"] is False
 
 
-def test_a_relayed_flagship_chat_still_refuses_folder_changes(relayed_db, tmp_path):
+def test_a_relayed_flagship_chat_still_refuses_folder_removal(relayed_db, tmp_path):
     session = relayed_db.create_session(agent_type="gaia")
-    with pytest.raises(session_environment.EnvironmentChangeError):
-        session_environment.add_folder(relayed_db, session["id"], str(tmp_path))
+    with pytest.raises(session_environment.EnvironmentChangeError) as refusal:
+        session_environment.remove_folder(relayed_db, session["id"], str(tmp_path))
+    assert "internet" not in str(refusal.value)
 
 
 def test_a_relayed_email_chat_keeps_its_own_network_rules(relayed_db, running_relays):
@@ -716,6 +721,10 @@ def test_switching_off_mid_turn_stops_the_flagships_next_web_search(
         while not (agents and agents[0].started.is_set()):
             assert time.monotonic() < deadline, "the relayed turn never started"
             time.sleep(0.02)
+        # Mid-turn: the relay is live, so the switch itself must reach the agent.
+        while handler.active_relay_internet_session != session["id"]:
+            assert time.monotonic() < deadline, "the relay never went live"
+            time.sleep(0.01)
 
         session_environment.set_internet(relayed_db, session["id"], False)
     finally:
@@ -787,6 +796,11 @@ def test_switching_off_while_a_turn_starts_stops_the_flagships_web_search(
         while not (agents and agents[0].started.is_set()):
             assert time.monotonic() < deadline, "the relayed turn never started"
             time.sleep(0.02)
+        # The agent may start a moment before the relay re-reads the switch;
+        # its first tool call comes after a model reply, which this stands in for.
+        while handler.active_relay_internet_session != session["id"]:
+            assert time.monotonic() < deadline, "the relay never re-read the switch"
+            time.sleep(0.01)
     finally:
         leave_setup.set()
         gate.set()

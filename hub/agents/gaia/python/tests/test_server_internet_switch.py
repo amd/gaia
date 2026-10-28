@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""``/query``'s ``internet_off`` field and ``/sessions/{id}/internet`` (2.22).
+"""``/query``'s ``internet_off`` field and ``/sessions/{id}/internet`` (2.23).
 
 A chat with the Internet switch off, relayed from the Agent UI, used to reach the
 flagship with no word of it, so the agent went on searching the web. These drive
@@ -86,7 +86,7 @@ def _query(client, **fields):
 
 def test_the_contract_advertises_internet_off():
     major, minor = (int(x) for x in server_mod.API_VERSION.split(".")[:2])
-    assert (major, minor) >= (2, 22)
+    assert (major, minor) >= (2, 23)
     assert "internet_off" in server_mod.QueryRequest.model_fields
 
 

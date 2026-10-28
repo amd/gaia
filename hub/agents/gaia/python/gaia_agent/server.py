@@ -16,7 +16,7 @@ Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
 ``/query/{run_id}/cancel``, ``/query/{run_id}/respond``,
 ``/query/{run_id}/followup``, ``/query/{run_id}/tool_decision`` (contract >=
 2.14), ``/sessions/{session_id}/bypass`` and ``/sessions/{session_id}/internet``
-(contract >= 2.22). ``needs_input`` is answered over
+(contract >= 2.23). ``needs_input`` is answered over
 ``/respond`` on the run's existing stream; ``needs_confirmation`` is answered
 the same way over ``/tool_decision`` — but only when there is a session to
 hold the grant AND the caller declared it can answer (``can_confirm`` in
@@ -68,6 +68,7 @@ from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
+from gaia.ui.turn_insights import turn_record
 from gaia.version import LEMONADE_MIN_VERSION
 
 logger = get_logger(__name__)
@@ -87,8 +88,9 @@ AGENT_ID = "gaia"
 #: 2.19 added ``/query``'s ``changes_turn_id`` field.
 #: 2.20 added ``/query``'s ``surface`` field.
 #: 2.21 added ``context`` to ``/query``'s ``final`` event.
-#: 2.22 added ``/query``'s ``internet_off`` field and ``/sessions/{id}/internet``.
-API_VERSION = "2.22"
+#: 2.22 added ``/query``'s ``reasoning`` field.
+#: 2.23 added ``/query``'s ``internet_off`` field and ``/sessions/{id}/internet``.
+API_VERSION = "2.23"
 
 #: How long ``final`` waits for the turn's context measurement before going without.
 _CONTEXT_WAIT_SECONDS = 15.0
@@ -238,7 +240,7 @@ class QueryRequest(_Strict):
     internet_off: Optional[bool] = Field(
         default=None,
         description=(
-            "Whether this turn may reach the internet (contract >= 2.22). True "
+            "Whether this turn may reach the internet (contract >= 2.23). True "
             "refuses web search, page fetches, the browser, connector tools and "
             "commands that contact another host, with a plain message the model "
             "relays; false allows them. Send it every turn: a retained session "
@@ -268,6 +270,15 @@ class QueryRequest(_Strict):
             "worded for its own settings. Fixed when a session is built; omit "
             "it for a headless caller, whose provider advice then points at "
             "the model server this GAIA host uses."
+        ),
+    )
+
+    reasoning: bool = Field(
+        default=False,
+        description=(
+            "Stream the model's reasoning as `reasoning` events with a `delta` "
+            "(contract >= 2.22), for a client that shows it apart from status "
+            "lines. Without it, reasoning folds into `status` lines as before."
         ),
     )
 
@@ -808,7 +819,7 @@ def _apply_memory_mode(agent: Any, mode: Optional[str]) -> None:
 
 
 def _apply_internet_switch(agent: Any, internet_off: Optional[bool]) -> None:
-    """Turn *agent*'s internet guard on or off for this turn (>= 2.22)."""
+    """Turn *agent*'s internet guard on or off for this turn (>= 2.23)."""
     if internet_off is not None:
         agent.internet_off = internet_off
 
@@ -1590,13 +1601,16 @@ async def query(request: QueryRequest):
         return _sse(_worded(event, _wording_surface(request)))
 
     async def _with_context(final: Dict[str, Any]) -> Dict[str, Any]:
-        """``final`` carrying the turn's context measurement (contract >= 2.21)."""
+        """``final`` carrying the turn's context measurement (contract >= 2.21) and timings."""
         if final.get("type") != "final":
             return final
         # ``final`` is printed inside process_query; the measurement follows it.
         deadline = time.monotonic() + _CONTEXT_WAIT_SECONDS
         while not run.context_done.is_set() and time.monotonic() < deadline:
             await asyncio.sleep(0.05)
+        performance = turn_record(run.result)
+        if performance is not None:
+            final = {**final, "performance": performance}
         if not run.context_done.is_set():
             logger.warning(
                 "run_id=%s: no context measurement within %ss; final goes without it",
@@ -1611,7 +1625,9 @@ async def query(request: QueryRequest):
         return {**final, "context": run.context}
 
     async def _stream():
-        translator = CanonicalTranslator(request.run_id, agent_id=AGENT_ID)
+        translator = CanonicalTranslator(
+            request.run_id, agent_id=AGENT_ID, reasoning=request.reasoning
+        )
         terminated = False
         last_write = time.monotonic()
         try:

@@ -258,7 +258,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.22"`                  |
+| Contract version   | `API_VERSION = "2.23"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -276,7 +276,7 @@ the header.
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
 | `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
 | `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
-| `POST` | `/v1/gaia/sessions/{session_id}/internet` | Turn one session's internet on or off from its next tool call, including in a turn already running (≥ 2.22) |
+| `POST` | `/v1/gaia/sessions/{session_id}/internet` | Turn one session's internet on or off from its next tool call, including in a turn already running (≥ 2.23) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
 #### `/query` request body
@@ -330,13 +330,13 @@ omit it to leave memory as the agent has it. `"on"` never turns memory on when
 the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
 `422` the field.
 
-`internet_off` (contract ≥ 2.22) is `true` when the caller's chat has the
+`internet_off` (contract ≥ 2.23) is `true` when the caller's chat has the
 Internet switched off and `false` when it is on. With `true` the turn refuses
 web search and page fetches, the browser, connector (MCP) tools and any call
 or shell command that contacts a host other than the agent's own machine, and
 the refusal tells the model the internet is off for this chat. A retained
 session keeps the last value, so send it every turn; omit it to leave the
-agent as it is. Pre-2.22 binaries `422` the field, so a caller whose chat has
+agent as it is. Pre-2.23 binaries `422` the field, so a caller whose chat has
 the internet off should check `/version` and refuse the turn on an older
 binary rather than answer it online.
 
@@ -377,6 +377,12 @@ model's failure reads "the model server at `host:port`", not "Lemonade on this
 machine". Pre-2.20 binaries `422` the field and word every such error for the
 TUI.
 
+`reasoning` (contract ≥ 2.22), when `true`, streams the model's reasoning as
+`reasoning` events, `{ "type": "reasoning", "delta": "…" }`, so a client can
+show it apart from `status` lines and from the answer's `token`s. Each delta
+keeps its own spacing: join them as they arrive. Without the field, reasoning
+folds into `status` lines as before. Pre-2.22 binaries `422` it.
+
 ```json
 {
   "query": "What's in this directory?",
@@ -415,11 +421,14 @@ daemon-transport counterpart of the stdio `MEMORY_DUMP_QUERY` sentinel; both
 paths call the same `build_memory_dump()` and return the identical shape.
 
 `GET /v1/gaia/skills` (contract ≥ 2.17) lists the skills the agent can load:
-`{ "skills": [{ "name", "description", "version", "tier", "tools", "path" }],
-"invalid": { "<folder>": "<why it failed to parse>" } }`. It reads the same
-roots the agent does — its bundled skills, `~/.gaia/skills`, Claude Code skill
-folders — so a host without the Python package (the bundled skills live inside
-the binary) can still show them. A skill root that cannot be read is a `500`
+`{ "skills": [{ "name", "description", "version", "tier", "tools", "path",
+"source" }], "invalid": { "<folder>": "<why it failed to parse>" } }`. It reads
+the same roots the agent does — its bundled skills, `~/.gaia/skills`, Claude
+Code skill folders — so a host without the Python package (the bundled skills
+live inside the binary) can still show them. `source` names the root a skill
+came from: `agent-bundled`, `user` or `claude-import`, or `null` for any other
+root. An agent that predates `source` omits the field; a host must treat a list
+where any skill lacks it as ungrouped and show it flat, not drop the skill. A skill root that cannot be read is a `500`
 naming it.
 
 `/query` streams the answer as `token` events before its terminal `final`. A
@@ -440,6 +449,14 @@ A turn that was stopped or ended on a model failure carries no `context`; a
 measurement that failed carries `context_error`, one sentence saying why, and
 the answer still stands. Older binaries send neither, so read `context` only
 when `/version` reports 2.21 or later.
+
+`final` also carries `performance`: the turn's step timings, as
+`{ "timing_summary", "conversation" }`. `timing_summary` holds the run's model
+and tool seconds and its model call count; `conversation` holds one
+`{ "role": "system", "content": { "type": "stats", ... } }` entry per model
+call, with that call's token counts and speed. The Agent UI turns it into the
+Context panel's "Under the hood" figures. A run that timed nothing
+carries none, and older binaries never send it, so read it only when present.
 
 ### 5.2 `session_id` and agent retention
 

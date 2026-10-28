@@ -196,7 +196,7 @@ def get_forwarded_token(provider: str, scopes: List[str]) -> str:
             "revoked/withdrawn. Connect and grant it in one command — no Agent UI "
             f"required: `gaia connectors connect {provider} --scopes "
             f"{' '.join(_all_scopes_for(provider))} "
-            "--grant-agent installed:email`, or use Settings -> Connections in "
+            "--grant-agent installed:email`, or use Settings -> Connectors in "
             "the Agent UI. The daemon forwards a token on the next use."
         )
     if (cred.expires_at - time.time()) < _EXPIRY_BUFFER_SECONDS:
@@ -219,7 +219,7 @@ def get_forwarded_token(provider: str, scopes: List[str]) -> str:
             f"scopes {missing}. Reconnect with those scopes in one command: "
             f"`gaia connectors connect {provider} --scopes "
             f"{' '.join(suggested)} --grant-agent installed:email` (or "
-            "Settings -> Connections in the Agent UI) so the daemon can "
+            "Settings -> Connectors in the Agent UI) so the daemon can "
             "forward a token that covers them."
         )
     return cred.access_token

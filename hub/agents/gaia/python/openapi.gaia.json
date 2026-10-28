@@ -232,7 +232,7 @@
                 "type": "null"
               }
             ],
-            "description": "Whether this turn may reach the internet (contract >= 2.22). True refuses web search, page fetches, the browser, connector tools and commands that contact another host, with a plain message the model relays; false allows them. Send it every turn: a retained session keeps the last value. Omit it to leave the agent as it is.",
+            "description": "Whether this turn may reach the internet (contract >= 2.23). True refuses web search, page fetches, the browser, connector tools and commands that contact another host, with a plain message the model relays; false allows them. Send it every turn: a retained session keeps the last value. Omit it to leave the agent as it is.",
             "title": "Internet Off"
           },
           "max_steps": {
@@ -294,6 +294,12 @@
             "minLength": 1,
             "title": "Query",
             "type": "string"
+          },
+          "reasoning": {
+            "default": false,
+            "description": "Stream the model's reasoning as `reasoning` events with a `delta` (contract >= 2.22), for a client that shows it apart from status lines. Without it, reasoning folds into `status` lines as before.",
+            "title": "Reasoning",
+            "type": "boolean"
           },
           "run_id": {
             "description": "Host-minted UUIDv4 run handle. Cancellation (POST /v1/gaia/query/{run_id}/cancel) keys off it, so the client must mint it before the request rather than learn it from the stream.",
@@ -505,7 +511,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.22"
+    "version": "2.23"
   },
   "openapi": "3.1.0",
   "paths": {
