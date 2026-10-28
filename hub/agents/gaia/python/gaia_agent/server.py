@@ -67,6 +67,7 @@ from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
+from gaia.ui.turn_insights import turn_record
 from gaia.version import LEMONADE_MIN_VERSION
 
 logger = get_logger(__name__)
@@ -86,7 +87,8 @@ AGENT_ID = "gaia"
 #: 2.19 added ``/query``'s ``changes_turn_id`` field.
 #: 2.20 added ``/query``'s ``surface`` field.
 #: 2.21 added ``context`` to ``/query``'s ``final`` event.
-API_VERSION = "2.21"
+#: 2.22 added ``/query``'s ``reasoning`` field.
+API_VERSION = "2.22"
 
 #: How long ``final`` waits for the turn's context measurement before going without.
 _CONTEXT_WAIT_SECONDS = 15.0
@@ -255,6 +257,15 @@ class QueryRequest(_Strict):
             "worded for its own settings. Fixed when a session is built; omit "
             "it for a headless caller, whose provider advice then points at "
             "the model server this GAIA host uses."
+        ),
+    )
+
+    reasoning: bool = Field(
+        default=False,
+        description=(
+            "Stream the model's reasoning as `reasoning` events with a `delta` "
+            "(contract >= 2.22), for a client that shows it apart from status "
+            "lines. Without it, reasoning folds into `status` lines as before."
         ),
     )
 
@@ -1559,13 +1570,16 @@ async def query(request: QueryRequest):
         return _sse(_worded(event, _wording_surface(request)))
 
     async def _with_context(final: Dict[str, Any]) -> Dict[str, Any]:
-        """``final`` carrying the turn's context measurement (contract >= 2.21)."""
+        """``final`` carrying the turn's context measurement (contract >= 2.21) and timings."""
         if final.get("type") != "final":
             return final
         # ``final`` is printed inside process_query; the measurement follows it.
         deadline = time.monotonic() + _CONTEXT_WAIT_SECONDS
         while not run.context_done.is_set() and time.monotonic() < deadline:
             await asyncio.sleep(0.05)
+        performance = turn_record(run.result)
+        if performance is not None:
+            final = {**final, "performance": performance}
         if not run.context_done.is_set():
             logger.warning(
                 "run_id=%s: no context measurement within %ss; final goes without it",
@@ -1580,7 +1594,9 @@ async def query(request: QueryRequest):
         return {**final, "context": run.context}
 
     async def _stream():
-        translator = CanonicalTranslator(request.run_id, agent_id=AGENT_ID)
+        translator = CanonicalTranslator(
+            request.run_id, agent_id=AGENT_ID, reasoning=request.reasoning
+        )
         terminated = False
         last_write = time.monotonic()
         try:

@@ -15,7 +15,7 @@ title: "FileIOToolsMixin"
 
 ## Overview
 
-FileIOToolsMixin provides comprehensive file I/O operations with intelligent file type detection, syntax validation, and security controls. It handles Python files with full AST analysis, markdown with structure extraction, and generic text files with appropriate encoding.
+FileIOToolsMixin provides comprehensive file I/O operations with intelligent file type detection, syntax validation, and security controls. It handles Python files with full AST analysis, markdown, and generic text files with appropriate encoding.
 
 **Key Features:**
 - Read files with automatic type detection and analysis
@@ -120,11 +120,6 @@ see [Read before edit](#read-before-edit).
     "is_valid": bool,
     "errors": List[str],
     "symbols": [{"name": str, "type": str, "line": int}],
-
-    # Markdown files only
-    "headers": List[str],
-    "code_blocks": [{"language": str, "code": str}],
-    "links": [{"text": str, "url": str}],
 
     # Binary files only
     "is_binary": bool
@@ -613,11 +608,10 @@ computed at import time in `gaia.security`; they are not a constructor argument.
 - Symbol extraction (functions, classes)
 - Error reporting with line numbers
 
-### Markdown Files (.md)
+### Markdown Files (.md, .mdx)
 
-- Header extraction (# patterns)
-- Code block extraction with language tags
-- Link extraction ([text](url) patterns)
+- Returned as content with `file_type: "markdown"`; no extracted headers,
+  code blocks or links, which would repeat the content
 
 ### Binary Files
 

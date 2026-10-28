@@ -14,13 +14,13 @@ import { expectShape } from '../../utils/responseShape';
 import { log } from '../../utils/logger';
 import { useInferencePlace, useModelStore, selectChipModel, displayModelName, UNKNOWN_PLACE_TITLE } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
+import { useFolderPicker } from '../../hooks/useFolderPicker';
 import { useSessionEnvironment } from '../../hooks/useSessionEnvironment';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
 import { announcePermissionMode, usePermissionModeEvents } from '../../utils/permissionModeEvents';
 import { requestMobileAccess, useMobileAccessState } from '../../utils/mobileAccessEvents';
 import { MODES } from '../PermissionModeChip';
 import { PanelSection } from './PanelSection';
-import { FolderPicker } from './FolderPicker';
 import { Switch } from './Switch';
 import type { LocalModelStatus, PermissionMode, TunnelStatus } from '../../types';
 import type { ScopeEntry, ScopeSource } from '../../types/sessionPanel';
@@ -136,7 +136,6 @@ function Folders({ sessionId }: { sessionId: string }) {
     const { env, error: loadError, change } = useSessionEnvironment(sessionId);
     // Only the flagship's own default scope (your user folder) is known here.
     const flagship = useChatStore((s) => s.sessions.find((x) => x.id === sessionId)?.agent_type === 'gaia');
-    const [picking, setPicking] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [busyPath, setBusyPath] = useState<string | null>(null);
     const [showAllFiles, setShowAllFiles] = useState(false);
@@ -156,9 +155,9 @@ function Folders({ sessionId }: { sessionId: string }) {
     const remove = (entry: ScopeEntry) =>
         run(entry.path, () => change(() => api.removeEnvironmentFolder(sessionId, entry.path)));
     const add = (path: string) => {
-        setPicking(false);
         void run(path, () => change(() => api.addEnvironmentFolder(sessionId, path)));
     };
+    const { open: pickFolder, picker, error: pickError } = useFolderPicker(add);
 
     const folders = env?.folders.filter((f) => f.kind === 'folder') ?? [];
     const files = env?.folders.filter((f) => f.kind === 'file') ?? [];
@@ -223,14 +222,14 @@ function Folders({ sessionId }: { sessionId: string }) {
                         </span>
                     )}
                     {!locked && (
-                        <button type="button" className="sp-action" onClick={() => setPicking(true)} disabled={busyPath !== null}>
+                        <button type="button" className="sp-action" onClick={() => pickFolder()} disabled={busyPath !== null}>
                             <FolderPlus size={12} aria-hidden="true" /> Add folder
                         </button>
                     )}
                 </>
             )}
-            {error && <span className="sp-error" role="alert">{error}</span>}
-            {picking && <FolderPicker onPick={add} onClose={() => setPicking(false)} />}
+            {(error ?? pickError) && <span className="sp-error" role="alert">{error ?? pickError}</span>}
+            {picker}
         </Row>
     );
 }
@@ -333,11 +332,7 @@ function Permission({ sessionId }: { sessionId: string }) {
     }, [sessionId]);
     usePermissionModeEvents(sessionId, setMode);
 
-    const apply = async (next: PermissionMode) => {
-        if (next === 'full_access' && !confirming) {
-            setConfirming(true);
-            return;
-        }
+    const save = async (next: PermissionMode) => {
         setConfirming(false);
         setError(null);
         try {
@@ -360,7 +355,8 @@ function Permission({ sessionId }: { sessionId: string }) {
                         role="radio"
                         aria-checked={mode === m.mode}
                         className={mode === m.mode ? 'is-selected' : undefined}
-                        onClick={() => void apply(m.mode)}
+                        // Full access only turns on from "Turn it on", so a double-click can't confirm it.
+                        onClick={() => (m.mode === 'full_access' ? setConfirming(true) : void save(m.mode))}
                     >
                         {m.mode === 'full_access'
                             ? <ShieldAlert size={12} aria-hidden="true" />
@@ -373,7 +369,7 @@ function Permission({ sessionId }: { sessionId: string }) {
             {confirming && (
                 <span className="sp-confirm" role="alert">
                     Full access lets GAIA change files and run commands on this PC without asking.
-                    <button type="button" className="sp-action is-warning" onClick={() => void apply('full_access')}>Turn it on</button>
+                    <button type="button" className="sp-action is-warning" onClick={() => void save('full_access')}>Turn it on</button>
                     <button type="button" className="sp-action" onClick={() => setConfirming(false)}>Cancel</button>
                 </span>
             )}

@@ -494,3 +494,14 @@
         padding: 18px 16px 28px;
     }
 }
+
+.skill-group {
+    margin-top: 18px;
+}
+
+.skill-group-title {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+}

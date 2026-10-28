@@ -16,6 +16,7 @@ always on changes nothing downstream.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -303,7 +304,9 @@ def _num(value: Any) -> Optional[float]:
 def _step_stats(conversation: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out = []
     for entry in conversation or []:
-        content = entry.get("content") if isinstance(entry, dict) else None
+        if not isinstance(entry, dict):
+            continue
+        content = entry.get("content")
         if (
             entry.get("role") == "system"
             and isinstance(content, dict)
@@ -359,6 +362,54 @@ def _cost(model_id: Optional[str], tokens_in, cached, tokens_out) -> Dict[str, A
     if usd is None:
         return {"kind": "unknown", "usd": None}
     return {"kind": "estimate", "usd": round(usd, 6)}
+
+
+def turn_record(result: Any) -> Optional[Dict[str, Any]]:
+    """The part of an agent's result :func:`summarize_turn` reads, or None if it timed nothing.
+
+    Small enough for the sidecar to send on ``/query``'s ``final`` event, so a
+    relayed turn is measured the same way as an in-process one.
+    """
+    if not isinstance(result, dict):
+        return None
+    timing = result.get("timing_summary") or {}
+    steps = _step_stats(result.get("conversation"))
+    if not (timing or steps):
+        return None
+    return {
+        "timing_summary": timing,
+        "conversation": [{"role": "system", "content": stats} for stats in steps],
+    }
+
+
+#: A relayed record above this is refused; a long real turn is a few hundred KB.
+MAX_TURN_RECORD_BYTES = 1_000_000
+
+
+def turn_record_problem(value: Any) -> Optional[str]:
+    """Why ``value`` can't be summarized as a :func:`turn_record`, or ``None`` if it can."""
+    if not isinstance(value, dict) or not isinstance(value.get("timing_summary"), dict):
+        return "it is not a record with a timing_summary"
+    try:
+        # Refuses NaN/Infinity, which json.loads accepts and int() can't take.
+        size = len(json.dumps(value, allow_nan=False))
+    except (TypeError, ValueError) as exc:
+        return f"it holds a value JSON can't carry ({exc})"
+    if size > MAX_TURN_RECORD_BYTES:
+        return f"it is {size:,} bytes, over the {MAX_TURN_RECORD_BYTES:,}-byte limit"
+    conversation = value.get("conversation")
+    if not isinstance(conversation, list):
+        return "its conversation is not a list"
+    for entry in conversation:
+        content = entry.get("content") if isinstance(entry, dict) else None
+        if not isinstance(content, dict):
+            return "a conversation entry has no stats object"
+        tools = content.get("tools") or []
+        if not isinstance(content.get("performance_stats") or {}, dict):
+            return "a step's performance_stats is not an object"
+        if not isinstance(tools, list) or not all(isinstance(t, dict) for t in tools):
+            return "a step's tools is not a list of objects"
+    return None
 
 
 def summarize_turn(
