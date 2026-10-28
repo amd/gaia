@@ -1,6 +1,6 @@
 ---
 name: slide-decks
-description: Build and check PowerPoint slide decks (.pptx) - quarterly or business reviews, executive briefings, pitches, project status, training, research readouts, option comparisons, roadmaps, one-slide frameworks. Use when the user asks for a deck, slides, a presentation, a pitch, a slide or two from their data, or an image (PNG/JPEG) of a slide. Plans the storyline, builds native editable charts, tables, KPI tiles and diagrams from a short outline, then verifies fit, data, sources and style.
+description: Build and check PowerPoint decks (.pptx) - business reviews, executive briefings, pitches, project status, training, research readouts, option comparisons, roadmaps, one-slide frameworks. Use when the user asks for a deck, slides, a presentation, a pitch, a slide or two from their data, or an image (PNG/JPEG) of a slide. Builds native editable charts, tables, KPI tiles and diagrams from a short outline, then checks fit, data, sources and style.
 license: MIT
 version: 1.0.0
 metadata:
@@ -227,6 +227,7 @@ Must show: Revenue $12.4M; West +37%
 - Revenue $12.4M, up 12% on Q2
 - West +37% year on year
 Source: finance_q3.xlsx, Jul-Sep 2026
+Takeaway: Keep funding West
 
 ## West drove most of the quarter's growth
 ```chart column
@@ -251,7 +252,7 @@ Axis: More channels, staff and hours
 ````
 
 `# ` is the cover, each `## ` line is one slide titled with its takeaway, `-`
-lines are bullets, `Must show:` lists what has to be visible. Three or more
+lines are bullets, `Takeaway:` the line to act on, `Must show:` what must be seen. Three or more
 `### ` headings on a slide are drawn as side-by-side boxes, each heading's
 bullets inside it. `Diagram: process` draws them as left-to-right stages
 (also `cycle`, `pyramid`, `stack`). On a process,
@@ -270,16 +271,15 @@ without inventing abbreviations. Keep `Axis:` under 10 words.
   event, section and message the request asks for and pass them as
   `required_items`: short facts and names, not the deck's overall message.
   Never move requested content into the notes: cut other words or split. Notes hold extra detail and the spoken script.
-- **Every number comes from a source**, with its unit and period. Every
-  chart, table and KPI slide names its source.
+- **Only numbers the user gave or a tool returned** (compute with
+  `run_python`); data slides name their source.
 - **On `status: "error"`**, fix every listed problem and call again. Never
   switch to writing code.
 
 ## Procedure
 
 1. **Brief.** Settle audience, purpose and slide count. Saved preferences
-   apply automatically; what this request says wins (`prefs`, `theme`,
-   `template_path`). Ask **one** short question **only** for a material
+   apply; this request's `prefs`, `theme`, `template_path` win. Ask **one** short question **only** for a material
    ambiguity, through `request_user_input` with a default.
    Never ask about anything a default covers.
 2. **Key facts.** From files: `list_files`, read each document in full with

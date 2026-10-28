@@ -823,3 +823,59 @@ def test_a_line_under_a_diagram_title_is_its_subtitle(out):
     shapes = {s.name: s for s in Presentation(path).slides[0].shapes}
     assert shapes["Subtitle"].text_frame.text == "Each stage adds effort"
     assert shapes["Subtitle"].top + shapes["Subtitle"].height <= shapes["Step 1"].top
+
+
+def _shapes(path, slide=0):
+    return {s.name: s for s in Presentation(path).slides[slide].shapes}
+
+
+def test_a_few_short_points_become_cards_with_headings(out):
+    """Three short points used to sit at the top of an empty slide."""
+    from slidedeck.markdown import outline_from_markdown
+
+    md = (
+        "## Two features shipped; mobile slipped\n"
+        "- **Offline mode**: shipped\n- **Workspaces**: shipped\n- Mobile: slipped to Q4\n"
+    )
+    path = out("cards.pptx")
+    assert build_deck(outline_from_markdown(md), path)["status"] == "ok"
+    shapes = _shapes(path)
+    assert {"Card 1", "Card 2", "Card 3"} <= set(shapes)
+    first = shapes["Card 1"].text_frame.paragraphs
+    assert first[0].text == "Offline mode" and first[0].runs[0].font.bold
+    assert first[1].text == "shipped"
+    assert shapes["Card 3"].text_frame.paragraphs[0].text == "Mobile"
+
+
+def test_a_long_or_nested_list_stays_a_list(out):
+    from slidedeck.markdown import outline_from_markdown
+
+    md = "## Plan\n- One\n  - detail\n- Two\n- Three\n"
+    path = out("list.pptx")
+    assert build_deck(outline_from_markdown(md), path)["status"] == "ok"
+    assert not any(n.startswith("Card") for n in _shapes(path))
+
+
+def test_a_takeaway_line_is_a_band_above_the_footer(out):
+    from slidedeck.markdown import outline_from_markdown
+
+    md = "## West led the quarter\n- Revenue up\nTakeaway: Keep funding West\nSource: q3.xlsx\n"
+    path = out("band.pptx")
+    assert build_deck(outline_from_markdown(md), path)["status"] == "ok"
+    shapes = _shapes(path)
+    band = shapes["Takeaway"]
+    assert band.text_frame.text == "Keep funding West"
+    assert band.top + band.height <= shapes["Source"].top
+
+
+def test_content_slides_carry_the_deck_name_above_a_one_line_title(out):
+    from slidedeck.markdown import outline_from_markdown
+
+    md = "# Q3 review\n\n## West led\n- Revenue up\n\n## Next steps\n- Hire\n"
+    path = out("kicker.pptx")
+    assert build_deck(outline_from_markdown(md), path)["status"] == "ok"
+    shapes = _shapes(path, 1)
+    kicker, title = shapes["Kicker"], shapes["Title 1"]
+    assert kicker.text_frame.text == "Q3 REVIEW"
+    assert kicker.top + kicker.height <= title.top
+    assert kicker.left == title.left > 0

@@ -896,6 +896,27 @@ class DeckBuilder:
             placeholder=True,
             raw_texts=[text],
         )
+        kicker = str(self.outline.get("title") or "").strip()
+        if box is None and kicker and kicker.lower() != text.strip().lower():
+            self._kicker(slide, ph, kicker, need, size)
+
+    def _kicker(self, slide, ph, label: str, need_pt: float, size: float) -> None:
+        """The deck's name in small caps just above a one-line title."""
+        if need_pt > size * 1.6:
+            return  # a two-line title fills its box; a label would collide
+        bottom = int(ph.top) + int(ph.height)
+        text_top = bottom - int(Pt(need_pt / FIT_SLACK)) - Inches(0.05)
+        h = Inches(0.28)
+        if text_top - h < Inches(0.12):
+            return
+        # The title box shrinks to its one line, which stays where it was.
+        left, width = int(ph.left), int(ph.width)
+        ph.left, ph.top, ph.width, ph.height = left, text_top, width, bottom - text_top
+        tb = self.textbox(
+            slide, Box(int(ph.left), text_top - h, int(ph.width), h), "Kicker"
+        )
+        para = [Para(_plain(label).upper(), level=-1, bold=True)]
+        self.write(tb, para, 11, color=self.theme.primary, anchor=MSO_ANCHOR.BOTTOM)
 
     def footer(self, slide, s: Dict[str, Any], *, number: bool = True) -> int:
         """Source/footnote line and slide number. Returns the content bottom (EMU)."""
@@ -978,7 +999,43 @@ class DeckBuilder:
                 etree.SubElement(sf, qn("a:srgbClr")).set("val", self.theme.muted.hex)
                 etree.SubElement(rpr, qn("a:latin")).set("typeface", self.font.family)
                 etree.SubElement(fld, qn("a:t")).text = str(self._current)
-        return min(top, self.footer_top) - Inches(0.2)
+        content_bottom = min(top, self.footer_top) - Inches(0.2)
+        if s.get("takeaway"):
+            # The one line to act on, as a dark band above the footer.
+            band = Box(
+                self.content_x,
+                content_bottom - Inches(0.62),
+                self.content_w,
+                Inches(0.62),
+            )
+            dark = luminance(self.theme.background.hex) < 0.4
+            fill = self.theme.primary if dark else self.theme.title
+            shp = self.shape(
+                slide,
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                band,
+                "Takeaway",
+                fill,
+                round_adj=0.12,
+            )
+            text = _plain(s["takeaway"])
+            self._write_group(
+                [
+                    (
+                        shp,
+                        [Para(text, level=-1, bold=True)],
+                        [text],
+                        [self.theme.text_on(fill)],
+                    )
+                ],
+                18,
+                "takeaway",
+                align=PP_ALIGN.LEFT,
+                anchor=MSO_ANCHOR.MIDDLE,
+                inset_x=Inches(0.25),
+            )
+            content_bottom = band.y - Inches(0.2)
+        return content_bottom
 
     def notes_for(self, slide, s: Dict[str, Any]) -> None:
         if not s.get("notes"):
@@ -1210,8 +1267,96 @@ class DeckBuilder:
 
     # bullets ------------------------------------------------------------
 
+    #: "**Head** detail", "Head: detail" or "Head - detail" splits into a card's heading and text.
+    _CARD_HEAD = re.compile(
+        r"^\*\*(.+?)\*\*[\s:–—-]*(.*)$|^([^:–—]{2,40}?)\s*[:–—]\s+(.+)$"
+    )
+
+    def _as_cards(self, items) -> Optional[List[Tuple[str, str]]]:
+        """2-4 short flat points as (heading, text) cards; None when a list reads better."""
+        if not 2 <= len(items) <= 4 or any(lvl > 0 for _t, lvl, _b in items):
+            return None
+        if any(len(_plain(t)) > 140 for t, _l, _b in items):
+            return None
+        cards = []
+        for text, _lvl, _bold in items:
+            m = self._CARD_HEAD.match(text.strip())
+            if m and (m.group(1) or m.group(3)):
+                head = (m.group(1) or m.group(3)).strip()
+                cards.append((head, (m.group(2) if m.group(1) else m.group(4)).strip()))
+            else:
+                cards.append(("", _plain(text)))
+        return cards
+
+    def _slide_cards(self, s, cards: List[Tuple[str, str]]) -> None:
+        """Short points side by side as cards, sized to their text and centred."""
+        slide, box = self._standard(s)
+        n, gap = len(cards), self.gap
+        w = (box.w - gap * (n - 1)) // n
+        heads = any(h for h, _t in cards)
+        entries = []
+        for head, text in cards:
+            ps = []
+            if head:
+                ps.append(Para(_plain(head), level=-1, bold=True, scale=1.15))
+            if text:
+                ps.append(
+                    Para(_plain(text), level=-1, space_before=0.35 if head else 0.0)
+                )
+            entries.append(ps)
+        ix, iy = Inches(0.25), Inches(0.25)
+        size = min(
+            self.fit(
+                ps, w, box.h, SIZES["body_max"], self.body_min, inset_x=ix, inset_y=iy
+            )[0]
+            for ps in entries
+        )
+        need = max(
+            self.fit(ps, w, box.h, size, size, inset_x=ix, inset_y=iy)[2]
+            for ps in entries
+        )
+        h = min(box.h, int(Pt(need / FIT_SLACK)) + 2 * iy + Inches(0.15))
+        y = box.y + (box.h - h) // 2
+        group = []
+        for k, ps in enumerate(entries):
+            x = box.x + k * (w + gap)
+            card = self.shape(
+                slide,
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                Box(x, y, w, h),
+                f"Card {k + 1}",
+                self.theme.panel,
+                round_adj=0.06,
+            )
+            # A thin accent rule on top marks each card as one point.
+            self.shape(
+                slide,
+                MSO_SHAPE.RECTANGLE,
+                Box(x, y, w, Inches(0.07)),
+                f"Card {k + 1} rule",
+                self.theme.primary,
+            )
+            colors = [
+                self.theme.primary if heads and p.bold else self.theme.text for p in ps
+            ]
+            group.append((card, ps, [p.text for p in ps], colors))
+        self._write_group(
+            group,
+            size,
+            "cards",
+            align=PP_ALIGN.LEFT,
+            anchor=MSO_ANCHOR.TOP,
+            inset_x=ix,
+            inset_y=iy,
+        )
+        self._finish(slide)
+
     def _slide_bullets(self, s, paras_in=None, title=None):
         items = paras_in if paras_in is not None else s["paras"]
+        cards = self._as_cards(items) if paras_in is None else None
+        if cards:
+            self._slide_cards(s, cards)
+            return
         use_ph = self._layouts["content"] is not self._layouts["title_only"]
         slide = self._new_slide("content" if use_ph else "title_only")
         self.set_title(slide, title if title is not None else s["title"])
@@ -2009,7 +2154,7 @@ class DeckBuilder:
                 heights.append(lines * size * LINE_SPACING + pt(2 * cell_my) + 2)
             return widths, heights
 
-        size = float(SIZES["body_min"])
+        size = float(SIZES["body_max"] - 4)
         while True:
             widths, heights = layout(size)
             if sum(heights) <= pt(box.h) * 0.97 or size <= self.dense_min:
@@ -2039,6 +2184,12 @@ class DeckBuilder:
             self.warn(
                 f"table needs {sum(heights):.0f}pt of height at {size:.0f}pt but {pt(box.h):.0f}pt is available; it will run off the slide. Cut rows (keep at most ~7 rows x 5 columns; put the full table in an appendix), or set allow_split."
             )
+        if fits:
+            # A short table takes its share of the space, not a strip at the top.
+            spare = pt(box.h) * 0.9 - sum(heights)
+            if spare > 0:
+                grow = min(spare / len(heights), size * 1.1)
+                heights = [h + grow for h in heights]
         nrows = len(grid)
         gf = slide.shapes.add_table(
             nrows, ncols, box.x, box.y, box.w, int(sum(heights) * EMU_PER_PT)

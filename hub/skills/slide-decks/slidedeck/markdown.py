@@ -260,6 +260,10 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
         if m:
             slide["source"] = m.group(1).strip()
             continue
+        m = re.match(r"^(?:takeaway|decision|ask|bottom line)\s*:\s*(.+)$", s, re.I)
+        if m:
+            slide["takeaway"] = m.group(1).strip()
+            continue
         m = re.match(r"^(?:note|footnote)\s*:\s*(.*)$", s, re.I)
         if m:
             slide["footnote"] = m.group(1).strip()

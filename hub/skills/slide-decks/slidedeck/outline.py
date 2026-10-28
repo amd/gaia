@@ -322,6 +322,9 @@ COMMON_FIELDS = {
     "heading",
     "tagline",
     "speaker_notes",
+    "takeaway",
+    "decision",
+    "ask",
 }
 
 #: Fields each slide type reads, beyond the common ones.
@@ -1117,6 +1120,7 @@ def _normalize_slide(
             else "; ".join(_text(x) for x in raw["sources"])
         ),
         "footnote": _text(raw.get("footnote")),
+        "takeaway": _text(raw.get("takeaway") or raw.get("decision") or raw.get("ask")),
         "allow_split": raw.get("allow_split"),
         "kind": str(raw.get("kind") or raw_type).lower(),
         "todo": bool(raw.get("todo")),
