@@ -282,8 +282,9 @@ export function ScheduleManager() {
         pollRef.current = window.setInterval(() => loadSchedules(), 5000);
         return () => {
             if (pollRef.current) clearInterval(pollRef.current);
+            dismissActionError();
         };
-    }, [loadSchedules]);
+    }, [loadSchedules, dismissActionError]);
 
     // Allow creation if all 3 fields are filled. parsed?.valid is a bonus
     // (shows preview) but not a hard gate — the backend validates on create.

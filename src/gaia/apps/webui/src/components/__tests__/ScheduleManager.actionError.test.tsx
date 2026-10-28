@@ -59,3 +59,16 @@ describe('failed pause', () => {
         expect(screen.queryByText('db locked')).not.toBeInTheDocument();
     });
 });
+
+describe('reopening the manager', () => {
+    it('does not show an error from the previous time it was open', async () => {
+        const first = render(<ScheduleManager />);
+        await act(async () => { useScheduleStore.setState({ actionError: 'db locked' }); });
+        expect(await screen.findByText('db locked')).toBeInTheDocument();
+
+        first.unmount();
+        render(<ScheduleManager />);
+        expect(await screen.findByText('news')).toBeInTheDocument();
+        expect(screen.queryByText('db locked')).not.toBeInTheDocument();
+    });
+});
