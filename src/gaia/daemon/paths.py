@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 _ENV_HOME = "GAIA_DAEMON_HOME"
@@ -103,6 +104,30 @@ def scheduler_db_path() -> Path:
     return path
 
 
+_WINDOWS_REPLACE_ATTEMPTS = 5
+_WINDOWS_REPLACE_INITIAL_DELAY = 0.05
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _replace_file(source: Path, target: Path) -> None:
+    """Replace *target* with *source*, retrying transient Windows share violations."""
+    if not _is_windows():
+        os.replace(str(source), str(target))
+        return
+
+    for attempt in range(_WINDOWS_REPLACE_ATTEMPTS):
+        try:
+            os.replace(str(source), str(target))
+            return
+        except PermissionError:
+            if attempt == _WINDOWS_REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(_WINDOWS_REPLACE_INITIAL_DELAY * (2**attempt))
+
+
 def atomic_write_json(path: Path, payload, mode: int = 0o600) -> None:
     """Atomically persist *payload* as JSON at *path*, default file mode 0600.
 
@@ -130,7 +155,14 @@ def atomic_write_json(path: Path, payload, mode: int = 0o600) -> None:
         except OSError:
             pass
         raise
-    os.replace(str(tmp), str(path))
+    try:
+        _replace_file(tmp, path)
+    except Exception:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
     # os.replace preserves the temp's mode; re-assert defensively for platforms
     # where the source mode is not carried across the rename.
     try:

@@ -124,6 +124,61 @@ def test_atomic_write_json_mode_0600_and_roundtrip(daemon_home, tmp_path):
 # ===========================================================================
 
 
+def test_atomic_write_json_retries_transient_windows_replace_error(
+    daemon_home, tmp_path, monkeypatch
+):
+    from gaia.daemon import paths
+
+    target = tmp_path / "somefile.json"
+    calls = 0
+    delays = []
+    real_replace = paths.os.replace
+
+    def _replace(source, destination):
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise PermissionError("simulated transient share violation")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(paths, "_is_windows", lambda: True)
+    monkeypatch.setattr(paths.os, "replace", _replace)
+    monkeypatch.setattr(paths.time, "sleep", delays.append)
+
+    paths.atomic_write_json(target, {"ok": True})
+
+    assert calls == 3
+    assert delays == [0.05, 0.1]
+    with open(target, encoding="utf-8") as f:
+        assert json.load(f) == {"ok": True}
+
+
+def test_atomic_write_json_cleans_temp_after_exhausting_windows_retries(
+    daemon_home, tmp_path, monkeypatch
+):
+    from gaia.daemon import paths
+
+    target = tmp_path / "somefile.json"
+    calls = 0
+    delays = []
+
+    def _replace(source, destination):
+        nonlocal calls
+        calls += 1
+        raise PermissionError("simulated persistent share violation")
+
+    monkeypatch.setattr(paths, "_is_windows", lambda: True)
+    monkeypatch.setattr(paths.os, "replace", _replace)
+    monkeypatch.setattr(paths.time, "sleep", delays.append)
+
+    with pytest.raises(PermissionError, match="persistent share violation"):
+        paths.atomic_write_json(target, {"ok": True})
+
+    assert calls == 5
+    assert delays == [0.05, 0.1, 0.2, 0.4]
+    assert not list(tmp_path.glob(".somefile.json.*.tmp"))
+
+
 def test_new_registry_error_classes_are_sidecar_errors():
     from gaia.daemon.sidecars.errors import (
         CapacityError,
@@ -542,16 +597,21 @@ def test_concurrent_record_spawn_for_different_agents_no_lost_update(daemon_home
     entries survive."""
     from gaia.daemon.sidecars import ledger
 
+    failures = []
+
     def _hammer(agent_id, base_port):
-        for i in range(20):
-            ledger.record_spawn(
-                agent_id=agent_id,
-                pid=1000 + i,
-                port=base_port + i,
-                mode="user",
-                argv=[agent_id],
-                started_at=float(i),
-            )
+        try:
+            for i in range(20):
+                ledger.record_spawn(
+                    agent_id=agent_id,
+                    pid=1000 + i,
+                    port=base_port + i,
+                    mode="user",
+                    argv=[agent_id],
+                    started_at=float(i),
+                )
+        except Exception as exc:
+            failures.append(exc)
 
     t1 = threading.Thread(target=_hammer, args=("toy-a", 10000))
     t2 = threading.Thread(target=_hammer, args=("toy-b", 20000))
@@ -559,6 +619,10 @@ def test_concurrent_record_spawn_for_different_agents_no_lost_update(daemon_home
     t2.start()
     t1.join(10)
     t2.join(10)
+
+    assert not t1.is_alive()
+    assert not t2.is_alive()
+    assert not failures
 
     entries = {e["agent_id"]: e for e in ledger.read_entries()}
     assert set(entries) == {"toy-a", "toy-b"}
