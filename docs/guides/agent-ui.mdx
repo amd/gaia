@@ -332,12 +332,18 @@ and where that model runs.
   marks the chat in the sidebar, and a click turns private off. A private chat
   isn't saved to memory. To keep a new chat's first message out too, turn on
   **Private** next to the message box before you send it.
-- **Tool steps** show as one quiet line ("3 steps · 1 tool") you can open for
-  the detail. "Steps" is the agent's own count, the same figure the TUI and
-  evals report.
-- **The line under an answer** says how long it took, where it ran and when
-  the first word came ("Answered in 40 s on your GPU · first word in 1 s", or
-  "via Fireworks AI" for a cloud model). Click it for the exact numbers,
+- **While GAIA works** the reply builds up as a timeline. Short notes GAIA
+  writes before a tool call ("I'll check the forecast first") appear in full,
+  each step shows as one line with its own timer, and live reasoning scrolls
+  by under **Thinking**. A line at the end says what the model is doing between
+  steps. Picking up a skill gets its own highlighted line.
+- **Once the answer is in**, the steps between two notes fold into one line
+  ("Read web page, read file") you can open for the detail, and reasoning
+  folds to "Thought for 8s".
+- **The line under an answer** says how long it took, where it ran, when
+  the first word came and how many steps GAIA took ("Answered in 40 s on your
+  GPU · first word in 1 s · 3 steps", or "via Fireworks AI" for a cloud model).
+  "Steps" is the agent's own count, the same figure the TUI and evals report. Click it for the exact numbers,
   including the tokens the whole turn read and wrote across every model call.
   Files the answer names by full path,
   such as a saved deliverable, open in your file explorer when clicked.

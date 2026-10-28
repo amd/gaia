@@ -251,7 +251,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const closeStoppedTurnLocallyRef = useRef<(() => void) | null>(null);
     const stepIdRef = useRef(0);
     /** The agent's own step number for the live turn, from its `step` events. */
-    const [liveAgentStep, setLiveAgentStep] = useState(0);
     const toolOccurredRef = useRef(false);
     const sendMessageRef = useRef<(text?: string, options?: SendOptions) => void>(() => {});
     // Messages typed while a reply runs, kept per chat in the store, and whether the user stopped that reply.
@@ -624,7 +623,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // from the start, so stale cards would double up without this.
         clearCards();
         stepIdRef.current = 0;
-        setLiveAgentStep(0);
         toolOccurredRef.current = false;
         if (reconnect) {
             useChatStore.getState().setLiveStatus(`${RECONNECTING_PREFIX} (attempt ${reconnect} of ${MAX_STREAM_RECONNECTS})…`);
@@ -744,6 +742,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             toolOccurredRef.current = false;
                         }
                         fullContent += content;
+                        // The answer has begun, so the reasoning before it is over.
+                        const steps = useChatStore.getState().agentSteps;
+                        const last = steps[steps.length - 1];
+                        if (last?.type === 'thinking' && last.active) {
+                            updateLastAgentStep({ active: false, latencyMs: Date.now() - last.timestamp });
+                        }
                     }
                     // Safety net: strip any tool-call JSON that leaked past the
                     // backend SSE filter (see sse_handler.py _TOOL_CALL_JSON_RE).
@@ -935,6 +939,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
                 // Tool completion updates the last TOOL step (not just the last step,
                 // since thinking/status events may have been interleaved during execution)
+                // The call is over, so the live line must stop naming it; the model has the turn again.
+                if ((event.type === 'tool_end' || event.type === 'tool_result')
+                    && useChatStore.getState().livePhase === 'tool') {
+                    useChatStore.getState().setLiveStatus(null);
+                }
                 if (event.type === 'tool_end') {
                     updateLastToolStep({ active: false, success: event.success !== false });
                     return;
@@ -1006,6 +1015,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
+                // The text streamed so far narrated the call that follows: it leaves the answer for the timeline.
+                if (event.type === 'commentary') {
+                    fullContent = '';
+                    toolOccurredRef.current = false;
+                    streamBufferRef.current = '';
+                    setStreamContent('');
+                    const step = agentEventToStep(event, stepIdRef);
+                    if (step) addAgentStep(step);
+                    return;
+                }
+
                 // One "Thinking" step per turn. appendThinkingContent() appends
                 // inside a single set(), so racing chunks never lose text.
                 if (event.type === 'thinking') {
@@ -1064,11 +1084,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
-                if (event.type === 'step') {
-                    // No row of its own, but it is the turn's step count.
-                    if (typeof event.step === 'number') setLiveAgentStep(event.step);
-                    return;
-                }
+                // The step counter measures the harness; the timeline shows the work.
+                if (event.type === 'step') return;
 
                 if (event.type === 'agent_error' && isEchoOfFailedTool(event, useChatStore.getState().agentSteps)) {
                     return;
@@ -1790,7 +1807,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 isStreaming={isStreaming}
                                 agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
                                 agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
-                                agentStepCount={liveAgentStep}
                                 cards={isStreaming ? cards : lastCardsRef.current}
                                 liveStatus={isStreaming ? liveStatus : null}
                                 awaitingUser={isStreaming && (awaitingUser || hasLiveQuestion || hasOpenPrompt)}

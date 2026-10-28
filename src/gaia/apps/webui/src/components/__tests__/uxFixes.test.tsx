@@ -71,15 +71,16 @@ describe('tool latency', () => {
     });
 });
 
-describe('step count', () => {
-    it('does not count progress-status rows, which are not saved with the turn', () => {
+describe('progress-status rows', () => {
+    it('leave a finished turn, which does not save them', () => {
         const steps: AgentStep[] = [
             { id: 1, type: 'tool', label: 'x', tool: 'read_file', active: false, success: true, timestamp: 1 },
             { id: 2, type: 'status', label: 'Model is processing', active: false, timestamp: 2 },
             { id: 3, type: 'tool', label: 'x', tool: 'read_file', active: false, success: true, timestamp: 3 },
         ];
-        render(<AgentActivity steps={steps} isActive={false} variant="summary" />);
-        expect(screen.getByText(/^2 steps/)).toBeInTheDocument();
+        render(<AgentActivity steps={steps} isActive={false} />);
+        expect(screen.queryByText('Model is processing')).toBeNull();
+        expect(screen.getByLabelText('2 identical calls')).toBeInTheDocument();
     });
 });
 

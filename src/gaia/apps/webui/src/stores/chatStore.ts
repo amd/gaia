@@ -416,7 +416,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             if (last.type !== 'thinking') return state;
             steps[steps.length - 1] = {
                 ...last,
-                detail: (last.detail ? last.detail + '\n' : '') + content,
+                // Streamed pieces carry their own spacing, as the saved turn joins them.
+                detail: (last.detail ?? '') + content,
                 active: true,
             };
             return { agentSteps: steps };

@@ -19,7 +19,7 @@ it.each([
     ['search_past_conversations', 'Searched past chats'],
     ['index_documents', 'Indexed documents'],
 ])('names the GAIA agent\'s %s step instead of "Used tool"', (tool, label) => {
-    render(<AgentActivity steps={[step(tool)]} isActive={false} variant="summary" />);
+    render(<AgentActivity steps={[step(tool)]} isActive={false} />);
 
     expect(screen.getByText(label)).toBeInTheDocument();
     expect(screen.queryByText('Used tool')).toBeNull();
@@ -29,7 +29,7 @@ it.each(['remember', 'recall', 'update_memory', 'forget'])(
     'keeps a successful %s step out of the activity list',
     (tool) => {
         const steps = [step(tool), { ...step('find_files'), id: 2 }];
-        render(<AgentActivity steps={steps} isActive={false} variant="summary" />);
+        render(<AgentActivity steps={steps} isActive={false} />);
 
         expect(screen.getByText('Found files')).toBeInTheDocument();
         expect(screen.queryByText(/memory/i)).toBeNull();
@@ -38,14 +38,14 @@ it.each(['remember', 'recall', 'update_memory', 'forget'])(
 
 it('shows nothing when memory was the only activity', () => {
     const { container } = render(
-        <AgentActivity steps={[step('remember')]} isActive={false} variant="summary" />,
+        <AgentActivity steps={[step('remember')]} isActive={false} />,
     );
 
     expect(container).toBeEmptyDOMElement();
 });
 
 it('still shows a memory step that failed', () => {
-    render(<AgentActivity steps={[step('remember', false, false)]} isActive={false} variant="summary" />);
+    render(<AgentActivity steps={[step('remember', false, false)]} isActive={false} />);
 
     expect(screen.getByText(/memory/i)).toBeInTheDocument();
 });
@@ -55,7 +55,7 @@ it.each([
     ['read_file', 'Reading file failed', 'Read file'],
     ['some_unknown_tool', 'Using some unknown tool failed', 'Used some unknown tool'],
 ])('does not give a failed or denied %s step the done label', (tool, label, doneLabel) => {
-    render(<AgentActivity steps={[step(tool, false, false)]} isActive={false} variant="inline" />);
+    render(<AgentActivity steps={[step(tool, false, false)]} isActive={false} />);
 
     expect(screen.getByText(label)).toBeInTheDocument();
     expect(screen.queryByText(doneLabel)).toBeNull();
@@ -63,7 +63,7 @@ it.each([
 
 it('does not say a step stopped before its result "Wrote file"', () => {
     const stopped: AgentStep = { id: 1, type: 'tool', label: 'Using write_file', tool: 'write_file', active: false, timestamp: 1 };
-    render(<AgentActivity steps={[stopped]} isActive={false} variant="inline" />);
+    render(<AgentActivity steps={[stopped]} isActive={false} />);
 
     expect(screen.getByText("Writing file didn't finish")).toBeInTheDocument();
     expect(screen.queryByText('Wrote file')).toBeNull();
@@ -71,26 +71,26 @@ it('does not say a step stopped before its result "Wrote file"', () => {
 
 it('keeps the done label for a finished step saved without a success flag', () => {
     const legacy: AgentStep = { id: 1, type: 'tool', label: 'Using write_file', tool: 'write_file', active: false, result: 'success', timestamp: 1 };
-    render(<AgentActivity steps={[legacy]} isActive={false} variant="inline" />);
+    render(<AgentActivity steps={[legacy]} isActive={false} />);
 
     expect(screen.getByText('Wrote file')).toBeInTheDocument();
 });
 
 it('names a running GAIA agent step in the present tense', () => {
-    render(<AgentActivity steps={[step('request_user_input', true)]} isActive={true} variant="inline" />);
+    render(<AgentActivity steps={[step('request_user_input', true)]} isActive={true} />);
 
     expect(screen.getByText('Asking you')).toBeInTheDocument();
 });
 
-it('counts only the steps it shows when memory steps are hidden', () => {
-    const steps = [step('remember'), { ...step('find_files'), id: 2 }];
-    render(<AgentActivity steps={steps} isActive={false} variant="summary" agentStepCount={2} />);
+it('leaves hidden memory steps out of a folded summary', () => {
+    const steps = [step('remember'), { ...step('find_files'), id: 2 }, { ...step('read_file'), id: 3 }];
+    render(<AgentActivity steps={steps} isActive={false} />);
 
-    expect(screen.getByText(/^1 step\b/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Found files, read file$/ })).toBeInTheDocument();
 });
 
 it('names a tool it has no label for, rather than "Used tool"', () => {
-    render(<AgentActivity steps={[step('generate_image')]} isActive={false} variant="summary" />);
+    render(<AgentActivity steps={[step('generate_image')]} isActive={false} />);
 
     expect(screen.getByText('Used generate image')).toBeInTheDocument();
     expect(screen.queryByText('Used tool')).toBeNull();

@@ -21,7 +21,7 @@ function gitLog(overrides: Partial<AgentStep> = {}): AgentStep {
 }
 
 it('names the connector and tool on an MCP step, not "MCP tool"', () => {
-    render(<AgentActivity steps={[gitLog()]} isActive={false} variant="inline" />);
+    render(<AgentActivity steps={[gitLog()]} isActive={false} />);
 
     expect(screen.getByText('Used Git: git_log')).toBeInTheDocument();
     expect(screen.queryByText('MCP tool')).toBeNull();
@@ -34,7 +34,7 @@ it('names the connector while the MCP call runs', () => {
 });
 
 it('shows the first lines of an MCP tool\'s output and expands to all of it', () => {
-    render(<AgentActivity steps={[gitLog()]} isActive={false} variant="inline" />);
+    render(<AgentActivity steps={[gitLog()]} isActive={false} />);
     fireEvent.click(screen.getByRole('button', { name: /Used Git: git_log/ }));
 
     const output = screen.getByTestId('mcp-output');
@@ -49,7 +49,7 @@ it('shows the first lines of an MCP tool\'s output and expands to all of it', ()
 
 it('keeps the old label for a saved MCP step that has no connector name', () => {
     const legacy = gitLog({ mcpServerLabel: undefined, mcpTool: undefined, narration: undefined, mcpOutput: undefined });
-    render(<AgentActivity steps={[legacy]} isActive={false} variant="inline" />);
+    render(<AgentActivity steps={[legacy]} isActive={false} />);
 
     expect(screen.getByText('MCP tool')).toBeInTheDocument();
 });

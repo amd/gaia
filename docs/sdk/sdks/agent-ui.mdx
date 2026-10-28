@@ -991,6 +991,7 @@ Deleting a chat deletes its copies.
     | `thinking` | `content` (string) | Agent reasoning or progress message. Emitted when the agent starts processing, thinks through a problem, or begins a long-running operation. |
     | `step` | `step` (int), `total` (int), `status` (string) | Agent step progress. `step` is the current step number, `total` is the step limit, and `status` is `"started"`. |
     | `status` | `status` (string), `message` (string) | General status update. `status` is one of `"working"`, `"complete"`, `"warning"`, or `"info"`. May also include `steps` (int) and `elapsed` (number) when `status` is `"complete"`. |
+    | `commentary` | `content` (string) | The text the model streamed since the last tool call, sent just before the next `tool_start`. Those `chunk` events narrated the call rather than answering, so a client moves the text out of the answer and shows it as a note in the turn. Only sent when the text is not empty; the saved turn keeps it as a step of type `commentary`. |
     | `plan` | `steps` (string[]), `step_narrations` (string[]), `current_step` (int or null) | Agent execution plan, re-sent before each step it executes. `steps` names each planned tool call with its arguments; `step_narrations` is the same list as one plain line per step (e.g. `"Reading file: notes.txt"`). `current_step` is the zero-based index of the step being executed. |
 
     **Tool Execution**

@@ -37,6 +37,10 @@ export function answerSummary(
         const first = `first word in ${spokenDuration(stats.time_to_first_token * 1000)}`;
         parts.push(parts.length ? first : first[0].toUpperCase() + first.slice(1));
     }
+    // The agent's own count, the figure the TUI and evals report.
+    if (stats?.steps != null && stats.steps > 0) {
+        parts.push(`${stats.steps} step${stats.steps !== 1 ? 's' : ''}`);
+    }
     return parts.length ? parts.join(' · ') : null;
 }
 

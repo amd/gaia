@@ -478,3 +478,174 @@ class TestNonStreamingProgressLabel:
             event = handler.event_queue.get_nowait()
             assert "channel" not in event, f"{label!r} was demoted to debug"
             assert _tr().translate(event), f"{label!r} never reached the user"
+
+
+# ===========================================================================
+# Mid-turn commentary
+# ===========================================================================
+
+
+def _drain(handler: SSEOutputHandler) -> list:
+    events = []
+    while not handler.event_queue.empty():
+        events.append(handler.event_queue.get_nowait())
+    return events
+
+
+class TestCommentary:
+    """Text written right before a tool call is a progress note, not the answer."""
+
+    def test_text_before_a_call_arrives_as_commentary_ahead_of_the_call(self):
+        handler = SSEOutputHandler()
+        handler.print_streaming_text("I'll check the forecast ")
+        handler.print_streaming_text("first.", end_of_stream=True)
+        handler.print_tool_usage("fetch_page")
+
+        events = _drain(handler)
+        types = [e["type"] for e in events]
+        assert types.index("commentary") == types.index("tool_start") - 1
+        commentary = events[types.index("commentary")]
+        assert commentary["content"] == "I'll check the forecast first."
+
+    def test_a_call_with_no_text_before_it_gets_no_commentary(self):
+        handler = SSEOutputHandler()
+        handler.print_tool_usage("fetch_page")
+        handler.print_tool_usage("read_file")
+
+        assert "commentary" not in [e["type"] for e in _drain(handler)]
+
+    def test_each_note_carries_only_the_text_since_the_previous_call(self):
+        handler = SSEOutputHandler()
+        handler.print_streaming_text("Reading the page.", end_of_stream=True)
+        handler.print_tool_usage("fetch_page")
+        handler.print_streaming_text("Now the minutes.", end_of_stream=True)
+        handler.print_tool_usage("read_file")
+
+        notes = [e["content"] for e in _drain(handler) if e["type"] == "commentary"]
+        assert notes == ["Reading the page.", "Now the minutes."]
+
+    def test_the_answer_after_the_last_call_is_never_commentary(self):
+        handler = SSEOutputHandler()
+        handler.print_tool_usage("fetch_page")
+        handler.print_streaming_text("Clear Saturday.", end_of_stream=True)
+        handler._emit({"type": "answer", "content": "Clear Saturday."})
+        handler.print_tool_usage("read_file")
+
+        assert "commentary" not in [e["type"] for e in _drain(handler)]
+
+    def test_a_relayed_turn_gets_the_same_commentary(self):
+        from gaia.ui.email_sidecar import relay
+        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+
+        handler = SSEOutputHandler()
+        relay._dispatch_one(
+            handler, {"type": "token", "delta": "Searching the web."}, GAIA_PROFILE
+        )
+        relay._dispatch_one(
+            handler,
+            {"type": "tool_call", "tool": "web_search", "args": {"query": "x"}},
+            GAIA_PROFILE,
+        )
+
+        events = _drain(handler)
+        types = [e["type"] for e in events]
+        assert types.index("commentary") == types.index("tool_start") - 1
+        assert events[types.index("commentary")]["content"] == "Searching the web."
+
+    def test_the_sidecar_does_not_send_commentary_twice(self):
+        """The host re-derives commentary from tokens; the sidecar's copy is dropped."""
+        tr = _tr()
+        assert tr.translate({"type": "commentary", "content": "Searching."}) == []
+
+
+class TestThinkingStream:
+    """Streamed reasoning pieces join back into the words the model wrote."""
+
+    def test_pieces_keep_the_spaces_between_words(self):
+        handler = SSEOutputHandler()
+        for token in [
+            "<think>\n",
+            "Start with",
+            " the forecast",
+            " page</think>",
+            "Done.",
+        ]:
+            handler.print_streaming_text(token)
+        handler.print_streaming_text("", end_of_stream=True)
+
+        pieces = [e["content"] for e in _drain(handler) if e["type"] == "thinking"]
+        assert "".join(pieces) == "Start with the forecast page"
+
+    def test_a_whole_block_in_one_piece_is_trimmed(self):
+        handler = SSEOutputHandler()
+        handler.print_streaming_text(
+            "<think> Plan it out. </think>Done.", end_of_stream=True
+        )
+
+        pieces = [e["content"] for e in _drain(handler) if e["type"] == "thinking"]
+        assert pieces == ["Plan it out."]
+
+
+class TestReasoningTime:
+    """A saved turn keeps how long the reasoning before its answer ran."""
+
+    def test_the_answer_closes_the_reasoning_before_it(self):
+        from gaia.ui._chat_helpers import _close_reasoning
+
+        steps = [
+            {"type": "tool", "timestamp": 500},
+            {"type": "thinking", "timestamp": 1_000, "active": False},
+            {"type": "thinking", "timestamp": 2_000, "active": True},
+        ]
+        _close_reasoning(steps, 7_000)
+        _close_reasoning(steps, 9_000)
+
+        assert steps[2]["latencyMs"] == 6_000
+        assert steps[2]["active"] is False
+        assert "latencyMs" not in steps[0]
+
+    def test_no_reasoning_leaves_the_steps_alone(self):
+        from gaia.ui._chat_helpers import _close_reasoning
+
+        steps = [{"type": "tool", "timestamp": 500}]
+        _close_reasoning(steps, 7_000)
+
+        assert steps == [{"type": "tool", "timestamp": 500}]
+
+
+class TestRelayedNarration:
+    """A relayed call reaches the window in the same plain words as an in-process one."""
+
+    def test_the_relay_passes_the_sidecars_narration_on(self):
+        from gaia.ui.email_sidecar import relay
+        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+
+        handler = SSEOutputHandler()
+        relay._dispatch_one(
+            handler,
+            {
+                "type": "tool_call",
+                "tool": "web_search",
+                "args": {"query": "seattle weather"},
+                "narration": "Searching the web: seattle weather",
+            },
+            GAIA_PROFILE,
+        )
+
+        events = {e["type"]: e for e in _drain(handler)}
+        assert events["tool_start"]["narration"] == "Searching the web: seattle weather"
+        assert events["tool_args"]["narration"] == "Searching the web: seattle weather"
+
+    def test_an_older_sidecar_without_narration_still_gets_plain_words(self):
+        from gaia.ui.email_sidecar import relay
+        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+
+        handler = SSEOutputHandler()
+        relay._dispatch_one(
+            handler,
+            {"type": "tool_call", "tool": "read_file", "args": {"file_path": "a.txt"}},
+            GAIA_PROFILE,
+        )
+
+        events = {e["type"]: e for e in _drain(handler)}
+        assert events["tool_start"]["narration"] == "Reading file: a.txt"

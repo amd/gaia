@@ -10,6 +10,8 @@ import {
     formatArgsDisplay,
     formatElapsed,
     readableListValue,
+    thoughtDurations,
+    thoughtLabel,
 } from '../AgentActivity';
 import type { AgentStep } from '../../types';
 import activityCss from '../AgentActivity.css?raw';
@@ -132,12 +134,11 @@ describe('identical calls', () => {
 
     it('merges three identical failed reads into one row marked ×3', () => {
         const steps = [failedRead(1), retryThought(2), failedRead(3), retryThought(4), failedRead(5)];
-        render(<AgentActivity steps={steps} isActive={false} variant="summary" />);
-        fireEvent.click(screen.getByRole('button', { name: 'Expand agent activity' }));
+        render(<AgentActivity steps={steps} isActive={false} />);
+        fireEvent.click(screen.getByRole('button', { name: /^Read web page ×3$/ }));
 
         expect(screen.getAllByText('Reading web page: go.nps.gov/RainierWeather')).toHaveLength(1);
         expect(screen.getByLabelText('3 identical calls')).toHaveTextContent('×3');
-        expect(screen.getByText(/· 3 tools$/)).toBeInTheDocument();
     });
 
     it('keeps calls with different arguments apart', () => {
@@ -156,7 +157,6 @@ describe('identical calls', () => {
 describe('plain step lines', () => {
     it('shows the narration, not the raw tool name, by default', () => {
         render(<AgentActivity steps={[call(1, 'Reading file: notes.txt', { tool: 'read_file' })]} isActive={false} />);
-        fireEvent.click(screen.getByRole('button', { name: 'Expand agent activity' }));
 
         expect(screen.getByText('Reading file: notes.txt')).toBeInTheDocument();
         expect(screen.queryByText('read_file')).toBeNull();
@@ -164,7 +164,6 @@ describe('plain step lines', () => {
 
     it('puts the raw tool name and arguments one click deeper', () => {
         render(<AgentActivity steps={[call(1, 'Reading file: notes.txt', { tool: 'read_file' })]} isActive={false} />);
-        fireEvent.click(screen.getByRole('button', { name: 'Expand agent activity' }));
         const row = screen.getByRole('button', { name: /Reading file: notes.txt/ });
         expect(row).toHaveAttribute('aria-expanded', 'false');
 
@@ -175,18 +174,21 @@ describe('plain step lines', () => {
         expect(screen.getByText('Arguments')).toBeInTheDocument();
     });
 
-    it('only counts steps while a call runs; the live line beside GAIA\'s name times it', () => {
+    it('shows a running call in view with its timer, and no live line beside it', () => {
         const running = call(1, 'Reading file: notes.txt', { active: true, success: undefined, result: undefined, timestamp: Date.now() - 12_000 });
-        render(<AgentActivity steps={[running]} isActive={true} />);
+        render(<AgentActivity steps={[running]} isActive={true} liveLine={<span>Thinking</span>} />);
 
-        expect(screen.getByRole('button', { name: 'Expand agent activity' })).toHaveTextContent(/^1 step · 1 tool$/);
+        const row = screen.getByRole('button', { name: /Reading file: notes.txt/ });
+        expect(within(row).getByText('12s')).toBeInTheDocument();
+        expect(screen.queryByText('Thinking')).toBeNull();
     });
 
-    it('only counts steps while the model works', () => {
-        const thought: AgentStep = { id: 1, type: 'thinking', label: 'Thinking', detail: 'Hmm', active: true, timestamp: Date.now() - 5_000 };
-        render(<AgentActivity steps={[thought]} isActive={true} />);
+    it('shows the live line between steps, where the next one will appear', () => {
+        const { container } = render(
+            <AgentActivity steps={[call(1, 'Reading file: notes.txt')]} isActive={false} running liveLine={<span>Thinking</span>} />,
+        );
 
-        expect(screen.getByRole('button', { name: 'Expand agent activity' })).toHaveTextContent(/^1 step$/);
+        expect(container.querySelector('.agent-activity')!.lastElementChild).toHaveTextContent('Thinking');
     });
 
     it('shows a failed call\'s reason on its row', () => {
@@ -247,8 +249,8 @@ describe('reasoning', () => {
 
     it('is folded away once the turn is over', () => {
         const { container } = render(<AgentActivity steps={[thought(false), call(2, 'Reading file: a.txt')]} isActive={false} />);
-        fireEvent.click(screen.getByRole('button', { name: 'Expand agent activity' }));
-        const toggle = screen.getByRole('button', { name: /Reasoning/ });
+        fireEvent.click(screen.getByRole('button', { name: /^Read file$/ }));
+        const toggle = screen.getByRole('button', { name: /Thought/ });
 
         expect(toggle).toHaveAttribute('aria-expanded', 'false');
         expect(container.querySelector('.flow-thought-hacker')).toBeNull();
@@ -259,8 +261,7 @@ describe('reasoning', () => {
 
     it('streams in view while the model is thinking, then folds when the turn ends', () => {
         const { container, rerender } = render(<AgentActivity steps={[thought(true)]} isActive={true} />);
-        fireEvent.click(screen.getByRole('button', { name: 'Expand agent activity' }));
-        expect(container.querySelector('.flow-thought-hacker')).not.toBeNull();
+        expect(container.querySelector('.flow-thought-hacker')).toHaveTextContent('Consult the rules');
 
         rerender(<AgentActivity steps={[thought(false)]} isActive={false} />);
         expect(container.querySelector('.flow-thought-hacker')).toBeNull();
@@ -285,8 +286,8 @@ describe('reasoning', () => {
         expect(activityCss).toMatch(/\.flow-thought-hacker \{[^}]*color: var\(--text-secondary\)[^}]*background: var\(--bg-recessed\)/);
         for (const block of [light, dark]) {
             expect(ratio(token(block, '--text-secondary'), token(block, '--bg-recessed'))).toBeGreaterThanOrEqual(4.5);
-            // The toggle's word count sits on the panel background.
-            expect(ratio(token(block, '--text-muted'), token(block, '--bg-secondary'))).toBeGreaterThanOrEqual(4.5);
+            // Live reasoning is previewed in muted text on the chat canvas.
+            expect(ratio(token(block, '--text-muted'), token(block, '--bg-primary'))).toBeGreaterThanOrEqual(4.5);
         }
     });
 });
@@ -301,18 +302,18 @@ describe('expanded view order', () => {
 
     it('leads with the steps and puts the filter after them, only for busy turns', () => {
         const few = [1, 2, 3].map((i) => call(i, `Reading file: ${i}.txt`));
-        const { container, unmount } = render(<AgentActivity steps={few} isActive={false} />);
-        fireEvent.click(screen.getByRole('button', { name: 'Expand agent activity' }));
+        const { unmount } = render(<AgentActivity steps={few} isActive={false} />);
+        fireEvent.click(screen.getByRole('button', { name: /^Read file ×3$/ }));
         expect(screen.queryByLabelText('Filter by tool name')).toBeNull();
         unmount();
 
         const many = [1, 2, 3, 4, 5, 6].map((i) => call(i, `Reading file: ${i}.txt`));
         const view = render(<AgentActivity steps={many} isActive={false} />);
-        fireEvent.click(screen.getByRole('button', { name: 'Expand agent activity' }));
-        const wrap = view.container.querySelector('.agent-flow-wrap')!;
-        expect(wrap.firstElementChild).toHaveClass('agent-flow');
-        expect(wrap.lastElementChild).toHaveClass('activity-filter-bar');
-        void container;
+        expect(screen.queryByLabelText('Filter by tool name')).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: /^Read file ×6$/ }));
+        const activity = view.container.querySelector('.agent-activity')!;
+        expect(activity.firstElementChild).toHaveClass('agent-timeline');
+        expect(activity.lastElementChild).toHaveClass('activity-filter-bar');
     });
 });
 
@@ -334,5 +335,126 @@ describe('background memory calls', () => {
         ], false);
 
         expect(rows.map((r) => r.tool)).toEqual(['read_file', 'remember', 'read_file']);
+    });
+});
+
+describe('timeline', () => {
+    const note = (id: number, text: string): AgentStep => ({
+        id, type: 'commentary', label: 'Commentary', detail: text, active: false, timestamp: id,
+    });
+    const skill = (id: number, name: string): AgentStep =>
+        call(id, `Loading skill: ${name}`, { tool: 'load_skill' });
+
+    it('shows the agent\'s notes in full, in order, with the steps between them folded', () => {
+        const steps = [
+            note(1, 'Checking the forecast first.'),
+            call(2, 'Reading web page: nps.gov', { tool: 'fetch_page' }),
+            call(3, 'Reading file: a.txt'),
+            note(4, 'Now the minutes.'),
+            call(5, 'Reading file: minutes.html'),
+        ];
+        const { container } = render(<AgentActivity steps={steps} isActive={false} />);
+
+        const items = [...container.querySelector('.agent-timeline')!.children].map((el) => el.textContent);
+        expect(items).toEqual([
+            'Checking the forecast first.',
+            'Read web page, read file',
+            'Now the minutes.',
+            'Reading file: minutes.html',
+        ]);
+    });
+
+    it('keeps the stretch that is running open, and folds it once a note follows', () => {
+        const first = [note(1, 'Looking around.'), call(2, 'Reading file: a.txt'), call(3, 'Reading file: b.txt')];
+        const { rerender } = render(<AgentActivity steps={first} isActive={false} running />);
+        expect(screen.getByText('Reading file: a.txt')).toBeInTheDocument();
+
+        rerender(<AgentActivity steps={[...first, note(4, 'Found it.')]} isActive={false} running />);
+        expect(screen.queryByText('Reading file: a.txt')).toBeNull();
+        expect(screen.getByRole('button', { name: /^Read file ×2$/ })).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('leaves out a note the answer repeats', () => {
+        const steps = [note(1, 'Dropped the scratch table.'), call(2, 'Dropping table', { tool: 'drop_table' })];
+        const { container } = render(
+            <AgentActivity steps={steps} isActive={false} answer={'Dropped the scratch table.\n\nAll clean.'} />,
+        );
+
+        expect(container.querySelector('.flow-note')).toBeNull();
+    });
+
+    it('names the skill the agent picked up', () => {
+        render(<AgentActivity steps={[skill(1, 'meeting-notes'), call(2, 'Reading file: a.txt')]} isActive={false} />);
+
+        expect(screen.getByRole('button', { name: /^Used meeting-notes skill, read file$/ })).toBeInTheDocument();
+    });
+
+    it('marks a skill pickup apart from ordinary calls', () => {
+        const { container } = render(<AgentActivity steps={[skill(1, 'meeting-notes')]} isActive={false} />);
+
+        expect(container.querySelector('.flow-tool')).toHaveClass('skill');
+        expect(activityCss).toMatch(/\.flow-tool\.skill [^{]*\{[^}]*color: var\(--accent\)/);
+    });
+
+    it.each([
+        [true, undefined, 'Thinking'],
+        [false, 8_400, 'Thought for 8s'],
+        [false, 400, 'Thought'],
+        [false, undefined, 'Thought'],
+    ])('labels reasoning (live %s, %s ms) as "%s"', (live, ms, label) => {
+        expect(thoughtLabel(live, ms)).toBe(label);
+    });
+});
+
+describe('timeline review fixes', () => {
+    const piece = (id: number, timestamp: number, opts: Partial<AgentStep> = {}): AgentStep => ({
+        id, type: 'thinking', label: 'Thinking', detail: `part ${id} `, active: false, timestamp, ...opts,
+    });
+    const note = (id: number, text: string): AgentStep => ({
+        id, type: 'commentary', label: 'Commentary', detail: text, active: false, timestamp: id,
+    });
+
+    it('times a saved stretch of reasoning from its first piece to the next step', () => {
+        const steps = [piece(1, 1_000), piece(2, 3_000), piece(3, 4_000), call(4, 'Reading file: a.txt', { timestamp: 9_000 })];
+
+        expect(thoughtDurations(steps).get(3)).toBe(8_000);
+        render(<AgentActivity steps={steps} isActive={false} />);
+        fireEvent.click(screen.getByRole('button', { name: /^Read file$/ }));
+        expect(screen.getByRole('button', { name: /Thought for 8s/ })).toBeInTheDocument();
+    });
+
+    it('times the reasoning before the answer from the time saved on its last piece', () => {
+        const steps = [piece(1, 1_000), piece(2, 2_000, { latencyMs: 6_000 })];
+
+        render(<AgentActivity steps={steps} isActive={false} />);
+        expect(screen.getByRole('button', { name: /Thought for 6s/ })).toBeInTheDocument();
+    });
+
+    it('filters a lone call between notes like any other', () => {
+        const many = [1, 2, 3, 4, 5, 6].map((i) => call(i, `Reading file: ${i}.txt`, i === 1 ? { success: false } : {}));
+        render(<AgentActivity steps={[...many, note(7, 'One more.'), call(8, 'Reading file: last.txt')]} isActive={false} />);
+        fireEvent.click(screen.getByRole('button', { name: /^Read file ×6$/ }));
+        expect(screen.getByText('Reading file: last.txt')).toBeInTheDocument();
+
+        fireEvent.change(screen.getByLabelText('Filter by status'), { target: { value: 'error' } });
+        expect(screen.queryByText('Reading file: last.txt')).toBeNull();
+        expect(screen.getByText('Reading file: 1.txt')).toBeInTheDocument();
+    });
+
+    it('shows a warning raised while the turn runs', () => {
+        const warning: AgentStep = {
+            id: 2, type: 'status', label: 'Detected a repeating call. Execution paused.', active: false, success: false, timestamp: 2,
+        };
+        render(<AgentActivity steps={[call(1, 'Reading file: a.txt'), warning]} isActive={false} running />);
+
+        expect(screen.getByRole('status')).toHaveTextContent('Execution paused.');
+    });
+
+    it('keeps a short note the answer only mentions later on', () => {
+        const { container } = render(
+            <AgentActivity steps={[note(1, 'Done.'), call(2, 'Reading file: a.txt')]} isActive={false} answer="Here it is. Done." />,
+        );
+
+        expect(container.querySelector('.flow-note')).toHaveTextContent('Done.');
     });
 });

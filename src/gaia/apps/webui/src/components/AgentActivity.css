@@ -4,141 +4,94 @@
 
 .agent-activity {
     width: 100%;
-    margin-bottom: 6px;
-}
-
-/* ── Summary bar — subtle by default, expands on hover ─────────────
-   Most chat turns don't require the user to inspect the agent's
-   internal steps; the previous loud panel-with-border was eating
-   visual attention every turn for content the user rarely opens.
-   Now it sits quietly inline (no border, dim text, smaller) and only
-   asserts itself on hover/focus, matching the access pattern. The
-   "active/done" state and error variant still escalate visibility
-   so an in-flight or failed run is obvious. */
-.agent-summary-bar {
-    display: inline-flex;
-    align-items: center;
-    justify-content: flex-start;
-    width: auto;
-    max-width: 100%;
-    gap: 6px;
-    padding: 2px 8px 2px 4px;
-    border-radius: var(--radius-xs);
-    background: transparent;
-    border: 1px solid transparent;
-    font-size: 13px;
-    font-family: var(--font-sans);
-    color: var(--text-secondary);
-    opacity: 0.85;
-    transition: opacity var(--duration-fast) var(--ease),
-                background var(--duration-fast) var(--ease),
-                border-color var(--duration-fast) var(--ease),
-                color var(--duration-fast) var(--ease);
-    cursor: pointer;
-}
-.agent-summary-bar:hover,
-.agent-summary-bar:focus-visible {
-    opacity: 1;
-    background: var(--bg-tertiary);
-    border-color: var(--border);
-    color: var(--text-secondary);
-}
-/* When activity is currently streaming or has errors, force full
-   opacity — the user genuinely needs to see those states. */
-.agent-activity.active .agent-summary-bar,
-.agent-activity.has-errors .agent-summary-bar,
-.agent-activity.has-policy-alerts .agent-summary-bar {
-    opacity: 1;
-}
-/* Once expanded, the bar is the title for the panel below it — keep
-   it visible at full opacity even on mouse-out so the user has
-   continuous orientation. */
-.agent-activity:has(.flow-expanded) .agent-summary-bar {
-    opacity: 1;
-    background: var(--bg-tertiary);
-    border-color: var(--border);
-    color: var(--text-secondary);
-}
-
-.agent-summary-left {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-}
-
-.agent-summary-right {
-    display: flex;
-    align-items: center;
-    color: var(--text-muted);
-    transition: transform var(--duration-fast) var(--ease);
-}
-
-.agent-summary-text {
-    font-weight: 500;
-    flex-shrink: 0;
-}
-
-.agent-icon-done { color: var(--text-muted); }
-.agent-icon-error { color: var(--danger); }
-.agent-activity.has-policy-alerts .agent-icon-done { color: var(--accent-yellow); }
-
-/* @keyframes spin defined in global index.css */
-
-/* No visual difference between active/done states — bar stays stable */
-
-/* ── Flow wrapper — animated expand/collapse ─────────────────── */
-.agent-flow-wrap {
-    display: grid;
-    /* grid-template-rows trick for smooth height animation */
-    grid-template-rows: 1fr;
-    transition: grid-template-rows var(--duration-slow) var(--ease),
-                opacity var(--duration-slow) var(--ease),
-                margin-top var(--duration-slow) var(--ease);
-    opacity: 1;
-    margin-top: 6px;
-}
-
-.agent-flow-wrap.flow-collapsed {
-    grid-template-rows: 0fr;
-    opacity: 0;
-    margin-top: 0;
-    pointer-events: none;
-}
-
-.agent-flow-wrap > .agent-flow {
-    overflow: hidden;
-    min-height: 0;
-}
-
-/* ── Flow container ──────────────────────────────────────────── */
-.agent-flow {
-    padding: 8px 12px;
-    border-radius: var(--radius-xs);
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
+    margin-bottom: 10px;
     display: flex;
     flex-direction: column;
     gap: 6px;
-    animation: flowSlideDown var(--duration-slow) var(--ease);
 }
 
-@keyframes flowSlideDown {
-    from { opacity: 0; transform: translateY(-6px); }
-    to { opacity: 1; transform: translateY(0); }
-}
+.agent-icon-error { color: var(--danger); }
 
-/* ── Flow: Thinking text ─────────────────────────────────────── */
-.flow-thought {
+/* ── Timeline: notes in full, steps between them ───────────────── */
+.agent-timeline {
     display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* A note the agent wrote mid-turn reads like the answer it leads to. */
+.flow-note {
+    animation: thoughtSlideIn var(--duration) var(--ease);
+}
+.flow-note > :first-child { margin-top: 0; }
+.flow-note > :last-child { margin-bottom: 0; }
+
+.flow-steps {
+    display: flex;
+    flex-direction: column;
     align-items: flex-start;
+    gap: 2px;
+}
+
+.flow-steps-summary {
+    display: inline-flex;
+    align-items: center;
     gap: 6px;
-    padding: 3px 0;
-    font-size: 12px;
+    max-width: 100%;
+    padding: 3px 8px 3px 4px;
+    margin-left: -4px;
+    border-radius: var(--radius-xs);
+    font-size: 13px;
     font-family: var(--font-sans);
     color: var(--text-secondary);
-    line-height: 1.5;
-    animation: thoughtSlideIn var(--duration) var(--ease);
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+.flow-steps-summary:hover,
+.flow-steps-summary:focus-visible {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+.flow-steps-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+.flow-steps-done { color: var(--text-muted); flex-shrink: 0; }
+
+.flow-steps-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+}
+/* A run opened from its summary hangs off it, so it reads as that run's detail. */
+.flow-steps.open:not(.live) .flow-steps-rows {
+    margin: 2px 0 2px 6px;
+    padding-left: 10px;
+    border-left: 1px solid var(--border);
+}
+
+.flow-warning {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.flow-warning > svg {
+    flex-shrink: 0;
+    color: var(--accent-yellow);
+}
+
+.flow-live-line {
+    padding: 2px 0;
+}
+.flow-live-line .thinking-indicator {
+    font-size: 12px;
 }
 
 @keyframes thoughtSlideIn {
@@ -146,25 +99,20 @@
     to { opacity: 1; transform: translateX(0); }
 }
 
-.flow-thought.active {
-    color: var(--text-secondary);
-}
-
-.flow-thought-text {
-    font-style: italic;
-    word-break: break-word;
-}
-
 /* @keyframes fadeIn defined in global index.css */
 
 /* ── Flow: Reasoning, folded behind a one-line toggle ───────────── */
-.flow-reasoning-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
+.flow-reasoning {
     width: 100%;
-    padding: 3px 0;
-    font-size: 12px;
+}
+.flow-reasoning-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 8px 3px 4px;
+    margin-left: -4px;
+    border-radius: var(--radius-xs);
+    font-size: 13px;
     font-family: var(--font-sans);
     color: var(--text-secondary);
     text-align: left;
@@ -172,9 +120,10 @@
 }
 .flow-reasoning-toggle:hover {
     color: var(--text-primary);
+    background: var(--bg-tertiary);
 }
-.flow-reasoning-count {
-    color: var(--text-muted);
+.flow-reasoning.live .flow-reasoning-toggle {
+    color: var(--text-primary);
 }
 
 .flow-thought-hacker {
@@ -214,16 +163,28 @@
     animation: cursorBlink var(--duration-blink) var(--ease-step) infinite;
 }
 
+/* Live reasoning shows its last lines, fading out at the top, until opened. */
+.flow-thought-hacker.peek {
+    max-height: 4.8em;
+    overflow: hidden;
+    margin: 2px 0 0 20px;
+    padding: 0;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    -webkit-mask-image: linear-gradient(to bottom, transparent, currentColor 45%);
+    mask-image: linear-gradient(to bottom, transparent, currentColor 45%);
+}
+
 /* @keyframes cursorBlink is defined globally in index.css */
 
 /* .thinking-dots styles are defined globally in index.css */
 
 /* ── Flow: Tool Card ─────────────────────────────────────────── */
 .flow-tool {
+    width: 100%;
     border-radius: var(--radius-xs);
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border);
-    transition: border-color var(--duration-fast) var(--ease);
     animation: toolSlideIn var(--duration) var(--ease) both;
 }
 
@@ -238,12 +199,10 @@
 .flow-tool:nth-child(4) { animation-delay: calc(var(--stagger) * 3); }
 .flow-tool:nth-child(5) { animation-delay: calc(var(--stagger) * 4); }
 
-.flow-tool.active {
-    border-color: color-mix(in srgb, var(--accent) 25%, transparent);
-}
-
-.flow-tool.error {
-    border-color: color-mix(in srgb, var(--danger) 25%, transparent);
+/* Picking up a skill changes how the agent works from here, so it stands out. */
+.flow-tool.skill .flow-tool-left > svg:not(.flow-tool-spinner),
+.flow-tool.skill .flow-tool-label {
+    color: var(--accent);
 }
 
 .flow-tool-header {
@@ -252,7 +211,10 @@
     justify-content: space-between;
     width: 100%;
     gap: 8px;
-    padding: 5px 10px;
+    padding: 3px 6px 3px 4px;
+    margin-left: -4px;
+    width: calc(100% + 4px);
+    border-radius: var(--radius-xs);
     font-size: 13px;
     font-family: var(--font-sans);
     color: var(--text-secondary);
@@ -304,13 +266,15 @@
 }
 
 .flow-tool-label {
-    font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: var(--text-primary);
+    color: var(--text-secondary);
     font-size: 13px;
     min-width: 0;
+}
+.flow-tool.active .flow-tool-label {
+    color: var(--text-primary);
 }
 
 /* ×N: identical calls merged into one row */
@@ -427,13 +391,16 @@
 
 /* Tool detail (expanded) */
 .flow-tool-detail {
-    padding: 0 10px 8px;
+    margin: 2px 0 6px 20px;
+    padding: 4px 10px 8px;
     display: flex;
     flex-direction: column;
     gap: 6px;
     animation: detailExpand var(--duration) var(--ease);
     overflow: hidden;
-    border-top: 1px solid var(--border-light);
+    border-radius: var(--radius-xs);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
 }
 
 @keyframes detailExpand {
@@ -525,9 +492,9 @@
 .plan-icon-stopped { color: var(--text-muted); }
 .plan-icon-pending { color: var(--text-muted); opacity: 0.6; }
 
-/* The live checklist sits under the summary bar while the turn runs. */
+/* The live checklist sits under the timeline while the turn runs. */
 .agent-activity > .flow-plan {
-    margin-top: 6px;
+    margin-top: 2px;
 }
 
 /* ── Flow: Error ─────────────────────────────────────────────── */
@@ -1066,12 +1033,7 @@
         animation: none;
     }
 
-    .agent-flow-wrap {
-        transition: none;
-    }
-
-    .agent-flow,
-    .flow-thought,
+    .flow-note,
     .flow-thought-hacker,
     .flow-tool,
     .flow-tool-detail,
@@ -1093,12 +1055,5 @@
 
     .flow-tool-chevron {
         transition: none;
-    }
-}
-
-/* ── Responsive ───────────────────────────────────────────────── */
-@media (max-width: 768px) {
-    .agent-activity {
-        padding: 0 16px;
     }
 }

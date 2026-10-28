@@ -57,6 +57,7 @@ from gaia.ui.sse_handler import (
     _summarize_tool_result,
     tool_result_failed,
 )
+from gaia.ui.event_narration import derive_narration
 from gaia.ui.sse_translation import MCP_TOOL_FIELDS, SUMMARY_VIEW_KEYS
 from gaia.ui.turn_insights import turn_record_problem
 
@@ -255,7 +256,17 @@ def _dispatch_one(
         handler.record_tool_started(tool)
         if isinstance(args, dict):
             handler.record_tool_args(args)
-        start: Dict[str, Any] = {"type": "tool_start", "tool": tool, "detail": label}
+        # The call in plain words; a sidecar older than the field gets it derived here.
+        narration = str(
+            event.get("narration")
+            or derive_narration(tool, args if isinstance(args, dict) else {})
+        )
+        start: Dict[str, Any] = {
+            "type": "tool_start",
+            "tool": tool,
+            "detail": label,
+            "narration": narration,
+        }
         start.update({k: event[k] for k in MCP_TOOL_FIELDS if event.get(k)})
         handler._emit(start)
         handler._emit(
@@ -264,6 +275,7 @@ def _dispatch_one(
                 "tool": tool,
                 "args": args,
                 "detail": _format_tool_args(tool, args) or label,
+                "narration": narration,
             }
         )
         if tool in profile.mutating_tools:

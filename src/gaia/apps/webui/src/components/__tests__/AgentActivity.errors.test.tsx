@@ -14,19 +14,18 @@ it('shows a failed turn\'s error without a click', () => {
     const steps: AgentStep[] = [
         { id: 1, type: 'error', label: 'Error', detail: failure, active: false, success: false, timestamp: 1 },
     ];
-    const { container } = render(<AgentActivity steps={steps} isActive={false} variant="summary" />);
+    render(<AgentActivity steps={[...steps, { ...steps[0], id: 2, type: 'thinking', detail: 'Retrying.' }]} isActive={false} />);
 
-    expect(container.querySelector('.agent-flow-wrap')!.hasAttribute('inert')).toBe(false);
-    expect(screen.getByRole('button', { name: 'Collapse agent activity' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Hit an error/ })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText(failure)).toBeVisible();
 });
 
-it('keeps a turn whose only failure is a tool result collapsed', () => {
+it('keeps steps whose only failure is a tool result folded', () => {
     const steps: AgentStep[] = [
         { id: 1, type: 'tool', label: 'Using tool', tool: 'read_file', active: false, success: false, timestamp: 1 },
+        { id: 2, type: 'tool', label: 'Using tool', tool: 'read_file', detail: 'b', active: false, success: true, timestamp: 2 },
     ];
-    const { container } = render(<AgentActivity steps={steps} isActive={false} variant="summary" />);
+    render(<AgentActivity steps={steps} isActive={false} />);
 
-    expect(container.querySelector('.agent-flow-wrap')!.hasAttribute('inert')).toBe(true);
-    expect(screen.getByRole('button', { name: 'Expand agent activity' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Read file ×2/ })).toHaveAttribute('aria-expanded', 'false');
 });

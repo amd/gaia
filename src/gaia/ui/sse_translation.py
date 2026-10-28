@@ -398,6 +398,10 @@ class CanonicalTranslator:
             return []
         return [{"type": "token", "delta": delta}]
 
+    def _on_commentary(self, _event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        # Its text already went out as tokens; the host's handler re-derives it.
+        return []
+
     def _on_tool_result(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         self._result_seen_since_call = True
         data = event.get("result_data")
@@ -638,6 +642,7 @@ class CanonicalTranslator:
         "thinking": _on_thinking,
         "plan": _on_plan,
         "chunk": _on_chunk,
+        "commentary": _on_commentary,
         "tool_start": _on_tool_start,
         "tool_result": _on_tool_result,
         "tool_end": _on_tool_end,

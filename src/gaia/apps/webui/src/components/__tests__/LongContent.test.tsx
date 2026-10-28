@@ -171,8 +171,7 @@ describe('long step output', () => {
             id: 1, type: 'tool', label: 'Ran command', tool: 'run_shell_command',
             result, active: false, success: true, timestamp: 1,
         }];
-        const view = render(<AgentActivity steps={steps} isActive={false} variant="summary" />);
-        fireEvent.click(screen.getByRole('button', { name: 'Expand agent activity' }));
+        const view = render(<AgentActivity steps={steps} isActive={false} />);
         fireEvent.click(view.container.querySelector('.flow-tool-header')!);
         return view;
     }

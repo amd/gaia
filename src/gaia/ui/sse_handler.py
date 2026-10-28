@@ -544,6 +544,8 @@ class SSEOutputHandler(OutputHandler):
         self._last_tool_label = ""
         self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
         self._in_thinking = False  # True while inside a <think>...</think> block
+        # Part of the open <think> block already went out.
+        self._thinking_streamed = False
         self._json_filtered = False  # True after a JSON block was suppressed; used to eat trailing } artifacts
         # Where the brace scan of a still-open envelope stopped, and the head of
         # the buffer it scanned: a long tool call is scanned once, not per token.
@@ -563,6 +565,8 @@ class SSEOutputHandler(OutputHandler):
         self._shown_line_start = True
         # Line-start state of the raw stream, thinking included.
         self._raw_line_start = True
+        # Text streamed since the last tool call; becomes commentary if a call follows.
+        self._text_since_tool = ""
         # Set while streaming the value of a {"answer": "..."} reply.
         self._answer_stream: Optional[JsonStringStreamDecoder] = None
         # Tool confirmation state (blocking until frontend responds)
@@ -628,10 +632,20 @@ class SSEOutputHandler(OutputHandler):
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
-        if event and event.get("type") == "chunk":
+        etype = event.get("type") if event else None
+        if etype == "chunk":
             self._shown_fence, self._shown_line_start = _fence_after(
                 event.get("content") or "", self._shown_fence, self._shown_line_start
             )
+            self._text_since_tool += event.get("content") or ""
+        elif etype == "tool_start":
+            # Text written just before a call narrates the work; it is not the answer.
+            note = self._text_since_tool.strip()
+            if note:
+                self.event_queue.put({"type": "commentary", "content": note})
+            self._text_since_tool = ""
+        elif etype == "answer":
+            self._text_since_tool = ""
         self.event_queue.put(event)
 
     def _fence_at(self, unshown: str) -> "tuple[Optional[str], bool]":
@@ -1523,7 +1537,14 @@ class SSEOutputHandler(OutputHandler):
                     # We're inside a thinking block — look for closing tag
                     close_idx = self._stream_buffer.find("</think>")
                     if close_idx >= 0:
-                        thinking_text = self._stream_buffer[:close_idx].strip()
+                        thinking_text = self._stream_buffer[:close_idx]
+                        # A closing piece continues the streamed words; keep its leading space.
+                        thinking_text = (
+                            thinking_text.rstrip()
+                            if self._thinking_streamed
+                            else thinking_text.strip()
+                        )
+                        self._thinking_streamed = False
                         if thinking_text:
                             self._emit({"type": "thinking", "content": thinking_text})
                         self._stream_buffer = self._stream_buffer[
@@ -1533,10 +1554,12 @@ class SSEOutputHandler(OutputHandler):
                         continue  # Check for more <think> blocks
                     else:
                         # Still inside thinking — emit partial and wait
-                        if self._stream_buffer.strip():
-                            self._emit(
-                                {"type": "thinking", "content": self._stream_buffer}
-                            )
+                        piece = self._stream_buffer
+                        if not self._thinking_streamed:
+                            piece = piece.lstrip()
+                        if piece:
+                            self._emit({"type": "thinking", "content": piece})
+                            self._thinking_streamed = True
                         self._stream_buffer = ""
                         return
                 else:
@@ -2380,6 +2403,7 @@ class SSEOutputHandler(OutputHandler):
             self._emit({"type": "thinking", "content": self._stream_buffer})
             self._stream_buffer = ""
             self._in_thinking = False
+        self._thinking_streamed = False
 
         # A stopped stream can leave a call open or a tag tail held back.
         if self._markup_close is not None or self._markup_pending:
