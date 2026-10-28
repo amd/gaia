@@ -1273,14 +1273,18 @@ TEST(StreamingLoopTest, CancelDuringTheModelCallNeverRunsTheToolItAskedFor) {
 // The model is checked every turn, and a failed load ends the turn loudly
 // ---------------------------------------------------------------------------
 
-TEST(ModelLoadTest, LoadIsRecheckedEveryTurn) {
+TEST(ModelLoadTest, LoadIsRecheckedBeforeEveryRequest) {
+    // A server that keeps reporting the model unloaded (another client evicted
+    // it, or reloaded it at a smaller ctx) must get a load before each request.
     bench::MockLlmServer mock(/*reportModelLoaded=*/false);
     mock.pushResponses(kPlainAnswer, 2);
     ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
     agent.initForTest();
     agent.processQuery("one");
     agent.processQuery("two");
-    EXPECT_EQ(mock.loadRequestCount(), 2);
+    ASSERT_EQ(mock.requestCount(), 2);
+    // One check at the start of each turn plus one before each chat request.
+    EXPECT_EQ(mock.loadRequestCount(), 4);
 }
 
 TEST(ModelLoadTest, AFailedLoadIsAnErrorNotAWarning) {

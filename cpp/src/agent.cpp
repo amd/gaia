@@ -546,6 +546,11 @@ UsageStats extractUsage(const json& responseJson) {
 
 Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std::string& sysPrompt,
                                 const AgentConfig& cfg) {
+    // Re-check before every request: another client can reload the model at a smaller ctx mid-turn.
+    if (!cfg.modelId.empty()) {
+        lemonade_.ensureModelLoaded();
+    }
+
     // Build OpenAI-compatible request.
     // NOTE: n_ctx is intentionally omitted — context size is set at model load
     // time via LemonadeClient::loadModel() / ensureModelLoaded(), not per-request.
