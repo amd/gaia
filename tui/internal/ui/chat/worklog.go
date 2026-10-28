@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -308,11 +309,10 @@ func settleFailures(items []ActivityItem, final bool) []ActivityItem {
 }
 
 // retryKey is what a later success must match to settle a failed call: the
-// tool plus a shell command's program and the first two words that say what
-// it does, or the tool plus a file tool's file. "" means nothing to match on,
-// so the failure is never marked retried. A failed `npm run build` is not
-// recovered by `npm run lint`, `python -m pip install` by `python -m pytest`,
-// or clean.py by report.py.
+// tool plus the job a shell command does (see commandKey), or the tool plus a
+// file tool's file. "" means nothing to match on, so the failure is never
+// marked retried. A failed `npm run build` is not recovered by `npm run lint`,
+// `cd build && make` by `cd build && ls`, or clean.py by report.py.
 func retryKey(tool string, args json.RawMessage) string {
 	var fields struct {
 		Command  string `json:"command"`
@@ -322,22 +322,11 @@ func retryKey(tool string, args json.RawMessage) string {
 	if json.Unmarshal(args, &fields) != nil {
 		return ""
 	}
-	if words := strings.Fields(fields.Command); len(words) > 0 {
-		program := strings.ToLower(filepath.Base(slashed(unquote(words[0]))))
-		program = strings.TrimSuffix(program, ".exe")
-		key := tool + " " + program
-		taken := 0
-		for _, w := range words[1:] {
-			w = unquote(w)
-			if w == "" || commandFlag(w) || strings.EqualFold(w, "run") {
-				continue
-			}
-			key += " " + w
-			if taken++; taken == 2 {
-				break
-			}
+	if strings.TrimSpace(fields.Command) != "" {
+		if key := commandKey(fields.Command, 0); key != "" {
+			return tool + " " + key
 		}
-		return key
+		return ""
 	}
 	file := fields.FilePath
 	if file == "" {
@@ -349,6 +338,145 @@ func retryKey(tool string, args json.RawMessage) string {
 	return ""
 }
 
+// commandKey names the job a command line does. Every command joined by &&,
+// || or ; counts, so `make || echo done` and `ls || echo done` differ; a cd
+// among them becomes the folder the job runs in. Only the left side of a pipe
+// counts: `npm test | tail -5` is the same job as `npm test | tail -50`.
+func commandKey(cmd string, depth int) string {
+	var dir string
+	var jobs []string
+	for _, words := range shellSegments(cmd) {
+		program := programName(words[0])
+		switch program {
+		case "cd", "pushd", "chdir", "set-location", "sl":
+			if d := positional(words[1:]); len(d) > 0 {
+				dir = path.Clean(slashed(d[0]))
+			}
+			continue
+		}
+		jobs = append(jobs, jobKey(program, words[1:], depth))
+	}
+	if len(jobs) == 0 {
+		if dir == "" {
+			return ""
+		}
+		jobs = []string{"cd"}
+	}
+	key := strings.Join(jobs, " ; ")
+	if dir != "" {
+		key = "in " + dir + ": " + key
+	}
+	return key
+}
+
+// jobKey is a program and its positional words. A shell wrapper (cmd /c,
+// powershell -Command, bash -c) is keyed by the command it runs.
+func jobKey(program string, args []string, depth int) string {
+	if depth < 3 {
+		for i, w := range args {
+			if wrapperFlag(program, w) && i+1 < len(args) {
+				return program + " (" + commandKey(strings.Join(args[i+1:], " "), depth+1) + ")"
+			}
+		}
+	}
+	return strings.Join(append([]string{program}, positional(args)...), " ")
+}
+
+// positional drops the words that only modify a command. A bare flag (-m,
+// --user, /c) goes; its value, if it takes one, stays as a positional word,
+// so `--target out pkgA` and `--target out pkgB` differ. A `--flag=value`
+// stays whole for the same reason. `run` goes: `npm run build` is `npm build`.
+func positional(args []string) []string {
+	var out []string
+	for _, w := range args {
+		if w == "" || strings.EqualFold(w, "run") || (commandFlag(w) && !strings.Contains(w, "=")) {
+			continue
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
+func wrapperFlag(program, w string) bool {
+	w = strings.ToLower(w)
+	switch program {
+	case "cmd":
+		return w == "/c" || w == "/k"
+	case "powershell", "pwsh":
+		return w == "-command" || w == "-c"
+	case "bash", "sh", "zsh", "dash":
+		return w == "-c" || (len(w) > 2 && w[0] == '-' && w[1] != '-' && strings.HasSuffix(w, "c"))
+	}
+	return false
+}
+
+func programName(w string) string {
+	return strings.TrimSuffix(strings.ToLower(filepath.Base(slashed(w))), ".exe")
+}
+
+// shellSegments splits a command line into its commands, each as words with
+// quotes removed. Outside quotes, &&, ||, ;, & and newlines end a command,
+// and a | drops the rest of that command (the pipe's right side). A quoted
+// separator is just text, and an & in a redirect (2>&1) is not a separator.
+// Empty commands are dropped.
+func shellSegments(cmd string) [][]string {
+	var segs [][]string
+	var words []string
+	var cur strings.Builder
+	var quote rune
+	quoted, piped := false, false
+	flush := func() {
+		if (cur.Len() > 0 || quoted) && !piped {
+			words = append(words, cur.String())
+		}
+		cur.Reset()
+		quoted = false
+	}
+	end := func() {
+		flush()
+		if len(words) > 0 {
+			segs = append(segs, words)
+		}
+		words, piped = nil, false
+	}
+	rs := []rune(cmd)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			} else {
+				cur.WriteRune(r)
+			}
+		case r == '"' || r == '\'':
+			quote, quoted = r, true
+		case r == '&' && ((i > 0 && (rs[i-1] == '>' || rs[i-1] == '<')) ||
+			(i+1 < len(rs) && rs[i+1] == '>')):
+			cur.WriteRune(r)
+		case r == ';' || r == '\n' || r == '&':
+			if r == '&' && i+1 < len(rs) && rs[i+1] == '&' {
+				i++
+			}
+			end()
+		case r == '|':
+			if i+1 < len(rs) && rs[i+1] == '|' {
+				i++
+				end()
+			} else {
+				flush()
+				piped = true
+			}
+		case unicode.IsSpace(r):
+			flush()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	end()
+	return segs
+}
+
 // commandFlag reports a word that modifies a command rather than naming what
 // it does: -m, --user, -Command, and cmd's /c. A longer word starting with /
 // is a path (/tmp/a.py), not a switch.
@@ -358,8 +486,6 @@ func commandFlag(w string) bool {
 	}
 	return strings.HasPrefix(w, "/") && len(w) <= 3 && !strings.Contains(w[1:], "/")
 }
-
-func unquote(w string) string { return strings.Trim(w, `"'`) }
 
 func slashed(p string) string { return strings.ReplaceAll(p, `\`, "/") }
 

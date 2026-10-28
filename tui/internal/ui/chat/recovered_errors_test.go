@@ -371,3 +371,90 @@ func TestCopiedWorkMatchesTheScreenForARetriedStep(t *testing.T) {
 		t.Errorf("a standing failure must still copy as failed:\n%s", copied)
 	}
 }
+
+// A chained command is the whole chain: the shell tool tells the model to
+// write `cd build && make`, so a later `cd build && ls` passing says nothing
+// about make. A cd becomes the folder, and only a pipe's left side counts.
+func TestAChainedCommandIsRecoveredOnlyByTheSameChain(t *testing.T) {
+	red := colour(t)
+	differ := [][2]string{
+		{"cd build && make", "cd build && ls"},
+		{"cd build; npm test", "cd build; npm ls"},
+		{"make || echo done", "ls || echo done"},
+		{"cd a && make", "cd b && make"},
+		{"npm test | tail -5", "npm ls | tail -5"},
+		{`bash -c "cd build && make"`, `bash -c "cd build && ls"`},
+		// A quoted ; is text, not a second command.
+		{`git commit -m "fix; ok"`, `git push origin "main; ok"`},
+	}
+	for _, p := range differ {
+		record := workRecord(t, shellTurn(t, p[0], p[1]))
+		got := ansi.Strip(record)
+		if strings.Contains(got, "retried") || !strings.Contains(got, "└ failed") ||
+			!strings.Contains(got, "boom-from-the-first-call") || !strings.Contains(record, red) {
+			t.Errorf("%q passing recovered or hid %q failing:\n%s", p[1], p[0], got)
+		}
+	}
+	same := [][2]string{
+		{"cd a && make", "cd a && make"},
+		{"cd build && make", `cd "build" && make -j4`},
+		{"npm test | tail -5", "npm test | tail -50"},
+		{"cd build && make;", "cd build ;; && make"},
+		{"make 2>&1 | tail", "make 2>&1"},
+		{`bash -c "cd build && make"`, `bash -lc 'cd build && make'`},
+	}
+	for _, p := range same {
+		got := ansi.Strip(workRecord(t, shellTurn(t, p[0], p[1])))
+		if !strings.Contains(got, "└ error, retried") || strings.Contains(got, "└ failed") {
+			t.Errorf("%q passing should settle %q:\n%s", p[1], p[0], got)
+		}
+	}
+}
+
+// A flag's value is part of the job: `--target out pkgA` and `--target out
+// pkgB` install different things. A flag with no value (--user) still does
+// not change the job.
+func TestAFlagValueIsPartOfTheJob(t *testing.T) {
+	differ := [][2]string{
+		{"pip install --target out pkgA", "pip install --target out pkgB"},
+		{"pip install --target=outA pkgA", "pip install --target=outB pkgA"},
+		{"pip install -r a.txt", "pip install -r b.txt"},
+		// Spelled differently, so not provably the same job: stays failed.
+		{"pip install --target=out pkgA", "pip install --target out pkgA"},
+	}
+	for _, p := range differ {
+		got := ansi.Strip(workRecord(t, shellTurn(t, p[0], p[1])))
+		if strings.Contains(got, "retried") || !strings.Contains(got, "└ failed") {
+			t.Errorf("%q passing recovered %q failing:\n%s", p[1], p[0], got)
+		}
+	}
+	got := ansi.Strip(workRecord(t, shellTurn(t, "pip install --target out pkgA", "pip install --user --target out pkgA")))
+	if !strings.Contains(got, "└ error, retried") {
+		t.Errorf("adding a valueless flag must still recover the same job:\n%s", got)
+	}
+}
+
+func TestShellSegments(t *testing.T) {
+	cases := map[string]string{
+		`cd build && make`:        "cd build|make",
+		`a; b || c & d`:           "a|b|c|d",
+		`echo "a; b && c" | tail`: "echo a; b && c",
+		`make 2>&1 | tail`:        "make 2>&1",
+		` ; ; make ;`:             "make",
+		`git commit -m 'x | y'`:   "git commit -m x | y",
+		`cmd /c "npm run build"`:  "cmd /c npm run build",
+		`run ""`:                  "run ",
+	}
+	for in, want := range cases {
+		var segs []string
+		for _, words := range shellSegments(in) {
+			segs = append(segs, strings.Join(words, " "))
+		}
+		if got := strings.Join(segs, "|"); got != want {
+			t.Errorf("shellSegments(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if commandKey(" ; && ", 0) != "" || retryKey("run_shell_command", json.RawMessage(`{"command":" ;; "}`)) != "" {
+		t.Errorf("a command line with no command must have no retry key")
+	}
+}

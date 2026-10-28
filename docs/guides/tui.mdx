@@ -474,7 +474,10 @@ the answer set apart below:
   where a failure lives, not a separate error. While the turn is still running
   it reads `error` in amber, since the agent may fix it and try again. Once a
   later run of the same file or the same command succeeds, it reads
-  `error, retried` and keeps its one-line error. A step with no file or command
+  `error, retried` and keeps its one-line error. The same command means every
+  command in a `&&`, `||` or `;` chain, in the same folder, with the same
+  arguments; added switches like `--user` and the right side of a pipe don't
+  count. A step with no file or command
   to match, such as a web fetch or a query, is never marked retried. A failure
   nothing recovered turns red and reads `failed` when the turn ends.
 - **A confirmation** asks once, in the prompt pinned above the composer. The step
