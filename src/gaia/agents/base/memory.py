@@ -45,6 +45,7 @@ import threading
 import time
 import weakref
 from collections import deque
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -85,10 +86,16 @@ from gaia.agents.base.verification import check_was_executed
 from gaia.chat.sdk import AgentSDK, LLMCallCancelled
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
+    ModelDownloadCancelledError,
     _endpoint_label,
     backend_crash_remedy,
     configured_lemonade_url,
     find_model_requirement,
+)
+from gaia.llm.retry import (
+    current_cancel_check,
+    current_retry_listener,
+    model_retry_notices,
 )
 
 if TYPE_CHECKING:
@@ -1036,10 +1043,45 @@ class MemoryMixin(ProceduralMemoryMixin):
             console.print_info(notice)
 
         errors: List[str] = []
+        last_reported_percent = -5.0
 
         def on_progress(event: Dict[str, Any]) -> None:
-            if event.get("event") == "error":
+            nonlocal last_reported_percent
+            event_type = event.get("event")
+            if event_type == "error":
                 errors.append(str(event.get("error") or "unknown error"))
+                return
+            if event_type != "progress" or console is None:
+                return
+            percent = event.get("percent")
+            if isinstance(percent, bool) or not isinstance(percent, (int, float)):
+                return
+            percent = float(percent)
+            # Pull servers can send a progress event for every chunk.  Keep the
+            # Agent UI live without flooding its status timeline.
+            if percent < last_reported_percent + 5 and percent < 100:
+                return
+            last_reported_percent = percent
+            console.report_progress(
+                f"Downloading the embedding model '{model}' for memory: {percent:g}%"
+            )
+
+        # ``MemoryMixin.process_query`` starts this deferred work before its
+        # Agent superclass installs the normal cancellation context. Carry the
+        # Agent UI Stop event here so the streamed pull can close immediately.
+        cancel_check = current_cancel_check()
+        if cancel_check is None:
+            cancelled = getattr(console, "cancelled", None)
+            is_set = getattr(cancelled, "is_set", None)
+            cancel_check = is_set if callable(is_set) else None
+        cancel_context = (
+            model_retry_notices(
+                current_retry_listener() or (lambda _notice: None),
+                is_cancelled=cancel_check,
+            )
+            if cancel_check is not None and current_cancel_check() is None
+            else nullcontext()
+        )
 
         # A user. model registers under its registry id, whatever the caller wrote.
         name = requirement.model_id if requirement else model
@@ -1047,9 +1089,22 @@ class MemoryMixin(ProceduralMemoryMixin):
         try:
             # Streamed: a stalled pull fails after PULL_IDLE_TIMEOUT_S, and the
             # error event carries the reason instead of only logging it.
-            pulled = LemonadeClient(model=model).ensure_model_downloaded(
-                name, show_progress=False, on_progress=on_progress, **pull_kwargs
+            with cancel_context:
+                pulled = LemonadeClient(model=model).ensure_model_downloaded(
+                    name, show_progress=False, on_progress=on_progress, **pull_kwargs
+                )
+        except ModelDownloadCancelledError as e:
+            cancelled_notice = (
+                "Embedding download cancelled — memory stays off for this session. "
+                "Restart the agent to retry the download."
             )
+            logger.info("[MemoryMixin] %s", cancelled_notice)
+            if console is not None:
+                console.print_info(cancelled_notice)
+            raise RuntimeError(
+                f"Embedding model '{model}' was not found, and downloading it "
+                f"was cancelled: {e}"
+            ) from e
         except Exception as e:
             raise RuntimeError(
                 f"Embedding model '{model}' was not found, and downloading it "
