@@ -203,6 +203,7 @@ class CodeIndexSDK:
         Index the repository: discover files, parse, embed, build FAISS index,
         persist atomically.
         """
+        self.progress = {"embedded": 0, "to_embed": 0}
         start = time.time()
 
         self.log.info(f"Indexing repository: {self._repo_root}")
@@ -1007,6 +1008,7 @@ class CodeIndexSDK:
                         f"Skipping chunk with no embedding: {getattr(chunk, 'file_path', '?')}"
                     )
 
+        self.progress["embedded"] = len(texts)
         if not valid_embeddings:
             return np.array([], dtype=np.float32), []
 

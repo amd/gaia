@@ -314,6 +314,18 @@ class CodeIndexToolsMixin:
             if sdk is None:
                 return json.dumps({"error": "code_index SDK not initialised"})
 
+            job = getattr(self, "_code_index_job", None)
+            if job is not None and job["sdk"] is sdk and job["thread"].is_alive():
+                return json.dumps(
+                    {
+                        "error": (
+                            "A code index build for this repository is already "
+                            "running; search_code_index reports its progress."
+                        ),
+                        "index_building": True,
+                    }
+                )
+
             try:
                 result = sdk.index_repository()
                 return json.dumps(
@@ -328,9 +340,7 @@ class CodeIndexToolsMixin:
                 logger.error("index_codebase failed: %s", e)
                 return json.dumps({"error": str(e)})
 
-        # The first search runs the same build as index_codebase, so it gets the
-        # same window; the default cap abandoned it mid-build on a large repo.
-        @tool(timeout=900)
+        @tool
         def search_code_index(
             query: str,
             scope: str = "all",
