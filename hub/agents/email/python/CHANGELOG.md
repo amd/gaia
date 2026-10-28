@@ -13,6 +13,13 @@ contract version is tracked separately as
   `[unmapped agent event: commentary]`.** The host's output handler now marks
   that text as `commentary`; the translator drops it, since the words already
   went out as `token` events.
+- **Memory downloads its embedding model when it is missing.** On the first
+  start that uses memory, the agent now fetches the required embedding model
+  from Lemonade instead of silently running without memory; the initial
+  download can be about 300 MB.
+- **Sensitive credentials stay out of memory and the conversation log.** PINs,
+  card numbers, SSNs and other credential-shaped text are not saved as
+  memories, and logged turns replace matching spans with `[secret removed]`.
 - **Connect prompts name the right Settings tab.** The agent sent users to a
   "Connections" tab in Settings, which the Agent UI doesn't have; it now says
   "Settings → Connectors".
