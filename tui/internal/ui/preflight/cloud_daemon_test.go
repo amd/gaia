@@ -88,6 +88,34 @@ func TestDaemonGateReplaysTheKeptKeyForACloudModel(t *testing.T) {
 	}
 }
 
+// With a gateway model saved as default_model the launch passes no model, so
+// the sidecar names it — and a restarted Lemonade, keyless, lists it as missing.
+// It was offered as a ~4 GB download instead of having its key handed back.
+func TestDaemonGateTreatsACloudDefaultModelAsCloud(t *testing.T) {
+	replayed := false
+	stubReplayKeptKey(t, func(_ context.Context, provider string) (bool, error) {
+		replayed = provider == "amd"
+		return replayed, nil
+	})
+	stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
+		if !replayed {
+			return nil, nil
+		}
+		return []lemonade.Model{{ID: "amd.DeepSeek-V4.1-Flash", Recipe: "cloud"}}, nil
+	})
+	missing := strings.ReplaceAll(initModelMissing, "Gemma-4-E4B-it-GGUF", "amd.DeepSeek-V4.1-Flash")
+
+	rep := Check(context.Background(), gaiaFake(503, missing), cloudDaemonCfg(""))
+
+	row, _ := rep.Find(KeyModel)
+	if row.State != StateOK || !replayed {
+		t.Fatalf("a cloud default model was not checked as cloud: replayed=%v row=%+v", replayed, row)
+	}
+	if row.Fix == FixPullModel || strings.Contains(row.Detail, "4 GB") {
+		t.Errorf("a cloud model was described as a download: %+v", row)
+	}
+}
+
 func TestDaemonGateStillRequiresTheLocalModelForALocalLaunch(t *testing.T) {
 	stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
 		t.Error("a local launch must not ask a cloud provider anything")
