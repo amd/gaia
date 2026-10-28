@@ -53,8 +53,10 @@ from gaia.agents.base.completion import (
 from gaia.agents.base.console import (
     AgentConsole,
     SilentConsole,
+    TerminalConfirmationMixin,
     edit_is_inside,
     edit_target,
+    terminal_is_interactive,
     user_denial_message,
 )
 from gaia.agents.base.context_eviction import (
@@ -3141,40 +3143,67 @@ Do NOT wrap conversational replies in JSON.
         """Route out-of-scope path approvals through this agent's console."""
         validator = self._read_validator()
         if validator is not None:
-            validator.set_access_prompt(self._confirm_path_access)
+            validator.set_access_prompt(
+                self._confirm_path_access, declines=self._path_access_declined
+            )
 
-    def _confirm_path_access(self, path: Path) -> bool:
-        """Ask the user, via the console's confirmation dialog, to allow *path*."""
+    def _path_access_grants_unasked(self) -> bool:
+        """True when Full access grants an out-of-scope path without asking."""
         console = self.console
         # Full access widens the file scope; pre-approving gated tools does not.
         if getattr(console, "full_access", False):
-            logger.warning("Full access is on: granting %s without asking", path)
             return True
         watched = getattr(console, "answers_confirmations", False) is True
-        if watched and getattr(console, "grants_paths", False) is True:
-            logger.warning(
-                "Full access is on for this chat: granting %s without asking", path
-            )
-            return True
+        return watched and getattr(console, "grants_paths", False) is True
+
+    def _path_access_refusal_unasked(self, path: Path) -> str:
+        """Why an approval for *path* is refused without asking anyone, or ""."""
+        console = self.console
+        watched = getattr(console, "answers_confirmations", False) is True
         auto_approves = getattr(console, "auto_approve_confirmations_enabled", None)
         if callable(auto_approves) and auto_approves() and not watched:
-            logger.warning(
-                "Not granting %s: tools are pre-approved, nobody asked", path
-            )
-            return False
+            return "tools are pre-approved, nobody asked"
         # One prompt per path per turn: a user who stepped away is not asked
         # again, and made to wait out the timeout again, for what is inside it.
+        target = Path(path).resolve()
+        for seen_turn, denied in self._refused_paths:
+            if seen_turn == self._turn_seq and (
+                target == denied or denied in target.parents
+            ):
+                return f"{denied} was declined this turn"
+        return ""
+
+    def _path_access_declined(self, path: Path) -> bool:
+        """True when an approval for *path* would be refused, judged without asking."""
+        if self._path_access_grants_unasked():
+            return False
+        if self._path_access_refusal_unasked(path):
+            return True
+        console = self.console
+        # A background run or an unattended sidecar query denies every prompt.
+        if getattr(console, "background_mode", False) is True:
+            return True
+        if getattr(console, "nobody_answers", False) is True:
+            return True
+        if getattr(console, "blocking_confirmation", False):
+            return False
+        # A terminal console asks only on an interactive terminal; others deny.
+        return not (
+            isinstance(console, TerminalConfirmationMixin) and terminal_is_interactive()
+        )
+
+    def _confirm_path_access(self, path: Path) -> bool:
+        """Ask the user, via the console's confirmation dialog, to allow *path*."""
+        if self._path_access_grants_unasked():
+            logger.warning("Full access is on: granting %s without asking", path)
+            return True
+        refusal = self._path_access_refusal_unasked(path)
+        if refusal:
+            logger.warning("Not granting %s: %s", path, refusal)
+            return False
         turn = self._turn_seq
         refused = self._refused_paths
         target = Path(path).resolve()
-        for seen_turn, denied in refused:
-            if seen_turn == turn and (target == denied or denied in target.parents):
-                logger.info(
-                    "Not asking again this turn about %s (%s was declined)",
-                    target,
-                    denied,
-                )
-                return False
         args = {"path": str(path)}
         # Lets the prompt say "file" or "folder" instead of a catch-all.
         if path.is_dir():
