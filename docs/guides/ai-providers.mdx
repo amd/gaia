@@ -146,7 +146,9 @@ embedding model, which loads on the GPU too. It never goes below 65,536 tokens.
 
 On any Lemonade except one you run yourself, the window is saved with the model. If another load
 evicts it, Lemonade reloads it at that window on the next request instead of
-picking its own, which can be as small as 4,096 tokens.
+picking its own, which can be as small as 4,096 tokens. A window GAIA shrank
+because free memory was short is saved as it loaded; GAIA's next load of the
+model sends its full size again.
 
 | PC | Memory for models | Window | KV cache |
 |----|-------------------|--------|----------|
