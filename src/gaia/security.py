@@ -421,6 +421,17 @@ _NO_WORKAROUND = (
     " Do not copy, move or convert it to another location to get around this."
 )
 
+# Folders a denial of the whole home folder offers instead, when they exist.
+_USER_FOLDER_NAMES = (
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Movies",
+    "Music",
+    "Pictures",
+    "Videos",
+)
+
 
 def _system_temp_roots() -> Set[str]:
     """Shared temp directories, which stay out of every agent's scope."""
@@ -758,6 +769,7 @@ class PathValidator:
         self._on_prompt_end = on_prompt_end
         self._interactive_check = interactive_check
         self._access_prompt: Optional[Callable[[Path], bool]] = None
+        self._access_declines: Optional[Callable[[Path], bool]] = None
 
         # Load persisted paths
         self._load_persisted_paths()
@@ -1004,7 +1016,11 @@ class PathValidator:
         real = Path(_real_path(path))
         return any(_path_is_within(real, root) for root in self.read_only_paths)
 
-    def set_access_prompt(self, prompt: Optional[Callable[[Path], bool]]) -> None:
+    def set_access_prompt(
+        self,
+        prompt: Optional[Callable[[Path], bool]],
+        declines: Optional[Callable[[Path], bool]] = None,
+    ) -> None:
         """Ask through *prompt* instead of stdin when a path is out of scope.
 
         Hosts whose user is not on this process's stdin (Agent UI, TUI) pass a
@@ -1016,8 +1032,11 @@ class PathValidator:
 
         Args:
             prompt: The callable, or None to restore the stdin prompt.
+            declines: Optional check, without asking anyone, that *prompt*
+                would refuse a path; refusal messages never suggest such a path.
         """
         self._access_prompt = prompt
+        self._access_declines = declines if prompt is not None else None
 
     def _unaskable_reason(self, path: Path) -> str:
         """Why *path* stays refused whatever the user answers, or "".
@@ -1121,6 +1140,39 @@ class PathValidator:
                 )
         return ""
 
+    def _folders_inside_home_hint(self, path: Path) -> str:
+        """Folders to ask for instead when *path* holds the whole home folder.
+
+        Args:
+            path: A symlink-resolved path refused as too broad.
+
+        Returns:
+            A sentence naming the user folders an approval could grant, or ""
+            when *path* does not hold the home folder or nobody can approve.
+            A folder the host would refuse without asking is never named.
+        """
+        home = Path.home().resolve()
+        if not _path_is_within(home, path):
+            return ""
+        if self._access_prompt is None and not self._can_prompt():
+            return ""
+        declines = self._access_declines
+        askable = []
+        for name in _USER_FOLDER_NAMES:
+            folder = home / name
+            if not folder.is_dir():
+                continue
+            real = Path(_real_path(folder))
+            if self._unaskable_reason(real) or (declines and declines(real)):
+                continue
+            askable.append(f"'{folder}'")
+        if not askable:
+            return ""
+        return (
+            " A folder inside the home folder can still be approved: use the "
+            f"specific folder you need instead, such as {', '.join(askable)}."
+        )
+
     def access_denied_message(self, path: str) -> str:
         """The error for an out-of-scope *path*, with a remedy this host offers.
 
@@ -1143,7 +1195,10 @@ class PathValidator:
         real_path = Path(_real_path(path))
         unaskable = self._unaskable_reason(real_path)
         if unaskable:
-            remedy = f" No approval can grant it: {unaskable.rstrip('.')}."
+            remedy = (
+                f" No approval can grant it: {unaskable.rstrip('.')}."
+                f"{self._folders_inside_home_hint(real_path)}"
+            )
         elif self._access_prompt is not None or self._can_prompt():
             remedy = (
                 " To use it, ask again and approve access when prompted, or "
