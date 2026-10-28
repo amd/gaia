@@ -21,6 +21,8 @@ import { log } from '../utils/logger';
 import { deviceLabel } from '../utils/modelLabels';
 import type { StartCard, StartScreen } from '../types';
 import './NewChat.css';
+import { useSavedDraft } from '../hooks/useSavedDraft';
+import { NEW_CHAT_DRAFT_KEY } from '../utils/savedDraft';
 
 interface NewChatProps {
     /**
@@ -153,7 +155,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
     // Moot once chats run in the cloud or a local model has loaded after all.
     const setupError = useChatStore((s) => (s.systemStatus?.model_loaded ? null : s.systemStatus?.setup_error ?? null));
     const remote = useModelStore((s) => !!s.active?.remote);
-    const [text, setText] = useState(initialText);
+    const [text, setText] = useSavedDraft(NEW_CHAT_DRAFT_KEY, initialText);
     const [error, setError] = useState<string | null>(null);
     const [sending, setSending] = useState(false);
     const [start, setStart] = useState<StartScreen | null>(null);

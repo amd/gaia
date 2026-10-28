@@ -158,4 +158,17 @@ contextBridge.exposeInMainWorld("gaiaUpdater", {
    * Resolves with the updated state.
    */
   resumeUpdates: () => ipcRenderer.invoke("gaia:update:resume"),
+
+  /** Turn auto-update on or off (persisted; off by default). Resolves with the state. */
+  setAutoUpdate: (enabled) => ipcRenderer.invoke("gaia:update:set-auto-update", enabled),
+
+  /** Offer release candidates as updates (independent of auto-update). Resolves with the state. */
+  setIncludePrereleases: (enabled) =>
+    ipcRenderer.invoke("gaia:update:set-include-prereleases", enabled),
+
+  /** "Update now": download the offered update; the restart prompt follows. */
+  downloadUpdate: () => ipcRenderer.invoke("gaia:update:download"),
+
+  /** Restart into a downloaded update. */
+  restart: () => ipcRenderer.invoke("gaia:update:restart"),
 });

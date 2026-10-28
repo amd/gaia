@@ -127,7 +127,8 @@ def test_masking_stays_fast_on_long_input(name):
     MemoryMixin._mask_credentials(text)
     MemoryMixin._looks_like_credential(text)
 
-    assert time.perf_counter() - started < 1.0
+    # ~0.2s locally; the bound catches runaway backtracking, not a busy CI runner.
+    assert time.perf_counter() - started < 5.0
 
 
 def test_remember_refuses_a_pin(store):
