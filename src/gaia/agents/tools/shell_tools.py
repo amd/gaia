@@ -2833,7 +2833,7 @@ class ShellToolsMixin:
         """Replace the session with a clean one and return it."""
         previous = getattr(self, "_shell_session", None)
         self._shell_session = ShellSession(
-            start_cwd=_workspace_default(self),
+            start_cwd=self._session_start_cwd(),
             cwd_guard=self._session_cwd_guard(),
         )
         if previous is not None:
