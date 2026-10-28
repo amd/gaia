@@ -340,12 +340,14 @@ func retryKey(tool string, args json.RawMessage) string {
 
 // commandKey names the job a command line does. Every command joined by &&,
 // || or ; counts, so `make || echo done` and `ls || echo done` differ; a cd
-// among them becomes the folder the job runs in. Only the left side of a pipe
-// counts: `npm test | tail -5` is the same job as `npm test | tail -50`.
+// among them becomes the folder the job runs in. Every stage of a pipe counts
+// except a trailing output filter: `npm test | tail -5` is the same job as
+// `npm test | tail -50`, but `cat a | python p.py` is not `cat a | head`.
 func commandKey(cmd string, depth int) string {
 	var dir string
 	var jobs []string
-	for _, words := range shellSegments(cmd) {
+	for _, stages := range shellSegments(cmd) {
+		words := stages[0]
 		program := programName(words[0])
 		switch program {
 		case "cd", "pushd", "chdir", "set-location", "sl":
@@ -354,7 +356,14 @@ func commandKey(cmd string, depth int) string {
 			}
 			continue
 		}
-		jobs = append(jobs, jobKey(program, words[1:], depth))
+		for len(stages) > 1 && outputFilter(programName(stages[len(stages)-1][0])) {
+			stages = stages[:len(stages)-1]
+		}
+		parts := []string{jobKey(program, words[1:], depth)}
+		for _, stage := range stages[1:] {
+			parts = append(parts, jobKey(programName(stage[0]), stage[1:], depth))
+		}
+		jobs = append(jobs, strings.Join(parts, " | "))
 	}
 	if len(jobs) == 0 {
 		if dir == "" {
@@ -367,6 +376,15 @@ func commandKey(cmd string, depth int) string {
 		key = "in " + dir + ": " + key
 	}
 	return key
+}
+
+// outputFilter reports a program that only trims what a pipe shows.
+func outputFilter(program string) bool {
+	switch program {
+	case "head", "tail", "more", "less", "select-object":
+		return true
+	}
+	return false
 }
 
 // jobKey is a program and its positional words. A shell wrapper (cmd /c,
@@ -414,30 +432,38 @@ func programName(w string) string {
 	return strings.TrimSuffix(strings.ToLower(filepath.Base(slashed(w))), ".exe")
 }
 
-// shellSegments splits a command line into its commands, each as words with
-// quotes removed. Outside quotes, &&, ||, ;, & and newlines end a command,
-// and a | drops the rest of that command (the pipe's right side). A quoted
+// shellSegments splits a command line into its commands, each as the stages
+// of its pipe, each stage as words with quotes removed. Outside quotes, &&,
+// ||, ;, & and newlines end a command and a | ends a stage. A quoted
 // separator is just text, and an & in a redirect (2>&1) is not a separator.
-// Empty commands are dropped.
-func shellSegments(cmd string) [][]string {
-	var segs [][]string
+// Empty stages and commands are dropped.
+func shellSegments(cmd string) [][][]string {
+	var segs [][][]string
+	var stages [][]string
 	var words []string
 	var cur strings.Builder
 	var quote rune
-	quoted, piped := false, false
+	quoted := false
 	flush := func() {
-		if (cur.Len() > 0 || quoted) && !piped {
+		if cur.Len() > 0 || quoted {
 			words = append(words, cur.String())
 		}
 		cur.Reset()
 		quoted = false
 	}
-	end := func() {
+	pipe := func() {
 		flush()
 		if len(words) > 0 {
-			segs = append(segs, words)
+			stages = append(stages, words)
 		}
-		words, piped = nil, false
+		words = nil
+	}
+	end := func() {
+		pipe()
+		if len(stages) > 0 {
+			segs = append(segs, stages)
+		}
+		stages = nil
 	}
 	rs := []rune(cmd)
 	for i := 0; i < len(rs); i++ {
@@ -464,8 +490,7 @@ func shellSegments(cmd string) [][]string {
 				i++
 				end()
 			} else {
-				flush()
-				piped = true
+				pipe()
 			}
 		case unicode.IsSpace(r):
 			flush()
