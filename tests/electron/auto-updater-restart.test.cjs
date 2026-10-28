@@ -186,3 +186,13 @@ test("a pin in a file that was broken at launch is honoured once the file is fix
   expect(mockUpdater.autoDownload).toBe(false);
   expect(global.fetch).not.toHaveBeenCalled(); // stays on the pinned feed
 });
+
+test("auto-update switched off in the Terminal UI after a download stops the install on quit", async () => {
+  saveConfig({ autoUpdate: true });
+  initUpdater({ confirmRestart: jest.fn(async () => false) });
+  await downloadedAndRestartChosen();
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
+  saveConfig({ autoUpdate: false });
+  electronMock.app.emit("before-quit");
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
+});

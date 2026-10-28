@@ -1198,6 +1198,8 @@ function init(mainWindow, options = {}) {
       app: electron.app,
     };
     autoUpdaterRef = electronUpdater.autoUpdater;
+    // The Terminal UI may have turned auto-update off since the last check.
+    electron.app.on("before-quit", _refreshPreferences);
 
     // Record the running version for getState() / listReleases().
     try {
@@ -1287,6 +1289,7 @@ function destroy() {
     scheduledTimeout = null;
   }
   unregisterIpcHandlers();
+  if (electronApi) electronApi.app.removeListener("before-quit", _refreshPreferences);
   mainWindowRef = null;
   // Keep `initialized` true — calling init() again after destroy() is not a
   // supported lifecycle and we'd need to re-wire electron-updater events
