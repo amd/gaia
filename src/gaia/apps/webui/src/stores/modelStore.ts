@@ -166,7 +166,7 @@ export function displayModelName(model: string): string {
 /** The backend's answer to where a session's chat is answered (`inference_remote: null` = unknown). */
 export type InferenceLocation = Pick<
     Session,
-    'inference_remote' | 'inference_provider_name' | 'inference_description'
+    'inference_remote' | 'inference_provider_name' | 'inference_description' | 'effective_model'
 >;
 
 /**
@@ -198,7 +198,11 @@ export function inferencePlace(
     active: ActiveModel | null,
     location: InferenceLocation | undefined,
 ): InferencePlace | null {
-    if (active?.remote) {
+    // The chat names a model this window's pick doesn't (another window or the TUI
+    // changed it): its own location goes with that name, or the chip contradicts itself.
+    const pickIsStale =
+        !!location?.effective_model && !!active?.model && location.effective_model !== active.model;
+    if (active?.remote && !(pickIsStale && location?.inference_remote !== undefined)) {
         return {
             remote: true,
             label: active.provider === 'fireworks' ? 'Fireworks AI' : 'AMD LLM Gateway',

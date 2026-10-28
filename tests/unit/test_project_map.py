@@ -177,7 +177,7 @@ def test_map_names_absent_commands_so_the_agent_does_not_try_them(repo, monkeypa
     assert pm.tools_present == []
     assert pm.shell_commands == []
     assert set(pm.tools_absent) == set(DEV_TOOL_PROBES)
-    assert "NOT installed" in render_project_map(pm)
+    assert "Not on the agent's PATH" in render_project_map(pm)
 
 
 def test_shell_allowlist_is_not_conflated_with_what_is_installed(repo):
@@ -671,7 +671,7 @@ def test_an_explicit_root_may_point_at_gaia_itself(monkeypatch):
 def test_shell_commands_are_omitted_for_an_agent_without_the_shell_tool(repo):
     text = render_project_map(build_project_map(repo), has_shell_tool=False)
     assert "run_shell_command" not in text
-    assert "NOT installed" in text
+    assert "Not on the agent's PATH" in text
 
 
 def test_a_turn_that_does_not_offer_the_shell_omits_its_commands(repo):

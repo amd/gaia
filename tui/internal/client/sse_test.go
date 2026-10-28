@@ -1422,3 +1422,27 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// #5739: an agent that died between turns is a 502 "did not answer" from the
+// daemon. The user is told to send again (which respawns it), not to POST to
+// the daemon's API.
+func TestSSEClientNamesADeadAgentPlainly(t *testing.T) {
+	f := newFakeRelay(t)
+	f.queryStatus = http.StatusBadGateway
+	f.queryBody = `{"detail":"sidecar for agent 'gaia' at http://127.0.0.1:1 did not answer (ReadError: ). It may have died after registration — re-ensure it (POST /daemon/v1/agents/gaia/ensure) and retry."}`
+	f.stream = func(http.ResponseWriter, func(), queryRequest) {}
+
+	c := f.client(t)
+	defer c.Close()
+
+	_, err := c.Send(context.Background(), "triage")
+	if err == nil {
+		t.Fatal("expected an error for a dead agent")
+	}
+	if err.Error() != event.AgentStoppedBeforeAnswerDetail {
+		t.Errorf("err = %q, want the plain message", err)
+	}
+	if strings.Contains(err.Error(), "/daemon/v1") {
+		t.Errorf("the daemon's API route must not reach the user: %v", err)
+	}
+}

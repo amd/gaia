@@ -21,7 +21,7 @@ Design notes:
 - Startup gate: no ticks until ~/.gaia/chat/initialized exists.
 - Tunnel gate: no background ticks when ngrok tunnel is active.
 - Rate limiting: hourly call count + per-tick step budget.
-- All private sessions are unconditionally skipped.
+- Ticks run in their own "Background goals" chat, never a user's (so never a private one).
 """
 
 import asyncio
@@ -57,8 +57,19 @@ _OBSERVE_MODEL = os.environ.get("GAIA_AUTO_OBSERVE_MODEL", "Qwen3-4B-GGUF")
 # Timeout (seconds) for a single autonomous tick execution
 _TICK_TIMEOUT = int(os.environ.get("GAIA_AGENT_TICK_TIMEOUT", "300"))
 
-# How long a user-message followup waits for the triggering turn to release the session
+# How long a user-message followup waits for the triggering turn to release the model
 _FOLLOWUP_GRACE_SECONDS = 10.0
+
+# The background chat goal ticks run in, listed with the other background runs.
+GOALS_SESSION_TITLE = "Background goals"
+GOALS_SESSION_SETTING = "agent_loop_session_id"
+
+SIDECAR_TICKS_UNSUPPORTED = (
+    "Background goals can't run with this install's GAIA agent yet: it runs as "
+    "a separate program, and goal runs only work with the agent installed into "
+    "GAIA's Python, as in a source checkout. Track "
+    "https://github.com/amd/gaia/issues/5840."
+)
 
 # Default agent mode. "autonomous" (observe → infer goals → execute, spec
 # docs/spec/autonomous-agent-mode.md §6.7) is not implemented yet (#2005), so
@@ -294,22 +305,26 @@ class AgentLoop:
             )
             return LoopDirective("idle", reason="hourly rate limit")
 
-        # ── Session selection ────────────────────────────────────────────
-        session_id = trigger.session_id or await self._get_active_session()
-        if session_id is None:
-            return LoopDirective("idle")
-
-        # Double-check: never run on a private session
-        session = self._db.get_session(session_id)
-        if session is None or session.get("private"):
-            return LoopDirective("idle")
-
         # ── Goal check ───────────────────────────────────────────────────
         # goal_driven only executes existing approved goals. The planned
         # "autonomous" mode would run an observation cycle here instead of
         # idling (docs/spec/autonomous-agent-mode.md §6.7, #2005).
         goals = self._get_actionable_goals()
         if not goals:
+            return LoopDirective("idle")
+
+        # A private chat's turn never sets off autonomous work (spec §11).
+        if trigger.session_id:
+            source = self._db.get_session(trigger.session_id)
+            if source is None or source.get("private"):
+                return LoopDirective("idle")
+
+        # ── Session selection ────────────────────────────────────────────
+        # Goals run in their own background chat, never one the user is in:
+        # a tick holds its chat's lock, and a long one would refuse their messages.
+        session_id = self._goals_session_id()
+        session = self._db.get_session(session_id)
+        if session is None:
             return LoopDirective("idle")
 
         # ── Session gate ─────────────────────────────────────────────────
@@ -351,17 +366,28 @@ class AgentLoop:
             else:
                 session_lock.release()
 
-    async def _get_active_session(self) -> Optional[str]:
-        """Return the most recently updated non-private session, or None."""
-        try:
-            sessions = self._db.list_sessions(limit=20)
-            # Skip private sessions unconditionally (spec §11)
-            for s in sessions:
-                if not s.get("private"):
-                    return s["id"]
-        except Exception as exc:
-            logger.debug("AgentLoop: session lookup failed: %s", exc)
-        return None
+    def _goals_session_id(self) -> str:
+        """The background chat goal ticks run in, created on first use."""
+        session_id = self._db.get_setting(GOALS_SESSION_SETTING)
+        if session_id and self._db.get_session(session_id):
+            return session_id
+        session = self._db.create_session(title=GOALS_SESSION_TITLE, kind="scheduled")
+        self._db.set_setting(GOALS_SESSION_SETTING, session["id"])
+        return session["id"]
+
+    @staticmethod
+    def _fail_goals(goals: List[Any], error: str) -> None:
+        """Mark *goals* failed with *error*, so the Goals page says why."""
+        if not goals:
+            return
+        from gaia.agents.base.goal_store import GoalStore
+
+        store = GoalStore()
+        for goal in goals:
+            note = f"The background run failed: {error}"
+            if goal.progress_notes:
+                note = f"{goal.progress_notes}\n{note}"
+            store.update_goal_status(goal.id, "failed", progress_notes=note)
 
     def _get_actionable_goals(self) -> List[Any]:
         """Return approved, queued goals from GoalStore."""
@@ -423,6 +449,9 @@ class AgentLoop:
                 # lookup evicts the user's cached agent.
                 agent_type = session.get("agent_type") or "chat"
                 registry = _helpers._agent_registry
+                flagship = registry.get("gaia") if registry is not None else None
+                if flagship is not None and flagship.is_sidecar:
+                    raise RuntimeError(SIDECAR_TICKS_UNSUPPORTED)
                 model_id = session.get("model")
                 custom_model = db.get_setting("custom_model")
                 if custom_model:
@@ -538,6 +567,12 @@ class AgentLoop:
             )
         except Exception as exc:
             logger.error("Could not persist autonomous turn: %s", exc, exc_info=True)
+
+        if result_holder["error"]:
+            # The goals are still actionable, so continuing would rerun the
+            # failure at once until the hourly budget is gone.
+            self._fail_goals(goals[:3], result_holder["error"])
+            return LoopDirective("idle", reason="tick failed")
 
         # Read directive from SSE handler (set by set_loop_state tool)
         if sse_handler.loop_state_directive:

@@ -155,7 +155,11 @@ tools into a multi-step workflow, and the **seven canonical Server-Sent Event ty
 
 The **host mints `run_id`**, so the run is cancellable from the instant the request is
 sent (`POST /v1/email/query/{run_id}/cancel`, which stops tool execution between steps).
-Context is **pushed** in the body — the sidecar stays stateless. The response is
+Context is **pushed** in the body — the sidecar stays stateless. Context that doesn't fit
+beside the agent's prompt in the model's window keeps only its newest whole turns, and a
+`status` event says older messages are out of the model's view. A single turn bigger than
+the whole budget is kept with its longest messages cut and a note saying how much, so its
+answer stays in view. The response is
 `text/event-stream`; each `data:` line is one canonical event discriminated on `type`:
 
 | `type` | Payload | Meaning |

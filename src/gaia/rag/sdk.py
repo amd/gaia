@@ -6,6 +6,7 @@
 GAIA RAG SDK - Simple PDF document retrieval and Q&A
 """
 
+import codecs
 import errno
 import hashlib
 import hmac
@@ -61,6 +62,35 @@ from gaia.utils.file_lock import (
     write_text_atomic,
 )
 
+_TEXT_BOM_ENCODINGS = (
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+_TEXT_FALLBACK_ENCODINGS = ("utf-8", "cp1252", "latin-1")
+_TEXT_TRIED_ENCODINGS = ", ".join(
+    dict.fromkeys([e for _, e in _TEXT_BOM_ENCODINGS] + list(_TEXT_FALLBACK_ENCODINGS))
+)
+
+
+def _decode_text_bytes(data: bytes) -> str:
+    """Decode text bytes without letting latin-1 hide Windows encodings."""
+    for bom, encoding in _TEXT_BOM_ENCODINGS:
+        if data.startswith(bom):
+            return data.decode(encoding)
+
+    for encoding in _TEXT_FALLBACK_ENCODINGS:
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    # latin-1 never fails; only a corrupt BOM-tagged file raises (above).
+    raise UnicodeDecodeError("text", data, 0, len(data), "unsupported encoding")
+
+
 # --- PDF extraction errors ---------------------------------------------------
 # These inherit from ValueError so existing `except ValueError` blocks in
 # callers (and the index_document error path) keep working, while allowing
@@ -95,6 +125,18 @@ class EmptyPDFError(PDFExtractionError):
     """
 
     status = "empty"
+
+
+class SpreadsheetReadError(ValueError):
+    """An Excel workbook that can't be read; ``status`` is its error kind."""
+
+    def __init__(self, message: str, status: str):
+        super().__init__(message)
+        self.status = status
+
+
+# Legacy .xls and password-protected .xlsx are both OLE2 compound files.
+_OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
 def _missing_package_hint(*packages: str) -> str:
@@ -894,7 +936,8 @@ class RAGSDK:
                 f"{EMBED_MAX_CHARS}-char input limit (longest: {max(oversized)} "
                 "chars). Split them with gaia.rag.sdk.split_for_embedding first."
             )
-        safe_texts = list(texts)
+        # No-break spaces in extracted tables can exceed one token per character.
+        safe_texts = [text.replace("\u00a0", " ") for text in texts]
 
         all_embeddings = []
 
@@ -1965,27 +2008,20 @@ These positions indicate where to split the text."""
     def _extract_text_from_text_file(self, file_path: str) -> str:
         """Extract text from text-based file (txt, md, etc.)."""
         try:
-            encodings = ["utf-8", "utf-8-sig", "latin-1", "cp1252"]
-            text = None
+            with self._safe_open(file_path, "rb") as f:
+                data = f.read()
 
-            for encoding in encodings:
-                try:
-                    # Use _safe_open with binary mode, then decode
-                    with self._safe_open(file_path, "rb") as f:
-                        text = f.read().decode(encoding)
-                    break
-                except (UnicodeDecodeError, AttributeError):
-                    continue
-
-            if text is None:
+            try:
+                text = _decode_text_bytes(data)
+            except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode file: {file_path}\n"
-                    f"Tried encodings: {', '.join(encodings)}\n"
+                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Convert the file to UTF-8 encoding\n"
                     "  2. Check if the file is corrupted\n"
                     "  3. Ensure the file is a text file (not binary)"
-                )
+                ) from exc
 
             if self.config.show_stats:
                 print(f"  ✅ Loaded text file ({len(text):,} characters)")
@@ -2004,57 +2040,52 @@ These positions indicate where to split the text."""
             import csv
 
             text_parts = []
-            encodings = ["utf-8", "utf-8-sig", "latin-1", "cp1252"]
 
-            for encoding in encodings:
-                try:
-                    # Use _safe_open with binary mode, then decode for csv.reader
-                    from io import StringIO
+            from io import StringIO
 
-                    with self._safe_open(csv_path, "rb") as f:
-                        text = f.read().decode(encoding)
-                        reader = csv.reader(StringIO(text))
-                        rows = list(reader)
+            with self._safe_open(csv_path, "rb") as f:
+                data = f.read()
 
-                        if not rows:
-                            raise ValueError("CSV file is empty")
+            try:
+                decoded = _decode_text_bytes(data)
+            except UnicodeDecodeError as exc:
+                raise ValueError(
+                    f"Failed to decode CSV file: {csv_path}\n"
+                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
+                    "Suggestions:\n"
+                    "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
+                    "  2. Check if the file is a valid CSV (not corrupted)\n"
+                    "  3. Try opening and re-saving in a text editor"
+                ) from exc
 
-                        # Include header as context
-                        if rows:
-                            header = rows[0]
-                            text_parts.append(f"Columns: {', '.join(header)}\n")
+            reader = csv.reader(StringIO(decoded))
+            rows = list(reader)
 
-                        # Convert rows to readable text
-                        for row in rows[1:]:
-                            # Create a readable row format
-                            row_text = []
-                            for i, cell in enumerate(row):
-                                if i < len(header):
-                                    row_text.append(f"{header[i]}: {cell}")
-                                else:
-                                    row_text.append(cell)
-                            text_parts.append(" | ".join(row_text))
+            if not rows:
+                raise ValueError("CSV file is empty")
 
-                        text = "\n".join(text_parts)
+            # Include header as context
+            header = rows[0]
+            text_parts.append(f"Columns: {', '.join(header)}\n")
 
-                        if self.config.show_stats:
-                            print(
-                                f"  ✅ Loaded CSV file ({len(rows)} rows, {len(header)} columns)"
-                            )
+            # Convert rows to readable text
+            for row in rows[1:]:
+                # Create a readable row format
+                row_text = []
+                for i, cell in enumerate(row):
+                    if i < len(header):
+                        row_text.append(f"{header[i]}: {cell}")
+                    else:
+                        row_text.append(cell)
+                text_parts.append(" | ".join(row_text))
 
-                        self.log.info(f"📊 Extracted {len(rows)} rows from CSV")
-                        return text
-                except UnicodeDecodeError:
-                    continue
+            text = "\n".join(text_parts)
 
-            raise ValueError(
-                f"Failed to decode CSV file: {csv_path}\n"
-                f"Tried encodings: {', '.join(encodings)}\n"
-                "Suggestions:\n"
-                "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
-                "  2. Check if the file is a valid CSV (not corrupted)\n"
-                "  3. Try opening and re-saving in a text editor"
-            )
+            if self.config.show_stats:
+                print(f"  ✅ Loaded CSV file ({len(rows)} rows, {len(header)} columns)")
+
+            self.log.info(f"📊 Extracted {len(rows)} rows from CSV")
+            return text
         except Exception as e:
             self._log_read_failure(e, csv_path, f"Error reading CSV {csv_path}: {e}")
             raise
@@ -2103,34 +2134,106 @@ These positions indicate where to split the text."""
             raise
 
     def _extract_text_from_xlsx(self, xlsx_path: str) -> str:
-        """Extract text from Excel (.xlsx / .xls) files using openpyxl."""
-        try:
-            import openpyxl
+        """Extract text from an Excel .xlsx workbook using openpyxl.
 
-            wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+        Raises:
+            SpreadsheetReadError: The file is not a readable .xlsx workbook
+                (``corrupted``), is a legacy .xls or password-protected one
+                (``unsupported_workbook``), or has no cell values (``empty_file``).
+            ImportError: openpyxl is not installed.
+        """
+        try:
+            import openpyxl  # pylint: disable=import-outside-toplevel
+        except ImportError as e:
+            raise ImportError(
+                "openpyxl is required to read Excel files. "
+                + _missing_package_hint("openpyxl")
+            ) from e
+        from openpyxl.utils.exceptions import (  # pylint: disable=import-outside-toplevel
+            InvalidFileException,
+        )
+
+        name = Path(xlsx_path).name
+        legacy = SpreadsheetReadError(
+            f"Could not read {name}: it is not in the .xlsx format (a legacy .xls "
+            "workbook, or one protected with a password). Open it in Excel, save "
+            "a copy as .xlsx without a password, then index that copy.",
+            "unsupported_workbook",
+        )
+        try:
+            with open(xlsx_path, "rb") as f:
+                magic = f.read(len(_OLE2_MAGIC))
+            if magic == _OLE2_MAGIC or Path(xlsx_path).suffix.lower() == ".xls":
+                raise legacy
+            try:
+                wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+            except InvalidFileException as e:
+                raise legacy from e
+            # KeyError: the zip lacks a part every workbook has (xl/workbook.xml).
+            except (zipfile.BadZipFile, KeyError) as e:
+                self.log.warning(f"openpyxl could not open {xlsx_path}: {e!r}")
+                raise SpreadsheetReadError(
+                    f"Could not read {name}: it is not a valid .xlsx workbook. "
+                    "Open it in Excel and save it again as .xlsx, or re-download "
+                    "it, then index the new copy.",
+                    "corrupted",
+                ) from e
             parts = []
+            has_values = False
+
+            def _numeric(cell: str) -> bool:
+                return cell.strip().replace(".", "").replace("-", "").isdigit()
 
             for sheet in wb.worksheets:
                 parts.append(f"Sheet: {sheet.title}")
 
                 # Collect rows, skipping entirely blank rows
                 rows = []
-                for row in sheet.iter_rows(values_only=True):
+                row_numbers = []
+                for number, row in enumerate(sheet.iter_rows(values_only=True), 1):
                     cells = [str(c) if c is not None else "" for c in row]
                     if any(c.strip() for c in cells):
                         rows.append(cells)
+                        row_numbers.append(number)
+                merged_starts = {
+                    (r.min_row, r.min_col)
+                    for r in sheet.merged_cells.ranges
+                    if r.max_col > r.min_col
+                }
 
                 if not rows:
                     continue
+                has_values = True
+
+                # Single-cell rows above the header are titles when merged
+                # across the table, or when a row of labels then numbers follows.
+                first_wide = next(
+                    (
+                        i
+                        for i, r in enumerate(rows)
+                        if sum(1 for c in r if c.strip()) > 1
+                    ),
+                    0,
+                )
+                merged_titles = all(
+                    (row_numbers[i], next(j for j, c in enumerate(r) if c.strip()) + 1)
+                    in merged_starts
+                    for i, r in enumerate(rows[:first_wide])
+                )
+                labels_then_numbers = (
+                    first_wide + 1 < len(rows)
+                    and not any(_numeric(c) for c in rows[first_wide])
+                    and any(_numeric(c) for c in rows[first_wide + 1])
+                )
+                if first_wide and (merged_titles or labels_then_numbers):
+                    for row in rows[:first_wide]:
+                        parts.append(" ".join(c for c in row if c.strip()))
+                    rows = rows[first_wide:]
 
                 # Use first non-empty row as header if it looks like one
                 # (contains at least one non-numeric string cell)
                 header = rows[0]
-                has_header = any(
-                    c.strip()
-                    and not c.strip().replace(".", "").replace("-", "").isdigit()
-                    for c in header
-                )
+                has_header = any(c.strip() and not _numeric(c) for c in header)
 
                 if has_header and len(rows) > 1:
                     parts.append(
@@ -2139,7 +2242,9 @@ These positions indicate where to split the text."""
                     for row in rows[1:]:
                         row_parts = []
                         for i, cell in enumerate(row):
-                            col_name = header[i] if i < len(header) else f"Col{i+1}"
+                            col_name = (
+                                header[i].strip() if i < len(header) else ""
+                            ) or f"Col{i+1}"
                             if cell.strip():
                                 row_parts.append(f"{col_name}: {cell}")
                         if row_parts:
@@ -2148,6 +2253,12 @@ These positions indicate where to split the text."""
                     for row in rows:
                         parts.append(" | ".join(c for c in row if c.strip()))
 
+            if not has_values:
+                raise SpreadsheetReadError(
+                    f"{name} has no cell values to index. Add data to the "
+                    "workbook, save it, then index it again.",
+                    "empty_file",
+                )
             text = "\n".join(parts)
 
             if self.config.show_stats:
@@ -2440,7 +2551,11 @@ These positions indicate where to split the text."""
         vlm_paragraphs = set()
         for idx, para in enumerate(paragraphs):
             # Check if this paragraph contains VLM markers
-            if "### 🖼️ IMAGE" in para or "**Content Extracted from Images:**" in para:
+            if (
+                "### 🖼️ IMAGE" in para
+                or "**Content Extracted from Images:**" in para
+                or any(block["placeholder"] in para for block in vlm_blocks)
+            ):
                 vlm_paragraphs.add(idx)
                 self.log.debug(
                     f"Paragraph {idx} marked as VLM content (will keep atomic)"
@@ -3061,7 +3176,9 @@ These positions indicate where to split the text."""
                 "total_chunks": int,
                 "error": str (if failed),
                 "error_type": str (some failures: "file_locked",
-                    "cache_busy" or "embedding_unavailable")
+                    "cache_busy" or "embedding_unavailable"),
+                "xlsx_status": str (an unreadable workbook: "corrupted",
+                    "unsupported_workbook" or "empty_file")
             }
 
         Raises:
@@ -3534,6 +3651,13 @@ These positions indicate where to split the text."""
             self.log.error(f"PDF extraction failed for {file_path}: {e.status}")
             stats["error"] = str(e)
             stats["pdf_status"] = e.status
+            return stats
+        except SpreadsheetReadError as e:
+            if self.config.show_stats:
+                print(f"❌ Failed to index {Path(file_path).name}: {e}")
+            self.log.error(f"Excel extraction failed for {file_path}: {e.status}")
+            stats["error"] = str(e)
+            stats["xlsx_status"] = e.status
             return stats
         except (IndexingStopped, LeaseWaitCancelled):
             raise

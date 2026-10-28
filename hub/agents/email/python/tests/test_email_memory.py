@@ -609,6 +609,7 @@ def _build_agent_with_failing_embedder(
             "gaia.agents.base.memory.MemoryMixin._embed_text",
             side_effect=embed_exc,
         ),
+        patch("gaia.agents.base.memory.MemoryMixin._pull_missing_embedder"),
     ):
         mock_sdk.return_value = MagicMock()
         return EmailTriageAgent(config=cfg)

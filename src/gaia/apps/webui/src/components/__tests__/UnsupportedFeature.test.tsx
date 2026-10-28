@@ -212,4 +212,21 @@ describe('UploadErrorToast', () => {
         expect(screen.queryByText(/File type not supported: $/)).toBeNull();
         expect(screen.queryByRole('link')).toBeNull();
     });
+
+    it('tells the user to re-save a legacy or password-protected workbook, with no bug report link', () => {
+        render(
+            <UploadErrorToast
+                filename="labs.xlsx"
+                error="Could not read labs.xlsx: it is a legacy .xls workbook or is protected with a password."
+                status={422}
+                kind="unsupported_workbook"
+                onDismiss={() => {}}
+                timeout={0}
+            />
+        );
+
+        expect(screen.getByText(`"labs.xlsx" can't be read`)).toBeInTheDocument();
+        expect(screen.getByText(/save a copy as \.xlsx without a password/)).toBeInTheDocument();
+        expect(screen.queryByRole('link')).toBeNull();
+    });
 });

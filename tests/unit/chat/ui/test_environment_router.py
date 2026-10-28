@@ -6,6 +6,7 @@ Changes persist, show up in the listing, and reach the chat's live agent at
 once, so the next step is checked against them without a restart.
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from gaia.security import PathValidator
 from gaia.ui import session_environment
+from gaia.ui.database import ChatDatabase
 from gaia.ui.server import create_app
 
 
@@ -187,30 +189,59 @@ def test_unknown_session_is_404(client):
     assert client.get("/api/sessions/nope/environment").status_code == 404
 
 
-def test_a_relayed_agent_is_reported_unenforced_and_changes_are_refused(
-    client, session_id, folder, monkeypatch
-):
-    # A Hub binary or the email sidecar runs as its own process.
+@pytest.fixture
+def relayed_gaia(monkeypatch):
+    """The flagship runs as a daemon sidecar, as on an installed GAIA."""
+    from gaia.ui.email_sidecar import daemon_client
+
     monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
-    body = client.get(f"/api/sessions/{session_id}/environment").json()
+    agent = SimpleNamespace(api_version="2.21", asked=[])
+
+    def acquire(agent_id):
+        agent.asked.append(agent_id)
+        return SimpleNamespace(api_version=agent.api_version)
+
+    monkeypatch.setattr(daemon_client, "acquire_handle", acquire)
+    return agent
+
+
+@pytest.fixture
+def gaia_session_id(client):
+    return client.post("/api/sessions", json={"agent_type": "gaia"}).json()["id"]
+
+
+def test_a_relayed_agent_is_reported_unenforced_and_can_only_gain_folders(
+    client, gaia_session_id, folder, relayed_gaia
+):
+    sid = gaia_session_id
+    body = client.get(f"/api/sessions/{sid}/environment").json()
     assert body["enforced"] is False
-    off = client.put(
-        f"/api/sessions/{session_id}/environment/internet", json={"on": False}
-    )
+    off = client.put(f"/api/sessions/{sid}/environment/internet", json={"on": False})
     assert off.status_code == 409
     assert "its own process" in off.json()["detail"]
+    added = client.post(
+        f"/api/sessions/{sid}/environment/folders", json={"path": str(folder)}
+    )
+    assert added.status_code == 200, added.text
+    assert str(folder.resolve()) in _paths(added.json())
     removed = client.post(
-        f"/api/sessions/{session_id}/environment/folders/remove",
-        json={"path": str(folder)},
+        f"/api/sessions/{sid}/environment/folders/remove", json={"path": str(folder)}
     )
     assert removed.status_code == 409
+    assert client.get(f"/api/sessions/{sid}/environment").json()["internet"] is True
+
+
+def test_a_relayed_agent_too_old_for_folders_is_refused_one(
+    client, gaia_session_id, folder, relayed_gaia
+):
+    relayed_gaia.api_version = "2.17"
     added = client.post(
-        f"/api/sessions/{session_id}/environment/folders", json={"path": str(folder)}
+        f"/api/sessions/{gaia_session_id}/environment/folders",
+        json={"path": str(folder)},
     )
     assert added.status_code == 400
-    assert (
-        client.get(f"/api/sessions/{session_id}/environment").json()["internet"] is True
-    )
+    assert "too old to be given folders" in added.json()["detail"]
+    assert "Update GAIA" in added.json()["detail"]
 
 
 def test_an_invalid_allowed_paths_setting_is_named_not_an_empty_list(
@@ -223,3 +254,145 @@ def test_an_invalid_allowed_paths_setting_is_named_not_an_empty_list(
 
     assert res.status_code == 500
     assert "GAIA_ALLOWED_PATHS" in res.json()["detail"]
+
+
+def _chat_count(client):
+    return client.get("/api/sessions").json()["total"]
+
+
+def test_a_new_chat_can_start_with_a_folder(client, folder):
+    created = client.post("/api/sessions", json={"folders": [str(folder)]})
+    assert created.status_code == 200, created.text
+    body = client.get(f"/api/sessions/{created.json()['id']}/environment").json()
+    entry = next(f for f in body["folders"] if f["path"] == str(folder.resolve()))
+    assert entry["source"] == "added"
+
+
+@pytest.mark.parametrize("bad", ["home", "missing"])
+def test_a_refused_folder_leaves_no_chat_behind(client, tmp_path, bad):
+    path = str(Path.home()) if bad == "home" else str(tmp_path / "nope")
+    refused = client.post("/api/sessions", json={"folders": [path]})
+    assert refused.status_code == 400
+    assert "GAIA can't be given" in refused.text or "is not a folder" in refused.text
+    assert _chat_count(client) == 0
+
+
+def test_a_relayed_agent_that_takes_folders_can_start_with_one(
+    client, folder, relayed_gaia
+):
+    created = client.post(
+        "/api/sessions", json={"agent_type": "gaia", "folders": [str(folder)]}
+    )
+    assert created.status_code == 200, created.text
+    assert relayed_gaia.asked == ["gaia"]
+    body = client.get(f"/api/sessions/{created.json()['id']}/environment").json()
+    assert str(folder.resolve()) in _paths(body)
+
+
+def test_a_relayed_agent_too_old_for_folders_cannot_start_with_one(
+    client, folder, relayed_gaia
+):
+    relayed_gaia.api_version = "2.17"
+    refused = client.post(
+        "/api/sessions", json={"agent_type": "gaia", "folders": [str(folder)]}
+    )
+    assert refused.status_code == 400
+    assert "too old to be given folders" in refused.text
+    assert _chat_count(client) == 0
+
+
+def test_a_relayed_agent_that_cannot_start_refuses_the_folder_and_says_why(
+    client, folder, relayed_gaia, monkeypatch
+):
+    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.email_sidecar.errors import SidecarError
+
+    def fail(_agent_id):
+        raise SidecarError("sidecar crashed")
+
+    monkeypatch.setattr(daemon_client, "acquire_handle", fail)
+    refused = client.post(
+        "/api/sessions", json={"agent_type": "gaia", "folders": [str(folder)]}
+    )
+    assert refused.status_code == 400
+    assert "couldn't start" in refused.text
+    assert _chat_count(client) == 0
+
+
+def test_the_email_agent_cannot_start_with_a_folder(client, folder, relayed_gaia):
+    refused = client.post(
+        "/api/sessions", json={"agent_type": "email", "folders": [str(folder)]}
+    )
+    assert refused.status_code == 400
+    assert "runs as its own process" in refused.text
+    assert relayed_gaia.asked == []
+    assert _chat_count(client) == 0
+
+
+def test_a_folder_removed_after_the_check_leaves_no_chat_behind(
+    client, folder, monkeypatch
+):
+    checked = session_environment.check_new_chat_folders
+
+    def check_then_remove(agent_type, folders):
+        checked(agent_type, folders)
+        folder.rmdir()
+
+    monkeypatch.setattr(
+        session_environment, "check_new_chat_folders", check_then_remove
+    )
+    refused = client.post("/api/sessions", json={"folders": [str(folder)]})
+    assert refused.status_code == 400
+    assert "is not a folder" in refused.text
+    assert _chat_count(client) == 0
+
+
+def test_a_failed_folder_save_leaves_no_chat_behind(client, folder, monkeypatch):
+    def broken_save(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ChatDatabase, "set_session_environment", broken_save)
+    failed = client.post("/api/sessions", json={"folders": [str(folder)]})
+    assert failed.status_code == 500
+    assert _chat_count(client) == 0
+
+
+def _break_rollback(monkeypatch):
+    def broken_delete(*_args, **_kwargs):
+        raise OSError("database is locked")
+
+    monkeypatch.setattr(ChatDatabase, "delete_session", broken_delete)
+
+
+def test_a_failed_rollback_keeps_the_folder_refusal_as_the_answer(
+    client, folder, monkeypatch, caplog
+):
+    checked = session_environment.check_new_chat_folders
+
+    def check_then_remove(agent_type, folders):
+        checked(agent_type, folders)
+        folder.rmdir()
+
+    monkeypatch.setattr(
+        session_environment, "check_new_chat_folders", check_then_remove
+    )
+    _break_rollback(monkeypatch)
+    refused = client.post("/api/sessions", json={"folders": [str(folder)]})
+    assert refused.status_code == 400
+    assert "is not a folder" in refused.text
+    assert "Could not remove half-made chat" in caplog.text
+
+
+def test_a_failed_rollback_keeps_the_original_500_and_logs_both(
+    client, folder, monkeypatch, caplog
+):
+    def broken_save(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ChatDatabase, "set_session_environment", broken_save)
+    _break_rollback(monkeypatch)
+    failed = client.post("/api/sessions", json={"folders": [str(folder)]})
+    assert failed.status_code == 500
+    assert "Check server logs" in failed.json()["detail"]
+    assert "database is locked" in caplog.text
+    assert "disk full" in caplog.text

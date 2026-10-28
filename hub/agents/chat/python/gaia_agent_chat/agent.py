@@ -62,7 +62,7 @@ from gaia.agents.base.context_eviction import (
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import before_change, note_untracked
 from gaia.agents.base.memory import MemoryMixin
-from gaia.agents.base.project_map import resolve_project_root
+from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 
 # dynamic_tools_env_override is re-exported so callers importing it from
 # gaia_agent_chat.agent keep working; its canonical home is the core tool_loader
@@ -1514,12 +1514,14 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             return cached
         gaia_docs = os.path.normcase(str((gaia_home() / "documents").resolve()))
         labelled = []
+        has_gaia_docs = False
         allowed = getattr(self, "allowed_paths", None) or []
         for path in dict.fromkeys(Path(p).resolve() for p in allowed):
             if not path.is_dir():
                 continue
             if os.path.normcase(str(path)) == gaia_docs:
                 labelled.insert(0, f"{path} (GAIA's documents folder)")
+                has_gaia_docs = True
             else:
                 labelled.append(str(path))
         line = ""
@@ -1527,8 +1529,15 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             line = (
                 f"\nYour folders this session: {', '.join(labelled)}. For "
                 '"my documents", "your folder", or a file named without a path, '
-                "look here first.\n"
+                "look here first."
             )
+            if has_gaia_docs:
+                line += (
+                    " To save a new file to the user's Documents folder, use "
+                    f"{Path.home() / 'Documents'}: GAIA's documents folder is "
+                    "GAIA's own."
+                )
+            line += "\n"
         self._folders_line = line
         return line
 
@@ -2101,11 +2110,25 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 moved_from = None
                 if run_dir is not None and not run_dir.is_dir():
                     moved_from, run_dir = run_dir, None
+                # A root guessed from the process cwd is the daemon's launch folder.
+                chosen_root = getattr(
+                    self.config, "project_root", None
+                ) or os.environ.get(PROJECT_ROOT_ENV)
+                if chosen_root and not project:
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: the project root {chosen_root} "
+                        "is outside the agent's allowed paths, so a snippet "
+                        "cannot run from it. Add it to the allowed paths, or "
+                        f"unset {PROJECT_ROOT_ENV}.",
+                        "has_errors": True,
+                    }
                 if run_dir is None or (
-                    not project
+                    not chosen_root
                     and scratch is not None
                     and not self.path_validator.is_path_allowed(str(run_dir))
                 ):
+                    project = None
                     if scratch is None:
                         return {
                             "status": "error",
@@ -2368,8 +2391,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         def get_system_info() -> dict:
             """Get information about the current system (OS, CPU, memory, disk).
 
+            Answers "how much free disk space / memory do I have?" directly; no
+            shell command is needed.
+
             Returns:
-                Dictionary with os, cpu, memory, disk, and python version info
+                Dictionary with os, cpu, memory (total, available), disk (total,
+                free, percent used), and python version info
             """
             import sys
 
@@ -2385,9 +2412,15 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 info["cpu_count"] = psutil.cpu_count(logical=True)
                 info["cpu_percent"] = psutil.cpu_percent(interval=0.1)
                 info["memory_total_gb"] = round(mem.total / 1e9, 1)
+                info["memory_available_gb"] = round(mem.available / 1e9, 1)
                 info["memory_used_pct"] = mem.percent
                 info["disk_total_gb"] = round(disk.total / 1e9, 1)
-                info["disk_used_pct"] = round(disk.used / disk.total * 100, 1)
+                # Free is shared across an APFS container; macOS's "/" alone has
+                # used only the system's few GB, so used/total reads nearly empty.
+                info["disk_free_gb"] = round(disk.free / 1e9, 1)
+                info["disk_used_pct"] = round(
+                    (disk.total - disk.free) / disk.total * 100, 1
+                )
             except ImportError:
                 info["note"] = "psutil not installed. " + missing_package_hint("psutil")
             return {"status": "success", **info}
@@ -3047,6 +3080,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 on_modified=self.reindex_file,
                 on_deleted=self._handle_file_deletion,
                 on_moved=self._handle_file_move,
+                filter_func=self._should_watch_file,
             )
             observer = Observer()
             observer.schedule(event_handler, directory, recursive=True)
@@ -3056,6 +3090,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             logger.info(f"Started watching: {directory}")
         except Exception as e:
             logger.error(f"Failed to watch {directory}: {e}")
+
+    @staticmethod
+    def _should_watch_file(file_path: str) -> bool:
+        """Watch supported documents, excluding Office owner files."""
+        if file_path.lower().endswith((".docx", ".pptx", ".xlsx")):
+            return not Path(file_path).name.startswith("~$")
+        return file_path.lower().endswith(tuple(FileChangeHandler.DEFAULT_EXTENSIONS))
 
     def _handle_file_deletion(self, file_path: str) -> None:
         """Handle file deletion by removing it from the index."""
@@ -3081,7 +3122,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     def _handle_file_move(self, src_path: str, dest_path: str) -> None:
         """Handle file move by removing old path and indexing new path."""
         self._handle_file_deletion(src_path)
-        self.reindex_file(dest_path)
+        if self._should_watch_file(dest_path):
+            self.reindex_file(dest_path)
 
     def reindex_file(self, file_path: str) -> None:
         """Reindex a file that was modified or created.

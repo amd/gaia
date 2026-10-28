@@ -1256,7 +1256,7 @@ export function MemoryDashboard() {
                                                 stats?.knowledge?.by_category
                                                     ? Object.entries(stats.knowledge.by_category)
                                                         .slice(0, 3)
-                                                        .map(([k, v]) => `${v} ${k}s`)
+                                                        .map(([k, v]) => `${v} ${k}${v === 1 ? '' : 's'}`)
                                                         .join(', ')
                                                     : 'No entries'
                                             );

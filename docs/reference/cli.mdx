@@ -774,13 +774,13 @@ catalog's latest version when the two differ. This is the supported way to provi
 agent on a machine with no UI.
 
 <Note>
-`gaia agent install` installs **in-process**. [`gaia hub install`](#hub-command)
-performs the same install through the daemon, which additionally stops that
-agent's running sidecar first and keeps it stopped for the whole download —
-the install directory is the sidecar's own binary cache. Reach for `gaia hub`
-when the daemon supervises the agent, and `gaia agent` when it does not (or
-when the daemon extras are not installed). Both enforce the same `--trust` gate
-and the same SHA-256 verification.
+`gaia agent install` installs **in-process**. Updating an agent that is
+running replaces its binary in place (on Windows the running copy is moved
+aside and deleted by the next install), then stops the running sidecar so the
+next chat starts the new version. [`gaia hub install`](#hub-command) performs
+the same install through the daemon, which instead stops that agent's sidecar
+first and keeps it stopped for the whole download. Both enforce the same
+`--trust` gate and the same SHA-256 verification.
 </Note>
 
 Running a sidecar agent starts its sidecar automatically on first use;
@@ -2684,7 +2684,11 @@ Skills are discovered from three roots, highest precedence first:
 
     The version is a SemVer range — `web-research@^1.2`, `@>=1.0.0, <2.0.0`,
     `@1.4.7`, or omitted for the latest. The highest published version satisfying
-    it wins, the same rule agent `dependencies:` use.
+    it wins. A range admits a prerelease only if one of its targets names a
+    prerelease of the same `major.minor.patch`, such as `@>=1.3.0-rc.1`.
+    Omitting the version or using `*` / `latest` prefers the highest stable
+    release; only when none exists does it select the highest prerelease.
+    `any` and an empty range behave the same way.
 
     Install verifies the artifact's SHA-256 against the hub manifest, verifies the
     bundle's `SIGNATURE.json` over every file, then installs at
@@ -3011,9 +3015,11 @@ skills:
 Every `Agent` subclass resolves this block at construction, so a **custom agent**
 under `~/.gaia/agents/<id>/` consumes an installed hub skill by dropping a
 `gaia-agent.yaml` beside its `agent.py` — no code change, no registration call.
-Resolution mirrors agent `dependencies:`: highest installed version satisfying the
-range, tool providers ordered before their consumers, and fail-loud on a conflict
-or a dependency cycle. A missing `required: true` skill raises with the
+Resolution checks the installed version against the range, orders tool providers
+before their consumers, and fails loudly on a conflict or a dependency cycle.
+A pinned range admits a prerelease only when a target names a prerelease of the
+same `major.minor.patch`. Unrestricted pins accept an installed prerelease.
+A missing `required: true` skill raises with the
 `gaia skill install` command that fixes it; a missing optional one is logged and
 skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 `load_declared_skills()` yourself.
@@ -3441,7 +3447,7 @@ The flagship GAIA agent comes from `gaia init`, not from here.
 ```bash
 gaia hub list                      # what is available + what is installed
 gaia hub list --installed          # only what is installed (works offline)
-gaia hub install email --trust     # required: email is a non-verified agent
+gaia hub install email
 gaia hub uninstall email           # stops the sidecar first, then removes the dir
 ```
 
@@ -3511,7 +3517,7 @@ Options accepted by every `gaia tui` command:
 
 There is no `list`, `install`, `uninstall`, or `hub` subcommand — the TUI does
 not install agents. Installing the email sidecar is the Python CLI's job
-(`gaia hub install email --trust`, see [Hub Command](#hub-command)).
+(`gaia hub install email`, see [Hub Command](#hub-command)).
 
 #### `run --query` is a real one-shot
 
@@ -3833,45 +3839,6 @@ the connector with `gaia connectors configure mcp-tavily --set TAVILY_API_KEY=tv
 
 ---
 
-### Kill Command
-
-Terminate processes running on specific ports.
-
-```bash
-gaia kill [OPTIONS]
-```
-
-**Options:**
-
-| Option | Type | Description |
-|--------|------|-------------|
-| `--port` | integer | Port number to kill process on |
-| `--lemonade` | flag | Kill Lemonade server (port 13305) |
-| `--daemons` | flag | List running GAIA daemons; stop those whose home folder or `instance.json` is gone |
-
-**Examples:**
-
-<CodeGroup>
-```bash Kill Lemonade Server
-gaia kill --lemonade
-```
-
-```bash Kill by Port
-gaia kill --port 13305
-```
-
-```bash Stop Orphaned Daemons
-gaia kill --daemons
-```
-</CodeGroup>
-
-This command will:
-- Find the process ID (PID) bound to the specified port
-- Forcefully terminate that process
-- Report killed, refused, and failed listeners; exit 1 on any refusal or failure. An empty port is a successful no-op (exit 0). Listing and forceful termination commands each have a five-second timeout.
-
----
-
 ### Diagnostics Command
 
 Bundle system info and logs into a tarball for bug reports.
@@ -3942,7 +3909,7 @@ Backend flags are accepted only by the commands that use them, and any other com
 |-------|-------------|
 | `--use-claude`, `--claude-model` | `chat`, `prompt`, `talk` |
 | `--model` | `chat`, `prompt`, `talk`, `llm`, `email` (and eval subcommands that define their own) |
-| `--base-url` | `chat`, `prompt`, `talk`, `llm`, `email`, `api`, `stats`, `mcp start` |
+| `--base-url` | `chat`, `prompt`, `talk`, `llm`, `api`, `stats`, `mcp start` |
 | `--trace` | `chat`, `email` |
 | `--max-steps`, `--list-tools`, `--stream` | `chat` |
 

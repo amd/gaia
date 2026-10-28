@@ -232,7 +232,7 @@ setup(
         # lazy pip-install path cannot work inside a PyInstaller app, where
         # sys.executable is the .exe rather than an interpreter.
         "diarize": [
-            "sherpa-onnx>=1.13,<2",
+            "sherpa-onnx>=1.13,<3",
         ],
         "mcp": [
             # Supports mcp 2.x: its public MCPServer API replaced

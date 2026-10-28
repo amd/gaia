@@ -192,6 +192,9 @@ class LemonadeInfo:
     version: Optional[str] = None
     path: Optional[str] = None
     error: Optional[str] = None
+    #: True when the probe itself raised, so ``installed=False`` is a guess
+    #: rather than a reading; a caller must not report "not installed" for it.
+    check_failed: bool = False
 
     @property
     def version_tuple(self) -> Optional[tuple]:
@@ -422,7 +425,7 @@ class LemonadeInstaller:
             )
 
         except Exception as e:
-            return LemonadeInfo(installed=False, error=str(e))
+            return LemonadeInfo(installed=False, error=str(e), check_failed=True)
 
     def needs_install(self, info: LemonadeInfo) -> bool:
         """

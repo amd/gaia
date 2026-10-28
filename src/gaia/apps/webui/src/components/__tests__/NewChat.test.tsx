@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
@@ -16,7 +16,7 @@ const START: StartScreen = {
         { skill: 'document-brief', title: 'Ask about your documents', note: '2 indexed documents', prompt: 'Using my indexed documents, give me the key points.', needs_input: false },
         { skill: 'research-report', title: 'Research a topic', note: 'A cited report from the web', prompt: 'Research and write a short cited report on: ', needs_input: true },
     ],
-    working_folder: { path: '/home/u/my-project', name: 'my-project', gaia_folder: false },
+    working_folder: { path: '/home/u/my-project', name: 'my-project', gaia_folder: false, choosable: true },
 };
 
 beforeEach(() => {
@@ -122,6 +122,64 @@ describe('NewChat while GAIA is starting', () => {
     });
 });
 
+describe('NewChat while the chat is being created (#5712)', () => {
+    beforeEach(() => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus, messageQueues: {}, currentSessionId: null });
+    });
+
+    function sendTwo(onSend: (text: string) => Promise<boolean | void>) {
+        render(<NewChat onSend={onSend} />);
+        const box = screen.getByLabelText('Message');
+        fireEvent.change(box, { target: { value: 'first' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        // Cleared at once, so what is typed next is its own message.
+        expect(box).toHaveValue('');
+        expect(box).toBeEnabled();
+        fireEvent.change(box, { target: { value: 'second' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        return box;
+    }
+
+    it('queues a message sent before the chat exists instead of dropping it', async () => {
+        let created!: () => void;
+        const onSend = vi.fn(() => new Promise<void>((resolve) => { created = () => {
+            useChatStore.setState({ currentSessionId: 'chat-1' });
+            resolve();
+        }; }));
+        sendTwo(onSend);
+
+        expect(onSend).toHaveBeenCalledTimes(1);
+        await act(async () => created());
+
+        expect(useChatStore.getState().messageQueues['chat-1']?.map((m) => [m.text, m.state])).toEqual([['second', 'queued']]);
+    });
+
+    it('never sends held messages on their own when the first one was not sent', async () => {
+        let created!: () => void;
+        const onSend = vi.fn(() => new Promise<boolean>((resolve) => { created = () => {
+            useChatStore.setState({ currentSessionId: 'chat-1' });
+            resolve(false);
+        }; }));
+        sendTwo(onSend);
+
+        await act(async () => created());
+
+        expect(useChatStore.getState().messageQueues['chat-1']?.map((m) => [m.text, m.state, m.error]))
+            .toEqual([['second', 'failed', 'The first message was not sent.']]);
+    });
+
+    it('puts every message back in the box when the chat could not be created', async () => {
+        let fail!: () => void;
+        const onSend = vi.fn(() => new Promise<void>((_, reject) => { fail = () => reject(new Error('no backend')); }));
+        const box = sendTwo(onSend);
+
+        await act(async () => fail());
+
+        expect(box).toHaveValue('first\n\nsecond');
+        expect(screen.getByText('no backend')).toBeInTheDocument();
+    });
+});
+
 describe('NewChat while the first prompt is being primed', () => {
     it('shows the wait without holding the message box', async () => {
         useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
@@ -214,11 +272,80 @@ describe('NewChat empty state', () => {
 
     it("says when GAIA works in its own folder", async () => {
         vi.mocked(api.getStartScreen).mockResolvedValue({
-            ...START, working_folder: { path: '/home/u/.gaia/documents', name: 'documents', gaia_folder: true },
+            ...START, working_folder: { path: '/home/u/.gaia/documents', name: 'documents', gaia_folder: true, choosable: true },
         });
         render(<NewChat onSend={vi.fn()} />);
         const chip = (await screen.findByText('documents')).parentElement!;
         expect(chip.getAttribute('title')).toMatch(/its own folder/);
+    });
+
+    it('picks a folder for the chat from the folder chip, and drops it again', async () => {
+        useChatStore.setState({ draftFolder: null });
+        vi.mocked(api.browseFiles).mockResolvedValueOnce({
+            current_path: '/home/u',
+            parent_path: null,
+            entries: [{ name: 'site', path: '/home/u/site', type: 'folder', size: 0, extension: null, modified: null }],
+            quick_links: [],
+        }).mockResolvedValueOnce({ current_path: '/home/u/site', parent_path: '/home/u', entries: [], quick_links: [] });
+        render(<NewChat onSend={vi.fn()} />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Folder for this chat: my-project' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'site' }));
+        await screen.findByText('No folders inside.');
+        fireEvent.click(screen.getByRole('button', { name: 'Use this folder' }));
+
+        expect(useChatStore.getState().draftFolder).toBe('/home/u/site');
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        const chip = screen.getByRole('button', { name: 'Folder for this chat: my-project, plus site' });
+        // Picking adds a folder; the working folder stays in the label.
+        expect(chip).toHaveTextContent('my-project + site');
+
+        fireEvent.click(screen.getByRole('button', { name: "Don't give this chat site" }));
+        expect(useChatStore.getState().draftFolder).toBeNull();
+        expect(screen.getByRole('button', { name: 'Folder for this chat: my-project' })).toBeInTheDocument();
+    });
+
+    describe('in the desktop app', () => {
+        const pickFolder = vi.fn<(defaultPath?: string) => Promise<string | null>>();
+        beforeEach(() => {
+            useChatStore.setState({ draftFolder: null });
+            window.gaiaAPI = { dialog: { pickFolder } } as unknown as NonNullable<typeof window.gaiaAPI>;
+        });
+        afterEach(() => {
+            delete window.gaiaAPI;
+        });
+
+        it('picks the folder in the OS picker, starting from the working folder', async () => {
+            pickFolder.mockResolvedValue('/home/u/site');
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Folder for this chat: my-project' }));
+
+            expect(await screen.findByRole('button', { name: 'Folder for this chat: my-project, plus site' })).toBeInTheDocument();
+            expect(pickFolder).toHaveBeenCalledWith('/home/u/my-project');
+            expect(useChatStore.getState().draftFolder).toBe('/home/u/site');
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+            expect(api.browseFiles).not.toHaveBeenCalled();
+        });
+
+        it('keeps the folder as it was when the OS picker is cancelled', async () => {
+            pickFolder.mockResolvedValue(null);
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Folder for this chat: my-project' }));
+
+            await waitFor(() => expect(pickFolder).toHaveBeenCalledTimes(1));
+            expect(useChatStore.getState().draftFolder).toBeNull();
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        });
+    });
+
+    it("shows the folder as plain text when this chat's agent can't be given another", async () => {
+        vi.mocked(api.getStartScreen).mockResolvedValue({ ...START, working_folder: { ...START.working_folder, choosable: false } });
+        render(<NewChat onSend={vi.fn()} />);
+
+        expect(await screen.findByText('my-project')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Folder for this chat/ })).not.toBeInTheDocument();
     });
 
     it('starts with text handed over from setup', () => {

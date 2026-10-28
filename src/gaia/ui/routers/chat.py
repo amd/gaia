@@ -746,10 +746,16 @@ async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db))
     """How full the model's context is for this chat's next message, by kind."""
     if not db.get_session(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
-    from .._chat_helpers import cached_session_agent, model_turns
+    from .._chat_helpers import cached_session_agent, model_turns, relayed_context
 
     agent = cached_session_agent(session_id)
     if agent is None:
+        # A relayed chat's agent lives in the sidecar, which measures each turn.
+        relayed = relayed_context(session_id)
+        if relayed is not None and "usage" in relayed:
+            return {"available": True, **relayed["usage"]}
+        if relayed is not None:
+            return {"available": False, "reason": relayed["reason"]}
         # Measuring needs the chat's agent, which lives in memory between turns.
         answered = db.latest_message_id(session_id, role="assistant") is not None
         return {
@@ -761,22 +767,12 @@ async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db))
                 else "Measured once GAIA has answered in this chat."
             ),
         }
-    from ..turn_insights import (
-        context_categories,
-        context_state,
-        measure_context,
-        tools_by_load,
-    )
+    from ..turn_insights import panel_context
 
     def _measure():
-        usage = measure_context(
+        return panel_context(
             agent, model_turns(agent, db, session_id), getattr(agent, "model_id", None)
         )
-        usage["categories"] = context_categories(usage)
-        usage["tool_loading"] = tools_by_load(agent)
-        usage["model"] = getattr(agent, "model_id", None)
-        usage["context_state"] = context_state(agent)
-        return usage
 
     return {"available": True, **(await asyncio.to_thread(_measure))}
 
