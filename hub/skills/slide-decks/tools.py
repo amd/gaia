@@ -202,6 +202,44 @@ def _missing_axis(slides: List[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
+#: The user invites invented numbers: "make up", "dummy data", "hypothetical"...
+_INVENTED = re.compile(
+    r"\b(?:make|made|making)\s+(?:\w+\s+){0,2}up\b|\binvent\w*|\bdummy\b|"
+    r"\bplaceholder\b|\bfake\b|\bhypothetical\b|\bmock\b|"
+    r"\bsample\s+(?:data|numbers|figures)\b",
+    re.I,
+)
+_LABELLED = re.compile(
+    r"illustrative|hypothetical|example|sample|not actual|made[- ]up|placeholder",
+    re.I,
+)
+
+
+def _unlabelled_invented(slides: List[Dict[str, Any]]) -> Optional[str]:
+    """Data slides built on numbers the user said to make up, without saying so."""
+    try:
+        request = current().request
+    except SkillContextError:
+        return None
+    if not _INVENTED.search(request):
+        return None
+    bare = [
+        s.get("title") or f"slide {i}"
+        for i, s in enumerate(slides, 1)
+        if s.get("type") in ("chart", "kpi", "table")
+        and not _LABELLED.search(
+            json.dumps({k: v for k, v in s.items() if k != "notes"})
+        )
+    ]
+    if not bare:
+        return None
+    return (
+        "The user asked for made-up numbers, so a slide showing them must say "
+        f"so where it is seen: {'; '.join(bare)}. Set its source to "
+        "'Illustrative data, not actual results', and say so in the reply."
+    )
+
+
 def _text_of(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("label") or value.get("title") or "")
@@ -446,7 +484,9 @@ def _build_from(
                     "change the slides. " + _merge_hint(count)
                 ]
             )
-        missing = _missing_axis(data.get("slides") or [])
+        missing = _missing_axis(data.get("slides") or []) or _unlabelled_invented(
+            data.get("slides") or []
+        )
         if missing:
             raise OutlineError([missing])
         if request:

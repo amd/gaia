@@ -435,6 +435,9 @@ def _diagram_slide(
                 items[-1]["bullets"].append(
                     {"text": b["text"], "level": b["level"] - 1}
                 )
+    if text and not slide.get("subtitle"):
+        # A line between the title and the boxes frames the diagram.
+        slide["subtitle"], text = " ".join(text), []
     lines = [b["text"] for b in loose] + text
     if lines:
         slide["footnote"] = "; ".join(
@@ -518,6 +521,24 @@ def outline_from_markdown(
                 title = ""
             block.append(line)
     close()
+    body = [
+        line.strip()
+        for line in cover_lines
+        if re.match(r"^(?:[-*•]\s|\d+[.)]\s|```|\||###\s)", line.strip())
+    ]
+    if deck_title is not None and body:
+        if not slides:
+            # "# Title" over the content with no "## " slide is that slide, not a cover.
+            slides.append(_slide_from_block(deck_title, cover_lines))
+            deck_title, cover_lines = None, []
+        else:
+            raise OutlineError(
+                [
+                    f"The '# {deck_title}' cover holds slide content ({body[0]!r}), "
+                    "which a cover does not show. Move it under a '## ' slide; the "
+                    "cover keeps only a subtitle and a date line."
+                ]
+            )
     out: List[Dict[str, Any]] = []
     if deck_title is not None:
         sub = [

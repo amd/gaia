@@ -21,6 +21,9 @@ into slides, builds them and checks them in one call.
   naming what grows from left to right. A list of what increases across the
   stages goes here, not in a separate table or slide. An `Axis:` line on a
   slide with no `Diagram:` line draws its boxes as a process.
+- On a diagram slide, a plain line between the `##` title and the first `###`
+  is the slide's subtitle; a plain line right under a `###` heading is that
+  box's bold lead line, above its bullets.
 - A pipe table is a table slide; `![alt](path)` an image slide; a slide that
   is only a `>` block is a quote slide.
 - `Source: ...` adds the source line, `Note: ...` a footnote, and `Notes:`

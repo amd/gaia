@@ -47,6 +47,7 @@ from .style import (
     SIZES,
     PrefsError,
     best_text_on,
+    luminance,
     merge_prefs,
     mix,
     resolve_tokens,
@@ -1042,7 +1043,22 @@ class DeckBuilder:
         self.set_title(slide, s["title"])
         bottom = self.footer(slide, s, number=number)
         self.notes_for(slide, s)
-        return slide, self.content_box(bottom)
+        box = self.content_box(bottom)
+        if s.get("subtitle"):
+            # One muted line under the title that frames the slide.
+            h = Inches(0.45)
+            tb = self.textbox(slide, Box(box.x, box.y, box.w, h), "Subtitle")
+            paras = [Para(_plain(s["subtitle"]), level=-1)]
+            size, ok, _n, _a = self.fit(paras, box.w, h, 18, self.body_min)
+            if not ok:
+                self.warn("slide subtitle does not fit on one line; shorten it.")
+            self.write(
+                tb, paras, size, colors=[self.theme.muted], raw_texts=[s["subtitle"]]
+            )
+            box = Box(
+                box.x, box.y + h + self.unit // 2, box.w, box.h - h - self.unit // 2
+            )
+        return slide, box
 
     def _side_text(self, slide, items, box: Box, name: str, max_pt: float):
         tb = self.textbox(slide, box, name)
@@ -2425,34 +2441,9 @@ class DeckBuilder:
         if isinstance(axis, dict):
             axis = axis.get("label") or axis.get("title") or ""
         axis = _plain(str(axis or "")).strip()
-        if axis and n <= 6:
-            # What grows from the first step to the last, as one arrow under them.
-            arrow_h = Inches(0.55)
-            band = Box(box.x, box.y + box.h - arrow_h, box.w, arrow_h)
-            # A pentagon with its point set explicitly: Keynote and Quick Look
-            # misdraw arrow shapes left at their default adjustments.
-            shp = self.shape(
-                slide,
-                MSO_SHAPE.PENTAGON,
-                band,
-                "Axis arrow",
-                self.theme.primary,
-                round_adj=0.5,
-            )
-            self._write_group(
-                [
-                    (
-                        shp,
-                        [Para(axis, level=-1, bold=True)],
-                        [axis],
-                        [self.theme.text_on(self.theme.primary)],
-                    )
-                ],
-                16,
-                "process axis",
-                align=PP_ALIGN.CENTER,
-                anchor=MSO_ANCHOR.MIDDLE,
-            )
+        draw_axis = bool(axis) and n <= 6
+        arrow_h = Inches(0.55)
+        if draw_axis:
             box = Box(box.x, box.y, box.w, box.h - arrow_h - self.unit)
         if n > 6:
             self.warn(
@@ -2465,19 +2456,54 @@ class DeckBuilder:
         row_h = (box.h - row_gap * (rows - 1)) // rows
         has_detail = any(it.get("text") or it.get("bullets") for it in items)
         head_h = min(Inches(1.0), int(row_h * (0.32 if has_detail else 0.6)))
+        gap = Inches(0.08) if style == "chevrons" else Inches(0.45)
+        sw = (box.w - gap * (per_row - 1)) // per_row
+        dw = sw - (Inches(0.12) if style == "chevrons" else 0)
+        d_gap, d_ix, d_iy = Inches(0.12), Inches(0.15), Inches(0.12)
+        detail_h = row_h - head_h - d_gap
+        cards = []
+        for it in items:
+            ps, raws = self._card_paras(
+                {"text": it.get("text"), "bullets": it.get("bullets")},
+                body_scale=1.0,
+            )
+            colors = [self.theme.text] * len(ps)
+            if it.get("text") and ps:
+                # A stage's one-line summary leads its card, in the accent colour.
+                ps[0] = replace(ps[0], bold=True)
+                colors[0] = self.theme.primary
+            cards.append((ps, raws, colors))
+        top = box.y
+        if has_detail and rows == 1:
+            # Cards as tall as their text, the group centred: stretched cards read as unfinished.
+            size = min(
+                self.fit(ps, dw, detail_h, 18, inset_x=d_ix, inset_y=d_iy)[0]
+                for ps, _r, _c in cards
+            )
+            need = max(
+                self.fit(ps, dw, detail_h, size, size, inset_x=d_ix, inset_y=d_iy)[2]
+                for ps, _r, _c in cards
+            )
+            detail_h = min(detail_h, int(Pt(need / FIT_SLACK)) + 2 * d_iy + Inches(0.1))
+            top = box.y + (row_h - head_h - d_gap - detail_h) // 2
+        # Stages deepen in colour from first to last unless one is highlighted.
+        ramp = s.get("highlight") is None and n > 1
+        dark = luminance(self.theme.background.hex) < 0.4
+        fade = -0.55 if dark else 0.6
         heads, details = [], []
         for k, it in enumerate(items):
             r, c = divmod(k, per_row)
-            gap = Inches(0.08) if style == "chevrons" else Inches(0.45)
-            sw = (box.w - gap * (per_row - 1)) // per_row
             x = box.x + c * (sw + gap)
-            y = box.y + r * (row_h + row_gap)
+            y = top + r * (row_h + row_gap)
             kind = (
                 (MSO_SHAPE.PENTAGON if c == 0 else MSO_SHAPE.CHEVRON)
                 if style == "chevrons"
                 else MSO_SHAPE.ROUNDED_RECTANGLE
             )
             paint = self._fill_for(s, k, it["title"])
+            if ramp:
+                # Toward the background: lighter on a light slide, darker on a dark one.
+                paint = self.theme.primary.tinted(fade * (n - 1 - k) / (n - 1))
             head = self.shape(
                 slide,
                 kind,
@@ -2509,25 +2535,47 @@ class DeckBuilder:
                     f"Arrow {k + 1}",
                 )
             if has_detail:
-                d = Box(
-                    x,
-                    y + head_h + Inches(0.12),
-                    sw - (Inches(0.12) if style == "chevrons" else 0),
-                    row_h - head_h - Inches(0.12),
-                )
                 tb = self.shape(
                     slide,
                     MSO_SHAPE.ROUNDED_RECTANGLE,
-                    d,
+                    Box(x, y + head_h + d_gap, dw, detail_h),
                     f"Step {k + 1} detail",
                     self.theme.panel,
                     round_adj=0.05,
                 )
-                ps, raws = self._card_paras(
-                    {"text": it.get("text"), "bullets": it.get("bullets")},
-                    body_scale=1.0,
-                )
-                details.append((tb, ps, raws, [self.theme.text] * len(ps)))
+                details.append((tb, *cards[k]))
+        if draw_axis:
+            # What grows from the first step to the last, as one light arrow under them.
+            ay = (
+                top + head_h + d_gap + detail_h + self.unit
+                if has_detail and rows == 1
+                else box.y + box.h + self.unit
+            )
+            fill = self.theme.panel if dark else self.theme.primary.tinted(0.82)
+            # A pentagon with its point set explicitly: Keynote and Quick Look
+            # misdraw arrow shapes left at their default adjustments.
+            shp = self.shape(
+                slide,
+                MSO_SHAPE.PENTAGON,
+                Box(box.x, ay, box.w, arrow_h),
+                "Axis arrow",
+                fill,
+                round_adj=0.5,
+            )
+            self._write_group(
+                [
+                    (
+                        shp,
+                        [Para(axis, level=-1, bold=True)],
+                        [axis],
+                        [self.theme.text_on(fill)],
+                    )
+                ],
+                16,
+                "process axis",
+                align=PP_ALIGN.CENTER,
+                anchor=MSO_ANCHOR.MIDDLE,
+            )
         point = int(head_h * 0.5)
         self._write_group(
             heads,
@@ -2543,8 +2591,8 @@ class DeckBuilder:
             18,
             "step details",
             align=PP_ALIGN.LEFT,
-            inset_x=Inches(0.15),
-            inset_y=Inches(0.12),
+            inset_x=d_ix,
+            inset_y=d_iy,
         )
 
     def _diagram_boxes(self, slide, s, box: Box, cols: Optional[int] = None):

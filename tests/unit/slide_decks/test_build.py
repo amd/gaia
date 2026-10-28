@@ -788,3 +788,38 @@ def test_step_arrows_set_their_point_so_every_viewer_draws_the_same_shape(out):
     for name in ("Step 1", "Step 2", "Step 3"):
         assert shapes[name].adjustments[0] == pytest.approx(0.5)
         assert b'name="adj"' in etree.tostring(shapes[name]._element)
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_process_stages_deepen_in_order_and_cards_fit_their_text(out, theme):
+    """Stages read as a progression, and short cards are not stretched to the floor."""
+    from slidedeck.markdown import outline_from_markdown
+    from slidedeck.style import luminance
+
+    steps = "".join(f"### Stage {i}\nLead {i}\n- Detail {i}\n" for i in range(1, 5))
+    md = f"## Work grows stage by stage\nDiagram: process\n{steps}Axis: More effort\n"
+    path = out("ramp.pptx")
+    r = build_deck(outline_from_markdown(md, 1), path, theme=theme)
+    assert r["status"] == "ok", r
+    shapes = {s.name: s for s in Presentation(path).slides[0].shapes}
+    lum = [luminance(str(shapes[f"Step {i}"].fill.fore_color.rgb)) for i in range(1, 5)]
+    # Toward the background first: lighter on light slides, darker on dark ones.
+    assert lum == sorted(lum, reverse=(theme == "light")) and len(set(lum)) == 4
+    card, arrow = shapes["Step 1 detail"], shapes["Axis arrow"]
+    assert card.height < Presentation(path).slide_height // 3
+    assert card.top + card.height < arrow.top
+
+
+def test_a_line_under_a_diagram_title_is_its_subtitle(out):
+    """The framing line used to land in the footnote; it belongs under the title."""
+    from slidedeck.markdown import outline_from_markdown
+
+    md = (
+        "## Work grows stage by stage\nEach stage adds effort\nDiagram: process\n"
+        "### One\n- a\n### Two\n- b\n### Three\n- c\n"
+    )
+    path = out("sub.pptx")
+    assert build_deck(outline_from_markdown(md, 1), path)["status"] == "ok"
+    shapes = {s.name: s for s in Presentation(path).slides[0].shapes}
+    assert shapes["Subtitle"].text_frame.text == "Each stage adds effort"
+    assert shapes["Subtitle"].top + shapes["Subtitle"].height <= shapes["Step 1"].top

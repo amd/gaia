@@ -576,3 +576,69 @@ def test_what_grows_comes_only_from_an_explicit_list(tools, request_text, listed
     import tools as skill_tools
 
     assert skill_tools._grows_list(request_text) == listed
+
+
+def test_content_under_the_only_title_is_the_slide_not_a_cover(tools, tmp_path):
+    """'# Title' over KPIs with no '## ' slide used to become a cover with no KPIs."""
+    skill, fns, _r = tools
+    md = "# October KPIs\n\n- Revenue: $12.4M\n- Churn: 2.1%\n- NPS: 48\n"
+    with bind(_Asking("One slide with October KPIs."), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md,
+            output_path=str(tmp_path / "k.pptx"),
+            required_items=["$12.4M", "2.1%", "48"],
+        )
+    assert r["status"] == "ok", r
+    assert r["slides"] == 1
+
+
+def test_content_under_a_real_cover_is_an_error_not_dropped(tools, tmp_path):
+    skill, fns, _r = tools
+    md = "# Ferry plan\n- Crossings up 20%\n\n## Next steps\n- Order a boat\n"
+    with bind(_Asking(), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "c.pptx")
+        )
+    assert r["status"] == "error"
+    assert "Crossings up 20%" in r["problems"][0]
+
+
+_CHURN = (
+    "## Churn fell every quarter\n"
+    "```chart line\nsource: {src}\nQuarter,Churn %\nQ1,3.4\nQ2,2.9\nQ3,2.1\n```\n"
+)
+
+
+def test_made_up_numbers_must_be_labelled_on_the_slide(tools, tmp_path):
+    """Invented data the user invited is fine; presenting it as real is not."""
+    skill, fns, _r = tools
+    out = str(tmp_path / "churn.pptx")
+    with bind(_Asking("One slide on churn going down. Make up some numbers."), skill):
+        bare = fns["build_deck_from_markdown"](
+            markdown=_CHURN.format(src="CRM export, 2026"), output_path=out
+        )
+        labelled = fns["build_deck_from_markdown"](
+            markdown=_CHURN.format(src="Illustrative data, not actual results"),
+            output_path=out,
+        )
+    assert bare["status"] == "error"
+    assert "Illustrative data" in bare["problems"][0]
+    assert labelled["status"] == "ok", labelled
+
+
+@pytest.mark.parametrize(
+    "request_text, invites",
+    [
+        ("Make up some realistic numbers", True),
+        ("use dummy data for now", True),
+        ("a hypothetical scenario with sample numbers", True),
+        ("Make a slide about our Q3 revenue of $5.6M", False),
+        ("make sure it looks clean", False),
+    ],
+)
+def test_only_an_invitation_to_invent_numbers_triggers_the_label(
+    tools, request_text, invites
+):
+    import tools as skill_tools
+
+    assert bool(skill_tools._INVENTED.search(request_text)) is invites

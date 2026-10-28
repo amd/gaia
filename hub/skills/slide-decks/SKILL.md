@@ -214,8 +214,10 @@ Q3 26,5.6,4.1
 ```
 
 ## Support grows from one desk to a 24/7 team
+Each step adds channels and hours
 Diagram: process
 ### Help desk
+Answers within a day
 - Email tickets
 ### Live chat
 - Chat, 8am-6pm
@@ -232,15 +234,14 @@ bullets inside it. `Diagram: process` draws them as left-to-right stages
 `Axis:` names what grows along them, never a separate table or slide.
 Use this for stages, steps, levels or options, never a chart of made-up
 scores or a wall of bullets.
-Keep the user's own names for each stage. Under each, write 2-4 bullets of
-2-6 words, with no labels like `Focus:`. Use the user's terms in titles
+Keep the user's own names for each stage. Under each, a lead line, then 2-4
+bullets of 2-6 words, with no labels like `Focus:`. Use the user's terms in titles
 without inventing abbreviations. Keep `Axis:` under 10 words.
 
 ## Hard rules
 
-- **Exact slide count.** If the user named a number, build exactly that many
-  and pass it as `expected_slides` to the build and verify tools (a one-slide
-  request then gets no cover). Otherwise use the blueprint's default.
+- **Exact slide count.** Build exactly the number the user named (a one-slide
+  request gets no cover), else the blueprint's default.
 - **Every must-show item is visible on a slide.** List each number, name,
   event, section and message the request asks for and pass them as
   `required_items`: short facts and names, not the deck's overall message.
