@@ -325,6 +325,22 @@ class TestSDToolsMixinRejectsNonImages:
         assert list(tmp_path.iterdir()) == []
         assert mixin.sd_generations == []
 
+    def test_an_oversized_image_is_an_error_not_a_crash(
+        self, tmp_path, mock_lemonade_client, monkeypatch
+    ):
+        monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)
+        mock_lemonade_client.generate_image.return_value = {
+            "data": [{"b64_json": _png_b64()}]
+        }
+        mixin = SDToolsMixin()
+        mixin.init_sd(output_dir=str(tmp_path))
+
+        result = mixin._generate_image("a red fox")
+
+        assert result["status"] == "error"
+        assert "not a readable image" in result["error"]
+        assert list(tmp_path.iterdir()) == []
+
     def test_file_missing_after_save_is_an_error(self, tmp_path, mock_lemonade_client):
         mock_lemonade_client.generate_image.return_value = {
             "data": [{"b64_json": _png_b64()}]

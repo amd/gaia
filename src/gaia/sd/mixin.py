@@ -72,7 +72,7 @@ def image_problem(image_bytes: bytes) -> Optional[str]:
         with Image.open(io.BytesIO(image_bytes)) as img:
             img.load()
             extrema = img.convert("RGB").getextrema()
-    except (OSError, SyntaxError, ValueError) as e:
+    except (OSError, SyntaxError, ValueError, Image.DecompressionBombError) as e:
         return f"the data is not a readable image ({e})"
     if all(low == high for low, high in extrema):
         return "the image is a single flat colour, so generation failed on the server"
