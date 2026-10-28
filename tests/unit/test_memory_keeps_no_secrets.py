@@ -251,6 +251,19 @@ def test_card_groups_do_not_cross_a_newline(newline):
     assert MemoryMixin._mask_credentials(text) == text
 
 
+@pytest.mark.parametrize(
+    "text",
+    (
+        "sales_2024_report.pdf",
+        "invoice-2024-march.pdf",
+        "Source /docs/sales_2024_report.pdf: SHA256 abc",
+    ),
+)
+def test_lowercase_filenames_are_not_masked_as_generic_tokens(text):
+    assert not MemoryMixin._looks_like_credential(text)
+    assert MemoryMixin._mask_credentials(text) == text
+
+
 def test_phone_lists_and_tracking_numbers_are_not_masked():
     texts = (
         "+49 30 12345678 or +49 89 98765432",
