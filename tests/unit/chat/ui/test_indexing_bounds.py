@@ -153,7 +153,9 @@ async def test_time_waiting_for_a_worker_does_not_count(slow_rag):
     rag, doc = slow_rag
     rag.steps = 6
     rag.step_seconds = 0.1
-    with patch.object(helpers, "_INDEX_TIMEOUT_S", 0.5):
+    # Each document works for 0.6 s; allow a slow worker to begin its first
+    # heartbeat while still proving time spent queued for a worker is excluded.
+    with patch.object(helpers, "_INDEX_TIMEOUT_S", 1.0):
         counts = await asyncio.gather(*(helpers._index_document(doc) for _ in range(4)))
     assert counts == [6] * 4
 

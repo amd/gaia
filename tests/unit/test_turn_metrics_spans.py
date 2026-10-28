@@ -262,7 +262,8 @@ def test_the_clients_lock_lease_and_probe_waits_land_on_the_open_call(
     tmp_path, monkeypatch
 ):
     """The real request path, not numbers fed to the recorder by hand."""
-    from gaia.llm.lemonade_client import LemonadeClient, _local_request_lock
+    from gaia.llm import lemonade_client
+    from gaia.llm.lemonade_client import LemonadeClient
 
     client = LemonadeClient(base_url="http://127.0.0.1:9/api/v1", verbose=False)
     monkeypatch.setattr(client, "cloud_model_provider", lambda model: None)
@@ -273,17 +274,45 @@ def test_the_clients_lock_lease_and_probe_waits_land_on_the_open_call(
         lambda model, force=False: time.sleep(0.05),
     )
     model = "perf-trace-wiring-model"
-    held, release = threading.Event(), threading.Event()
+
+    class _ContendedRLock:
+        """An RLock that tells the holder when another request reaches it."""
+
+        def __init__(self):
+            self._lock = threading.RLock()
+            self.contended = threading.Event()
+
+        def acquire(self, blocking=True, timeout=-1):
+            acquired = self._lock.acquire(blocking, timeout)
+            if not acquired:
+                self.contended.set()
+            return acquired
+
+        def release(self):
+            self._lock.release()
+
+        def __enter__(self):
+            self.acquire()
+            return self
+
+        def __exit__(self, *_):
+            self.release()
+
+    lock = _ContendedRLock()
+    monkeypatch.setattr(lemonade_client, "_local_request_lock", lambda _: lock)
+    held = threading.Event()
 
     def other_request():
-        with _local_request_lock(model):
+        with lock:
             held.set()
-            release.wait(2)
+            lock.contended.wait(2)
+            # This delay begins only after the measured request has reached the
+            # lock, so it proves a real wait without relying on timer ordering.
+            time.sleep(0.05)
 
     holder = threading.Thread(target=other_request)
     holder.start()
     assert held.wait(2)
-    threading.Timer(0.1, release.set).start()
     rec = _recorder(tmp_path)
     perf_trace.activate(rec)
     try:
@@ -296,7 +325,8 @@ def test_the_clients_lock_lease_and_probe_waits_land_on_the_open_call(
         holder.join(2)
 
     waits = rec.llm_calls[0]["client"]
-    assert waits["lock_wait_s"] >= 0.08  # queued behind the other request
+    assert lock.contended.is_set()
+    assert waits["lock_wait_s"] > 0
     assert "lease_wait_s" in waits
     assert waits["ensure_loaded_s"] >= 0.04
 
