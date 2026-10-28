@@ -130,19 +130,19 @@ def _credential_scan_seconds(text):
 @pytest.mark.parametrize("name", LONG_INPUTS)
 def test_masking_stays_fast_on_long_input(name):
     text = LONG_INPUTS[name]
-    smaller = text[: len(text) // 2]
+    smaller = text[: len(text) // 4]
 
     # The minimum absorbs an isolated scheduling pause on a shared xdist runner.
-    # Comparing N/2 to N catches super-linear regex backtracking independently
+    # Comparing N/4 to N catches super-linear regex backtracking independently
     # of how busy that runner happens to be.
     smaller_seconds = min(_credential_scan_seconds(smaller) for _ in range(3))
     full_seconds = min(_credential_scan_seconds(text) for _ in range(3))
 
     # Preserve a generous escape hatch for a genuine pathological input.
     assert full_seconds < 10.0
-    # Linear growth is about 2x. The floor avoids overreacting to timer noise
-    # when a small input completes faster than the scheduler can resolve.
-    assert full_seconds <= max(smaller_seconds * 4, 0.05)
+    # Linear growth is about 4x and quadratic about 16x. The floor avoids
+    # overreacting to timer noise when a small input finishes near-instantly.
+    assert full_seconds <= max(smaller_seconds * 8, 0.05)
 
 
 def test_remember_refuses_a_pin(store):
