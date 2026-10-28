@@ -161,15 +161,17 @@ def test_exit_codes_are_distinct_and_the_smoke_test_checks_them():
 
 
 def test_running_app_refusal_retries_for_a_bounded_time_before_failing():
-    body = re.search(r"^Function AbortIfRunning\n(.*?)^FunctionEnd", _nsi(), re.M | re.S)
+    body = re.search(
+        r"^Function AbortIfRunning\n(.*?)^FunctionEnd", _nsi(), re.M | re.S
+    )
     assert body, "gaia-setup.nsi no longer checks a running app before install"
     code = body.group(1)
-    assert 'StrCpy $R6 20' in code
-    assert 'IntOp $R6 $R6 - 1' in code
-    assert 'Sleep 500' in code
-    assert 'Goto wait_for_file' in code
+    assert "StrCpy $R6 20" in code
+    assert "IntOp $R6 $R6 - 1" in code
+    assert "Sleep 500" in code
+    assert "Goto wait_for_file" in code
     assert 'DetailPrint "Waiting for $R8 to be released..."' in code
-    assert 'SetErrorLevel ${EXIT_RUNNING}' in code
+    assert "SetErrorLevel ${EXIT_RUNNING}" in code
 
 
 def test_every_section_is_ordered_ahead_of_the_code_that_names_it():
