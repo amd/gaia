@@ -31,7 +31,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
-from .outline import OutlineError
+from .outline import CHART_TYPES, OutlineError
 
 _BULLET = re.compile(r"^(\s*)(?:[-*+•]|\d+[.)])\s+(.*)$")
 _TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
@@ -82,6 +82,16 @@ def _csv_block(title: str, lang: str, lines: List[str]) -> Dict[str, Any]:
     """A ```chart / ```table / ```kpi block: optional 'key: value' lines, then CSV."""
     parts = re.split(r"[\s:]+", lang.strip(), maxsplit=1)
     kind = parts[0]
+    first = next((i for i, line in enumerate(lines) if line.strip()), None)
+    if (
+        kind == "chart"
+        and len(parts) == 1
+        and first is not None
+        and lines[first].strip().lower() in CHART_TYPES
+    ):
+        # "```chart" with the chart type alone on the next line.
+        parts = [kind, lines[first].strip().lower()]
+        lines = lines[:first] + lines[first + 1 :]
     options: Dict[str, Any] = {}
     body: List[str] = []
     for line in lines:

@@ -642,3 +642,17 @@ def test_only_an_invitation_to_invent_numbers_triggers_the_label(
     import tools as skill_tools
 
     assert bool(skill_tools._INVENTED.search(request_text)) is invites
+
+
+def test_a_chart_type_on_its_own_line_is_read(tools, tmp_path):
+    """'```chart' then 'bar' on the next line used to fail as a chart with no data."""
+    skill, fns, _r = tools
+    md = (
+        "## West led every quarter\n"
+        "```chart\nbar\nsource: finance_q3.xlsx, 2026\nRegion,Revenue\nWest,5.6\nEast,4.1\n```\n"
+    )
+    with bind(_Asking(), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "c.pptx")
+        )
+    assert r["status"] == "ok", r
