@@ -2150,6 +2150,114 @@ _CLOUD_NON_STREAMING: set = set()
 
 _NON_STREAMING_LOADED = False
 
+# Native tool-calling support learned by probe, ``{model_id: bool}``. Consulted
+# only when the catalog's labels don't advertise ``tool-calling``.
+_CLOUD_TOOL_CALLING: Dict[str, bool] = {}
+_TOOL_CALLING_LOADED = False
+
+
+def _load_tool_calling() -> None:
+    """Seed the learned tool-calling map from ``gateway.json``, once per process."""
+    global _TOOL_CALLING_LOADED
+    if _TOOL_CALLING_LOADED:
+        return
+    try:
+        from gaia.llm.gateway import GatewayState
+
+        state = GatewayState.load()
+    except Exception as e:  # noqa: BLE001 - a learned preference, never fatal
+        log.warning(f"Could not read learned tool-calling support: {e}")
+        _TOOL_CALLING_LOADED = True  # an unreadable file is not retried per call
+        return
+    with _CLOUD_LOCK:
+        # Probed answers from this process win over the file's older ones.
+        loaded = {m: True for m in state.tool_calling_models}
+        loaded.update({m: False for m in state.no_tool_calling_models})
+        loaded.update(_CLOUD_TOOL_CALLING)
+        _CLOUD_TOOL_CALLING.update(loaded)
+        # Marked only once filled, so a concurrent reader never sees it empty.
+        _TOOL_CALLING_LOADED = True
+
+
+def learned_tool_calling(model_id: Optional[str]) -> Optional[bool]:
+    """What a probe found about *model_id*'s native tool calling, or None."""
+    if not model_id:
+        return None
+    _load_tool_calling()
+    return _CLOUD_TOOL_CALLING.get(model_id)
+
+
+def record_tool_calling(model_id: str, supported: bool) -> None:
+    """Remember a probe result, in memory and in ``gateway.json``."""
+    _load_tool_calling()
+    with _CLOUD_LOCK:
+        _CLOUD_TOOL_CALLING[model_id] = supported
+        yes = sorted(m for m, ok in _CLOUD_TOOL_CALLING.items() if ok)
+        no = sorted(m for m, ok in _CLOUD_TOOL_CALLING.items() if not ok)
+    try:
+        from gaia.llm.gateway import GatewayState
+
+        state = GatewayState.load()
+        state.tool_calling_models, state.no_tool_calling_models = yes, no
+        state.save()
+    except Exception as e:  # noqa: BLE001 - the in-memory map still holds
+        log.warning(f"Could not persist tool-calling support for {model_id}: {e}")
+
+
+_PROBE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "report_ready",
+        "description": "Report that you are ready.",
+        "parameters": {
+            "type": "object",
+            "properties": {"ready": {"type": "boolean"}},
+            "required": ["ready"],
+        },
+    },
+}
+
+
+#: The probe runs while a caller waits on readiness; it must not hang it.
+PROBE_TIMEOUT_S = 30
+
+
+def probe_cloud_tool_calling(client: "LemonadeClient", model_id: str) -> Optional[bool]:
+    """Ask *model_id* to call a trivial tool once; record and return whether it did.
+
+    ``None`` when the reply proves nothing (cut off at the token limit, or
+    empty, as a reasoning model can be): nothing is recorded, so the next start
+    probes again. Raises ``LemonadeClientError`` when the request itself fails,
+    so a network error is never recorded as "no tool calling".
+    """
+    response = client.chat_completions(
+        model=model_id,
+        messages=[
+            {"role": "user", "content": "Call the report_ready tool with ready=true."}
+        ],
+        tools=[_PROBE_TOOL],
+        max_tokens=1024,
+        stream=False,
+        auto_download=False,
+        timeout=PROBE_TIMEOUT_S,
+    )
+    choice = (response.get("choices") or [{}])[0]
+    message = choice.get("message") or {}
+    calls = message.get("tool_calls") or []
+    if any((c.get("function") or {}).get("name") == "report_ready" for c in calls):
+        supported = True
+    elif choice.get("finish_reason") == "stop" and (message.get("content") or calls):
+        supported = False  # answered, cleanly and fully, without calling it
+    else:
+        log.info(
+            f"Native tool-calling probe for {model_id} was inconclusive "
+            f"(finish_reason={choice.get('finish_reason')!r}); not recorded"
+        )
+        return None
+    record_tool_calling(model_id, supported)
+    log.info(f"Native tool calling for {model_id}: {supported} (probed)")
+    return supported
+
 
 def _load_non_streaming() -> None:
     """Seed the learned set from ``~/.gaia/gateway.json``, once per process.
@@ -2326,8 +2434,10 @@ def is_tool_calling_model(model_id: Optional[str]) -> bool:
             return mr.tool_calling
     cloud = _CLOUD_MODELS.get(model_id)
     if cloud is not None:
-        # Gateways advertise this per model; trust them over the GGUF default.
-        return bool(cloud["tool_calling"])
+        # A label is authoritative; without one, what a probe learned decides.
+        if cloud["tool_calling"]:
+            return True
+        return bool(learned_tool_calling(model_id))
     return True  # Unknown GGUF: optimistic default per Tier 0 findings
 
 

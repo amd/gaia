@@ -1015,6 +1015,7 @@ class LemonadeManager:
                         return False
 
                 if is_cloud:
+                    cls.learn_tool_calling(client, chat_model)
                     cls._ready_for_cloud = True
                     cls._remember_server(client)
                     cls._log.debug(
@@ -1254,6 +1255,36 @@ class LemonadeManager:
         )
         if not quiet and not already_announced:
             cls.print_ceiling_message(cls._context_size, min_context_size)
+
+    @classmethod
+    def learn_tool_calling(cls, client: "LemonadeClient", model: str) -> None:
+        """Probe a cloud model's native tool calling once, when nothing says.
+
+        A failed probe is logged and left unrecorded, so the next start tries
+        again; until then the model runs on the in-text JSON tool format.
+        """
+        from gaia.llm.lemonade_client import (
+            cloud_model_info,
+            learned_tool_calling,
+            probe_cloud_tool_calling,
+        )
+
+        info = cloud_model_info(model)
+        if (
+            info is None
+            or info.get("tool_calling")
+            or learned_tool_calling(model) is not None
+        ):
+            return
+        try:
+            probe_cloud_tool_calling(client, model)
+        except LemonadeClientError as e:
+            cls._log.warning(
+                "Could not probe native tool calling for %s (%s); it runs on the "
+                "in-text tool format this session.",
+                model,
+                e,
+            )
 
     @classmethod
     def _autostart(

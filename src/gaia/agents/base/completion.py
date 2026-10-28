@@ -213,17 +213,25 @@ def _payload(value: Any) -> dict:
     return tool_result_dict(value) or {}
 
 
+#: Marks of a code identifier rather than a file or folder name: a leading
+#: underscore, a call, a scope or an assignment.
+_CODE_NAME = re.compile(r"^_|[()=<>]|::")
+
+
 def _path_token(match: re.Match) -> str | None:
     value = next(g for g in match.groups() if g is not None).strip()
     value = value.lstrip("([").rstrip(".,;:)]?!")
     if not value or "://" in value or "@" in value or "\x00" in value:
         return None
+    if "<" in value or ">" in value:
+        return None  # a placeholder such as `<folder>/<name>`, not a real path
     quoted = any(match.group(i) is not None for i in (1, 2, 3))
     suffix = value.rsplit(".", 1)[-1].lower()
     # Dotted initials (U.S, e.g) are abbreviations, not file names.
     abbreviation = all(len(part) == 1 for part in value.split("."))
     if (
-        quoted
+        # A quoted code name is not a destination: `_daemon_alive`, `run()`.
+        (quoted and not _CODE_NAME.search(value))
         or "/" in value
         or "\\" in value
         or (
@@ -447,13 +455,18 @@ def _normalize_key(path: str, base: str) -> str:
     ):
         # A drive-lettered path off Windows: no filesystem here can resolve it.
         return ntpath.normcase(ntpath.normpath(ntpath.join(base, path)))
-    # Write tools report resolved paths; junctions and macOS /tmp are symlinks.
     # Prose names folders as `%TEMP%` or `$HOME`; tools report them expanded.
-    return os.path.normcase(
-        os.path.realpath(
-            os.path.join(base, os.path.expandvars(os.path.expanduser(path)))
-        )
-    )
+    joined = os.path.join(base, os.path.expandvars(os.path.expanduser(path)))
+    if joined.startswith(("\\\\", "//")):
+        # A network share: resolving it is a network round trip per mention,
+        # and an unreachable server raises. Its identity is its text.
+        return os.path.normcase(os.path.normpath(joined))
+    # Write tools report resolved paths; junctions and macOS /tmp are symlinks.
+    try:
+        return os.path.normcase(os.path.realpath(joined))
+    except OSError:
+        # Unresolvable (a vanished mount, a device name): the text is the key.
+        return os.path.normcase(os.path.normpath(joined))
 
 
 class CompletionEvidence:
@@ -549,6 +562,11 @@ class CompletionEvidence:
 
     def _readable(self, path: str, validator: Any = None) -> bool:
         """Whether the read boundary allows inspecting *path*, without prompting."""
+        unc = ("\\\\", "//")
+        if path.startswith(unc) and not self.root.startswith(unc):
+            # Never inside a local workspace, and asking a validator about it
+            # resolves it: a network round trip that can raise.
+            return False
         if validator is not None:
             allowed, _ = validator.validate_read(path, prompt_user=False)
             return bool(allowed)

@@ -220,6 +220,8 @@ class TestAuth:
             "enabled_models",
             "active_model",
             "non_streaming_models",
+            "tool_calling_models",
+            "no_tool_calling_models",
             "unavailable_models",
         }
 

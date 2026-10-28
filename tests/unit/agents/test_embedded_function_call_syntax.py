@@ -227,3 +227,26 @@ class TestProcessQueryDispatchesEmbeddedFunctionCallSyntax:
         text = result.get("result") if isinstance(result, dict) else str(result)
         # Raw internal call syntax never reached the user-visible output.
         assert "remember(" not in (text or "")
+
+
+def test_a_name_followed_by_a_space_and_paren_is_prose(agent):
+    # "tree (v2 layout)" in an answer once failed a finished turn as a broken call.
+    _register_remember(agent)
+    text = "The remember (see docs) step keeps a fact."
+    with patch.object(agent, "_uses_native_tool_calls", return_value=False):
+        assert agent._extract_function_call_tool_syntax(text) is None
+
+
+def test_a_native_tool_calling_model_never_has_prose_parsed_as_a_call(agent):
+    calls = _register_remember(agent)
+    text = 'Use remember(fact="x") to store it.'
+    with patch.object(agent, "_uses_native_tool_calls", return_value=True):
+        assert agent._extract_function_call_tool_syntax(text) is None
+    assert calls == []
+
+
+def test_the_text_path_still_runs_a_real_python_style_call(agent):
+    _register_remember(agent)
+    with patch.object(agent, "_uses_native_tool_calls", return_value=False):
+        parsed = agent._extract_function_call_tool_syntax('remember(fact="x")')
+    assert parsed == {"tool": "remember", "tool_args": {"fact": "x"}}

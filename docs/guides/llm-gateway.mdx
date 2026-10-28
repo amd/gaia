@@ -154,6 +154,17 @@ one delayed first answer per model, then normal speed.
 This is why the default is a model that streams: `DeepSeek-V4.1-Flash`, or
 `Gemma-4-31B` when the gateway doesn't offer it.
 
+### Native tool calling
+
+A model that takes tools natively (OpenAI `tools=`) calls them more reliably
+than one that writes tool calls as text. The gateway's catalog doesn't label
+which models do, so the first time GAIA readies a gateway model it sends one
+tiny request with a single tool and records the answer in
+`~/.gaia/gateway.json` (`tool_calling_models` / `no_tool_calling_models`).
+Models that call the tool get native tool schemas from then on; the others keep
+the in-text tool format. A probe that fails on the network is not recorded, so
+the next start tries again. Delete the model from those lists to re-probe it.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |

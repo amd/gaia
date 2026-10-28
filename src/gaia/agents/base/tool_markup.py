@@ -84,6 +84,8 @@ class MalformedToolMarkup(ValueError):
 class MarkupToolCall:
     name: str
     args: Dict[str, Any] = field(default_factory=dict)
+    # XML parameters carry text only; the caller types them against the schema.
+    raw_strings: bool = False
 
 
 @dataclass
@@ -108,6 +110,113 @@ def _outside_code(pattern: re.Pattern, text: str, pos: int = 0) -> Optional[int]
 def has_tool_markup(text: str) -> bool:
     """Whether *text* carries tool-call markup of any supported format."""
     return bool(text) and _outside_code(_ANY_MARKUP, text) is not None
+
+
+_XML_OPEN = re.compile(r"<function_calls>|<invoke\s+name\s*=")
+_XML_INVOKE = re.compile(r"<invoke\s+name\s*=\s*\"([^\"]*)\"\s*>")
+_XML_PARAM = re.compile(
+    r"<parameter\s+name\s*=\s*\"([^\"]*)\"\s*>(.*?)</parameter>", re.DOTALL
+)
+_JSON_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+
+
+def parse_text_tool_calls(text: str) -> Optional[MarkupParse]:
+    """Tool calls a model wrote as text in any supported dialect, or ``None``.
+
+    DeepSeek DSML and special tokens, Anthropic-style ``<invoke>`` XML, and
+    Hermes/Qwen ``<tool_call>{json}</tool_call>``.
+
+    Raises:
+        MalformedToolMarkup: the markup is there but truncated or unparseable.
+    """
+    found = parse_deepseek_tool_calls(text)
+    if found is not None or not text:
+        return found
+    start = _outside_code(_XML_OPEN, text)
+    # No closing tag and no parameter is prose about the format, not a call.
+    if start is not None and ("</invoke>" in text or "<parameter" in text[start:]):
+        return _parse_xml_invokes(text, start)
+    start = _outside_code(re.compile(r"<tool_call>"), text)
+    if start is not None:
+        return _parse_json_calls(text, start)
+    return None
+
+
+def _parse_xml_invokes(text: str, start: int) -> MarkupParse:
+    calls: List[MarkupToolCall] = []
+    pos, spans = start, []
+    while True:
+        # Every invoke, not just the first, must sit outside fenced/inline code.
+        at = _outside_code(_XML_INVOKE, text, pos)
+        if at is None:
+            break
+        opening = _XML_INVOKE.match(text, at)
+        close = text.find("</invoke>", opening.end())
+        if close < 0:
+            raise MalformedToolMarkup(
+                f"Tool call '{opening.group(1) or '?'}' was cut off before </invoke>."
+            )
+        name = opening.group(1).strip()
+        if not name:
+            raise MalformedToolMarkup("<invoke> tag has no tool name.")
+        body = text[opening.end() : close]
+        args = {
+            m.group(1): _strip_one_newline(m.group(2))
+            for m in _XML_PARAM.finditer(body)
+        }
+        if "<parameter" in _XML_PARAM.sub("", body):
+            raise MalformedToolMarkup(
+                f"A parameter of tool call '{name}' was cut off before </parameter>."
+            )
+        calls.append(MarkupToolCall(name=name, args=args, raw_strings=True))
+        spans.append((opening.start(), close + len("</invoke>")))
+        pos = close + len("</invoke>")
+    if not calls:
+        raise MalformedToolMarkup("Tool-call markup contained no complete <invoke>.")
+    prose = text
+    for lo, hi in reversed(spans):
+        prose = prose[:lo] + prose[hi:]
+    prose = re.sub(r"</?function_calls>", "", prose)
+    return MarkupParse(calls=calls, prose=prose.strip())
+
+
+def _parse_json_calls(text: str, start: int) -> MarkupParse:
+    calls: List[MarkupToolCall] = []
+    for match in _JSON_CALL.finditer(text, start):
+        try:
+            payload = json.loads(match.group(1))
+        except json.JSONDecodeError as exc:
+            raise MalformedToolMarkup(
+                f"<tool_call> body is not valid JSON: {exc}"
+            ) from exc
+        if not isinstance(payload, dict) or not payload.get("name"):
+            raise MalformedToolMarkup("<tool_call> body has no tool name.")
+        args = payload.get("arguments", payload.get("parameters", {}))
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError as exc:
+                raise MalformedToolMarkup(
+                    f"Arguments of '{payload['name']}' are not valid JSON: {exc}"
+                ) from exc
+        if not isinstance(args, dict):
+            raise MalformedToolMarkup(
+                f"Arguments of '{payload['name']}' must be an object."
+            )
+        calls.append(MarkupToolCall(name=str(payload["name"]), args=args))
+    if not calls:
+        raise MalformedToolMarkup(
+            "A <tool_call> block was cut off before </tool_call>."
+        )
+    return MarkupParse(calls=calls, prose=_JSON_CALL.sub("", text).strip())
+
+
+def _strip_one_newline(value: str) -> str:
+    if value.startswith("\n"):
+        value = value[1:]
+    if value.endswith("\n"):
+        value = value[:-1]
+    return value
 
 
 def parse_deepseek_tool_calls(text: str) -> Optional[MarkupParse]:
