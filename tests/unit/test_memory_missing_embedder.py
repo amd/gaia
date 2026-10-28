@@ -8,6 +8,7 @@ starts on; when the pull fails, the session reports the pull error and says a
 restart retries it. Every test mocks Lemonade.
 """
 
+import threading
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -22,7 +23,9 @@ from gaia.agents.base.memory import (
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
+    ModelDownloadCancelledError,
 )
+from gaia.llm.retry import current_cancel_check
 
 NOT_FOUND = RuntimeError(
     "Embedding failed: Error generating embeddings: Request failed with status "
@@ -144,16 +147,59 @@ def test_an_unprefixed_registry_id_registers_under_its_user_name(tmp_path):
         host.memory_store.close()
 
 
-def test_the_download_is_announced_on_the_console(tmp_path):
+def test_the_download_is_announced_and_progress_reaches_the_console(tmp_path):
     host = _Host()
     host.console = MagicMock()
-    with _lemonade([NOT_FOUND, VECTOR]):
+
+    def downloading(name, on_progress=None, **_kwargs):
+        for percent in (0, 3, 5, 9, 10, 100):
+            on_progress({"event": "progress", "percent": percent})
+        return True
+
+    with _lemonade([NOT_FOUND, VECTOR]) as client_cls:
+        client_cls.return_value.ensure_model_downloaded.side_effect = downloading
         host.init_memory(db_path=tmp_path / "memory.db")
     try:
-        notice = host.console.print_info.call_args[0][0]
+        notice = host.console.print_info.call_args_list[0].args[0]
         assert f"Downloading the embedding model '{DEFAULT_EMBEDDING_MODEL}'" in notice
+        assert [
+            call.args[0] for call in host.console.report_progress.call_args_list
+        ] == [
+            f"Downloading the embedding model '{DEFAULT_EMBEDDING_MODEL}' for memory: 0%",
+            f"Downloading the embedding model '{DEFAULT_EMBEDDING_MODEL}' for memory: 5%",
+            f"Downloading the embedding model '{DEFAULT_EMBEDDING_MODEL}' for memory: 10%",
+            f"Downloading the embedding model '{DEFAULT_EMBEDDING_MODEL}' for memory: 100%",
+        ]
     finally:
         host.memory_store.close()
+
+
+def test_a_cancelled_pull_leaves_memory_off_and_reports_the_reason(tmp_path):
+    host = _Host()
+    host.console = MagicMock()
+    host.console.cancelled = threading.Event()
+    host.console.cancelled.set()
+
+    def cancelled(*_args, **_kwargs):
+        cancel_check = current_cancel_check()
+        assert cancel_check is not None and cancel_check()
+        raise ModelDownloadCancelledError("Download stopped at your request.")
+
+    with _lemonade([NOT_FOUND]) as client_cls:
+        client_cls.return_value.ensure_model_downloaded.side_effect = cancelled
+        host.init_memory(db_path=tmp_path / "memory.db")
+
+    assert host.memory_store is None
+    assert host._memory_unavailable_reason == MEMORY_UNAVAILABLE_MODEL_NOT_PULLED
+    assert "was cancelled" in host.memory_unavailable_message()
+    assert (
+        "Restart the agent to retry the download" in host.memory_unavailable_message()
+    )
+    assert (
+        host.console.print_info.call_args_list[-1]
+        .args[0]
+        .startswith("Embedding download cancelled")
+    )
 
 
 def test_a_pull_that_does_not_fix_the_probe_still_reports_not_pulled(tmp_path):
