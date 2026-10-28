@@ -178,7 +178,10 @@ The v2 keystone (#2016): NL request in, the agent reasons and chains its tools, 
 exactly one `final` or `error`. This is the one loop every v2 front-door relays to. The **host
 mints `run_id`** and **pushes** the transcript slice in `context`, so the sidecar
 stays stateless. A slice too big for the model's window beside the agent's prompt
-keeps only its newest whole turns, announced in a `status` event. A single turn too large for the whole budget is retained with its longest messages truncated and a note saying how much, so its answer stays in view. The typed client wraps it (#2097): `query()` returns an async
+keeps only its newest whole turns, announced in a `status` event. A single turn
+bigger than the whole budget is kept with its longest messages cut and a note saying
+how much, so its answer stays in view. The typed client wraps it (#2097): `query()`
+returns an async
 iterator of typed `QueryEvent`s; `cancelQuery(runId)` stops the run between steps:
 
 ```ts
@@ -307,9 +310,7 @@ for (;;) {
 Other endpoints: `POST /cancel`, `DELETE /session/{id}`, `GET /session/{id}/history`,
 and the runtime memory toggle `POST /memory` + `GET /memory/{id}` (enabling memory that
 was never initialized returns **409**, never a silent no-op). One turn at a time per
-session — an overlapping `/query` returns **409**. A `/confirm-tool` decision with no
-prompt pending (already answered, timed out, or never asked) also returns **409**, so
-check the status instead of assuming the run resumed. See `SPEC.md` for the full table.
+session — an overlapping `/query` returns **409**. See `SPEC.md` for the full table.
 
 ### Full autonomy (`/v1/email/agent/autonomy/*`)
 
