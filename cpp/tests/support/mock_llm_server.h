@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <deque>
+#include <map>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -39,6 +40,17 @@ static const std::string kModelsList = R"({"data":[{"id":"mock-model"}]})";
 
 // Load response
 static const std::string kLoadOk = R"({"status":"ok"})";
+
+/// One request to a media or model-management route, as the server saw it.
+struct RecordedRequest {
+    std::string path;
+    std::string contentType;
+    std::string body;                          ///< raw body (empty for multipart)
+    std::map<std::string, std::string> fields; ///< multipart text fields
+    std::string fileName;                      ///< multipart "file" part's filename
+    std::string fileContentType;               ///< multipart "file" part's Content-Type
+    std::string fileContent;                   ///< multipart "file" part's bytes
+};
 
 class MockLlmServer {
 public:
@@ -133,6 +145,23 @@ public:
     /// Answer POST /api/v1/load with this status (200 by default).
     void setLoadStatus(int status) { loadStatus_ = status; }
 
+    /// Answer POST @p path (/api/v1/images/generations, /audio/transcriptions or
+    /// /pull) with @p status and @p body; queued per path, the last one repeats.
+    void pushRouteResponse(const std::string& path, int status, const std::string& body) {
+        std::lock_guard<std::mutex> lk(mu_);
+        routes_[path].push_back({body, status, {}});
+    }
+
+    /// Requests seen on /load, /pull, /images/generations and /audio/transcriptions.
+    std::vector<RecordedRequest> recorded(const std::string& path) const {
+        std::lock_guard<std::mutex> lk(mu_);
+        std::vector<RecordedRequest> out;
+        for (const auto& r : recorded_) {
+            if (r.path == path) out.push_back(r);
+        }
+        return out;
+    }
+
     void clearQueue() {
         std::lock_guard<std::mutex> lk(mu_);
         responseQueue_.clear();
@@ -161,7 +190,8 @@ private:
             res.set_content(reportModelLoaded_ ? kHealthOk : kHealthNoModel, "application/json");
         });
 
-        server_->Post("/api/v1/load", [this](const httplib::Request&, httplib::Response& res) {
+        server_->Post("/api/v1/load", [this](const httplib::Request& req, httplib::Response& res) {
+            record(req);
             ++loadCount_;
             res.status = loadStatus_.load();
             res.set_content(res.status == 200 ? kLoadOk : R"({"error":"model failed to load"})", "application/json");
@@ -220,7 +250,41 @@ private:
                           res.set_content(qr.body, "application/json");
                       });
 
+        for (const char* path : {"/api/v1/images/generations", "/api/v1/audio/transcriptions", "/api/v1/pull"}) {
+            server_->Post(path, [this, path](const httplib::Request& req, httplib::Response& res) {
+                record(req);
+                std::lock_guard<std::mutex> lk(mu_);
+                auto& queue = routes_[path];
+                if (queue.empty()) {
+                    res.status = 404;
+                    res.set_content(R"({"error":{"message":"no response scripted"}})", "application/json");
+                    return;
+                }
+                res.status = queue.front().status;
+                res.set_content(queue.front().body, "application/json");
+                if (queue.size() > 1) queue.pop_front();
+            });
+        }
+
         registerGenericHttpRoutes();
+    }
+
+    void record(const httplib::Request& req) {
+        RecordedRequest r;
+        r.path = req.path;
+        r.contentType = req.get_header_value("Content-Type");
+        r.body = req.body;
+        for (const auto& [name, part] : req.files) {
+            if (part.filename.empty()) {
+                r.fields[name] = part.content;
+            } else {
+                r.fileName = part.filename;
+                r.fileContentType = part.content_type;
+                r.fileContent = part.content;
+            }
+        }
+        std::lock_guard<std::mutex> lk(mu_);
+        recorded_.push_back(std::move(r));
     }
 
     /// OpenAI-style token stream terminated by the [DONE] sentinel.
@@ -347,6 +411,8 @@ private:
     std::atomic<int> sseDelayMs_{0};
     std::atomic<int> sseEventsSent_{0};
     std::string modelsList_ = kModelsList;
+    std::map<std::string, std::deque<QueuedResponse>> routes_;
+    std::vector<RecordedRequest> recorded_;
     std::atomic<int> loadStatus_{200};
 };
 

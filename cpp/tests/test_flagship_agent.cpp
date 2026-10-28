@@ -245,6 +245,86 @@ TEST_F(FlagshipAgentTest, FastModeIsConversationOnly) {
     EXPECT_EQ(system.find("=== MEMORY (Persistent Second Brain) ==="), std::string::npos);
 }
 
+TEST_F(FlagshipAgentTest, MediaToolsAreRegisteredAndTheirSkillsListed) {
+    bench::MockLlmServer mock;
+    FlagshipOptions o = opts();
+    o.embeddedSkills.push_back({"image-gen", R"(---
+name: image-gen
+description: Draw pictures.
+metadata:
+  gaia:
+    tools_required:
+      - generate_image
+      - list_sd_models
+      - get_generation_history
+---
+
+Draw.
+)"});
+    o.embeddedSkills.push_back({"transcribe-meeting", R"(---
+name: transcribe-meeting
+description: Transcribe a meeting.
+metadata:
+  gaia:
+    tools_required:
+      - transcribe_media
+      - refine_transcript
+      - summarize_document
+      - query_documents
+      - remember
+---
+
+Go.
+)"});
+    FlagshipAgent agent(cfg(mock), o);
+    for (const char* t : {"generate_image", "list_sd_models", "get_generation_history", "transcribe_media",
+                          "refine_transcript", "take_screenshot"}) {
+        EXPECT_TRUE(agent.toolRegistry().hasTool(t)) << t;
+    }
+    const std::string catalog = agent.skillManager().catalogPrompt();
+    EXPECT_NE(catalog.find("image-gen"), std::string::npos) << catalog;
+    EXPECT_NE(catalog.find("transcribe-meeting"), std::string::npos) << catalog;
+
+    FlagshipAgent fast(cfg(mock), opts(/*fast=*/true));
+    EXPECT_FALSE(fast.toolRegistry().hasTool("generate_image"));
+    EXPECT_FALSE(fast.toolRegistry().hasTool("take_screenshot"));
+}
+
+TEST_F(FlagshipAgentTest, RefineTranscriptAsksTheSessionModelAndIndexesTheResult) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("1: Speaker A"));
+    FlagshipAgent agent(cfg(mock), opts());
+    const fs::path raw = root_ / "work" / "call.txt";
+    std::ofstream(raw, std::ios::binary) << "Hello there.";
+    std::ofstream(fs::u8path(raw.u8string() + ".timing.json"), std::ios::binary)
+        << R"({"segments":[{"start":0,"end":1,"text":"Hello there."}],"speakers":[]})";
+    json r = agent.toolbelt().refineTranscript({{"transcript_path", raw.u8string()}});
+    ASSERT_EQ(r["status"], "success") << r.dump();
+    ASSERT_EQ(mock.receivedBodies().size(), 1u);
+    const json body = json::parse(mock.receivedBodies()[0]);
+    EXPECT_EQ(body["model"], "Gemma-4-E4B-it-GGUF");
+    EXPECT_DOUBLE_EQ(body["temperature"].get<double>(), 0.2);
+    EXPECT_EQ(body["max_completion_tokens"], 4096);
+    ASSERT_EQ(body["messages"].size(), 1u);
+    EXPECT_EQ(body["messages"][0]["role"], "user");
+    EXPECT_NE(body["messages"][0]["content"].get<std::string>().find("1. Hello there."), std::string::npos);
+    EXPECT_EQ(r["speakers"], (json{"Speaker A"}));
+    EXPECT_EQ(r["indexed"], true) << r.dump();
+}
+
+TEST_F(FlagshipAgentTest, RefineTranscriptReportsAnEmptyModelReply) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(R"({"choices":[{"message":{"role":"assistant","content":""},"finish_reason":"length"}]})");
+    FlagshipAgent agent(cfg(mock), opts());
+    const fs::path raw = root_ / "work" / "call.txt";
+    std::ofstream(raw, std::ios::binary) << "Hello there.";
+    std::ofstream(fs::u8path(raw.u8string() + ".timing.json"), std::ios::binary)
+        << R"({"segments":[{"start":0,"end":1,"text":"Hello there."}],"speakers":[]})";
+    json r = agent.toolbelt().refineTranscript({{"transcript_path", raw.u8string()}});
+    EXPECT_EQ(r["status"], "error");
+    EXPECT_NE(r["error"].get<std::string>().find("finish_reason='length'"), std::string::npos) << r.dump();
+}
+
 TEST_F(FlagshipAgentTest, HistoryStubsOldToolOutputToFitTheWindow) {
     // Four ~10K-char (paged) results overflow a 16K window's 8K-token history budget.
     bench::MockLlmServer mock;

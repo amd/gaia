@@ -68,6 +68,9 @@ const char* const kToolRules = R"(
 - Anything live or recent on the web → search_web, then fetch_page (or fetch_webpage) on the best results. Cite the URLs you used.
 - Commands on this machine → run_shell_command. The user approves each run.
 - Images (png, jpg, gif, webp, bmp) → analyze_image, or answer_question_about_image for one question. Image analysis IS supported.
+- Audio and video recordings (mp4, mkv, mov, m4a, mp3, wav) → transcribe_media, then refine_transcript, then summarize_document on the refined file. Never refuse a recording as something you cannot process.
+- A picture the user asks you to make → call generate_image first; don't pre-announce it. If it errors, give its error in 1-2 sentences.
+- What is on the screen right now → take_screenshot, then analyze_image on the file it saves.
 - A result that was cut short carries an `artifact` handle: read_tool_output(artifact, entry=1) or offset paging returns the rest.
 
 **FILE SEARCH:** Start with a quick search (no `deep_search`). Use `deep_search=true` only if the user asks again after a quick search returns nothing. Multiple matches → show a numbered list and let the user pick.
@@ -186,6 +189,35 @@ FlagshipAgent::FlagshipAgent(const AgentConfig& config, FlagshipOptions options)
     ctx.cancelled = [this] { return isCancelled(); };
     ctx.askUser = options_.askUser;
     ctx.vision = visionReader();
+    ctx.lemonadeUrl = config.baseUrl;
+    ctx.lemonadeApiKey = config.lemonadeApiKey;
+    ctx.complete = [this](const std::string& prompt) {
+        const AgentConfig cfg = this->Agent::config();
+        // An explicit ceiling: the default truncated every section, and a reasoning model spent it all thinking.
+        const json request = {{"model", cfg.modelId}, {"temperature", 0.2}, {"max_completion_tokens", 4096},
+                              {"messages", json::array({{{"role", "user"}, {"content", prompt}}})}};
+        const json reply = json::parse(lemonade().chatCompletions(request));
+        const json& choice = reply.at("choices").at(0);
+        std::string out = choice.at("message").value("content", "");
+        for (auto open = out.find("<think>"); open != std::string::npos; open = out.find("<think>")) {
+            const auto close = out.find("</think>", open);
+            out.erase(open, close == std::string::npos ? std::string::npos : close + 8 - open);
+        }
+        if (out.find_first_not_of(" \n\t") == std::string::npos) {
+            const std::string reason = choice.contains("finish_reason") && choice["finish_reason"].is_string()
+                                           ? "'" + choice["finish_reason"].get<std::string>() + "'"
+                                           : "None";
+            throw std::runtime_error("The language model returned no transcript text for this section (finish_reason=" +
+                                     reason + "). The section may be too large for the model's reply budget — retry, "
+                                     "or transcribe a shorter recording.");
+        }
+        return out;
+    };
+    ctx.indexDocument = [this](const std::string& path) -> json {
+        const ToolInfo* tool = toolRegistry().findTool("index_document");
+        if (!tool || !tool->callback) throw std::runtime_error("index_document is not registered");
+        return tool->callback(json{{"file_path", path}});
+    };
     tools_ = std::make_unique<FlagshipTools>(std::move(ctx));
     documents_->setPathResolver([this](const std::string& p) { return tools_->resolveAllowed(p); });
     code_->setPathResolver([this](const std::string& p) { return tools_->resolveAllowed(p); });

@@ -207,6 +207,24 @@ public:
     /// Mirrors Python validate_context_size().
     std::pair<bool, std::string> validateContextSize(int tokens);
 
+    /// Download a model: POST /pull {"model_name"}. Built-in models are pulled
+    /// by name only; a recipe makes Lemonade reject them (#1655).
+    /// @throws std::runtime_error naming the status and the server's message.
+    json pullModel(const std::string& modelName, int timeoutSec = 7200);
+
+    // ---- Media ----
+
+    /// POST /images/generations with @p payload. Mirrors Python generate_image().
+    /// @throws std::runtime_error naming the status and the server's message.
+    json generateImage(const json& payload, int timeoutSec = 300);
+
+    /// POST /audio/transcriptions as multipart/form-data: @p fields, then
+    /// @p wav as the "file" part (audio/wav). The endpoint takes WAV only.
+    /// @throws std::runtime_error naming the status and the server's message.
+    json transcribeAudio(const std::string& wav, const std::string& fileName,
+                         const std::vector<std::pair<std::string, std::string>>& fields,
+                         int timeoutSec = 1800);
+
     // ---- Inference ----
 
     /// POST /chat/completions and return the raw response body string.
@@ -272,6 +290,11 @@ private:
     /// POST request; returns response body or throws HttpError.
     std::string httpPost(const std::string& path, const std::string& body,
                          int timeoutSec = 30);
+
+    /// POST returning a JSON object; every failure becomes a runtime_error
+    /// that says what @p what was, where, and what the server answered.
+    json postForJson(const std::string& path, const std::string& body, const HttpHeaders& headers,
+                     int timeoutSec, const std::string& what);
 
     /// Streaming POST request. Calls receiver for each response body chunk;
     /// receiver returning false ends the stream normally (i.e. SseParser got

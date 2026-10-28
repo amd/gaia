@@ -10,6 +10,8 @@
 //   data     analyze_data_file, create_table, insert_data, query_data, list_tables, drop_table
 //   more     tree, file_info, list_recent_files, search_directory, download_file,
 //            dump_document, request_user_input
+//   media    generate_image, list_sd_models, get_generation_history,
+//            transcribe_media, refine_transcript, take_screenshot
 //   misc     sleep
 //
 // File tools are confined to allowedPaths and refuse credential files; an
@@ -18,6 +20,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -31,6 +34,7 @@
 
 namespace gaia {
 
+class LemonadeClient;
 class ShellSession;
 class ToolRegistry;
 
@@ -51,6 +55,20 @@ struct GAIA_API FlagshipToolContext {
     /// The session model's vision: (prompt, raw image bytes) → reply. Unset, the
     /// image tools are not registered and scanned pages stay unread.
     std::function<std::string(const std::string& prompt, const std::vector<std::string>& images)> vision;
+    /// Lemonade for image generation and transcription. Empty, those tools are
+    /// not registered.
+    std::string lemonadeUrl;
+    std::string lemonadeApiKey;
+    /// One-shot completion on the session's model (refine_transcript's naming
+    /// passes). Throws, naming finish_reason, when the reply has no text.
+    std::function<std::string(const std::string& prompt)> complete;
+    /// index_document on @p path, or unset when the session has no documents.
+    std::function<json(const std::string& path)> indexDocument;
+    /// Output folders; empty means Python's: <GAIA_CONFIG_DIR>/cache/sd/images,
+    /// ~/.gaia/transcripts and ~/.gaia/screenshots.
+    std::string imageDir;
+    std::string transcriptDir;
+    std::string screenshotDir;
 };
 
 /// One HTTP GET, redirects not followed: what web tools build on.
@@ -114,6 +132,12 @@ public:
     json requestUserInput(const json& args);
     json analyzeImage(const json& args);
     json answerQuestionAboutImage(const json& args);
+    json generateImage(const json& args);
+    json listSdModels(const json& args);
+    json getGenerationHistory(const json& args);
+    json transcribeMedia(const json& args);
+    json refineTranscript(const json& args);
+    json takeScreenshot(const json& args);
 
     /// Resolve @p raw (~ expanded, relative to workDir) to an absolute path,
     /// or "" when it falls outside allowedPaths.
@@ -127,6 +151,11 @@ public:
 private:
     json fetchFollowing(const std::string& url, HttpFetch& out);
     void backup(const std::string& path);
+    void registerMedia(ToolRegistry& registry);
+    LemonadeClient& lemonade();
+    std::string transcriptFolder() const;
+    json transcriptAccessError(const std::string& path, bool write) const;
+    json nameTurns(const std::vector<std::vector<json>>& batch, std::vector<std::string>& speakers);
 
     FlagshipToolContext ctx_;
     std::unique_ptr<ShellSession> shell_;
@@ -135,6 +164,9 @@ private:
     Database scratch_;
     std::function<HttpFetch(const std::string&)> httpGet_;
     bool allowPrivate_ = false;
+    std::unique_ptr<LemonadeClient> lemonade_;
+    std::mutex mediaMutex_;
+    json generations_ = json::array();
 };
 
 /// The platform transport: WinHTTP on Windows, the system curl elsewhere.
@@ -148,6 +180,14 @@ GAIA_API HttpFetch platformHttpGet(const std::string& url, bool allowPrivate = f
 /// and proxy-tunnel blocks, into @p out's status, content type and location.
 /// @return where the body starts in @p raw.
 GAIA_API std::size_t parseHttpHeaderBlocks(const std::string& raw, HttpFetch& out);
+
+/// PNG bytes for @p rgb (width*height*3, rows top to bottom).
+/// @throws std::runtime_error when the encoder fails.
+GAIA_API std::string encodePng(const std::vector<std::uint8_t>& rgb, int width, int height);
+
+/// The whole desktop (every monitor) as RGB rows. Windows only.
+/// @throws std::runtime_error naming why the screen could not be read.
+GAIA_API std::vector<std::uint8_t> captureScreen(int& width, int& height);
 
 /// Visible text of an HTML page (scripts, styles and tags removed, entities decoded).
 GAIA_API std::string htmlToText(const std::string& html);

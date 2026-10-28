@@ -22,6 +22,7 @@
 #include "gaia/documents.h"
 #include "gaia/file_tools.h"
 #include "gaia/flagship_config.h"
+#include "gaia/lemonade_client.h"
 #include "gaia/process.h"
 #include "gaia/rag.h"
 #include "gaia/tool_registry.h"
@@ -540,6 +541,12 @@ FlagshipTools::FlagshipTools(FlagshipToolContext ctx)
     if (ctx_.workDir.empty()) ctx_.workDir = fs::current_path(ec).u8string();
     if (ctx_.scratchDir.empty()) ctx_.scratchDir = (fs::u8path(gaiaHomeDir()) / "native" / "scratch").u8string();
     httpGet_ = [this](const std::string& url) { return platformHttpGet(url, allowPrivate_); };
+    if (!ctx_.lemonadeUrl.empty()) {
+        LemonadeClientConfig lc;
+        lc.baseUrl = ctx_.lemonadeUrl;
+        lc.apiKey = ctx_.lemonadeApiKey;
+        lemonade_ = std::make_unique<LemonadeClient>(lc);
+    }
 }
 
 FlagshipTools::~FlagshipTools() = default;
@@ -1889,6 +1896,7 @@ void FlagshipTools::registerAll(ToolRegistry& registry, bool includeWeb) {
         {{"seconds", T::NUMBER, true, "How long to wait (max 300)"},
          {"reason", T::STRING, false, "Why, shown to the user"}},
         &FlagshipTools::sleep);
+    registerMedia(registry);
 }
 
 }  // namespace gaia

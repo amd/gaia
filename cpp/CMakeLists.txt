@@ -324,6 +324,7 @@ add_library(gaia_core
     src/skill_manager.cpp
     src/flagship_tools.cpp
     src/web_tools.cpp
+    src/media_tools.cpp
     src/documents.cpp
     src/data_file.cpp
     src/rag.cpp
@@ -414,7 +415,8 @@ if(UNIX)
 endif()
 if(WIN32)
     # winhttp: HTTPS for the web tools from the OS, so no TLS library ships.
-    target_link_libraries(gaia_core PRIVATE ws2_32 winhttp)
+    # gdi32/user32: take_screenshot's screen capture.
+    target_link_libraries(gaia_core PRIVATE ws2_32 winhttp gdi32 user32)
 endif()
 
 # FTXUI (TUI console — optional)
@@ -552,6 +554,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_memory.cpp
         tests/test_skill_manager.cpp
         tests/test_flagship_tools.cpp
+        tests/test_media_tools.cpp
         tests/test_documents.cpp
         tests/test_data_file.cpp
         tests/test_rag.cpp

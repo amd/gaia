@@ -97,14 +97,18 @@ Any OpenAI-compatible endpoint works: point `LEMONADE_BASE_URL` at its full base
 | Web | `search_web`, `fetch_page`, `fetch_webpage`, `download_file` |
 | Memory | `remember`, `recall`, `update_memory`, `forget`, `search_past_conversations` |
 | Skills | `list_skills`, `load_skill`, `unload_skill`, `skill_status` |
-| Images | `analyze_image`, `answer_question_about_image` (the session model must accept images; the default Gemma-4 does) |
+| Images | `analyze_image`, `answer_question_about_image` (the session model must accept images; the default Gemma-4 does); `generate_image`, `list_sd_models`, `get_generation_history` (Stable Diffusion through Lemonade, `SDXL-Turbo` by default, saved to `~/.gaia/cache/sd/images`) |
+| Recordings | `transcribe_media` (Lemonade's `Whisper-Large-v3-Turbo`; transcripts in `~/.gaia/transcripts`), `refine_transcript` (speaker turns from pauses, named by the session model) |
+| Screen | `take_screenshot` (Windows; saved to `~/.gaia/screenshots`) |
 | Other | `read_tool_output`, `request_user_input`, `sleep` |
 
 The starter skills are compiled in. Skills in `~/.gaia/skills` and `.claude/skills` are found too. A skill that ships Python tools, or asks for a permission GAIA cannot enforce, is refused with the reason; a skill that needs a tool this build lacks stays loadable but is left out of the catalogue the model sees.
 
 ## Differences from the Python flagship
 
-- **Not included:** image generation, audio transcription, email and other connectors, browser automation, and the skill hub (install/capture). Skills that depend on them are not offered.
+- **Not included:** email and other connectors, browser automation, and the skill hub (install/capture). Skills that depend on them are not offered.
+- **Transcription:** a 16 kHz mono 16-bit WAV is sent as is; anything else is decoded with `ffmpeg` from `PATH`. Python installs ffmpeg itself on first use; this build reports it missing, with the install command, instead. There is no speaker diarization: `transcribe_media` says its transcript has no speaker labels, and `refine_transcript` labels turns from pauses and what was said, marked as best-effort.
+- **Screenshots** are captured on Windows only. On Linux and macOS `take_screenshot` returns an error, because the libraries Python uses there (mss, Pillow) are not part of this build.
 - **Scanned pages:** a page that is only an image is sent to the session model, so its numbers come from a vision read; `read_file` reads up to 10 such pages and `index_document` up to 20. Pages whose image is in an encoding GAIA cannot unpack (JBIG2, CCITT, CMYK) are reported as unread.
 - **`--serve`** answers only requests from this machine: a page on another site, or a request through another host name, is refused. It runs one request at a time (a second one gets `409`), refuses bodies over 16 MB (`413`), and answers `502` with an error body when the model could not be reached, instead of returning the failure as a reply.
 - **Memory** lives in `~/.gaia/native/memory.db`, separate from the Python agent's database.

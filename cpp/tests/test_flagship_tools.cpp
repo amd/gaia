@@ -306,7 +306,7 @@ TEST_F(FlagshipToolsTest, RegistersThePythonFlagshipNamesWithConfirmGates) {
     for (const char* t : {"read_file", "write_file", "edit_file", "search_file", "find_files", "search_file_content",
                           "browse_directory", "get_file_info", "run_shell_command", "run_python", "fetch_webpage",
                           "fetch_page", "search_web", "create_table", "insert_data", "query_data", "list_tables",
-                          "drop_table", "sleep"}) {
+                          "drop_table", "sleep", "take_screenshot"}) {
         EXPECT_TRUE(reg.hasTool(t)) << t;
     }
     ToolRegistry noWeb;

@@ -78,8 +78,10 @@ Measured against the Python flagship (`hub/agents/gaia/python/gaia_agent/agent.p
 
 ## Out of scope (named so nobody assumes it is done)
 
-- Image generation, audio transcription, email and other connectors, browser automation, and
-  screenshots. Skills that need them stay loadable by name but are left out of the catalogue.
+- Email and other connectors, and browser automation. Skills that need them stay loadable by
+  name but are left out of the catalogue.
+- Speaker diarization (pyannote) for `transcribe_media`, installing ffmpeg on first use, and
+  screenshots on Linux and macOS (Python's mss/Pillow backends).
 - Dynamic per-turn tool and skill selection (off by default in the Python flagship too).
 - `set_loop_state` (Agent UI autonomy plumbing) and the skill hub verbs (install/capture/remove).
 - Per-binary shell command policies (decision 7 replaces them with confirm-every-call).
@@ -135,6 +137,10 @@ Each step lands with unit tests in `cpp/tests/`; nothing merges with a skipped t
 - **Vision.** `analyze_image` and `answer_question_about_image` on the session model, and scanned
   PDF pages (JPEG, or 8-bit gray/RGB pixels re-encoded as PNG) transcribed in `read_file` and
   `index_document`.
+- **Media.** `generate_image`, `list_sd_models` and `get_generation_history` (Lemonade's
+  `/images/generations`); `transcribe_media` (multipart WAV to `/audio/transcriptions`, ffmpeg from
+  `PATH` for other formats, 40-minute chunks) and `refine_transcript`; `take_screenshot` by GDI on
+  Windows, PNG-encoded with the bundled miniz.
 - **Final-answer guards** from Python: tool markup as text, narrated next steps, planning-only
   replies, unopened workspace files, and cut-off replies.
 - **The TUI's stdio protocol** (`--stdio`), checked against `tests/fixtures/stdio/gaia_stdio_wire.json`
