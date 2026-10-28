@@ -106,6 +106,24 @@ def is_openable(path: str) -> bool:
     return Path(path).suffix.lower() in OPENABLE_SUFFIXES
 
 
+def search_hits(text: str) -> List[Dict[str, str]]:
+    """The ``title``/``url`` of each hit in a ``search_web`` text result."""
+    return [
+        {"title": m.group("title").strip(), "url": m.group("url")}
+        for m in _SEARCH_HIT_RE.finditer(text)
+    ]
+
+
+def _search_sources(data: Any) -> Optional[List[Any]]:
+    """A ``search_web`` result's hits, from its text or from the summary a
+    relayed turn carries instead; None when it is neither."""
+    if isinstance(data, str):
+        return search_hits(data)
+    if isinstance(data, dict) and isinstance(data.get("sources"), list):
+        return data["sources"]
+    return None
+
+
 def _payload(data: Any) -> Any:
     """A tool result as a dict when it is JSON, else as given."""
     if isinstance(data, str) and data.lstrip().startswith("{"):
@@ -184,14 +202,17 @@ class TurnLedger:
                     match = _PAGE_TITLE_RE.search(data)
                     title = match.group("title").strip() if match else None
                 read.setdefault(url, {"url": url, "title": title, "kind": "page"})
-            elif tool == "search_web" and isinstance(data, str):
-                for match in _SEARCH_HIT_RE.finditer(data):
-                    url = match.group("url")
+            elif tool == "search_web":
+                for hit in _search_sources(data) or []:
+                    url = hit.get("url") if isinstance(hit, dict) else None
+                    if not _web_url(url):
+                        continue
+                    title = hit.get("title")
                     hits.setdefault(
                         url,
                         {
                             "url": url,
-                            "title": match.group("title").strip(),
+                            "title": title if isinstance(title, str) else None,
                             "kind": "search_result",
                         },
                     )
@@ -246,7 +267,8 @@ class TurnLedger:
             arg = LIVE_DATA_TOOLS[tool]
             if arg is None:
                 # Only the built-in search (text result) has a known backend.
-                host = _SEARCH_HOST if isinstance(call["data"], str) else None
+                searched = _search_sources(call["data"]) is not None
+                host = _SEARCH_HOST if searched else None
             else:
                 host = _host(call["args"].get(arg))
             if host and host not in sites:

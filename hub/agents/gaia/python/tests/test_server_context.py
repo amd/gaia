@@ -171,3 +171,103 @@ def test_a_slow_tokenizer_never_holds_up_the_answer(built, monkeypatch):
     assert final["context"]["used"] == 2
     assert final["context"]["tokenizer"]["exact"] is False
     assert "estimates" in final["context"]["tokenizer"]["reason"]
+
+
+def test_final_carries_the_turns_timings(built, measured):
+    """The Agent UI's Under the hood panel measures a relayed turn from these."""
+    client, state = built
+    stats = {
+        "type": "stats",
+        "step": 1,
+        "performance_stats": {"prompt_tokens": 1200, "completion_tokens": 40},
+    }
+    timing = {"llm_seconds": 2.5, "tool_seconds": 0.0, "llm_calls": 1}
+    state["result"] = {
+        "answer": "Paris.",
+        "timing_summary": timing,
+        "conversation": [
+            {"role": "user", "content": "Capital of France?"},
+            {"role": "system", "content": stats},
+        ],
+    }
+
+    final = _final(client)
+
+    assert final["performance"] == {
+        "timing_summary": timing,
+        "conversation": [{"role": "system", "content": stats}],
+    }
+
+
+def _timed_result():
+    stats = {
+        "type": "stats",
+        "step": 1,
+        "performance_stats": {"prompt_tokens": 900, "completion_tokens": 12},
+    }
+    return {
+        "answer": "Paris.",
+        "timing_summary": {"llm_seconds": 1.5, "tool_seconds": 0.0, "llm_calls": 1},
+        "conversation": [{"role": "system", "content": stats}],
+    }
+
+
+def test_timings_survive_a_context_measurement_that_overruns(built, monkeypatch):
+    """The answer goes without ``context`` after the wait, but still with its timings."""
+    import threading
+
+    client, state = built
+    state["result"] = _timed_result()
+    release = threading.Event()
+
+    def stuck(*args, **kwargs):
+        release.wait(10)
+        return {"used": 1}
+
+    def answers_live(self, query, max_steps=None):
+        # The real agent prints ``final`` inside process_query, before measuring.
+        self.console.print_final_answer(self.result["answer"])
+        return self.result
+
+    monkeypatch.setattr(_Agent, "process_query", answers_live)
+    monkeypatch.setattr(server_mod, "_measure_turn_context", stuck)
+    monkeypatch.setattr(server_mod, "_CONTEXT_WAIT_SECONDS", 0.2)
+    try:
+        final = _final(client)
+    finally:
+        release.set()
+
+    assert "context" not in final
+    assert final["performance"]["timing_summary"]["llm_seconds"] == 1.5
+    assert len(final["performance"]["conversation"]) == 1
+
+
+def test_a_turn_that_timed_nothing_sends_no_performance(built, measured):
+    client, state = built
+    state["result"] = {"answer": "Paris.", "conversation": [{"role": "user"}]}
+
+    final = _final(client)
+
+    assert final["answer"] == "Paris."
+    assert "performance" not in final
+
+
+def test_performance_carries_only_the_stats_entries(built, measured):
+    """User text and tool output stay in the agent; only the counts travel."""
+    client, state = built
+    result = _timed_result()
+    result["conversation"] = [
+        {"role": "user", "content": "secret question"},
+        {"role": "assistant", "content": "secret answer"},
+        "not-a-dict",
+        *result["conversation"],
+    ]
+    state["result"] = result
+
+    final = _final(client)
+
+    sent = json.dumps(final["performance"])
+    assert "secret" not in sent
+    assert [e["content"]["type"] for e in final["performance"]["conversation"]] == [
+        "stats"
+    ]
