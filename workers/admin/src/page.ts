@@ -75,7 +75,7 @@ h2{font-family:"Space Grotesk",Inter,sans-serif;font-size:22px;font-weight:600;m
 .ks{color:var(--ink2);font-size:13px}.ks b{color:var(--ink);font-weight:600}
 .bar2{display:flex;height:8px;border-radius:4px;overflow:hidden;gap:2px;margin:16px 0 8px;background:var(--line2)}.bar2 span{display:block;height:100%}
 .grid4{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
-.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:12px}
 .kpi{padding:15px 17px}
 .kv{font-family:"Space Grotesk",Inter,sans-serif;font-size:28px;font-weight:600;line-height:1.1;margin:8px 0 3px;letter-spacing:-.025em}
 .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
@@ -112,10 +112,11 @@ td.trunc.wide{white-space:normal;max-width:none!important;overflow:visible;word-
 .st{display:inline-flex;align-items:center;gap:6px}.dot{width:7px;height:7px;border-radius:50%;display:inline-block}
 .pb{display:inline-block;width:56px;height:5px;border-radius:3px;background:var(--line2);vertical-align:middle;margin-right:8px;overflow:hidden}.pb i{display:block;height:100%}
 .more{background:none;border:0;color:var(--accent);cursor:pointer;font:inherit;font-size:12.5px;font-weight:500;padding:10px 18px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .good{color:var(--good)}.bad{color:var(--bad)}.warnc{color:var(--warn)}
 .kpi.lv-good{box-shadow:inset 3px 0 0 var(--good)}.kpi.lv-warn{box-shadow:inset 3px 0 0 var(--warn)}.kpi.lv-bad{box-shadow:inset 3px 0 0 var(--bad)}
 .lvdot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:7px;flex:none}
-.attn{border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:0 0 16px;background:var(--surface);font-size:13px;display:flex;gap:8px 18px;flex-wrap:wrap;align-items:center}
+.attn{border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:0 0 10px;background:var(--surface);font-size:13px;display:flex;gap:8px 18px;flex-wrap:wrap;align-items:center}
 .attn b{font-family:"JetBrains Mono",monospace;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);font-weight:500}
 .attn a{text-decoration:none;display:inline-flex;align-items:center;gap:2px}.attn a:hover{text-decoration:underline}
 .legend span{cursor:pointer;user-select:none;border-radius:6px;padding:1px 4px;margin:-1px -4px}.legend span:hover{background:var(--surface2)}
@@ -288,12 +289,15 @@ function worst(a,b){var o={'':0,good:1,warn:2,bad:3};return o[a]>=o[b]?a:b;}
 function cellLv(v,rule){var lv=level(v,rule);return lv?' class="n '+(lv==='good'?'good':lv==='warn'?'warnc':'bad')+'"':' class="n"';}
 var LVC={good:'var(--good)',warn:'var(--warn)',bad:'var(--bad)'};
 /* A KPI card; amber and red ones are also listed in the page's attention bar with the reason. */
-function kpi(key,label,value,sub,lv,why){if(lv==='warn'||lv==='bad')ATTN.push({key:key,label:label,value:value,lv:lv,why:why||''});
-  return '<div class="card kpi'+(lv?' lv-'+lv:'')+'" id="k-'+key+'"'+(why?' title="'+esc(why)+'"':'')+'><div class="kl">'+(lv?'<span class="lvdot" style="background:'+LVC[lv]+'"></span>':'')+label+info(key)+'</div><div class="kv num'+(lv==='bad'?' bad':lv==='warn'?' warnc':'')+'">'+value+'</div><div class="ks">'+sub+'</div></div>';}
+function kpi(key,label,value,sub,lv,why){if(lv)ATTN.push({key:key,label:label,value:value,lv:lv,why:why||''});
+  return '<div class="card kpi'+(lv?' lv-'+lv:'')+'" id="k-'+key+'"'+(why?' title="'+esc(why)+'"':'')+'><div class="kl">'+(lv?'<span class="lvdot" style="background:'+LVC[lv]+'"></span>':'')+label+info(key)+(lv?'<span class="sr"> ('+(lv==='good'?'healthy':lv==='warn'?'needs attention':'unhealthy')+(why?': '+esc(why):'')+')</span>':'')+'</div><div class="kv num'+(lv==='bad'?' bad':lv==='warn'?' warnc':'')+'">'+value+'</div><div class="ks">'+sub+'</div></div>';}
+/* Problems first, then wins: every scored headline number lands in one of the two lines. */
 function drawAttention(){var box=el('attn');if(!box)return;
-  if(!ATTN.length){box.innerHTML='<div class="attn"><span class="lvdot" style="background:var(--good)"></span>Every headline number on this page is in its healthy range.</div>';return;}
-  var list=ATTN.filter(function(a){return a.lv==='bad';}).concat(ATTN.filter(function(a){return a.lv==='warn';}));
-  box.innerHTML='<div class="attn"><b>Needs attention</b>'+list.map(function(a){return '<a href="#k-'+a.key+'" title="'+esc(a.why)+'"><span class="lvdot" style="background:'+LVC[a.lv]+'"></span>'+a.label+': <span class="'+(a.lv==='bad'?'bad':'warnc')+'">'+a.value+'</span></a>';}).join('')+'</div>';}
+  var link=function(a){var c=a.lv==='bad'?'bad':a.lv==='warn'?'warnc':'good';return '<a href="#'+(el('k-'+a.key)?'k-'+a.key:a.key)+'" title="'+esc(a.why)+'"><span class="lvdot" style="background:'+LVC[a.lv]+'"></span>'+a.label+': <span class="'+c+'">'+a.value+'</span></a>';};
+  var bad=ATTN.filter(function(a){return a.lv==='bad';}).concat(ATTN.filter(function(a){return a.lv==='warn';})),good=ATTN.filter(function(a){return a.lv==='good';});
+  var h=bad.length?'<div class="attn"><b>Needs attention</b>'+bad.map(link).join('')+'</div>':ATTN.length?'<div class="attn"><span class="lvdot" style="background:var(--good)"></span>Every headline number on this page is in its healthy range.</div>':'';
+  if(good.length)h+='<div class="attn"><b>Going well</b>'+good.map(link).join('')+'</div>';
+  box.innerHTML=h;}
 
 function setUrl(extra){var p=new URLSearchParams();p.set('range',S.range);if(S.gran!=='auto')p.set('gran',S.gran);if(S.labels)p.set('labels','1');
   Object.keys(extra||{}).forEach(function(k){if(extra[k])p.set(k,extra[k]);});history.replaceState(null,'','?'+p.toString());}
@@ -364,14 +368,14 @@ function drawOverview(){var d=D.downloads,t=D.traction,h='';
       pf=n?shift(lastDay,-(n-1)):'0000',cur2=sumDays(t.packages,'pypi',pf,lastDay)+sumDays(t.packages,'npm',pf,lastDay),
       firstPy=t.packages.filter(function(r){return r.pypi!=null;}).map(function(r){return r.day;})[0],
       prev2=n&&firstPy&&firstPy<=shift(pf,-n)?sumDays(t.packages,'pypi',shift(pf,-n),shift(pf,-1))+sumDays(t.packages,'npm',shift(pf,-n),shift(pf,-1)):null,r2=prev2?cur2/prev2:null;
-    h+=kpi('pkg','Package downloads',fmt(cur2),(n?n+' days':'all time')+' to '+shortLab(lastDay,'day')+(prev2!=null?' · '+fmt(prev2)+' the '+n+' days before':''),n?level(r2,DL_TREND):'',
+    h+=kpi('pkg','Package downloads',fmt(cur2),(firstPy&&firstPy>pf?'since '+shortLab(firstPy,'day')+(firstPy.slice(0,4)!==lastDay.slice(0,4)?' '+firstPy.slice(0,4):''):(n?n+' days':'all time'))+' to '+shortLab(lastDay,'day')+(prev2!=null?' · '+fmt(prev2)+' the '+n+' days before':''),n?level(r2,DL_TREND):'',
       prev2!=null?fmt(cur2)+' downloads against '+fmt(prev2)+' in the previous '+n+' days':'');}
   else h+=kpi('pkg','Package downloads','—','collecting…','');
   var age=last?(Date.now()-Date.parse(last.publishedAt))/864e5:null;
   h+=kpi('latest','Latest release',last?esc(last.tag):'—',last?'<b class="num">'+fmt(last.install)+'</b> installs · '+ago(last.publishedAt):'',level(age,{good:35,warn:60,higher:false}),age==null?'':Math.round(age)+' days since the last final release');
   var rr2=d.releases.filter(function(r){return r.main&&Date.parse(r.publishedAt)>=sinceMs();});
   var nf=rr2.filter(function(r){return !r.rc;}).length,nrc=rr2.filter(function(r){return r.rc;}).length,rcp=nf?nrc/nf:null;
-  h+=kpi('rels','Releases',fmt(nf),'plus '+fmt(nrc)+' release candidates · '+rangeText(),level(rcp,{good:3,warn:6,higher:false}),rcp==null?'':(Math.round(rcp*10)/10)+' release candidates per final release');
+  h+=kpi('rels','Releases',fmt(nf),'plus '+fmt(nrc)+' release candidates'+(rcp!=null?' (<b>'+(Math.round(rcp*10)/10)+' per release</b>)':'')+' · '+rangeText(),level(rcp,{good:3,warn:6,higher:false}),rcp==null?'':(Math.round(rcp*10)/10)+' release candidates per final release');
   el('ov').innerHTML=h+'</div></div>';}
 
 DRAW.rel=drawReleases;
@@ -442,7 +446,7 @@ function drawDaily(){var d=D.downloads;if(!d||d.empty){emptyBox('daily',d?esc(d.
 
 function drawPackages(){var t=D.traction;if(!t||!t.packages.length){emptyBox('packages','No package history collected yet.');return;}
   var p=series(t.packages,{pypi:'sum',npm:'sum'});
-  chart('packages',{keys:p.b.map(function(r){return r.key;}),gran:p.g,type:'bar',stacked:true,title:'Package downloads',h:220,cover:p.first&&p.first>p.start?'No data before '+longLab(p.first,'day')+': the registries keep about 180 days (PyPI) to a year (npm).':'',
+  chart('packages',{keys:p.b.map(function(r){return r.key;}),gran:p.g,type:'bar',stacked:true,title:'Package downloads',h:220,cover:(function(){var fp=t.packages.filter(function(r){return r.pypi!=null;}).map(function(r){return r.day;})[0];return fp&&fp>p.start?'No PyPI data before '+longLab(fp,'day')+': PyPI keeps about 180 days, so earlier bars are npm only.':'';})(),
     series:[{name:'PyPI',color:'var(--s1)',vals:p.b.map(function(r){return r.pypi;})},{name:'npm',color:'var(--s2)',vals:p.b.map(function(r){return r.npm;})}],empty:'No package downloads in this range yet.'});}
 
 function render(){ATTN=[];setUrl({mode:P.mode!=='os'?P.mode:'',install:P.install?'':'0',rc:P.rc?'':'0'});
@@ -461,7 +465,7 @@ var INFO={` + INFO_COMMON + String.raw`
 'k-prs':['Open pull requests','PRs open now, and how many have waited more than 14 days. Green: 10% or fewer are that old. Amber: up to 25%. Red: more than 25%, which means review is not keeping up.'],
 'k-commits':['Commits','Commits on the default branch in the window, and the people who made them (by GitHub login), against the window before. Green: at least 75% as many active contributors as before. Amber: 50 to 75%. Red: below 50%.'],
 'k-ttm':['Time to merge','Median and 90th-percentile time from a PR opening to merging, for PRs merged in the window. Bands from LinearB’s 2026 benchmarks (8.1 million PRs): elite under 25 hours, good up to 72. Green: median under 25 hours and P90 under 3 days. Amber: median up to 3 days, P90 up to 161 hours. Red: slower.'],
-'k-ttc':['Time to close','Median and 90th-percentile time from an issue opening to closing, for issues closed in the window. No published benchmark exists, so these are a proposed default; a clean-up of old issues raises it for a while. Green: median within 14 days and P90 within 90. Amber: median up to 30 days or P90 up to 180. Red: median over 30 days or P90 over 180.'],
+'k-ttc':['Time to close','Median and 90th-percentile time from an issue opening to closing, for issues closed in the window. No published benchmark exists, so these are a proposed default. Closing a batch of old issues raises it for a while, though the backlog shrinks: check Open issues before reading red here as slower triage. Green: median within 14 days and P90 within 90. Amber: median up to 30 days or P90 up to 180. Red: median over 30 days or P90 over 180.'],
 'issues':['Issues opened and closed','Per period. When closed bars are taller than opened, the backlog shrank. Click a legend entry to hide or show it.'],
 'backlog':['Open issues','Issues open at the end of each period (opened so far minus closed so far). Pull requests are excluded.'],
 'ttm-h':['How long PRs take to merge','Each bar counts PRs merged in the selected window that took that long from opened to merged. A long tail to the right means some work waits a long time for review.'],
@@ -486,6 +490,8 @@ function hist(id,vals,name,color,what,cap){var c=HB.map(function(){return 0;});v
 function wk(n){var d=S.range==='all'?0:Number(S.range);return d>=7?fmt(Math.round(n*7/d))+' a week':'';}
 function pace(c,p){return p?c/p-1:null;}
 var PACE={good:-.2,warn:-.4},MERGE_MED={good:25/24,warn:3,higher:false},MERGE_P90={good:3,warn:161/24,higher:false};
+/* The card shows the median; when the P90 sets the colour, the attention bar names the P90. */
+function p90Led(key,lm,lp,p90){var o={'':0,good:1,warn:2,bad:3};if(o[lp]<=o[lm])return;var e=ATTN.filter(function(x){return x.key===key;})[0];if(e)e.value='P90 '+ddur(p90);}
 function drawKpis(){var m=D.momentum;if(!m){el('ov').innerHTML='';return;}var s=m.summary,p=m.previous,rt=rangeText(),h='';
   var mr=s.prsOpened?s.prsMerged/s.prsOpened:null,mp=p?pace(s.prsMerged,p.prsMerged):null;
   h+=kpi('k-merged','PRs merged',fmt(s.prsMerged),(wk(s.prsMerged)?wk(s.prsMerged)+(p?' (was '+wk(p.prsMerged).replace(' a week','')+')':'')+' · ':'')+fmt(s.prsOpened)+' opened · '+rt,worst(level(mr,{good:.8,warn:.6}),level(mp,PACE)),(mr==null?'':Math.round(mr*100)+'% as many merged as opened')+(mp==null?'':', pace '+(mp>=0?'up ':'down ')+Math.abs(Math.round(mp*100))+'%'));
@@ -499,13 +505,15 @@ function drawKpis(){var m=D.momentum;if(!m){el('ov').innerHTML='';return;}var s=
   h+=kpi('k-commits','Commits',fmt(s.commits),fmt(s.contributors)+' commit authors'+(p?' (were '+fmt(p.contributors)+')':'')+' · '+rt,level(ac,{good:.75,warn:.5}),ac==null?'':fmt(s.contributors)+' commit authors against '+fmt(p.contributors)+' in the window before');
   var lm=worst(level(s.medianDaysToMerge,MERGE_MED),level(s.p90DaysToMerge,MERGE_P90));
   h+=kpi('k-ttm','Time to merge',ddur(s.medianDaysToMerge),'P90 '+ddur(s.p90DaysToMerge)+' · '+fmt(s.prsMerged)+' merged PRs',lm,'median '+ddur(s.medianDaysToMerge)+', 90th percentile '+ddur(s.p90DaysToMerge));
+  p90Led('k-ttm',level(s.medianDaysToMerge,MERGE_MED),level(s.p90DaysToMerge,MERGE_P90),s.p90DaysToMerge);
   h+=kpi('k-ttc','Time to close',ddur(s.medianDaysToClose),'P90 '+ddur(s.p90DaysToClose)+' · '+fmt(s.issuesClosed)+' closed issues',worst(level(s.medianDaysToClose,{good:14,warn:30,higher:false}),level(s.p90DaysToClose,{good:90,warn:180,higher:false})),'median '+ddur(s.medianDaysToClose)+', P90 '+ddur(s.p90DaysToClose)+' (healthy: median within 14 days)');
+  p90Led('k-ttc',level(s.medianDaysToClose,{good:14,warn:30,higher:false}),level(s.p90DaysToClose,{good:90,warn:180,higher:false}),s.p90DaysToClose);
   el('ov').innerHTML='<div class="strip">'+h+'</div>';drawSplit();}
 function drawSplit(){var m=D.momentum,box=el('split');if(!box)return;if(!m||!m.split){box.innerHTML='';return;}var x=m.split;
   var row=function(name,c,pv,ratio){var mp=pv?pace(c.prsMerged,pv.prsMerged):null;
     return '<tr><td>'+name+'</td><td class="n">'+(wk(c.prsMerged)?fmt(Math.round(c.prsMerged*7/Number(S.range))):fmt(c.prsMerged))+'</td><td'+cellLv(mp,PACE)+'>'+(mp==null?'—':(mp>=0?'+':'')+Math.round(mp*100)+'%')+'</td><td'+cellLv(c.medianDaysToMerge,MERGE_MED)+'>'+ddur(c.medianDaysToMerge)+'</td><td'+cellLv(c.p90DaysToMerge,MERGE_P90)+'>'+ddur(c.p90DaysToMerge)+'</td><td class="n">'+(ratio==null?'—':ratio.toFixed(1)+'×')+'</td><td class="n">'+fmt(c.openPrs)+'</td><td class="n">'+fmt(c.issuesOpened)+'</td><td class="n">'+fmt(c.openIssues)+'</td></tr>';};
   var ratio=x.core.medianDaysToMerge&&x.outside.medianDaysToMerge!=null?x.outside.medianDaysToMerge/x.core.medianDaysToMerge:null,per=wk(1)?'a week':'in the range';
-  var ol=level(x.outside.medianDaysToMerge,MERGE_MED);if(ol==='warn'||ol==='bad')ATTN.push({key:'split',label:'Outside PRs merge in',value:ddur(x.outside.medianDaysToMerge),lv:ol,why:'outside contributors’ PRs take a median '+ddur(x.outside.medianDaysToMerge)+' to merge'});
+  var ol=level(x.outside.medianDaysToMerge,MERGE_MED);if(ol)ATTN.push({key:'split',label:'Outside PRs merge in',value:ddur(x.outside.medianDaysToMerge),lv:ol,why:'outside contributors’ PRs take a median '+ddur(x.outside.medianDaysToMerge)+' to merge'});
   box.innerHTML='<div class="scroll" style="max-height:none"><table><tr><th>Who</th><th class="n">PRs merged '+per+'</th><th class="n">Pace vs before</th><th class="n">Merge median</th><th class="n">Merge P90</th><th class="n">Wait vs core</th><th class="n">Open PRs</th><th class="n">Issues opened</th><th class="n">Open issues</th></tr>'
     +row('Core team',x.core,x.corePrevious,null)+row('Outside contributors',x.outside,x.outsidePrevious,ratio)+'</table></div>';}
 function drawPeople(){var m=D.momentum;
@@ -575,7 +583,7 @@ var INFO={` + INFO_COMMON + String.raw`
 'tests':['Unit tests','Read from the pytest summary line (for example “1234 passed, 5 skipped in 312s”) of the latest main-branch Unit Tests run each day, so it covers the unit suite only. If a run has several jobs, the one with the most tests is used. Days without a readable summary are left out, not shown as zero.'],
 'time':['Where CI time goes','Wall-clock time of finished runs per period, split by workflow (the largest eight, the rest grouped as Other). This is run duration from start to finish, not billed runner minutes: a run with parallel jobs counts once. Runs over 6 hours are left out as waiting time. Click a legend entry to hide a workflow.'],
 'time-table':['CI time by workflow','Total and average time per run in the window, and the change against the window before. Waiting counts runs over 6 hours, which are left out of the times.'],
-'table':['Workflow health','Each workflow’s push and nightly runs on main in the window. Runs counts those that passed or failed (cancelled and skipped left out). Flaky counts commits where it failed and a later run passed. Runtime median and P90 are over successful runs, leaving out runs over 6 hours (waiting time). Status follows the pass rate: healthy at 90% or better, watch at 80 to 90%, failing below. Runtime median is coloured against CircleCI’s 10-minute benchmark: green under 10 minutes, amber up to 20, red above; eval and hardware lanes run long by design.']};
+'table':['Workflow health','Each workflow’s push and nightly runs on main in the window. Runs counts those that passed or failed; Cancelled counts the rest (cancelled, skipped or still running), which are not in the pass rate. Flaky counts commits where it failed and a later run passed. Runtime median and P90 are over successful runs, leaving out runs over 6 hours (waiting time). Status follows the pass rate: healthy at 90% or better, watch at 80 to 90%, failing below. Runtime median is coloured against CircleCI’s 10-minute benchmark: green under 10 minutes, amber up to 20, red above; eval and hardware lanes run long by design.']};
 var P={om:pick(qs.get('om'),['count','share','rate'],'count'),wf:qs.get('wf')||'',br:pick(qs.get('br'),['main','all'],'main'),tm:pick(qs.get('tm'),['total','outcome','rate'],'total'),ctm:pick(qs.get('ctm'),['hours','share'],'hours'),allWf:false,allTime:false};
 var OC={success:'var(--good)',failure:'var(--bad)',cancelled:'var(--neutral)',other:'var(--s4)'};
 var WC=['var(--s1)','var(--s2)','var(--s3)','var(--s4)','var(--s5)','#7a6ee0','#2aa7b8','#b5651d'];
@@ -641,9 +649,9 @@ function drawTable(){var ci=D.ci,box=el('wtable');if(!ci||!ci.coverage||!ci.cove
   var w=ci.main.workflows,rows=P.allWf?w:w.slice(0,10);
   if(!w.length){box.innerHTML='<div class="empty">No push or nightly runs on main in this range.</div>';return;}
   function st(p){if(p==null)return '<span class="st"><span class="dot" style="background:var(--mute)"></span>no result</span>';if(p>=.9)return '<span class="st good"><span class="dot" style="background:var(--good)"></span>healthy</span>';if(p>=.8)return '<span class="st warnc"><span class="dot" style="background:var(--warn)"></span>watch</span>';return '<span class="st bad"><span class="dot" style="background:var(--bad)"></span>failing</span>';}
-  var h='<div class="scroll" style="max-height:none"><table><tr><th>Workflow</th><th>Status</th><th class="n">Pass rate</th><th class="n">Runs</th><th class="n">Failed</th><th class="n">Flaky</th><th class="n">Runtime median</th><th class="n">Runtime P90</th></tr>';
+  var h='<div class="scroll" style="max-height:none"><table><tr><th>Workflow</th><th>Status</th><th class="n">Pass rate</th><th class="n">Runs</th><th class="n">Failed</th><th class="n" title="Cancelled, skipped or still running; not in the pass rate">Cancelled</th><th class="n">Flaky</th><th class="n">Runtime median</th><th class="n">Runtime P90</th></tr>';
   rows.forEach(function(x){var c=x.passRate==null?'var(--mute)':x.passRate>=.9?'var(--good)':x.passRate>=.8?'var(--warn)':'var(--bad)';
-    h+='<tr><td class="trunc" title="'+esc(x.workflow)+'">'+esc(x.workflow)+'</td><td>'+st(x.passRate)+'</td><td class="n"><span class="pb"><i style="width:'+(x.passRate==null?0:x.passRate*100)+'%;background:'+c+'"></i></span>'+pct(x.passRate)+'</td><td class="n">'+fmt(x.passed+x.failed)+'</td><td class="n">'+x.failed+'</td><td class="n">'+x.flaky+'</td><td'+cellLv(x.p50==null?null:x.p50/60,{good:10,warn:20,higher:false})+'>'+dur(x.p50)+'</td><td class="n">'+dur(x.p90)+'</td></tr>';});
+    h+='<tr><td class="trunc" title="'+esc(x.workflow)+'">'+esc(x.workflow)+'</td><td>'+st(x.passRate)+'</td><td class="n"><span class="pb"><i style="width:'+(x.passRate==null?0:x.passRate*100)+'%;background:'+c+'"></i></span>'+pct(x.passRate)+'</td><td class="n">'+fmt(x.passed+x.failed)+'</td><td class="n">'+x.failed+'</td><td class="n">'+fmt(Math.max(0,x.runs-x.passed-x.failed))+'</td><td class="n">'+x.flaky+'</td><td'+cellLv(x.p50==null?null:x.p50/60,{good:10,warn:20,higher:false})+'>'+dur(x.p50)+'</td><td class="n">'+dur(x.p90)+'</td></tr>';});
   box.innerHTML=h+'</table></div>'+(w.length>10?'<button class="more" id="more">'+(P.allWf?'Show fewer':'Show all '+w.length+' workflows')+'</button>':'');
   var mb=el('more');if(mb)mb.addEventListener('click',function(){P.allWf=!P.allWf;drawTable();});}
 function render(){ATTN=[];setUrl({om:P.om!=='count'?P.om:'',wf:P.wf,br:P.br!=='main'?P.br:'',tm:P.tm!=='total'?P.tm:'',ctm:P.ctm!=='hours'?P.ctm:''});syncShell();drawKpis();drawOutcomes();drawTests();drawTime();drawTable();drawAttention();drawStatus();}

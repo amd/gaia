@@ -36,7 +36,7 @@ import { ciStats, dailyDeltas, releaseDownloads, type AssetRow, type ReleaseRow,
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", "cache-control": "no-store" },
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
 
 export const RANGES = [1, 7, 14, 30, 60, 90, 180, 365] as const;

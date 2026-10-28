@@ -66,14 +66,15 @@ function nowKey(g){return g.gran==='week'?weekKey(today()):today().slice(0,7)+'-
 function inRange(){var g=D.growth;if(!g)return [];var s=startKey(g);return g.periods.filter(function(p){return p.start>=s;});}
 function signed(x){return x==null?'—':(x>=0?'+':'')+pct(x,Math.abs(x)<.1?1:0);}
 function drawKpis(){var g=D.growth;if(!g){el('ov').innerHTML='<div class="card empty">Could not load growth data.</div>';el('hv').innerHTML='';return;}
-  var c=g.current,p=g.previous,rt=S.range==='1'?'since yesterday':rangeText(),h='',short=g.days<7,rl=function(v,t){return short?'':level(v,rule(t));},was=function(v,f){return v!=null?' · was '+f(v):'';};
+  var through=new Date(Date.parse(g.from)+(g.days-1)*864e5).toISOString().slice(0,10),mo=g.days>=30;
+  var c=g.current,p=g.previous,rt=S.range==='all'?'all time':g.days+' days to '+shortLab(through,'day'),h='',short=g.days<7,rl=function(v,t){return short?'':level(v,rule(t));},was=function(v,f){return v!=null?' · was '+f(v):'';};
   if(short){el('ov').innerHTML='<div class="card empty">Growth rates need at least 7 days. Pick 7d or longer.</div>';el('hv').innerHTML='';return;}
-  h+=kpi('g-stars','Star growth',pct(c.starRate30),'a month · +'+fmt(c.stars)+' stars · '+rt+was(p&&p.starRate30,function(v){return pct(v)+'/mo';}),rl(c.starRate30,T.starRate),'stars grew '+pct(c.starRate30)+' a month (target '+pct(T.starRate.good,0)+')');
-  h+=kpi('g-forks','Fork growth',pct(c.forkRate30),'a month · +'+fmt(c.forks)+' forks · '+rt+was(p&&p.forkRate30,function(v){return pct(v)+'/mo';}),rl(c.forkRate30,T.forkRate),'forks grew '+pct(c.forkRate30)+' a month (target '+pct(T.forkRate.good,0)+')');
+  h+=kpi('g-stars','Star growth',mo?pct(c.starRate30):pct(c.starGrowth),(mo?'a month · ':'in '+g.days+' days · ')+'+'+fmt(c.stars)+' stars · '+rt+(mo?was(p&&p.starRate30,function(v){return pct(v)+'/mo';}):was(p&&p.starGrowth,pct)),mo?rl(c.starRate30,T.starRate):'','stars grew '+pct(c.starRate30)+' a month (target '+pct(T.starRate.good,0)+')');
+  h+=kpi('g-forks','Fork growth',mo?pct(c.forkRate30):pct(c.forkGrowth),(mo?'a month · ':'in '+g.days+' days · ')+'+'+fmt(c.forks)+' forks · '+rt+(mo?was(p&&p.forkRate30,function(v){return pct(v)+'/mo';}):was(p&&p.forkGrowth,pct)),mo?rl(c.forkRate30,T.forkRate):'','forks grew '+pct(c.forkRate30)+' a month (target '+pct(T.forkRate.good,0)+')');
   var ac=p&&p.active?c.active/p.active-1:null;
   h+=kpi('g-active','Contributor growth',signed(ac),fmt(c.active)+' active'+(p?', were '+fmt(p.active):'')+' · '+rt,level(ac,{good:T.activeRatio.good-1,warn:T.activeRatio.warn-1}),ac==null?'':'active contributors '+signed(ac)+' against the window before');
   var n30=c.newContributors*30/g.days;
-  h+=kpi('g-new','Newcomers',fmt(Math.round(n30)),'a month · '+fmt(c.newContributors)+' first-time contributors · '+rt+(p?', were '+fmt(p.newContributors):''),rl(n30,T.newPer30),Math.round(n30)+' new contributors a month (target '+T.newPer30.good+')');
+  h+=kpi('g-new','Newcomers',fmt(mo?Math.round(n30):c.newContributors),(mo?'a month · '+fmt(c.newContributors)+' first-time contributors · ':'first-time contributors · ')+rt+(p?', were '+fmt(p.newContributors):''),mo?rl(n30,T.newPer30):'',Math.round(n30)+' new contributors a month (target '+T.newPer30.good+')');
   var d=g.downloads;
   if(d){var dl=function(key,label,w){var ok=w.growth!=null;
       return kpi(key,label,signed(w.growth),ok?fmt(w.total)+' vs '+fmt(w.previous)+' · to '+shortLab(w.through,'day'):w.previous===0?fmt(w.total)+', none in the window before':w.first?'collecting since '+shortLab(w.first,'day')+'; needs two full windows':'no data yet',ok&&!short?level(w.growth,rule(T.downloads)):'',ok?label+' '+signed(w.growth)+' against the window before':'');};
@@ -105,10 +106,10 @@ function drawCharts(){var g=D.growth,rows=inRange();
   if(waiting===rows.length)emptyBox('retention','Newcomers in this range have not had 90 days yet. Pick 1y or All to see earlier groups.');
   else chart('retention',{keys:K,gran:gr,type:'bar',stacked:true,title:'Newcomers who came back',h:220,note:waiting?'The last '+waiting+' '+gr+(waiting>1?'s are':' is')+' blank: their newcomers have not had 90 days yet.':'',
     series:[{name:'Came back',color:'var(--s3)',vals:v(function(r){return r.newcomerReturned;})},{name:'Did not',color:'var(--neutral)',vals:v(function(r){return r.newcomerCohort==null?null:r.newcomerCohort-r.newcomerReturned;})}]});
-  chart('outside',{keys:K,gran:gr,type:'line',title:'Outside share of merged PRs',h:220,ymin:0,ymax:1,yfmt:function(x){return pct(x,0);},target:T.external.good,targetLabel:'target',note:part,
+  chart('outside',{keys:K,gran:gr,type:'line',title:'Outside share of merged PRs',h:220,ymin:0,ymax:1,yfmt:function(x){return pct(x,0);},target:T.external.good,targetLabel:'target',
     series:[{name:'Outside share',color:'var(--s2)',vals:v(function(r){return r.prsMerged?r.externalMerged/r.prsMerged:null;}),fmt:function(x){return pct(x,0);}}]});}
 function drawBench(){var g=D.growth,box=el('bench');if(!g){box.innerHTML='';return;}var c=g.current,last=g.periods[g.periods.length-1],n30=c.newContributors*30/g.days;
-  var mine={stars:pct(c.starRate30),ratio:last&&last.starsTotal?(last.forksTotal/last.starsTotal).toFixed(2):'—',new:fmt(Math.round(n30))+(last&&last.starsTotal?' ('+pct(n30/last.starsTotal)+' of its stars)':''),
+  var mine={stars:g.days<30?'pick 30d or longer':pct(c.starRate30),ratio:last&&last.starsTotal?(last.forksTotal/last.starsTotal).toFixed(2):'—',new:g.days<30?'pick 30d or longer':fmt(Math.round(n30))+(last&&last.starsTotal?' ('+pct(n30/last.starsTotal)+' of its stars)':''),
     ext:pct(c.externalShare,0),ret:pct(g.newcomers.rate,0),bus:c.busFactor==null?'—':fmt(c.busFactor),resp:'Not collected yet'};
   box.innerHTML='<div class="scroll" style="max-height:none"><table><tr><th>Metric</th><th>GAIA</th><th>Target</th><th>Hermes Agent</th><th>Peers</th></tr>'+BENCH.map(function(b){
     return '<tr><td>'+esc(b.metric)+'</td><td class="num">'+esc(mine[b.key])+'</td><td>'+esc(b.target)+'</td><td>'+esc(b.hermes)+'</td><td style="white-space:normal">'+esc(b.peers)+'</td></tr>';}).join('')+'</table></div>';}

@@ -45,6 +45,18 @@ interface GhRun {
   created_at: string;
   run_started_at: string | null;
   updated_at: string;
+  /** `.github/workflows/x.yml`, or `dynamic/...` for GitHub's own workflows. */
+  path?: string;
+}
+
+/** Dynamic workflows (CodeQL default setup, Dependabot) name each run after its PR or package; group them. */
+export function workflowName(r: { name: string | null; event?: string; path?: string }): string {
+  const name = r.name ?? "(unnamed)";
+  if (r.event !== "dynamic") return name;
+  if (r.path === "dynamic/github-code-scanning/codeql") return "CodeQL (default setup)";
+  if (name.startsWith("Graph Update:")) return "Dependabot graph update";
+  if (r.path?.startsWith("dynamic/dependabot/")) return "Dependabot updates";
+  return name;
 }
 
 const MAX_PAGES = 60;
@@ -231,7 +243,7 @@ export async function collectRuns(
       const begun = Date.parse(r.run_started_at ?? r.created_at);
       const end = Date.parse(r.updated_at);
       const done = r.status === "completed" && Number.isFinite(begun) && Number.isFinite(end);
-      return [r.id, r.name ?? "(unnamed)", r.head_branch, r.event, r.status, r.conclusion, r.head_sha, r.run_attempt, r.created_at,
+      return [r.id, workflowName(r), r.head_branch, r.event, r.status, r.conclusion, r.head_sha, r.run_attempt, r.created_at,
         done ? Math.max(0, Math.round((end - begun) / 1000)) : null];
     });
     await writeAtomic(env.DB, insertMany(env.DB, "workflow_runs",

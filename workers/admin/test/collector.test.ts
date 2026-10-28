@@ -193,3 +193,14 @@ describe("collectAll", () => {
     expect(logs).toEqual([["releases", 0], ["repo", 1], ["stars", 1], ["forks", 1], ["issues", 1], ["commits", 1], ["code stats", 1], ["package history", 1], ["runs", 1], ["tests", 1], ["evals", 1]]);
   });
 });
+
+describe("workflowName", () => {
+  it("groups GitHub's dynamic workflows, which name each run after its PR or package", async () => {
+    const { workflowName } = await import("../src/collector");
+    expect(workflowName({ name: "PR #5956", event: "dynamic", path: "dynamic/github-code-scanning/codeql" })).toBe("CodeQL (default setup)");
+    expect(workflowName({ name: "npm_and_yarn in /src/gaia/apps/webui", event: "dynamic", path: "dynamic/dependabot/dependabot-updates" })).toBe("Dependabot updates");
+    expect(workflowName({ name: "Graph Update: pip in /.", event: "dynamic", path: "dynamic/dependabot/update-graph" })).toBe("Dependabot graph update");
+    expect(workflowName({ name: "Unit Tests", event: "push", path: ".github/workflows/test_unit.yml" })).toBe("Unit Tests");
+    expect(workflowName({ name: null, event: "push" })).toBe("(unnamed)");
+  });
+});
