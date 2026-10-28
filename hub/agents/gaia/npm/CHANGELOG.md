@@ -20,10 +20,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shorten that" ran with no record of it. It is now kept: long tool results
   become a short note naming the tool, and its longest messages are cut with
   a note saying how much.
+- **Internet off also stops the mailbox and Agent Hub tools.** With a chat's
+  Internet switched off, GAIA could still read Gmail or Outlook and search or
+  install skills from the Agent Hub, because those tools carry no URL for the
+  check to see. They are now refused with the same message as a web search.
 
-### For integrators: contract 2.23
+### For integrators: contract 2.24
 
-- **The agent remembers its own tool calls across turns** (contract **2.23**,
+- **The agent remembers its own tool calls across turns** (contract **2.24**,
   #5701). A caller that pushed history as `context` could send only text, so
   on the next turn the agent saw its earlier answers but not the commands it
   ran or their errors, and "why did that fail?" got "I have no record of the
@@ -31,8 +35,24 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   model saw it, tool calls and results included. Send those back in the new
   `turns` field, oldest first, and the agent replays them, keeping the newest
   whole turns that fit its context window. `turns` replaces `context` when
-  sent. Pre-2.23 binaries refuse the field with `422`, so probe `/version`
+  sent. Pre-2.24 binaries refuse the field with `422`, so probe `/version`
   first.
+
+### For integrators: contract 2.23
+
+- **`/query` takes `internet_off`** (contract **2.23**, #5883). The Agent UI
+  never told the agent when a chat's Internet switch was off, so the switch
+  stayed locked in every GAIA chat on a standard install. `true` refuses web
+  search, page fetches, the browser, connector, mailbox and Agent Hub tools and
+  commands that contact another host, as it does when the agent runs inside the Agent UI. `false`
+  allows them, and omitting it leaves the agent as it is. A retained session
+  keeps the last value. Older binaries `422` the field.
+- **`POST /v1/gaia/sessions/{session_id}/internet`** (contract **2.23**)
+  reaches a turn already running. Without it, a user who turned the internet
+  off mid-turn watched the agent keep searching until the turn ended. Body
+  `{"internet_off": bool}`; the session's next tool call follows it. An
+  unknown session is a `404`, as for `/bypass`. Post it only once `/query`
+  has answered: until then the turn's own `internet_off` replaces it.
 
 ### For integrators: contract 2.22
 

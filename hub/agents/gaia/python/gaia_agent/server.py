@@ -15,7 +15,8 @@ so the two agents cannot drift into private dialects of the same contract.
 Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
 ``/query/{run_id}/cancel``, ``/query/{run_id}/respond``,
 ``/query/{run_id}/followup``, ``/query/{run_id}/tool_decision`` (contract >=
-2.14) and ``/sessions/{session_id}/bypass``. ``needs_input`` is answered over
+2.14), ``/sessions/{session_id}/bypass`` and ``/sessions/{session_id}/internet``
+(contract >= 2.23). ``needs_input`` is answered over
 ``/respond`` on the run's existing stream; ``needs_confirmation`` is answered
 the same way over ``/tool_decision`` — but only when there is a session to
 hold the grant AND the caller declared it can answer (``can_confirm`` in
@@ -88,8 +89,9 @@ AGENT_ID = "gaia"
 #: 2.20 added ``/query``'s ``surface`` field.
 #: 2.21 added ``context`` to ``/query``'s ``final`` event.
 #: 2.22 added ``/query``'s ``reasoning`` field.
-#: 2.23 added ``/query``'s ``turns`` field and ``final.model_messages``.
-API_VERSION = "2.23"
+#: 2.23 added ``/query``'s ``internet_off`` field and ``/sessions/{id}/internet``.
+#: 2.24 added ``/query``'s ``turns`` field and ``final.model_messages``.
+API_VERSION = "2.24"
 
 #: How long ``final`` waits for the turn's context measurement before going without.
 _CONTEXT_WAIT_SECONDS = 15.0
@@ -236,6 +238,18 @@ class QueryRequest(_Strict):
         ),
     )
 
+    internet_off: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether this turn may reach the internet (contract >= 2.23). True "
+            "refuses web search, page fetches, the browser, connector, mailbox "
+            "and Agent Hub tools and commands that contact another host, with a "
+            "plain message the model relays; false allows them. Send it every "
+            "turn: a retained session keeps the last value. Omit it to leave the "
+            "agent as it is."
+        ),
+    )
+
     changes_turn_id: Optional[str] = Field(
         default=None,
         pattern=file_snapshots.TURN_ID_PATTERN,
@@ -265,7 +279,7 @@ class QueryRequest(_Strict):
         default=None,
         description=(
             "Earlier turns as the model saw them, oldest first (contract >= "
-            "2.23): each is that turn's `final.model_messages`, tool calls and "
+            "2.24): each is that turn's `final.model_messages`, tool calls and "
             "results included, or a user/assistant text pair for a turn that "
             "recorded none. Replaces `context` when sent; the agent keeps the "
             "newest whole turns that fit its context window."
@@ -446,6 +460,17 @@ class BypassRequest(_Strict):
 class BypassResponse(_Strict):
     session_id: str
     enabled: bool
+
+
+class InternetRequest(_Strict):
+    """Body of ``POST /v1/gaia/sessions/{session_id}/internet``."""
+
+    internet_off: bool
+
+
+class InternetResponse(_Strict):
+    session_id: str
+    internet_off: bool
 
 
 class _QueryRun:
@@ -815,6 +840,12 @@ def _apply_memory_mode(agent: Any, mode: Optional[str]) -> None:
         return
     agent._incognito = True
     agent._incognito_reason = "private" if mode == "private" else "memory_off"
+
+
+def _apply_internet_switch(agent: Any, internet_off: Optional[bool]) -> None:
+    """Turn *agent*'s internet guard on or off for this turn (>= 2.23)."""
+    if internet_off is not None:
+        agent.internet_off = internet_off
 
 
 def build_query_agent(**config_kwargs: Any):
@@ -1470,6 +1501,7 @@ async def query(request: QueryRequest):
             session is not None and request.can_answer_questions is not False
         )
         _apply_memory_mode(agent, request.memory)
+        _apply_internet_switch(agent, request.internet_off)
         if request.can_answer_questions is False:
             # Nobody is there to answer. Let the loop know so it resolves
             # ambiguity itself instead of parking on a question forever.
@@ -1927,6 +1959,30 @@ async def set_bypass(session_id: str, body: BypassRequest):
         )
     session.permissions.set_full_access(body.enabled)
     return BypassResponse(session_id=session_id, enabled=body.enabled)
+
+
+@router.post("/sessions/{session_id}/internet", response_model=InternetResponse)
+async def set_internet(session_id: str, body: InternetRequest):
+    """Turn a session's internet on or off from its agent's next tool call.
+
+    ``/query``'s ``internet_off`` covers the turns that start after a change;
+    this reaches a turn already running, so a switch flipped mid-turn stops the
+    next web search rather than the one after the turn ends. An unknown session
+    is a 404, as for bypass.
+    """
+    _require_valid_session_id(session_id)
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No session {session_id!r} exists. Send a query on that "
+                "session first; the internet switch applies to a conversation, "
+                "not to the server."
+            ),
+        )
+    session.agent.internet_off = body.internet_off
+    return InternetResponse(session_id=session_id, internet_off=body.internet_off)
 
 
 def _log_caller_auth_state(auth_config: Any) -> None:

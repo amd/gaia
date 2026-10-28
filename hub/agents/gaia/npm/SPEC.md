@@ -258,7 +258,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.23"`                  |
+| Contract version   | `API_VERSION = "2.24"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -276,6 +276,7 @@ the header.
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
 | `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
 | `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
+| `POST` | `/v1/gaia/sessions/{session_id}/internet` | Turn one session's internet on or off from its next tool call, including in a turn already running (≥ 2.23) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
 #### `/query` request body
@@ -290,8 +291,8 @@ checked for drift in CI — the same pattern as the email agent's own
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
-`documents`, `allowed_paths`, `memory`, `changes_turn_id`, `surface`) is
-optional.
+`documents`, `allowed_paths`, `memory`, `internet_off`, `changes_turn_id`,
+`surface`) is optional.
 
 `context` is the transcript you push. It replaces the agent's history for the
 turn. If it doesn't fit beside the agent's prompt and tools in the model's
@@ -329,6 +330,29 @@ omit it to leave memory as the agent has it. `"on"` never turns memory on when
 the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
 `422` the field.
 
+`internet_off` (contract ≥ 2.23) is `true` when the caller's chat has the
+Internet switched off and `false` when it is on. With `true` the turn refuses
+web search and page fetches, the browser, connector (MCP), mailbox and Agent
+Hub tools and any call or shell command that contacts a host other than the agent's own machine, and
+the refusal tells the model the internet is off for this chat. A retained
+session keeps the last value, so send it every turn; omit it to leave the
+agent as it is. Pre-2.23 binaries `422` the field, so a caller whose chat has
+the internet off should check `/version` and refuse the turn on an older
+binary rather than answer it online, and cancel an older binary's running
+turn when the switch goes off.
+
+`internet_off` is read when a turn starts. To change it for a turn already
+running, `POST /v1/gaia/sessions/{session_id}/internet` with
+`{ "internet_off": true }` (or `false`): the session's next tool call follows
+it, and so do later turns until a `/query` sends another value. An unknown
+session is a **404** rather than a new one.
+
+Send it only once `/query` has answered. The response starts after the turn's
+own `internet_off` is applied, so a switch posted earlier is replaced by the
+body's value, and on a session's first turn it is a **404** because the
+session does not exist yet. A caller whose user can flip the switch while a
+turn starts re-reads it when `/query` answers and posts it if it changed.
+
 `changes_turn_id` (contract ≥ 2.19) asks the agent to record the turn's file
 changes for undo. Before a tool writes, edits, creates or deletes a file, the
 agent saves a copy of it under `<GAIA home>/snapshots/<session_id>/<changes_turn_id>/`,
@@ -354,7 +378,7 @@ model's failure reads "the model server at `host:port`", not "Lemonade on this
 machine". Pre-2.20 binaries `422` the field and word every such error for the
 TUI.
 
-`turns` (contract ≥ 2.23) is the conversation so far as the model saw it,
+`turns` (contract ≥ 2.24) is the conversation so far as the model saw it,
 oldest first. Each entry is one earlier turn's `final.model_messages`, which
 holds the assistant's tool calls and the tool results, or a user/assistant text
 pair for a turn that recorded none. The agent replays the newest whole turns
@@ -362,7 +386,7 @@ that fit its context window and says in a `status` event when older ones drop
 out. Sent, it replaces `context`, which must then be `[]`. Every `final` carries
 `model_messages` so a caller can store it with the reply; it is absent when the
 loop had not returned 15 s after its answer, and that turn then replays as text
-only. Pre-2.23 binaries `422` `turns`.
+only. Pre-2.24 binaries `422` `turns`.
 
 `reasoning` (contract ≥ 2.22), when `true`, streams the model's reasoning as
 `reasoning` events, `{ "type": "reasoning", "delta": "…" }`, so a client can
@@ -454,7 +478,8 @@ agent instead of a throwaway built fresh per call — indexed documents and
 `load_skill` state only survive between turns when the same `session_id`
 threads them together. A `session_id` must be 1–128 characters from
 `A-Z a-z 0-9 . _ -`, not only dots (a UUID works); any other value is a **400**
-naming the allowed characters, on `/query` and on `/sessions/{session_id}/bypass`.
+naming the allowed characters, on `/query`, `/sessions/{session_id}/bypass` and
+`/sessions/{session_id}/internet`.
 Omitting it is a valid, explicit one-shot: nothing persists past that single
 turn, and the agent is not told otherwise.
 

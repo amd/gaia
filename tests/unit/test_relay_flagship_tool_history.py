@@ -180,9 +180,9 @@ def chat(monkeypatch, sidecar_flagship_registry):  # noqa: F811
 
 @pytest.mark.parametrize(
     "version, expected",
-    [("2.23", True), ("3.0", True), ("2.22", False), (None, False)],
+    [("2.24", True), ("3.0", True), ("2.23", False), (None, False)],
 )
-def test_only_a_flagship_at_2_23_takes_turns(version, expected):
+def test_only_a_flagship_at_2_24_takes_turns(version, expected):
     assert turns_supported(GAIA_PROFILE, version) is expected
 
 
@@ -214,8 +214,8 @@ def test_the_next_turn_sees_the_refused_tool_call(monkeypatch, live_sidecar, cha
 
 def test_an_older_flagship_still_gets_text_context(monkeypatch, live_sidecar, chat):
     base_url, agents, _ = live_sidecar
-    # Claims 2.22, so the relay must not send a field that version refuses.
-    _point_ui_at(monkeypatch, base_url, "2.22")
+    # Claims 2.23, so the relay must not send a field that version refuses.
+    _point_ui_at(monkeypatch, base_url, "2.23")
 
     chat.send("list the PRs")
     assert _answer(chat.send("why did that fail?")) == "second"

@@ -588,7 +588,8 @@ reads nothing.
     you add it back. A document attached to the chat is removed from the
     document bar instead, which also takes it out of the chat's search.
   - **Internet:** turn it off and GAIA won't search the web, open pages,
-    use the browser or connectors, or run commands that go online (such as
+    use the browser, connectors or your mailbox, search or install skills
+    from the Agent Hub, or run commands that go online (such as
     `git push`, `pip install` or `npx`). Commands that talk only to this PC,
     such as `curl http://localhost:3000`, still run. The check reads what a
     command names, so a script that connects to the internet by itself (for
@@ -599,9 +600,18 @@ reads nothing.
   - **Permission mode:** Ask or Full access, the same setting as the shield in
     the message box.
 
-  An agent that runs as its own process, such as the email agent, isn't held
-  to the folder and internet settings, and the section says so instead of
-  offering them.
+  A Hub-installed GAIA, which runs as its own process, is held to the
+  internet setting. It can be given another folder, but a folder can't be
+  taken away from it. Turning the internet off while it is working,
+  or while your message is still starting, stops its next web search, not
+  only the next message. If GAIA can't be reached to tell it, the panel or
+  the chat says so and the Agent UI ends that turn; the setting still
+  applies from your next message. It needs a GAIA agent at
+  contract 2.23 or later: with the internet off, the Agent UI doesn't send
+  your message to an older one and asks you to update GAIA instead, and
+  turning the internet off while an older one is working ends that turn. An
+  agent that keeps its own network rules, such as the email agent, isn't
+  held to either setting.
 - **Context & performance** is the breakdown described in
   [See how full the context is](#see-how-full-the-context-is).
 - **Outputs** lists everything the chat produced, newest first: files created

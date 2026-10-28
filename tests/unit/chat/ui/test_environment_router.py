@@ -189,6 +189,34 @@ def test_unknown_session_is_404(client):
     assert client.get("/api/sessions/nope/environment").status_code == 404
 
 
+def test_a_relayed_agent_is_reported_unenforced_and_changes_are_refused(
+    client, folder, monkeypatch
+):
+    # The email sidecar runs as its own process and keeps its own network rules.
+    monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
+    session_id = client.post("/api/sessions", json={"agent_type": "email"}).json()["id"]
+    body = client.get(f"/api/sessions/{session_id}/environment").json()
+    assert body["enforced"] is False
+    assert body["internet_enforced"] is False
+    off = client.put(
+        f"/api/sessions/{session_id}/environment/internet", json={"on": False}
+    )
+    assert off.status_code == 409
+    assert "its own network rules" in off.json()["detail"]
+    removed = client.post(
+        f"/api/sessions/{session_id}/environment/folders/remove",
+        json={"path": str(folder)},
+    )
+    assert removed.status_code == 409
+    added = client.post(
+        f"/api/sessions/{session_id}/environment/folders", json={"path": str(folder)}
+    )
+    assert added.status_code == 400
+    assert (
+        client.get(f"/api/sessions/{session_id}/environment").json()["internet"] is True
+    )
+
+
 @pytest.fixture
 def relayed_gaia(monkeypatch):
     """The flagship runs as a daemon sidecar, as on an installed GAIA."""
@@ -210,15 +238,16 @@ def gaia_session_id(client):
     return client.post("/api/sessions", json={"agent_type": "gaia"}).json()["id"]
 
 
-def test_a_relayed_agent_is_reported_unenforced_and_can_only_gain_folders(
+def test_a_relayed_flagship_chat_can_gain_folders_and_switch_internet_only(
     client, gaia_session_id, folder, relayed_gaia
 ):
     sid = gaia_session_id
     body = client.get(f"/api/sessions/{sid}/environment").json()
     assert body["enforced"] is False
+    assert body["internet_enforced"] is True
     off = client.put(f"/api/sessions/{sid}/environment/internet", json={"on": False})
-    assert off.status_code == 409
-    assert "its own process" in off.json()["detail"]
+    assert off.status_code == 200, off.text
+    assert off.json()["internet"] is False
     added = client.post(
         f"/api/sessions/{sid}/environment/folders", json={"path": str(folder)}
     )
@@ -228,7 +257,7 @@ def test_a_relayed_agent_is_reported_unenforced_and_can_only_gain_folders(
         f"/api/sessions/{sid}/environment/folders/remove", json={"path": str(folder)}
     )
     assert removed.status_code == 409
-    assert client.get(f"/api/sessions/{sid}/environment").json()["internet"] is True
+    assert "take a folder away" in removed.json()["detail"]
 
 
 def test_a_relayed_agent_too_old_for_folders_is_refused_one(
@@ -254,6 +283,30 @@ def test_an_invalid_allowed_paths_setting_is_named_not_an_empty_list(
 
     assert res.status_code == 500
     assert "GAIA_ALLOWED_PATHS" in res.json()["detail"]
+
+
+def test_a_switch_the_running_relayed_turn_cannot_take_is_a_502_naming_the_next_turn(
+    client, session_id, monkeypatch
+):
+    monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
+
+    def unreachable(_session_id, internet_off):
+        raise session_environment.RelayedSwitchError(
+            "Internet is off from the next message, but the running agent "
+            "couldn't be told (gone), so its turn was stopped. Send the message "
+            "again."
+        )
+
+    monkeypatch.setattr(session_environment, "_tell_running_relay", unreachable)
+    off = client.put(
+        f"/api/sessions/{session_id}/environment/internet", json={"on": False}
+    )
+    assert off.status_code == 502
+    assert "from the next message" in off.json()["detail"]
+    assert (
+        client.get(f"/api/sessions/{session_id}/environment").json()["internet"]
+        is False
+    )
 
 
 def _chat_count(client):
