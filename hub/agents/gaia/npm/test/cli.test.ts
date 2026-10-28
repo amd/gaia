@@ -270,6 +270,10 @@ describe("main dispatch", () => {
     }
   });
 
+  it("rejects an unknown command even when help is requested", async () => {
+    await expect(main(["fecth", "--help"])).rejects.toThrow("unknown command 'fecth'");
+  });
+
   it("refuses known boolean switches when the command would ignore them", async () => {
     for (const flag of ["--force", "--allow-insecure-base-url"]) {
       await expect(main(["version", flag])).rejects.toThrow(new RegExp(`${flag} is not valid`));
