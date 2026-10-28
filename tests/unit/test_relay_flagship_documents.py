@@ -17,6 +17,7 @@ import hashlib
 import json
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -354,6 +355,89 @@ def test_an_older_flagship_says_folders_need_an_update(
     assert "too old to be given folders" in error["content"]
     assert "Update GAIA to the latest version" in error["content"]
     assert agents == []
+
+
+def test_a_relayed_chat_with_a_removed_sub_folder_stops(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    # Made while the agent ran in-process: a folder, with one sub-folder taken
+    # away. Relayed, the folder would go as a whole and hand back the secret.
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    folder = tmp_path / "project"
+    secret = folder / "secrets"
+    secret.mkdir(parents=True)
+    chat.db.set_session_environment(
+        chat.session_id,
+        folders=[str(folder.resolve())],
+        withheld=[str(secret.resolve())],
+        internet_off=False,
+    )
+
+    events = chat.send("list everything in this folder")
+
+    [error] = [e for e in events if e.get("type") == "agent_error"]
+    assert "Start a new chat" in error["content"]
+    assert agents == []
+
+
+def test_a_relayed_chat_with_a_removed_default_folder_stops(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    chat.db.set_session_environment(
+        chat.session_id,
+        folders=[],
+        withheld=[str(Path.cwd().resolve())],
+        internet_off=False,
+    )
+
+    events = chat.send("hi")
+
+    assert [e for e in events if e.get("type") == "agent_error"]
+    assert agents == []
+
+
+def test_a_folder_reaches_the_relayed_flagship_without_its_siblings(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    folder = tmp_path / "picked"
+    sibling = tmp_path / "picked-not"
+    folder.mkdir()
+    sibling.mkdir()
+    session_environment.grant_folder(chat.db, chat.session_id, str(folder))
+
+    _answer(chat.send("what's here?"))
+
+    [agent] = agents
+    scope = agent.built_with["allowed_paths"]
+    assert str(folder.resolve()) in scope
+    assert str(tmp_path.resolve()) not in scope
+    assert str(sibling.resolve()) not in scope
+    validator = PathValidator(scope)
+    assert validator.is_path_allowed(str(folder / "a.txt"), prompt_user=False)
+    assert not validator.is_path_allowed(str(sibling / "a.txt"), prompt_user=False)
+
+
+def test_gaia_allowed_paths_still_narrows_a_relayed_folder(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    ceiling = tmp_path / "ceiling"
+    ceiling.mkdir()
+    folder = tmp_path / "outside"
+    folder.mkdir()
+    session_environment.grant_folder(chat.db, chat.session_id, str(folder))
+    monkeypatch.setenv("GAIA_ALLOWED_PATHS", str(ceiling))
+
+    _answer(chat.send("what's here?"))
+
+    [agent] = agents
+    assert str(folder.resolve()) not in agent.built_with["allowed_paths"]
 
 
 def test_email_turns_never_carry_documents(monkeypatch, tmp_path):

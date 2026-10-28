@@ -1442,7 +1442,9 @@ agent at once, so they take effect on its next step.
     relayed sidecar); removing a folder and the internet switch then refuse
     with **409**. Adding a folder works when the sidecar's contract is 2.18 or
     later, since each turn sends it the chat's folders, and is a **400**
-    otherwise.
+    otherwise. A chat that had a folder removed while its agent ran in process
+    stops its turns once the agent is relayed, since the sidecar can't be kept
+    out of a removed folder; start a new chat.
   </Accordion>
 
   <Accordion title="POST /api/sessions/{session_id}/environment/folders">

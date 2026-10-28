@@ -79,7 +79,7 @@ from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
 from .session_environment import apply_environment, folders_refusal
 from .session_environment import load as load_environment
-from .session_environment import with_folder_note
+from .session_environment import with_folder_note, withheld_refusal
 from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
 from .utils import attached_upload_paths, managed_documents_dir
@@ -2188,6 +2188,7 @@ def _dispatch_sidecar_query(
     documents: list | None = None,
     allowed_paths: list | None = None,
     folders: list | None = None,
+    withheld: list | None = None,
     memory: str = "on",
     recording: TurnRecording | None = None,
     max_steps: int | None = None,
@@ -2204,7 +2205,9 @@ def _dispatch_sidecar_query(
 
     *folders* are the folders the user added to the chat. They join the scope;
     a sidecar too old to take a scope stops the turn rather than answer
-    without them.
+    without them. *withheld* are paths the user took away from the chat; an
+    allowed-paths list can't express them, so a chat with any stops the turn
+    rather than hand the sidecar what the user removed.
 
     *memory* is the chat's memory mode (:func:`_memory_mode`). Likewise, a
     private or memory-off turn is stopped rather than sent to a sidecar that
@@ -2275,6 +2278,15 @@ def _dispatch_sidecar_query(
             )
             return
         relayed_documents = [str(Path(p).resolve()) for p in documents]
+
+    if withheld:
+        logger.warning(
+            "%s chat %s has withheld paths a relayed agent can't be held to",
+            agent_type,
+            (session_id or "")[:8],
+        )
+        sse_handler._emit({"type": "agent_error", "content": withheld_refusal()})
+        return
 
     takes_scope = scope_supported(profile, handle.api_version)
     if folders and not takes_scope:
@@ -3928,6 +3940,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         agent_type,
                         session_id[:8],
                     )
+                    relayed_env = load_environment(db, session_id)
                     _dispatch_sidecar_query(
                         sse_handler,
                         request,
@@ -3937,7 +3950,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         session_id=session_id,
                         documents=_relayed_documents(rag_file_paths, attached),
                         allowed_paths=allowed,
-                        folders=load_environment(db, session_id)["folders"],
+                        folders=relayed_env["folders"],
+                        withheld=relayed_env["withheld"],
                         memory=_memory_mode(session, db),
                         recording=recording,
                     )

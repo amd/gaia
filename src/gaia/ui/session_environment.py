@@ -139,6 +139,15 @@ def folders_refusal(agent_type: Optional[str]) -> str:
     )
 
 
+def withheld_refusal() -> str:
+    """What to tell the user when a relayed chat has folders taken away."""
+    return (
+        "This chat had folders taken away while its agent ran inside GAIA. The "
+        "agent now runs as its own process, which can't be kept out of them. "
+        "Start a new chat to keep working."
+    )
+
+
 def _require_folders(agent_type: Optional[str]) -> None:
     if not takes_folders(agent_type):
         raise EnvironmentChangeError(folders_refusal(agent_type))
