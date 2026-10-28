@@ -249,6 +249,12 @@
             "title": "Query",
             "type": "string"
           },
+          "reasoning": {
+            "default": false,
+            "description": "Stream the model's reasoning as `reasoning` events with a `delta` (contract >= 2.22), for a client that shows it apart from status lines. Without it, reasoning folds into `status` lines as before.",
+            "title": "Reasoning",
+            "type": "boolean"
+          },
           "run_id": {
             "description": "Host-minted UUIDv4 run handle. Cancellation (POST /v1/gaia/query/{run_id}/cancel) keys off it, so the client must mint it before the request rather than learn it from the stream.",
             "title": "Run Id",
@@ -459,7 +465,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.21"
+    "version": "2.22"
   },
   "openapi": "3.1.0",
   "paths": {

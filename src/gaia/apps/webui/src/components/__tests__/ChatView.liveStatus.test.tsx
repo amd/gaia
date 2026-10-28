@@ -108,7 +108,13 @@ async function driveSend() {
     expect(capturedCallbacks).not.toBeNull();
 }
 
-/** The live line beside GAIA's name; the activity panel may repeat the same text. */
+/** A running tool is named once, on its own row, with no live line repeating it. */
+async function runningRow(text: string) {
+    await waitFor(() => expect(document.querySelector('.flow-tool.active .flow-tool-label')?.textContent).toBe(text));
+    expect(document.querySelector('.thinking-indicator')).toBeNull();
+}
+
+/** The live line at the end of the timeline, saying what the model is doing between steps. */
 async function liveLine(text: string) {
     await waitFor(() => expect(document.querySelector('.thinking-indicator-text')?.textContent).toBe(text));
 }
@@ -153,13 +159,11 @@ describe('ChatView live status', () => {
             capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'write_file' } as unknown as StreamEvent);
         });
         expect(useChatStore.getState().liveStatus).toBe('Writing file');
-        await liveLine('Writing file');
+        await runningRow('Writing file');
     });
 });
 
 describe('one progress readout per turn', () => {
-    const summaryBar = () => screen.queryByRole('button', { name: 'Expand agent activity' });
-
     it("keeps the backend's silent-wait tick out of the bubble", async () => {
         await driveSend();
         act(() => {
@@ -171,7 +175,7 @@ describe('one progress readout per turn', () => {
         await liveLine('Thinking...');
         expect(useChatStore.getState().agentSteps).toEqual([]);
         expect(screen.queryByText(/Model is processing/)).toBeNull();
-        expect(summaryBar()).toBeNull();
+        expect(document.querySelector('.agent-timeline')).toBeNull();
     });
 
     it("does not relabel the model's reasoning with the tick", async () => {
@@ -186,7 +190,7 @@ describe('one progress readout per turn', () => {
         expect(useChatStore.getState().agentSteps.map((s) => s.label)).toEqual(['Thinking']);
     });
 
-    it("names a running tool beside GAIA's name and only counts steps in the activity bar", async () => {
+    it('names a running tool on its own row, once', async () => {
         await driveSend();
         act(() => {
             capturedCallbacks!.onAgentEvent({
@@ -194,8 +198,19 @@ describe('one progress readout per turn', () => {
             } as unknown as StreamEvent);
         });
 
-        await liveLine('Reading file: notes.txt');
-        expect(summaryBar()).toHaveTextContent(/^1 step · 1 tool$/);
+        await runningRow('Reading file: notes.txt');
+    });
+
+    it('stops naming a call once it finishes, even when no new phase follows', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({
+                type: 'tool_start', tool: 'web_search', narration: 'Searching web: portland weather',
+            } as unknown as StreamEvent);
+            capturedCallbacks!.onAgentEvent({ type: 'tool_end', success: true } as unknown as StreamEvent);
+        });
+
+        await liveLine('Thinking...');
     });
 
     it('takes a narration that arrives with the arguments', async () => {
@@ -207,7 +222,7 @@ describe('one progress readout per turn', () => {
             } as unknown as StreamEvent);
         });
 
-        await liveLine('Reading file: notes.txt');
+        await runningRow('Reading file: notes.txt');
     });
 });
 
@@ -271,5 +286,40 @@ describe('opening a chat', () => {
         await act(async () => { deliver({ messages: [], total: 0 }); });
 
         expect(userBubbles()).toEqual(['send the drafted email']);
+    });
+});
+
+describe('mid-turn notes', () => {
+    const emit = (e: object) => capturedCallbacks!.onAgentEvent(e as unknown as StreamEvent);
+
+    it('moves text written before a tool call out of the answer and into the timeline', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onChunk({ type: 'chunk', content: "I'll check the forecast first." } as StreamEvent);
+            emit({ type: 'commentary', content: "I'll check the forecast first." });
+            emit({ type: 'tool_start', tool: 'fetch_page', narration: 'Reading web page' });
+            emit({ type: 'tool_end', success: true });
+        });
+        act(() => {
+            capturedCallbacks!.onChunk({ type: 'chunk', content: 'Clear Saturday.' } as StreamEvent);
+        });
+
+        await waitFor(() => expect(document.querySelector('.flow-note')).toHaveTextContent("I'll check the forecast first."));
+        await waitFor(() => expect(useChatStore.getState().streamingContent).toBe('Clear Saturday.'));
+        expect(screen.getAllByText("I'll check the forecast first.")).toHaveLength(1);
+    });
+
+    it('ends the reasoning once the answer starts streaming', async () => {
+        await driveSend();
+        act(() => {
+            emit({ type: 'thinking', content: 'Weighing it up.' });
+        });
+        act(() => {
+            capturedCallbacks!.onChunk({ type: 'chunk', content: 'Clear Saturday.' } as StreamEvent);
+        });
+
+        const thought = useChatStore.getState().agentSteps[0];
+        expect(thought.active).toBe(false);
+        expect(thought.latencyMs).toBeGreaterThanOrEqual(0);
     });
 });
