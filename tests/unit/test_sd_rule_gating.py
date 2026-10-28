@@ -22,7 +22,8 @@ def test_slides_are_files_that_ask_for_a_format(enabled):
     with chat_agent_build_context("full", enable_sd_tools=enabled) as agent:
         prompt = agent._get_system_prompt()
     assert "**SLIDES / DECKS:** Files, never images." in prompt
-    assert "ask: .pptx or HTML?" in prompt
+    assert 'always ask "PowerPoint (.pptx) or HTML?"' in prompt
+    assert "build nothing until they answer" in prompt
     assert "`run_python` with python-pptx" in prompt
     if enabled:
         assert "never for slides or documents" in prompt

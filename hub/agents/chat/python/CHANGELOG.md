@@ -3,7 +3,8 @@
 ## Unreleased
 
 - Asked for a slide or deck, the agent asks whether you want PowerPoint (.pptx)
-  or HTML when you didn't say, then builds that file. It no longer reaches for
+  or HTML when you didn't say, and builds nothing until you answer; then it
+  builds that file. It no longer reaches for
   `generate_image`, which can't render readable text. A successful image is
   reported by its saved path.
 - `get_system_info` reports free disk space (`disk_free_gb`) and available
