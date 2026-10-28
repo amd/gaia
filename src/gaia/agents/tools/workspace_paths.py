@@ -36,7 +36,7 @@ def _workspace_default(host: Any) -> Optional[str]:
 
 def _project_target_for(host: Any, args: dict) -> Path:
     return _resolve_target(
-        args['file_path'],
-        args.get('project_dir'),
+        args["file_path"],
+        args.get("project_dir"),
         _workspace_default(host),
     )
