@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -219,6 +220,9 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 	inst, err := c.Attach(ctx)
 	if err == nil {
 		if why := ReplacedInstall(inst); why != "" {
+			if recentlyDeferred(inst) {
+				return inst, nil
+			}
 			return c.restartOutdated(ctx, inst, why)
 		}
 		return inst, nil
@@ -235,6 +239,33 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 		return inst, err
 	}
 	return c.spawnAndWait(ctx)
+}
+
+// deferredRecheck is how long the TUI keeps using a busy out-of-date daemon
+// before it asks the GAIA CLI again, so a chat doesn't start a Python process
+// for every request while the restart waits.
+const deferredRecheck = time.Minute
+
+var (
+	deferredMu sync.Mutex
+	deferredAt = map[string]time.Time{}
+)
+
+func deferredKey(inst *Instance) string {
+	return fmt.Sprintf("%d@%v", inst.PID, inst.StartedAt)
+}
+
+func recentlyDeferred(inst *Instance) bool {
+	deferredMu.Lock()
+	defer deferredMu.Unlock()
+	at, ok := deferredAt[deferredKey(inst)]
+	return ok && time.Since(at) < deferredRecheck
+}
+
+func markDeferred(inst *Instance) {
+	deferredMu.Lock()
+	defer deferredMu.Unlock()
+	deferredAt[deferredKey(inst)] = time.Now()
 }
 
 // restartOutdated replaces a daemon an update left on the previous release.
@@ -268,6 +299,7 @@ func (c *Client) restartOutdated(ctx context.Context, inst *Instance, why string
 			// The CLI keeps a busy daemon running until its work is done.
 			c.opts.Logf("daemon: %s is out of date (%s) but busy; using it for now: %s",
 				fresh, again, strings.TrimSpace(out.String()))
+			markDeferred(fresh)
 			return fresh, nil
 		}
 		return nil, &StartError{Reason: fmt.Sprintf(

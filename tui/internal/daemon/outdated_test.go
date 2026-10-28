@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // An update that replaced GAIA must not leave the TUI on the previous release's
@@ -100,6 +101,44 @@ func TestStartOrAttachKeepsABusyOutOfDateDaemon(t *testing.T) {
 	}
 	if got.GaiaVersion != "0.25.1" {
 		t.Errorf("attached to GAIA %q, want the busy 0.25.1 daemon kept", got.GaiaVersion)
+	}
+}
+
+func TestABusyOutOfDateDaemonIsNotAskedAboutOnEveryRequest(t *testing.T) {
+	f := newFakeDaemon(t)
+	path := versionFile(t, "0.25.2")
+	f.writeInstance(func(i *Instance) { i.GaiaVersion, i.VersionFile = "0.25.1", path })
+
+	runs := 0
+	keep := launcher(t, f.dir, "", "")
+	c := testClient(t, func(o *Options) {
+		o.StartCommand = func(ctx context.Context) (*exec.Cmd, error) {
+			runs++
+			return keep(ctx)
+		}
+	})
+	for i := 0; i < 3; i++ {
+		if _, err := c.StartOrAttach(context.Background()); err != nil {
+			t.Fatalf("StartOrAttach #%d: %v", i, err)
+		}
+	}
+	if runs != 1 {
+		t.Errorf("ran the GAIA CLI %d times while the restart waited, want 1", runs)
+	}
+
+	// After the recheck interval the CLI is asked again.
+	inst, err := c.Attach(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deferredMu.Lock()
+	deferredAt[deferredKey(inst)] = time.Now().Add(-2 * deferredRecheck)
+	deferredMu.Unlock()
+	if _, err := c.StartOrAttach(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 2 {
+		t.Errorf("ran the GAIA CLI %d times after the recheck interval, want 2", runs)
 	}
 }
 

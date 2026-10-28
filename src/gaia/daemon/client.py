@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Callable, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from gaia.daemon import paths
 from gaia.daemon.constants import API_PREFIX, AUTH_SCHEME, DAEMON_API_VERSION
@@ -116,8 +116,10 @@ STOP_WAIT_TIMEOUT = 45.0
 
 # A daemon that served a Lemonade request this recently may be mid-turn.
 OUTDATED_BUSY_RECENT_S = 120.0
-# Outdated daemons already reported as kept running, so the notice shows once.
-_DEFERRED_NOTED: set = set()
+# Work this process runs on the daemon that no route of the daemon reports.
+_LOCAL_WORK: List[Callable[[], Optional[str]]] = []
+# Why the daemon was last kept running on the previous release, for front ends.
+_deferred_notice: Optional[str] = None
 
 UPGRADE_CORE_GUIDANCE = (
     "Upgrade the installed GAIA core so it matches this app: "
@@ -301,6 +303,7 @@ def start_or_attach(
     except DaemonHungError:
         inst = None  # replaced below, under the lock
     if inst is not None and runs_replaced_install(inst) is None:
+        _set_deferred_notice(None)
         return inst
 
     with StartLock(timeout=timeout):
@@ -311,22 +314,21 @@ def start_or_attach(
                 _check_version(inst)
                 stale = runs_replaced_install(inst)
                 if stale is None:
+                    _set_deferred_notice(None)
                     return inst
                 busy = outdated_daemon_busy(inst)
                 if busy is not None:
-                    if inst.pid in _DEFERRED_NOTED:
-                        return inst
-                    _DEFERRED_NOTED.add(inst.pid)
-                    logger.warning(
-                        "daemon: pid %s is out of date (%s), but %s, so it keeps "
-                        "running for now. It restarts on a later GAIA command "
-                        "once it is free, or run `gaia daemon restart`.",
-                        inst.pid,
-                        stale,
-                        busy,
+                    notice = (
+                        f"GAIA's background service is out of date ({stale}). "
+                        f"It keeps running because {busy}, and restarts on the "
+                        "next GAIA command once that work is done. Run `gaia "
+                        "daemon restart` to restart it now."
                     )
+                    _set_deferred_notice(notice)
+                    logger.warning("daemon: pid %s: %s", inst.pid, notice)
                     return inst
                 _replace_outdated(inst, stale)
+                _set_deferred_notice(None)
                 inst = None
         except DaemonHungError as e:
             logger.warning("daemon: %s Replacing it.", e)
@@ -401,21 +403,70 @@ def _scheduled_work() -> Optional[str]:
     return None
 
 
+def add_local_work(check: Callable[[], Optional[str]]) -> None:
+    """Have this process's own work on the daemon delay an update's restart.
+
+    *check* returns why stopping the daemon now would cut that work off, or
+    None. A front end that talks to agents directly (the Agent UI) registers
+    its turns here, since the daemon cannot see them.
+    """
+    _LOCAL_WORK.append(check)
+
+
+def remove_local_work(check: Callable[[], Optional[str]]) -> None:
+    """Undo :func:`add_local_work`."""
+    if check in _LOCAL_WORK:
+        _LOCAL_WORK.remove(check)
+
+
+def deferred_restart_notice() -> Optional[str]:
+    """Why the daemon still runs the previous release, or None.
+
+    Set when this process last found the daemon out of date but busy, cleared
+    once it found a current one.
+    """
+    return _deferred_notice
+
+
+def _set_deferred_notice(notice: Optional[str]) -> None:
+    global _deferred_notice
+    _deferred_notice = notice
+
+
 def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     """Why stopping *inst* now could cut off work, or None when it is free.
 
     Uses what older daemons expose too: their job store, the front ends
-    registered with them, and when Lemonade last served a request.
+    registered with them, and when Lemonade last served a request. A daemon
+    from this release also reports the turns relayed through it, so a turn
+    waiting on a tool or an approval counts even when its front end is the
+    caller.
     """
     import requests
 
+    for check in list(_LOCAL_WORK):
+        mine = check()
+        if mine is not None:
+            return mine
     jobs = _scheduled_work()
     if jobs is not None:
         return jobs
+    headers = {"Authorization": f"{AUTH_SCHEME} {inst.token}"}
+    try:
+        status = requests.get(
+            f"{inst.base_url}{API_PREFIX}/status", headers=headers, timeout=5.0
+        )
+    except requests.exceptions.RequestException as e:
+        return f"GAIA could not check whether it is busy ({e})"
+    if status.status_code != 200:
+        return f"GAIA could not check whether it is busy ({_error_detail(status)})"
+    relayed = status.json().get("relayed_turns") or 0
+    if relayed:
+        return f"{relayed} agent turn(s) are still running on it"
     try:
         clients = requests.get(
             f"{inst.base_url}{API_PREFIX}/lemonade/clients",
-            headers={"Authorization": f"{AUTH_SCHEME} {inst.token}"},
+            headers=headers,
             timeout=5.0,
         )
     except requests.exceptions.RequestException as e:

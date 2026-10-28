@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 
 import pytest
 
@@ -187,7 +188,7 @@ def running(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(client, "wait_until_gone", lambda inst, timeout=0: True)
     monkeypatch.setattr(client, "outdated_daemon_busy", lambda inst: state.get("busy"))
-    monkeypatch.setattr(client, "_DEFERRED_NOTED", set())
+    monkeypatch.setattr(client, "_deferred_notice", None)
 
     def spawn(timeout, on_progress=None, drop_env=()):
         calls["spawned"] += 1
@@ -225,7 +226,7 @@ def test_an_out_of_date_daemon_that_will_not_stop_says_what_to_run(
     assert calls["spawned"] == 0
 
 
-def test_a_busy_out_of_date_daemon_keeps_running_and_says_so_once(running, caplog):
+def test_a_busy_out_of_date_daemon_keeps_running_and_says_so_each_time(running, caplog):
     state, calls, path = running
     state["inst"] = _inst(gaia_version="0.25.1", version_file=str(path))
     state["busy"] = "the GAIA terminal app is still using it"
@@ -238,9 +239,25 @@ def test_a_busy_out_of_date_daemon_keeps_running_and_says_so_once(running, caplo
     notices = [
         r.getMessage() for r in caplog.records if "keeps running" in r.getMessage()
     ]
-    assert len(notices) == 1
+    assert len(notices) == 2
     assert "terminal app is still using it" in notices[0]
     assert "gaia daemon restart" in notices[0]
+    # Front ends show the same text to the person using them.
+    assert "terminal app is still using it" in client.deferred_restart_notice()
+
+
+def test_the_notice_clears_once_the_daemon_is_restarted(running):
+    state, calls, path = running
+    state["inst"] = _inst(gaia_version="0.25.1", version_file=str(path))
+    state["busy"] = "a chat is still answering"
+    client.start_or_attach(timeout=1)
+    assert client.deferred_restart_notice()
+
+    state["busy"] = None
+    client.start_or_attach(timeout=1)
+
+    assert calls["shutdown"] == [4242]
+    assert client.deferred_restart_notice() is None
 
 
 def test_a_daemon_that_cannot_be_asked_to_stop_says_what_to_run(running, monkeypatch):
@@ -273,9 +290,17 @@ def daemon_reports(monkeypatch, tmp_path):
     import requests
 
     answers = {
+        "status": _Response(200, {"service": "gaia-daemon", "relayed_turns": 0}),
         "clients": _Response(200, {"clients": [], "seconds_since_request": None}),
     }
-    monkeypatch.setattr(requests, "get", lambda url, **kwargs: answers["clients"])
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda url, **kwargs: answers[
+            "status" if url.endswith("/status") else "clients"
+        ],
+    )
+    monkeypatch.setattr(client, "_LOCAL_WORK", [])
     monkeypatch.setattr(client, "pid_alive", lambda pid: pid != 999999)
     monkeypatch.setattr(client.paths, "host_dir", lambda: tmp_path)
     return answers
@@ -400,3 +425,159 @@ def test_a_store_without_the_jobs_table_does_not_keep_it(daemon_reports, tmp_pat
 
     sqlite3.connect(tmp_path / "scheduler.db").close()
     assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_a_turn_relayed_through_the_daemon_keeps_it(daemon_reports):
+    daemon_reports["status"] = _Response(200, {"relayed_turns": 2})
+    assert "2 agent turn(s) are still running" in client.outdated_daemon_busy(_inst())
+
+
+def test_an_older_daemon_without_the_turn_count_is_judged_as_before(daemon_reports):
+    daemon_reports["status"] = _Response(200, {"service": "gaia-daemon"})
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_this_processs_own_work_keeps_it_even_with_nothing_else(daemon_reports):
+    client.add_local_work(lambda: "1 Agent UI chat(s) are still answering")
+    assert "Agent UI chat" in client.outdated_daemon_busy(_inst())
+
+
+def test_removed_local_work_no_longer_keeps_it(daemon_reports):
+    def check():
+        return "busy"
+
+    client.add_local_work(check)
+    client.remove_local_work(check)
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+# The Agent UI talks to the flagship directly, so the daemon cannot count its
+# turns. Its backend is also the process that runs the check, so it excludes
+# itself from the front ends it sees: its own turns must be counted here.
+
+
+class _ParkedProxy:
+    """A flagship whose run parks on *event* until released."""
+
+    agent_id = "gaia"
+
+    def __init__(self, event):
+        self.event = event
+        self.parked = threading.Event()
+        self.release = threading.Event()
+
+    def query_stream(self, body, read_timeout=None, on_response=None):
+        yield dict(self.event, run_id=body.get("run_id"))
+        self.parked.set()
+        self.release.wait(10)
+        yield {"type": "final", "answer": "done", "run_id": body.get("run_id")}
+
+    def cancel_query(self, _rid):
+        self.release.set()
+
+    def tool_decision(self, *_a):
+        return {"delivered": True}
+
+    def set_bypass(self, *_a):
+        pass
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "tool_call", "tool": "run_shell_command", "args": {}},
+        {
+            "type": "needs_confirmation",
+            "action": "write_file",
+            "summary": "Allow writing file?",
+            "confirm_id": "c-1",
+        },
+    ],
+    ids=["slow-tool", "approval"],
+)
+def test_a_parked_agent_ui_turn_keeps_the_daemon_from_restarting(
+    daemon_reports, monkeypatch, event
+):
+    from gaia.ui import _chat_helpers as helpers
+    from gaia.ui.email_sidecar import relay
+    from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    monkeypatch.setattr(helpers, "_active_sse_handlers", {})
+    client.add_local_work(helpers.relayed_turns_in_flight)
+    # The calling chat, still on its way to the agent, does not count.
+    helpers._active_sse_handlers["chat-b"] = SSEOutputHandler()
+    assert client.outdated_daemon_busy(_inst()) is None
+
+    proxy = _ParkedProxy(event)
+    handler = SSEOutputHandler()
+    helpers._active_sse_handlers["chat-a"] = handler
+    turn = threading.Thread(
+        target=relay.relay_query,
+        args=(handler, proxy),
+        kwargs={
+            "query": "q",
+            "context": [],
+            "run_id": "r-a",
+            "profile": GAIA_PROFILE,
+            "session_id": "chat-a",
+            "answers_confirmations": True,
+        },
+        daemon=True,
+    )
+    turn.start()
+    try:
+        assert proxy.parked.wait(5)
+        assert "1 Agent UI chat(s) are still answering" in (
+            client.outdated_daemon_busy(_inst())
+        )
+    finally:
+        proxy.release.set()
+        turn.join(10)
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_an_agent_ui_chat_shows_why_the_update_is_not_running_yet(monkeypatch):
+    from types import SimpleNamespace
+
+    from gaia.ui import _chat_helpers as helpers
+    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.models import ChatRequest
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    class _Done:
+        agent_id = "gaia"
+
+        def init(self):
+            return 200, {}
+
+        def query_stream(self, body, read_timeout=None, on_response=None):
+            yield {"type": "final", "answer": "ok"}
+
+        def cancel_query(self, _rid):
+            pass
+
+        def set_bypass(self, *_a):
+            pass
+
+    handle = SimpleNamespace(api_version="2.24", proxy=lambda: _Done())
+    monkeypatch.setattr(daemon_client, "acquire_handle", lambda _id: handle)
+    monkeypatch.setattr(helpers, "_replay_cloud_key_for_relay", lambda *_a: None)
+    monkeypatch.setattr(
+        client, "_deferred_notice", "GAIA's background service is out of date"
+    )
+    handler = SSEOutputHandler()
+
+    helpers._dispatch_sidecar_query(
+        handler,
+        ChatRequest(session_id="s", message="hi", agent_type="gaia"),
+        [],
+        None,
+        "gaia",
+    )
+
+    events = []
+    while not handler.event_queue.empty():
+        events.append(handler.event_queue.get_nowait())
+    notes = [e for e in events if e.get("type") == "status"]
+    assert any("out of date" in e.get("message", "") for e in notes), events
