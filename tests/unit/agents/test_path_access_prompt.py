@@ -20,6 +20,8 @@ from gaia.ui.sse_handler import SSEOutputHandler
 
 
 class _RecordingConsole(SilentConsole):
+    blocking_confirmation = True
+
     def __init__(self, answer):
         super().__init__()
         self.answer = answer
@@ -537,3 +539,74 @@ def test_the_hint_never_makes_the_home_folder_itself_askable(layout, home):
 
     assert "too broad" in again
     assert console.calls == []
+
+
+class _UnattendedConsole(_RecordingConsole):
+    blocking_confirmation = False
+
+
+def test_home_folder_refusal_names_no_folder_on_a_console_nobody_answers(layout, home):
+    console = _UnattendedConsole(True)
+    agent = _BrowseAgent(layout["scope"], console)
+
+    with patch("gaia.agents.base.agent.terminal_is_interactive", return_value=False):
+        refused = _browse(agent, home)
+
+    assert "too broad" in refused
+    assert "Movies" not in refused
+    assert console.calls == []
+
+
+def test_home_folder_refusal_names_folders_under_full_access_unattended(layout, home):
+    console = _UnattendedConsole(True)
+    console.full_access = True
+    agent = _BrowseAgent(layout["scope"], console)
+
+    with patch("gaia.agents.base.agent.terminal_is_interactive", return_value=False):
+        refused = _browse(agent, home)
+
+    assert "Movies" in refused
+
+
+def test_home_folder_refusal_names_no_folder_when_tools_are_preapproved(layout, home):
+    console = _RecordingConsole(True)
+    console.auto_approve_gated_tools = True
+    agent = _BrowseAgent(layout["scope"], console)
+
+    refused = _browse(agent, home)
+
+    assert "too broad" in refused
+    assert "Movies" not in refused
+    assert console.calls == []
+
+
+def test_home_folder_refusal_skips_a_folder_declined_this_turn(layout, home):
+    (home / "Pictures").mkdir()
+    console = _RecordingConsole(False)
+    agent = _BrowseAgent(layout["scope"], console)
+
+    declined = _browse(agent, home / "Movies")
+    refused = _browse(agent, home)
+
+    assert "Access denied" in declined
+    assert json.dumps(str(home / "Pictures"))[1:-1] in refused
+    assert json.dumps(str(home / "Movies"))[1:-1] not in refused
+    assert len(console.calls) == 1
+
+
+def test_every_named_folder_is_granted_when_approved(layout, home):
+    for name in ("Desktop", "Documents", "Pictures"):
+        (home / name).mkdir()
+    console = _RecordingConsole(True)
+    agent = _BrowseAgent(layout["scope"], console)
+
+    refused = _browse(agent, home)
+    named = [
+        home / n
+        for n in ("Desktop", "Documents", "Movies", "Pictures")
+        if json.dumps(str(home / n))[1:-1] in refused
+    ]
+
+    assert len(named) == 4
+    for folder in named:
+        assert "Access denied" not in _browse(agent, folder)
