@@ -256,12 +256,36 @@ def test_card_groups_do_not_cross_a_newline(newline):
     (
         "sales_2024_report.pdf",
         "invoice-2024-march.pdf",
+        "REPORT-2024-FINAL.pdf",
+        "Q3_2024_FINAL.PDF",
         "Source /docs/sales_2024_report.pdf: SHA256 abc",
+        "Saved to C:/Users/me/backup_2024_march.tar.gz yesterday",
     ),
 )
-def test_lowercase_filenames_are_not_masked_as_generic_tokens(text):
+def test_filenames_are_not_masked_as_generic_tokens(text):
     assert not MemoryMixin._looks_like_credential(text)
     assert MemoryMixin._mask_credentials(text) == text
+
+
+@pytest.mark.parametrize(
+    "text, secret",
+    (
+        ("the code is tango-9921-delta", "tango-9921-delta"),
+        ("pw for the router is admin-2024-secret", "admin-2024-secret"),
+        ("halibut-4417-zulu", "halibut-4417-zulu"),
+        ("Halibut-4417-Zulu", "Halibut-4417-Zulu"),
+        ("HALIBUT-4417-ZULU", "HALIBUT-4417-ZULU"),
+        # A sentence-ending period is not a file extension.
+        ("my code is tango-9921-delta.", "tango-9921-delta"),
+        ("my code is tango-9921-delta. Keep it safe.", "tango-9921-delta"),
+        ("(tango_9921_delta)", "tango_9921_delta"),
+    ),
+)
+def test_joined_tokens_are_masked_in_any_case(text, secret):
+    assert MemoryMixin._looks_like_credential(text)
+    masked = MemoryMixin._mask_credentials(text)
+    assert secret not in masked
+    assert "[secret removed]" in masked
 
 
 def test_phone_lists_and_tracking_numbers_are_not_masked():
