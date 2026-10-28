@@ -29,3 +29,13 @@ it('keeps steps whose only failure is a tool result folded', () => {
 
     expect(screen.getByRole('button', { name: /Read file ×2/ })).toHaveAttribute('aria-expanded', 'false');
 });
+
+it('says a folded run with a policy block was blocked by policy', () => {
+    const steps: AgentStep[] = [
+        { id: 1, type: 'policy_alert', label: 'Policy blocked run_shell_command', tool: 'run_shell_command', decision: 'BLOCK', reason: 'Not allowed here.', ruleIds: [], active: false, success: false, timestamp: 1 },
+        { id: 2, type: 'thinking', label: 'Thinking', detail: 'Try another way.', active: false, timestamp: 2 },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByRole('button', { name: /^Blocked by policy$/ })).toHaveAttribute('aria-expanded', 'true');
+});

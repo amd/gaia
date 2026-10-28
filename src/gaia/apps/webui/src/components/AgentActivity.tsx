@@ -382,7 +382,8 @@ export function stepsSummary(rows: ActivityRow[]): string {
     for (const row of rows) {
         let label: string;
         if (row.type === 'tool') label = skillUsed(row) ?? getToolMeta(row.tool, row).label;
-        else if (row.type === 'error' || row.type === 'policy_alert') label = 'Hit an error';
+        else if (row.type === 'policy_alert') label = 'Blocked by policy';
+        else if (row.type === 'error') label = 'Hit an error';
         else if (row.type === 'plan') label = 'Made a plan';
         else continue;
         const seen = kinds.find((k) => k.label === label);
