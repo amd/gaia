@@ -241,10 +241,11 @@ class QueryRequest(_Strict):
         default=None,
         description=(
             "Whether this turn may reach the internet (contract >= 2.23). True "
-            "refuses web search, page fetches, the browser, connector tools and "
-            "commands that contact another host, with a plain message the model "
-            "relays; false allows them. Send it every turn: a retained session "
-            "keeps the last value. Omit it to leave the agent as it is."
+            "refuses web search, page fetches, the browser, connector, mailbox "
+            "and Agent Hub tools and commands that contact another host, with a "
+            "plain message the model relays; false allows them. Send it every "
+            "turn: a retained session keeps the last value. Omit it to leave the "
+            "agent as it is."
         ),
     )
 

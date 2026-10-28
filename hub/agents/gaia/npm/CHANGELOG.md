@@ -20,14 +20,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shorten that" ran with no record of it. It is now kept: long tool results
   become a short note naming the tool, and its longest messages are cut with
   a note saying how much.
+- **Internet off also stops the mailbox and Agent Hub tools.** With a chat's
+  Internet switched off, GAIA could still read Gmail or Outlook and search or
+  install skills from the Agent Hub, because those tools carry no URL for the
+  check to see. They are now refused with the same message as a web search.
 
 ### For integrators: contract 2.23
 
 - **`/query` takes `internet_off`** (contract **2.23**, #5883). The Agent UI
   never told the agent when a chat's Internet switch was off, so the switch
   stayed locked in every GAIA chat on a standard install. `true` refuses web
-  search, page fetches, the browser, connector tools and commands that contact
-  another host, as it does when the agent runs inside the Agent UI. `false`
+  search, page fetches, the browser, connector, mailbox and Agent Hub tools and
+  commands that contact another host, as it does when the agent runs inside the Agent UI. `false`
   allows them, and omitting it leaves the agent as it is. A retained session
   keeps the last value. Older binaries `422` the field.
 - **`POST /v1/gaia/sessions/{session_id}/internet`** (contract **2.23**)
