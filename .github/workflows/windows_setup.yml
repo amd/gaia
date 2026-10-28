@@ -265,9 +265,9 @@ jobs:
 
           if (-not $nsisPath) {
             if ($chocoExitCode -ne 0) {
-              Write-Error "Chocolatey failed to install NSIS (exit code $chocoExitCode); makensis.exe was not found."
+              throw "Chocolatey failed to install NSIS (exit code $chocoExitCode); makensis.exe was not found. See the Chocolatey output above for the feed error."
             }
-            Write-Error "Chocolatey reported success, but makensis.exe was not found after two attempts."
+            throw "Chocolatey reported success, but makensis.exe was not found after two attempts. See the Chocolatey output above (e.g. 'Unable to find package')."
           }
 
           $nsisDir = Split-Path -Parent $nsisPath
