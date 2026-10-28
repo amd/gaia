@@ -3770,6 +3770,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         success=False,
                         error=error_msg,
                         duration_ms=duration_ms,
+                        executed=True,
                     )
                     self._auto_store_error(tool_name, error_msg, tool_args)
                     self._note_failure(tool_name, tool_args, error_msg, None)
@@ -3806,6 +3807,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         success=not is_error,
                         error=error_msg,
                         duration_ms=duration_ms,
+                        executed=check_was_executed(result),
                     )
 
                     # Auto-store novel errors as knowledge
