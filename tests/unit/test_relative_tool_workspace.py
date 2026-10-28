@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
-from gaia.agents.tools.shell_session import ShellSession
 from gaia.agents.base import project_map
+from gaia.agents.tools.shell_session import ShellSession
+from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 
 
 class _Config:

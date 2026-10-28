@@ -58,8 +58,8 @@ from gaia.agents.tools.search_scope import (
     search_roots,
 )
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
-from gaia.filesystem.name_match import fold_name, strip_accents
 from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
+from gaia.filesystem.name_match import fold_name, strip_accents
 from gaia.logger import get_logger
 from gaia.security import BackupError
 

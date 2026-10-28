@@ -35,13 +35,13 @@ from gaia.agents.tools.search_scope import (
     root_depth,
     search_roots,
 )
+from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.filesystem.name_match import (
     fold_glob_match,
     fold_words_match,
     fts_name_terms,
     glob_matches_mid_word,
 )
-from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)

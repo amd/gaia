@@ -48,11 +48,7 @@ from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaia_agent_chat.tool_requests import requested_tools
 
 from gaia.agents.base.agent import Agent, default_max_steps
-from gaia.agents.base.checks import (
-    attach_check,
-    check_from_python_run,
-    snippet_target,
-)
+from gaia.agents.base.checks import attach_check, check_from_python_run, snippet_target
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_KEEP_STEPS,
@@ -89,13 +85,10 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     WaitToolsMixin,
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
-from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.agents.tools.rag_tools import documents_still_indexing
+from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.env import child_env
-from gaia.llm.inference_location import (
-    InferenceLocation,
-    resolve_inference_location,
-)
+from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
 from gaia.llm.lemonade_client import (
     _endpoint_label,
     configured_lemonade_url,

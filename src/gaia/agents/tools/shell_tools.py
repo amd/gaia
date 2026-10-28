@@ -31,11 +31,7 @@ from gaia.agents.base.call_risk import (
 )
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.errors import exit_error
-from gaia.agents.base.file_snapshots import (
-    SnapshotError,
-    before_change,
-    note_untracked,
-)
+from gaia.agents.base.file_snapshots import SnapshotError, before_change, note_untracked
 from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
