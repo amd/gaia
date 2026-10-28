@@ -768,7 +768,7 @@ export interface RetrievalChunk {
 /** A single step in the agent's execution. */
 export interface AgentStep {
     id: number;
-    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert';
+    type: 'thinking' | 'commentary' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert';
     /** Short label shown in collapsed view. */
     label: string;
     /** Detailed content shown when expanded. */
@@ -836,6 +836,7 @@ export type StreamEventType =
     | 'status'       // Agent state change
     | 'step'         // Step progress
     | 'thinking'     // Agent reasoning
+    | 'commentary'   // A note the agent wrote before a tool call
     | 'plan'         // Agent plan
     | 'tool_start'   // Tool execution started
     | 'tool_end'     // Tool execution completed
