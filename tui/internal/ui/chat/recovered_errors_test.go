@@ -157,10 +157,12 @@ func TestAShellFailureIsRecoveredOnlyByTheSameKindOfCommand(t *testing.T) {
 		result("run_shell_command", `{"status":"success","return_code":0}`),
 		turnEnds,
 	)
-	// Back to back, a settled attempt folds into its retry as before ("x2").
-	if got := ansi.Strip(workRecord(t, m)); strings.Contains(got, "failed") ||
-		!strings.Contains(got, "x2") {
-		t.Errorf("the same command retried and passing must settle it:\n%s", got)
+	// Back to back, the settled attempt keeps its own row and one-line error:
+	// folded into its retry as "x2", the error it recovered from would vanish.
+	got := ansi.Strip(workRecord(t, m))
+	if strings.Contains(got, "└ failed") || strings.Contains(got, "x2") ||
+		!strings.Contains(got, "└ error, retried: Command failed (exit 1): python.exe: No module named pip") {
+		t.Errorf("the same command retried and passing must settle it, error kept:\n%s", got)
 	}
 }
 
@@ -252,7 +254,120 @@ func TestRetryKeyBoundaries(t *testing.T) {
 			t.Errorf("%s and %s must not share a retry key", c.a, c.b)
 		}
 	}
-	if retryKey("t", json.RawMessage(`not json`)) != "t" {
-		t.Errorf("unparseable args must fall back to the tool name")
+	if retryKey("t", json.RawMessage(`not json`)) != "" || retryKey("t", json.RawMessage(`{"url":"x"}`)) != "" {
+		t.Errorf("args with nothing to match on must have no retry key")
+	}
+}
+
+// shellTurn runs one failing command, then one passing command, and ends the turn.
+func shellTurn(t *testing.T, failing, passing string) ChatModel {
+	t.Helper()
+	args := func(c string) string {
+		b, err := json.Marshal(map[string]string{"command": c})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	return feed(t, newTestChat(t),
+		call("run_shell_command", args(failing)),
+		result("run_shell_command", `{"status":"error","error":"Command failed (exit 1): boom-from-the-first-call"}`),
+		call("run_shell_command", args(passing)),
+		result("run_shell_command", `{"status":"success","return_code":0}`),
+		turnEnds,
+	)
+}
+
+// Wrappers and flags must not hide what a command does: each pair is two
+// different jobs, so the first failure stands, red, with its error on screen.
+func TestAShellFailureIsNotRecoveredByADifferentJobBehindAWrapper(t *testing.T) {
+	red := colour(t)
+	pairs := [][2]string{
+		{"npm run build", "npm run lint"},
+		{"python -m pip install formulas", "python -m pytest"},
+		{"cmd /c npm run build", "cmd /c npm run lint"},
+		{`powershell -Command "npm run build"`, `powershell -Command "npm run lint"`},
+		{"python /tmp/a.py", "python /tmp/b.py"},
+	}
+	for _, p := range pairs {
+		record := workRecord(t, shellTurn(t, p[0], p[1]))
+		got := ansi.Strip(record)
+		if strings.Contains(got, "retried") || strings.Contains(got, "x2") ||
+			!strings.Contains(got, "└ failed") || !strings.Contains(got, "boom-from-the-first-call") ||
+			!strings.Contains(record, red) {
+			t.Errorf("%q passing recovered or hid %q failing:\n%s", p[1], p[0], got)
+		}
+	}
+}
+
+// The same job retried with a different flag, quoting or path spelling does
+// recover it, and the error it recovered from stays on screen.
+func TestASameJobRetryRecoversAndKeepsItsError(t *testing.T) {
+	red := colour(t)
+	pairs := [][2]string{
+		{"pip install formulas", "pip install --user formulas"},
+		{"python -m pip install formulas", "python -m pip install --user formulas"},
+		{"cmd /c npm run build", "cmd /C npm run build"},
+		{`powershell -Command "npm run build"`, `powershell -NoProfile -Command "npm run build"`},
+		{`C:\Python\python.exe clean.py`, "python clean.py"},
+	}
+	for _, p := range pairs {
+		record := workRecord(t, shellTurn(t, p[0], p[1]))
+		got := ansi.Strip(record)
+		if !strings.Contains(got, "└ error, retried: Command failed (exit 1): boom-from-the-first-call") ||
+			strings.Contains(got, "└ failed") || strings.Contains(record, red) {
+			t.Errorf("%q passing should settle %q with its error kept:\n%s", p[1], p[0], got)
+		}
+	}
+}
+
+// A call with no file or command to match on is never marked retried: another
+// URL or another query succeeding says nothing about the one that failed.
+func TestAFailureWithNothingToMatchOnIsNeverRetried(t *testing.T) {
+	red := colour(t)
+	turns := []struct{ tool, failing, passing string }{
+		{"fetch_url", `{"url":"https://a.example/x"}`, `{"url":"https://b.example/y"}`},
+		{"query_data", `{"sql":"SELECT * FROM missing"}`, `{"sql":"SELECT 1"}`},
+		{"query_data", `{"sql":"SELECT 1"}`, `{"sql":"SELECT 1"}`},
+	}
+	for _, c := range turns {
+		m := feed(t, newTestChat(t),
+			call(c.tool, c.failing),
+			result(c.tool, `{"status":"error","error":"boom-from-the-first-call"}`),
+			call(c.tool, c.passing),
+			result(c.tool, `{"success":true}`),
+			turnEnds,
+		)
+		record := workRecord(t, m)
+		got := ansi.Strip(record)
+		if strings.Contains(got, "retried") || !strings.Contains(got, "└ failed") ||
+			!strings.Contains(got, "boom-from-the-first-call") || !strings.Contains(record, red) {
+			t.Errorf("%s %s: a keyless failure was settled or hidden:\n%s", c.tool, c.failing, got)
+		}
+	}
+}
+
+// The copied text says what the screen says.
+func TestCopiedWorkMatchesTheScreenForARetriedStep(t *testing.T) {
+	m := shellTurn(t, "pip install formulas", "pip install --user formulas")
+	var copied string
+	for _, msg := range m.messages {
+		if msg.Role == RoleWork {
+			copied = msg.Content
+		}
+	}
+	if strings.Contains(copied, " — failed") ||
+		!strings.Contains(copied, "error, retried: Command failed (exit 1): boom-from-the-first-call") {
+		t.Errorf("copied work disagrees with the screen:\n%s", copied)
+	}
+
+	m = shellTurn(t, "npm run build", "npm run lint")
+	for _, msg := range m.messages {
+		if msg.Role == RoleWork {
+			copied = msg.Content
+		}
+	}
+	if !strings.Contains(copied, "npm run build — failed") || strings.Contains(copied, "retried") {
+		t.Errorf("a standing failure must still copy as failed:\n%s", copied)
 	}
 }

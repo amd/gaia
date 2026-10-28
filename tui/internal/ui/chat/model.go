@@ -3226,11 +3226,13 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 			last := &out[n-1]
 			// Different confirmation answers never fold: "x2 · approved" over a
 			// denied second call would misstate what the user said.
-			// Nor does a failure that still stands: folded, the next call's
-			// outcome would replace it and the failure would vanish.
-			standing := stepFailed(*last) && last.Recovery != recoveryRetried
+			// Nor does a failed row, retried or not: folded, the next call's
+			// outcome would replace its error line. A failure folds under an
+			// earlier row only when it is a retry of that same call.
+			keep := stepFailed(*last) ||
+				(stepFailed(item) && (item.RetryKey == "" || item.RetryKey != last.RetryKey))
 			if last.Kind == item.Kind && activityKey(*last) == activityKey(item) &&
-				last.Approval == item.Approval && !standing {
+				last.Approval == item.Approval && !keep {
 				last.Repeat++
 				last.Content = mergeTargets(last.Content, item.Content)
 				last.Done = item.Done

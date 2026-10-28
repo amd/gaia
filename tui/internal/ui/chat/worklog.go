@@ -169,7 +169,12 @@ func stepText(item ActivityItem) string {
 	if item.Approval != "" {
 		line += " · " + clean(item.Approval)
 	}
-	if d := clean(item.Detail); d != "" {
+	d := clean(item.Detail)
+	if item.Recovery != "" && stepFailed(item) {
+		// Copied text says what the screen says: not "failed" for a retried step.
+		d = calmDetail(d, item.Recovery)
+	}
+	if d != "" {
 		line += " — " + d
 	}
 	return line
@@ -284,12 +289,15 @@ func settleFailures(items []ActivityItem, final bool) []ActivityItem {
 		if item.Approval != "" && !strings.HasPrefix(item.Approval, "approved") {
 			continue
 		}
-		key := stepRetryKey(*item)
-		for _, later := range out[i+1:] {
-			if later.Kind == "tool" && later.Done && !stepFailed(later) &&
-				stepRetryKey(later) == key {
-				item.Recovery = recoveryRetried
-				break
+		// A call with no file or command to match on (a fetch, a query) is
+		// never matched: another URL or SQL succeeding says nothing about it.
+		if key := item.RetryKey; key != "" {
+			for _, later := range out[i+1:] {
+				if later.Kind == "tool" && later.Done && !stepFailed(later) &&
+					later.RetryKey == key {
+					item.Recovery = recoveryRetried
+					break
+				}
 			}
 		}
 		if item.Recovery == "" && !final {
@@ -299,17 +307,12 @@ func settleFailures(items []ActivityItem, final bool) []ActivityItem {
 	return out
 }
 
-func stepRetryKey(item ActivityItem) string {
-	if item.RetryKey != "" {
-		return item.RetryKey
-	}
-	return activityKey(item)
-}
-
-// retryKey is the tool, plus — for a shell command — its program and first
-// argument, or for a file tool the file. A failed `pip install` is not
-// recovered by a later `dir`, `python -c` succeeding after `python -m pip`
-// failed, or report.py running after clean.py failed.
+// retryKey is what a later success must match to settle a failed call: the
+// tool plus a shell command's program and the first two words that say what
+// it does, or the tool plus a file tool's file. "" means nothing to match on,
+// so the failure is never marked retried. A failed `npm run build` is not
+// recovered by `npm run lint`, `python -m pip install` by `python -m pytest`,
+// or clean.py by report.py.
 func retryKey(tool string, args json.RawMessage) string {
 	var fields struct {
 		Command  string `json:"command"`
@@ -317,14 +320,22 @@ func retryKey(tool string, args json.RawMessage) string {
 		Path     string `json:"path"`
 	}
 	if json.Unmarshal(args, &fields) != nil {
-		return tool
+		return ""
 	}
 	if words := strings.Fields(fields.Command); len(words) > 0 {
-		program := strings.ToLower(filepath.Base(strings.ReplaceAll(words[0], "\\", "/")))
+		program := strings.ToLower(filepath.Base(slashed(unquote(words[0]))))
 		program = strings.TrimSuffix(program, ".exe")
 		key := tool + " " + program
-		if len(words) > 1 {
-			key += " " + words[1]
+		taken := 0
+		for _, w := range words[1:] {
+			w = unquote(w)
+			if w == "" || commandFlag(w) || strings.EqualFold(w, "run") {
+				continue
+			}
+			key += " " + w
+			if taken++; taken == 2 {
+				break
+			}
 		}
 		return key
 	}
@@ -333,10 +344,24 @@ func retryKey(tool string, args json.RawMessage) string {
 		file = fields.Path
 	}
 	if file = strings.TrimSpace(file); file != "" {
-		return tool + " " + path.Clean(strings.ReplaceAll(file, "\\", "/"))
+		return tool + " " + path.Clean(slashed(file))
 	}
-	return tool
+	return ""
 }
+
+// commandFlag reports a word that modifies a command rather than naming what
+// it does: -m, --user, -Command, and cmd's /c. A longer word starting with /
+// is a path (/tmp/a.py), not a switch.
+func commandFlag(w string) bool {
+	if strings.HasPrefix(w, "-") {
+		return true
+	}
+	return strings.HasPrefix(w, "/") && len(w) <= 3 && !strings.Contains(w[1:], "/")
+}
+
+func unquote(w string) string { return strings.Trim(w, `"'`) }
+
+func slashed(p string) string { return strings.ReplaceAll(p, `\`, "/") }
 
 // calmDetail rewords a recovered step's failure line: the state leads instead
 // of "failed", and the tool's own one-line error follows it.
