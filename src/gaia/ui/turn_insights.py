@@ -499,9 +499,7 @@ def summarize_turn(
         "cost": _cost(model_id, tokens_in, cached, tokens_out),
         "unknown": unknown,
     }
-    # A finite input can still produce infinity in a derived speed or prompt
-    # size.  Reject the complete record so the caller stores the turn as
-    # unmeasured instead of persisting a value the API cannot serialize.
+    # Derived speeds or prompt size can still overflow: reject the record, not the panel.
     json.dumps(summary, allow_nan=False)
     return summary
 

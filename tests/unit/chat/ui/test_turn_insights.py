@@ -206,6 +206,43 @@ def test_turn_token_totals_that_overflow_are_not_measured(caplog):
     assert "turn input tokens overflowed" in caplog.text
 
 
+def test_one_step_whose_prompt_size_overflows_is_not_recorded():
+    # No prompt_tokens: the prompt is rebuilt as new + cached, which overflows alone.
+    result = {
+        "timing_summary": {"llm_seconds": 1.0, "tool_seconds": 0.0},
+        "conversation": [
+            _stats(
+                1,
+                {"cache_tokens": 1e308, "input_tokens": 1e308, "output_tokens": 5},
+            )
+        ],
+    }
+
+    with pytest.raises(ValueError, match="Out of range float values"):
+        turn_insights.summarize_turn(result, wall_seconds=1.0, model_id="M-GGUF")
+
+
+def test_huge_token_totals_that_stay_finite_are_still_measured():
+    step = {
+        "prompt_tokens": 1e307,
+        "cache_tokens": 0,
+        "input_tokens": 1e307,
+        "output_tokens": 1e307,
+        "time_to_first_token": 1.0,
+        "tokens_per_second": 10.0,
+    }
+    result = {
+        "timing_summary": {"llm_seconds": 1.0, "tool_seconds": 0.0},
+        "conversation": [_stats(1, step), _stats(2, step)],
+    }
+
+    summary = turn_insights.summarize_turn(result, wall_seconds=1.0, model_id="M-GGUF")
+
+    assert summary["tokens_in"] == 2e307
+    assert summary["tokens_out"] == 2e307
+    json.dumps(summary, allow_nan=False)
+
+
 def test_chat_token_totals_that_overflow_are_not_measured(caplog):
     turns = [
         {
