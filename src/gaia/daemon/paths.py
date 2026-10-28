@@ -136,6 +136,8 @@ def atomic_write_json(path: Path, payload, mode: int = 0o600) -> None:
     temp file in the same directory (so ``os.replace`` is a same-filesystem
     atomic rename), fsyncs it, then renames it over the target. The temp file
     is created ``O_EXCL`` at *mode* so it is never briefly world-readable.
+    On Windows the rename is retried briefly on ``PermissionError`` (a reader
+    or scanner holding the target open); persistent failures still raise.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
