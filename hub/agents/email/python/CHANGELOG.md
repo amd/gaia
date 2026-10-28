@@ -23,6 +23,10 @@ contract version is tracked separately as
 - **Connect prompts name the right Settings tab.** The agent sent users to a
   "Connections" tab in Settings, which the Agent UI doesn't have; it now says
   "Settings → Connectors".
+- **A tool decision that reached no prompt is no longer reported as delivered.**
+  `POST /v1/email/agent/confirm-tool` answered `ok` even when nothing was
+  waiting for the decision (already answered, timed out, or never asked). It now
+  answers 409, like the flagship agent's tool decision route. (#4889)
 - **One very long turn no longer vanishes from the conversation.** A pushed
   turn bigger than the whole history budget was dropped, answer included. It is
   now kept with its longest messages cut and a note saying how much.
