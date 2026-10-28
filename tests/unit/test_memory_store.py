@@ -872,21 +872,144 @@ class TestConversations:
         assert results[0]["content"] == "First"
         assert results[-1]["content"] == "Third"
 
-    def test_delete_session_conversations_removes_only_that_session(self, store):
-        """A deleted chat's turns leave history and search; others and facts stay."""
+
+# ===========================================================================
+# 5b. Deleting one session (#5931)
+# ===========================================================================
+
+
+def _fts_rowids(store, word):
+    return {
+        r[0]
+        for r in store._conn.execute(
+            "SELECT rowid FROM conversations_fts WHERE conversations_fts MATCH ?",
+            (word,),
+        )
+    }
+
+
+def _log_tool(store, session_id, query):
+    store.log_tool_call(
+        session_id=session_id,
+        tool_name="web_search",
+        args={"query": query},
+        result_summary=f"results for {query}",
+        success=True,
+    )
+
+
+class TestDeleteSession:
+    def test_removes_only_that_session(self, store):
+        """A deleted chat's turns and tool calls go; other chats and facts stay."""
         store.store_turn("gone", "user", "pineapple question")
         store.store_turn("gone", "assistant", "pineapple answer")
+        _log_tool(store, "gone", "pineapple recipes")
         store.store_turn("kept", "user", "pineapple elsewhere")
+        _log_tool(store, "kept", "pineapple prices")
         store.store(category="fact", content="User likes pineapple")
 
-        assert store.delete_session_conversations("gone") == 2
+        assert store.delete_session("gone") == {"conversations": 2, "tool_history": 1}
 
         assert store.get_history(session_id="gone") == []
         assert [s["session_id"] for s in store.get_sessions()] == ["kept"]
         hits = store.search_conversations("pineapple")
         assert [h["session_id"] for h in hits] == ["kept"]
+        tools = store._conn.execute(
+            "SELECT session_id, args FROM tool_history"
+        ).fetchall()
+        assert [t[0] for t in tools] == ["kept"]
+        assert "pineapple prices" in tools[0][1]
         assert store.get_by_category("fact")[0]["content"] == "User likes pineapple"
-        assert store.delete_session_conversations("gone") == 0
+
+    def test_nothing_left_behind(self, store):
+        """No row, FTS entry or tool call of the deleted session survives."""
+        store.store_turn("gone", "user", "zanzibar question")
+        store.store_turn("gone", "assistant", "zanzibar answer")
+        _log_tool(store, "gone", "zanzibar")
+        store.store_turn("kept", "user", "unrelated")
+        assert len(_fts_rowids(store, "zanzibar")) == 2
+
+        store.delete_session("gone")
+
+        assert _fts_rowids(store, "zanzibar") == set()
+        for table in ("conversations", "tool_history"):
+            n = store._conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE session_id = 'gone'"
+            ).fetchone()[0]
+            assert n == 0, table
+        hits = store._conn.execute(
+            "SELECT COUNT(*) FROM tool_history WHERE args LIKE '%zanzibar%'"
+        ).fetchone()[0]
+        assert hits == 0
+        # The external-content FTS index still matches its table.
+        store._conn.execute(
+            "INSERT INTO conversations_fts(conversations_fts) VALUES('integrity-check')"
+        )
+        assert store.delete_session("gone") == {"conversations": 0, "tool_history": 0}
+
+    @pytest.mark.parametrize(
+        "neighbour", ["abc%", "abc_", "ABC", "abcd", "xabc", "abc ", "", "%", "_"]
+    )
+    def test_matches_the_id_exactly(self, store, neighbour):
+        """No prefix, case or wildcard match reaches a neighbouring session."""
+        store.store_turn("abc", "user", "mine")
+        store.store_turn(neighbour, "user", "theirs")
+        _log_tool(store, neighbour, "theirs")
+
+        store.delete_session("abc")
+
+        assert [t["content"] for t in store.get_history(session_id=neighbour)] == [
+            "theirs"
+        ]
+        assert (
+            store._conn.execute(
+                "SELECT COUNT(*) FROM tool_history WHERE session_id = ?", (neighbour,)
+            ).fetchone()[0]
+            == 1
+        )
+
+    def test_wildcard_id_deletes_only_itself(self, store):
+        store.store_turn("a", "user", "one")
+        store.store_turn("%", "user", "two")
+        store.delete_session("%")
+        assert [s["session_id"] for s in store.get_sessions()] == ["a"]
+
+    def test_legacy_random_id_turns_are_untouched_until_pruned(self, store):
+        """Pre-#5931 turns under a random id survive a chat delete; age pruning
+        or a full clear removes them."""
+        chat_id = str(uuid.uuid4())
+        legacy_id = str(uuid.uuid4())
+        store.store_turn(chat_id, "user", "new turn")
+        store.store_turn(legacy_id, "user", "legacy turn")
+
+        store.delete_session(chat_id)
+        assert [s["session_id"] for s in store.get_sessions()] == [legacy_id]
+
+        old = (datetime.now().astimezone() - timedelta(days=91)).isoformat()
+        store._conn.execute(
+            "UPDATE conversations SET timestamp = ? WHERE session_id = ?",
+            (old, legacy_id),
+        )
+        store._conn.commit()
+        assert store.prune(days=90)["conversations_deleted"] == 1
+        assert store.get_sessions() == []
+
+    def test_concurrent_deletes_and_writes_stay_separate(self, store):
+        """Deleting one chat while another writes never drops the other's turns."""
+        for i in range(50):
+            store.store_turn("gone", "user", f"gone {i}")
+
+        def writer():
+            for i in range(50):
+                store.store_turn("kept", "user", f"kept {i}")
+
+        t = threading.Thread(target=writer)
+        t.start()
+        store.delete_session("gone")
+        t.join()
+
+        assert store.get_history(session_id="gone") == []
+        assert len(store.get_history(session_id="kept", limit=100)) == 50
 
 
 # ===========================================================================

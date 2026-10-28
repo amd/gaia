@@ -4546,27 +4546,33 @@ class MemoryStore:
         logger.info("[MemoryStore] cleared conversations: %d rows", deleted)
         return {"conversations": deleted}
 
-    def delete_session_conversations(self, session_id: str) -> int:
-        """Delete every conversation turn of *session_id*; returns the count.
+    def delete_session(self, session_id: str) -> Dict:
+        """Delete *session_id*'s conversation turns and tool calls.
 
-        Knowledge learned from those turns is kept. The FTS index follows
-        through the delete trigger.
+        Both hold the chat's own words: tool args and result summaries can
+        quote files, searches and pages. What was learned from the session
+        (knowledge, procedures) is kept. The FTS index follows through the
+        delete trigger. Returns the deleted row counts.
         """
         with self._locked():
             try:
-                deleted = self._conn.execute(
+                conv_deleted = self._conn.execute(
                     "DELETE FROM conversations WHERE session_id = ?", (session_id,)
+                ).rowcount
+                tool_deleted = self._conn.execute(
+                    "DELETE FROM tool_history WHERE session_id = ?", (session_id,)
                 ).rowcount
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
                 raise
         logger.info(
-            "[MemoryStore] deleted %d conversation turns of session %s",
-            deleted,
+            "[MemoryStore] deleted session %s: %d conversation turns, %d tool calls",
             session_id,
+            conv_deleted,
+            tool_deleted,
         )
-        return deleted
+        return {"conversations": conv_deleted, "tool_history": tool_deleted}
 
     def seed_bulk(self, items: List[Dict]) -> List[str]:
         """Bulk-insert knowledge rows, bypassing dedup.

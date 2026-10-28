@@ -423,11 +423,9 @@ async def delete_session(
     async with session_locks.setdefault(session_id, asyncio.Lock()):
         # First, so a failure leaves the chat in place to delete again.
         try:
-            await asyncio.to_thread(
-                get_memory_store().delete_session_conversations, session_id
-            )
+            await asyncio.to_thread(get_memory_store().delete_session, session_id)
         except sqlite3.Error as e:
-            logger.error("Could not delete memory turns of %s: %s", session_id, e)
+            logger.error("Could not delete the memory of %s: %s", session_id, e)
             raise HTTPException(
                 status_code=500,
                 detail=(
