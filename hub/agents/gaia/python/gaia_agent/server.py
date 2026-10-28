@@ -87,7 +87,8 @@ AGENT_ID = "gaia"
 #: 2.19 added ``/query``'s ``changes_turn_id`` field.
 #: 2.20 added ``/query``'s ``surface`` field.
 #: 2.21 added ``context`` to ``/query``'s ``final`` event.
-API_VERSION = "2.21"
+#: 2.22 added ``/query``'s ``reasoning`` field.
+API_VERSION = "2.22"
 
 #: How long ``final`` waits for the turn's context measurement before going without.
 _CONTEXT_WAIT_SECONDS = 15.0
@@ -256,6 +257,15 @@ class QueryRequest(_Strict):
             "worded for its own settings. Fixed when a session is built; omit "
             "it for a headless caller, whose provider advice then points at "
             "the model server this GAIA host uses."
+        ),
+    )
+
+    reasoning: bool = Field(
+        default=False,
+        description=(
+            "Stream the model's reasoning as `reasoning` events with a `delta` "
+            "(contract >= 2.22), for a client that shows it apart from status "
+            "lines. Without it, reasoning folds into `status` lines as before."
         ),
     )
 
@@ -1584,7 +1594,9 @@ async def query(request: QueryRequest):
         return {**final, "context": run.context}
 
     async def _stream():
-        translator = CanonicalTranslator(request.run_id, agent_id=AGENT_ID)
+        translator = CanonicalTranslator(
+            request.run_id, agent_id=AGENT_ID, reasoning=request.reasoning
+        )
         terminated = False
         last_write = time.monotonic()
         try:

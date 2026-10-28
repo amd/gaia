@@ -21,6 +21,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   become a short note naming the tool, and its longest messages are cut with
   a note saying how much.
 
+### For integrators: contract 2.22
+
+- **A client can show the model's reasoning.** Over `/query` the reasoning
+  only arrived folded into `status` lines, so the Agent UI showed none of it
+  for an installed GAIA. A request with `reasoning: true` now gets it as
+  `reasoning` events, `{ delta }`, kept apart from the answer. Without the
+  field nothing changes. Older binaries reject it with `422`.
+
 ### For integrators: contract 2.21
 
 - **`final` says how full the model's window is** (contract **2.21**,

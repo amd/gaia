@@ -332,12 +332,18 @@ and where that model runs.
   marks the chat in the sidebar, and a click turns private off. A private chat
   isn't saved to memory. To keep a new chat's first message out too, turn on
   **Private** next to the message box before you send it.
-- **Tool steps** show as one quiet line ("3 steps · 1 tool") you can open for
-  the detail. "Steps" is the agent's own count, the same figure the TUI and
-  evals report.
-- **The line under an answer** says how long it took, where it ran and when
-  the first word came ("Answered in 40 s on your GPU · first word in 1 s", or
-  "via Fireworks AI" for a cloud model). Click it for the exact numbers,
+- **While GAIA works** the reply builds up as a timeline. Short notes GAIA
+  writes before a tool call ("I'll check the forecast first") appear in full,
+  each step shows as one line with its own timer, and live reasoning scrolls
+  by under **Thinking**. A line at the end says what the model is doing between
+  steps. Picking up a skill gets its own highlighted line.
+- **Once the answer is in**, the steps between two notes fold into one line
+  ("Read web page, read file") you can open for the detail, and reasoning
+  folds to "Thought for 8s".
+- **The line under an answer** says how long it took, where it ran, when
+  the first word came and how many steps GAIA took ("Answered in 40 s on your
+  GPU · first word in 1 s · 3 steps", or "via Fireworks AI" for a cloud model).
+  "Steps" is the agent's own count, the same figure the TUI and evals report. Click it for the exact numbers,
   including the tokens the whole turn read and wrote across every model call.
   Files the answer names by full path,
   such as a saved deliverable, open in your file explorer when clicked.
@@ -348,8 +354,14 @@ and where that model runs.
   to fill in is typed into the message box; the others start straight away.
   Click the folder under the message box to give the chat another folder it
   may read and write from its first message, the same as **Add folder** in the
-  session panel. When the GAIA agent runs as its own process, it keeps its own
-  limits, so the folder shows as plain text instead.
+  session panel. The chat's agent is told which folder the chat is working
+  in, so "this folder" means the one you picked. This works when GAIA runs
+  its agent as its own process too,
+  as an installed GAIA does. Only an agent too old to be given folders shows
+  the folder as plain text; update GAIA to pick one. In the desktop app this
+  opens your computer's own folder picker; in a browser GAIA shows its own,
+  where hidden folders (names starting with a dot) stay out of the list until
+  you tick **Show hidden**.
 - **The session panel** on the right keeps the facts about this chat in view;
   see [The session panel](#the-session-panel).
 - **"Loading Qwen3.6-35B-A3B on your GPU… 12s"** under the message box means
@@ -569,7 +581,8 @@ reads nothing.
   - **Runs on:** this PC with its device and backend (for example
     `GPU · Vulkan`), the model and the memory in use, or the cloud provider.
   - **Can read and write:** the folders and files GAIA may use in this chat,
-    and where each came from. **Add folder** gives it another folder;
+    and where each came from. **Add folder** gives it another folder, picked
+    the same way as from a new chat's folder;
     **Remove** takes one away. A removed folder is refused by every file and
     shell tool, even under full access and even inside a wider folder, until
     you add it back. A document attached to the chat is removed from the

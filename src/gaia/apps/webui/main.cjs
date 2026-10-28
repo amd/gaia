@@ -91,6 +91,7 @@ const installerProgressDialog = require("./services/backend-installer-progress-d
 const autoUpdater = require("./services/auto-updater.cjs");
 const agentSeeder = require("./services/agent-seeder.cjs");
 const systemMetrics = require("./services/system-metrics.cjs");
+const folderDialog = require("./services/folder-dialog.cjs");
 const {
   parseDeepLink,
   extractDeepLinkFromArgv,
@@ -794,6 +795,8 @@ function initializeServices() {
 
   // #2007: System metrics for the observability dashboard
   systemMetrics.registerIpcHandlers();
+
+  folderDialog.registerIpcHandlers();
 
   const appPorts = () => (paneBridge ? [backendPort, paneBridge.port] : [backendPort]);
 

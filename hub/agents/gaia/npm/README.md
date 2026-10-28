@@ -231,6 +231,11 @@ its own settings screen sends `surface` (`"tui"`, `"agent_ui"` or `"cli"`) to
 get its own wording; a headless caller omits it. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Showing the model's reasoning?** Send `reasoning: true` (contract ≥ 2.22)
+and it arrives as `reasoning` events with a `delta`, apart from `status` lines
+and the answer. Join the deltas as they come. Older binaries reject the field
+with `422`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
 **Showing how full the model's window is?** From contract 2.21 the `final`
 event carries `context`: the window size, the tokens the next call will take,
 and what takes them (prompt, tools, documents, history). Older binaries leave

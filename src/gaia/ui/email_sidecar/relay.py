@@ -51,6 +51,7 @@ from gaia.agents.base.tool_grants import SITE_ARG
 from gaia.logger import get_logger
 from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
+from gaia.ui.event_narration import derive_narration
 from gaia.ui.sse_handler import (
     SSEOutputHandler,
     _format_tool_args,
@@ -243,12 +244,25 @@ def _dispatch_one(
             return False
 
     if etype == "status":
-        handler._emit({"type": "status", "message": str(event.get("message", ""))})
+        status: Dict[str, Any] = {
+            "type": "status",
+            "message": str(event.get("message", "")),
+        }
+        # The phase is what makes it the live line ("Reading your request").
+        for key in ("phase", "words", "chars", "queue"):
+            if key in event:
+                status[key] = event[key]
+        handler._emit(status)
 
     elif etype == "token":
         delta = event.get("delta", "")
         if delta:
             handler._emit({"type": "chunk", "content": delta})
+
+    elif etype == "reasoning":
+        delta = event.get("delta", "")
+        if delta:
+            handler._emit({"type": "thinking", "content": delta})
 
     elif etype == "tool_call":
         tool = str(event.get("tool") or "unknown")
@@ -258,7 +272,17 @@ def _dispatch_one(
         handler.record_tool_started(tool)
         if isinstance(args, dict):
             handler.record_tool_args(args)
-        start: Dict[str, Any] = {"type": "tool_start", "tool": tool, "detail": label}
+        # The call in plain words; a sidecar older than the field gets it derived here.
+        narration = str(
+            event.get("narration")
+            or derive_narration(tool, args if isinstance(args, dict) else {})
+        )
+        start: Dict[str, Any] = {
+            "type": "tool_start",
+            "tool": tool,
+            "detail": label,
+            "narration": narration,
+        }
         start.update({k: event[k] for k in MCP_TOOL_FIELDS if event.get(k)})
         handler._emit(start)
         handler._emit(
@@ -267,6 +291,7 @@ def _dispatch_one(
                 "tool": tool,
                 "args": args,
                 "detail": _format_tool_args(tool, args) or label,
+                "narration": narration,
             }
         )
         if tool in profile.mutating_tools:
@@ -449,6 +474,7 @@ def relay_query(
     memory: Optional[str] = None,
     changes_turn_id: Optional[str] = None,
     surface: Optional[str] = None,
+    reasoning: bool = False,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
 
@@ -465,6 +491,9 @@ def relay_query(
 
     *surface* — the front-end this turn comes from, for a sidecar the caller
     has established takes it (``profiles.surface_supported``).
+
+    *reasoning* — ask the sidecar to stream the model's reasoning, for a
+    sidecar the caller has established takes it (``profiles.reasoning_supported``).
 
     *documents* — absolute paths of the chat's attached files, for a sidecar
     the caller has established takes them (``profiles.documents_supported``).
@@ -541,6 +570,8 @@ def relay_query(
         body["changes_turn_id"] = changes_turn_id
     if surface is not None:
         body["surface"] = surface
+    if reasoning:
+        body["reasoning"] = True
 
     syncs_mode = full_access is not None and bool(session_id)
     enable_after_start = False

@@ -15,6 +15,7 @@
  *   gaia:update:*    — Auto-update status & manual check (Phase F)
  *   system:*         — System metrics for the observability dashboard (#2007)
  *   power:*          — Keep the PC awake while a chat turn runs (#5226)
+ *   dialog:*         — The OS folder picker
  */
 
 const { contextBridge, ipcRenderer } = require("electron");
@@ -83,6 +84,11 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
   // ── System metrics for the observability dashboard (#2007) ────────────
   system: {
     getMetrics: () => ipcRenderer.invoke("system:get-metrics"),
+  },
+
+  // ── OS folder picker; resolves the chosen path, or null on cancel ─────
+  dialog: {
+    pickFolder: (defaultPath) => ipcRenderer.invoke("dialog:pick-folder", defaultPath),
   },
 });
 

@@ -9,6 +9,7 @@ turn hung for minutes and the folder was served to the whole network.
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -74,10 +75,9 @@ def test_a_command_that_only_mentions_a_server_word_is_not(command):
 
 
 def test_the_folder_a_server_would_serve_is_read_from_the_line():
-    assert (
+    assert Path(
         server_in_command('cd "a b" && cd site && python3 -m http.server').folder
-        == "a b/site"
-    )
+    ) == Path("a b", "site")
     assert server_in_command("python3 -m http.server -d out").folder == "out"
 
 

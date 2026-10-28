@@ -619,7 +619,8 @@ def test_the_static_server_answers_on_loopback_only(tmp_path):
 
 
 def _fetch_when_up(url: str) -> str:
-    deadline = time.monotonic() + 15
+    # A loaded CI runner can take well over 15 s to start a Python process.
+    deadline = time.monotonic() + 60
     while True:
         try:
             with urllib.request.urlopen(url, timeout=2) as r:

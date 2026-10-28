@@ -258,7 +258,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.21"`                  |
+| Contract version   | `API_VERSION = "2.22"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -353,6 +353,12 @@ names the `host:port` it went through; on a base URL the user set, a local
 model's failure reads "the model server at `host:port`", not "Lemonade on this
 machine". Pre-2.20 binaries `422` the field and word every such error for the
 TUI.
+
+`reasoning` (contract ≥ 2.22), when `true`, streams the model's reasoning as
+`reasoning` events, `{ "type": "reasoning", "delta": "…" }`, so a client can
+show it apart from `status` lines and from the answer's `token`s. Each delta
+keeps its own spacing: join them as they arrive. Without the field, reasoning
+folds into `status` lines as before. Pre-2.22 binaries `422` it.
 
 ```json
 {
