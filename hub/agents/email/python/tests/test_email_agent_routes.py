@@ -383,8 +383,7 @@ class TestToolConfirmation:
         assert r.status_code == 404
 
     def test_confirm_with_nothing_pending_409(self, client):
-        # A run is active (handler set) but no prompt is waiting: the decision
-        # reaches nothing, so it must not be reported as delivered.
+        # A run is active but no prompt is waiting, so nothing was delivered.
         from gaia.ui.sse_handler import SSEOutputHandler
 
         client.post("/v1/email/agent/session", json={"session_id": "s1"})
@@ -396,6 +395,12 @@ class TestToolConfirmation:
             )
             assert r.status_code == 409
             assert "No tool confirmation is pending" in r.json()["detail"]
+
+    def test_playground_shows_a_rejected_decision(self):
+        from gaia_agent_email.playground_html import render_playground_html
+
+        # A 409 from confirm-tool must reach the user, not vanish in a bare catch.
+        assert "confirm-tool HTTP" in render_playground_html()
 
 
 # ---------------------------------------------------------------------------
