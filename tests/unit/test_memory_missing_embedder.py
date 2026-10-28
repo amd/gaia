@@ -25,7 +25,11 @@ from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     ModelDownloadCancelledError,
 )
-from gaia.llm.retry import current_cancel_check
+from gaia.llm.retry import (
+    current_cancel_check,
+    current_retry_listener,
+    model_retry_notices,
+)
 
 NOT_FOUND = RuntimeError(
     "Embedding failed: Error generating embeddings: Request failed with status "
@@ -172,6 +176,25 @@ def test_the_download_is_announced_and_progress_reaches_the_console(tmp_path):
         ]
     finally:
         host.memory_store.close()
+
+
+def test_a_download_preserves_the_existing_retry_listener(tmp_path):
+    host = _Host()
+    host.console = MagicMock()
+    listener = MagicMock()
+    seen = []
+
+    def downloading(*_args, **_kwargs):
+        seen.append(current_retry_listener())
+        return True
+
+    with _lemonade([NOT_FOUND, VECTOR]) as client_cls:
+        client_cls.return_value.ensure_model_downloaded.side_effect = downloading
+        with model_retry_notices(listener):
+            host.init_memory(db_path=tmp_path / "memory.db")
+
+    assert seen == [listener]
+    host.memory_store.close()
 
 
 def test_a_cancelled_pull_leaves_memory_off_and_reports_the_reason(tmp_path):

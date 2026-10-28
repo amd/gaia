@@ -92,7 +92,11 @@ from gaia.llm.lemonade_client import (
     configured_lemonade_url,
     find_model_requirement,
 )
-from gaia.llm.retry import current_cancel_check, model_retry_notices
+from gaia.llm.retry import (
+    current_cancel_check,
+    current_retry_listener,
+    model_retry_notices,
+)
 
 if TYPE_CHECKING:
     from gaia.agents.base.bootstrap import BootstrapResult
@@ -1071,8 +1075,11 @@ class MemoryMixin(ProceduralMemoryMixin):
             is_set = getattr(cancelled, "is_set", None)
             cancel_check = is_set if callable(is_set) else None
         cancel_context = (
-            model_retry_notices(lambda _notice: None, is_cancelled=cancel_check)
-            if cancel_check is not None
+            model_retry_notices(
+                current_retry_listener() or (lambda _notice: None),
+                is_cancelled=cancel_check,
+            )
+            if cancel_check is not None and current_cancel_check() is None
             else nullcontext()
         )
 
