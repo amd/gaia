@@ -156,6 +156,10 @@ const (
 )
 
 type ChatModel struct {
+	// updateCheckOnLaunch makes Init ask once whether a newer GAIA is out
+	// (WithUpdateCheck). Off unless the launch opts in.
+	updateCheckOnLaunch bool
+
 	providerPanel *providers.Model
 	// agentsPanel is the in-chat "/agents" listing (nil unless open). It only
 	// lists and selects (agents.SelectedMsg's own doc comment); switching to
@@ -669,6 +673,9 @@ func (m ChatModel) Init() tea.Cmd {
 	if m.startup.pending && !m.setupChecking {
 		cmds = append(cmds, startupModelCmd())
 	}
+	if m.updateCheckOnLaunch {
+		cmds = append(cmds, checkUpdateCmd(true /* launch */, ""))
+	}
 	if m.setupChecking {
 		// The flagship agent's first-boot gate (see applyFirstBootGate):
 		// hold the initial query, if any, until the check -- and the setup
@@ -976,6 +983,15 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case slackStatusMsg:
 		return m.handleSlackStatus(msg)
+
+	case updateCheckedMsg:
+		return m.handleUpdateChecked(msg)
+
+	case updatePlannedMsg:
+		return m.handleUpdatePlanned(msg)
+
+	case updateSavedMsg:
+		return m.handleUpdateSaved(msg)
 
 	case slackDeclinedMsg:
 		return m.handleSlackDeclined(msg)
@@ -1758,6 +1774,11 @@ func (m *ChatModel) restoreToComposer(text string) {
 // "/clear" typed mid-turn still clears when it finally lands instead of being
 // sent to the agent as a literal question.
 func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
+	// `/update` takes a free-form version argument, so like /model it is
+	// dispatched before the exact-match switch.
+	if isUpdateCommand(query) {
+		return m.runUpdateCommand(updateCommandArg(query))
+	}
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
