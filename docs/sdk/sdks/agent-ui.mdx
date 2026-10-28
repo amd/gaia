@@ -713,8 +713,10 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     read and write those folders from its first message, as
     `POST /api/sessions/{session_id}/environment/folders` would. A folder that
     is missing or too broad (a drive root, the home folder, a protected
-    folder), or any folder for an agent that runs as its own process, is a
-    **400** and no chat is created.
+    folder), or any folder for an agent that can't be given one, is a **400**
+    and no chat is created. An agent that runs as its own process can be given
+    folders when its contract is 2.18 or later; an older one, the email agent,
+    or one that fails to start is refused.
 
     From the Agent UI (`X-Gaia-Client: agent-ui`) a chat is always the GAIA
     agent: an omitted `agent_type` becomes `gaia` and any other value is a
@@ -991,6 +993,7 @@ Deleting a chat deletes its copies.
     | `thinking` | `content` (string) | Agent reasoning or progress message. Emitted when the agent starts processing, thinks through a problem, or begins a long-running operation. |
     | `step` | `step` (int), `total` (int), `status` (string) | Agent step progress. `step` is the current step number, `total` is the step limit, and `status` is `"started"`. |
     | `status` | `status` (string), `message` (string) | General status update. `status` is one of `"working"`, `"complete"`, `"warning"`, or `"info"`. May also include `steps` (int) and `elapsed` (number) when `status` is `"complete"`. |
+    | `commentary` | `content` (string) | The text the model streamed since the last tool call, sent just before the next `tool_start`. Those `chunk` events narrated the call rather than answering, so a client moves the text out of the answer and shows it as a note in the turn. Only sent when the text is not empty; the saved turn keeps it as a step of type `commentary`. |
     | `plan` | `steps` (string[]), `step_narrations` (string[]), `current_step` (int or null) | Agent execution plan, re-sent before each step it executes. `steps` names each planned tool call with its arguments; `step_narrations` is the same list as one plain line per step (e.g. `"Reading file: notes.txt"`). `current_step` is the zero-based index of the step being executed. |
 
     **Tool Execution**
@@ -1428,7 +1431,8 @@ agent at once, so they take effect on its next step.
       "folders": [{"path": "C:\\work", "kind": "folder", "source": "added", "removable": true}],
       "removed": ["C:\\work\\private"],
       "internet": true,
-      "enforced": true
+      "enforced": true,
+      "internet_enforced": true
     }
     ```
 
@@ -1436,9 +1440,18 @@ agent at once, so they take effect on its next step.
     `source` is `added`, `gaia_documents`, `scratch`, `document`,
     `working_folder` or `approved` (granted during the chat). `removable` is
     false for an attached document, which leaves through the chat's document
-    list. `enforced` is false for an agent that runs as its own process (a
-    relayed sidecar); the folder and internet endpoints then refuse changes
-    with **409** (**400** for adding a folder).
+    list. `enforced` covers the folders and is false for an agent that runs as
+    its own process (a relayed sidecar); removing a folder then refuses with
+    **409**. Adding a folder works when the sidecar's contract is 2.18 or
+    later, since each turn sends it the chat's folders, and is a **400**
+    otherwise. A chat that had a folder removed while its agent ran in process
+    stops its turns once the agent is relayed, since the sidecar can't be kept
+    out of a removed folder; start a new chat. `internet_enforced` covers the
+    internet switch: it is true in process and for a relayed GAIA agent (for
+    one older than contract 2.23, the Agent UI refuses an internet-off turn
+    with an update message instead of sending it), and false for an agent
+    that keeps its own network rules (the email agent), where the internet
+    endpoint refuses changes with **409**.
   </Accordion>
 
   <Accordion title="POST /api/sessions/{session_id}/environment/folders">
@@ -1466,6 +1479,14 @@ agent at once, so they take effect on its next step.
     is: `localhost` exactly or a loopback IP (`127.0.0.0/8`, `::1`). Each
     command in a chained shell line is checked on its own. The refusal tells the model the
     internet is off for this chat.
+
+    For a relayed GAIA chat with a turn running, the change is also sent to
+    that turn's agent, which follows it from its next tool call. A change
+    made while the turn is still starting is sent as soon as the agent has
+    taken the turn. If it can't be delivered, the endpoint answers **502**:
+    the setting is saved and applies from the next message, and switching
+    off also ends the turn in the Agent UI. A turn that ended before it
+    could be told needs nothing, so that change answers **200**.
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/outputs">
@@ -2248,14 +2269,15 @@ First-run hardware scan (issues #1726, #1727).
   <Accordion title="GET /api/onboarding/start">
     What a new chat's empty screen offers: up to four `cards` and the
     `working_folder` (`{path, name, gaia_folder, choosable}`) a new chat's agent
-    works in. `choosable` is false when the GAIA agent runs as its own process,
-    so a new chat can't be given another folder.
+    works in. `choosable` says whether a new chat can be given another folder:
+    true for an in-process agent or a sidecar at contract 2.18 or later.
     Each card is `{skill, title, note, prompt, needs_input}`. Its task runs on
     the agent's own tools, so it appears whether or not `skill` is installed;
     only the check-in card needs its skill. Cards for what the user set up
     (indexed documents, a connected mail account) come first. `needs_input` means the prompt ends
-    where the user types the subject. When the agent can't list its skills,
-    `cards` is empty and `skills_error` says why. Makes no model call.
+    where the user types the subject. When the agent can't list its skills or
+    can't start, `cards` is empty, `choosable` is false and `skills_error` says
+    why. Makes no model call.
   </Accordion>
 </AccordionGroup>
 
