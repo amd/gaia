@@ -216,9 +216,10 @@ class CodeIndexToolsMixin:
         A first build of a large repository outlasts any one tool call, and a
         build cut off at the tool timeout saves nothing, so it runs on its own
         thread, shared by every caller. A search waits for it only briefly;
-        ``until_done`` (``index_codebase``) waits until it ends or the call is
-        abandoned. ``result`` is the ``IndexResult`` of a finished build;
-        otherwise ``refusal`` says how far it has got, or why it failed.
+        ``until_done`` (``index_codebase``) waits for a build it started until
+        it ends or the call is abandoned, and reports one already running.
+        ``result`` is the ``IndexResult`` of a finished build; otherwise
+        ``refusal`` says how far it has got, or why it failed.
         """
         with _BUILD_LOCK:
             build = getattr(self, "_code_index_job", None)
@@ -242,7 +243,7 @@ class CodeIndexToolsMixin:
                 self._code_index_job = build
                 build["thread"].start()
                 started = True
-        if until_done:
+        if until_done and started:
             while build["thread"].is_alive():
                 build["thread"].join(0.5)
                 raise_if_cancelled()
@@ -353,7 +354,7 @@ class CodeIndexToolsMixin:
             if sdk is None:
                 return json.dumps({"error": "code_index SDK not initialised"})
             try:
-                # Joins a running build rather than embedding the repo twice.
+                # Reports a running build rather than embedding the repo twice.
                 refusal, result = self._code_index_build(sdk, until_done=True)
                 if refusal is not None:
                     return refusal
@@ -369,9 +370,7 @@ class CodeIndexToolsMixin:
                 logger.error("index_codebase failed: %s", e)
                 return json.dumps({"error": str(e)})
 
-        # The first search runs the same build as index_codebase, so it gets the
-        # same window; the default cap abandoned it mid-build on a large repo.
-        @tool(timeout=900)
+        @tool
         def search_code_index(
             query: str,
             scope: str = "all",

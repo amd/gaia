@@ -541,6 +541,18 @@ class TestBackgroundBuild:
         sdk.release.set()
         assert sdk.index_calls == 1
 
+    def test_index_codebase_reports_a_running_build_instead_of_starting_one(
+        self, tmp_path
+    ):
+        sdk = _SlowSDK()
+        self._harness(tmp_path, sdk)
+        self._search()
+        with patch("gaia.agents.tools.code_index_tools._CODE_INDEX_AVAILABLE", True):
+            out = json.loads(_TOOL_REGISTRY["index_codebase"]["function"]())
+        sdk.release.set()
+        assert out["index_building"] is True
+        assert sdk.index_calls == 1
+
     def test_the_finished_build_answers_the_next_search(self, tmp_path):
         harness_sdk = _SlowSDK()
         harness = self._harness(tmp_path, harness_sdk)
@@ -565,17 +577,6 @@ class TestBackgroundBuild:
     def _tool(self, name, **kwargs):
         with patch("gaia.agents.tools.code_index_tools._CODE_INDEX_AVAILABLE", True):
             return json.loads(_TOOL_REGISTRY[name]["function"](**kwargs))
-
-    def test_index_codebase_while_it_builds_joins_that_build(self, tmp_path):
-        import threading
-
-        sdk = _SlowSDK()
-        self._harness(tmp_path, sdk)
-        self._search()
-        threading.Timer(0.3, sdk.release.set).start()
-        out = self._tool("index_codebase")
-        assert out["status"] == "ok"
-        assert sdk.builds == 1
 
     def test_index_codebase_reports_a_failed_build(self, tmp_path):
         sdk = _SlowSDK(fail=True)
@@ -731,11 +732,10 @@ def test_a_new_build_does_not_show_the_last_builds_progress(tmp_path):
 
 
 class TestBuildWindow:
-    def test_a_first_search_gets_the_build_window_index_codebase_gets(self, tmp_path):
-        """search_code_index builds the index on first use; capped at the default
-        it was abandoned mid-build and the model's index_codebase started a second."""
+    def test_only_index_codebase_gets_the_long_build_window(self, tmp_path):
+        """A first search builds in the background, so it needs no long window."""
         make_harness(tmp_path)
 
         build = _TOOL_REGISTRY["index_codebase"]["timeout"]
         assert build is not None
-        assert _TOOL_REGISTRY["search_code_index"]["timeout"] == build
+        assert _TOOL_REGISTRY["search_code_index"]["timeout"] != build
