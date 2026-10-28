@@ -490,9 +490,15 @@ class _SlowSDK(_FakeSDK):
         self.release = threading.Event()
         self.fail = fail
         self.progress = {"embedded": 50, "to_embed": 200}
+        self.cleared = 0
+        self.builds = 0
+
+    def clear_index(self):
+        self.cleared += 1
 
     def index_repository(self):
         self.index_calls += 1
+        self.builds += 1
         self.release.wait(5)
         if self.fail:
             raise RuntimeError("embedder unreachable")
@@ -555,6 +561,173 @@ class TestBackgroundBuild:
         assert "index_codebase" in out["error"]
         self._search()
         assert sdk.index_calls == 2
+
+    def _tool(self, name, **kwargs):
+        with patch("gaia.agents.tools.code_index_tools._CODE_INDEX_AVAILABLE", True):
+            return json.loads(_TOOL_REGISTRY[name]["function"](**kwargs))
+
+    def test_index_codebase_while_it_builds_joins_that_build(self, tmp_path):
+        import threading
+
+        sdk = _SlowSDK()
+        self._harness(tmp_path, sdk)
+        self._search()
+        threading.Timer(0.3, sdk.release.set).start()
+        out = self._tool("index_codebase")
+        assert out["status"] == "ok"
+        assert sdk.builds == 1
+
+    def test_index_codebase_reports_a_failed_build(self, tmp_path):
+        sdk = _SlowSDK(fail=True)
+        sdk.release.set()
+        self._harness(tmp_path, sdk)
+        out = self._tool("index_codebase")
+        assert "embedder unreachable" in out["error"]
+
+    def test_an_abandoned_index_codebase_leaves_the_build_running(self, tmp_path):
+        """The tool timeout stops the wait, not the build a search reports on."""
+        import threading
+
+        from gaia.tool_cancellation import set_tool_cancel_event
+
+        sdk = _SlowSDK()
+        harness = self._harness(tmp_path, sdk)
+        cancel = threading.Event()
+        outs = []
+
+        def _worker():
+            set_tool_cancel_event(cancel)
+            outs.append(self._tool("index_codebase"))
+
+        worker = threading.Thread(target=_worker)
+        worker.start()
+        cancel.set()
+        worker.join(5)
+        assert not worker.is_alive()
+        assert "cancelled" in outs[0]["error"]
+        assert self._search()["index_building"] is True
+        sdk.release.set()
+        harness._code_index_job["thread"].join(5)
+        assert self._search() == []  # the build it left running landed
+        assert sdk.builds == 1
+
+    def test_a_search_during_index_codebase_starts_no_second_build(self, tmp_path):
+        """The task-start auto-index runs index_codebase on its own thread."""
+        import threading
+
+        sdk = _SlowSDK()
+        harness = self._harness(tmp_path, sdk)
+        auto = threading.Thread(target=lambda: self._tool("index_codebase"))
+        auto.start()
+        for _ in range(100):
+            if getattr(harness, "_code_index_job", None) is not None:
+                break
+            threading.Event().wait(0.01)
+        out = self._search()
+        sdk.release.set()
+        auto.join(5)
+        assert out["index_building"] is True
+        assert sdk.builds == 1
+
+    def test_index_codebase_after_a_failed_build_retries_it(self, tmp_path):
+        """The failure reply says "call index_codebase to retry"; that must."""
+        sdk = _SlowSDK(fail=True)
+        harness = self._harness(tmp_path, sdk)
+        assert self._search()["index_building"] is True
+        sdk.release.set()
+        harness._code_index_job["thread"].join(5)
+        sdk.fail = False
+        out = self._tool("index_codebase")
+        assert out["status"] == "ok"
+        assert sdk.builds == 2
+
+    def test_clearing_while_it_builds_is_refused(self, tmp_path):
+        sdk = _SlowSDK()
+        self._harness(tmp_path, sdk)
+        self._search()
+        out = self._tool("clear_code_index")
+        sdk.release.set()
+        assert out["index_building"] is True
+        assert sdk.cleared == 0
+
+    def test_a_fresh_sdk_for_the_same_index_joins_the_running_build(self, tmp_path):
+        first, second = _SlowSDK(), _SlowSDK()
+        first._cache_dir = second._cache_dir = tmp_path / "cache"
+        harness = self._harness(tmp_path, first)
+        self._search()
+        harness._get_code_index_sdk = lambda: second
+        out = self._search()
+        first.release.set()
+        assert out["index_building"] is True
+        assert (first.index_calls, second.index_calls) == (1, 0)
+
+    def test_another_repository_is_not_blocked_by_this_build(self, tmp_path):
+        first, second = _SlowSDK(), _SlowSDK()
+        first._cache_dir = tmp_path / "a"
+        second._cache_dir = tmp_path / "b"
+        harness = self._harness(tmp_path, first)
+        self._search()
+        harness._get_code_index_sdk = lambda: second
+        self._search()
+        first.release.set()
+        second.release.set()
+        assert (first.index_calls, second.index_calls) == (1, 1)
+
+    def test_an_index_gone_after_the_build_is_rebuilt_not_reported_stale(
+        self, tmp_path
+    ):
+        sdk = _SlowSDK()
+        harness = self._harness(tmp_path, sdk)
+        self._search()
+        sdk.release.set()
+        harness._code_index_job["thread"].join(5)
+        assert self._search() == []  # the built index answers
+        sdk.indexed = False  # then it is cleared on disk
+        out = self._search()
+        job = getattr(harness, "_code_index_job", None)
+        if job is not None:
+            job["thread"].join(5)
+        assert sdk.builds == 2
+        assert (
+            out
+            == {
+                "index_built_now": {"files_indexed": 3, "chunks_created": 7},
+                "results": [],
+            }
+            or out.get("index_building") is True
+        )
+
+    def test_simultaneous_first_searches_start_one_build(self, tmp_path):
+        import threading
+
+        sdk = _SlowSDK()
+        self._harness(tmp_path, sdk)
+        gate = threading.Barrier(8)
+        outs = []
+
+        def _go():
+            gate.wait()
+            outs.append(self._search())
+
+        threads = [threading.Thread(target=_go) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(5)
+        sdk.release.set()
+        assert sdk.index_calls == 1
+        assert len(outs) == 8 and all(o["index_building"] for o in outs)
+
+
+def test_a_new_build_does_not_show_the_last_builds_progress(tmp_path):
+    from gaia.code_index.sdk import CodeIndexConfig, CodeIndexSDK
+
+    sdk = CodeIndexSDK(
+        CodeIndexConfig(repo_path=str(tmp_path), cache_dir=str(tmp_path / "c"))
+    )
+    sdk.progress = {"embedded": 900, "to_embed": 1000}
+    sdk.index_repository()
+    assert sdk.progress == {"embedded": 0, "to_embed": 0}
 
 
 class TestBuildWindow:

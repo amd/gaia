@@ -67,9 +67,11 @@ in a repository with no index starts building it in the background. A small
 repository finishes within that search's first minute and is searched at once.
 A large one keeps building — GAIA's own repository can take 20 minutes — and
 each search until then answers with how far it has got, so the agent uses text
-search meanwhile instead of waiting. A task that never searches never pays for
-the embedding pass. Set `GAIA_PROJECT_MAP_AUTO_INDEX=1` to build it in the
-background at task start instead.
+search meanwhile instead of waiting. `index_codebase` waits for that same build
+rather than starting a second one, and `clear_code_index` refuses while it
+runs. A task that never searches never pays for the embedding pass. Set
+`GAIA_PROJECT_MAP_AUTO_INDEX=1` to build it in the background at task start
+instead.
 
 ### Example interaction
 

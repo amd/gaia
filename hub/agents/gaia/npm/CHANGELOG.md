@@ -81,6 +81,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   15-minute limit, saved nothing, and ended the turn with an empty answer —
   every time. The build now runs in the background and each search reports its
   progress until it is done, so the agent falls back to text search meanwhile.
+  `index_codebase` and the task-start auto-index wait for that build instead
+  of embedding the repository a second time alongside it.
 
 - **An old failure in memory no longer stops a request you make now.** A note
   like "this page returned 503, don't waste tool calls on it" was obeyed as a

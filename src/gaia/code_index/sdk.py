@@ -204,6 +204,7 @@ class CodeIndexSDK:
         persist atomically.
         """
         start = time.time()
+        self.progress = {"embedded": 0, "to_embed": 0}
 
         self.log.info(f"Indexing repository: {self._repo_root}")
 

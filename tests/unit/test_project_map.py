@@ -513,6 +513,21 @@ def test_prompt_says_building_while_the_index_is_running(repo):
     assert "building now in the background" in text
 
 
+def test_prompt_says_building_while_a_search_started_build_runs(repo):
+    """A first search's background build must not read as "not built"."""
+    agent = _FakeAgent(repo, indexed=False, auto_index=False)
+    agent._code_index_build_running = lambda sdk: '{"index_building": true}'
+    text = agent.get_project_map_system_prompt()
+    assert "building now in the background" in text
+    assert "not built" not in text
+
+
+def test_prompt_says_not_built_when_no_build_runs(repo):
+    agent = _FakeAgent(repo, indexed=False, auto_index=False)
+    agent._code_index_build_running = lambda sdk: None
+    assert "not built" in agent.get_project_map_system_prompt()
+
+
 def test_prompt_reports_a_failed_index_instead_of_waiting_forever(repo):
     """A dead background index must not read as "still building" all session."""
 
