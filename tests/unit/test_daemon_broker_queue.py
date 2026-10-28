@@ -1035,7 +1035,7 @@ def test_an_upload_queued_behind_a_dead_holder_still_indexes(
 
     from gaia.ui import _chat_helpers as helpers
 
-    daemon = daemon_factory(ModelSlotBroker(heartbeat_ttl_s=1.5))
+    daemon = daemon_factory(ModelSlotBroker(heartbeat_ttl_s=4.0))
     monkeypatch.setattr(broker_routes, "QUEUE_UPDATE_EVERY_S", 0.1)
     # A 0.1 s queue update is live progress, not a sub-second deadline.
     # Leave enough scheduling headroom for an xdist worker under load.
