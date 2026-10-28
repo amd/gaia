@@ -78,11 +78,60 @@ def relayed(session: Dict[str, Any]) -> bool:
     )
 
 
+def takes_folders(agent_type: Optional[str]) -> bool:
+    """Whether a chat with *agent_type* can be given folders.
+
+    An in-process agent always can. A relayed one can when the running
+    sidecar's contract says it takes the chat's file scope on every turn.
+
+    Raises:
+        EnvironmentChangeError: The relayed agent could not be started to ask.
+    """
+    from .email_sidecar import daemon_client
+    from .email_sidecar.errors import SidecarError
+    from .email_sidecar.profiles import profile_for, scope_supported
+
+    agent_type = agent_type or "chat"
+    if not relayed({"agent_type": agent_type}):
+        return True
+    profile = profile_for(agent_type)
+    if profile is None or profile.min_scope_api_version is None:
+        return False
+    try:
+        handle = daemon_client.acquire_handle(agent_type)
+    except SidecarError as e:
+        logger.error("Could not start the %s agent to check folders: %s", agent_type, e)
+        raise EnvironmentChangeError(profile.start_failed_text(e.kind)) from e
+    return scope_supported(profile, handle.api_version)
+
+
+def folders_refusal(agent_type: Optional[str]) -> str:
+    """What to tell the user when *agent_type* can't be given folders."""
+    from .email_sidecar.profiles import profile_for
+
+    profile = profile_for(agent_type or "chat")
+    if profile is not None and profile.min_scope_api_version is not None:
+        return (
+            f"The installed {profile.display_name} agent is too old to be given "
+            "folders. Update GAIA to the latest version, then try again."
+        )
+    return (
+        "This chat's agent runs as its own process and can't be given folders. "
+        "Start a chat with the GAIA agent to use them."
+    )
+
+
+def _require_folders(agent_type: Optional[str]) -> None:
+    if not takes_folders(agent_type):
+        raise EnvironmentChangeError(folders_refusal(agent_type))
+
+
 def _require_holdable(session: Dict[str, Any]) -> None:
     if relayed(session):
         raise EnvironmentChangeError(
-            "This chat's agent runs as its own process, so GAIA can't hold it to "
-            "these settings. Start a chat with the GAIA agent to use them."
+            "This chat's agent runs as its own process, so GAIA can't take a "
+            "folder away from it or turn its internet off. To work without a "
+            "folder, start a new chat."
         )
 
 
@@ -98,12 +147,12 @@ def check_new_chat_folders(agent_type: Optional[str], folders: List[str]) -> Non
     Checked before the chat exists, so a refused folder leaves no chat behind.
 
     Raises:
-        EnvironmentChangeError: The agent can't hold folder settings, or a
+        EnvironmentChangeError: The agent can't be given folders, or a
             folder is missing or too broad.
     """
     if not folders:
         return
-    _require_holdable({"agent_type": agent_type})
+    _require_folders(agent_type)
     for path in folders:
         check_folder(path)
 
@@ -220,7 +269,17 @@ def check_folder(path: str) -> Path:
 
 def add_folder(db: ChatDatabase, session_id: str, path: str) -> None:
     """Let the chat read and write *path*, now and in later turns."""
-    _require_enforceable(db, session_id)
+    session = db.get_session(session_id)
+    if session is not None:
+        _require_folders(session.get("agent_type"))
+    grant_folder(db, session_id, path)
+
+
+def grant_folder(db: ChatDatabase, session_id: str, path: str) -> None:
+    """:func:`add_folder` for a chat whose agent is known to take folders.
+
+    A new chat's agent was asked once, by :func:`check_new_chat_folders`.
+    """
     target = check_folder(path)
     env = load(db, session_id)
     covering = [

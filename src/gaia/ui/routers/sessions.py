@@ -231,7 +231,12 @@ async def create_session(
     request.agent_type = flagship_only(http_request, request.agent_type)
     _reject_unknown_agent_type(request.agent_type)
     try:
-        session_environment.check_new_chat_folders(request.agent_type, request.folders)
+        # Off the loop: a relayed agent is asked over the daemon.
+        await asyncio.to_thread(
+            session_environment.check_new_chat_folders,
+            request.agent_type,
+            request.folders,
+        )
     except session_environment.EnvironmentChangeError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     session = None
@@ -250,7 +255,7 @@ async def create_session(
         )
         session_permissions.seed_new_session(session["id"], start_mode)
         for folder in request.folders:
-            session_environment.add_folder(db, session["id"], folder)
+            session_environment.grant_folder(db, session["id"], folder)
         return await _session_response(db, session)
     except Exception as e:
         if session is not None:

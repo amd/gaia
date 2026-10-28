@@ -189,30 +189,59 @@ def test_unknown_session_is_404(client):
     assert client.get("/api/sessions/nope/environment").status_code == 404
 
 
-def test_a_relayed_agent_is_reported_unenforced_and_changes_are_refused(
-    client, session_id, folder, monkeypatch
-):
-    # A Hub binary or the email sidecar runs as its own process.
+@pytest.fixture
+def relayed_gaia(monkeypatch):
+    """The flagship runs as a daemon sidecar, as on an installed GAIA."""
+    from gaia.ui.email_sidecar import daemon_client
+
     monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
-    body = client.get(f"/api/sessions/{session_id}/environment").json()
+    agent = SimpleNamespace(api_version="2.21", asked=[])
+
+    def acquire(agent_id):
+        agent.asked.append(agent_id)
+        return SimpleNamespace(api_version=agent.api_version)
+
+    monkeypatch.setattr(daemon_client, "acquire_handle", acquire)
+    return agent
+
+
+@pytest.fixture
+def gaia_session_id(client):
+    return client.post("/api/sessions", json={"agent_type": "gaia"}).json()["id"]
+
+
+def test_a_relayed_agent_is_reported_unenforced_and_can_only_gain_folders(
+    client, gaia_session_id, folder, relayed_gaia
+):
+    sid = gaia_session_id
+    body = client.get(f"/api/sessions/{sid}/environment").json()
     assert body["enforced"] is False
-    off = client.put(
-        f"/api/sessions/{session_id}/environment/internet", json={"on": False}
-    )
+    off = client.put(f"/api/sessions/{sid}/environment/internet", json={"on": False})
     assert off.status_code == 409
     assert "its own process" in off.json()["detail"]
+    added = client.post(
+        f"/api/sessions/{sid}/environment/folders", json={"path": str(folder)}
+    )
+    assert added.status_code == 200, added.text
+    assert str(folder.resolve()) in _paths(added.json())
     removed = client.post(
-        f"/api/sessions/{session_id}/environment/folders/remove",
-        json={"path": str(folder)},
+        f"/api/sessions/{sid}/environment/folders/remove", json={"path": str(folder)}
     )
     assert removed.status_code == 409
+    assert client.get(f"/api/sessions/{sid}/environment").json()["internet"] is True
+
+
+def test_a_relayed_agent_too_old_for_folders_is_refused_one(
+    client, gaia_session_id, folder, relayed_gaia
+):
+    relayed_gaia.api_version = "2.17"
     added = client.post(
-        f"/api/sessions/{session_id}/environment/folders", json={"path": str(folder)}
+        f"/api/sessions/{gaia_session_id}/environment/folders",
+        json={"path": str(folder)},
     )
     assert added.status_code == 400
-    assert (
-        client.get(f"/api/sessions/{session_id}/environment").json()["internet"] is True
-    )
+    assert "too old to be given folders" in added.json()["detail"]
+    assert "Update GAIA" in added.json()["detail"]
 
 
 def test_an_invalid_allowed_paths_setting_is_named_not_an_empty_list(
@@ -248,11 +277,55 @@ def test_a_refused_folder_leaves_no_chat_behind(client, tmp_path, bad):
     assert _chat_count(client) == 0
 
 
-def test_a_relayed_agent_cannot_start_with_a_folder(client, folder, monkeypatch):
-    monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
-    refused = client.post("/api/sessions", json={"folders": [str(folder)]})
+def test_a_relayed_agent_that_takes_folders_can_start_with_one(
+    client, folder, relayed_gaia
+):
+    created = client.post(
+        "/api/sessions", json={"agent_type": "gaia", "folders": [str(folder)]}
+    )
+    assert created.status_code == 200, created.text
+    assert relayed_gaia.asked == ["gaia"]
+    body = client.get(f"/api/sessions/{created.json()['id']}/environment").json()
+    assert str(folder.resolve()) in _paths(body)
+
+
+def test_a_relayed_agent_too_old_for_folders_cannot_start_with_one(
+    client, folder, relayed_gaia
+):
+    relayed_gaia.api_version = "2.17"
+    refused = client.post(
+        "/api/sessions", json={"agent_type": "gaia", "folders": [str(folder)]}
+    )
+    assert refused.status_code == 400
+    assert "too old to be given folders" in refused.text
+    assert _chat_count(client) == 0
+
+
+def test_a_relayed_agent_that_cannot_start_refuses_the_folder_and_says_why(
+    client, folder, relayed_gaia, monkeypatch
+):
+    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.email_sidecar.errors import SidecarError
+
+    def fail(_agent_id):
+        raise SidecarError("sidecar crashed")
+
+    monkeypatch.setattr(daemon_client, "acquire_handle", fail)
+    refused = client.post(
+        "/api/sessions", json={"agent_type": "gaia", "folders": [str(folder)]}
+    )
+    assert refused.status_code == 400
+    assert "couldn't start" in refused.text
+    assert _chat_count(client) == 0
+
+
+def test_the_email_agent_cannot_start_with_a_folder(client, folder, relayed_gaia):
+    refused = client.post(
+        "/api/sessions", json={"agent_type": "email", "folders": [str(folder)]}
+    )
     assert refused.status_code == 400
     assert "runs as its own process" in refused.text
+    assert relayed_gaia.asked == []
     assert _chat_count(client) == 0
 
 

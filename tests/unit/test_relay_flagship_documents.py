@@ -26,6 +26,7 @@ from gaia.agents.registry import AgentRegistry
 from gaia.hub.installer import register_installed_sidecars
 from gaia.security import PathValidator
 from gaia.ui import permissions as session_permissions
+from gaia.ui import session_environment
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
 from gaia.ui.email_sidecar import daemon_client as daemon_client_module
@@ -68,7 +69,8 @@ class _Rag:
 class _DocAgent:
     """Stands in for GaiaAgent: answers with the documents it can read."""
 
-    def __init__(self, scope, **_kwargs):
+    def __init__(self, scope, **kwargs):
+        self.built_with = kwargs
         self.console = None
         self.conversation_history = []
         self._cancel_event = None
@@ -232,7 +234,7 @@ def chat(monkeypatch, sidecar_flagship_registry, tmp_path):
         )
         db.attach_document(session_id, doc["id"])
 
-    yield SimpleNamespace(send=send, attach=attach, session_id=session_id)
+    yield SimpleNamespace(db=db, send=send, attach=attach, session_id=session_id)
     session_permissions.reset_all()
 
 
@@ -310,6 +312,38 @@ def test_an_older_flagship_still_chats_without_documents(
     _point_ui_at(monkeypatch, base_url, "2.15")
 
     assert _answer(chat.send("hi")) == "no documents are indexed"
+
+
+def test_a_folder_added_to_the_chat_reaches_the_relayed_flagship(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    folder = tmp_path / "q3-report"
+    folder.mkdir()
+    session_environment.grant_folder(chat.db, chat.session_id, str(folder))
+
+    _answer(chat.send("what's in my folder?"))
+
+    [agent] = agents
+    assert str(folder.resolve()) in agent.built_with["allowed_paths"]
+
+
+def test_an_older_flagship_says_folders_need_an_update(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    base_url, agents, _ = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, "2.17")
+    folder = tmp_path / "q3-report"
+    folder.mkdir()
+    session_environment.grant_folder(chat.db, chat.session_id, str(folder))
+
+    events = chat.send("what's in my folder?")
+
+    [error] = [e for e in events if e.get("type") == "agent_error"]
+    assert "too old to be given folders" in error["content"]
+    assert "Update GAIA to the latest version" in error["content"]
+    assert agents == []
 
 
 def test_email_turns_never_carry_documents(monkeypatch, tmp_path):

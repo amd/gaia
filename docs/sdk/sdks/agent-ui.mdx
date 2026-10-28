@@ -713,8 +713,10 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     read and write those folders from its first message, as
     `POST /api/sessions/{session_id}/environment/folders` would. A folder that
     is missing or too broad (a drive root, the home folder, a protected
-    folder), or any folder for an agent that runs as its own process, is a
-    **400** and no chat is created.
+    folder), or any folder for an agent that can't be given one, is a **400**
+    and no chat is created. An agent that runs as its own process can be given
+    folders when its contract is 2.18 or later; an older one, the email agent,
+    or one that fails to start is refused.
 
     From the Agent UI (`X-Gaia-Client: agent-ui`) a chat is always the GAIA
     agent: an omitted `agent_type` becomes `gaia` and any other value is a
@@ -1437,8 +1439,10 @@ agent at once, so they take effect on its next step.
     `working_folder` or `approved` (granted during the chat). `removable` is
     false for an attached document, which leaves through the chat's document
     list. `enforced` is false for an agent that runs as its own process (a
-    relayed sidecar); the folder and internet endpoints then refuse changes
-    with **409** (**400** for adding a folder).
+    relayed sidecar); removing a folder and the internet switch then refuse
+    with **409**. Adding a folder works when the sidecar's contract is 2.18 or
+    later, since each turn sends it the chat's folders, and is a **400**
+    otherwise.
   </Accordion>
 
   <Accordion title="POST /api/sessions/{session_id}/environment/folders">
@@ -2248,14 +2252,15 @@ First-run hardware scan (issues #1726, #1727).
   <Accordion title="GET /api/onboarding/start">
     What a new chat's empty screen offers: up to four `cards` and the
     `working_folder` (`{path, name, gaia_folder, choosable}`) a new chat's agent
-    works in. `choosable` is false when the GAIA agent runs as its own process,
-    so a new chat can't be given another folder.
+    works in. `choosable` says whether a new chat can be given another folder:
+    true for an in-process agent or a sidecar at contract 2.18 or later.
     Each card is `{skill, title, note, prompt, needs_input}`. Its task runs on
     the agent's own tools, so it appears whether or not `skill` is installed;
     only the check-in card needs its skill. Cards for what the user set up
     (indexed documents, a connected mail account) come first. `needs_input` means the prompt ends
-    where the user types the subject. When the agent can't list its skills,
-    `cards` is empty and `skills_error` says why. Makes no model call.
+    where the user types the subject. When the agent can't list its skills or
+    can't start, `cards` is empty, `choosable` is false and `skills_error` says
+    why. Makes no model call.
   </Accordion>
 </AccordionGroup>
 

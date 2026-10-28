@@ -101,7 +101,9 @@ def test_a_fresh_sessions_writable_folder_exists_once_granted(homes, monkeypatch
     assert documents.is_dir()
 
     documents.rmdir()
-    assert start_screen.working_folder()["path"] == str(documents.resolve())
+    assert start_screen.working_folder(choosable=True)["path"] == str(
+        documents.resolve()
+    )
     assert documents.is_dir()
 
 
@@ -122,6 +124,7 @@ def test_an_uncreatable_documents_folder_reaches_the_user(homes, client, monkeyp
     monkeypatch.setattr(
         "gaia.ui.routers.skills.list_skills", lambda *a, **k: {"skills": []}
     )
+    monkeypatch.setattr("gaia.ui.session_environment.relayed", lambda _s: False)
     gaia_home.chmod(0o500)
     try:
         resp = client.get("/api/onboarding/start", headers={"X-Gaia-UI": "1"})

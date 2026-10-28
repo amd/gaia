@@ -77,7 +77,8 @@ from . import permissions as session_permissions
 from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
-from .session_environment import apply_environment
+from .session_environment import apply_environment, folders_refusal
+from .session_environment import load as load_environment
 from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
 from .utils import attached_upload_paths, managed_documents_dir
@@ -2185,6 +2186,7 @@ def _dispatch_sidecar_query(
     session_id: str | None = None,
     documents: list | None = None,
     allowed_paths: list | None = None,
+    folders: list | None = None,
     memory: str = "on",
     recording: TurnRecording | None = None,
     max_steps: int | None = None,
@@ -2198,6 +2200,10 @@ def _dispatch_sidecar_query(
     *allowed_paths* is the chat's computed file scope. A sidecar that takes it
     gets it with ``GAIA_ALLOWED_PATHS`` already applied — the sidecar process
     need not share this one's environment — so it works where the UI says.
+
+    *folders* are the folders the user added to the chat. They join the scope;
+    a sidecar too old to take a scope stops the turn rather than answer
+    without them.
 
     *memory* is the chat's memory mode (:func:`_memory_mode`). Likewise, a
     private or memory-off turn is stopped rather than sent to a sidecar that
@@ -2269,10 +2275,23 @@ def _dispatch_sidecar_query(
             return
         relayed_documents = [str(Path(p).resolve()) for p in documents]
 
+    takes_scope = scope_supported(profile, handle.api_version)
+    if folders and not takes_scope:
+        logger.warning(
+            "%s agent at contract %s can't be given folders (needs %s)",
+            agent_type,
+            handle.api_version,
+            profile.min_scope_api_version,
+        )
+        sse_handler._emit(
+            {"type": "agent_error", "content": folders_refusal(agent_type)}
+        )
+        return
+
     relayed_scope = None
-    if allowed_paths is not None and scope_supported(profile, handle.api_version):
+    if allowed_paths is not None and takes_scope:
         try:
-            relayed_scope = _effective_scope(allowed_paths)
+            relayed_scope = _effective_scope(sorted({*allowed_paths, *(folders or [])}))
         except AllowedPathsEnvError as exc:
             # In process, the agent's validator raises this same error. The
             # sidecar may not see this environment, so say it here instead of
@@ -3913,6 +3932,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         session_id=session_id,
                         documents=_relayed_documents(rag_file_paths, attached),
                         allowed_paths=allowed,
+                        folders=load_environment(db, session_id)["folders"],
                         memory=_memory_mode(session, db),
                         recording=recording,
                     )
