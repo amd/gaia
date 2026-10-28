@@ -51,7 +51,7 @@ In the AgentUI:
 
 ## What this test validates
 
-- ✅ Settings → Connections renders, Connect button works.
+- ✅ Settings → Connectors renders, Connect button works.
 - ✅ OAuth PKCE flow completes; refresh token lands in OS keychain.
 - ✅ Loopback `127.0.0.1:<ephemeral>/callback` round-trips.
 - ✅ SSE event `connection.connected` updates AgentUI in &lt;2s.
@@ -61,7 +61,7 @@ In the AgentUI:
   grant raises `AuthRequiredError(AGENT_NOT_GRANTED)`).
 - ✅ After grant, sync→async bridge fetches a real bearer token.
 - ✅ Live Gmail API call succeeds.
-- ✅ Disconnect from Settings → Connections clears the keyring entry
+- ✅ Disconnect from Settings → Connectors clears the keyring entry
   and the chip flips to "Not connected" within 2s.
 - ✅ Restart AgentUI: connection persists (refresh token is in keychain).
 
@@ -73,7 +73,7 @@ gaia connectors grants revoke google "custom:<sha-prefix>:oauth-test"
 rm -rf ~/.gaia/agents/oauth-test/
 ```
 
-Or, from Settings → Connections in AgentUI:
+Or, from Settings → Connectors in AgentUI:
 - Click **Disconnect** next to Google.
 - Click **Revoke** next to the OAuth Test agent under per-agent grants.
 

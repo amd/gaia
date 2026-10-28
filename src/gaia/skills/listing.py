@@ -12,6 +12,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
+from gaia.skills.manager import ROOT_AGENT_BUNDLED, ROOT_CLAUDE_IMPORT, ROOT_USER
+
+#: Where a skill came from: the discovery-root labels the UI groups by.
+SKILL_SOURCES = (ROOT_AGENT_BUNDLED, ROOT_USER, ROOT_CLAUDE_IMPORT)
+
 
 def skills_listing(
     agent_skill_dirs: Iterable[str],
@@ -41,6 +46,7 @@ def skills_listing(
             "tools": list(s.tool_names),
             "path": s.root or "",
             "always_on": s.name in always_on,
+            "source": s.root if s.root in SKILL_SOURCES else None,
         }
         for s in sorted(discovered.values(), key=lambda s: s.name)
     ]

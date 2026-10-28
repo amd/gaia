@@ -63,6 +63,24 @@ describe('Sidebar', () => {
         expect(screen.queryByText('Fix the build')).not.toBeInTheDocument();
     });
 
+    it('puts search above New chat, expanded and collapsed', () => {
+        const above = (a: HTMLElement, b: HTMLElement) =>
+            !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+        const { unmount } = render(<Sidebar onNewChat={vi.fn()} />);
+        expect(above(
+            screen.getByRole('searchbox', { name: /Search chats/ }),
+            screen.getByRole('button', { name: 'New chat' }),
+        )).toBe(true);
+        unmount();
+
+        useChatStore.setState({ sidebarCollapsed: true });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(above(
+            screen.getByRole('button', { name: 'Search chats' }),
+            screen.getByRole('button', { name: /New chat/ }),
+        )).toBe(true);
+    });
+
     it('New chat calls onNewChat', () => {
         const onNewChat = vi.fn();
         render(<Sidebar onNewChat={onNewChat} />);

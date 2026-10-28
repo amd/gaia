@@ -4610,18 +4610,22 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     exc,
                 )
             inference_stats = _turn_inference_stats(inference_stats, answer_event)
-            if isinstance(result_holder.get("result"), dict):
+            turn_result = result_holder.get("result")
+            if not isinstance(turn_result, dict):
+                # A relayed turn's timings come back on the sidecar's final event.
+                turn_result = getattr(sse_handler, "relay_performance", None)
+            if isinstance(turn_result, dict):
                 from .turn_insights import summarize_turn
 
                 inference_stats = dict(inference_stats or {})
                 try:
                     inference_stats["performance"] = summarize_turn(
-                        result_holder["result"],
+                        turn_result,
                         wall_seconds=_time.monotonic() - turn_started,
-                        model_id=result_holder.get("model"),
+                        model_id=result_holder.get("model") or model_id,
                         loads=result_holder["model_loads"],
                     )
-                except (KeyError, TypeError, ValueError) as exc:
+                except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
                     # The answer is still saved; the panel shows the turn as unmeasured.
                     logger.warning(
                         "Turn performance for session %s not recorded: %s",

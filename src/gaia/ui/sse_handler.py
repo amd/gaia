@@ -47,7 +47,7 @@ from gaia.ui.event_narration import (
     grant_phrase,
     tool_phrase,
 )
-from gaia.ui.turn_summary import TurnLedger
+from gaia.ui.turn_summary import TurnLedger, search_hits
 from gaia.utils.json_string import (
     JsonStringStreamDecoder,
     extract_json_string_field,
@@ -614,6 +614,7 @@ class SSEOutputHandler(OutputHandler):
         # What the sidecar measured fills its context, from its ``final`` event.
         self.relay_context: Optional[Dict[str, Any]] = None
         self.relay_context_error: Optional[str] = None
+        self.relay_performance: Optional[Dict[str, Any]] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
@@ -854,6 +855,9 @@ class SSEOutputHandler(OutputHandler):
             for key in RESULT_PATH_KEYS:
                 if isinstance(data.get(key), str):
                     event[key] = data[key]
+        # The summary drops the hits a relayed turn's sources are made of.
+        if self._last_tool_name == "search_web" and isinstance(data, str):
+            event["sources"] = search_hits(data)
 
         if success and (get_tool_metadata(self._last_tool_name) or {}).get(
             "_mcp_server"

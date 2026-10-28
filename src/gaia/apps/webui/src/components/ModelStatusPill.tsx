@@ -100,10 +100,13 @@ export function ModelStatusPill() {
                 aria-haspopup="dialog"
                 aria-expanded={open}
                 aria-label={place?.remote ? text : `${text}, model ${dot === 'idle' ? 'not loaded' : dot}`}
-                title={title}
+                title={name ? `${text}. ${title}` : title}
             >
                 <Icon size={13} aria-hidden="true" />
-                <span className="sb-location-text">{text}</span>
+                <span className="sb-location-text">
+                    {place?.label && name && <span className="sb-location-place">{place.label}</span>}
+                    <span className="sb-location-name">{name ?? place?.label ?? 'Model'}</span>
+                </span>
                 {!place?.remote && (
                     <span className={`sb-location-dot is-${dot}`} aria-hidden="true" />
                 )}

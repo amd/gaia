@@ -58,6 +58,7 @@ from gaia.ui.sse_handler import (
     tool_result_failed,
 )
 from gaia.ui.sse_translation import MCP_TOOL_FIELDS, SUMMARY_VIEW_KEYS
+from gaia.ui.turn_insights import turn_record_problem
 
 logger = get_logger(__name__)
 
@@ -343,6 +344,17 @@ def _dispatch_one(
         if isinstance(event.get("model_messages"), list):
             # Saved with the reply so later turns replay its tool calls.
             handler.relayed_model_messages = event["model_messages"]
+        performance = event.get("performance")
+        problem = None if performance is None else turn_record_problem(performance)
+        if performance is not None and problem is None:
+            # What summarize_turn reads, so Under the hood measures this turn.
+            handler.relay_performance = performance
+        elif problem is not None:
+            logger.warning(
+                "Sidecar's performance record refused because %s; "
+                "the turn shows as not measured",
+                problem,
+            )
         handler._emit(out)
         return True
 

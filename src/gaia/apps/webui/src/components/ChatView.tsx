@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, EyeOff } from 'lucide-react';
+import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
 import { MessageBubble, isErrorContent } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
@@ -31,6 +31,7 @@ import { AnswerComparison } from './AnswerComparison';
 import * as messageQueue from '../utils/messageQueue';
 import type { QueuedMessage } from '../utils/messageQueue';
 import { SessionPanel, SessionPanelToggle } from './session-panel/SessionPanel';
+import { PrivateChatButton } from './PrivateChatButton';
 import { OfflineNotice } from './session-panel/OfflineNotice';
 import { ExportErrorBar } from './ExportErrorBar';
 import { useSessionPanelStore } from '../stores/sessionPanelStore';
@@ -46,6 +47,7 @@ import { isPlaceholderTitle } from '../utils/sessionTitle';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
+import { useChatDraft } from '../hooks/useSavedDraft';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -171,7 +173,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const notificationPanelVisible = useNotificationStore((s) => s.showPanel);
     const setNotificationPanelVisible = useNotificationStore((s) => s.setShowPanel);
     const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
-    const pendingPrompt = useChatStore((s) => s.pendingPrompt);
+    const pendingPrompt = useChatStore((s) => (s.pendingPrompt?.sessionId === sessionId ? s.pendingPrompt : null));
     const liveStatus = useChatStore((s) => s.liveStatus);
     const awaitingUser = useChatStore((s) => s.awaitingUser);
     // Other events can arrive while a question waits; it still waits on the user.
@@ -182,7 +184,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const session = sessions.find((s) => s.id === sessionId);
     const sessionDocIds = new Set(session?.document_ids ?? []);
     const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
-    const [input, setInput] = useState('');
+    const [input, setInput] = useChatDraft(sessionId, session?.private);
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
     const [isDragOver, setIsDragOver] = useState(false);
@@ -378,9 +380,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
         return () => { mountedRef.current = false; };
     }, []);
     useEffect(() => {
-        const { pendingPrompt: pending, isLoadingMessages: loading } = useChatStore.getState();
+        const pending = pendingPrompt?.text;
         // Wait for the history load, or it would replace the message just sent.
-        if (!pending || loading) return;
+        if (!pending || useChatStore.getState().isLoadingMessages) return;
         useChatStore.getState().setPendingPrompt(null);
         openingRef.current = true;
         // A timer, not rAF: rAF never fires while the window is hidden, and
@@ -458,6 +460,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             }
             dismissPolicyToast();
             streamBufferRef.current = '';
+            // Clear this view's live turn now, before the next view's effects re-attach theirs.
+            useChatStore.getState().resetStreaming();
         };
     }, [sessionId]);
 
@@ -1002,13 +1006,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
-                // ── Consolidate thinking events ──────────────────────────
-                // Instead of creating a new step for every thought, update
-                // the existing thinking step so we get ONE "Thinking" entry
-                // that shows the latest thought, not a massive stream.
-                // Uses appendThinkingContent() which atomically reads the
-                // current detail and appends inside a single set() call,
-                // preventing stale-read races that can lose accumulated text.
+                // One "Thinking" step per turn. appendThinkingContent() appends
+                // inside a single set(), so racing chunks never lose text.
                 if (event.type === 'thinking') {
                     const currentSteps = useChatStore.getState().agentSteps;
                     const lastStep = currentSteps[currentSteps.length - 1];
@@ -1654,15 +1653,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     )}
                 </div>
                 <div className="task-header-right">
-                    <button
-                        className={`btn-icon-sm${session?.private ? ' active' : ''}`}
-                        onClick={handleTogglePrivate}
-                        title={session?.private ? 'Private: this chat is not saved to memory' : 'Make private (not saved to memory)'}
-                        aria-label={session?.private ? 'Private chat on' : 'Make chat private'}
-                        aria-pressed={!!session?.private}
-                    >
-                        <EyeOff size={15} />
-                    </button>
+                    <PrivateChatButton isPrivate={!!session?.private} onToggle={handleTogglePrivate} />
                     <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files on this PC" aria-label="Browse files on this PC">
                         <FolderSearch size={15} />
                     </button>

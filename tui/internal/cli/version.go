@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"github.com/amd/gaia/tui/internal/update"
 )
 
 var (
@@ -32,6 +34,7 @@ var versionCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(versionCmd)
+	update.Current = version
 	// rootCmd.Version left empty means cobra never registers --version at all
 	// (root_test.go pins this) -- a published binary with no way to answer
 	// "what version is this" is exactly what the install script has nothing to

@@ -1,7 +1,8 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Pins what the shell sends when a chat starts, and when it shows first-run setup.
+// Pins what the shell sends when a chat starts, when it shows first-run setup,
+// and which sidebar destination is open.
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -54,7 +55,7 @@ beforeEach(() => {
     });
     mocked.checkSetup.mockResolvedValue(READY);
     mocked.requestWarmUp.mockResolvedValue({ state: 'ready' });
-    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false } });
+    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
     mocked.getSetupPlan.mockRejectedValue(new Error('no plan'));
     mocked.getSystemStatus.mockResolvedValue({
         lemonade_running: true,
@@ -149,6 +150,16 @@ describe('a new chat', () => {
         expect(useChatStore.getState().draftDocumentIds).toEqual([]);
     });
 
+    it('starts with the folder picked on the new-chat page, then forgets it', async () => {
+        useChatStore.setState({ draftFolder: '/home/u/site' });
+        render(<App />);
+        await sendFirstMessage('list the pages');
+
+        await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
+        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ folders: ['/home/u/site'] });
+        expect(useChatStore.getState().draftFolder).toBeNull();
+    });
+
     it('sends "ask" too, so a full-access default in config cannot hide behind the chip', async () => {
         render(<App />);
         await sendFirstMessage('go');
@@ -174,6 +185,16 @@ describe('a new chat', () => {
 
         expect(await screen.findByRole('alert')).toHaveTextContent(/permission mode could not be set.*backend said no/);
         expect(mocked.sendMessageStream).not.toHaveBeenCalled();
+        // The unsent message waits in the new chat's own box, not back in New Chat.
+        expect(await screen.findByLabelText('Message')).toHaveValue('go');
+        expect(localStorage.getItem('gaia:draft:new-chat')).toBeNull();
+    });
+
+    it('forgets the first message once sent, so New Chat does not offer it again', async () => {
+        render(<App />);
+        await sendFirstMessage('summarise my notes');
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
+        expect(localStorage.getItem('gaia:draft:new-chat')).toBeNull();
     });
 });
 
@@ -253,7 +274,7 @@ describe('a private new chat', () => {
             .toBeLessThan(mocked.sendMessageStream.mock.invocationCallOrder[0]);
         expect(mocked.toggleSessionPrivacy).not.toHaveBeenCalled();
         expect(useChatStore.getState().sessions.find((s) => s.id === 'sess-new-0001')?.private).toBe(true);
-        expect(await screen.findByRole('button', { name: 'Private chat on' })).toHaveAttribute('aria-pressed', 'true');
+        expect(await screen.findByRole('button', { name: 'Turn off private chat' })).toHaveAttribute('data-private', 'true');
         // The next new chat starts non-private again.
         expect(useChatStore.getState().draftPrivate).toBe(false);
     });
@@ -294,7 +315,7 @@ describe('first-run setup', () => {
     async function finishSetupWith(card: StartCard) {
         mocked.checkSetup.mockResolvedValue(NOT_READY);
         mocked.startSetup.mockResolvedValue({ state: 'ready', steps: [] });
-        mocked.getStartScreen.mockResolvedValue({ cards: [card], working_folder: { path: '/w', name: 'w', gaia_folder: false } });
+        mocked.getStartScreen.mockResolvedValue({ cards: [card], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
         render(<App />);
         await userEvent.click(await screen.findByRole('button', { name: 'Start setup' }));
         await userEvent.click(await screen.findByRole('button', { name: new RegExp(card.title) }));
@@ -392,5 +413,22 @@ describe('opening the app on a chat link', () => {
         await waitFor(() => expect(mocked.listSessions).toHaveBeenCalled());
         await waitFor(() => expect(window.location.hash).toBe(''));
         expect(useChatStore.getState().currentSessionId).toBeNull();
+    });
+});
+
+describe('sidebar destinations', () => {
+    it('opens Scheduled tasks over the chat, and Documents in its place', async () => {
+        mocked.listSchedules.mockResolvedValue({ schedules: [], total: 0 });
+        render(<App />);
+        await userEvent.click(await screen.findByRole('button', { name: 'Scheduled tasks' }));
+
+        expect(await screen.findByRole('dialog', { name: 'Scheduled tasks' })).toBeInTheDocument();
+        expect(screen.getByLabelText('Message')).toBeInTheDocument();
+
+        // The backdrop covers the sidebar for a pointer, not for a screen reader or voice control.
+        fireEvent.click(screen.getByRole('button', { name: 'Documents' }));
+
+        expect(await screen.findByRole('dialog', { name: 'Document library' })).toBeInTheDocument();
+        expect(screen.queryByRole('dialog', { name: 'Scheduled tasks' })).not.toBeInTheDocument();
     });
 });
