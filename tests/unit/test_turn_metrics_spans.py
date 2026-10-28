@@ -326,7 +326,8 @@ def test_the_clients_lock_lease_and_probe_waits_land_on_the_open_call(
 
     waits = rec.llm_calls[0]["client"]
     assert lock.contended.is_set()
-    assert waits["lock_wait_s"] > 0
+    # At least the holder's post-contention sleep, less Windows timer slack.
+    assert waits["lock_wait_s"] >= 0.04
     assert "lease_wait_s" in waits
     assert waits["ensure_loaded_s"] >= 0.04
 
