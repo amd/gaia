@@ -145,3 +145,13 @@ describe("downloadPeriods", () => {
     ]);
   });
 });
+
+describe("one person with two accounts", () => {
+  it("counts once for contributors and bus factor when the accounts are joined", () => {
+    const alias = new Map([["alice", "alice"], ["alice-work", "alice"]]);
+    const commits = [c("alice", "d"), c("alice-work", "d"), c("alice-work", "d"), c("bob", "d"), c("carol", "d")];
+    expect(busFactor(commits)).toBe(2);
+    expect(busFactor(commits, alias)).toBe(1);
+    expect(new Set(activity([], commits, alias).map((a) => a.who))).toEqual(new Set(["alice", "bob", "carol"]));
+  });
+});

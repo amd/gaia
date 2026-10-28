@@ -90,7 +90,7 @@ npx wrangler d1 migrations apply gaia-admin --remote
 
 ```bash
 npx wrangler secret put GITHUB_TOKEN        # paste the token when asked
-npx wrangler secret put MAINTAINER_LOGINS   # comma-separated GitHub logins, e.g. alice,bob-amd
+npx wrangler secret put MAINTAINER_LOGINS   # comma-separated, + joins one person's accounts: alice+alice-amd,bob
 ```
 
 `MAINTAINER_LOGINS` drives the Developers page's "Hide maintainers" button, so the

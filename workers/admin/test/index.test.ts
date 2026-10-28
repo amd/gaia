@@ -63,3 +63,12 @@ describe("collect origin check", () => {
     expect((await post({ "x-admin-action": "collect", origin: "null" })).status).toBe(403);
   });
 });
+
+describe("parseMaintainerGroups", () => {
+  it("reads one person per entry, + joining their accounts, and rejects anything that is not a login", async () => {
+    const { parseMaintainerGroups, parseMaintainers } = await import("../src/page");
+    expect(parseMaintainerGroups("alice+alice-work, bob")).toEqual([["alice", "alice-work"], ["bob"]]);
+    expect(parseMaintainers("alice+alice-work,bob")).toEqual(["alice", "alice-work", "bob"]);
+    expect(() => parseMaintainerGroups("alice+<script>")).toThrow(/not GitHub logins/);
+  });
+});

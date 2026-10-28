@@ -123,7 +123,10 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
   }
 
   if (path === "/api/growth") {
-    const maintainers = new Set((url.searchParams.get("core") ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean));
+    // core=alice+alice-work,bob: one entry per person, + joining one person's accounts.
+    const groups = (url.searchParams.get("core") ?? "").split(",").map((g) => g.split("+").map((x) => x.trim().toLowerCase()).filter(Boolean)).filter((g) => g.length);
+    const maintainers = new Set(groups.flat());
+    const alias = new Map(groups.flatMap((g) => g.map((l) => [l, g[0]!] as [string, string])));
     const stars = await all<DailyRow>("SELECT day, n FROM star_daily ORDER BY day");
     const forks = await all<DailyRow>("SELECT day, n FROM fork_daily ORDER BY day");
     const items = await all<ItemRow>("SELECT kind, created_at, closed_at, merged_at, assoc, author FROM items WHERE kind = 'pr'");
@@ -138,9 +141,9 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
     const span = allTime ? Math.round((Date.parse(end) - Date.parse(first)) / 86_400_000) : Math.max(2, days);
     const from = allTime ? first : new Date(Date.parse(end) - span * 86_400_000).toISOString().slice(0, 10);
     const prevFrom = new Date(Date.parse(from) - span * 86_400_000).toISOString().slice(0, 10);
-    const current = growthWindow(stars, forks, items, commits, maintainers, from, end);
+    const current = growthWindow(stars, forks, items, commits, maintainers, from, end, alias);
     // These are complete dated lists from GitHub, so the window before is always known (zero before the project began).
-    const previous = allTime ? null : growthWindow(stars, forks, items, commits, maintainers, prevFrom, from);
+    const previous = allTime ? null : growthWindow(stars, forks, items, commits, maintainers, prevFrom, from, alias);
     const gran = !allTime && days <= 90 ? "week" : "month";
     // Periods start four before the range, so the page can compare the first ones with a recent pace.
     const baseFrom = shift(from, gran === "week" ? -28 : -124);
@@ -168,8 +171,8 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
       current: { ...current, starRate30: per30(current.starGrowth, span), forkRate30: per30(current.forkGrowth, span) },
       previous: previous && { ...previous, starRate30: per30(previous.starGrowth, span), forkRate30: per30(previous.forkGrowth, span) },
       // People whose first PR was 90 to 180 days ago, so every one has had the full 90 days.
-      newcomers: newcomerRetention(activity(items, []), shift(today, -2 * RETURN_DAYS), shift(today, -RETURN_DAYS), today),
-      periods: growthPeriods(stars, forks, items, commits, maintainers, gran, today, allTime ? from : baseFrom),
+      newcomers: newcomerRetention(activity(items, [], alias), shift(today, -2 * RETURN_DAYS), shift(today, -RETURN_DAYS), today),
+      periods: growthPeriods(stars, forks, items, commits, maintainers, gran, today, allTime ? from : baseFrom, alias),
       downloads: allTime ? null : downloadWindows(dlDays, span, end, firsts),
       downloadPeriods: downloadPeriods(dlDays, gran, allTime ? from : baseFrom, today),
     });
@@ -202,7 +205,7 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
         }, new Map<string, { week: string; additions: number; deletions: number }>()).values()].sort((x, y) => x.week.localeCompare(y.week))
       : await all<{ week: string; additions: number; deletions: number }>("SELECT week, additions, deletions FROM loc_weekly ORDER BY week");
     // Core team against outside contributors, people only and whatever the people filter hides.
-    const maintainers = new Set((url.searchParams.get("core") ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean));
+    const maintainers = new Set((url.searchParams.get("core") ?? "").split(/[,+]/).map((x) => x.trim().toLowerCase()).filter(Boolean));
     const humans = allItems.filter((i) => i.author && !isBot(i.author));
     const outside = humans.filter((i) => isExternal(i, maintainers));
     const core = humans.filter((i) => !isExternal(i, maintainers));

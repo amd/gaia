@@ -48,7 +48,7 @@ var INFO={` + INFO_COMMON + String.raw`
 'g-new':['New contributors','People whose first commit or pull request to the project falls in the window, scaled to 30 days for the colour. CHAOSS tracks this as the clearest sign a community is growing. Green: __NEW_GOOD__ or more a month. Amber: __NEW_WARN__ or more. Red: fewer.'],
 'g-ret':['Newcomer retention','Of the people whose first pull request was 90 to 180 days ago, the share who opened another within 90 days of it. It does not follow the range: everyone counted has had the full 90 days. Hermes Agent keeps 30 to 34%; research finds under 20% of newcomers stay. Green: __RET_GOOD__ or more. Amber: __RET_WARN__ or more. Red: below.'],
 'g-ext':['Outside contributions','Share of merged pull requests opened by people outside the core team. The core team is the maintainer accounts configured for this dashboard plus GitHub organisation members and collaborators; bots are left out of both counts. Green: __EXT_GOOD__ or more. Amber: __EXT_WARN__ or more. Red: below.'],
-'g-bus':['Bus factor','Fewest people who together made at least half of the commits in the window (CHAOSS: contributor absence factor). A bus factor of 1 means one person leaving would halve the work. One person with two accounts counts as two, so read 2 with care. A small core team usually sits at 1 or 2, so 1 is amber, not red. Green: __BUS_GOOD__ or more. Amber: __BUS_WARN__.'],
+'g-bus':['Bus factor','Fewest people who together made at least half of the commits in the window (CHAOSS: contributor absence factor). A bus factor of 1 means one person leaving would halve the work. Accounts joined with + in the maintainer list count as one person; any other second account counts separately. A small core team usually sits at 1 or 2, so 1 is amber, not red. Green: __BUS_GOOD__ or more. Amber: __BUS_WARN__.'],
 'g-pypi':['PyPI download growth','Downloads of the Python package in the window against the window before, both ending on the last day PyPI has reported (it publishes a day late). Includes mirrors and CI installs, so read it as a trend, not a user count. Absolute numbers are on the Users page. Green: flat or up, or down less than 10%. Amber: down 10 to 30%. Red: down more than 30%.'],
 'g-inst':['Install growth','GitHub release installs (update checks left out) in the window against the window before. GitHub keeps only running totals, so daily installs exist from the first nightly snapshot on; the comparison appears once two full windows are collected. Same colours as PyPI.'],
 'rate':['Stars and forks','Added in each period as a share of the total when the period began. The dashed line is the star target (__STAR_GOOD__ a month) converted to the period length; forks aim higher, at __FORK_GOOD__. Click a legend entry to hide it.'],
@@ -57,7 +57,7 @@ var INFO={` + INFO_COMMON + String.raw`
 'outside':['Outside share of merged PRs','Per period, the share of merged pull requests opened by people outside the core team, bots left out. The dashed line is the target (__EXT_GOOD__).'],
 'bench':['Against healthy projects','GAIA’s targets are set from its own recent history, a little above its median; the peers are far larger communities, shown for context rather than as goals. Peer figures come from the GitHub API and public star trackers, __ASOF__; GAIA’s are live, for the selected range. Time to first reply is not collected yet.']};
 var T=__TARGETS__;
-var MINE=__MAINTAINERS__;
+var MINE=__MAINTAINERS__,CORE=__CORE__;
 var BENCH=__BENCH__;
 function rule(t,hi){return {good:t.good,warn:t.warn,higher:hi!==false};}
 function perPeriod(m,g){return Math.pow(1+m,(g==='week'?7:30)/30)-1;}
@@ -104,9 +104,9 @@ function drawCharts(){var g=D.growth,rows=inRange();
   else chart('momentum',{keys:K,gran:gr,type:'line',title:'Momentum',h:240,ymin:Math.floor(Math.min.apply(null,mins)*4)/4,yfmt:signed,target:0,targetLabel:'recent pace',series:se});
   var waiting=rows.filter(function(r){return r.newcomerCohort==null;}).length;
   if(waiting===rows.length)emptyBox('retention','Newcomers in this range have not had 90 days yet. Pick 1y or All to see earlier groups.');
-  else chart('retention',{keys:K,gran:gr,type:'bar',stacked:true,title:'Newcomers who came back',h:220,note:waiting?'The last '+waiting+' '+gr+(waiting>1?'s are':' is')+' blank: their newcomers have not had 90 days yet.':'',
+  else chart('retention',{partial:false,keys:K,gran:gr,type:'bar',stacked:true,title:'Newcomers who came back',h:220,note:waiting?'The last '+waiting+' '+gr+(waiting>1?'s are':' is')+' blank: their newcomers have not had 90 days yet.':'',
     series:[{name:'Came back',color:'var(--s3)',vals:v(function(r){return r.newcomerReturned;})},{name:'Did not',color:'var(--neutral)',vals:v(function(r){return r.newcomerCohort==null?null:r.newcomerCohort-r.newcomerReturned;})}]});
-  chart('outside',{keys:K,gran:gr,type:'line',title:'Outside share of merged PRs',h:220,ymin:0,ymax:1,yfmt:function(x){return pct(x,0);},target:T.external.good,targetLabel:'target',
+  chart('outside',{partial:false,keys:K,gran:gr,type:'line',title:'Outside share of merged PRs',h:220,ymin:0,ymax:1,yfmt:function(x){return pct(x,0);},target:T.external.good,targetLabel:'target',
     series:[{name:'Outside share',color:'var(--s2)',vals:v(function(r){return r.prsMerged?r.externalMerged/r.prsMerged:null;}),fmt:function(x){return pct(x,0);}}]});}
 function drawBench(){var g=D.growth,box=el('bench');if(!g){box.innerHTML='';return;}var c=g.current,last=g.periods[g.periods.length-1],n30=c.newContributors*30/g.days;
   var wk=g.days<7?'pick 7d or longer':null;
@@ -115,14 +115,15 @@ function drawBench(){var g=D.growth,box=el('bench');if(!g){box.innerHTML='';retu
   box.innerHTML='<div class="scroll" style="max-height:none"><table><tr><th>Metric</th><th>GAIA</th><th>Target</th><th>Hermes Agent</th><th>Peers</th></tr>'+BENCH.map(function(b){
     return '<tr><td>'+esc(b.metric)+'</td><td class="num">'+esc(mine[b.key])+'</td><td>'+esc(b.target)+'</td><td>'+esc(b.hermes)+'</td><td style="white-space:normal">'+esc(b.peers)+'</td></tr>';}).join('')+'</table></div>';}
 function render(){ATTN=[];setUrl({});syncShell();drawKpis();drawCharts();drawBench();drawAttention();drawStatus();}
-function jobs(){return [['growth','/api/growth?core='+encodeURIComponent(MINE.join(','))],['status','/api/status']];}
+function jobs(){return [['growth','/api/growth?core='+encodeURIComponent(CORE)],['status','/api/status']];}
 boot(jobs,render);
 `;
 
 
-export function renderGrowthPage(maintainers: string[] = []): string {
+export function renderGrowthPage(people: string[][] = []): string {
   const js = GROWTH_JS.replace("__TARGETS__", JSON.stringify(TARGETS))
-    .replace("__MAINTAINERS__", JSON.stringify(maintainers))
+    .replace("__MAINTAINERS__", JSON.stringify(people.flat()))
+    .replace("__CORE__", JSON.stringify(people.map((g) => g.join("+")).join(",")))
     .replace("__BENCH__", JSON.stringify(BENCHMARKS))
     .replace("__ASOF__", BENCHMARKS_AS_OF)
     .replace(/__STAR_GOOD__/g, pc(TARGETS.starRate.good))

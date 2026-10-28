@@ -54,11 +54,15 @@ export interface GrowthWindow {
 
 const human = (who: string | null | undefined): who is string => !!who && who !== NO_ACCOUNT && !isBot(who);
 
+/** Login to person: a maintainer's second accounts map to their first. */
+export type Aliases = Map<string, string>;
+const person = (login: string, alias?: Aliases) => alias?.get(login.toLowerCase()) ?? login.toLowerCase();
+
 /** Who did something on which day: commits to the default branch and pull requests opened, people only. */
-export function activity(items: ItemRow[], commits: CommitRow[]): Activity[] {
+export function activity(items: ItemRow[], commits: CommitRow[], alias?: Aliases): Activity[] {
   const out: Activity[] = [];
-  for (const c of commits) if (human(c.author)) out.push({ who: c.author.toLowerCase(), day: c.day });
-  for (const i of items) if (i.kind === "pr" && human(i.author)) out.push({ who: i.author.toLowerCase(), day: i.created_at.slice(0, 10) });
+  for (const c of commits) if (human(c.author)) out.push({ who: person(c.author, alias), day: c.day });
+  for (const i of items) if (i.kind === "pr" && human(i.author)) out.push({ who: person(i.author, alias), day: i.created_at.slice(0, 10) });
   return out;
 }
 
@@ -130,9 +134,10 @@ export function growthPeriods(
   gran: Gran,
   today: string,
   startAt = "",
+  alias?: Aliases,
 ): GrowthPeriod[] {
-  const acts = activity(items, commits);
-  const prActs = activity(items, []);
+  const acts = activity(items, commits, alias);
+  const prActs = activity(items, [], alias);
   const first = firstSeen(acts);
   const days = [...stars.map((r) => r.day), ...forks.map((r) => r.day), ...acts.map((a) => a.day)].sort();
   if (!days.length) return [];
@@ -166,9 +171,9 @@ export function growthPeriods(
 }
 
 /** Fewest people who made at least half of the commits; null with no commits. */
-export function busFactor(commits: CommitRow[]): number | null {
+export function busFactor(commits: CommitRow[], alias?: Aliases): number | null {
   const by = new Map<string, number>();
-  for (const c of commits) if (human(c.author)) by.set(c.author.toLowerCase(), (by.get(c.author.toLowerCase()) ?? 0) + 1);
+  for (const c of commits) if (human(c.author)) by.set(person(c.author, alias), (by.get(person(c.author, alias)) ?? 0) + 1);
   const counts = [...by.values()].sort((a, b) => b - a);
   const total = counts.reduce((a, b) => a + b, 0);
   if (!total) return null;
@@ -189,8 +194,9 @@ export function growthWindow(
   maintainers: Set<string>,
   from: string,
   to: string,
+  alias?: Aliases,
 ): GrowthWindow {
-  const acts = activity(items, commits);
+  const acts = activity(items, commits, alias);
   const first = firstSeen(acts);
   const who = peopleIn(acts, from, to);
   const merged = items.filter((i) => i.kind === "pr" && i.merged_at && human(i.author) && i.merged_at.slice(0, 10) >= from && i.merged_at.slice(0, 10) < to);
@@ -204,7 +210,7 @@ export function growthWindow(
     newContributors: [...who].filter((w) => (first.get(w) ?? "") >= from).length,
     prsMerged: merged.length,
     externalShare: merged.length ? merged.filter((i) => isExternal(i, maintainers)).length / merged.length : null,
-    busFactor: busFactor(commits.filter((c) => c.day >= from && c.day < to)),
+    busFactor: busFactor(commits.filter((c) => c.day >= from && c.day < to), alias),
   };
 }
 

@@ -220,7 +220,7 @@ document.addEventListener('click',function(e){var b=e.target.closest&&e.target.c
 
 /* Generic time or category chart.
    spec: {keys, gran?, cats?, catName?, series:[{name,color,vals,fmt?}], type:'bar'|'line'|'area', stacked?, ymin?, ymax?, yfmt?, h?, empty?, note?, title} */
-function chart(id,spec){SPECS[id]=spec;var h=HID[id];if(h){var names={};spec.series.forEach(function(x){names[x.name]=1;});Object.keys(h).forEach(function(k){if(!names[k])delete h[k];});if(spec.series.every(function(x){return h[x.name];}))delete HID[id];}draw(id);}
+function chart(id,spec){if(spec.partial!==false&&spec.type==='bar'&&!spec.note&&!spec.cats&&spec.gran&&spec.gran!=='day'&&spec.keys.length&&spec.keys[spec.keys.length-1]===bucketStart(dataEnd(),spec.gran))spec.note='The last '+spec.gran+' is still in progress, so it reads low.';SPECS[id]=spec;var h=HID[id];if(h){var names={};spec.series.forEach(function(x){names[x.name]=1;});Object.keys(h).forEach(function(k){if(!names[k])delete h[k];});if(spec.series.every(function(x){return h[x.name];}))delete HID[id];}draw(id);}
 /* Show a message instead of a chart, and forget the old chart so a resize cannot bring it back. */
 function emptyBox(id,msg){delete SPECS[id];var b=el(id);if(b)b.innerHTML='<div class="empty">'+msg+'</div>';}
 function draw(id){
@@ -282,8 +282,8 @@ function bucketStart(d,g){return g==='week'?weekKey(d):g==='month'?d.slice(0,7)+
 function daysFrom(a,b){var out=[];for(var t=Date.parse(a+'T00:00:00Z'),e=Date.parse(b+'T00:00:00Z');t<=e;t+=864e5)out.push(new Date(t).toISOString().slice(0,10));return out;}
 /* A daily series spanning the whole selected range (days without data stay empty), regrouped into whole buckets.
    first: the first day that has data, so the chart can say where its coverage begins. */
-function series(rows,how){
-  var end=dataEnd(),first=rows.length?rows[0].day:null,start=S.range==='all'?(first||end):sinceDay(),g=granFor(daysFrom(start,end).length);
+function series(rows,how,until){
+  var end=until&&until<dataEnd()?until:dataEnd(),first=rows.length?rows[0].day:null,start=S.range==='all'?(first||end):sinceDay(),g=granFor(daysFrom(start,end).length);
   start=bucketStart(start,g);var by={};rows.forEach(function(r){by[r.day]=r;});
   var dense=daysFrom(start,end).map(function(d){return by[d]||{day:d};});
   return {g:g,b:bucket(dense,how,g),first:first,start:start};}
@@ -456,7 +456,7 @@ function drawDaily(){var d=D.downloads;if(!d||d.empty){emptyBox('daily',d?esc(d.
     note:d.negativeDays.length?'Counts fell on '+d.negativeDays.map(esc).join(', ')+' because a file or release was deleted; those days leave the drop out.':''});}
 
 function drawPackages(){var t=D.traction;if(!t||!t.packages.length){emptyBox('packages','No package history collected yet.');return;}
-  var p=series(t.packages,{pypi:'sum',npm:'sum'});
+  var p=series(t.packages,{pypi:'sum',npm:'sum'},t.packages.filter(function(r){return r.pypi!=null;}).map(function(r){return r.day;}).pop());
   chart('packages',{keys:p.b.map(function(r){return r.key;}),gran:p.g,type:'bar',stacked:true,title:'Package downloads',h:220,cover:(function(){var fp=t.packages.filter(function(r){return r.pypi!=null;}).map(function(r){return r.day;})[0];return fp&&fp>p.start?'No PyPI data before '+longLab(fp,'day')+': PyPI keeps about 180 days, so earlier bars are npm only.':'';})(),
     series:[{name:'PyPI',color:'var(--s1)',vals:p.b.map(function(r){return r.pypi;})},{name:'npm',color:'var(--s2)',vals:p.b.map(function(r){return r.npm;})}],empty:'No package downloads in this range yet.'});}
 
@@ -476,7 +476,7 @@ var INFO={` + INFO_COMMON + String.raw`
 'k-prs':['Open pull requests','PRs open now, and how many have waited more than 14 days. Green: 10% or fewer are that old. Amber: up to 25%. Red: more than 25%, which means review is not keeping up.'],
 'k-commits':['Commits','Commits on the default branch in the window, and the people who made them (by GitHub login), against the window before. Green: at least 75% as many active contributors as before. Amber: 50 to 75%. Red: below 50%.'],
 'k-ttm':['Time to merge','Median and 90th-percentile time from a PR opening to merging, for PRs merged in the window. Bands from LinearB’s 2026 benchmarks (8.1 million PRs): elite under 25 hours, good up to 72. Green: median under 25 hours and P90 under 3 days. Amber: median up to 3 days, P90 up to 161 hours. Red: slower.'],
-'k-ttc':['Time to close','Median and 90th-percentile time from an issue opening to closing, for issues closed in the window. No published benchmark exists, so these are a proposed default. Closing a batch of old issues raises it for a while, though the backlog shrinks: check Open issues before reading red here as slower triage. Green: median within 14 days and P90 within 90. Amber: median up to 30 days or P90 up to 180. Red: median over 30 days or P90 over 180.'],
+'k-ttc':['Time to close','Median and 90th-percentile time from an issue opening to closing, for issues closed in the window. No published benchmark exists, so these are a proposed default. Closing a batch of old issues raises it for a while, though the backlog shrinks, so while more issues are closed than opened and the backlog is shrinking it is never red, at worst amber. Green: median within 14 days and P90 within 90. Amber: median up to 30 days or P90 up to 180. Red: median over 30 days or P90 over 180.'],
 'issues':['Issues opened and closed','Per period. When closed bars are taller than opened, the backlog shrank. Click a legend entry to hide or show it.'],
 'backlog':['Open issues','Issues open at the end of each period (opened so far minus closed so far). Pull requests are excluded.'],
 'ttm-h':['How long PRs take to merge','Each bar counts PRs merged in the selected window that took that long from opened to merged. A long tail to the right means some work waits a long time for review.'],
@@ -487,7 +487,7 @@ var INFO={` + INFO_COMMON + String.raw`
 'people':['Contributors','Active is the number of people who committed in the 28 days up to that point. New is people making their first commit to the project. Follows the people filter.'],
 'loc':['Lines of code changed','Lines added and deleted on the default branch per period, from GitHub’s code-frequency statistics (weeks start on Sunday on GitHub; shown from the following Monday). With people hidden, it sums GitHub’s per-contributor statistics instead, which cover the top 100 contributors. Lockfiles and generated files count too, so read spikes with care.'],
 'split':['Core team and outside contributors','The same pull-request numbers for the core team (maintainer accounts plus organisation members and collaborators) and for everyone else, bots left out. Ignores the people filter above. Merge time uses LinearB’s bands, as above. Wait vs core shows how much longer outside PRs take, for context only: core PRs are often self-merged within the hour, so the ratio is large even when outside PRs merge quickly.'],
-'who':['Contributors in the range','Everyone who committed, opened a PR or opened an issue in the selected window. Lines come from GitHub’s weekly statistics, so they cover whole weeks. Untick a person, or use the buttons, to leave them out of every number on this page.'],
+'who':['Contributors in the range','Everyone who committed, opened a PR or opened an issue in the selected window. Lines come from GitHub’s per-contributor weekly statistics, so they cover whole weeks and count a merged branch’s commits for each author; their sum is larger than the repository total in the Lines of code chart. Untick a person, or use the buttons, to leave them out of every number on this page.'],
 'community':['Stars and forks','Rebuilt from GitHub’s dated stargazer and fork lists, so the full history is available. Total is the running count; New is how many were added in each period.']};
 var MINE=__MAINTAINERS__;
 var P={pm:qs.get('pm')||'active',comm:qs.get('comm')||'stars',cmode:qs.get('cmode')||'total',bots:qs.get('bots')!=='0',
@@ -518,7 +518,9 @@ function drawKpis(){var m=D.momentum;if(!m){el('ov').innerHTML='';return;}var s=
   var lm=worst(level(s.medianDaysToMerge,MERGE_MED),level(s.p90DaysToMerge,MERGE_P90));
   h+=kpi('k-ttm','Time to merge',ddur(s.medianDaysToMerge),'P90 '+ddur(s.p90DaysToMerge)+' · '+fmt(s.prsMerged)+' merged PRs',lm,'median '+ddur(s.medianDaysToMerge)+', 90th percentile '+ddur(s.p90DaysToMerge));
   p90Led('k-ttm',level(s.medianDaysToMerge,MERGE_MED),level(s.p90DaysToMerge,MERGE_P90),s.p90DaysToMerge);
-  h+=kpi('k-ttc','Time to close',ddur(s.medianDaysToClose),'P90 '+ddur(s.p90DaysToClose)+' · '+fmt(s.issuesClosed)+' closed issues',worst(level(s.medianDaysToClose,{good:14,warn:30,higher:false}),level(s.p90DaysToClose,{good:90,warn:180,higher:false})),'median '+ddur(s.medianDaysToClose)+', P90 '+ddur(s.p90DaysToClose)+' (healthy: median within 14 days)');
+  var ttcLv=worst(level(s.medianDaysToClose,{good:14,warn:30,higher:false}),level(s.p90DaysToClose,{good:90,warn:180,higher:false}));
+  if(ttcLv==='bad'&&cr!=null&&cr>=1&&gr!=null&&gr<0)ttcLv='warn';
+  h+=kpi('k-ttc','Time to close',ddur(s.medianDaysToClose),'P90 '+ddur(s.p90DaysToClose)+' · '+fmt(s.issuesClosed)+' closed issues',ttcLv,'median '+ddur(s.medianDaysToClose)+', P90 '+ddur(s.p90DaysToClose)+' (healthy: median within 14 days)');
   p90Led('k-ttc',level(s.medianDaysToClose,{good:14,warn:30,higher:false}),level(s.p90DaysToClose,{good:90,warn:180,higher:false}),s.p90DaysToClose);
   el('ov').innerHTML='<div class="strip">'+h+'</div>';drawSplit();}
 function drawSplit(){var m=D.momentum,box=el('split');if(!box)return;if(!m||!m.split){box.innerHTML='';return;}var x=m.split;
@@ -558,7 +560,7 @@ function drawCharts(){var m=D.momentum;
   var op=col('openPrs');chart('pr-backlog',{keys:K,gran:x.g,type:'line',title:'Open pull requests',h:210,series:[{name:'Open pull requests',color:'var(--s2)',vals:op}],ymin:Math.max(0,Math.floor(minOf(op)*0.8))});
   chart('commits',{keys:K,gran:x.g,type:'bar',title:'Commits',h:210,series:[{name:'Commits',color:'var(--s1)',vals:col('commits')}]});
   if(P.pm==='active')chart('people',{keys:K,gran:x.g,type:'line',title:'Active contributors',h:210,ymin:0,series:[{name:'Active in the last 28 days',color:'var(--s3)',vals:col('activeContributors28d')}]});
-  else chart('people',{keys:K,gran:x.g,type:'bar',title:'New contributors',h:210,series:[{name:'First-time committers',color:'var(--s5)',vals:col('newContributors')}]});
+  else chart('people',{partial:P.pm==='new',keys:K,gran:x.g,type:'bar',title:'New contributors',h:210,series:[{name:'First-time committers',color:'var(--s5)',vals:col('newContributors')}]});
   var loc=(m.loc||[]).map(function(w){return {day:w.week,additions:w.additions,deletions:w.deletions};}),lx=series(loc,{additions:'sum',deletions:'sum'});
   var weeklyOnly=lx.g==='day';if(weeklyOnly){lx=(function(){var g='week',start=bucketStart(S.range==='all'?(loc[0]?loc[0].day:today()):sinceDay(),g),rows=loc.filter(function(r){return r.day>=start;});return {g:g,b:bucket(rows,{additions:'sum',deletions:'sum'},g),first:loc[0]?loc[0].day:null,start:start};})();}
   chart('loc',{keys:lx.b.map(function(r){return r.key;}),gran:lx.g,type:'bar',title:'Lines changed',h:230,yfmt:cmp,
@@ -635,7 +637,7 @@ function drawTests(){var t=D.tests;
   if(!t||!t.rows.length){emptyBox('tests','No test counts in this range. They come from the pytest summary in each day’s main-branch Unit Tests log.');return;}
   var x=series(t.rows,{passed:'last',failed:'last',errors:'last',skipped:'last',total:'last'}),b=x.b,K=b.map(function(r){return r.key;}),col=function(f){return b.map(function(r){return r[f];});},cover=coverNote(x,'test counts');
   if(P.tm==='total'){var tt=col('total'),v=tt.filter(function(z){return z!=null;});chart('tests',{keys:K,gran:x.g,type:'line',title:'Number of tests',cover:cover,ymin:v.length?Math.max(0,Math.floor(Math.min.apply(null,v)*.95)):0,series:[{name:'Tests',color:'var(--s1)',vals:tt}]});}
-  else if(P.tm==='outcome')chart('tests',{keys:K,gran:x.g,type:'bar',stacked:true,title:'Test outcomes',cover:cover,series:[{name:'Passed',color:OC.success,vals:col('passed')},{name:'Failed',color:OC.failure,vals:col('failed')},{name:'Errors',color:'var(--s2)',vals:col('errors')},{name:'Skipped',color:OC.cancelled,vals:col('skipped')}]});
+  else if(P.tm==='outcome')chart('tests',{partial:false,keys:K,gran:x.g,type:'bar',stacked:true,title:'Test outcomes',cover:cover,series:[{name:'Passed',color:OC.success,vals:col('passed')},{name:'Failed',color:OC.failure,vals:col('failed')},{name:'Errors',color:'var(--s2)',vals:col('errors')},{name:'Skipped',color:OC.cancelled,vals:col('skipped')}]});
   else{var rt=b.map(function(r){var d=(r.passed||0)+(r.failed||0)+(r.errors||0);return r.passed==null?null:d?r.passed/d:null;}),vv=rt.filter(function(v){return v!=null;}),lo=Math.max(0,Math.floor(((vv.length?Math.min.apply(null,vv):1)-.01)*100)/100);
     chart('tests',{keys:K,gran:x.g,type:'line',ymin:lo,ymax:1,yfmt:function(v){return (v*100).toFixed(1)+'%';},title:'Test pass rate',cover:cover,series:[{name:'Pass rate (skipped excluded)',color:OC.success,vals:rt,fmt:function(v){return pct(v,2);}}]});}}
 function drawTime(){var ct=D.citime;
@@ -758,10 +760,15 @@ const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$/;
  * time (MAINTAINER_LOGINS, comma-separated) so personal accounts stay out of the repo.
  */
 export function parseMaintainers(raw: string | undefined): string[] {
-  const list = (raw ?? "").split(",").map((x) => x.trim()).filter(Boolean);
-  const bad = list.filter((x) => !LOGIN.test(x));
+  return parseMaintainerGroups(raw).flat();
+}
+
+/** One list per person: `alice+alice-work,bob` is two people, the first with two accounts. */
+export function parseMaintainerGroups(raw: string | undefined): string[][] {
+  const groups = (raw ?? "").split(",").map((g) => g.split("+").map((x) => x.trim()).filter(Boolean)).filter((g) => g.length);
+  const bad = groups.flat().filter((x) => !LOGIN.test(x));
   if (bad.length) throw new Error(`MAINTAINER_LOGINS has entries that are not GitHub logins: ${bad.join(", ")}.`);
-  return list;
+  return groups;
 }
 
 export function renderDevelopersPage(maintainers: string[] = []): string {

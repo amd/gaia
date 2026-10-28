@@ -12,7 +12,7 @@ const scriptOf = (html: string) => html.split("<script>").pop()!.split("</script
 describe("page scripts", () => {
   const pages: [string, string][] = [
     ["users", renderUsersPage()],
-    ["growth", renderGrowthPage(["alice"])],
+    ["growth", renderGrowthPage([["alice", "alice-work"], ["bob"]])],
     ["developers", renderDevelopersPage(["alice", "bob-work"])],
     ["ci", renderCiPage()],
     ["evals", renderEvalsPage()],

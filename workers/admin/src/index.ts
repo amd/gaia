@@ -6,13 +6,13 @@ import { authenticate, AuthError, type AuthEnv } from "./auth";
 import { collectAll, type CollectEnv } from "./collector";
 import { renderEvalsPage } from "./evalspage";
 import { renderGrowthPage } from "./growthpage";
-import { parseMaintainers, renderCiPage, renderDevelopersPage, renderUsersPage } from "./page";
+import { parseMaintainerGroups, parseMaintainers, renderCiPage, renderDevelopersPage, renderUsersPage } from "./page";
 
 type Env = CollectEnv & AuthEnv & { MAINTAINER_LOGINS?: string };
 
 const PAGES: Record<string, (env: Env) => string> = {
   "/": renderUsersPage,
-  "/growth": (env) => renderGrowthPage(parseMaintainers(env.MAINTAINER_LOGINS)),
+  "/growth": (env) => renderGrowthPage(parseMaintainerGroups(env.MAINTAINER_LOGINS)),
   "/developers": (env) => renderDevelopersPage(parseMaintainers(env.MAINTAINER_LOGINS)),
   "/ci": renderCiPage,
   "/evals": renderEvalsPage,
