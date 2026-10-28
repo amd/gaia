@@ -34,7 +34,6 @@ from urllib.parse import urlencode
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
 from starlette.convertors import PathConvertor, register_url_convertor
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -86,6 +85,7 @@ from .routers import tunnel as tunnel_router_mod
 from .security import UIRequestGuardMiddleware
 from .tunnel import TunnelManager
 from .utils import ALLOWED_EXTENSIONS as _ALLOWED_EXTENSIONS  # noqa: F401
+from .utils import UploadStaticFiles
 from .utils import compute_file_hash as _compute_file_hash  # noqa: F401
 from .utils import sanitize_document_path as _sanitize_document_path  # noqa: F401
 from .utils import sanitize_static_path as _sanitize_static_path
@@ -1009,7 +1009,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     _uploads_dir.mkdir(parents=True, exist_ok=True)
     app.mount(
         "/api/files/uploads",
-        StaticFiles(directory=str(_uploads_dir)),
+        UploadStaticFiles(directory=str(_uploads_dir)),
         name="uploaded-files",
     )
 

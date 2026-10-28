@@ -10,9 +10,11 @@ for real.
 """
 
 import hashlib
+import os
 import platform
 import re
 import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, create_autospec, patch
 
@@ -510,3 +512,51 @@ def test_watched_office_save_by_rename_ignores_temporary_files(agent, workdir):
 
     assert any("BRAVO" in chunk for chunk in agent.rag.chunks)
     assert not any("ALPHA" in chunk for chunk in agent.rag.chunks)
+
+
+def test_watched_document_saved_over_by_rename_stays_indexed(agent, workdir):
+    path = workdir / "report.docx"
+    _write_office_document(path, "The project code is ALPHA.", ".docx")
+    agent.reindex_file(str(path))
+
+    reindexed = threading.Event()
+    reindex = agent.rag.reindex_document
+
+    def record_reindex(filename):
+        result = reindex(filename)
+        reindexed.set()
+        return result
+
+    with patch.object(agent.rag, "reindex_document", side_effect=record_reindex):
+        agent._watch_directory(str(workdir))
+        time.sleep(0.5)  # FSEvents drops events from before its stream starts
+        staged = workdir / "~WRL0001.tmp"
+        _write_office_document(staged, "The project code is BRAVO.", ".docx")
+        os.replace(staged, path)
+        assert reindexed.wait(10), "The saved document was not reindexed"
+        time.sleep(1.0)  # macOS follows the move with a delete of the old file
+        assert agent.file_handlers[0].wait_idle(timeout=30)
+
+    assert str(path) in agent.indexed_files
+    assert any("BRAVO" in chunk for chunk in agent.rag.chunks)
+    assert not any("ALPHA" in chunk for chunk in agent.rag.chunks)
+
+
+def test_system_info_reports_free_disk_space_as_macos_counts_it(agent, monkeypatch):
+    # macOS's "/" is the sealed system volume: 12.6 GB used of a 245 GB
+    # container whose free space, 5.3 GB, every volume shares.
+    from collections import namedtuple
+
+    import psutil
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+
+    usage = namedtuple("usage", "total used free percent")(
+        245_100_000_000, 12_600_000_000, 5_300_000_000, 70.3
+    )
+    monkeypatch.setattr(psutil, "disk_usage", lambda path: usage)
+
+    info = _TOOL_REGISTRY["get_system_info"]["function"]()
+
+    assert info["disk_free_gb"] == 5.3
+    assert info["disk_used_pct"] == 97.8

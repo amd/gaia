@@ -274,7 +274,7 @@ async def get_access_token(
 
     Two layers of authorization gate the call:
       a. Per-agent grant — the user must have explicitly granted this
-         agent the required scopes via Settings → Connections, or
+         agent the required scopes via Settings → Connectors, or
          ``gaia connectors grants grant``.
       b. OAuth scopes — the stored connection's actual scopes must
          cover the requested ones; otherwise reconnect with the
@@ -696,7 +696,7 @@ def import_forwarded_connection(
                     f"Forwarding the {provider} connection failed ({e}), and "
                     "putting back the previous client config and connection also "
                     f"failed ({restore_err}). They may no longer match: reconnect "
-                    f"from Settings → Connections, or run `gaia connectors connect "
+                    f"from Settings → Connectors, or run `gaia connectors connect "
                     f"{provider}`, or forward the connection again."
                 ) from restore_err
             raise

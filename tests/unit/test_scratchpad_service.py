@@ -91,6 +91,36 @@ class TestCreateTable:
         tables = scratchpad.list_tables()
         assert len(tables) == 1
 
+    def test_create_table_same_columns_says_already_exists(self, scratchpad):
+        """Re-creating with the same columns is a no-op and says so."""
+        first = scratchpad.create_table("dup", "id INTEGER, name TEXT")
+        scratchpad.insert_rows("dup", [{"id": 1, "name": "a"}])
+        second = scratchpad.create_table("dup", "id INTEGER, name TEXT")
+
+        assert "created" in first
+        assert "already exists" in second
+        assert "created" not in second
+        assert scratchpad.query_data("SELECT id FROM scratch_dup") == [{"id": 1}]
+
+    def test_create_table_type_case_and_spacing_ignored(self, scratchpad):
+        """The same types written in another case or spacing are not a conflict."""
+        scratchpad.create_table("dup", "id INTEGER, code VARCHAR(10)")
+        second = scratchpad.create_table("dup", "id integer, code varchar (10)")
+
+        assert "already exists" in second
+
+    def test_create_table_different_columns_refused(self, scratchpad):
+        """Re-creating with other columns raises and leaves the table alone."""
+        scratchpad.create_table("dup", "id INTEGER, name TEXT")
+
+        with pytest.raises(ValueError, match="already exists with different columns"):
+            scratchpad.create_table("dup", "id INTEGER, amount REAL")
+
+        columns = [
+            r["name"] for r in scratchpad.query("PRAGMA table_info(scratch_dup)")
+        ]
+        assert columns == ["id", "name"]
+
 
 # ---------------------------------------------------------------------------
 # Row insertion tests
@@ -408,21 +438,27 @@ class TestGetSizeBytes:
     """Tests for get_size_bytes estimation."""
 
     def test_get_size_bytes_empty(self, scratchpad):
-        """Empty scratchpad returns 0 bytes."""
-        assert scratchpad.get_size_bytes() == 0
+        """A fresh scratchpad is a few pages, not zero and not a row estimate."""
+        size = scratchpad.get_size_bytes()
+        assert 0 <= size < 64 * 1024
 
     def test_get_size_bytes_with_data(self, scratchpad):
-        """Scratchpad with data returns nonzero estimate."""
+        """Size is the real database size and grows with the stored data."""
         scratchpad.create_table("sized", "val TEXT")
-        scratchpad.insert_rows(
-            "sized",
-            [{"val": f"row_{i}"} for i in range(10)],
-        )
+        baseline = scratchpad.get_size_bytes()
+        scratchpad.insert_rows("sized", [{"val": "x" * 1000} for _ in range(100)])
 
-        size = scratchpad.get_size_bytes()
-        assert size > 0
-        # 10 rows * 200 bytes estimated = 2000
-        assert size == 10 * 200
+        # 100 KB of text cannot fit in less than 100 KB of pages.
+        assert scratchpad.get_size_bytes() - baseline >= 100 * 1000
+
+    def test_get_size_bytes_excludes_freed_pages(self, scratchpad):
+        """Dropping a table stops its pages counting before any VACUUM."""
+        scratchpad.create_table("sized", "val TEXT")
+        baseline = scratchpad.get_size_bytes()
+        scratchpad.insert_rows("sized", [{"val": "x" * 1000} for _ in range(100)])
+        scratchpad.drop_table("sized")
+
+        assert scratchpad.get_size_bytes() < baseline + 8 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -473,11 +509,11 @@ class TestTotalSizeLimit:
         could accumulate up to 100 tables * 1M rows (≈20 GB) while staying
         under each individual cap. Make the cap real.
         """
-        # Shrink the cap to 1 KB so the test doesn't actually allocate 100 MB.
-        monkeypatch.setattr(scratchpad, "MAX_TOTAL_SIZE_BYTES", 1024)
+        # 1 MB cap; 50 rows of 100 KB is ~5 MB of real data, ~500 times the
+        # old 200-bytes-per-row guess (10 KB).
+        monkeypatch.setattr(scratchpad, "MAX_TOTAL_SIZE_BYTES", 1024 * 1024)
         scratchpad.create_table("big", "val TEXT")
-        # 10 rows * 200 bytes = 2000 bytes > 1024 cap
-        scratchpad.insert_rows("big", [{"val": f"row_{i}"} for i in range(10)])
+        scratchpad.insert_rows("big", [{"val": "x" * 100_000} for _ in range(50)])
 
         # Next insert should be rejected.
         with pytest.raises(ValueError, match="size limit reached"):
@@ -502,9 +538,17 @@ class TestReadOnlyAndFailLoud:
         assert scratchpad.query_data("SELECT val FROM scratch_t") == [{"val": "a"}]
 
     def test_get_size_bytes_does_not_hide_errors(self, scratchpad):
-        with patch.object(scratchpad, "list_tables", side_effect=RuntimeError("io")):
+        with patch.object(scratchpad, "query", side_effect=RuntimeError("io")):
             with pytest.raises(RuntimeError, match="io"):
                 scratchpad.get_size_bytes()
+
+    def test_insert_refused_when_size_check_fails(self, scratchpad):
+        """A failing size check stops the insert instead of waving it through."""
+        scratchpad.create_table("t", "val TEXT")
+        with patch.object(scratchpad, "get_size_bytes", side_effect=RuntimeError("io")):
+            with pytest.raises(RuntimeError, match="io"):
+                scratchpad.insert_rows("t", [{"val": "a"}])
+        assert scratchpad.query_data("SELECT val FROM scratch_t") == []
 
 
 class TestOpenOrRebuild:
