@@ -699,6 +699,9 @@ class SSEOutputHandler(OutputHandler):
         pass
 
     def print_thought(self, thought: str):
+        # Live thinking pieces are joined with no separator; end a whole thought on a newline.
+        if thought and not thought.endswith("\n"):
+            thought += "\n"
         self._emit(
             {
                 "type": "thinking",

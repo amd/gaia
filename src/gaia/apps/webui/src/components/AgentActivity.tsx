@@ -3,14 +3,12 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
-    ChevronDown,
     ChevronRight,
     Wrench,
     ListChecks,
     AlertCircle,
     CheckCircle2,
     Loader2,
-    Zap,
     Search,
     FileText,
     Terminal,
