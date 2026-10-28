@@ -28,7 +28,6 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
         alternatives: [
             'Index PDFs that contain images — text is extracted automatically',
             'Paste image descriptions or OCR text directly into the chat',
-            'Use GAIA\'s VLM agent for image analysis: gaia vlm',
         ],
         featureTitle: 'Support image file indexing and OCR',
     },

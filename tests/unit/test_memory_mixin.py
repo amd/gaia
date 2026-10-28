@@ -1665,6 +1665,7 @@ class TestToolExecutionLogging:
         rows = mixin_host.memory_store.get_tool_history("write_file")
         assert len(rows) == 1
         assert rows[0]["success"] == 0
+        assert rows[0]["executed"] is False
         assert rows[0]["error"] == error
 
     def test_execute_tool_logs_failure(self, mixin_host):

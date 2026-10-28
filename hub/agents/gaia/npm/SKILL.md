@@ -65,7 +65,8 @@ A second sidecar started here would only fight the daemon's own for port 8141. U
 
 Other commands: `gaia fetch` (download + verify, print JSON, exit),
 `gaia serve` (sidecar alone), `gaia version` (per-component version, source URL,
-and platform matrix). Anything after a bare `--` goes to the TUI verbatim.
+and platform matrix). Unknown or misplaced launcher options are rejected;
+anything intended for the TUI goes after a bare `--` and is passed through verbatim.
 
 ### Where each binary comes from
 
