@@ -24,6 +24,8 @@ on:
       - 'tests/fixtures/*_skills/**'
       - '.github/workflows/build_cpp.yml'
       - '.github/workflows/benchmark_cpp.yml'
+      - '.github/actions/setup-venv/**'
+      - 'installer/scripts/start-lemonade.ps1'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -36,6 +38,8 @@ on:
       - 'tests/fixtures/*_skills/**'
       - '.github/workflows/build_cpp.yml'
       - '.github/workflows/benchmark_cpp.yml'
+      - '.github/actions/setup-venv/**'
+      - 'installer/scripts/start-lemonade.ps1'
   merge_group:
   workflow_dispatch:
 
@@ -98,10 +102,6 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libssl-dev
 
-      - name: Install OpenSSL (Windows)
-        if: runner.os == 'Windows'
-        run: choco install openssl --no-progress -y
-
       - name: Restore FetchContent cache
         id: cache-deps
         uses: actions/cache@v6
@@ -110,8 +110,12 @@ jobs:
           key: fetchcontent-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
           restore-keys: fetchcontent-${{ matrix.os }}-
 
+      # Windows gets OpenSSL from the vcpkg manifest; do not let HTTPS be compiled out silently.
       - name: Configure CMake
-        run: cmake -B cpp/build -S cpp -DCMAKE_BUILD_TYPE=Release -DGAIA_BUILD_INTEGRATION_TESTS=OFF
+        shell: bash
+        run: |
+          cmake -B cpp/build -S cpp -DCMAKE_BUILD_TYPE=Release -DGAIA_BUILD_INTEGRATION_TESTS=OFF | tee cpp-configure.log
+          grep -q "GAIA SSL: enabled" cpp-configure.log || { echo "::error::OpenSSL not found; gaia_core would build without HTTPS"; exit 1; }
 
       - name: Build
         run: cmake --build cpp/build --config Release --parallel
@@ -144,11 +148,6 @@ jobs:
           key: fetchcontent-install-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
           restore-keys: fetchcontent-install-${{ matrix.os }}-
 
-      - name: Install OpenSSL (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: choco install openssl --no-progress -y
-
       - name: Build and install gaia_core
         shell: bash
         run: |
@@ -156,17 +155,25 @@ jobs:
                 -DGAIA_BUILD_TESTS=OFF -DGAIA_BUILD_EXAMPLES=OFF \
                 -DGAIA_BUILD_INTEGRATION_TESTS=OFF \
                 -DGAIA_BUILD_TUI=OFF \
-                -DCMAKE_INSTALL_PREFIX="${{ runner.temp }}/gaia_install"
+                -DCMAKE_INSTALL_PREFIX="${{ runner.temp }}/gaia_install" | tee cpp-configure.log
+          grep -q "GAIA SSL: enabled" cpp-configure.log || { echo "::error::OpenSSL not found; gaia_core would build without HTTPS"; exit 1; }
           cmake --build cpp/build --config Release --parallel
           cmake --install cpp/build --config Release
 
       - name: Build consumer via find_package
         shell: bash
         run: |
+          toolchain_args=()
+          if [ -n "${VCPKG_INSTALLATION_ROOT:-}" ]; then
+            toolchain_args+=("-DCMAKE_TOOLCHAIN_FILE=${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake")
+            # The consumer has no vcpkg.json; reuse the OpenSSL gaia_core was built against.
+            toolchain_args+=("-DVCPKG_INSTALLED_DIR=$(pwd -W 2>/dev/null || pwd)/cpp/build/vcpkg_installed")
+          fi
           cmake -B consumer/build -S cpp/examples/fetch_content_consumer \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_PREFIX_PATH="${{ runner.temp }}/gaia_install" \
-                -DUSE_FIND_PACKAGE=ON
+                -DUSE_FIND_PACKAGE=ON \
+                "${toolchain_args[@]}"
           cmake --build consumer/build --config Release --parallel
 
   # Verify BUILD_SHARED_LIBS=ON (shared library / DLL) compiles cleanly
@@ -187,10 +194,6 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libssl-dev
 
-      - name: Install OpenSSL (Windows)
-        if: runner.os == 'Windows'
-        run: choco install openssl --no-progress -y
-
       - name: Restore FetchContent cache
         uses: actions/cache@v6
         with:
@@ -204,7 +207,8 @@ jobs:
           cmake -B cpp/build-shared -S cpp -DCMAKE_BUILD_TYPE=Release \
                 -DBUILD_SHARED_LIBS=ON \
                 -DGAIA_BUILD_TESTS=OFF -DGAIA_BUILD_EXAMPLES=OFF \
-                -DGAIA_BUILD_INTEGRATION_TESTS=OFF
+                -DGAIA_BUILD_INTEGRATION_TESTS=OFF | tee cpp-configure.log
+          grep -q "GAIA SSL: enabled" cpp-configure.log || { echo "::error::OpenSSL not found; gaia_core would build without HTTPS"; exit 1; }
           cmake --build cpp/build-shared --config Release --parallel
 
   # Integration tests on STX hardware: LLM + MCP + WiFi + Health

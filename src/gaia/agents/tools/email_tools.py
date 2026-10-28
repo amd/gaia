@@ -217,6 +217,11 @@ def _classify_mailbox(provider: str) -> Tuple[Optional[str], str]:
     conn = get_connection(provider)
     if not conn:
         return None, _not_connected(provider)
+    if conn.get("error") == "busy":
+        return None, (
+            "being saved by another GAIA operation right now, so its state can't "
+            "be read yet. Retry in a moment"
+        )
     if conn.get("error") == "configuration":
         return None, (
             "connected, but its OAuth client credentials are no longer "

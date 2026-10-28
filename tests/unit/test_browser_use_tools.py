@@ -11,6 +11,7 @@ shown, what the session store writes, and which calls need a human.
 from __future__ import annotations
 
 import json
+import socket
 from unittest.mock import patch
 
 import pytest
@@ -414,7 +415,16 @@ def test_the_browser_refuses_addresses_off_the_public_internet(url, monkeypatch)
 
 def test_public_urls_pass(monkeypatch):
     monkeypatch.delenv("GAIA_BROWSER_ALLOW_PRIVATE", raising=False)
+    looked_up = []
+
+    def public_dns(host, *args, **kwargs):
+        looked_up.append(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.215.14", 0))]
+
+    # A unit test must not depend on the runner's DNS.
+    monkeypatch.setattr("gaia.web.client.socket.getaddrinfo", public_dns)
     assert BrowserUseToolsMixin._check_navigable("https://example.com") is None
+    assert looked_up == ["example.com"]
 
 
 def test_local_addresses_need_an_explicit_opt_in(monkeypatch):

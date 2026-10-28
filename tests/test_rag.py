@@ -837,7 +837,8 @@ class TestChatIntegration:
 
         # Test message enhancement
         original_message = "What is AI?"
-        enhanced, metadata = chat._enhance_with_rag(original_message)
+        with patch("gaia.chat.sdk.resolve_ctx_size", return_value=32768):
+            enhanced, metadata = chat._enhance_with_rag(original_message)
 
         assert original_message in enhanced
         assert "Context" in enhanced
@@ -1613,13 +1614,13 @@ class TestCacheSecurity:
 
                 assert result["success"] is False
                 assert result["error_type"] == "cache_busy"
-                assert "Another GAIA process" in result["error"]
+                assert "1 other GAIA operation was ahead" in result["error"]
 
 
-class TestCacheBusyMessage:
-    """Only a lock timeout blames another process; other lock errors don't."""
+class TestCacheLockFailure:
+    """Busy, unwritable and a bad lock file are three error types."""
 
-    def _busy(self, error):
+    def _failed(self, error):
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
         from gaia.rag.sdk import RAGSDK
@@ -1627,21 +1628,34 @@ class TestCacheBusyMessage:
         rag = RAGSDK.__new__(RAGSDK)
         rag.config = Mock(show_stats=False)
         rag.log = Mock()
-        return rag._cache_busy({}, "doc.pdf", error)
+        return rag._cache_lock_failed({}, "doc.pdf", error)
 
-    def test_timeout_names_another_process(self):
+    def test_timeout_is_busy(self):
         from gaia.utils.file_lock import FileLockTimeout
 
-        stats = self._busy(FileLockTimeout("lock held", Path("x.lock")))
+        lock = Path("cache") / "rag-cache.lock"
+        stats = self._failed(FileLockTimeout("lock held", lock))
         assert stats["error_type"] == "cache_busy"
-        assert "Another GAIA process" in stats["error"]
+        assert "lock held" in stats["error"]
+        assert str(lock.parent) in stats["error"]
+        assert stats["cache_dir"] == str(lock.parent)
 
-    def test_unwritable_lock_dir_does_not_blame_another_process(self):
+    def test_unwritable_lock_dir_is_its_own_type(self):
         from gaia.utils.file_lock import FileLockError
 
-        stats = self._busy(FileLockError("cannot create x.lock", Path("x.lock")))
+        lock = Path("cache") / "rag-cache.lock"
+        error = FileLockError("cannot create x.lock", lock, dir_unwritable=True)
+        stats = self._failed(error)
+        assert stats["error_type"] == "cache_unwritable"
         assert "cannot create x.lock" in stats["error"]
-        assert "Another GAIA process" not in stats["error"]
+        assert str(lock.parent) in stats["error"]
+
+    def test_bad_lock_file_in_a_writable_dir_is_neither(self):
+        from gaia.utils.file_lock import FileLockError
+
+        stats = self._failed(FileLockError("cannot open x.lock", Path("x.lock")))
+        assert stats["error_type"] == "cache_lock_error"
+        assert "cannot open x.lock" in stats["error"]
 
 
 class TestClearCacheSafety:

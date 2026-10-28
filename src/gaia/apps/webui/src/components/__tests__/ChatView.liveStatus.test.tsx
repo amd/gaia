@@ -157,6 +157,107 @@ describe('ChatView live status', () => {
     });
 });
 
+describe('one progress readout per turn', () => {
+    const summaryBar = () => screen.queryByRole('button', { name: 'Expand agent activity' });
+
+    it("keeps the backend's silent-wait tick out of the bubble", async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({
+                type: 'status', status: 'working', message: 'Model is processing... (15s)',
+            } as unknown as StreamEvent);
+        });
+
+        await liveLine('Thinking...');
+        expect(useChatStore.getState().agentSteps).toEqual([]);
+        expect(screen.queryByText(/Model is processing/)).toBeNull();
+        expect(summaryBar()).toBeNull();
+    });
+
+    it("does not relabel the model's reasoning with the tick", async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({ type: 'thinking', content: 'Let me look.' } as unknown as StreamEvent);
+            capturedCallbacks!.onAgentEvent({
+                type: 'status', status: 'working', message: 'Model is processing... (15s)',
+            } as unknown as StreamEvent);
+        });
+
+        expect(useChatStore.getState().agentSteps.map((s) => s.label)).toEqual(['Thinking']);
+    });
+
+    it("names a running tool beside GAIA's name and only counts steps in the activity bar", async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({
+                type: 'tool_start', tool: 'read_file', narration: 'Reading file: notes.txt',
+            } as unknown as StreamEvent);
+        });
+
+        await liveLine('Reading file: notes.txt');
+        expect(summaryBar()).toHaveTextContent(/^1 step · 1 tool$/);
+    });
+
+    it('takes a narration that arrives with the arguments', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'read_file' } as unknown as StreamEvent);
+            capturedCallbacks!.onAgentEvent({
+                type: 'tool_args', tool: 'read_file', args: { file_path: 'notes.txt' }, narration: 'Reading file: notes.txt',
+            } as unknown as StreamEvent);
+        });
+
+        await liveLine('Reading file: notes.txt');
+    });
+});
+
+describe('a tool called with no arguments', () => {
+    const lastToolStep = () => {
+        const tools = useChatStore.getState().agentSteps.filter((s) => s.type === 'tool');
+        return tools[tools.length - 1];
+    };
+
+    it('shows as running from its start, and empty arguments keep its label', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({
+                type: 'tool_start', tool: 'list_skills', detail: 'Listing your skills',
+            } as unknown as StreamEvent);
+            capturedCallbacks!.onAgentEvent({
+                type: 'tool_args', tool: 'list_skills', args: {}, detail: '',
+            } as unknown as StreamEvent);
+        });
+
+        const step = lastToolStep();
+        expect(step?.tool).toBe('list_skills');
+        expect(step?.active).toBe(true);
+        expect(step?.detail).toBe('Listing your skills');
+        expect(useChatStore.getState().livePhase).toBe('tool');
+    });
+
+    it('never shows "{}" as the detail when no label was sent either', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'list_skills' } as unknown as StreamEvent);
+            capturedCallbacks!.onAgentEvent({ type: 'tool_args', tool: 'list_skills', args: {} } as unknown as StreamEvent);
+        });
+
+        expect(lastToolStep()?.detail).not.toBe('{}');
+    });
+
+    it('still shows real arguments when no formatted detail came with them', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'read_file' } as unknown as StreamEvent);
+            capturedCallbacks!.onAgentEvent({
+                type: 'tool_args', tool: 'read_file', args: { file_path: 'a.txt' },
+            } as unknown as StreamEvent);
+        });
+
+        expect(lastToolStep()?.detail).toBe('{"file_path":"a.txt"}');
+    });
+});
+
 describe('opening a chat', () => {
     it("keeps a message sent before the chat's history arrives", async () => {
         let deliver!: (v: { messages: never[]; total: number }) => void;

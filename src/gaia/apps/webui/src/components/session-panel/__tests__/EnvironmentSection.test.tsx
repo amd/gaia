@@ -43,6 +43,16 @@ describe('Runs on', () => {
         expect(screen.getByText('6.2 GB in use · 40.5 GB free')).toBeInTheDocument();
     });
 
+    it("doesn't describe another chat's model as this one's", async () => {
+        useChatStore.setState({
+            sessions: [{ ...useChatStore.getState().sessions[0], effective_model: 'Qwen3.6-35B-A3B-GGUF' }],
+        });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        expect(await screen.findByText(/not loaded right now/)).toBeInTheDocument();
+        expect(screen.queryByText('Gemma 4 E4B')).not.toBeInTheDocument();
+        expect(screen.queryByText(/GB in use/)).not.toBeInTheDocument();
+    });
+
     it('names the cloud provider for a cloud chat, without reading local status', async () => {
         setPlace(true);
         render(<EnvironmentSection sessionId={SID} busy={false} />);
@@ -114,11 +124,26 @@ describe('Can read and write', () => {
 
     it("says a separate agent isn't held to these settings, and offers no controls", async () => {
         mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false });
+        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'gaia' }] });
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         expect(await screen.findByText(/runs as its own process/)).toBeInTheDocument();
+        // Not a boundary: say so rather than listing folders as if they were the limit.
+        expect(screen.getByText('Files GAIA can reach')).toBeInTheDocument();
+        expect(screen.getByText(/rest of your user folder/)).toBeInTheDocument();
+        expect(screen.queryByText('Can read and write')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Add folder/ })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
-        expect(screen.getByRole('switch', { name: 'Internet for this chat' })).toBeDisabled();
+        expect(screen.queryByRole('switch', { name: 'Internet for this chat' })).not.toBeInTheDocument();
+        expect(screen.getByText('On')).toBeInTheDocument();
+        expect(screen.getAllByText(/can't be changed from/)).toHaveLength(1);
+    });
+
+    it("doesn't claim another agent's scope", async () => {
+        mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false });
+        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'email' }] });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        expect(await screen.findByText(/applies its own limits/)).toBeInTheDocument();
+        expect(screen.queryByText(/rest of your user folder/)).not.toBeInTheDocument();
     });
 
     it('offers no Remove for an attached document; it leaves through the document bar', async () => {
@@ -221,5 +246,38 @@ describe('Permission mode', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Permission mode: full access' }));
         fireEvent.click(await screen.findByRole('button', { name: /Ask before acting/ }));
         await waitFor(() => expect(screen.getByRole('radio', { name: /Ask/ })).toHaveAttribute('aria-checked', 'true'));
+    });
+
+    it('keeps Ask after a double-click on Full access, until "Turn it on"', async () => {
+        mocked.setPermissionMode.mockImplementation(async (_sid, mode) => ({ session_id: SID, mode, grants: [] }));
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const full = await screen.findByRole('radio', { name: /Full access/ });
+        await waitFor(() => expect(screen.getByRole('radio', { name: /Ask/ })).toHaveAttribute('aria-checked', 'true'));
+
+        fireEvent.click(full);
+        fireEvent.click(full);
+        await act(async () => {});
+        expect(mocked.setPermissionMode).not.toHaveBeenCalled();
+        expect(full).toHaveAttribute('aria-checked', 'false');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Turn it on' }));
+        await waitFor(() => expect(full).toHaveAttribute('aria-checked', 'true'));
+        expect(mocked.setPermissionMode).toHaveBeenCalledExactlyOnceWith(SID, 'full_access');
+    });
+
+    it('never saves Full access from repeated clicks or Cancel', async () => {
+        mocked.setPermissionMode.mockImplementation(async (_sid, mode) => ({ session_id: SID, mode, grants: [] }));
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const full = await screen.findByRole('radio', { name: /Full access/ });
+        await waitFor(() => expect(screen.getByRole('radio', { name: /Ask/ })).toHaveAttribute('aria-checked', 'true'));
+
+        for (let i = 0; i < 3; i++) fireEvent.click(full);
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+        fireEvent.click(full);
+        fireEvent.click(full);
+        await act(async () => {});
+        expect(mocked.setPermissionMode).not.toHaveBeenCalled();
+        expect(full).toHaveAttribute('aria-checked', 'false');
+        expect(screen.getByRole('button', { name: 'Turn it on' })).toBeInTheDocument();
     });
 });

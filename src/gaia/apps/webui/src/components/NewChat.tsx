@@ -2,26 +2,34 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronRight, Folder } from 'lucide-react';
+import { ChevronRight, FileText, X } from 'lucide-react';
 import { Composer } from './Composer';
+import { FolderChip } from './FolderChip';
 import { ModelChip } from './ModelChip';
 import { PermissionModeChip } from './PermissionModeChip';
+import { PrivateChip } from './PrivateChip';
 import { StartCards } from './StartCards';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
-import { displayModelName, useModelNames } from '../stores/modelStore';
+import { displayModelName, useModelNames, useModelStore } from '../stores/modelStore';
+import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { STARTING_REASON } from '../utils/constants';
 import { log } from '../utils/logger';
 import { deviceLabel } from '../utils/modelLabels';
 import type { StartCard, StartScreen } from '../types';
 import './NewChat.css';
+import { useSavedDraft } from '../hooks/useSavedDraft';
+import { NEW_CHAT_DRAFT_KEY } from '../utils/savedDraft';
 
 interface NewChatProps {
-    /** Creates the chat and sends the first message; rejects with the reason it could not. */
-    onSend: (text: string) => Promise<void>;
+    /**
+     * Creates the chat and sends the first message; rejects with the reason it could not.
+     * Resolves false when the chat was made but the message was not sent (it says why itself).
+     */
+    onSend: (text: string) => Promise<boolean | void>;
     /** Text to start the message box with, e.g. a task picked at the end of setup. */
     initialText?: string;
     /** Changes each time New chat is chosen, so the box takes focus even when already shown. */
@@ -60,10 +68,94 @@ function SuggestionsUnavailable({ detail, onRetry }: { detail: string; onRetry: 
     );
 }
 
+/** The start card that asks about the library's documents. */
+const DOCUMENT_CARD = 'document-brief';
+
+/** Hold every indexed library document for the chat about to be created. */
+function attachWholeLibrary() {
+    const { documents, draftDocumentIds, addDraftDocuments } = useChatStore.getState();
+    addDraftDocuments(documents
+        .filter((d) => d.indexing_status === 'complete' && !draftDocumentIds.includes(d.id))
+        .map((d) => d.id));
+}
+
+/**
+ * A chat searches only the documents attached to it: show what this one will
+ * get, and offer the rest of the library.
+ */
+function LibraryDocuments() {
+    const documents = useChatStore((s) => s.documents);
+    const draftIds = useChatStore((s) => s.draftDocumentIds);
+    const removeDraftDocument = useChatStore((s) => s.removeDraftDocument);
+    const setShowDocLibrary = useChatStore((s) => s.setShowDocLibrary);
+    const attached = documents.filter((d) => draftIds.includes(d.id));
+    const offered = documents.filter((d) => d.indexing_status === 'complete' && !draftIds.includes(d.id));
+    if (!attached.length && !offered.length) return null;
+    const n = offered.length;
+    return (
+        <div className="new-chat-docs">
+            {attached.length > 0 && (
+                <ul className="new-chat-doc-list" aria-label="Documents for this chat">
+                    {attached.map((d) => (
+                        <li key={d.id} className="new-chat-doc">
+                            <FileText size={12} aria-hidden="true" />
+                            <span>{d.filename}</span>
+                            <button
+                                type="button"
+                                className="new-chat-doc-remove"
+                                onClick={() => removeDraftDocument(d.id)}
+                                aria-label={`Don't attach ${d.filename}`}
+                            >
+                                <X size={12} aria-hidden="true" />
+                            </button>
+                        </li>
+                    ))}
+                </ul>
+            )}
+            {n > 0 && (
+                <p className="new-chat-note">
+                    {attached.length
+                        ? `${n} more document${n !== 1 ? 's' : ''} in your library. `
+                        : `Your library has ${n} document${n !== 1 ? 's' : ''}; this chat can search only the ones you attach. `}
+                    <button type="button" className="link-btn" onClick={attachWholeLibrary}>
+                        Attach {n === 1 ? 'it' : `all ${n}`}
+                    </button>
+                    {n > 1 && (
+                        <>
+                            {' · '}
+                            <button type="button" className="link-btn" onClick={() => setShowDocLibrary(true)}>
+                                Choose
+                            </button>
+                        </>
+                    )}
+                </p>
+            )}
+        </div>
+    );
+}
+
+/** First-run setup failed: say so before the first message fails with the same error. */
+function SetupFailed({ error }: { error: string }) {
+    const openSettings = useChatStore((s) => s.openSettings);
+    return (
+        <div className="new-chat-setup-failed" role="alert">
+            <p className="new-chat-setup-failed-title">GAIA&rsquo;s first-run setup didn&rsquo;t finish, so a chat on this PC&rsquo;s model will fail.</p>
+            <p className="new-chat-setup-failed-error">{error}</p>
+            <p>
+                Use a cloud model, or pick a smaller one.{' '}
+                <button type="button" className="link-btn" onClick={() => openSettings('model')}>Choose a model</button>
+            </p>
+        </div>
+    );
+}
+
 /** An empty chat: a greeting, the composer, tasks to start from. Created on the first message. */
 export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatProps) {
     const starting = useChatStore((s) => s.systemStatus?.init_state === 'initializing');
-    const [text, setText] = useState(initialText);
+    // Moot once chats run in the cloud or a local model has loaded after all.
+    const setupError = useChatStore((s) => (s.systemStatus?.model_loaded ? null : s.systemStatus?.setup_error ?? null));
+    const remote = useModelStore((s) => !!s.active?.remote);
+    const [text, setText] = useSavedDraft(NEW_CHAT_DRAFT_KEY, initialText);
     const [error, setError] = useState<string | null>(null);
     const [sending, setSending] = useState(false);
     const [start, setStart] = useState<StartScreen | null>(null);
@@ -95,34 +187,67 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         return () => { live.current = false; };
     }, [loadStart]);
 
+    useEffect(() => {
+        api.listDocuments()
+            .then((data) => useChatStore.getState().setDocuments(data.documents || []))
+            .catch((err) => log.api.warn('Document library unavailable; not offering its documents', err));
+    }, []);
+
     // The assistant may still be starting: keep asking while the reason is on screen.
     useEffect(() => {
         if (!startError) return;
         return setVisibleInterval(() => loadStart(true), START_RETRY_MS);
     }, [startError, loadStart]);
 
-    const send = useCallback(async (message: string) => {
-        if (!message || sending) return;
+    // Set before any re-render, so keypresses landing in the same tick are held too.
+    const sendingRef = useRef(false);
+    // Sent while the chat was still being created: they wait in its queue, never dropped.
+    const heldRef = useRef<string[]>([]);
+    const send = useCallback(async (message: string, draft = '') => {
+        if (!message) return;
+        if (sendingRef.current) {
+            // As typed: the attachments still belong to the first message.
+            heldRef.current.push(draft || message);
+            setText('');
+            return;
+        }
+        sendingRef.current = true;
         setSending(true);
         setError(null);
+        // Cleared now, so anything typed while the chat is created is a new message.
+        setText('');
         try {
-            await onSend(message);
-            setText('');
+            const sent = await onSend(message);
             attachments.clear();
+            const held = heldRef.current.splice(0);
+            const sessionId = useChatStore.getState().currentSessionId;
+            if (held.length > 0 && sessionId) {
+                // The chat is open now; if its first message never went out, the rest wait for Send again.
+                const add = (items: messageQueue.QueuedMessage[], text: string) => sent === false
+                    ? [...items, { ...messageQueue.item(text, 'failed'), error: 'The first message was not sent.' }]
+                    : messageQueue.enqueue(items, text, 'queued');
+                useChatStore.getState().updateQueue(sessionId, (q) => held.reduce(add, q));
+            }
         } catch (err) {
+            // Nothing was sent, so every message goes back in the box.
+            const held = heldRef.current.splice(0);
+            setText([draft || message, ...held].join('\n\n'));
             setError(err instanceof Error ? err.message : String(err));
         } finally {
+            sendingRef.current = false;
             setSending(false);
         }
-    }, [attachments, onSend, sending]);
+    }, [attachments, onSend]);
 
-    const submit = useCallback(() => send(attachments.compose(text.trim())), [attachments, send, text]);
+    const submit = useCallback(() => send(attachments.compose(text.trim()), text.trim()), [attachments, send, text]);
 
     useEffect(() => {
         if (focusRequest) inputRef.current?.focus();
     }, [focusRequest]);
 
     const pick = useCallback((card: StartCard) => {
+        // The card counts the library's documents; without them attached the chat has none.
+        if (card.skill === DOCUMENT_CARD) attachWholeLibrary();
         if (!card.needs_input) {
             void send(attachments.compose(card.prompt));
             return;
@@ -137,30 +262,22 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         <main className="new-chat" aria-label="New chat">
             <div className="new-chat-inner">
                 <h1 className="new-chat-greeting">{greeting()}</h1>
+                {setupError && !remote && <SetupFailed error={setupError} />}
                 <Composer
                     value={text}
                     onChange={setText}
                     onSubmit={submit}
                     attachments={attachments}
-                    disabledReason={starting ? STARTING_REASON : sending ? 'Starting the chat…' : null}
+                    disabledReason={starting ? STARTING_REASON : null}
                     autoFocus
                     inputRef={inputRef}
-                    leftControls={<PermissionModeChip sessionId={null} />}
+                    leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /></>}
                     rightControls={<ModelChip />}
                 />
-                {folder && (
-                    <div className="new-chat-meta">
-                        <span
-                            className="new-chat-folder"
-                            title={folder.gaia_folder
-                                ? `GAIA works in its own folder, ${folder.path}. Attach a file or start GAIA from a project folder to work there.`
-                                : `GAIA works in ${folder.path}`}
-                        >
-                            <Folder size={13} aria-hidden="true" />
-                            <span>{folder.name}</span>
-                        </span>
-                    </div>
-                )}
+                <div className="new-chat-meta">
+                    {folder && <FolderChip folder={folder} disabled={starting || sending} />}
+                </div>
+                <LibraryDocuments />
                 {warming !== null && !starting && (
                     <p className="new-chat-warmup" role="status">{warmUpLine(warming)}</p>
                 )}

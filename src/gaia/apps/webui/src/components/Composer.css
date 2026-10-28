@@ -10,12 +10,11 @@
     background: var(--bg-input);
     border-radius: var(--radius-xl);
     box-shadow: var(--shadow-sm);
-    transition: box-shadow var(--duration) var(--ease);
 }
 
-/* A brass edge and a soft ring: focus is the one place brass frames a surface. */
+/* A hairline, not a glow. This mix holds 3:1 against the input in every palette. */
 .composer:focus-within {
-    box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--accent-solid), 0 0 0 4px var(--accent-ring);
+    box-shadow: var(--shadow-sm), inset 0 0 0 1px color-mix(in srgb, var(--text-muted) 80%, var(--bg-input));
 }
 
 .composer-disabled {
@@ -43,6 +42,12 @@
 
 .composer-input:focus-visible {
     outline: none;
+}
+
+.composer-limit-error {
+    margin: 4px 0 0;
+    color: var(--danger);
+    font-size: 12px;
 }
 
 .composer-row {
@@ -211,4 +216,9 @@
 
 .composer-chip.is-danger {
     color: var(--danger);
+}
+
+.composer-chip.is-on {
+    background: var(--accent-dim);
+    color: var(--accent);
 }

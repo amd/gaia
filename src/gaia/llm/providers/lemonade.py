@@ -28,6 +28,7 @@ from ..lemonade_client import (
     resolve_ctx_size,
 )
 from ..lemonade_launcher import describe_client_hint
+from ..surface_hints import TUI_MODEL_SWITCH_HINT, TUI_PROVIDER_AUTH_HINT
 
 logger = logging.getLogger(__name__)
 
@@ -334,16 +335,6 @@ class LemonadeCloudAccountError(LemonadeError):
     )
 
 
-#: How a TUI user picks another model. The Agent UI swaps this exact sentence
-#: for :data:`AGENT_UI_MODEL_SWITCH_HINT` (``gaia.ui._chat_helpers``).
-TUI_MODEL_SWITCH_HINT = "Pick another model with /model in the TUI."
-AGENT_UI_MODEL_SWITCH_HINT = (
-    "Pick another model from the model menu next to the Send button. If you "
-    "typed this model ID yourself, clear it under Settings > Advanced > "
-    "Custom model ID."
-)
-
-
 class LemonadeCloudModelUnavailableError(LemonadeError):
     """The cloud provider answered 404 for the model (not deployed, renamed,
     or no access). Retrying the same model can never succeed."""
@@ -378,10 +369,7 @@ class LemonadeAuthRejectedError(LemonadeError):
     """
 
     retryable = False
-    user_message = (
-        "The request was rejected as unauthorized. Run /provider in the TUI "
-        "to reconnect the provider, or verify LEMONADE_API_KEY."
-    )
+    user_message = f"The request was rejected as unauthorized. {TUI_PROVIDER_AUTH_HINT}"
 
 
 def _classify_lemonade_response(

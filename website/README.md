@@ -19,11 +19,11 @@ together.
 # Install dependencies
 npm install
 
-# Start dev server (HUB_CATALOG_URL is REQUIRED — see below)
-HUB_CATALOG_URL=https://hub.amd-gaia.ai npm run dev
+# Start dev server (fetches the GitHub release at build time — see below)
+npm run dev
 
 # Build for production
-HUB_CATALOG_URL=https://hub.amd-gaia.ai npm run build
+npm run build
 
 # Preview production build
 npm run preview
@@ -32,17 +32,29 @@ npm run preview
 npm test
 ```
 
-## Download data (`HUB_CATALOG_URL`)
+## Download data (GitHub releases)
 
-The download links on the home page are built from what the download server
-(`hub.amd-gaia.ai`, the `workers/agent-hub/` Worker) actually published, fetched
-at build time from `${HUB_CATALOG_URL}/agents/<id>/manifest.json`.
+Every download button on the home page links to an asset of the newest stable
+GitHub release (`github.com/amd/gaia/releases`), resolved at build time by
+`src/data/github.ts`. Linking GitHub rather than `hub.amd-gaia.ai` is what makes
+the site's downloads countable: GitHub keeps a `download_count` per asset. The
+release candidate entry links the candidate's own assets the same way.
 
-**`HUB_CATALOG_URL` is required. There is no bundled fixture and no offline
-path.** If it is unset, or the fetch fails, or the shape is wrong, the build
-**fails loudly** — it never falls back to stale filenames. This is deliberate;
-do not add a fallback. A download-server outage therefore blocks every website
-build; check `GET https://hub.amd-gaia.ai/health` first.
+A platform whose asset is not on the release gets no button. **There is no
+bundled fixture and no fallback to the hub.** If the GitHub API fetch fails, or
+the stable release carries no desktop or no terminal build at all, the build
+**fails loudly**. This is deliberate; do not add a fallback.
+
+`GITHUB_TOKEN` is optional and only raises the API rate limit (60/hr
+unauthenticated, 5,000/hr with a token). A build that hits the limit fails with
+HTTP 403; set the token and rebuild.
+
+To read the counts:
+
+```bash
+gh api repos/amd/gaia/releases/tags/v0.25.1 \
+  --jq '.assets[] | "\(.download_count)\t\(.name)"'
+```
 
 ## Project Structure
 
@@ -57,8 +69,7 @@ website/
 ├── src/
 │   ├── components/                  # Astro components (Downloads, Header, Footer, …)
 │   ├── data/
-│   │   ├── catalog.ts               # Published-binary lookup for the downloads
-│   │   ├── github.ts                # Build-time GitHub / npm stats
+│   │   ├── github.ts                # Build-time GitHub releases (downloads) and npm stats
 │   │   └── *.test.ts                # Vitest unit tests
 │   ├── design/
 │   │   ├── global.css               # Owns the @tailwind directives
@@ -94,9 +105,14 @@ trusting a copy — the headlines only:
 - **Font (Display)**: Antonio — headings, buttons, figures, the wordmark
 - **Font (UI)**: Titillium Web, standing in for AMD's Klavika
 - **Font (Code)**: JetBrains Mono
-- **Background**: `src/scripts/starfield.ts`, a canvas of streaking stars. It
-  holds a still frame under `prefers-reduced-motion` or when a visitor pauses it
-  from the footer.
+- **Background**: `src/scripts/starfield.ts`, a deep Hubble field flown through
+  at warp: streaking stars, and real Hubble galaxies and clusters from the one
+  atlas in `public/space/` (credits in `public/space/CREDITS.md`). It holds a still
+  frame under `prefers-reduced-motion` or when a visitor pauses it from the footer.
+- **Headline**: `src/scripts/scramble.ts` resolves it out of the writing systems in
+  `src/data/scramble-scripts.ts`, on the starfield's warp clock. Their characters
+  come from `public/fonts/gaia-scripts.woff2`, a Noto subset (SIL OFL 1.1). Adding a
+  character means regenerating that subset, or it renders as a missing-glyph box.
 
 ## Deployment
 
@@ -132,23 +148,24 @@ domain, and is not affected by the apex route.
 Railway builds from `railway.json` (NIXPACKS, `npm install && npm run build`,
 served by `serve dist`) — it does **not** auto-detect Astro.
 
-Two pieces of configuration are required, and a missing one is a hard failure, not
-a degraded deploy:
+One piece of configuration is required, and missing it is a hard failure, not a
+degraded deploy:
 
 | What | Where | Why |
 | ---- | ----- | --- |
 | `RAILWAY_TOKEN` | GitHub repo secret | A Railway **project** token for `gaia-agent-hub`, production environment (Railway → project → Settings → Tokens). |
-| `HUB_CATALOG_URL=https://hub.amd-gaia.ai` | Railway service variable on `website` | The build has no fixture fallback, so without it the deploy **fails**. Set it in Railway → Variables. |
+| `GITHUB_TOKEN` (optional) | Railway service variable on `website` | Raises the GitHub API rate limit for the build. Unset works; a build that hits the 60/hr limit fails until it is set. |
 
-> Both live outside this repo (GitHub secrets and the Railway dashboard), so they
+> These live outside this repo (GitHub secrets and the Railway dashboard), so they
 > cannot be verified from a checkout. Treat the table as the required
 > configuration and confirm it in the respective dashboard when a deploy fails.
 
 ### Deploys only fire on `website/**` changes
 
 Both `deploy_website.yml` and `website-ci.yml` are path-filtered. The download
-links are resolved at build time, so a release that publishes new binaries
-dispatches the deploy explicitly (see the release workflows). You can do the
+links are resolved at build time, so a release dispatches the deploy explicitly
+once its assets are attached (`release_components.yml`, and `publish.yml` for a
+release candidate). You can do the
 same by hand:
 
 ```bash
@@ -165,7 +182,7 @@ the fastest way to revert a bad website deploy without touching Railway.
 ### Manual deploy
 
 ```bash
-HUB_CATALOG_URL=https://hub.amd-gaia.ai npm run build
+npm run build
 # Upload contents of dist/ to your hosting provider
 ```
 

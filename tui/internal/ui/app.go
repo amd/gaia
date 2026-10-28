@@ -81,6 +81,7 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 		WithFullAccessNotice(notice).
 		WithClaude(useClaude, claudeModel)).
 		WithTrace(trace).
+		WithUpdateCheck().
 		WithLocalPreflight(preflight.LocalOptions{
 			// The gate has to answer about the binary this launch will actually
 			// spawn — with --mock that is the mock, not the name the seed carries.
@@ -207,9 +208,11 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 				p.Quit()
 			}
 		}()
-		if _, err := p.Run(); err != nil {
+		final, err := p.Run()
+		if err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
+		beforeExit(final)
 		return nil
 	}
 
@@ -251,12 +254,35 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	// Bracket Run: tea.Program.Send silently discards messages outside it, so
 	// the control API must refuse injection rather than report a false success.
 	srv.MarkRunning()
-	_, err = p.Run()
+	final, err := p.Run()
 	srv.MarkStopped()
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
+	beforeExit(final)
 	return nil
+}
+
+// exitHook is a model with work to finish once the program has stopped —
+// however it stopped: a key, a closed terminal, a signal.
+type exitHook interface{ BeforeExit() error }
+
+// beforeExit runs the final model's exit work, after unwrapping the
+// recorder and repaint wrappers around it.
+func beforeExit(m tea.Model) {
+	for m != nil {
+		if h, ok := m.(exitHook); ok {
+			if err := h.BeforeExit(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+			return
+		}
+		u, ok := m.(interface{ Unwrap() tea.Model })
+		if !ok {
+			return
+		}
+		m = u.Unwrap()
+	}
 }
 
 // RunAgent launches one catalog agent by id, over whatever transport that entry
@@ -328,7 +354,7 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		// it ran after the client, so a machine with no gaia-agent got
 		// ForAgent's bare "no runnable binary" instead of the gate's three-part
 		// answer, which names where it looked and how to get the program.
-		cfg := preflight.ConfigFor(agent.ID, agent.Name)
+		cfg := oneShotConfig(agent.ID, agent.Name, model)
 		var rep preflight.Report
 		if agent.Transport == catalog.TransportDaemon {
 			t := preflight.NewDaemonTransport(daemon.New(daemon.Options{Logf: logf}))
@@ -453,6 +479,17 @@ func launchFullAccess(agent catalog.Agent, fullAccess, saved bool) (bool, string
 		return false, "", err
 	}
 	return fullAccess, "", nil
+}
+
+// oneShotConfig is the readiness check for a --query turn. It carries the model
+// the turn runs on, so a cloud model is checked rather than the local default.
+func oneShotConfig(agentID, name, model string) preflight.Config {
+	cfg := preflight.ConfigFor(agentID, name)
+	// Only the flagship takes a per-turn model; email ignores one.
+	if agentID == catalog.FlagshipID {
+		cfg.Model = model
+	}
+	return cfg
 }
 
 // oneShotModel is the model a --query run uses: an explicit --model, else the

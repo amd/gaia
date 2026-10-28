@@ -17,6 +17,9 @@ on:
       - 'tests/verify_*.py'
       - 'setup.py'
       - '.github/workflows/test_security.yml'
+      - 'pyproject.toml'
+      - 'src/gaia/security.py'
+      - 'hub/agents/chat/python/**'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -26,6 +29,9 @@ on:
       - 'tests/verify_*.py'
       - 'setup.py'
       - '.github/workflows/test_security.yml'
+      - 'pyproject.toml'
+      - 'src/gaia/security.py'
+      - 'hub/agents/chat/python/**'
   merge_group:
   workflow_dispatch:
 

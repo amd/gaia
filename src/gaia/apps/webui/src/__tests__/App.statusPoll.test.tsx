@@ -73,7 +73,7 @@ beforeEach(() => {
     // ChatView's mount effects chain off these; auto-mocked they return undefined.
     mocked.listDocuments.mockResolvedValue({ documents: [] } as never);
     mocked.getMessageCount.mockResolvedValue({ count: 0 } as never);
-    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false } });
+    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
 
     useModelStore.setState({ active: null, error: null, restoreNotice: null });
     useChatStore.setState({
@@ -138,7 +138,7 @@ describe('system status poll', () => {
         render(<App />);
         await advance(120_000);
         expect(document.body.textContent).toMatch(/not answering/i);
-        expect(document.body.textContent).not.toMatch(/stopped responding/i);
+        expect(document.body.textContent).not.toMatch(/isn't running/i);
     });
 
     it('calls a backend that keeps missing answers slow, never lost', async () => {
@@ -223,7 +223,7 @@ describe('system status poll', () => {
         mocked.getSystemStatus.mockResolvedValue({ lemonade_running: false, lemonade_error: null, start_command: 'lemond --start' } as never);
         render(<App />);
         await advance(20_000);
-        expect(document.body.textContent).toMatch(/stopped responding/i);
+        expect(document.body.textContent).toMatch(/model server isn't running/i);
         expect(document.body.textContent).toContain('lemond --start');
     });
 });

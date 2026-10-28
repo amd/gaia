@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
@@ -173,10 +174,19 @@ async function indexAndAttachFiles(
     return { docIds, supported, succeededFiles, unsupported, failed, lastError };
 }
 
-export function FileBrowser() {
+const isHiddenName = (name: string) => name.startsWith('.');
+
+interface FileBrowserProps {
+    /** Starts a new chat with this first message; used when no chat is open. */
+    onStartChat: (text: string) => Promise<boolean>;
+}
+
+export function FileBrowser({ onStartChat }: FileBrowserProps) {
     const { setShowFileBrowser, currentSessionId, updateSessionInList, setPendingPrompt } = useChatStore();
     const closeBrowser = useCallback(() => setShowFileBrowser(false), [setShowFileBrowser]);
     useEscapeToClose(true, closeBrowser);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useFocusTrap(dialogRef, true);
 
     // Browse state
     const [currentPath, setCurrentPath] = useState<string>('');
@@ -185,6 +195,7 @@ export function FileBrowser() {
     const [quickLinks, setQuickLinks] = useState<QuickLink[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [showHidden, setShowHidden] = useState(false);
 
     // Search state
     const [searchQuery, setSearchQuery] = useState('');
@@ -357,8 +368,11 @@ export function FileBrowser() {
         }
     }, [selectedFiles, currentSessionId, updateSessionInList, entries]);
 
+    // A second click can land before the re-render that disables the button.
+    const askingRef = useRef(false);
     const handleAskAgent = useCallback(async () => {
-        if (selectedFiles.size === 0) return;
+        if (selectedFiles.size === 0 || askingRef.current) return;
+        askingRef.current = true;
         const files = Array.from(selectedFiles);
         setIndexError(null);
         setIndexingFiles(new Set(files));
@@ -400,7 +414,11 @@ export function FileBrowser() {
                 ? `Please analyze this document for me: ${fileNames[0]}`
                 : `Please analyze these documents for me:\n${fileNames.map(n => `- ${n}`).join('\n')}`;
 
-            setPendingPrompt(prompt);
+            if (currentSessionId) {
+                setPendingPrompt({ sessionId: currentSessionId, text: prompt });
+            } else {
+                await onStartChat(prompt);
+            }
             setShowFileBrowser(false);
             setSelectedFiles(new Set());
         } catch (err) {
@@ -410,10 +428,11 @@ export function FileBrowser() {
                 error: err instanceof Error ? err.message : 'An unexpected error occurred.',
             });
         } finally {
+            askingRef.current = false;
             setIndexingFiles(new Set());
             setIndexStatus(null);
         }
-    }, [selectedFiles, currentSessionId, updateSessionInList, entries, setPendingPrompt, setShowFileBrowser]);
+    }, [selectedFiles, currentSessionId, updateSessionInList, entries, setPendingPrompt, setShowFileBrowser, onStartChat]);
 
     // Build breadcrumb segments from current path
     const pathSegments = currentPath ? currentPath.replace(/\\/g, '/').split('/').filter(Boolean) : [];
@@ -425,6 +444,7 @@ export function FileBrowser() {
     const searchScope = formatSearchScope(searchedLocations);
 
     // Items to display: search results or browse entries
+    const visibleEntries = entries.filter(e => !isHiddenName(e.name));
     const displayItems = searchResults
         ? searchResults.map((r: any) => ({
             name: r.name,
@@ -434,10 +454,20 @@ export function FileBrowser() {
             extension: r.extension || '',
             modified: r.modified || '',
         }))
-        : entries;
+        : showHidden ? entries : visibleEntries;
+    const hiddenCount = entries.length - visibleEntries.length;
+
+    // Nothing the user can't see gets indexed: covers Show hidden turned off and leaving a search.
+    useEffect(() => {
+        if (showHidden || searchResults) return;
+        setSelectedFiles(prev => {
+            const kept = [...prev].filter(p => !isHiddenName(p.split(/[\\/]/).pop() ?? ''));
+            return kept.length === prev.size ? prev : new Set(kept);
+        });
+    }, [showHidden, searchResults]);
 
     return (
-        <div className="modal-overlay" onClick={() => setShowFileBrowser(false)} role="dialog" aria-modal="true" aria-label="File browser">
+        <div ref={dialogRef} className="modal-overlay" onClick={() => setShowFileBrowser(false)} role="dialog" aria-modal="true" aria-label="File browser">
             <div className={`modal-panel file-browser-modal ${previewFile ? 'has-preview' : ''}`} onClick={(e) => e.stopPropagation()}>
                 {/* Header */}
                 <div className="modal-header">
@@ -507,27 +537,37 @@ export function FileBrowser() {
 
                     {/* Breadcrumb */}
                     {!searchResults && (
-                        <div className="fb-breadcrumb">
-                            <button className="fb-crumb" onClick={() => loadDirectory('/')}>
-                                <HardDrive size={12} />
-                            </button>
-                            {breadcrumbs.map((crumb, i) => (
-                                <span key={i} className="fb-crumb-item">
-                                    <ChevronRight size={12} className="fb-crumb-sep" />
-                                    <button className="fb-crumb" onClick={() => loadDirectory(crumb.path)}>
-                                        {crumb.label}
-                                    </button>
-                                </span>
-                            ))}
-                            {parentPath && (
-                                <button
-                                    className="fb-up-btn"
-                                    onClick={() => loadDirectory(parentPath)}
-                                    title="Go up"
-                                >
-                                    <ArrowUp size={14} />
+                        <div className="fb-pathbar">
+                            <div className="fb-breadcrumb">
+                                <button className="fb-crumb" onClick={() => loadDirectory('/')}>
+                                    <HardDrive size={12} />
                                 </button>
-                            )}
+                                {breadcrumbs.map((crumb, i) => (
+                                    <span key={i} className="fb-crumb-item">
+                                        <ChevronRight size={12} className="fb-crumb-sep" />
+                                        <button className="fb-crumb" onClick={() => loadDirectory(crumb.path)}>
+                                            {crumb.label}
+                                        </button>
+                                    </span>
+                                ))}
+                                {parentPath && (
+                                    <button
+                                        className="fb-up-btn"
+                                        onClick={() => loadDirectory(parentPath)}
+                                        title="Go up"
+                                    >
+                                        <ArrowUp size={14} />
+                                    </button>
+                                )}
+                            </div>
+                            <label className="fb-hidden-toggle">
+                                <input
+                                    type="checkbox"
+                                    checked={showHidden}
+                                    onChange={(e) => setShowHidden(e.target.checked)}
+                                />
+                                Show hidden
+                            </label>
                         </div>
                     )}
 
@@ -566,7 +606,11 @@ export function FileBrowser() {
 
                             {!loading && displayItems.length === 0 && (
                                 <div className="fb-empty">
-                                    {searchResults ? 'No files found' : 'This folder is empty'}
+                                    {searchResults
+                                        ? 'No files found'
+                                        : hiddenCount > 0
+                                            ? 'Only hidden items here. Turn on Show hidden to see them.'
+                                            : 'This folder is empty'}
                                 </div>
                             )}
 

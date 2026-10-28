@@ -214,7 +214,10 @@ A created or modified file is reported once it has gone `debounce_seconds` with 
 events and no change in size or modification time, so a file still being copied in is
 never read half-written, and a burst of saves becomes one callback. A file that never
 stops changing, such as a log that is written to constantly, is not reported until it
-pauses. Deletes and moves are reported as they arrive.
+pauses. Deletes and moves are reported as they arrive. A delete event for a path that
+still exists (macOS reports a file replaced by rename this way) is reported as a
+modification instead, or as a creation when only `on_created` is set; with neither set,
+it is dropped.
 
 ```python
 # Report a file once it has been unchanged for 2 seconds (default)
@@ -228,17 +231,32 @@ watcher = FileWatcher(
 ### Handle Errors in Callbacks
 
 Callbacks run on the watcher's own dispatch thread, one at a time, so a slow callback
-does not hold up event delivery. Errors are caught and logged with their traceback:
+does not hold up event delivery. An exception a callback raises is logged with its
+traceback, and the next event is still delivered.
+
+**Let `PermissionError` propagate.** On Windows, a file another program holds for
+exclusive access, or has a byte-range lock on, fails to read with `PermissionError`.
+When an `on_created` or `on_modified` callback raises it, the watcher reports the file
+again after 1, 2 and 4 windows. When an `on_moved` callback raises it, the destination
+is reported again the same way, as a modification, because editors save by renaming a
+temp file onto the document. If the file is still locked after the last retry, the
+watcher logs one error, with the traceback, telling the user to close the program and
+save the file again. A callback that catches `PermissionError`, for example with a bare
+`except Exception`, turns that retry off, and a file that was briefly locked is never
+processed. On Linux and macOS a read is never blocked by another program, so a
+`PermissionError` there means the file's permissions forbid it; the watcher retries it
+the same way and then gives up.
 
 ```python
-def safe_process(path: str):
+def process(path: str):
     try:
         process_file(path)
-    except Exception as e:
-        logger.error(f"Failed to process {path}: {e}")
-        # Consider adding to retry queue
+    except PermissionError:
+        raise  # the watcher retries a locked file
+    except ValueError as e:
+        logger.error(f"Skipping {path}: {e}")
 
-watcher = FileWatcher("./data", on_created=safe_process)
+watcher = FileWatcher("./data", on_created=process, on_modified=process)
 ```
 
 ### Clean Up Resources

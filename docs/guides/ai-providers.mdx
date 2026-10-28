@@ -41,6 +41,15 @@ URL. The default authentication header is `Authorization`, with the prefix
 enter the required header name and leave the prefix empty. Use **Tab** to move
 between fields, then paste the key and press **Enter**.
 
+Before you pick it, GAIA checks whether the gateway's host answers. Off your
+organization's network, or without its VPN, the option is greyed out and reads
+"No network available — can't reach llm-api.amd.com (needs AMD's network or VPN)",
+and it can't be chosen. Connect, then press **r** to check again. This shows both
+in the provider panel and at the first-run "where should chat run?" question.
+The check is skipped, and the option stays choosable, when Lemonade runs on
+another machine or an `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` proxy is set: those
+requests don't take this PC's direct route.
+
 For **Local**, the list shows every chat model Lemonade offers, downloaded or not.
 On a new machine, the list becomes available once the setup step that installs
 Lemonade is done; the panel names that step until then.
@@ -62,8 +71,10 @@ Lemonade:
 
 A model fits when its size plus 5% and 1 GB of working room fits the memory
 llama.cpp loads into — on a Strix Halo that is the GPU carve-out plus shared
-memory — and its download fits the free disk. If Lemonade cannot report this PC's
-memory, every download is disabled rather than guessed.
+memory, which on Windows is half of the RAM left after the carve-out — and its
+download fits the free disk.
+If Lemonade cannot report this PC's memory, every download is disabled rather
+than guessed.
 
 Selecting a cloud provider before setup downloads only the local embedding
 models, not an unused local chat model.

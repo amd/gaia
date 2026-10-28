@@ -50,6 +50,7 @@ on:
       - 'eval/tasks/swebench_subsets.json'
       - '.github/workflows/eval_swebench.yml'
       - 'util/swebench_model_preflight.py'
+      - '.github/actions/setup-venv/**'
 
 permissions:
   contents: read

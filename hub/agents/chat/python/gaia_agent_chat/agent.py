@@ -5,6 +5,7 @@ Chat Agent - Interactive chat with RAG and file search capabilities.
 """
 
 import dataclasses
+import errno
 import os
 import platform
 import re
@@ -30,8 +31,11 @@ except ImportError as _watchdog_err:
 from gaia_agent_chat.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
 from gaia_agent_chat.python_jobs import (
     DEFAULT_PYTHON_TIMEOUT,
+    describe_code,
+    files_written_by,
     finished_job_note,
     folders_named_in,
+    may_write_files,
     resolve_python_timeout,
     run_python_job,
     stop_requested,
@@ -58,7 +62,7 @@ from gaia.agents.base.context_eviction import (
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import before_change, note_untracked
 from gaia.agents.base.memory import MemoryMixin
-from gaia.agents.base.project_map import resolve_project_root
+from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 
 # dynamic_tools_env_override is re-exported so callers importing it from
 # gaia_agent_chat.agent keep working; its canonical home is the core tool_loader
@@ -92,6 +96,8 @@ from gaia.llm.inference_location import (
     resolve_inference_location,
 )
 from gaia.llm.lemonade_client import (
+    _endpoint_label,
+    configured_lemonade_url,
     is_tool_calling_model,
     resolve_default_chat_model,
     resolve_lemonade_base_url,
@@ -99,7 +105,14 @@ from gaia.llm.lemonade_client import (
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
-from gaia.security import PathValidator, narrow_allowed_paths, stable_scratch_dir
+from gaia.security import (
+    PathValidator,
+    acquire_scratch_dir,
+    ensure_scratch_dir,
+    narrow_allowed_paths,
+    release_scratch_dir,
+)
+from gaia.utils.file_lock import held_by_another_program
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.vlm.mixin import VLMToolsMixin
 
@@ -213,6 +226,50 @@ def _python_script_run_context(
     return project, env
 
 
+def _start_failure(program: str, run_dir: Path, exc: OSError) -> Dict[str, Any]:
+    """The result for a Python run that never started.
+
+    A missing working folder is the agent's environment, not the model's
+    call: it is marked ``transient`` so the turn's failure breaker does not
+    count it. Either way the message says what to do instead of reaching for
+    a different Python.
+    """
+    # WinError 267 / ENOTDIR name the folder even when it reappeared since.
+    folder = isinstance(exc, NotADirectoryError) or getattr(exc, "winerror", 0) == 267
+    transient = folder or not run_dir.is_dir()
+    if transient:
+        error = (
+            f"Could not start Python: its working folder {run_dir} was missing "
+            f"({exc}). Nothing ran. Retry the call once; if it fails "
+            "again, tell the user the folder is missing. Do not install "
+            "packages or switch to another Python to work around this."
+        )
+    else:
+        error = (
+            f"Could not start {program}: {exc}. Nothing ran. Tell the user "
+            "GAIA's Python could not be started; do not install packages or "
+            "switch to another Python to work around this."
+        )
+    return {
+        "status": "error",
+        "error": error,
+        "has_errors": True,
+        "executed": False,
+        "transient": transient,
+        "cwd": str(run_dir),
+    }
+
+
+#: Without it the model told Agent UI users it has no scheduler.
+_AGENT_UI_SCHEDULE_LINE = (
+    "\nRecurring tasks: the Agent UI runs a prompt on a schedule from "
+    '**Scheduled tasks** in the sidebar (schedules like "every 6h", "daily at '
+    '9am", "every monday at 3pm"). For a recurring request, point the user '
+    "there and help them word a valid schedule and prompt; never say scheduling "
+    "is unavailable.\n"
+)
+
+
 @dataclass
 class ChatAgentConfig:
     """Configuration for ChatAgent."""
@@ -296,6 +353,9 @@ class ChatAgentConfig:
 
     # Session persistence (UI session ID for cross-turn document retention)
     ui_session_id: Optional[str] = None
+    # The front-end serving this session: "agent_ui", "tui", "cli", or None
+    # when the caller didn't say. Only "agent_ui" changes the prompt today.
+    surface: Optional[str] = None
     # Memory starts off (private chat / memory off in the UI): the embedder
     # loads only once memory is actually used.
     memory_incognito: bool = False
@@ -623,13 +683,13 @@ class ChatAgent(
         # Without this, throwaway scripts land in the user's project. One path
         # per project, so the prompt line naming it is stable across sessions.
         if any(name in self._tools_registry for name in _FILE_CREATING_TOOLS):
-            self.path_validator.set_scratch_dir(
-                str(
-                    stable_scratch_dir(
-                        getattr(config, "project_root", None) or os.getcwd()
-                    )
-                )
+            # Held, not owned: every chat on this project in a long-lived
+            # sidecar gets the same path, so cleanup deletes it only when the
+            # last of them lets go.
+            self._scratch_held = acquire_scratch_dir(
+                getattr(config, "project_root", None) or os.getcwd()
             )
+            self.path_validator.set_scratch_dir(str(self._scratch_held))
             self.scratch_dir = self.path_validator.scratch_dir
             # A prompt cached during init predates the scratch line.
             self.__dict__.pop("_system_prompt_cache", None)
@@ -1102,6 +1162,34 @@ class ChatAgent(
             use_openai=bool(getattr(config, "use_chatgpt", False)),
         )
 
+    def _no_documents_message(self) -> str:
+        # An Agent UI chat searches only its own attachments, not the library.
+        if getattr(getattr(self, "config", None), "ui_session_id", None):
+            return (
+                "No documents are attached to this chat. The user's Document "
+                "library may hold others, but a chat searches only the documents "
+                "attached to it. If the user expected documents here, say so and "
+                "ask them to attach them (Documents in the sidebar, then the link "
+                "icon), or index a file they name by its path."
+            )
+        return super()._no_documents_message()
+
+    def _model_service_label(self) -> Optional[str]:
+        """Names the provider in a failed turn's message: "Fireworks AI: …"."""
+        location = self._inference_location()
+        if location.provider != "lemonade" or configured_lemonade_url() is None:
+            return location.display
+        # A base URL the user chose may be any OpenAI-compatible server.
+        live = getattr(
+            getattr(getattr(self, "chat", None), "llm_client", None),
+            "current_base_url",
+            None,
+        )
+        label = _endpoint_label(live() if callable(live) else resolve_lemonade_base_url())
+        if not label:
+            return "The configured model server"
+        return f"The model server at {label}"
+
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
         profile = getattr(self.config, "prompt_profile", "full")
@@ -1386,6 +1474,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             "load_tools_menu": load_tools_menu,
         }
         prompt = base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
+        if not spec.early_return:
+            prompt += self._session_folders_line()
+        if getattr(self.config, "surface", None) == "agent_ui":
+            prompt += _AGENT_UI_SCHEDULE_LINE
         scratch_dir = getattr(self, "scratch_dir", None)
         if scratch_dir is not None:
             prompt += (
@@ -1394,6 +1486,45 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 "user's project.\n"
             )
         return prompt
+
+    def _session_folders_line(self) -> str:
+        """One prompt line naming the folders this session can work in.
+
+        Computed once: a folder created mid-session must not change the prompt
+        and invalidate the cached prefix. Files (attached documents) are left
+        out; the indexed-documents line already names them.
+        """
+        cached = getattr(self, "_folders_line", None)
+        if cached is not None:
+            return cached
+        gaia_docs = os.path.normcase(str((gaia_home() / "documents").resolve()))
+        labelled = []
+        has_gaia_docs = False
+        allowed = getattr(self, "allowed_paths", None) or []
+        for path in dict.fromkeys(Path(p).resolve() for p in allowed):
+            if not path.is_dir():
+                continue
+            if os.path.normcase(str(path)) == gaia_docs:
+                labelled.insert(0, f"{path} (GAIA's documents folder)")
+                has_gaia_docs = True
+            else:
+                labelled.append(str(path))
+        line = ""
+        if labelled:
+            line = (
+                f"\nYour folders this session: {', '.join(labelled)}. For "
+                '"my documents", "your folder", or a file named without a path, '
+                "look here first."
+            )
+            if has_gaia_docs:
+                line += (
+                    " To save a new file to the user's Documents folder, use "
+                    f"{Path.home() / 'Documents'}: GAIA's documents folder is "
+                    "GAIA's own."
+                )
+            line += "\n"
+        self._folders_line = line
+        return line
 
     def _create_console(self):
         """Create console for chat agent."""
@@ -1497,6 +1628,40 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             True if path is allowed, False otherwise
         """
         return self.path_validator.validate_read(path, prompt_user=False)[0]
+
+    def _live_scratch_dir(self) -> Path:
+        """This agent's scratch directory, re-created if it was deleted.
+
+        It lives in the shared temp folder, so another GAIA process on the
+        same project, or a temp cleaner, can remove it under a live chat. A
+        path that can no longer be made private (now a file or a link) is
+        replaced with a fresh one, and the change is logged.
+
+        Raises:
+            OSError: If no scratch directory can be created at all.
+        """
+        scratch = Path(self.scratch_dir)
+        try:
+            ensure_scratch_dir(scratch)
+            return scratch
+        except OSError as exc:
+            import tempfile
+
+            fresh = Path(tempfile.mkdtemp(prefix="gaia-scratch-"))
+            logger.warning(
+                "Scratch directory %s is unusable (%s); switching to %s",
+                scratch,
+                exc,
+                fresh,
+            )
+            held = getattr(self, "_scratch_held", None)
+            if held is not None:
+                release_scratch_dir(held)
+                self._scratch_held = None
+            self.path_validator.set_scratch_dir(str(fresh))
+            self.scratch_dir = self.path_validator.scratch_dir
+            self.__dict__.pop("_system_prompt_cache", None)
+            return self.scratch_dir
 
     def _script_project_root(self) -> Optional[str]:
         """This session's project root, or ``None`` when there is no project.
@@ -1795,22 +1960,50 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "has_errors": True,
                     }
                 start = time.monotonic()
+                run_dir = p.resolve().parent
                 try:
                     project = self._script_project_root()
                     run_dir, env = _python_script_run_context(p, project)
-                    note_untracked("execute_python_file", str(p))
-                    job = run_python_job(
-                        cmd,
-                        cwd=str(run_dir),
-                        env=env,
-                        timeout=timeout,
-                        should_stop=lambda: stop_requested(self),
-                        # The script's own output folders first: the search is bounded.
-                        watch=watch_folders(
-                            *folders_named_in(source), run_dir, project
-                        ),
-                        ignore=[p.resolve()],
-                    )
+                    if not run_dir.is_dir():
+                        # The project folder went away; the script's own
+                        # folder exists, since the script was just read.
+                        logger.warning(
+                            "execute_python_file: %s is gone; running from %s",
+                            run_dir,
+                            p.resolve().parent,
+                        )
+                        run_dir = p.resolve().parent
+                    writes = may_write_files(source)
+                    if writes:
+                        note_untracked("execute_python_file", str(p))
+                    # The script's own output folders first: the search is bounded.
+                    watch = watch_folders(*folders_named_in(source), run_dir, project)
+                    started = time.time()
+                    try:
+                        job = run_python_job(
+                            cmd,
+                            cwd=str(run_dir),
+                            env=env,
+                            timeout=timeout,
+                            should_stop=lambda: stop_requested(self),
+                            watch=watch,
+                            ignore=[p.resolve()],
+                        )
+                    except BaseException:
+                        if not writes:  # it may have run part-way: assume it wrote
+                            note_untracked("execute_python_file", str(p))
+                        raise
+                    if not writes:
+                        # Read-only by its code; the folders it ran in confirm it.
+                        written, complete = files_written_by(
+                            job, watch, started, [p.resolve()]
+                        )
+                        note_untracked(
+                            "execute_python_file",
+                            str(p),
+                            written,
+                            may_write=bool(written) or not complete,
+                        )
                     if job.stopped:
                         return stopped_job_result(job, timeout)
                     r = job.run
@@ -1832,11 +2025,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         ),
                     )
                 except OSError as e:
-                    return {
-                        "status": "error",
-                        "error": f"Could not start {cmd[0]}: {e}",
-                        "has_errors": True,
-                    }
+                    logger.error("execute_python_file could not start: %s", e)
+                    return _start_failure(cmd[0], run_dir, e)
                 except Exception as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
 
@@ -1896,22 +2086,62 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         )
                 except ValueError as e:  # GAIA_PROJECT_ROOT names no directory
                     return {"status": "error", "error": str(e), "has_errors": True}
-                run_dir = Path(project) if project else Path.cwd()
+                try:
+                    run_dir = Path(project) if project else Path.cwd()
+                except FileNotFoundError:  # POSIX: the process cwd was deleted
+                    run_dir = None
                 scratch = getattr(self, "scratch_dir", None)
                 in_scratch = False
-                if (
-                    not project
+                moved_from = None
+                if run_dir is not None and not run_dir.is_dir():
+                    moved_from, run_dir = run_dir, None
+                # A root guessed from the process cwd is the daemon's launch folder.
+                chosen_root = getattr(
+                    self.config, "project_root", None
+                ) or os.environ.get(PROJECT_ROOT_ENV)
+                if chosen_root and not project:
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: the project root {chosen_root} "
+                        "is outside the agent's allowed paths, so a snippet "
+                        "cannot run from it. Add it to the allowed paths, or "
+                        f"unset {PROJECT_ROOT_ENV}.",
+                        "has_errors": True,
+                    }
+                if run_dir is None or (
+                    not chosen_root
                     and scratch is not None
                     and not self.path_validator.is_path_allowed(str(run_dir))
                 ):
+                    project = None
+                    if scratch is None:
+                        return {
+                            "status": "error",
+                            "error": (
+                                "Cannot run Python: its working folder "
+                                f"{moved_from or 'the current directory'} no "
+                                "longer exists. Ask the user to re-open the "
+                                "project folder, or set GAIA_PROJECT_ROOT."
+                            ),
+                            "has_errors": True,
+                            "executed": False,
+                        }
                     # A UI server's cwd is its install dir; the scratch dir is ours.
                     logger.info(
-                        "run_python: %s is not allowed; running in scratch dir %s",
-                        run_dir,
+                        "run_python: %s is not usable; running in scratch dir %s",
+                        moved_from or run_dir,
                         scratch,
                     )
                     run_dir = scratch
                     in_scratch = True
+                if in_scratch:
+                    # Shared temp space: another process's cleanup or a temp
+                    # cleaner can delete it under a live chat.
+                    try:
+                        run_dir = self._live_scratch_dir()
+                    except OSError as e:
+                        logger.error("run_python: scratch dir unusable: %s", e)
+                        return _start_failure("Python", Path(run_dir), e)
                 if not self.path_validator.is_path_allowed(str(run_dir)):
                     return {
                         "status": "error",
@@ -1940,33 +2170,55 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     handle.write(code)
                     snippet = Path(handle.name)
                 cmd = python_command(snippet)
-                note_untracked(
-                    "run_python", code.strip().splitlines()[0] if code.strip() else ""
-                )
+                detail = describe_code(code)
+                writes = may_write_files(code)
+                if writes:
+                    note_untracked("run_python", detail)
+                watch = watch_folders(*folders_named_in(code), run_dir, project)
+                started = time.time()
                 start = time.monotonic()
                 try:
-                    job = run_python_job(
-                        cmd,
-                        cwd=str(run_dir),
-                        env=env,
-                        timeout=timeout,
-                        should_stop=lambda: stop_requested(self),
-                        watch=watch_folders(*folders_named_in(code), run_dir, project),
-                        ignore=[snippet],
-                    )
+                    try:
+                        job = run_python_job(
+                            cmd,
+                            cwd=str(run_dir),
+                            env=env,
+                            timeout=timeout,
+                            should_stop=lambda: stop_requested(self),
+                            watch=watch,
+                            ignore=[snippet],
+                        )
+                    except BaseException:
+                        if not writes:  # it may have run part-way: assume it wrote
+                            note_untracked("run_python", detail)
+                        raise
+                    if not writes:
+                        # Read-only by its code; the folders it ran in confirm it.
+                        written, complete = files_written_by(
+                            job, watch, started, [snippet]
+                        )
+                        note_untracked(
+                            "run_python",
+                            detail,
+                            written,
+                            may_write=bool(written) or not complete,
+                        )
                     if job.stopped:
                         return stopped_job_result(job, timeout)
                     r = job.run
                 except OSError as e:
-                    return {
-                        "status": "error",
-                        "error": f"Could not start {cmd[0]}: {e}",
-                        "has_errors": True,
-                    }
+                    logger.error("run_python could not start in %s: %s", run_dir, e)
+                    return _start_failure(cmd[0], Path(run_dir), e)
                 finally:
                     snippet.unlink(missing_ok=True)
                 notes = [finished_job_note(job)]
-                if in_scratch:
+                if moved_from is not None:
+                    notes.append(
+                        f"The working folder {moved_from} no longer exists, so "
+                        f"this ran in your scratch directory {run_dir} instead. "
+                        "Relative paths resolve there; use absolute paths."
+                    )
+                elif in_scratch:
                     notes.append(
                         f"Ran in your scratch directory {run_dir}: the working "
                         "directory is not in the allowed paths. Relative paths "
@@ -2124,8 +2376,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         def get_system_info() -> dict:
             """Get information about the current system (OS, CPU, memory, disk).
 
+            Answers "how much free disk space / memory do I have?" directly; no
+            shell command is needed.
+
             Returns:
-                Dictionary with os, cpu, memory, disk, and python version info
+                Dictionary with os, cpu, memory (total, available), disk (total,
+                free, percent used), and python version info
             """
             import sys
 
@@ -2141,9 +2397,15 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 info["cpu_count"] = psutil.cpu_count(logical=True)
                 info["cpu_percent"] = psutil.cpu_percent(interval=0.1)
                 info["memory_total_gb"] = round(mem.total / 1e9, 1)
+                info["memory_available_gb"] = round(mem.available / 1e9, 1)
                 info["memory_used_pct"] = mem.percent
                 info["disk_total_gb"] = round(disk.total / 1e9, 1)
-                info["disk_used_pct"] = round(disk.used / disk.total * 100, 1)
+                # Free is shared across an APFS container; macOS's "/" alone has
+                # used only the system's few GB, so used/total reads nearly empty.
+                info["disk_free_gb"] = round(disk.free / 1e9, 1)
+                info["disk_used_pct"] = round(
+                    (disk.total - disk.free) / disk.total * 100, 1
+                )
             except ImportError:
                 info["note"] = "psutil not installed. " + missing_package_hint("psutil")
             return {"status": "success", **info}
@@ -2802,6 +3064,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 on_modified=self.reindex_file,
                 on_deleted=self._handle_file_deletion,
                 on_moved=self._handle_file_move,
+                filter_func=self._should_watch_file,
             )
             observer = Observer()
             observer.schedule(event_handler, directory, recursive=True)
@@ -2811,6 +3074,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             logger.info(f"Started watching: {directory}")
         except Exception as e:
             logger.error(f"Failed to watch {directory}: {e}")
+
+    @staticmethod
+    def _should_watch_file(file_path: str) -> bool:
+        """Watch supported documents, excluding Office owner files."""
+        if file_path.lower().endswith((".docx", ".pptx", ".xlsx")):
+            return not Path(file_path).name.startswith("~$")
+        return file_path.lower().endswith(tuple(FileChangeHandler.DEFAULT_EXTENSIONS))
 
     def _handle_file_deletion(self, file_path: str) -> None:
         """Handle file deletion by removing it from the index."""
@@ -2836,10 +3106,17 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     def _handle_file_move(self, src_path: str, dest_path: str) -> None:
         """Handle file move by removing old path and indexing new path."""
         self._handle_file_deletion(src_path)
-        self.reindex_file(dest_path)
+        if self._should_watch_file(dest_path):
+            self.reindex_file(dest_path)
 
     def reindex_file(self, file_path: str) -> None:
-        """Reindex a file that was modified or created."""
+        """Reindex a file that was modified or created.
+
+        Raises:
+            PermissionError: Windows refused the read, because another program
+                holds the file exclusively or has locked part of it. The file
+                watcher retries on this, so it must not be caught here.
+        """
         if not self.rag:
             logger.warning(
                 f"Cannot reindex {file_path}: RAG dependencies not installed"
@@ -2854,18 +3131,36 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             logger.warning(f"Re-indexing skipped: Path not allowed {real_file_path}")
             return
 
+        logger.info(f"Reindexing: {real_file_path}")
         try:
-            logger.info(f"Reindexing: {real_file_path}")
-            # Use the new reindex_document method which removes old chunks first
+            # Catches a whole-file lock on formats whose parser hides the OS error.
+            if os.path.isfile(real_file_path):
+                with open(real_file_path, "rb") as f:
+                    f.read(1)
+        except FileNotFoundError:
+            # Its delete event removes it from the index.
+            logger.info(f"Not reindexing {real_file_path}: deleted before it was read")
+            return
+        except OSError as e:
+            if held_by_another_program(e):
+                raise
+            logger.exception(f"Failed to reindex {real_file_path}")
+            return
+        try:
             result = self.rag.reindex_document(real_file_path)
-            if result.get("success"):
-                self.indexed_files.add(file_path)
-                logger.info(f"Successfully reindexed {real_file_path}")
-            else:
-                error = result.get("error", "Unknown error")
-                logger.error(f"Failed to reindex {real_file_path}: {error}")
-        except Exception as e:
-            logger.error(f"Failed to reindex {real_file_path}: {e}")
+        except Exception:
+            # Runs on the file watcher's thread; nothing above it can report this.
+            logger.exception(f"Failed to reindex {real_file_path}")
+            return
+        if result.get("success"):
+            self.indexed_files.add(file_path)
+            logger.info(f"Successfully reindexed {real_file_path}")
+            return
+        error = result.get("error", "Unknown error")
+        if result.get("error_type") == "file_locked":
+            # A partial lock, or one taken after the probe: let the watcher retry.
+            raise PermissionError(errno.EACCES, error, real_file_path)
+        logger.error(f"Failed to reindex {real_file_path}: {error}")
 
     def stop_watching(self) -> None:
         """Stop all file system observers."""
@@ -2996,6 +3291,14 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         except Exception as e:
             logger.error(f"Error closing scratchpad during cleanup: {e}")
         scratch_dir = getattr(self, "scratch_dir", None)
+        held = getattr(self, "_scratch_held", None)
+        if held is not None:
+            self._scratch_held = None
+            if not release_scratch_dir(held):
+                # Another chat in this process still runs in it.
+                logger.debug("Scratch directory %s still in use; kept", held)
+                self.scratch_dir = None
+                scratch_dir = None
         if scratch_dir is not None:
             try:
                 shutil.rmtree(scratch_dir)

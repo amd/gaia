@@ -5,9 +5,10 @@
  * The session panel (#5279). Structure lives in the components; colours,
  * radii and shadows are the app's role tokens, and the panel's own sizes are
  * the layout tokens below, so the redesign (#1001) restyles it by changing
- * tokens, not markup.
+ * tokens, not markup. The folder picker also opens from the new-chat page.
  */
-.task-view {
+.task-view,
+.sp-picker {
     --sp-top: 48px;
     --sp-fs-title: 12px;
     --sp-fs: 12.5px;

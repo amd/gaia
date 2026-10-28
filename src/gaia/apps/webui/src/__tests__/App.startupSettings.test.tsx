@@ -11,6 +11,12 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../services/api');
+// Only rendered when setup is needed; stands in for the real screen's "Start chatting".
+vi.mock('../components/SetupScreen', () => ({
+    SetupScreen: ({ onReady }: { onReady: () => void }) => (
+        <button type="button" onClick={() => onReady()}>Start chatting</button>
+    ),
+}));
 
 import App from '../App';
 import * as api from '../services/api';
@@ -54,9 +60,9 @@ beforeEach(() => {
     mocked.listProviderModels.mockResolvedValue({ models: [] } as never);
     mocked.checkSetup.mockResolvedValue(READY);
     mocked.requestWarmUp.mockResolvedValue({ state: 'ready' });
-    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false } });
+    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
     mocked.getSystemStatus.mockResolvedValue({ lemonade_running: true, model_loaded: 'x', initialized: true } as never);
-    mocked.listAgents.mockResolvedValue({ agents: [GAIA_AGENT], total: 1 });
+    mocked.listAgents.mockReset().mockResolvedValue({ agents: [GAIA_AGENT], total: 1 });
     mocked.listSessions.mockResolvedValue({ sessions: [], total: 0 });
     mocked.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
     mocked.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
@@ -199,6 +205,71 @@ describe('the GAIA agent is not installed', () => {
         await advance(0);
         expect(screen.getByText(/could not be installed: Agent Hub unreachable/)).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    });
+
+    it('is not claimed right after setup installed the agent', async () => {
+        mocked.checkSetup.mockResolvedValue({ ready: false, steps: [] });
+        // Read at startup, before setup installs the agent.
+        mocked.listAgents.mockResolvedValueOnce({ agents: [], total: 0 });
+        let answer!: (v: { agents: AgentInfo[]; total: number }) => void;
+        mocked.listAgents.mockReturnValueOnce(new Promise((r) => { answer = r; }));
+        render(<App />);
+        await advance(0);
+
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start chatting' })); });
+        await advance(0);
+        expect(mocked.listAgents).toHaveBeenCalledTimes(2);
+        // Still re-reading: say nothing rather than the stale verdict.
+        expect(screen.queryByText(/GAIA agent isn't installed/)).not.toBeInTheDocument();
+
+        await act(async () => { answer({ agents: [GAIA_AGENT], total: 1 }); });
+        await advance(0);
+        expect(screen.getByLabelText('Message')).toBeInTheDocument();
+        expect(screen.queryByText(/GAIA agent isn't installed/)).not.toBeInTheDocument();
+    });
+
+    it('ignores a startup read that answers after the post-setup one', async () => {
+        mocked.checkSetup.mockResolvedValue({ ready: false, steps: [] });
+        let answerStartup!: (v: { agents: AgentInfo[]; total: number }) => void;
+        mocked.listAgents
+            .mockReturnValueOnce(new Promise((r) => { answerStartup = r; }))
+            .mockResolvedValueOnce({ agents: [GAIA_AGENT], total: 1 });
+        render(<App />);
+        await advance(0);
+
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start chatting' })); });
+        await advance(0);
+        expect(mocked.listAgents).toHaveBeenCalledTimes(2);
+
+        // The startup read was sent before setup installed the agent.
+        await act(async () => { answerStartup({ agents: [], total: 0 }); });
+        await advance(0);
+        expect(screen.getByLabelText('Message')).toBeInTheDocument();
+        expect(screen.queryByText(/GAIA agent isn't installed/)).not.toBeInTheDocument();
+    });
+
+    it('still says so after setup when the re-read fails', async () => {
+        mocked.checkSetup.mockResolvedValue({ ready: false, steps: [] });
+        mocked.listAgents
+            .mockResolvedValueOnce({ agents: [], total: 0 })
+            .mockRejectedValueOnce(NOT_LISTENING());
+        render(<App />);
+        await advance(0);
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start chatting' })); });
+        await advance(0);
+        expect(screen.getByText(/GAIA agent isn't installed/)).toBeInTheDocument();
+    });
+
+    it('re-checks on window focus, so an install from the CLI clears the notice', async () => {
+        mocked.listAgents.mockResolvedValueOnce({ agents: [], total: 0 });
+        render(<App />);
+        await advance(0);
+        expect(screen.getByText(/GAIA agent isn't installed/)).toBeInTheDocument();
+
+        await act(async () => { window.dispatchEvent(new Event('focus')); });
+        await advance(0);
+        expect(mocked.listAgents).toHaveBeenCalledTimes(2);
+        expect(screen.queryByText(/GAIA agent isn't installed/)).not.toBeInTheDocument();
     });
 
     it('a chat refused for the missing agent says why instead of the raw 422', async () => {

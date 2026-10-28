@@ -16,6 +16,7 @@ Exception → HTTP mapping:
 - ``AuthRequiredError(CONNECTION_MISSING_SCOPES)`` → 403 + missing_scopes
 - ``AuthRequiredError(REAUTH_REQUIRED)``           → 401
 - ``ConnectionRevokedError``                       → 401
+- ``ConnectionBusyError``                          → 503 + Retry-After
 - ``ScopeMismatchError``                           → 403
 - ``ConfigurationError``                           → 503
 - ``FlowInProgressError``                          → 409
@@ -53,6 +54,7 @@ from gaia.connectors.api import resolve_declared_scopes
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectionRevokedError,
     ConnectorsError,
     ConsentDeniedError,
@@ -254,6 +256,16 @@ def _raise_http_for(exc: ConnectorsError) -> HTTPException:
                 "connector_id": exc.connector_id,
             },
         )
+    if isinstance(exc, ConnectionBusyError):
+        return HTTPException(
+            status_code=503,
+            detail={
+                "error": "connection_busy",
+                "connector_id": exc.provider,
+                "message": str(exc),
+            },
+            headers={"Retry-After": "1"},
+        )
     if isinstance(exc, ConfigurationError):
         return HTTPException(status_code=503, detail=str(exc))
     if isinstance(exc, ScopeNotAllowedError):
@@ -427,7 +439,7 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
             config_error = (
                 f"OAuth credentials for {provider_ref!r} are not configured. "
                 f"Set GAIA_{_pref}_CLIENT_ID and GAIA_{_pref}_CLIENT_SECRET, "
-                "or use Settings → Connections to configure them."
+                "or use Settings → Connectors to configure them."
             )
         except KeyError:
             configurable = False

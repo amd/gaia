@@ -91,13 +91,14 @@ afterPack: ../../../../installer/scripts/after-pack.cjs
 # This baked `url` is INERT at runtime: services/auto-updater.cjs always
 # re-resolves the feed (GAIA_UPDATE_FEED_URL env → feedUrl in
 # ~/.gaia/update-config.json) and calls setFeedURL itself; with nothing
-# configured it enters a loud "no channel" state instead of checking this feed.
+# configured it reads the newest GitHub release on its channel instead of this feed.
 # The value exists only because electron-builder requires a non-empty,
 # expandable `url` to emit app-update.yml at build time.
 #
 # NOTE (#1719): the R2 publish feed + Worker `latest*.yml` channel pointer are
 # milestone-52 work and not live yet; the exact channel path under
-# hub.amd-gaia.ai is finalized there.
+# hub.amd-gaia.ai is finalized there. Nothing uploads the desktop app to R2
+# today: its installers and latest*.yml ship on the GitHub release only.
 publish:
   provider: generic
   url: https://hub.amd-gaia.ai/updates

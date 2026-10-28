@@ -164,6 +164,11 @@ as "no documents are indexed" about a file the user can see attached.
 - **Ordering:** `status`/`token`/`tool_call`/`tool_result` may interleave freely
   during a run. `needs_confirmation` pauses the logical run pending the §0.4
   handoff. A terminal `final`/`error` is always last.
+- **Undo finalization:** recording finishes before the terminal event. If saving
+  undo history also fails after a failed turn, a `status` warning reports the undo
+  failure and the terminal `error` preserves the original turn error. A successful
+  answer is likewise preserved when only undo saving fails. Both failures remain
+  available in the server log.
 
 ---
 
@@ -179,9 +184,9 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 | `token` | `{delta}` | stream assistant text |
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
-| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it |
+| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
-| `final` | `{answer, usage?}` | finalize the message; terminal |
+| `final` | `{answer, usage?, failed?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done |
 | `error` | `{detail, status}` | surface the actionable error verbatim; terminal |
 
 A `:`-prefixed SSE comment may appear at any point as a heartbeat. It carries no
@@ -218,7 +223,10 @@ indistinguishable from a dead one.
   "properties": {
     "type": { "const": "tool_call" },
     "tool": { "type": "string" },
-    "args": { "type": "object" }     // {} when the tool takes no arguments
+    "args": { "type": "object" },    // {} when the tool takes no arguments
+    "mcp_server":       { "type": "string" },  // optional, MCP tools only: mcp_servers.json key
+    "mcp_server_label": { "type": "string" },  // optional: the connector's name, e.g. "Git"
+    "mcp_tool":         { "type": "string" }   // optional: the server's own tool name
   } }
 
 // tool_result
@@ -239,6 +247,19 @@ indistinguishable from a dead one.
     "run_id":      { "type": "string", "format": "uuid" },
     "action":      { "type": "string" },   // e.g. "send", "archive", "input"
     "summary":     { "type": "string" },   // the literal text the user approves
+    "confirm_id":  { "type": "string" },   // echoed back by a live decision channel
+    "always_scope": { "type": "string" },  // what an "always" answer grants; absent = don't offer it
+    "risk":        { "enum": ["read", "write", "execute", "destructive"] },
+    "tool_label":  { "type": "string" },   // the tool in plain words
+    "args":        { "type": "object" },   // exactly the model's arguments, values capped
+    "args_truncated": { "const": true },   // a value in args was cut
+    "prompt_context": {                    // what the agent adds; never part of the call
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "working_directory": { "type": "string" },
+        "risk_note":         { "type": "string" },
+        "file_path":         { "type": "string" }   // where a relative write lands
+      } },
     "confirm_url": { "type": "string" }    // resume-model only (§0.4); omitted under stateless
   } }
 
@@ -274,7 +295,8 @@ indistinguishable from a dead one.
   "properties": {
     "type":   { "const": "final" },
     "answer": { "type": "string" },
-    "usage":  { "type": "object" }   // optional {steps?, tools_used?, elapsed?, tokens?, ttft?, tok_per_s?}
+    "usage":  { "type": "object" },  // optional {steps?, tools_used?, elapsed?, tokens?, ttft?, tok_per_s?}
+    "failed": { "const": true }      // optional; a model failure ended the turn
   } }
 
 // error
@@ -496,10 +518,10 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 
 | Source event | → Canonical | Transform |
 |---|---|---|
-| `tool_start` | `tool_call` | Rename; carry `tool`. `args` filled from the paired `tool_args` (§6.3). `detail`/`mcp_server` dropped (host derives its own label). |
+| `tool_start` | `tool_call` | Rename; carry `tool`. `args` filled from the paired `tool_args` (§6.3). `detail` dropped (host derives its own label). An MCP tool's `mcp_server`, `mcp_server_label` and `mcp_tool` ride along (additive): only the agent knows which connector a prefixed tool name belongs to. |
 | `chunk` | `token` | `content` → `delta`. |
 | `answer` | `final` | `content` → `answer`; `elapsed`/`steps`/`tools_used`/`tokens`/`ttft`/`tok_per_s`/`input_tokens`/`cached_tokens` → `usage`. An `answer` marked `streamed` (text pulled out of a streaming JSON reply, mid-turn) maps to a `token` instead: the agent's printed answer is the one `final`. |
-| `permission_request` | `needs_confirmation` | `tool` → `action`; render `args` as `summary` (for a shell command whose `risk` is `write` or `execute`, plus one plain line on what it can do; for a call GAIA's checks don't cover — `args._risk_note` set — the exact command unshortened, `in <folder>`, then that note, and no `always_scope`); carry `run_id`; `confirm_url` per §5. |
+| `permission_request` | `needs_confirmation` | `tool` → `action`; render `args` as `summary` (for a shell command whose `risk` is `write` or `execute`, plus one plain line on what it can do; for a call GAIA's checks don't cover — `args._risk_note` set — the exact command unshortened, `in <folder>`, then that note, and no `always_scope`); the wire `args` are the source's `call_args` (what the model sent) when present, else its `args` without the prompt-only `_risk_note` / `_scratch_dir`; a folder or note the agent added goes to `prompt_context`; carry `run_id`; `confirm_url` per §5. |
 
 ### 6.2 Every remaining top-level source event
 
@@ -525,8 +547,12 @@ The in-process handler emits `tool_start` (name only) and then, separately,
 `tool_args` (arguments) once they're known. The canonical `tool_call` carries
 `{tool, args}` **together**. The translation layer buffers the `tool_start`,
 attaches `args` from the following `tool_args`, and emits a single `tool_call`.
-If no `tool_args` arrives (argument-less tool), it emits `tool_call{tool,
-args:{}}`.
+Every call the agent loop makes sends `tool_args` before the tool runs, with
+`args: {}` for a tool that takes no arguments, so the `tool_call` is on the
+wire while the tool is still running. A host must treat that `tool_call` as a
+running tool: the messaging bridge stops counting idle time from it until the
+`tool_result`. If a producer sends `tool_start` with no `tool_args` at all,
+the next event (or stream close) flushes it as `tool_call{tool, args:{}}`.
 
 ---
 

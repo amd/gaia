@@ -674,7 +674,13 @@ def test_children_of_an_exited_server_are_still_stopped(tmp_path):
         time.sleep(0.05)
     child_pid = int(child_pid_file.read_text())
     # Children are recorded while the launcher runs; a real npx outlives this.
-    time.sleep(4 * stdio_module._CHILD_SCAN_S)
+    # The scan backs off to _CHILD_SCAN_MAX_S, so wait for it, not a fixed time.
+    deadline = time.monotonic() + 3 * stdio_module._CHILD_SCAN_MAX_S
+    while child_pid not in transport._children and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert (
+        child_pid in transport._children
+    ), "the running launcher's child was never recorded"
     transport._process.stdin.write("bye\n")
     transport._process.stdin.flush()
     transport._process.wait(timeout=10)
@@ -1782,9 +1788,31 @@ def test_a_secret_repeating_through_the_text_is_redacted_whole():
     assert time.perf_counter() - started < 0.2
 
 
-def test_redaction_stays_fast_on_dense_escapes():
-    """Text built so every position could start an escaped secret."""
+def _dense_escapes(near: str, size: int) -> list:
+    """Texts of about *size* characters where every position could start an
+    escaped form of *near*."""
     backslash = "\\"
+    return [
+        "".join(backslash * 3 + c for c in near) * (size // (4 * len(near))),
+        (backslash * 50 + near[0]) * (size // 51),
+        "".join(backslash + "u%04x" % ord(c) for c in near) * (size // (6 * len(near))),
+    ]
+
+
+def _seconds_to_redact(t: StdioTransport, texts: list) -> tuple:
+    """Wall and CPU seconds *t* takes to redact *texts*."""
+    wall, cpu = time.perf_counter(), time.thread_time()
+    for text in texts:
+        t.redact(text)
+    return time.perf_counter() - wall, time.thread_time() - cpu
+
+
+def test_redaction_stays_fast_on_dense_escapes():
+    """Text built so every position could start an escaped secret.
+
+    Timed against itself, not a fixed limit: one text costs about what eight
+    texts an eighth its length do together, where a quadratic scan costs 8x.
+    """
     cases = [
         ("Zq9vKe7w\u20ac\U0001f600", "Zq9vKe7w\u20ac"),
         ("Zq9vKe7wP2" * 20, "Zq9vKe7wP2" * 20),
@@ -1793,17 +1821,29 @@ def test_redaction_stays_fast_on_dense_escapes():
     ]
     for secret, near in cases:
         t = StdioTransport(sys.executable, args=["--api-key", secret])
-        for text in (
-            "".join(backslash * 3 + c for c in near) * (1_000_000 // (4 * len(near))),
-            (backslash * 50 + near[0]) * (1_000_000 // 51),
-            "".join(backslash + "u%04x" % ord(c) for c in near)
-            * (1_000_000 // (6 * len(near))),
-        ):
-            started = time.perf_counter()
-            t.redact(text)
-            took = time.perf_counter() - started
-            # Generous: this guards against blow-ups, not absolute speed.
-            assert took < 2.0, f"{took:.2f}s on {text[:20]!r}"
+        smalls, larges = _dense_escapes(near, 125_000), _dense_escapes(near, 1_000_000)
+        for short, long in zip(smalls, larges):
+            _, first = _seconds_to_redact(t, [long])
+            # A per-position rescan is linear but takes minutes at this size.
+            assert first < 15, f"{first:.1f}s on {long[:20]!r}"
+            # Enough runs to time well above a clock tick.
+            runs = max(1, min(20, int(0.2 / max(first, 0.005))))
+            # Best of up to three, as a stall only ever adds time. A real
+            # slowdown shows on both clocks; a busy runner inflates wall time,
+            # and Windows' tick-sampled CPU clock is noisy on short runs.
+            short_s = long_s = (float("inf"), float("inf"))
+            for _ in range(3):
+                short_s = tuple(
+                    map(min, short_s, _seconds_to_redact(t, [short] * 8 * runs))
+                )
+                long_s = tuple(map(min, long_s, _seconds_to_redact(t, [long] * runs)))
+                growth = min(long_s[0] / short_s[0], long_s[1] / max(short_s[1], 1e-9))
+                if growth < 3:
+                    break
+            assert growth < 3, (
+                f"one 8x text took {growth:.1f}x as long as 8 short ones "
+                f"(wall/CPU {short_s} vs {long_s}) on {long[:20]!r}"
+            )
 
 
 def _stderr_of(tmp_path, body: str, *args: str) -> str:

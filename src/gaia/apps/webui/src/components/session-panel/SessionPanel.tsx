@@ -17,6 +17,7 @@ import { AlertTriangle, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
 import { useSessionPanelStore, clampWidth, PANEL_DEFAULT_WIDTH, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from '../../stores/sessionPanelStore';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { liveDataFailed, railState, ThisAnswer } from '../SideRail';
 import { ContextDetails } from '../ContextPanel';
 import { PanelSection } from './PanelSection';
@@ -59,6 +60,8 @@ export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessa
     }, [overlay, setOpen, setOverlayOpen]);
 
     useEscapeToClose(open && overlay, close);
+    const panelRef = useRef<HTMLElement>(null);
+    useFocusTrap(panelRef, open && overlay);
 
     // An overlay takes focus when it opens, as a dialog does.
     useEffect(() => {
@@ -114,6 +117,7 @@ export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessa
         <>
             {overlay && <div className="sp-backdrop" onClick={close} aria-hidden="true" />}
             <aside
+                ref={panelRef}
                 className={`session-panel ${overlay ? 'is-overlay' : 'is-docked'}`}
                 style={overlay ? undefined : { width: shown }}
                 aria-label="Session panel"

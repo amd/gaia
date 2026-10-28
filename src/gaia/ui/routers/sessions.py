@@ -18,10 +18,12 @@ from gaia.config import GaiaConfigError
 
 from .. import answer_retry, followups
 from .. import permissions as session_permissions
+from .. import session_environment
 from .._chat_helpers import (
     _SIDECAR_AGENT_TYPES,
     _agent_type_unknown,
     evict_session_agent,
+    forget_relayed_context,
     get_agent_registry,
     resolve_device_model,
     resolve_session_model,
@@ -229,6 +231,11 @@ async def create_session(
     request.agent_type = flagship_only(http_request, request.agent_type)
     _reject_unknown_agent_type(request.agent_type)
     try:
+        session_environment.check_new_chat_folders(request.agent_type, request.folders)
+    except session_environment.EnvironmentChangeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    session = None
+    try:
         # Read before the chat exists, so a bad config leaves no chat behind.
         start_mode = session_permissions.default_mode()
         session = db.create_session(
@@ -242,8 +249,25 @@ async def create_session(
             mail_provider=request.mail_provider,
         )
         session_permissions.seed_new_session(session["id"], start_mode)
+        for folder in request.folders:
+            session_environment.add_folder(db, session["id"], folder)
         return await _session_response(db, session)
     except Exception as e:
+        if session is not None:
+            # A chat is made whole or not at all.
+            try:
+                db.delete_session(session["id"])
+            except Exception as cleanup_err:  # the original error stays the answer
+                logger.error(
+                    "Could not remove half-made chat %s: %s",
+                    session["id"],
+                    cleanup_err,
+                    exc_info=True,
+                )
+            finally:
+                session_permissions.forget_session(session["id"])
+        if isinstance(e, session_environment.EnvironmentChangeError):
+            raise HTTPException(status_code=400, detail=str(e)) from e
         logger.error("Failed to create session: %s", e, exc_info=True)
         raise HTTPException(
             status_code=500,
@@ -252,7 +276,7 @@ async def create_session(
                 if _is_gaia_config_error(e)
                 else "Failed to create session. Check server logs for details."
             ),
-        )
+        ) from e
 
 
 @router.get("/api/sessions/events")
@@ -399,6 +423,7 @@ async def delete_session(
             raise HTTPException(status_code=404, detail="Session not found")
         session_locks.pop(session_id, None)
         evict_session_agent(session_id)
+        forget_relayed_context(session_id)
         session_permissions.forget_session(session_id)
         followups.forget(session_id)
         answer_retry.forget(session_id)
@@ -506,6 +531,12 @@ async def delete_messages_from(
 # ── Export ───────────────────────────────────────────────────────────────────
 
 
+def _answer_model(msg: dict) -> str | None:
+    """The model recorded as having written ``msg``, or None if none was saved."""
+    stats = msg.get("inference_stats")
+    return stats.get("model") if isinstance(stats, dict) else None
+
+
 @router.get("/api/sessions/{session_id}/export")
 async def export_session(
     session_id: str,
@@ -518,26 +549,46 @@ async def export_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    messages = db.get_messages(session_id, limit=10000)
-
-    if export_format == "markdown":
-        lines = [f"# {session['title']}\n"]
-        lines.append(f"*Created: {session['created_at']}*\n")
-        lines.append(f"*Model: {session['model']}*\n\n---\n")
-
-        for msg in messages:
-            role_label = "User" if msg["role"] == "user" else "Assistant"
-            lines.append(f"**{role_label}:**\n\n{msg['content']}\n\n---\n")
-
-        content = "\n".join(lines)
-        return {"content": content, "format": "markdown"}
-    elif export_format == "json":
-        return {"session": session, "messages": messages, "format": "json"}
-    else:
+    if export_format not in ("markdown", "json"):
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported format: {export_format}",
         )
+
+    messages = db.get_messages(session_id, limit=10000)
+    # The stored model stays at the install default when a custom model answers.
+    effective_model = (await _session_response(db, session)).effective_model
+
+    if export_format == "markdown":
+        answer_models = [
+            _answer_model(msg) for msg in messages if msg["role"] == "assistant"
+        ]
+        if answer_models and all(answer_models):
+            used = list(dict.fromkeys(answer_models))
+            label = "Models" if len(used) > 1 else "Model"
+            model_line = f"*{label}: {', '.join(used)}*"
+        else:
+            # An answer saved before its model was recorded can't say what wrote it.
+            model_line = f"*Model (current setting): {effective_model}*"
+
+        lines = [f"# {session['title']}\n"]
+        lines.append(f"*Created: {session['created_at']}*\n")
+        lines.append(f"{model_line}\n\n---\n")
+
+        for msg in messages:
+            role_label = "User" if msg["role"] == "user" else "Assistant"
+            answer_model = _answer_model(msg)
+            if answer_model:
+                role_label = f"{role_label} ({answer_model})"
+            lines.append(f"**{role_label}:**\n\n{msg['content']}\n\n---\n")
+
+        content = "\n".join(lines)
+        return {"content": content, "format": "markdown"}
+    return {
+        "session": {**session, "effective_model": effective_model},
+        "messages": messages,
+        "format": "json",
+    }
 
 
 # ── Session-Document Attachments ─────────────────────────────────────────────

@@ -330,6 +330,11 @@ gaia skill info gpu-restock-watch
   functions your skill *provides* (and must exist in its `tools.py`).
   `tools_required` names registry tools it *consumes*. `rss-digest` and
   `slide-decks` use the former.
+- **`pairs_with` names skills this one combines with.** `data-explore`,
+  `document-brief`, `research-report` and `summarize` pair with `office-docs`,
+  so the catalogue tells the model to load both when a request reads from one
+  and produces an Office file. A name that is not installed is ignored. See
+  [Companion skills](/spec/agent-skills#companion-skills).
 - **Never put a secret in a skill file.** Reference it as a
   `requirements.env_vars` entry and configure it through
   `gaia connectors configure`.

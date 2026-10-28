@@ -17,6 +17,7 @@ it.each([
     ['request_user_input', 'Asked you'],
     ['find_files', 'Found files'],
     ['search_past_conversations', 'Searched past chats'],
+    ['index_documents', 'Indexed documents'],
 ])('names the GAIA agent\'s %s step instead of "Used tool"', (tool, label) => {
     render(<AgentActivity steps={[step(tool)]} isActive={false} variant="summary" />);
 
@@ -52,7 +53,7 @@ it('still shows a memory step that failed', () => {
 it.each([
     ['write_file', 'Writing file failed', 'Wrote file'],
     ['read_file', 'Reading file failed', 'Read file'],
-    ['some_unknown_tool', 'Using tool failed', 'Used tool'],
+    ['some_unknown_tool', 'Using some unknown tool failed', 'Used some unknown tool'],
 ])('does not give a failed or denied %s step the done label', (tool, label, doneLabel) => {
     render(<AgentActivity steps={[step(tool, false, false)]} isActive={false} variant="inline" />);
 
@@ -86,4 +87,11 @@ it('counts only the steps it shows when memory steps are hidden', () => {
     render(<AgentActivity steps={steps} isActive={false} variant="summary" agentStepCount={2} />);
 
     expect(screen.getByText(/^1 step\b/)).toBeInTheDocument();
+});
+
+it('names a tool it has no label for, rather than "Used tool"', () => {
+    render(<AgentActivity steps={[step('generate_image')]} isActive={false} variant="summary" />);
+
+    expect(screen.getByText('Used generate image')).toBeInTheDocument();
+    expect(screen.queryByText('Used tool')).toBeNull();
 });

@@ -49,13 +49,25 @@ def test_what_the_user_set_up_comes_first():
     assert cards[0]["note"] == "3 indexed documents"
 
 
-def test_a_card_needs_its_skill_installed():
-    cards = ss.pick_cards(_ctx(skills=frozenset({"summarize"}), docs=2, mail=True))
-    assert _skills(cards) == ["summarize"]
+def test_cards_run_on_the_agents_own_tools_without_their_skills():
+    cards = ss.pick_cards(_ctx(skills=frozenset(), docs=2, mail=True))
+    assert _skills(cards) == [
+        "document-brief",
+        "inbox-triage",
+        "research-report",
+        "coding",
+    ]
 
 
-def test_no_skills_means_no_cards():
-    assert ss.pick_cards(_ctx(skills=frozenset())) == []
+def test_without_the_starter_skills_a_new_chat_still_offers_tasks():
+    # What a release agent without the starter pack lists (#3057).
+    cards = ss.pick_cards(_ctx(skills=frozenset({"gaia-voice", "document-extract"})))
+    assert _skills(cards) == ["research-report", "coding", "summarize"]
+
+
+def test_check_in_needs_its_skill():
+    assert "check-in" not in _skills(ss.pick_cards(_ctx(skills=frozenset())))
+    assert "check-in" in _skills(ss.pick_cards(_ctx()))
 
 
 def test_cards_that_need_a_subject_say_so():
@@ -66,6 +78,9 @@ def test_cards_that_need_a_subject_say_so():
 
 
 def test_working_folder_is_the_project_directory(tmp_path, monkeypatch):
+    from gaia.ui import session_environment
+
+    monkeypatch.setattr(session_environment, "relayed", lambda _session: False)
     project = tmp_path / "proj"
     project.mkdir()
     monkeypatch.chdir(project)
@@ -74,7 +89,16 @@ def test_working_folder_is_the_project_directory(tmp_path, monkeypatch):
         "path": str(project.resolve()),
         "name": "proj",
         "gaia_folder": False,
+        "choosable": True,
     }
+
+
+def test_working_folder_is_not_choosable_for_a_relayed_flagship(tmp_path, monkeypatch):
+    from gaia.ui import session_environment
+
+    monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
+    monkeypatch.chdir(tmp_path)
+    assert ss.working_folder()["choosable"] is False
 
 
 def test_working_folder_falls_back_to_gaias_folder_when_cwd_is_home(
@@ -152,6 +176,41 @@ def test_an_unreadable_keyring_still_serves_the_start_screen(monkeypatch, tmp_pa
     assert len(body["cards"]) == ss.MAX_CARDS
     assert body["working_folder"]["name"] == tmp_path.name
     assert not body.get("skills_error")
+
+
+def test_a_keychain_prompt_does_not_hold_the_start_screen(monkeypatch, caplog):
+    import threading
+    import time
+
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    import gaia.connectors.store as store
+    from gaia.connectors import credential_wait
+
+    answered = threading.Event()
+    reads = []
+
+    def prompting(ref):
+        reads.append(ref)
+        answered.wait(timeout=30)
+        return None
+
+    monkeypatch.setattr(store, "peek_connection", prompting)
+    monkeypatch.setattr(credential_wait, "WAIT_SECONDS", 0.2)
+    try:
+        with caplog.at_level("WARNING"):
+            for _ in range(3):
+                started = time.monotonic()
+                assert ss._mail_connected() is False
+                assert time.monotonic() - started < 2
+        assert "Look for a system dialog" in caplog.text
+        assert len(reads) == 1  # one read in flight, not one per call
+    finally:
+        answered.set()
+    deadline = time.monotonic() + 5
+    while credential_wait.in_flight_count() and time.monotonic() < deadline:
+        ss._mail_connected()
+        time.sleep(0.01)
+    assert credential_wait.in_flight_count() == 0
 
 
 def test_a_non_keyring_error_still_fails_loudly(monkeypatch):

@@ -427,7 +427,7 @@ def load_connection(
         delete_connection(provider, account_email=account_email)
         raise ConnectorsError(
             f"Stored connection blob for provider={provider!r} is not valid "
-            "JSON. Cleared the entry; reconnect via Settings → Connections "
+            "JSON. Cleared the entry; reconnect via Settings → Connectors "
             f"or `gaia connectors connect {provider}`."
         ) from e
 
@@ -510,6 +510,34 @@ def peek_connection(
         # the corrupt entry; we don't here because peek_connection is
         # called during catalog render and must be side-effect-free.
         return None
+
+
+def snapshot_connection_slots(provider: str) -> dict:
+    """The stored client config and connection values for ``provider``.
+
+    For :func:`restore_connection_slots`, to undo a multi-slot write that
+    failed partway. A torn chunked value reads as absent. Holds secrets:
+    never log it.
+    """
+    verify_keyring_backend()
+    return {
+        username: _kr_get(username)
+        for username in (
+            _provider_credentials_username(provider),
+            _connection_username(provider, DEFAULT_ACCOUNT),
+        )
+    }
+
+
+def restore_connection_slots(snapshot: dict) -> None:
+    """Put back the values :func:`snapshot_connection_slots` read; an absent
+    one (including a torn one) is deleted."""
+    verify_keyring_backend()
+    for username, raw in snapshot.items():
+        if raw is None:
+            _kr_delete(username)
+        else:
+            _kr_set(username, raw)
 
 
 def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) -> None:

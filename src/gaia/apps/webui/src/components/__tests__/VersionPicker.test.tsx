@@ -113,7 +113,7 @@ describe('VersionPicker', () => {
         // Confirm step should mention version and restart
         expect(screen.getAllByText(/0\.20\.0/i).length).toBeGreaterThan(0);
         expect(screen.getAllByText(/restart/i).length).toBeGreaterThan(0);
-        expect(screen.getAllByText(/downgrade/i).length).toBeGreaterThan(0);
+        expect(screen.getAllByText(/updates are paused/i).length).toBeGreaterThan(0);
     });
 
     it('does not steal focus from the focused control when the view changes', async () => {

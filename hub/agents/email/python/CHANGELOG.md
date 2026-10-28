@@ -9,6 +9,60 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Connect prompts name the right Settings tab.** The agent sent users to a
+  "Connections" tab in Settings, which the Agent UI doesn't have; it now says
+  "Settings → Connectors".
+- **One very long turn no longer vanishes from the conversation.** A pushed
+  turn bigger than the whole history budget was dropped, answer included. It is
+  now kept with its longest messages cut and a note saying how much.
+- **A follow-up about a thread shown last turn now works in the TUI.** Find a
+  thread, then ask who said what in it: the second question used to fail,
+  because the host pushes back only the conversation's words and the thread id
+  never made it into the next turn. The model guessed one, and Gmail rejected
+  `[ID of Northgate migration sync — phase 2 sequencing]` with a 400. A
+  session-scoped agent (a `/v1/email/query` caller that sends `session_id`, as
+  the TUI does) now remembers the last 10 threads `get_thread` and
+  `summarize_thread` showed, and hands them back with the history as
+  `- [thread] <subject> (thread_id <id>)` lines, the subjects fenced as
+  untrusted. It also remembers each thread's mailbox, so the follow-up routes
+  without a `mailbox` argument. The Agent UI relay doesn't send `session_id`
+  yet, so it doesn't get this. Both tools now refuse an id that can't be a
+  thread id before calling the mail API, with `thread_id '<id>' is not a thread
+  id. Call search_messages first and pass the thread_id from its result.`
+  (#2834)
+- **Pushed history that doesn't fit the model's window no longer overflows
+  it.** `/v1/email/query` used the `context` the host pushed as-is, but the
+  host sizes it without seeing this agent's prompt and tools. On a 32K window
+  (an NPU model) the two together could exceed the window and fail the turn.
+  The agent now keeps the newest whole turns that fit beside its prompt and
+  streams a `status` event when older ones drop out of view.
+- **Outlook messages show their real age and the newest one is replied to.**
+  The Outlook backend handed downstream Graph's ISO-8601 `receivedDateTime` in
+  the `internalDate` field, which every consumer reads as epoch milliseconds
+  and turned into 0. Every message looked like it arrived at the epoch, so the
+  needs-you ages were empty, the "newest message in the thread" reply target
+  never fired, and the recency order of the needs-review list was lost. The
+  backend now emits epoch milliseconds, using one timestamp parser shared with
+  the follow-up tools.
+- **A mailbox another GAIA operation is saving is reported as busy, not as
+  missing permissions.** While the daemon, the Agent UI or the CLI is mid-save
+  on a connection, the connection listing returns it marked `"error": "busy"`
+  with no scopes. Mailbox onboarding used to read that as "missing N
+  permissions" and send the user to reconnect; it now reports the `error` state
+  with "being saved by another GAIA operation right now. Retry in a moment."
+  The calendar pick raises `ConnectionBusyError` instead of asking for a
+  calendar grant, and `GET /v1/email/connectors` adds a per-provider `busy`
+  flag so a client knows `can_send: false` is not final. A mailbox route that
+  hits a busy connection used to answer `403`, as if the account needed
+  reconnecting; it now answers `502` with a detail saying the connection is
+  being saved by another GAIA operation, so treat that 502 as transient and
+  retry. The agent routes answer `503` with `Retry-After`. A calendar that was
+  busy when a session started now works once the save finishes, instead of
+  staying unavailable for the whole session. While a higher-ranked calendar
+  account is busy, the agent now waits for it instead of using another
+  account's calendar. A calendar error that needs a reconnect now says so,
+  instead of a generic configuration error.
+
 - **A `/query` run waiting for the model streams that it is waiting.** The run
   thread runs as the user's turn: `status` events with `phase: "model_queue"`
   and a `queue` object (see the npm `SPEC.md`), interactive lease priority, and

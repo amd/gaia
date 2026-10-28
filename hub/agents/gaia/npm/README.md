@@ -39,7 +39,10 @@ however you arrive at the terminal UI, it behaves identically.
 - **Node.js 18+** (for the built-in `fetch`).
 - **[Lemonade Server](https://amd-gaia.ai/docs/reference/dev)** running locally —
   it hosts the model the agent thinks with. GAIA tells you if it isn't up.
-- The `gaia` Python CLI **0.25.0 or newer** on `PATH` for the daemon the terminal
+- **On Linux x64, glibc 2.34 or newer** for the agent sidecar (Ubuntu 22.04,
+  Debian 12 and RHEL 9 or later). An older distro cannot start the agent. Check
+  with `ldd --version`.
+- The `gaia` Python CLI **0.25.2 or newer** on `PATH` for the daemon the terminal
   UI starts. An earlier core cannot run this agent, so the UI comes up with
   nothing behind it. Install it with
   `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
@@ -193,6 +196,47 @@ and eviction behavior.
 2.16): the absolute paths, the whole set on every turn. The agent indexes any it
 has not read yet before answering, and can read those exact files and nothing
 else beside them. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Private chat, or memory off? Send `memory` every turn** (contract ≥ 2.18):
+`"private"` or `"off"` stops the turn saving anything to memory, including the
+errors and lessons the agent records on its own; omit it and memory stays as the
+agent has it. Send `allowed_paths` with the folders your UI shows the chat can
+read, so the agent works in the same scope. Binaries older than 2.18 reject both
+fields with `422`, so probe `/version` first. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Showing what a turn changed, with undo? Send `changes_turn_id`** (contract ≥
+2.19) along with `session_id`: the agent copies each file before it writes it,
+into the snapshot store under its GAIA home, keyed by the session and that turn
+id. The copies are complete before the stream's terminal event, so you can read
+and restore them as soon as the stream ends. Omit it and nothing is copied. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Approving tool calls by policy? Match on `args`.** A `needs_confirmation`
+event's `args` are exactly the arguments the model sent for the gated call,
+each value capped at 64,000 characters; `args_truncated: true` means one was
+cut, so don't auto-approve that call. What the agent adds to its own prompt —
+the folder a shell call runs in, a risk note, the full path of a relative
+write — comes in `prompt_context`, never
+in `args`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Serving the turn from the Agent UI? Send `surface: "agent_ui"`** (contract ≥
+2.20), and the agent points recurring requests at the **Scheduled tasks** page
+instead of saying it cannot schedule. Older binaries reject it with `422`.
+
+**Calling it headless?** From contract 2.20 a failed model request names the
+host it went through, and its advice points at the model server the GAIA host
+uses (`LEMONADE_BASE_URL`) rather than at the TUI's settings. A front-end with
+its own settings screen sends `surface` (`"tui"`, `"agent_ui"` or `"cli"`) to
+get its own wording; a headless caller omits it. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Showing how full the model's window is?** From contract 2.21 the `final`
+event carries `context`: the window size, the tokens the next call will take,
+and what takes them (prompt, tools, documents, history). Older binaries leave
+it out. It also carries `performance`, the turn's model and tool timings and
+each model call's token counts, when the binary sends it. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message

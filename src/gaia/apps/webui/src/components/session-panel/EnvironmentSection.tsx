@@ -12,7 +12,8 @@ import { Cloud, File, Folder, FolderPlus, Monitor, ShieldAlert, ShieldCheck, Sma
 import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
 import { log } from '../../utils/logger';
-import { useInferencePlace, UNKNOWN_PLACE_TITLE } from '../../stores/modelStore';
+import { useInferencePlace, useModelStore, selectChipModel, displayModelName, UNKNOWN_PLACE_TITLE } from '../../stores/modelStore';
+import { useChatStore } from '../../stores/chatStore';
 import { useSessionEnvironment } from '../../hooks/useSessionEnvironment';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
 import { announcePermissionMode, usePermissionModeEvents } from '../../utils/permissionModeEvents';
@@ -51,7 +52,7 @@ export function EnvironmentSection({ sessionId, busy }: { sessionId: string; bus
     const summary = env && !env.internet ? 'Offline' : null;
     return (
         <PanelSection id="environment" title="Environment" summary={summary}>
-            <RunsOn busy={busy} />
+            <RunsOn sessionId={sessionId} busy={busy} />
             <Folders sessionId={sessionId} />
             <Internet sessionId={sessionId} />
             <PhoneAccess />
@@ -69,9 +70,17 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     );
 }
 
+/** Lemonade ids compare case-insensitively, with or without the ``user.`` prefix. */
+function sameModel(a: string, b: string): boolean {
+    const norm = (id: string) => id.toLowerCase().replace(/^user\./, '');
+    return norm(a) === norm(b);
+}
+
 /** Where the model answering this chat runs, from the same data as the model status popover. */
-function RunsOn({ busy }: { busy: boolean }) {
+function RunsOn({ sessionId, busy }: { sessionId: string; busy: boolean }) {
     const place = useInferencePlace();
+    const active = useModelStore((s) => s.active);
+    const chatModel = useChatStore((s) => selectChipModel(active, s.sessions, sessionId));
     const [status, setStatus] = useState<LocalModelStatus | null>(null);
     const [error, setError] = useState<string | null>(null);
     const remote = place?.remote === true;
@@ -103,11 +112,15 @@ function RunsOn({ busy }: { busy: boolean }) {
     if (!place) {
         return <Row label="Runs on"><span className="sp-meta" title={UNKNOWN_PLACE_TITLE}>Not known yet</span></Row>;
     }
-    const memory = status?.memory;
+    // The server may have another chat's model loaded; only describe it when it is this chat's.
+    const other = !!(status?.model && chatModel && !sameModel(status.model, chatModel));
+    const memory = other ? null : status?.memory;
     return (
         <Row label="Runs on">
-            <span className="sp-place"><Monitor size={13} aria-hidden="true" /> This PC{status?.placement?.label ? ` · ${status.placement.label}` : ''}</span>
-            {status?.display_name && <span className="sp-meta">{status.display_name}{status.state !== 'loaded' ? ` · ${status.state}` : ''}</span>}
+            <span className="sp-place"><Monitor size={13} aria-hidden="true" /> This PC{!other && status?.placement?.label ? ` · ${status.placement.label}` : ''}</span>
+            {other
+                ? <span className="sp-meta">{displayModelName(chatModel!)} · not loaded right now</span>
+                : status?.display_name && <span className="sp-meta">{status.display_name}{status.state !== 'loaded' ? ` · ${status.state}` : ''}</span>}
             {memory && (
                 <span className="sp-meta">
                     {memory.model_gb != null ? `${memory.model_gb.toFixed(1)} GB in use` : 'Memory in use unknown'}
@@ -121,6 +134,8 @@ function RunsOn({ busy }: { busy: boolean }) {
 
 function Folders({ sessionId }: { sessionId: string }) {
     const { env, error: loadError, change } = useSessionEnvironment(sessionId);
+    // Only the flagship's own default scope (your user folder) is known here.
+    const flagship = useChatStore((s) => s.sessions.find((x) => x.id === sessionId)?.agent_type === 'gaia');
     const [picking, setPicking] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [busyPath, setBusyPath] = useState<string | null>(null);
@@ -175,8 +190,15 @@ function Folders({ sessionId }: { sessionId: string }) {
     );
 
     return (
-        <Row label="Can read and write">
+        <Row label={env && !env.enforced ? 'Files GAIA can reach' : 'Can read and write'}>
             {!env && !loadError && <span className="sp-meta">Checking…</span>}
+            {env && !env.enforced && (
+                <span className="sp-meta">
+                    {flagship
+                        ? 'These folders are where GAIA starts, not a limit: it can also reach the rest of your user folder. In Ask mode it asks before it changes anything.'
+                        : "These folders are where this chat's agent starts; it applies its own limits."}
+                </span>
+            )}
             {loadError && <span className="sp-error">Couldn't read this chat's folders: {loadError}</span>}
             {env && (
                 <>
@@ -192,7 +214,7 @@ function Folders({ sessionId }: { sessionId: string }) {
                     )}
                     {!env.enforced && (
                         <span className="sp-meta">
-                            This chat's agent runs as its own process, so its folders and internet access can't be changed from here.
+                            This chat's agent runs as its own process, so these settings can't be changed from here.
                         </span>
                     )}
                     {env.removed.length > 0 && (
@@ -229,12 +251,19 @@ function Internet({ sessionId }: { sessionId: string }) {
             setSaving(false);
         }
     };
+    if (!env.enforced) {
+        return (
+            <Row label="Internet">
+                <span className="sp-state-text">{env.internet ? 'On' : 'Off'}</span>
+            </Row>
+        );
+    }
     return (
         <Row label="Internet">
             <Switch
                 checked={env.internet}
                 onChange={(on) => void toggle(on)}
-                disabled={saving || !env.enforced}
+                disabled={saving}
                 label="Internet for this chat"
                 text={env.internet ? 'On' : 'Off: web search and pages are blocked'}
             />
@@ -304,11 +333,7 @@ function Permission({ sessionId }: { sessionId: string }) {
     }, [sessionId]);
     usePermissionModeEvents(sessionId, setMode);
 
-    const apply = async (next: PermissionMode) => {
-        if (next === 'full_access' && !confirming) {
-            setConfirming(true);
-            return;
-        }
+    const save = async (next: PermissionMode) => {
         setConfirming(false);
         setError(null);
         try {
@@ -331,7 +356,8 @@ function Permission({ sessionId }: { sessionId: string }) {
                         role="radio"
                         aria-checked={mode === m.mode}
                         className={mode === m.mode ? 'is-selected' : undefined}
-                        onClick={() => void apply(m.mode)}
+                        // Full access only turns on from "Turn it on", so a double-click can't confirm it.
+                        onClick={() => (m.mode === 'full_access' ? setConfirming(true) : void save(m.mode))}
                     >
                         {m.mode === 'full_access'
                             ? <ShieldAlert size={12} aria-hidden="true" />
@@ -344,7 +370,7 @@ function Permission({ sessionId }: { sessionId: string }) {
             {confirming && (
                 <span className="sp-confirm" role="alert">
                     Full access lets GAIA change files and run commands on this PC without asking.
-                    <button type="button" className="sp-action is-warning" onClick={() => void apply('full_access')}>Turn it on</button>
+                    <button type="button" className="sp-action is-warning" onClick={() => void save('full_access')}>Turn it on</button>
                     <button type="button" className="sp-action" onClick={() => setConfirming(false)}>Cancel</button>
                 </span>
             )}

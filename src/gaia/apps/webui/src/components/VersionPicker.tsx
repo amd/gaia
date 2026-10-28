@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReleaseInfo } from '../hooks/useUpdateStatus';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import './VersionPicker.css';
 
 interface VersionPickerProps {
@@ -27,8 +28,8 @@ function getUpdaterBridge(): GaiaUpdaterBridge | undefined {
 }
 
 /**
- * Modal dialog that lets the user pick a previous GAIA release and trigger
- * a rollback download + restart.
+ * Modal dialog that lets the user pick an exact GAIA release (newer or older)
+ * and install it; the app is then pinned to that version.
  *
  * Accessibility: role=dialog, focus trap, Esc to close, keyboard-navigable rows.
  */
@@ -59,6 +60,7 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
     }, []);
 
     useEscapeToClose(true, onClose);
+    useFocusTrap(dialogRef, true);
 
     // Move focus into the dialog ONCE on mount. Doing this per view change
     // would yank focus mid-flow (list → confirm → installing).
@@ -120,7 +122,7 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
             onClose();
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            setView({ kind: 'error', message: `Failed to start rollback: ${msg}` });
+            setView({ kind: 'error', message: `Failed to install that version: ${msg}` });
         }
     }
 
@@ -148,11 +150,11 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
                 className="version-picker-dialog"
                 role="dialog"
                 aria-modal="true"
-                aria-label="Roll back to a previous version"
+                aria-label="Install a specific version"
                 ref={dialogRef}
             >
                 <div className="version-picker-header">
-                    <h3>Roll back to a previous version</h3>
+                    <h3>Install a specific version</h3>
                     <button
                         className="version-picker-close"
                         onClick={onClose}
@@ -232,12 +234,12 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
                     {view.kind === 'confirm' && (
                         <div className="version-picker-confirm">
                             <p>
-                                This will <strong>downgrade to v{view.release.version}</strong> and
+                                This will <strong>install v{view.release.version}</strong> and
                                 restart the app.
                             </p>
                             <p className="vp-confirm-note">
-                                Auto-update will be paused after rollback so the app stays on
-                                v{view.release.version}. You can resume updates from Settings → About.
+                                GAIA will stay on v{view.release.version}: updates are paused until
+                                you unpin it in Settings → Updates.
                             </p>
                             <div className="vp-confirm-actions">
                                 <button
@@ -252,7 +254,7 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
                                     className="vp-btn-confirm"
                                     onClick={() => confirmInstall(view.release)}
                                 >
-                                    Confirm downgrade &amp; restart
+                                    Install &amp; restart
                                 </button>
                             </div>
                         </div>

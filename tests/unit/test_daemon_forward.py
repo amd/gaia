@@ -21,6 +21,7 @@ import pytest
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectionRevokedError,
 )
 from gaia.connectors.providers.base import ConnectorRequirement
@@ -221,7 +222,7 @@ def test_ungranted_error_is_headless_first_and_complete():
     assert "gaia connectors connect google --scopes" in msg
     assert "--grant-agent installed:email" in msg
     # CLI leads; the UI is the fallback, not the headline.
-    assert msg.index("gaia connectors connect") < msg.index("Settings -> Connections")
+    assert msg.index("gaia connectors connect") < msg.index("Settings -> Connectors")
 
 
 def test_ungranted_error_with_no_declared_requirement_names_the_gap():
@@ -293,6 +294,43 @@ def test_forward_provider_transport_mint_failure_retains_stale_forward(caplog):
     assert http.posts == []
     assert http.deletes == []
     assert "retaining any existing forward" in caplog.text
+
+
+def test_a_busy_mint_is_logged_as_busy_and_keeps_the_forward(caplog):
+    def _mint(*, provider, scopes, agent_id):
+        raise ConnectionBusyError(provider)
+
+    fwd, http = _forwarder(grants={"google": {"installed:email": ["s1"]}}, mint=_mint)
+    with caplog.at_level("WARNING"):
+        with pytest.raises(ConnectionBusyError):
+            fwd.forward_provider(
+                "email", "google", base_url="http://127.0.0.1:9", bearer="b"
+            )
+
+    assert http.deletes == []
+    assert "busy connection for 'google'" in caplog.text
+    assert "unclassified" not in caplog.text
+
+
+def test_forward_provider_busy_after_the_mint_keeps_the_existing_forward():
+    """A connection that turned busy (mid-save elsewhere) has no trustworthy
+    scopes, so nothing is posted and the existing forward is not withdrawn."""
+    fwd, http = _forwarder(
+        grants={"google": {"installed:email": ALL_SCOPES}},
+        get_connection=lambda provider: {
+            "provider": provider,
+            "scopes": [],
+            "error": "busy",
+        },
+        spec=_SPEC_WITH_REQUIRED_CONNECTIONS,
+    )
+    with pytest.raises(ConnectionBusyError):
+        fwd.forward_provider(
+            "email", "google", base_url="http://127.0.0.1:9", bearer="b"
+        )
+
+    assert http.posts == []
+    assert http.deletes == []
 
 
 def test_forward_provider_delivery_failure_raises_forward_delivery_error():
@@ -568,6 +606,21 @@ def test_boundary_delivery_failure_maps_to_502():
         "/daemon/v1/agents/email/connections/google/forward", headers=_auth()
     )
     assert r.status_code == 502
+
+
+def test_boundary_busy_connection_maps_to_503_retry():
+    def _mint(*, provider, scopes, agent_id):
+        raise ConnectionBusyError(provider)
+
+    fwd, http = _forwarder(grants={"google": {"installed:email": ["s1"]}}, mint=_mint)
+    client = _routes_client(fwd)
+    r = client.post(
+        "/daemon/v1/agents/email/connections/google/forward", headers=_auth()
+    )
+    assert r.status_code == 503
+    assert r.headers["Retry-After"] == "1"
+    assert "being saved" in r.json()["detail"]
+    assert http.deletes == []
 
 
 @pytest.mark.parametrize(

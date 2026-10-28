@@ -10,9 +10,34 @@ module so existing importers keep working unchanged.
 
 from __future__ import annotations
 
+from typing import Optional
+
+#: Header carrying a failed agent route's :attr:`SidecarError.kind`.
+ERROR_KIND_HEADER = "X-GAIA-Error-Kind"
+
+#: What went wrong, for a client choosing which next step to show a user.
+KIND_START_FAILED = "start_failed"
+KIND_OUT_OF_DATE = "out_of_date"
+KIND_CAPACITY = "capacity"
+KIND_MODE_CONFLICT = "mode_conflict"
+KIND_NOT_INSTALLED = "not_installed"
+KIND_SERVICE_UNREACHABLE = "service_unreachable"
+KIND_SERVICE_OUTDATED = "service_outdated"
+
 
 class SidecarError(Exception):
-    """Base for all sidecar-agent failures."""
+    """Base for all sidecar-agent failures.
+
+    :attr:`kind` is one of the ``KIND_*`` names, or ``""`` when the failure has
+    no specific next step. Subclasses set it; ``kind=`` overrides it per raise.
+    """
+
+    kind: str = ""
+
+    def __init__(self, *args, kind: Optional[str] = None):
+        super().__init__(*args)
+        if kind is not None:
+            self.kind = kind
 
 
 class PlatformError(SidecarError):
@@ -34,9 +59,13 @@ class BinaryNotFoundError(SidecarError):
 class HealthTimeoutError(SidecarError):
     """The sidecar did not report healthy within the health-poll deadline."""
 
+    kind = KIND_START_FAILED
+
 
 class SidecarSpawnError(SidecarError):
     """The sidecar process could not be launched (dev env missing, port in use)."""
+
+    kind = KIND_START_FAILED
 
 
 class SidecarInhibitedError(SidecarSpawnError):
@@ -83,13 +112,19 @@ class SidecarHTTPError(SidecarError):
 class VersionMismatchError(SidecarError):
     """The running sidecar speaks a different MAJOR contract version than expected."""
 
+    kind = KIND_OUT_OF_DATE
+
 
 class UnknownAgentError(SidecarError):
     """The requested agent_id is not in the daemon's registered specs."""
 
+    kind = KIND_NOT_INSTALLED
+
 
 class ModeConflictError(SidecarError):
     """The sidecar is running in a different mode than the ensure requested."""
+
+    kind = KIND_MODE_CONFLICT
 
 
 class DevSrcDirResolutionError(SidecarError):
@@ -100,6 +135,8 @@ class DevSrcDirResolutionError(SidecarError):
     inside a git work tree — and daemon-side when a non-absolute ``dev_src_dir``
     arrives over the wire. Neither case has a silent guess to fall back to.
     """
+
+    kind = KIND_MODE_CONFLICT
 
 
 class SidecarNotRunningError(SidecarError):
@@ -120,6 +157,8 @@ class SidecarUnresponsiveError(SidecarError):
 
 class CapacityError(SidecarError):
     """Starting another sidecar would exceed the live-sidecar cap."""
+
+    kind = KIND_CAPACITY
 
 
 class StopFailedError(SidecarError):

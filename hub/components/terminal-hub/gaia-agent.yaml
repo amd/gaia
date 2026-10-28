@@ -8,7 +8,7 @@
 # The id keeps its legacy name: published R2 paths are immutable.
 id: terminal-hub
 name: GAIA Terminal UI
-version: 0.25.0
+version: 0.25.2
 description: "Chat with the GAIA agent from your terminal"
 author: AMD
 license: MIT

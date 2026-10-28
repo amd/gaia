@@ -32,7 +32,9 @@ import {
 } from 'lucide-react';
 import type { AgentStep, CommandOutput, RetrievalChunk } from '../types';
 import * as api from '../services/api';
+import { CodeBlock } from './PermissionPrompt';
 import { log } from '../utils/logger';
+import { StepResult } from './LongContent';
 import './AgentActivity.css';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -66,6 +68,7 @@ const TOOL_META: Record<string, ToolMeta> = {
     semantic_search:       { label: 'Searched documents', activeLabel: 'Searching documents', icon: BookOpen },
     evaluate_retrieval:    { label: 'Evaluated retrieval', activeLabel: 'Evaluating retrieval', icon: BookOpen },
     index_document:        { label: 'Indexed document',   activeLabel: 'Indexing document',   icon: Database },
+    index_documents:       { label: 'Indexed documents',  activeLabel: 'Indexing documents',  icon: Database },
     index_directory:       { label: 'Indexed directory',  activeLabel: 'Indexing directory',   icon: Database },
     index_file:            { label: 'Indexed file',       activeLabel: 'Indexing file',       icon: Database },
     list_indexed_documents: { label: 'Listed documents',  activeLabel: 'Listing documents',   icon: Database },
@@ -101,22 +104,31 @@ const DEFAULT_TOOL_META: ToolMeta = {
     label: 'Used tool', activeLabel: 'Using tool', icon: Wrench,
 };
 
-function getToolMeta(toolName?: string): ToolMeta {
+/** Which connector an MCP call went to, as the server names it. */
+type McpIdentity = Pick<AgentStep, 'mcpServerLabel' | 'mcpTool'>;
+
+function getToolMeta(toolName?: string, mcp?: McpIdentity): ToolMeta {
     if (!toolName) return DEFAULT_TOOL_META;
     if (toolName.startsWith('mcp_')) {
+        const server = mcp?.mcpServerLabel;
+        if (server) {
+            const what = mcp?.mcpTool ? `${server}: ${mcp.mcpTool}` : server;
+            return { label: `Used ${what}`, activeLabel: `Using ${what}`, icon: Globe };
+        }
+        // Saved turns from before the server named the connector.
         return { label: 'MCP tool', activeLabel: 'Running MCP tool', icon: Globe };
     }
-    return TOOL_META[toolName] || DEFAULT_TOOL_META;
-}
-
-/** What the live line says while a tool runs: the step row's own wording, never the raw tool id. */
-export function toolActiveLabel(toolName?: string): string {
-    return getToolMeta(toolName).activeLabel;
+    if (TOOL_META[toolName]) return TOOL_META[toolName];
+    // A tool with no entry still says what it was, not a bare "Used tool".
+    const words = toolName.replace(/[_-]+/g, ' ').trim();
+    return words
+        ? { ...DEFAULT_TOOL_META, label: `Used ${words}`, activeLabel: `Using ${words}` }
+        : DEFAULT_TOOL_META;
 }
 
 /** The fallback line for a tool row that arrived without a narration (older saved turns). */
 function toolFallbackLabel(step: AgentStep): string {
-    const meta = getToolMeta(step.tool);
+    const meta = getToolMeta(step.tool, step);
     // The done-label ("Wrote file") would claim a failed, denied or stopped call succeeded.
     const unfinished = step.success == null && !step.result;
     return step.active
@@ -125,12 +137,17 @@ function toolFallbackLabel(step: AgentStep): string {
         : unfinished ? `${meta.activeLabel} didn't finish` : meta.label;
 }
 
-/** The one plain line a tool row shows by default. */
+/** The one plain line a tool row shows by default, and the live line while it runs. */
 export function toolRowText(step: AgentStep): string {
+    // Narration can only humanize the prefixed tool id; the connector's own name says more.
+    if (step.mcpServerLabel) return toolFallbackLabel(step);
     return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step);
 }
 
 const COMPACT_DETAIL_CHARS = 48;
+
+/** Lines of an MCP tool's output shown before "Show all". */
+const MCP_OUTPUT_PREVIEW_LINES = 5;
 
 /** Below this many call rows the list is short enough to scan without a filter. */
 const FILTER_MIN_TOOL_ROWS = 6;
@@ -286,6 +303,9 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
     return result;
 }
 
+/** What a turn blocked on the user says, in the message header and its held tool row. */
+export const WAITING_ON_USER_LABEL = 'Waiting for you';
+
 /** `8` -> "8s", `125` -> "2m 05s". */
 export function formatElapsed(seconds: number): string {
     const s = Math.max(0, Math.floor(seconds));
@@ -315,10 +335,12 @@ interface AgentActivityProps {
     variant?: 'inline' | 'summary';
     /** The agent's own step count; rows (thinking, plans, tools) are not steps. */
     agentStepCount?: number;
+    /** The turn is blocked on the user (an approval or a question), so nothing is running. */
+    awaitingUser?: boolean;
 }
 
 /** Displays agent activity as a single expandable "Thinking" panel with tool calls inline. */
-export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCount }: AgentActivityProps) {
+export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCount, awaitingUser = false }: AgentActivityProps) {
     // Always start collapsed — thinking text is shown via ThinkingIndicator
     // in the message header. Users can expand to see details if they want.
     const [expanded, setExpanded] = useState(false);
@@ -404,18 +426,10 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
     const stepCount = agentStepCount && agentStepCount > 0 && !steps.some(isBackgroundStep)
         ? agentStepCount
         : rowCount || displaySteps.length;
-    const runningTool = isActive ? [...displaySteps].reverse().find((s) => s.type === 'tool' && s.active) : undefined;
-    const lastStep = steps[steps.length - 1];
     const summaryText = hasPolicyAlerts
         ? `Blocked by policy \u00b7 ${policySteps.length} alert${policySteps.length !== 1 ? 's' : ''}`
         : `${stepCount} step${stepCount !== 1 ? 's' : ''}`
             + (toolCallCount > 0 ? ` \u00b7 ${toolCallCount} tool${toolCallCount !== 1 ? 's' : ''}` : '');
-    // What GAIA is waiting on right now, and for how long.
-    const liveText = runningTool
-        ? `${toolRowText(runningTool)} \u00b7 ${formatElapsed((now - runningTool.timestamp) / 1000)}`
-        : isActive && lastStep
-            ? `Waiting on the model \u00b7 ${formatElapsed((now - lastStep.timestamp) / 1000)}`
-            : '';
 
     return (
         <div className={`agent-activity ${variant} ${isActive ? 'active' : 'done'} ${hasErrors ? 'has-errors' : ''} ${hasPolicyAlerts ? 'has-policy-alerts' : ''}`}>
@@ -435,7 +449,6 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
                         <Zap size={14} className="agent-icon-done" />
                     )}
                     <span className="agent-summary-text">{summaryText}</span>
-                    {liveText && <span className="agent-summary-live">{liveText}</span>}
                 </div>
                 <div className="agent-summary-right">
                     {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -466,6 +479,7 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
                                         step={step}
                                         isExpanded={expandedTools.has(step.id)}
                                         now={now}
+                                        awaitingUser={isActive && awaitingUser}
                                         onToggle={() => toggleTool(step.id)}
                                     />
                                 );
@@ -665,15 +679,21 @@ interface FlowToolCardProps {
     onToggle: () => void;
     /** Wall-clock ms, for a running call's timer. */
     now: number;
+    /** The turn is waiting on the user (an approval or a question). */
+    awaitingUser?: boolean;
 }
 
-function FlowToolCard({ step, isExpanded, onToggle, now }: FlowToolCardProps) {
-    const Icon = getToolMeta(step.tool).icon;
-    const line = toolRowText(step);
+function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }: FlowToolCardProps) {
+    const Icon = getToolMeta(step.tool, step).icon;
+    // A call held for the user's answer hasn't started, so it neither runs nor times.
+    const waiting = !!step.active && awaitingUser;
+    const line = waiting ? WAITING_ON_USER_LABEL : toolRowText(step);
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
     const failure = step.success === false && step.result ? step.result : '';
-    const timing = step.active
+    const timing = waiting
+        ? ''
+        : step.active
         ? formatElapsed((now - step.timestamp) / 1000)
         : step.latencyMs != null ? formatToolLatency(step.latencyMs) : '';
 
@@ -683,10 +703,16 @@ function FlowToolCard({ step, isExpanded, onToggle, now }: FlowToolCardProps) {
                 className="flow-tool-header"
                 onClick={onToggle}
                 aria-expanded={isExpanded}
-                title={step.narration && step.narration !== line ? step.narration : undefined}
+                title={
+                    waiting
+                        ? toolRowText(step)
+                        : step.narration && step.narration !== line ? step.narration : undefined
+                }
             >
                 <div className="flow-tool-left">
-                    {step.active ? (
+                    {waiting ? (
+                        <Icon size={13} className="flow-tool-icon" />
+                    ) : step.active ? (
                         <Loader2 size={13} className="flow-tool-spinner" />
                     ) : step.success === false ? (
                         <AlertCircle size={13} style={{ color: 'var(--danger)' }} />
@@ -733,13 +759,23 @@ function FlowToolCard({ step, isExpanded, onToggle, now }: FlowToolCardProps) {
                         <CommandOutputView output={step.commandOutput} />
                     )}
 
+                    {step.mcpOutput && (
+                        <div className="step-detail-result result-success">
+                            <span className="detail-section-label">Output</span>
+                            <CodeBlock code={step.mcpOutput.text} previewLines={MCP_OUTPUT_PREVIEW_LINES} testId="mcp-output" />
+                            {step.mcpOutput.truncated && (
+                                <div className="cmd-truncated">Output was truncated (exceeded size limit)</div>
+                            )}
+                        </div>
+                    )}
+
                     {/* Generic result */}
-                    {step.result && !step.commandOutput && (
+                    {step.result && !step.commandOutput && !step.mcpOutput && (
                         <div className={`step-detail-result ${step.success === false ? 'result-error' : 'result-success'}`}>
                             <span className="detail-section-label">
                                 {step.success === false ? 'Error' : 'Result'}
                             </span>
-                            <div className="detail-result-content">{linkifyPaths(step.result)}</div>
+                            <StepResult text={step.result} renderShort={linkifyPaths} />
                         </div>
                     )}
                     {/* Retrieved document chunks */}
