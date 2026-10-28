@@ -3840,7 +3840,7 @@ class TestSchemaV2Migration:
         assert any(r["id"] == kid for r in results)
 
     def test_schema_version_is_current(self, store):
-        """A fresh database is stamped at the current schema version (v7, decayed_at)."""
+        """A fresh database is stamped at the current schema version (v8, executed tool history)."""
         with store._lock:
             cursor = store._conn.execute(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
