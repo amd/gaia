@@ -14,6 +14,7 @@ from any ``test_memory_*.py`` file so the per-test mocks take effect.
 
 import os
 import socket
+import sys
 import tempfile
 from pathlib import Path
 
@@ -279,6 +280,18 @@ def _enable_memory_for_memory_tests(request, monkeypatch):
     module_path = getattr(request.module, "__file__", "") or ""
     if "test_memory_" in os.path.basename(module_path):
         monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_user_turns(monkeypatch):
+    """Give each test its own process-wide user-turn count and idle clock.
+
+    A test that fails between starting and finishing a turn would otherwise
+    hold every later test's memory extraction.
+    """
+    memory = sys.modules.get("gaia.agents.base.memory")
+    if memory is not None:
+        monkeypatch.setattr(memory, "_USER_TURNS", memory._UserTurns())
 
 
 # ── Real Lemonade guard ────────────────────────────────────────────────────

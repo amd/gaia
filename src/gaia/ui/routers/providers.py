@@ -134,9 +134,11 @@ def _lemonade(
             allow_redirects=False,
         )
     except requests.RequestException as e:
+        from gaia.llm.lemonade_launcher import describe_start_hint
+
         raise ProviderError(
-            f"The local model server is not reachable at {base} ({e}). Finish "
-            "setup, or start it with `gaia daemon start`.",
+            f"The local model server is not reachable at {base} ({e}). "
+            f"{describe_start_hint().instruction}",
             status=503,
         ) from e
     try:

@@ -5,7 +5,8 @@
 
 Cards come from what is installed and set up on this PC — skills, indexed
 documents, connected mail accounts — never from a model call, so the screen
-costs nothing to open. A card only appears for a skill the agent has.
+costs nothing to open. A card's task runs on the agent's own tools; its skill,
+when installed, only sharpens it.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ MAIL_CONNECTORS = ("google", "microsoft", "microsoft_work")
 
 @dataclass(frozen=True)
 class Card:
+    #: The skill that sharpens this task when installed; also the card's id.
     skill: str
     title: str
     note: str
@@ -93,7 +95,10 @@ def _summarize(_ctx: Context) -> Card:
     )
 
 
-def _check_in(_ctx: Context) -> Card:
+def _check_in(ctx: Context) -> Optional[Card]:
+    # Without its skill, "Let's check in." is a greeting, not a task.
+    if "check-in" not in ctx.skills:
+        return None
     return Card(
         "check-in",
         "Check in",
@@ -114,19 +119,23 @@ _RULES: List[Callable[[Context], Optional[Card]]] = [
 
 
 def pick_cards(ctx: Context) -> List[Dict[str, Any]]:
-    """Up to :data:`MAX_CARDS` cards, each for a skill the agent has."""
+    """Up to :data:`MAX_CARDS` cards for what this PC is set up to do."""
     cards = []
     for rule in _RULES:
         card = rule(ctx)
-        if card is not None and card.skill in ctx.skills:
+        if card is not None:
             cards.append(asdict(card))
         if len(cards) == MAX_CARDS:
             break
     return cards
 
 
-def working_folder() -> Dict[str, Any]:
-    """The folder a new chat's agent works in, as ``_compute_allowed_paths`` grants it."""
+def working_folder(choosable: bool) -> Dict[str, Any]:
+    """The folder a new chat's agent works in, as ``_compute_allowed_paths`` grants it.
+
+    *choosable* says whether a new chat can be given another folder
+    (:func:`gaia.ui.session_environment.takes_folders`).
+    """
     from gaia.ui import _chat_helpers as chat
 
     cwd = Path.cwd().resolve()
@@ -134,7 +143,12 @@ def working_folder() -> Dict[str, Any]:
         folder, own = chat._managed_documents_dir(), True
     else:
         folder, own = cwd, False
-    return {"path": str(folder), "name": folder.name or str(folder), "gaia_folder": own}
+    return {
+        "path": str(folder),
+        "name": folder.name or str(folder),
+        "gaia_folder": own,
+        "choosable": choosable,
+    }
 
 
 def _mail_connected() -> bool:
@@ -160,11 +174,11 @@ def _mail_connected() -> bool:
     return False
 
 
-def start_screen(db, skills: List[Dict[str, Any]]) -> Dict[str, Any]:
+def start_screen(db, skills: List[Dict[str, Any]], choosable: bool) -> Dict[str, Any]:
     """The cards and working folder for a new chat; *skills* is ``/api/skills``."""
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
 
-    folder = working_folder()
+    folder = working_folder(choosable)
     ctx = Context(
         skills=frozenset(s["name"] for s in skills),
         indexed_documents=sum(

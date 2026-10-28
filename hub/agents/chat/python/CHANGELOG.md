@@ -14,6 +14,10 @@
 - Saving a Word, PowerPoint or Excel document in a watched folder now updates
   its index. Office owner files (`~$...`) and temporary save files are ignored;
   a document saved by renaming a temporary file over it is reindexed (#5478).
+- On macOS, a watched document saved by renaming a new copy over it (as Word
+  and most editors do) no longer drops out of the index right after it was
+  reindexed. macOS reports the replaced file as deleted; a file still on disk
+  is now treated as changed, not deleted.
 - A turn whose local model failed on a base URL the user set
   (`LEMONADE_BASE_URL` or an external Lemonade) now names that server — "The
   model server at 192.168.1.20:8080" — instead of "Lemonade on this machine",

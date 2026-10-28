@@ -133,9 +133,7 @@ class GatewayUnreachable(Exception):
     def __init__(self, host: str, reason: str):
         self.host = host
         self.reason = reason
-        super().__init__(
-            f"No network available — can't reach {host} (needs AMD's network or VPN)"
-        )
+        super().__init__(f"Can't reach {host}. It needs AMD's network or VPN")
 
 
 def check_reachable(base_url: Optional[str] = None) -> None:

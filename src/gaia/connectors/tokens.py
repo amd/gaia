@@ -408,9 +408,9 @@ async def _refresh_token(
         # absent or wrong in the refresh POST.  Distinguish the two cases
         # so the error tells the user what to do rather than just "try again":
         #   - No client_secret configured → ConfigurationError (fix: re-enter
-        #     credentials in Settings → Connections).
+        #     credentials in Settings → Connectors).
         #   - Secret is present but token rejected → AuthRequiredError (fix:
-        #     reconnect from Settings → Connections).
+        #     reconnect from Settings → Connectors).
         # Public PKCE clients (Microsoft/Entra) never have a secret — that's
         # the correct, expected state, not a misconfiguration — so only
         # providers in PROVIDERS_REQUIRING_CLIENT_SECRET take the
@@ -428,7 +428,7 @@ async def _refresh_token(
         ):
             raise ConfigurationError(
                 f"Token endpoint returned 401 for {provider.provider_id}: "
-                "client_secret is not configured. Open Settings → Connections "
+                "client_secret is not configured. Open Settings → Connectors "
                 f"→ {provider.provider_id} and re-enter the Client Secret, or "
                 "set the GAIA_GOOGLE_CLIENT_SECRET environment variable. "
                 "See docs/runbooks/google-oauth-client.md."
@@ -439,7 +439,7 @@ async def _refresh_token(
             message=(
                 f"Token endpoint returned 401 for {provider.provider_id} "
                 f"({err_payload.get('error', 'invalid_client')}). "
-                "Reconnect from Settings → Connections → "
+                "Reconnect from Settings → Connectors → "
                 f"{provider.provider_id}. "
                 "See docs/runbooks/google-oauth-client.md."
             ),
