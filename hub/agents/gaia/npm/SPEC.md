@@ -258,7 +258,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.24"`                  |
+| Contract version   | `API_VERSION = "2.25"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -291,8 +291,8 @@ checked for drift in CI — the same pattern as the email agent's own
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
-`documents`, `allowed_paths`, `memory`, `internet_off`, `changes_turn_id`,
-`surface`) is optional.
+`documents`, `allowed_paths`, `working_directory`, `memory`, `internet_off`,
+`changes_turn_id`, `surface`) is optional.
 
 `context` is the transcript you push. It replaces the agent's history for the
 turn. If it doesn't fit beside the agent's prompt and tools in the model's
@@ -321,6 +321,14 @@ field. Whatever the scope, its existing folders are named in the system prompt
 once, when the session is built, with GAIA's documents folder first; a folder
 added to a retained session later is usable but not named. A caller that omits
 the field, like the TUI, gets the default scope (the user's home folder) named.
+
+`working_directory` (contract ≥ 2.24) is the absolute chat workspace used as the
+base for relative file paths. It is separate from `allowed_paths`: the latter is
+an access allowlist, while this field determines where a bare `notes.txt` lands.
+New and retained sessions use it for relative reads, writes, edits and approval
+prompts, so the path shown to the user matches the file that is actually changed.
+A relative or empty value is a `422`; send it only when `/version` reports 2.24 or
+later.
 
 `memory` (contract ≥ 2.18) is `"on"`, `"private"` (a private chat) or `"off"`
 (memory turned off in the caller's settings). Under `"private"` or `"off"` the
@@ -378,7 +386,7 @@ model's failure reads "the model server at `host:port`", not "Lemonade on this
 machine". Pre-2.20 binaries `422` the field and word every such error for the
 TUI.
 
-`turns` (contract ≥ 2.24) is the conversation so far as the model saw it,
+`turns` (contract ≥ 2.25) is the conversation so far as the model saw it,
 oldest first. Each entry is one earlier turn's `final.model_messages`, which
 holds the assistant's tool calls and the tool results, or a user/assistant text
 pair for a turn that recorded none. The agent replays the newest whole turns
@@ -386,7 +394,7 @@ that fit its context window and says in a `status` event when older ones drop
 out. Sent, it replaces `context`, which must then be `[]`. Every `final` carries
 `model_messages` so a caller can store it with the reply; it is absent when the
 loop had not returned 15 s after its answer, and that turn then replays as text
-only. Pre-2.24 binaries `422` `turns`.
+only. Pre-2.25 binaries `422` `turns`.
 
 `reasoning` (contract ≥ 2.22), when `true`, streams the model's reasoning as
 `reasoning` events, `{ "type": "reasoning", "delta": "…" }`, so a client can

@@ -201,8 +201,11 @@ else beside them. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 `"private"` or `"off"` stops the turn saving anything to memory, including the
 errors and lessons the agent records on its own; omit it and memory stays as the
 agent has it. Send `allowed_paths` with the folders your UI shows the chat can
-read, so the agent works in the same scope. Binaries older than 2.18 reject both
-fields with `422`, so probe `/version` first. See
+read, so the agent works in the same scope. Send `working_directory` (contract
+≥ 2.24) with the absolute chat workspace so bare file names resolve in the same
+folder the UI shows; it is separate from the access allowlist. Binaries older
+than 2.18 reject `allowed_paths` and older than 2.24 reject `working_directory`,
+so probe `/version` first. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Internet switched off for the chat? Send `internet_off`** (contract ≥
@@ -258,7 +261,7 @@ each model call's token counts, when the binary sends it. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Keeping a multi-turn conversation? Send `turns`, not `context`** (contract ≥
-2.24). Store each `final.model_messages` with its reply and send them back,
+2.25). Store each `final.model_messages` with its reply and send them back,
 oldest first, so the agent sees the tool calls it made and what they returned.
 Text-only `context` loses them, and the agent can't explain its own last turn.
 Older binaries reject `turns` with `422`.

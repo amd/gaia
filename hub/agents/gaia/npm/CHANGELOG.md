@@ -25,9 +25,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   install skills from the Agent Hub, because those tools carry no URL for the
   check to see. They are now refused with the same message as a web search.
 
-### For integrators: contract 2.24
+### For integrators: contract 2.25
 
-- **The agent remembers its own tool calls across turns** (contract **2.24**,
+- **The agent remembers its own tool calls across turns** (contract **2.25**,
   #5701). A caller that pushed history as `context` could send only text, so
   on the next turn the agent saw its earlier answers but not the commands it
   ran or their errors, and "why did that fail?" got "I have no record of the
@@ -35,8 +35,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   model saw it, tool calls and results included. Send those back in the new
   `turns` field, oldest first, and the agent replays them, keeping the newest
   whole turns that fit its context window. `turns` replaces `context` when
-  sent. Pre-2.24 binaries refuse the field with `422`, so probe `/version`
+  sent. Pre-2.25 binaries refuse the field with `422`, so probe `/version`
   first.
+
+### For integrators: contract 2.24
+
+- **Relative file paths use the chat workspace.** A new `working_directory` field
+  on `/query` tells the agent where bare file names resolve, separately from
+  `allowed_paths`. New and retained sessions use the same workspace for reads,
+  writes, edits and approval prompts. Send it only after `/version` reports
+  contract 2.24 or later.
 
 ### For integrators: contract 2.23
 
