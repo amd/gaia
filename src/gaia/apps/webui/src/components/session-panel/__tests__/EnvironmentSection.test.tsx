@@ -169,8 +169,23 @@ describe('Can read and write', () => {
         expect(screen.queryByText('Can read and write')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Add folder/ })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
+    });
+
+    it('keeps the Internet switch usable when only the folders are not enforced', async () => {
+        mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false, internet_enforced: true });
+        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'gaia' }] });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const toggle = await screen.findByRole('switch', { name: 'Internet for this chat' });
+        expect(toggle).toBeEnabled();
+        expect(screen.queryByText(/can't be changed from this chat/)).not.toBeInTheDocument();
+    });
+
+    it('shows Internet as text for an agent that keeps its own network rules', async () => {
+        mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false, internet_enforced: false });
+        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'email' }] });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        expect(await screen.findByText('On')).toBeInTheDocument();
         expect(screen.queryByRole('switch', { name: 'Internet for this chat' })).not.toBeInTheDocument();
-        expect(screen.getByText('On')).toBeInTheDocument();
         expect(screen.getAllByText(/can't be changed from/)).toHaveLength(1);
     });
 
@@ -228,6 +243,19 @@ describe('Internet', () => {
         await act(async () => { await change!(() => mocked.setInternet(SID, false)); });
         await act(async () => { answerLateRead(ENV); });
         expect(screen.getByRole('switch', { name: 'Internet for this chat' })).toHaveAttribute('aria-checked', 'false');
+    });
+
+    it("shows the saved switch and why when the running turn couldn't be told", async () => {
+        const detail = "Internet is off from the next message, but the running agent couldn't be told (gone), so the Agent UI ended its turn. Send the message again.";
+        mocked.setInternet.mockRejectedValue(Object.assign(new Error(detail), { detail, httpStatus: 502 }));
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const toggle = await screen.findByRole('switch', { name: 'Internet for this chat' });
+        mocked.getEnvironment.mockResolvedValue({ ...ENV, internet: false });
+
+        fireEvent.click(toggle);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(detail);
+        await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'));
     });
 
     it('shows the offline notice for a chat saved with internet off', async () => {

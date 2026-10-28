@@ -213,7 +213,7 @@ function Folders({ sessionId }: { sessionId: string }) {
                     )}
                     {!env.enforced && (
                         <span className="sp-meta">
-                            This chat's agent runs as its own process, so these settings can't be changed from here.
+                            This chat's agent runs as its own process, so its folders can't be changed from here.
                         </span>
                     )}
                     {env.removed.length > 0 && (
@@ -235,7 +235,7 @@ function Folders({ sessionId }: { sessionId: string }) {
 }
 
 function Internet({ sessionId }: { sessionId: string }) {
-    const { env, change } = useSessionEnvironment(sessionId);
+    const { env, change, refresh } = useSessionEnvironment(sessionId);
     const [error, setError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     if (!env) return null;
@@ -246,11 +246,13 @@ function Internet({ sessionId }: { sessionId: string }) {
             await change(() => api.setInternet(sessionId, on));
         } catch (err) {
             setError(errorText(err));
+            // Saved even when the running turn couldn't be told, so show what was saved.
+            void refresh();
         } finally {
             setSaving(false);
         }
     };
-    if (!env.enforced) {
+    if (!env.internet_enforced) {
         return (
             <Row label="Internet">
                 <span className="sp-state-text">{env.internet ? 'On' : 'Off'}</span>

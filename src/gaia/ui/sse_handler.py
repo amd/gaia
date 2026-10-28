@@ -538,6 +538,14 @@ class SSEOutputHandler(OutputHandler):
     #: this run (an unattended sidecar query), so nothing offers to ask one.
     nobody_answers: bool = False
 
+    #: The sidecar session a relayed run keeps in step with the chat's Internet
+    #: switch; ``None`` when no relayed run is doing so.
+    active_relay_internet_session: Optional[str] = None
+
+    #: A relayed run is going whose agent is too old to be told the Internet
+    #: switch, so turning it off has to end the run instead.
+    relay_ignores_internet: bool = False
+
     def __init__(self, background_mode: bool = False):
         self.event_queue: queue.Queue = queue.Queue()
         self.cancelled = threading.Event()
