@@ -101,3 +101,36 @@ func TestDaemonGateStillRequiresTheLocalModelForALocalLaunch(t *testing.T) {
 		t.Fatalf("a missing local chat model no longer blocks a local launch: %+v", rep.Rows)
 	}
 }
+
+// A saved gateway default_model is the sidecar's model even when this launch
+// picked a local one; it must not come back as a ~4 GB download.
+func TestDaemonGateChecksThePickedLocalModelOverACloudDefault(t *testing.T) {
+	stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
+		t.Error("a local launch must not ask a cloud provider anything")
+		return nil, nil
+	})
+	orig := downloadedLocalModels
+	t.Cleanup(func() { downloadedLocalModels = orig })
+	downloadedLocalModels = func(context.Context) ([]lemonade.Model, error) {
+		return []lemonade.Model{{ID: "Gemma-4-E4B-it-GGUF", Downloaded: true}}, nil
+	}
+	cloudDefault := strings.ReplaceAll(initModelMissing, "Gemma-4-E4B-it-GGUF", "amd.DeepSeek-V4.1-Flash")
+
+	rep := Check(context.Background(), gaiaFake(503, cloudDefault), cloudDaemonCfg("Gemma-4-E4B-it-GGUF"))
+
+	row, _ := rep.Find(KeyModel)
+	if row.State != StateOK || strings.Contains(row.Line, "amd.") || strings.Contains(row.Detail, "4 GB") {
+		t.Fatalf("the cloud default was reported instead of the picked local model: %+v", row)
+	}
+	if blocker, blocked := rep.Blocker(); blocked {
+		t.Fatalf("launch refused by %s: %+v", blocker.Key, blocker)
+	}
+
+	downloadedLocalModels = func(context.Context) ([]lemonade.Model, error) { return nil, nil }
+	rep = Check(context.Background(), gaiaFake(503, cloudDefault), cloudDaemonCfg("Gemma-4-E4B-it-GGUF"))
+	blocker, blocked := rep.Blocker()
+	if !blocked || blocker.Key != KeyModel || !strings.Contains(blocker.Line, "Gemma-4-E4B-it-GGUF") ||
+		strings.Contains(blocker.Detail, "4 GB") {
+		t.Fatalf("a missing picked model was not reported by name: %+v", rep.Rows)
+	}
+}

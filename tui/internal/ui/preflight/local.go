@@ -609,7 +609,11 @@ var downloadedLocalModels = func(ctx context.Context) ([]lemonade.Model, error) 
 // checkPickedModel confirms the chosen local model is on disk; setup was told
 // to leave the chat model alone, so nothing else would notice it missing.
 func (l localRunner) checkPickedModel(ctx context.Context, row Row) Row {
-	picked := l.pickedLocalModel()
+	return checkLocalModelDownloaded(ctx, l.pickedLocalModel(), row)
+}
+
+// checkLocalModelDownloaded confirms a local model the user picked is on disk.
+func checkLocalModelDownloaded(ctx context.Context, picked string, row Row) Row {
 	models, err := downloadedLocalModels(ctx)
 	if err != nil {
 		row.State = StateUnknown
