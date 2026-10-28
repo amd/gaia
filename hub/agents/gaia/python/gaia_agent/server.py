@@ -87,8 +87,9 @@ AGENT_ID = "gaia"
 #: 2.19 added ``/query``'s ``changes_turn_id`` field.
 #: 2.20 added ``/query``'s ``surface`` field.
 #: 2.21 added ``context`` to ``/query``'s ``final`` event.
-#: 2.22 added ``/query``'s ``turns`` field and ``final.model_messages``.
-API_VERSION = "2.22"
+#: 2.22 added ``/query``'s ``reasoning`` field.
+#: 2.23 added ``/query``'s ``turns`` field and ``final.model_messages``.
+API_VERSION = "2.23"
 
 #: How long ``final`` waits for the turn's context measurement before going without.
 _CONTEXT_WAIT_SECONDS = 15.0
@@ -264,7 +265,7 @@ class QueryRequest(_Strict):
         default=None,
         description=(
             "Earlier turns as the model saw them, oldest first (contract >= "
-            "2.22): each is that turn's `final.model_messages`, tool calls and "
+            "2.23): each is that turn's `final.model_messages`, tool calls and "
             "results included, or a user/assistant text pair for a turn that "
             "recorded none. Replaces `context` when sent; the agent keeps the "
             "newest whole turns that fit its context window."
@@ -281,6 +282,15 @@ class QueryRequest(_Strict):
                 if message.get("role") not in {"user", "assistant", "system", "tool"}:
                     raise ValueError(f"unknown role {message.get('role')!r} in turns")
         return v
+
+    reasoning: bool = Field(
+        default=False,
+        description=(
+            "Stream the model's reasoning as `reasoning` events with a `delta` "
+            "(contract >= 2.22), for a client that shows it apart from status "
+            "lines. Without it, reasoning folds into `status` lines as before."
+        ),
+    )
 
     @model_validator(mode="after")
     def _changes_need_a_session(self) -> "QueryRequest":
@@ -1664,7 +1674,9 @@ async def query(request: QueryRequest):
         return {**final, "context": run.context}
 
     async def _stream():
-        translator = CanonicalTranslator(request.run_id, agent_id=AGENT_ID)
+        translator = CanonicalTranslator(
+            request.run_id, agent_id=AGENT_ID, reasoning=request.reasoning
+        )
         terminated = False
         last_write = time.monotonic()
         try:

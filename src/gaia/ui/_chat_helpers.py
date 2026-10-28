@@ -64,6 +64,7 @@ from gaia.ui.email_sidecar.profiles import (
     documents_supported,
     memory_supported,
     profile_for,
+    reasoning_supported,
     scope_supported,
     surface_supported,
     turns_supported,
@@ -2454,6 +2455,7 @@ def _dispatch_sidecar_query(
         surface=(
             "agent_ui" if surface_supported(profile, handle.api_version) else None
         ),
+        reasoning=reasoning_supported(profile, handle.api_version),
         max_steps=max_steps,
         turns=relayed_turns,
     )
@@ -2471,6 +2473,18 @@ def _find_last_tool_step(steps: list) -> dict | None:
         if steps[i].get("type") == "tool":
             return steps[i]
     return None
+
+
+def _close_reasoning(steps: list, now_ms: int) -> None:
+    """Record how long the reasoning just before the answer ran, on its last piece."""
+    run = []
+    for step in reversed(steps):
+        if step.get("type") != "thinking":
+            break
+        run.append(step)
+    if run and "latencyMs" not in run[0]:
+        run[0]["latencyMs"] = now_ms - run[-1]["timestamp"]
+        run[0]["active"] = False
 
 
 def _agent_ui_wording(text: str) -> str:
@@ -4289,6 +4303,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     answer_event = event
                 elif event_type == "chunk":
                     full_response += event.get("content", "")
+                    _close_reasoning(
+                        captured_steps,
+                        int(asyncio.get_running_loop().time() * 1000),
+                    )
+                elif event_type == "commentary":
+                    # Those chunks narrated a tool call; the answer starts after it.
+                    full_response = ""
                 elif event_type == "agent_error" and event.get("fatal"):
                     # A relayed sidecar's terminal error: the turn ends here.
                     fatal_error = event.get("content") or ""
@@ -4306,6 +4327,20 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "label": "Thinking",
                             "detail": event.get("content"),
                             "active": True,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        }
+                    )
+                elif event_type == "commentary":
+                    step_id += 1
+                    for s in captured_steps:
+                        s["active"] = False
+                    captured_steps.append(
+                        {
+                            "id": step_id,
+                            "type": "commentary",
+                            "label": "Commentary",
+                            "detail": event.get("content"),
+                            "active": False,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                         }
                     )

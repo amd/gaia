@@ -258,7 +258,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.22"`                  |
+| Contract version   | `API_VERSION = "2.23"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -354,7 +354,7 @@ model's failure reads "the model server at `host:port`", not "Lemonade on this
 machine". Pre-2.20 binaries `422` the field and word every such error for the
 TUI.
 
-`turns` (contract ≥ 2.22) is the conversation so far as the model saw it,
+`turns` (contract ≥ 2.23) is the conversation so far as the model saw it,
 oldest first. Each entry is one earlier turn's `final.model_messages`, which
 holds the assistant's tool calls and the tool results, or a user/assistant text
 pair for a turn that recorded none. The agent replays the newest whole turns
@@ -362,7 +362,13 @@ that fit its context window and says in a `status` event when older ones drop
 out. Sent, it replaces `context`, which must then be `[]`. Every `final` carries
 `model_messages` so a caller can store it with the reply; it is absent when the
 loop had not returned 15 s after its answer, and that turn then replays as text
-only. Pre-2.22 binaries `422` `turns`.
+only. Pre-2.23 binaries `422` `turns`.
+
+`reasoning` (contract ≥ 2.22), when `true`, streams the model's reasoning as
+`reasoning` events, `{ "type": "reasoning", "delta": "…" }`, so a client can
+show it apart from `status` lines and from the answer's `token`s. Each delta
+keeps its own spacing: join them as they arrive. Without the field, reasoning
+folds into `status` lines as before. Pre-2.22 binaries `422` it.
 
 ```json
 {

@@ -21,9 +21,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   become a short note naming the tool, and its longest messages are cut with
   a note saying how much.
 
-### For integrators: contract 2.22
+### For integrators: contract 2.23
 
-- **The agent remembers its own tool calls across turns** (contract **2.22**,
+- **The agent remembers its own tool calls across turns** (contract **2.23**,
   #5701). A caller that pushed history as `context` could send only text, so
   on the next turn the agent saw its earlier answers but not the commands it
   ran or their errors, and "why did that fail?" got "I have no record of the
@@ -31,8 +31,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   model saw it, tool calls and results included. Send those back in the new
   `turns` field, oldest first, and the agent replays them, keeping the newest
   whole turns that fit its context window. `turns` replaces `context` when
-  sent. Pre-2.22 binaries refuse the field with `422`, so probe `/version`
+  sent. Pre-2.23 binaries refuse the field with `422`, so probe `/version`
   first.
+
+### For integrators: contract 2.22
+
+- **A client can show the model's reasoning.** Over `/query` the reasoning
+  only arrived folded into `status` lines, so the Agent UI showed none of it
+  for an installed GAIA. A request with `reasoning: true` now gets it as
+  `reasoning` events, `{ delta }`, kept apart from the answer. Without the
+  field nothing changes. Older binaries reject it with `422`.
 
 ### For integrators: contract 2.21
 
