@@ -20,7 +20,6 @@ contract version is tracked separately as
 - **Sensitive credentials stay out of memory and the conversation log.** PINs,
   card numbers, SSNs and other credential-shaped text are not saved as
   memories, and logged turns replace matching spans with `[secret removed]`.
-
 - **Connect prompts name the right Settings tab.** The agent sent users to a
   "Connections" tab in Settings, which the Agent UI doesn't have; it now says
   "Settings → Connectors".
