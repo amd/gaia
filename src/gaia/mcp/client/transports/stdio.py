@@ -191,9 +191,8 @@ class StdioTransport(MCPTransport):
         self._stderr_reader: Optional[threading.Thread] = None
         #: Descendants seen so far, by PID, so a dead parent's are still found.
         self._children: Dict[int, "psutil.Process"] = {}
-        self._started_at = 0.0
-        #: The server process as psutil sees it; None when it can't be
-        #: confirmed as the one this connect() started.
+        #: The server process as psutil sees it; None when it cannot be
+        #: inspected after launch.
         self._ps_server: Optional["psutil.Process"] = None
         self._secret_values: Optional[List[str]] = None
 
@@ -401,7 +400,6 @@ class StdioTransport(MCPTransport):
             # credentials into the server.
             merged_env = child_env(self.env)
 
-            self._started_at = time.time()
             self._process = subprocess.Popen(
                 argv,
                 shell=False,
@@ -423,7 +421,7 @@ class StdioTransport(MCPTransport):
 
             logger.debug(f"MCP server process started (PID: {self._process.pid})")
 
-            self._ps_server = self._own_process(self._process.pid)
+            self._ps_server = self._own_process(self._process)
             self._start_readers()
 
             # Brief pause to catch immediate crashes (e.g. missing binary, SIGSEGV
@@ -508,18 +506,21 @@ class StdioTransport(MCPTransport):
         finally:
             self._process = None
 
-    def _own_process(self, pid: Any) -> Optional["psutil.Process"]:
-        """*pid* as a psutil process, if it is the one this connect() started."""
-        if not isinstance(pid, int):
+    @staticmethod
+    def _own_process(proc: subprocess.Popen) -> Optional["psutil.Process"]:
+        """Return the process this transport just launched, if psutil can inspect it.
+
+        ``Popen.pid`` is the identity returned by this launch, so comparing its
+        wall-clock creation time to ``time.time()`` only risks rejecting our own
+        process on platforms with coarser or skewed process timestamps.
+        """
+        if not isinstance(proc, subprocess.Popen):
             return None
         try:
-            candidate = psutil.Process(pid)
-            # A PID that already existed before the launch is someone else's.
-            if candidate.create_time() >= self._started_at - 1:
-                return candidate
+            return psutil.Process(proc.pid)
         except psutil.Error as e:
-            logger.debug("MCP server PID %s not visible to psutil: %s", pid, e)
-        return None
+            logger.debug("MCP server PID %s not visible to psutil: %s", proc.pid, e)
+            return None
 
     def _track_children(self) -> None:
         """Remember the processes the server has started so far.
