@@ -39,6 +39,24 @@ def load(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
     return db.get_session_environment(session_id)
 
 
+def with_folder_note(message: str, folders: List[str]) -> str:
+    """*message* as sent to the chat's agent, led by a note naming *folders*."""
+    # A granted folder only widens the scope; the model must also be told it.
+    if not folders:
+        return message
+    if len(folders) == 1:
+        note = (
+            f"[This chat is working in the folder {folders[0]}. When the user "
+            'says "this folder" or "here", they mean it.]'
+        )
+    else:
+        note = (
+            f"[This chat is working in these folders: {', '.join(folders)}. "
+            'When the user says "this folder" or "here", they mean these.]'
+        )
+    return f"{note}\n\n{message}"
+
+
 def apply_to_agent(agent: Any, env: Dict[str, Any]) -> bool:
     """Give *agent* the chat's folders and internet switch.
 

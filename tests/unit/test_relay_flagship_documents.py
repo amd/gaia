@@ -77,6 +77,7 @@ class _DocAgent:
         self.indexed_files: set = set()
         self.path_validator = PathValidator([str(scope)])
         self.rag = _Rag(self.path_validator)
+        self.queries: list = []
 
     def rebuild_system_prompt(self):
         pass
@@ -84,6 +85,7 @@ class _DocAgent:
     def process_query(self, query, max_steps=None):
         from pathlib import Path
 
+        self.queries.append(query)
         readable = sorted(
             Path(p).read_text(encoding="utf-8") for p in self.indexed_files
         )
@@ -327,6 +329,14 @@ def test_a_folder_added_to_the_chat_reaches_the_relayed_flagship(
 
     [agent] = agents
     assert str(folder.resolve()) in agent.built_with["allowed_paths"]
+    # The model is told which folder "my folder" is; the chat keeps the question.
+    [query] = agent.queries
+    assert query.startswith(f"[This chat is working in the folder {folder.resolve()}.")
+    assert query.endswith("\n\nwhat's in my folder?")
+    assert all(
+        "This chat is working in" not in (m["content"] or "")
+        for m in chat.db.get_messages(chat.session_id)
+    )
 
 
 def test_an_older_flagship_says_folders_need_an_update(

@@ -79,6 +79,7 @@ from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
 from .session_environment import apply_environment, folders_refusal
 from .session_environment import load as load_environment
+from .session_environment import with_folder_note
 from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
 from .utils import attached_upload_paths, managed_documents_dir
@@ -2287,6 +2288,7 @@ def _dispatch_sidecar_query(
             {"type": "agent_error", "content": folders_refusal(agent_type)}
         )
         return
+    query = with_folder_note(request.message, folders or [])
 
     relayed_scope = None
     if allowed_paths is not None and takes_scope:
@@ -2383,7 +2385,7 @@ def _dispatch_sidecar_query(
 
     try:
         context = _relayed_history(
-            history_pairs, model_id, request.message, sse_handler, session_id
+            history_pairs, model_id, query, sse_handler, session_id
         )
     except (LemonadeClientError, ModelFitError, GaiaConfigError) as exc:
         sse_handler._emit(
@@ -2402,7 +2404,7 @@ def _dispatch_sidecar_query(
     relay_query(
         sse_handler,
         proxy,
-        query=request.message,
+        query=query,
         context=context,
         model_id=model_id,
         # The chat's own mode, read per turn: the in-process path applies it
@@ -3435,8 +3437,11 @@ async def _get_chat_response(
 
         _apply_memory_state(agent, session, db)
         apply_environment(agent, session_id, db)
+        query = with_folder_note(
+            request.message, load_environment(db, session_id)["folders"]
+        )
 
-        _restore_model_history(agent, db, session_id, request.message)
+        _restore_model_history(agent, db, session_id, query)
 
         # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
         # omitted, the agent's __init__ set model_id via kwargs.setdefault —
@@ -3458,7 +3463,7 @@ async def _get_chat_response(
         try:
             # Never re-run on failure: tools the turn already ran would run
             # again. The error says whether sending it again can help.
-            result = agent.process_query(request.message)
+            result = agent.process_query(query)
         finally:
             agent.console = activity._inner
             warning = recording.close()
@@ -4045,6 +4050,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                 _apply_memory_state(agent, session, db)
                 apply_environment(agent, request.session_id, db)
+                query = with_folder_note(
+                    request.message, load_environment(db, session_id)["folders"]
+                )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -4059,9 +4067,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     session_id, agent, _followup_taken
                 )
 
-                _restore_model_history(
-                    agent, db, session_id, request.message, sse_handler
-                )
+                _restore_model_history(agent, db, session_id, query, sse_handler)
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -4097,7 +4103,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # and the next turn's pre-flight reloads an evicted model.
                 t_query = _time.monotonic()
                 result_holder["agent"] = agent
-                result = agent.process_query(request.message)
+                result = agent.process_query(query)
                 logger.info(
                     "PERF process_query session=%s took=%.3fs",
                     session_id[:8],
