@@ -100,7 +100,7 @@ def test_the_contract_advertises_allowed_paths():
 
 def test_the_contract_advertises_working_directory():
     major, minor = (int(x) for x in server_mod.API_VERSION.split(".")[:2])
-    assert (major, minor) >= (2, 22)
+    assert (major, minor) >= (2, 23)
     assert "working_directory" in server_mod.QueryRequest.model_fields
 
 

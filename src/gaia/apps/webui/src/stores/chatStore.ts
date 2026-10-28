@@ -4,7 +4,7 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
-import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode } from '../types';
+import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode, ProviderId } from '../types';
 import { applyTheme, resolveTheme, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
@@ -93,6 +93,11 @@ function readQueues(): Record<string, QueuedMessage[]> {
         log.system.warn('Saved queued messages unreadable; starting with none.', err);
         return {};
     }
+}
+
+export interface PendingPrompt {
+    sessionId: string;
+    text: string;
 }
 
 /** A question the agent is blocked on; `expiresAt` is when the backend stops waiting (ms), or null. */
@@ -209,6 +214,8 @@ interface ChatState {
     showFileBrowser: boolean;
     /** Open settings section, or null when settings is closed. */
     settingsSection: SettingsSection | null;
+    /** Provider tab Settings > Model opens on; null follows the active model. */
+    settingsProvider: ProviderId | null;
     showMemoryDashboard: boolean;
     showSchedules: boolean;
     /** Permission mode picked on the new-chat screen, applied when the chat is created. */
@@ -223,11 +230,13 @@ interface ChatState {
     draftDocumentIds: string[];
     /** The next new chat is created private, so its first message is never remembered. */
     draftPrivate: boolean;
+    /** A folder the next new chat may read and write from its first message. */
+    draftFolder: string | null;
     sidebarOpen: boolean;
     sidebarCollapsed: boolean;
     isLoadingMessages: boolean;
-    /** A first message queued before its chat view mounted; ChatView sends it. */
-    pendingPrompt: string | null;
+    /** A message queued for one chat; only that chat's view sends it. */
+    pendingPrompt: PendingPrompt | null;
     setThemePreference: (pref: ThemePreference) => void;
     /** Color palette; `default` is the built-in warm gray look. */
     palette: PaletteId;
@@ -238,7 +247,7 @@ interface ChatState {
     syncSystemTheme: () => void;
     setShowDocLibrary: (show: boolean) => void;
     setShowFileBrowser: (show: boolean) => void;
-    openSettings: (section?: SettingsSection) => void;
+    openSettings: (section?: SettingsSection, provider?: ProviderId) => void;
     closeSettings: () => void;
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
@@ -249,6 +258,7 @@ interface ChatState {
     /** After a chat is created: the next draft starts from the default again. */
     resetDraftPermissionMode: () => void;
     setDraftPrivate: (on: boolean) => void;
+    setDraftFolder: (path: string | null) => void;
     addDraftDocuments: (ids: string[]) => void;
     removeDraftDocument: (id: string) => void;
     clearDraftDocuments: () => void;
@@ -256,7 +266,7 @@ interface ChatState {
     toggleSidebarCollapsed: () => void;
     setSidebarCollapsed: (collapsed: boolean) => void;
     setLoadingMessages: (loading: boolean) => void;
-    setPendingPrompt: (prompt: string | null) => void;
+    setPendingPrompt: (prompt: PendingPrompt | null) => void;
 }
 
 /** The sidebar's Memory, Scheduled tasks and Documents: opening one closes the others. */
@@ -408,7 +418,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             if (last.type !== 'thinking') return state;
             steps[steps.length - 1] = {
                 ...last,
-                detail: (last.detail ? last.detail + '\n' : '') + content,
+                // Streamed pieces carry their own spacing, as the saved turn joins them.
+                detail: (last.detail ?? '') + content,
                 active: true,
             };
             return { agentSteps: steps };
@@ -480,6 +491,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showDocLibrary: false,
     showFileBrowser: false,
     settingsSection: null,
+    settingsProvider: null,
     showMemoryDashboard: false,
     showSchedules: false,
     draftPermissionMode: 'ask',
@@ -488,6 +500,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     defaultPermissionModeKnown: false,
     draftDocumentIds: [],
     draftPrivate: false,
+    draftFolder: null,
     setThemePreference: (pref) => {
         writePref('gaia-chat-theme', pref);
         const theme = resolveTheme(pref);
@@ -522,8 +535,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setShowDocLibrary: (show) =>
         set(show ? { ...NO_DESTINATION, showDocLibrary: true } : { showDocLibrary: false }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
-    openSettings: (section = 'general') => set({ settingsSection: section }),
-    closeSettings: () => set({ settingsSection: null }),
+    openSettings: (section = 'general', provider) => set({ settingsSection: section, settingsProvider: provider ?? null }),
+    closeSettings: () => set({ settingsSection: null, settingsProvider: null }),
     setShowMemoryDashboard: (show) =>
         set(show ? { ...NO_DESTINATION, showMemoryDashboard: true } : { showMemoryDashboard: false }),
     setShowSchedules: (show) =>
@@ -542,6 +555,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     resetDraftPermissionMode: () =>
         set((state) => ({ draftPermissionMode: state.defaultPermissionMode, draftPermissionModeChosen: false })),
     setDraftPrivate: (on) => set({ draftPrivate: on }),
+    setDraftFolder: (path) => set({ draftFolder: path }),
     addDraftDocuments: (ids) =>
         set((state) => {
             const toAdd = ids.filter((id) => !state.draftDocumentIds.includes(id));

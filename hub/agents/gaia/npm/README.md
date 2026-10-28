@@ -202,9 +202,9 @@ else beside them. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 errors and lessons the agent records on its own; omit it and memory stays as the
 agent has it. Send `allowed_paths` with the folders your UI shows the chat can
 read, so the agent works in the same scope. Send `working_directory` (contract
-≥ 2.22) with the absolute chat workspace so bare file names resolve in the same
+≥ 2.23) with the absolute chat workspace so bare file names resolve in the same
 folder the UI shows; it is separate from the access allowlist. Binaries older
-than 2.18 reject `allowed_paths` and older than 2.22 reject `working_directory`,
+than 2.18 reject `allowed_paths` and older than 2.23 reject `working_directory`,
 so probe `/version` first. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
@@ -234,10 +234,17 @@ its own settings screen sends `surface` (`"tui"`, `"agent_ui"` or `"cli"`) to
 get its own wording; a headless caller omits it. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Showing the model's reasoning?** Send `reasoning: true` (contract ≥ 2.22)
+and it arrives as `reasoning` events with a `delta`, apart from `status` lines
+and the answer. Join the deltas as they come. Older binaries reject the field
+with `422`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
 **Showing how full the model's window is?** From contract 2.21 the `final`
 event carries `context`: the window size, the tokens the next call will take,
 and what takes them (prompt, tools, documents, history). Older binaries leave
-it out. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+it out. It also carries `performance`, the turn's model and tool timings and
+each model call's token counts, when the binary sends it. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message

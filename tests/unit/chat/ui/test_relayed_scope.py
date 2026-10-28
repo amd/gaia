@@ -139,9 +139,9 @@ def test_only_a_flagship_at_2_18_takes_the_scope(version, expected):
 
 
 @pytest.mark.parametrize(
-    "version, expected", [("2.22", True), ("3.0", True), ("2.21", False), (None, False)]
+    "version, expected", [("2.23", True), ("3.0", True), ("2.22", False), (None, False)]
 )
-def test_only_a_flagship_at_2_22_takes_the_working_directory(version, expected):
+def test_only_a_flagship_at_2_23_takes_the_working_directory(version, expected):
     assert working_directory_supported(GAIA_PROFILE, version) is expected
     assert working_directory_supported(EMAIL_PROFILE, "9.9") is False
 
@@ -149,8 +149,8 @@ def test_only_a_flagship_at_2_22_takes_the_working_directory(version, expected):
 def test_the_relay_sends_the_workspace_only_to_a_supporting_flagship(monkeypatch):
     workspace = "/tmp/workspace"
 
-    new = _dispatch(monkeypatch, "2.22", [workspace])
-    old = _dispatch(monkeypatch, "2.21", [workspace])
+    new = _dispatch(monkeypatch, "2.23", [workspace])
+    old = _dispatch(monkeypatch, "2.22", [workspace])
 
     assert new["working_directory"] == workspace
     assert "working_directory" not in old
@@ -174,7 +174,7 @@ class _Proxy:
         yield {"type": "final", "answer": "ok"}
 
 
-def _dispatch(monkeypatch, version, allowed):
+def _dispatch(monkeypatch, version, allowed, folders=None):
     proxy = _Proxy()
 
     class _Handle:
@@ -192,6 +192,7 @@ def _dispatch(monkeypatch, version, allowed):
         "gaia",
         allowed_paths=allowed,
         working_directory=allowed[0],
+        folders=folders,
     )
     [body] = proxy.bodies
     return body
@@ -204,6 +205,25 @@ def test_the_relay_sends_the_scope_the_ui_computed(tree, monkeypatch):
     body = _dispatch(monkeypatch, "2.18", [str(tree.work), str(other)])
 
     # Already narrowed: the sidecar may not share this process's environment.
+    assert body["allowed_paths"] == [str(tree.work)]
+
+
+def test_the_relay_adds_the_chats_folders_to_the_scope(tree, monkeypatch):
+    body = _dispatch(
+        monkeypatch,
+        "2.18",
+        [str(tree.managed)],
+        folders=[str(tree.work), str(tree.managed)],
+    )
+
+    assert body["allowed_paths"] == sorted([str(tree.managed), str(tree.work)])
+
+
+def test_the_setting_still_narrows_an_added_folder(tree, monkeypatch):
+    monkeypatch.setenv(ALLOWED_PATHS_ENV, str(tree.work))
+
+    body = _dispatch(monkeypatch, "2.18", [str(tree.work)], folders=[str(tree.project)])
+
     assert body["allowed_paths"] == [str(tree.work)]
 
 

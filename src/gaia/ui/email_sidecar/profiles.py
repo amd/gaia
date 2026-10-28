@@ -178,6 +178,9 @@ class RelayProfile:
     #: Contract version from which ``/query`` takes ``surface``, the front-end
     #: the turn comes from. ``None`` means the relay never sends it.
     min_surface_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes ``reasoning`` and streams the
+    #: model's reasoning as ``reasoning`` events. ``None`` means the relay never asks.
+    min_reasoning_api_version: Optional[Tuple[int, int]] = None
     #: Shown when the agent itself fails to start (it crashed or never got
     #: healthy). Shown through :meth:`start_failed_text`, which adds the log folder.
     start_failed_message: str = ""
@@ -537,8 +540,8 @@ GAIA_PROFILE = RelayProfile(
     min_skills_api_version=(2, 17),
     # 2.18 added /query's allowed_paths field.
     min_scope_api_version=(2, 18),
-    # 2.22 adds the explicit workspace for relative file paths.
-    min_working_directory_api_version=(2, 22),
+    # 2.23 adds the explicit workspace for relative file paths.
+    min_working_directory_api_version=(2, 23),
     skills_upgrade_message=(
         "The installed GAIA agent is too old to list its skills here. Update "
         "GAIA to the latest version, then reopen this page. Its skills still "
@@ -555,6 +558,8 @@ GAIA_PROFILE = RelayProfile(
     min_changes_api_version=(2, 19),
     # 2.20 added /query's surface field.
     min_surface_api_version=(2, 20),
+    # 2.22 added /query's reasoning field.
+    min_reasoning_api_version=(2, 22),
     # 2.21 added /query's final.context.
     min_context_api_version=(2, 21),
     context_upgrade_message=(
@@ -689,6 +694,15 @@ def surface_supported(profile: RelayProfile, api_version: Optional[str]) -> bool
     Same evidence rule as :func:`api_version_supported`: no version, no claim.
     """
     floor = profile.min_surface_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def reasoning_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``reasoning`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_reasoning_api_version
     return floor is not None and _meets(api_version, floor)
 
 

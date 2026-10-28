@@ -311,7 +311,7 @@ it (**Step 6**). Until the per-agent grant lands, the agent surfaces:
 
 ```
 AGENT_NOT_GRANTED: this agent isn't granted these scopes on google: …
-Open Settings → Connections → google → Per-agent grants and grant them.
+Open Settings → Connectors → google → Per-agent grants and grant them.
 ```
 
 Fix it in the UI (Google tile → **Per-agent grants**) or run the
@@ -381,7 +381,7 @@ and reconnect from the UI to reset.
 
 Two places — both work:
 
-- **From GAIA**: Settings → Connections → Google → **Disconnect**.
+- **From GAIA**: Settings → Connectors → Google → **Disconnect**.
   Removes the refresh token from the keyring; the next API call
   errors with `NOT_CONNECTED`.
 - **From Google**: Follow Google's
