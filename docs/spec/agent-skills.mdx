@@ -227,8 +227,8 @@ a skill of the same `name` found earlier.
 | Precedence | Location | Root label | Scope |
 |:----------:|----------|------------|-------|
 | 1 | Agent-bundled `skills/<name>/` | `agent-bundled` | Shipped inside an agent package; read-only. Auto-detected beside the agent's module and beside its `gaia-agent.yaml`, plus any path the agent lists in `SKILL_DIRS`. |
-| 2 | `~/.gaia/skills/<name>/` | `user` | This user, all projects. The **writable** root — where `gaia skill create` and `gaia skill import` install. Honors `GAIA_CONFIG_DIR`. |
-| 3 | `./.claude/skills/` then `~/.claude/skills/` | `claude-import` | **Read-only import** for Claude Code compatibility. |
+| 2 | `~/.gaia/skills/<name>/` | `user` | This user, all projects. The **writable** root — where `gaia skill create` and `gaia skill import` install. Moves with `GAIA_HOME` (or `GAIA_CONFIG_DIR`). |
+| 3 | `./.claude/skills/` then `~/.claude/skills/` | `claude-project` / `claude-import` | **Read-only import** for Claude Code compatibility. When the agent knows its project root (`SkillManager(project_dir=...)`), that root's `.claude/skills` is labelled `claude-project` instead of the working directory's `claude-import`. |
 
 Roots 1–2 are native GAIA. Root 3 lets an existing Claude Code skill library work
 in GAIA with zero migration (see [Compatibility](#agent-skills--claude-code-compatibility)).
@@ -451,10 +451,20 @@ stays in the cached head of the prompt. It costs about one line per skill (rough
 external state must come from a tool call, never from memory. A description is
 cut at 480 characters in the list, so put the "use when" triggers early. A skill
 already under LOADED SKILLS stays listed, and the model is told not to load it
-again — dropping it would change the block from turn to turn. Read-only
-`.claude/skills` imports are loadable by name but not listed — they are another
-host's marketplace, written for working *on* a repo rather than answering a
-user's question.
+again — dropping it would change the block from turn to turn. The project's own
+`.claude/skills` (`claude-project`) are listed, as Claude Code lists them: they
+say how to work on the repo the agent was started in. Other `.claude/skills`
+imports (`claude-import`: `~/.claude/skills`, or a working directory that is
+not a known project) are loadable by name but not listed.
+
+A `claude-project` skill is parsed the way Claude Code parses it. One GAIA's
+schema rejects still loads, with a warning naming the reason: its name is
+lowercased and hyphenated (`Deploy_Helper` → `deploy-helper`) and need not match
+its folder, a missing `description` is the body's first paragraph, the
+1,024-character description limit is waived, and a malformed `version` or
+`metadata` is dropped — `metadata.gaia` that does not parse is dropped whole, so
+it never grants anything. A skill with no usable name, or with neither a
+description nor a body, is still reported as invalid.
 
 A CLI granted through `shell:execute:<binary>` is not refused before its skill
 is loaded: each call goes to the user's approval prompt instead. The grant is

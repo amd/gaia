@@ -10,6 +10,7 @@ Every test runs from a cold state: roots live under ``tmp_path`` and the real
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -88,8 +89,22 @@ def test_only_three_roots_in_v1(tmp_path):
 
 
 def test_user_root_honors_gaia_config_dir(monkeypatch, tmp_path):
+    monkeypatch.delenv("GAIA_HOME", raising=False)
     monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path / "custom"))
     assert user_skills_dir() == tmp_path / "custom" / "skills"
+
+
+def test_user_root_honors_gaia_home_over_config_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "portable"))
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path / "custom"))
+    assert user_skills_dir() == tmp_path / "portable" / "skills"
+
+
+def test_user_root_ignores_a_blank_gaia_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("GAIA_HOME", "  ")
+    monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert user_skills_dir() == tmp_path / ".gaia" / "skills"
 
 
 def test_discovers_skills_from_every_root(roots):

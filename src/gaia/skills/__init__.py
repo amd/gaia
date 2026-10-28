@@ -80,8 +80,10 @@ from gaia.skills.format import (
 )
 from gaia.skills.loader import register_skill_tools, unregister_skill_tools
 from gaia.skills.manager import (
+    CLAUDE_ROOTS,
     ROOT_AGENT_BUNDLED,
     ROOT_CLAUDE_IMPORT,
+    ROOT_CLAUDE_PROJECT,
     ROOT_USER,
     SkillManager,
     SkillRoot,
@@ -160,7 +162,9 @@ __all__ = [
     "SkillRoot",
     "ROOT_AGENT_BUNDLED",
     "ROOT_USER",
+    "CLAUDE_ROOTS",
     "ROOT_CLAUDE_IMPORT",
+    "ROOT_CLAUDE_PROJECT",
     "get_default_manager",
     "reset_default_manager",
     "user_skills_dir",

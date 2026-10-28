@@ -17,6 +17,11 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, Iterator, List, Optional
 
+# Re-exported: the resolver lives in a leaf module so gaia.logger can use it.
+from gaia.home import (  # noqa: F401  pylint: disable=unused-import
+    default_gaia_home,
+    gaia_home,
+)
 from gaia.utils.file_lock import (
     FileLockError,
     file_lock,
@@ -25,32 +30,6 @@ from gaia.utils.file_lock import (
 )
 
 log = logging.getLogger(__name__)
-
-
-def gaia_home() -> Path:
-    """Return the directory that holds GAIA's on-disk state.
-
-    Precedence:
-
-    1. ``GAIA_HOME`` relocates the whole tree.
-    2. ``GAIA_CONFIG_DIR`` keeps the existing config-directory override.
-    3. ``~/.gaia``.
-    """
-    for env_var in ("GAIA_HOME", "GAIA_CONFIG_DIR"):
-        raw = os.environ.get(env_var)
-        if raw is None:
-            continue
-        raw = raw.strip()
-        if not raw:
-            continue
-        return Path(os.path.expandvars(os.path.expanduser(raw)))
-    return default_gaia_home()
-
-
-def default_gaia_home() -> Path:
-    """``~/.gaia``: the home of a process with no ``GAIA_HOME``, and so of the
-    machine's default daemon and its Lemonade Server."""
-    return Path.home() / ".gaia"
 
 
 def mcp_servers_path() -> Path:

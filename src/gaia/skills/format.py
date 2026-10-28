@@ -648,6 +648,115 @@ def parse_skill_file(
     return skill
 
 
+_NON_NAME_CHARS = re.compile(r"[^a-z0-9]+")
+
+
+def _project_skill_name(raw: str) -> str:
+    """``My_Skill`` -> ``my-skill``: the loadable spelling of a Claude Code name."""
+    return _NON_NAME_CHARS.sub("-", raw.strip().lower()).strip("-")
+
+
+def _first_paragraph(body: str) -> str:
+    for block in re.split(r"\n\s*\n", body):
+        lines = [ln for ln in block.strip().splitlines() if not ln.startswith("#")]
+        text = " ".join(" ".join(lines).split())
+        if text:
+            return text
+    return ""
+
+
+def parse_project_skill_file(
+    path: Path | str,
+    *,
+    root: Optional[str] = None,
+    read_only: bool = True,
+) -> Skill:
+    """Parse a repository's ``.claude/skills`` skill the way Claude Code reads it.
+
+    A GAIA-valid skill parses exactly as :func:`parse_skill_file` would. One
+    GAIA's schema rejects is still loaded, with a warning naming why, when
+    Claude Code would load it: the name may be any case or use underscores
+    (normalised to a loadable ``lower-hyphen`` name) and need not match its
+    directory, a missing ``description`` is the body's first paragraph, the
+    1,024-character description cap does not apply, and a malformed
+    ``version`` or ``metadata`` is dropped. ``metadata.gaia`` that does not
+    parse is dropped whole, so a broken declaration never grants anything.
+
+    Raises:
+        SkillValidationError: no frontmatter, no usable name, or no
+            description and an empty body.
+    """
+    path = Path(path)
+    skill_file = path / SKILL_FILENAME if path.is_dir() else path
+    try:
+        return parse_skill_file(skill_file, root=root, read_only=read_only)
+    except SkillValidationError as strict_error:
+        reason = strict_error
+    try:
+        text = skill_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        raise reason from None  # already says the file is missing or unreadable
+    source = str(skill_file)
+    frontmatter, body = split_frontmatter(text, source=source)
+
+    raw_name = frontmatter.get("name")
+    if not isinstance(raw_name, str) or not raw_name.strip():
+        raw_name = skill_file.parent.name
+    name = _project_skill_name(raw_name)
+    if not NAME_PATTERN.match(name) or len(name) > MAX_NAME_LENGTH:
+        raise SkillValidationError(
+            f"{source}: name {raw_name!r} cannot be made a skill name (lowercase "
+            f"letters, digits and hyphens, at most {MAX_NAME_LENGTH} characters). "
+            f"Rename it. See {FORMAT_DOCS_URL}#naming"
+        ) from reason
+
+    description = frontmatter.get("description")
+    if not isinstance(description, str) or not description.strip():
+        description = _first_paragraph(body)
+    if not description:
+        raise SkillValidationError(
+            f"{source}: no 'description' and an empty body, so nothing says when "
+            f"to use this skill. Add 'description: ...' to the frontmatter. "
+            f"See {FORMAT_DOCS_URL}#adopted-base-agent-skills-standard"
+        ) from reason
+
+    version = frontmatter.get("version")
+    if not isinstance(version, str) or not SEMVER_PATTERN.match(version):
+        version = None
+    license_ = frontmatter.get("license")
+    raw_metadata = frontmatter.get("metadata")
+    if not isinstance(raw_metadata, dict):
+        raw_metadata = {}
+    try:
+        gaia = GaiaMetadata.from_dict(raw_metadata.get("gaia"), skill_name=name)
+        Skill(name=name, description=description, gaia=gaia).parsed_permissions()
+    except SkillValidationError as exc:
+        log.warning("%s: ignoring its metadata.gaia: %s", source, exc)
+        gaia = GaiaMetadata()
+
+    known_top_level = {"name", "description", "license", "version", "metadata"}
+    skill = Skill(
+        name=name,
+        description=description,
+        body=body.strip("\n"),
+        license=str(license_) if license_ is not None else None,
+        version=version,
+        gaia=gaia,
+        other_metadata={k: v for k, v in raw_metadata.items() if k != "gaia"},
+        extra_fields={k: v for k, v in frontmatter.items() if k not in known_top_level},
+    )
+    skill.path = skill_file
+    skill.root = root
+    skill.read_only = read_only
+    log.warning(
+        "%s is not a valid GAIA skill (%s); loaded as Claude Code skill %r.",
+        source,
+        reason,
+        name,
+    )
+    return skill
+
+
 def parse_skill_metadata(
     path: Path | str,
     *,

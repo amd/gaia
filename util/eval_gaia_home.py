@@ -41,8 +41,8 @@ MEMORY_TABLES = ("knowledge", "conversations", "procedures", "tool_history")
 def env_for(home: Path) -> dict[str, str]:
     """The variables that move GAIA's on-disk state into *home*.
 
-    ``GAIA_CONFIG_DIR`` is needed beside ``GAIA_HOME``: the skills root, the RAG
-    cache and ChatAgent sessions follow it and ignore ``GAIA_HOME``.
+    ``GAIA_CONFIG_DIR`` is needed beside ``GAIA_HOME``: the RAG cache and
+    ChatAgent sessions follow it and ignore ``GAIA_HOME``.
     """
     home = Path(home)
     return {

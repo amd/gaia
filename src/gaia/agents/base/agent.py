@@ -3953,19 +3953,18 @@ Do NOT wrap conversational replies in JSON.
 
         # Captured code is inert until `gaia skill promote` — instructions
         # inject, tools.py is never imported (gaia.skills.capture).
-        from gaia.skills.capture import code_is_deferred
+        from gaia.skills.capture import code_is_deferred, deferred_remedy
 
         code_deferred = code_is_deferred(skill)
         if code_deferred:
             registered = {}
             logger.warning(
-                "Skill '%s' is captured and its code is not yet trusted: %d "
-                "tool(s) (%s) deferred — instructions loaded. Run "
-                "'gaia skill promote %s' in a terminal to enable them.",
+                "Skill '%s' is not yet trusted: %d tool(s) (%s) deferred — "
+                "instructions loaded. Run %s in a terminal to enable them.",
                 skill.name,
                 len(skill.gaia.tools),
                 ", ".join(skill.tool_names),
-                skill.name,
+                deferred_remedy(skill),
             )
         else:
             registered = register_skill_tools(skill)
@@ -3992,11 +3991,10 @@ Do NOT wrap conversational replies in JSON.
                     self.granted_binaries.grant(policy.binary, skill_name=skill.name)
             elif policies:
                 logger.warning(
-                    "Skill '%s' is captured and untrusted: binary grant(s) %s "
-                    "withheld until 'gaia skill promote %s'.",
+                    "Skill '%s' is untrusted: binary grant(s) %s withheld until %s.",
                     skill.name,
                     ", ".join(p.binary for p in policies),
-                    skill.name,
+                    deferred_remedy(skill),
                 )
 
             self.loaded_skills[name] = skill

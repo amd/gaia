@@ -138,8 +138,10 @@ def _catalog_line(skills: Dict[str, "Skill"], skill: "Skill") -> str:
 def render_catalog(skills: Dict[str, "Skill"]) -> str:
     """One line per listed skill, sorted by name; ``""`` when there are none.
 
-    ``.claude/skills`` imports stay loadable by name but are not listed: they are
-    another host's skills for working on a repo, not answers to a user's request.
+    The project's own ``.claude/skills`` are listed, as Claude Code lists them:
+    they say how to work on the repo the agent was started in. Other
+    ``.claude/skills`` imports (``~/.claude/skills``, or a working directory
+    that is not a project) stay loadable by name but are not listed.
     """
     lines = [
         _catalog_line(skills, skill)

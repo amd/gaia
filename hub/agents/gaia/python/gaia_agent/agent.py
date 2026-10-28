@@ -80,6 +80,20 @@ logger = get_logger(__name__)
 #: frozen sidecar; as ``SKILL_DIRS`` they outrank a same-named user or Claude Code copy.
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
+# Rendered when the session starts inside a code repository. General software
+# practice, not any one repo's rules: those come from its CLAUDE.md/AGENTS.md
+# and its .claude/skills, which the project-instructions and skill catalog load.
+REPOSITORY_WORK_PROMPT = """**WORKING IN A CODE REPOSITORY**
+You are working in the code repository at the current directory. Work like a careful senior engineer:
+- Follow the project's own instructions (CLAUDE.md / AGENTS.md) over your habits. They are already in this prompt under PROJECT INSTRUCTIONS: do not read those files again. Before a task one of the project's skills covers (code review, issue replies, releases, testing...), load that skill and follow it.
+- Ground every claim in code you have read in this session. Before saying something exists, is missing, or appears N times, search the WHOLE repository (every top-level folder, not only src/) and count the hits; say which files you checked. If you could not verify something, say so instead of guessing.
+- Read with intent: search for the symbol, then read the lines around it. Read a large file in ranges; never assume what you did not read.
+- Trace a change across files: who calls it, what tests cover it, what docs or configs describe it, what the inverse path does (create vs. delete, install vs. uninstall, start vs. stop).
+- Reviews and audits: go through the diff or files systematically and keep going after the first few findings. Check that every command, path, flag, setting and file a change introduces or documents (docs, test plans, scripts, error messages) really exists and would work as written. Report only defects you can show from the code, with file:line and a concrete failure scenario; most severe first. Match severity to evidence: block or escalate only for defects that would break users or are real security holes, not for missing polish or hypotheticals.
+- When you change code: find the root cause and fix it for every input it affects, not only the reported example; look for the same bug at other call sites; key the fix on the real condition, not a heuristic stand-in for it (keyword matching, special-casing one path or value). Keep the change focused, match the surrounding style, add or update tests for the behaviour, and run only the tests that cover what you changed (one file or test, not the whole suite) before you say it works. Say exactly what you ran and its result. When you only read, review or write prose, do not run tests unless one specific claim needs it.
+- Output: produce exactly the format the task asks for, written to the file it names. Lead with the finding or verdict; no preamble, no thanks, no restating the task.
+- Before you finish, re-read the task's requirements and the project's writing rules and check your draft against each one: right format, required sections present, length within limits, nothing the rules forbid. Fix what fails, then deliver."""
+
 #: The starter pack's canonical home, for a source checkout only.
 #:
 #: Packaging stages the pack into ``_SKILLS_DIR``; in a checkout that directory
@@ -407,11 +421,13 @@ class GaiaAgent(
         if getattr(self, "_skill_manager", None) is None:
             from gaia.skills import SkillManager
 
+            # The project's .claude/skills join the catalogue, as in Claude Code.
             self._skill_manager = SkillManager(
                 agent_skill_dirs=[*self.SKILL_DIRS, *self._bundled_skill_dirs()],
                 excluded_names=(
                     () if self.config.developer_mode else (ENGINEERING_SKILL,)
                 ),
+                project_dir=self._project_map_root(),
             )
         return self._skill_manager
 
@@ -420,6 +436,18 @@ class GaiaAgent(
         if name == ENGINEERING_SKILL and not self.config.developer_mode:
             raise PermissionError("The engineering skill requires --developer-mode.")
         return super().load_skill(name, manager=manager)
+
+    def get_repository_work_system_prompt(self) -> str:
+        """How to work inside a code repository, when the session has a project.
+
+        Keyed on the mapped project root, which already excludes GAIA's own
+        source (the dev sidecar's cwd) and folders outside GAIA_ALLOWED_PATHS.
+        Byte-stable for the session (prompt cache).
+        """
+        # Fast mode is the conversational path with no tools to work a repo with.
+        if self.config.fast or not self._project_map_root():
+            return ""
+        return REPOSITORY_WORK_PROMPT
 
     @property
     def _always_on_skill_names(self):

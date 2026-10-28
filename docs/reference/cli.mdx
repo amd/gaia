@@ -2458,13 +2458,14 @@ gaia skill audit <dir> [OPTIONS]                                  # pre-publish 
 gaia skill {search,install,remove,lock,promote,publish,keygen,trust} [OPTIONS] # marketplace + trust
 ```
 
-Skills are discovered from three roots, highest precedence first:
+Skills are discovered from these roots, highest precedence first:
 
 | Root label | Location | Writable? |
 |------------|----------|:---------:|
 | `agent-bundled` | An agent package's own `skills/` directory | No |
 | `user` | `~/.gaia/skills/` (honors `GAIA_CONFIG_DIR`) | **Yes** — where `create` and `import` install |
-| `claude-import` | `./.claude/skills/` then `~/.claude/skills/` | No — read-only Claude Code import |
+| `claude-project` | The agent's project's `.claude/skills/` | No — listed in the skill catalog like Claude Code lists them; its `tools.py` and CLI grants stay withheld, since cloning a repo is not consent to run its code |
+| `claude-import` | `./.claude/skills/` (when no project is known) then `~/.claude/skills/` | No — read-only Claude Code import, loadable by name but not listed in the catalog |
 
 ### Subcommands
 

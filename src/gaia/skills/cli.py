@@ -106,7 +106,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--root",
         default=None,
         help="Only show skills from this discovery root "
-        "(agent-bundled | user | claude-import)",
+        "(agent-bundled | user | claude-project | claude-import)",
     )
 
     p_info = sub.add_parser("info", help="Show one skill's manifest in detail")

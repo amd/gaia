@@ -564,7 +564,7 @@ class SkillLibraryToolsMixin:
                 needed tool or command is missing.
             """
             from gaia.skills.errors import SkillError
-            from gaia.skills.manager import ROOT_CLAUDE_IMPORT
+            from gaia.skills.manager import CLAUDE_ROOTS
 
             rejection = _reject_bad_name("load_skill", name)
             if rejection is not None:
@@ -580,7 +580,7 @@ class SkillLibraryToolsMixin:
             except SkillError as exc:
                 return _failure("load_skill", exc)
 
-            if candidate.gaia.tools and candidate.root == ROOT_CLAUDE_IMPORT:
+            if candidate.gaia.tools and candidate.root in CLAUDE_ROOTS:
                 return _refuse_ungated_code(candidate)
 
             try:
@@ -640,15 +640,21 @@ class SkillLibraryToolsMixin:
                     "covers, load it too before starting."
                 )
             if deferred:
+                from gaia.skills.capture import deferred_remedy
+
+                inert = (
+                    f"its {len(skill.tool_names)} tool(s) "
+                    f"({', '.join(skill.tool_names)}) did NOT register"
+                    if skill.tool_names
+                    else "the commands it asks to run without a prompt were "
+                    "NOT granted"
+                )
                 payload["deferred_tools"] = list(skill.tool_names)
                 payload["warning"] = (
-                    f"Skill '{skill.name}' was captured and its code is not "
-                    f"yet trusted: its {len(skill.tool_names)} tool(s) "
-                    f"({', '.join(skill.tool_names)}) did NOT register. Its "
-                    "instructions are loaded and usable. Tell the user the "
-                    "tools stay inert until they run "
-                    f"`gaia skill promote {skill.name}` in a terminal — do "
-                    "not claim to run these tools."
+                    f"Skill '{skill.name}' is not yet trusted: {inert}. Its "
+                    "instructions are loaded and usable. Tell the user this "
+                    f"stays inert until they run {deferred_remedy(skill)} in "
+                    "a terminal — do not claim it works."
                 )
 
             # tools_required is advisory at load time — the base loader logs the
