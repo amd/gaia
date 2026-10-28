@@ -1586,8 +1586,14 @@ def _unsafe_directory_grant_reason(directory: Path) -> str:
     return ""
 
 
-def _session_working_directory() -> str:
-    """The folder shown for a new chat and used for bare relative paths."""
+def _session_working_directory(folders: Optional[list] = None) -> str:
+    """The folder the chat's chip shows, used for bare relative paths.
+
+    A folder the user picked for the chat comes first, so "create notes.txt"
+    lands where the chip and the agent's folder note both say it works.
+    """
+    if folders:
+        return str(Path(folders[0]).expanduser().resolve())
     cwd = Path.cwd().resolve()
     if _unsafe_directory_grant_reason(cwd):
         return str(_managed_documents_dir())
@@ -3359,7 +3365,9 @@ async def _get_chat_response(
         # Reuse what a running warm-up is caching rather than read it twice.
         wait_for_warm_up()
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
-        working_directory = _session_working_directory()
+        working_directory = _session_working_directory(
+            load_environment(db, session_id)["folders"]
+        )
 
         if cached_agent is not None:
             from gaia.agents.base.console import SilentConsole
@@ -3807,7 +3815,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if sse_handler.cancelled.is_set():
                     return
                 cached_agent = _get_cached_agent(session_id, model_id, agent_type)
-                working_directory = _session_working_directory()
+                working_directory = _session_working_directory(
+                    load_environment(db, session_id)["folders"]
+                )
 
                 if cached_agent is not None:
                     # -- Cache hit --

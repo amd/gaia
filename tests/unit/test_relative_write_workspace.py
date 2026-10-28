@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Relative file writes use the chat workspace, not the sidecar cwd (#5851)."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -178,3 +179,66 @@ def test_an_absolute_path_is_not_rebased_onto_the_workspace(tools):
     assert result["status"] == "success", result
     assert inside.exists()
     assert not (tools["workspace"] / "sub" / "sub").exists()
+
+
+def _assert_refused_outside(tools, file_path, outside):
+    target_of = tools["registry"]["write_file"]["preflight"].target_of
+    # The prompt and the write resolve the same way, so neither names the workspace.
+    assert not str(target_of({"file_path": file_path})).startswith(
+        str(tools["workspace"])
+    )
+    result = tools["write_file"](file_path=file_path, content="x")
+    assert result["status"] == "error", result
+    assert not outside.exists()
+
+
+def test_a_symlink_in_the_workspace_cannot_carry_a_write_out(tools):
+    outside = tools["workspace"].parent / "outside"
+    outside.mkdir()
+    try:
+        (tools["workspace"] / "link").symlink_to(outside, target_is_directory=True)
+    except OSError as e:
+        pytest.skip(f"cannot create a symlink here: {e}")
+
+    _assert_refused_outside(tools, "link/pwn.txt", outside / "pwn.txt")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows drive-relative paths")
+def test_a_drive_relative_path_on_another_drive_is_not_rebased(tools):
+    drive = tools["workspace"].drive.upper()
+    other = "Q:" if drive != "Q:" else "R:"
+
+    _assert_refused_outside(tools, f"{other}pwn.txt", Path(other, "pwn.txt"))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows drive-relative paths")
+def test_a_same_drive_relative_path_stays_in_the_workspace(tools):
+    drive = tools["workspace"].drive
+
+    result = tools["write_file"](file_path=f"{drive}notes.txt", content="x")
+
+    assert result["status"] == "success", result
+    assert Path(result["file_path"]) == tools["workspace"] / "notes.txt"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows root-relative paths")
+def test_a_root_relative_path_goes_to_the_drive_root_and_is_refused(tools):
+    name = "gaia_5851_root_relative.txt"
+    root_file = Path(tools["workspace"].anchor) / name
+
+    _assert_refused_outside(tools, "\\" + name, root_file)
+
+
+def test_a_folder_picked_for_the_chat_is_its_workspace(tmp_path, monkeypatch):
+    from gaia.ui import _chat_helpers as chat
+
+    picked, later, cwd = tmp_path / "picked", tmp_path / "later", tmp_path / "cwd"
+    for folder in (picked, later, cwd):
+        folder.mkdir()
+    monkeypatch.chdir(cwd)
+
+    assert chat._session_working_directory([str(picked), str(later)]) == str(
+        picked.resolve()
+    )
+    assert chat._session_working_directory([]) == str(cwd.resolve())
+    assert chat._session_working_directory(None) == str(cwd.resolve())
