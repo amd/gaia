@@ -171,6 +171,114 @@ def test_chat_totals_count_unpriced_turns_apart():
     assert turn_insights.chat_totals([])["wall_seconds"] is None
 
 
+def test_turn_token_totals_that_overflow_are_not_measured(caplog):
+    result = {
+        "timing_summary": {"llm_seconds": 1.0, "tool_seconds": 0.0},
+        "conversation": [
+            _stats(
+                1,
+                {
+                    "prompt_tokens": 1e308,
+                    "cache_tokens": 1e308,
+                    "input_tokens": 1e308,
+                    "output_tokens": 10,
+                },
+            ),
+            _stats(
+                2,
+                {
+                    "prompt_tokens": 1e308,
+                    "cache_tokens": 1e308,
+                    "input_tokens": 1e308,
+                    "output_tokens": 20,
+                },
+            ),
+        ],
+    }
+
+    perf = turn_insights.summarize_turn(result, wall_seconds=1.0, model_id="M-GGUF")
+
+    assert perf["tokens_in"] is None
+    assert perf["tokens_cached"] is None
+    assert perf["tokens_new"] is None
+    assert perf["tokens_out"] == 30
+    assert "turn input tokens overflowed" in caplog.text
+
+
+def test_chat_token_totals_that_overflow_are_not_measured(caplog):
+    turns = [
+        {
+            "time": {"wall_seconds": 1.0, "model_seconds": 1.0, "gaia_seconds": 0.0},
+            "tokens_in": 1e308,
+            "tokens_cached": 1e308,
+            "tokens_out": 10,
+            "cost": {"kind": "unknown", "usd": None},
+        },
+        {
+            "time": {"wall_seconds": 1.0, "model_seconds": 1.0, "gaia_seconds": 0.0},
+            "tokens_in": 1e308,
+            "tokens_cached": 1e308,
+            "tokens_out": 20,
+            "cost": {"kind": "unknown", "usd": None},
+        },
+    ]
+
+    totals = turn_insights.chat_totals(turns)
+
+    assert totals["tokens_in"] is None
+    assert totals["tokens_cached"] is None
+    assert totals["tokens_out"] == 30
+    assert "chat input tokens overflowed" in caplog.text
+
+
+def test_performance_endpoint_serializes_overflowed_token_totals(db, monkeypatch):
+    sid = db.create_session(model="M-GGUF")["id"]
+    db.add_message(
+        sid,
+        "assistant",
+        "hello",
+        inference_stats={
+            "performance": {
+                "time": {
+                    "wall_seconds": 1.0,
+                    "model_seconds": 1.0,
+                    "gaia_seconds": 0.0,
+                },
+                "tokens_in": 1e308,
+                "tokens_cached": 1e308,
+                "tokens_out": 1.0,
+                "cost": {"kind": "unknown", "usd": None},
+            }
+        },
+    )
+    db.add_message(
+        sid,
+        "assistant",
+        "again",
+        inference_stats={
+            "performance": {
+                "time": {
+                    "wall_seconds": 1.0,
+                    "model_seconds": 1.0,
+                    "gaia_seconds": 0.0,
+                },
+                "tokens_in": 1e308,
+                "tokens_cached": 1e308,
+                "tokens_out": 2.0,
+                "cost": {"kind": "unknown", "usd": None},
+            }
+        },
+    )
+    monkeypatch.setattr(turn_insights, "model_now", lambda model: {"model": model})
+
+    result = asyncio.run(chat.get_chat_performance(sid, db))
+
+    assert result["totals"]["tokens_in"] is None
+    assert result["totals"]["tokens_cached"] is None
+    assert result["totals"]["tokens_out"] == 3.0
+    json.dumps(result, allow_nan=False)
+
+
 # ── Context ────────────────────────────────────────────────────────────────
 
 

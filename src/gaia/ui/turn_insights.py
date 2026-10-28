@@ -316,12 +316,16 @@ def _step_stats(conversation: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
-def _sum(values: Iterable[Optional[float]]) -> Optional[float]:
-    """The total, or None unless every call reported it: a partial sum would undercount."""
+def _sum(values: Iterable[Optional[float]], *, what: str) -> Optional[float]:
+    """The total, or None unless every call reported it or the total stays finite."""
     values = list(values)
     if not values or any(v is None for v in values):
         return None
-    return sum(values)
+    total = sum(values)
+    if not math.isfinite(total):
+        logger.warning("%s overflowed; reporting it as not measured", what)
+        return None
+    return total
 
 
 def _call(stats: Dict[str, Any]) -> Dict[str, Optional[float]]:
@@ -462,9 +466,9 @@ def summarize_turn(
         )
 
     speeds = _speeds(steps, calls)
-    tokens_in = _sum(c["prompt"] for c in calls)
-    cached = _sum(c["cached"] for c in calls)
-    tokens_out = _sum(c["output"] for c in calls)
+    tokens_in = _sum((c["prompt"] for c in calls), what="turn input tokens")
+    cached = _sum((c["cached"] for c in calls), what="turn cached tokens")
+    tokens_out = _sum((c["output"] for c in calls), what="turn output tokens")
     listed = [{"name": t.get("name"), "seconds": _num(t.get("seconds"))} for t in tools]
     # Tool time the step timer measured outside any recorded step: shown, never dropped.
     unlisted = round(tool_s - sum(t["seconds"] or 0.0 for t in listed), _ROUND)
@@ -483,7 +487,7 @@ def summarize_turn(
         **speeds,
         "model_calls": int(timing.get("llm_calls") or len(calls)),
         "tokens_in": tokens_in,
-        "tokens_new": _sum(c["new"] for c in calls),
+        "tokens_new": _sum((c["new"] for c in calls), what="turn new tokens"),
         "tokens_cached": cached,
         "tokens_out": tokens_out,
         # The whole templated prompt of the turn's last request, as the server counted it.
@@ -575,24 +579,39 @@ def _speeds(steps: List[Dict[str, Any]], calls: List[Dict[str, Any]]) -> Dict[st
 def chat_totals(turns: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Sums over a chat's measured turns; a total of nothing measured is None."""
 
-    def total(get: Callable[[Dict[str, Any]], Any]) -> Optional[float]:
+    def total(get: Callable[[Dict[str, Any]], Any], *, what: str) -> Optional[float]:
         values = [_num(get(t)) for t in turns]
         known = [v for v in values if v is not None]
-        return round(sum(known), _ROUND) if known else None
+        if not known:
+            return None
+        total = sum(known)
+        if not math.isfinite(total):
+            logger.warning("%s overflowed; reporting it as not measured", what)
+            return None
+        return round(total, _ROUND)
 
     costs = [t.get("cost") or {} for t in turns]
     return {
         "turns": len(turns),
-        "wall_seconds": total(lambda t: t["time"]["wall_seconds"]),
-        "model_seconds": total(lambda t: t["time"]["model_seconds"]),
-        "gaia_seconds": total(lambda t: t["time"]["gaia_seconds"]),
-        "tokens_in": total(lambda t: t.get("tokens_in")),
-        "tokens_cached": total(lambda t: t.get("tokens_cached")),
-        "tokens_out": total(lambda t: t.get("tokens_out")),
+        "wall_seconds": total(
+            lambda t: t["time"]["wall_seconds"], what="chat wall time"
+        ),
+        "model_seconds": total(
+            lambda t: t["time"]["model_seconds"], what="chat model time"
+        ),
+        "gaia_seconds": total(
+            lambda t: t["time"]["gaia_seconds"], what="chat GAIA time"
+        ),
+        "tokens_in": total(lambda t: t.get("tokens_in"), what="chat input tokens"),
+        "tokens_cached": total(
+            lambda t: t.get("tokens_cached"), what="chat cached tokens"
+        ),
+        "tokens_out": total(lambda t: t.get("tokens_out"), what="chat output tokens"),
         "tool_calls": sum(t.get("tool_calls") or 0 for t in turns),
         "loads": sum(len(t.get("loads") or []) for t in turns),
         "load_seconds": total(
-            lambda t: sum(e["seconds"] for e in t.get("loads") or []) or None
+            lambda t: sum(e["seconds"] for e in t.get("loads") or []) or None,
+            what="chat model-load time",
         ),
         "usd": round(sum(c.get("usd") or 0.0 for c in costs), 6),
         "unpriced_turns": sum(1 for c in costs if c.get("kind") == "unknown"),
