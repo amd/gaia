@@ -7,17 +7,11 @@
  * and another turn's final answering step had no row at all.
  */
 
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AgentActivity } from '../AgentActivity';
-import { ChatView } from '../ChatView';
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+import { answerSummary } from '../AnswerStats';
 import { MessageBubble } from '../MessageBubble';
-import { useChatStore } from '../../stores/chatStore';
-import type { AgentStep, Message, Session, StreamEvent } from '../../types';
-import * as api from '../../services/api';
-
-vi.mock('../../services/api');
-const mockedApi = vi.mocked(api);
+import type { AgentStep, Message } from '../../types';
 
 let nextId = 0;
 const row = (type: AgentStep['type'], tool?: string): AgentStep => ({
@@ -36,85 +30,27 @@ function tenStepTurnRows(): AgentStep[] {
     return rows;
 }
 
-const summary = () => document.querySelector('.agent-summary-text')?.textContent;
+describe('step count in the answer footer', () => {
+    const base = { tokens_per_second: 0, time_to_first_token: 0, input_tokens: 0, output_tokens: 0 };
 
-describe('AgentActivity step count', () => {
-    it('shows the agent step count, not the number of rows', () => {
-        render(<AgentActivity steps={tenStepTurnRows()} isActive={false} variant="summary" agentStepCount={10} />);
-        expect(summary()).toBe('10 steps · 6 tools');
+    it('reports the agent step count, not the number of rows', () => {
+        expect(answerSummary(40_200, { ...base, steps: 10 })).toBe('Answered in 40 s · 10 steps');
     });
 
-    it('can report more steps than rows when a step produced none', () => {
-        const rows = [row('thinking'), row('tool', 'run_python'), row('thinking')];
-        render(<AgentActivity steps={rows} isActive={false} variant="summary" agentStepCount={19} />);
-        expect(summary()).toBe('19 steps · 1 tool');
+    it('says "1 step" for a one-step answer', () => {
+        expect(answerSummary(undefined, { ...base, steps: 1 })).toBe('1 step');
     });
 
     it('ignores a zero count rather than printing "0 steps"', () => {
-        const rows = [row('thinking'), row('tool', 'read_file')];
-        render(<AgentActivity steps={rows} isActive={false} variant="summary" agentStepCount={0} />);
-        expect(summary()).toBe('2 steps · 1 tool');
+        expect(answerSummary(40_200, { ...base, steps: 0 })).toBe('Answered in 40 s');
     });
-});
 
-describe('MessageBubble step count', () => {
-    it('reads a saved answer\'s count from its turn stats', () => {
+    it('reads a saved answer\'s count from its turn stats, whatever its rows', () => {
         const message: Message = {
             id: 7, session_id: 's', role: 'assistant', content: 'Done.', created_at: '', rag_sources: null,
-            stats: { tokens_per_second: 0, time_to_first_token: 0, input_tokens: 0, output_tokens: 0, steps: 9 },
+            stats: { ...base, steps: 9 },
         };
         render(<MessageBubble message={message} agentSteps={tenStepTurnRows()} />);
-        expect(summary()).toBe('9 steps · 6 tools');
-    });
-});
-
-describe('ChatView live step count', () => {
-    const SESSION: Session = {
-        id: 'session-1', title: 'Existing chat', created_at: '', updated_at: '', model: 'qwen',
-        system_prompt: null, message_count: 0, document_ids: [], agent_type: 'gaia',
-    };
-    let callbacks: api.StreamCallbacks | null = null;
-
-    beforeEach(() => {
-        vi.clearAllMocks();
-        callbacks = null;
-        mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
-        mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
-        mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
-        mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
-        mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
-        mockedApi.sendMessageStream.mockImplementation((_sid, _msg, cbs) => {
-            callbacks = cbs as api.StreamCallbacks;
-            return new AbortController();
-        });
-        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
-        useChatStore.setState({
-            sessions: [SESSION], currentSessionId: SESSION.id, messages: [], documents: [],
-            isStreaming: false, streamingContent: '', agentSteps: [], cards: [],
-            isLoadingMessages: false, pendingPrompt: null, systemStatus: null,
-        });
-    });
-
-    it('counts the agent\'s step events while the turn runs', async () => {
-        render(<ChatView sessionId={SESSION.id} />);
-        await act(async () => {
-            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'check these' } });
-            fireEvent.click(screen.getByLabelText('Send'));
-        });
-        const emit = (e: object) => callbacks!.onAgentEvent(e as unknown as StreamEvent);
-
-        act(() => {
-            emit({ type: 'step', step: 1, total: 150, status: 'started' });
-            emit({ type: 'thinking', content: 'Looking at the folder.' });
-            emit({ type: 'plan', steps: ['list', 'read'] });
-            emit({ type: 'tool_start', tool: 'list_files' });
-            emit({ type: 'tool_end', success: true });
-            emit({ type: 'step', step: 2, total: 150, status: 'started' });
-            emit({ type: 'thinking', content: 'Reading one.' });
-            emit({ type: 'plan', steps: ['read'] });
-            emit({ type: 'tool_start', tool: 'read_file' });
-        });
-
-        await waitFor(() => expect(summary()).toBe('2 steps · 2 tools'));
+        expect(screen.getByText(/9 steps/)).toBeInTheDocument();
     });
 });

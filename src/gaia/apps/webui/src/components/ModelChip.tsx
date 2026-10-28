@@ -369,7 +369,7 @@ export function ModelChip() {
                                 className="popover-item"
                                 {...rowProps(`key:${provider.id}`)}
                                 aria-selected={false}
-                                onClick={() => { setOpen(false); openSettings('model'); }}
+                                onClick={() => { setOpen(false); openSettings('model', provider.id); }}
                             >
                                 <span className="popover-item-check"><KeyRound size={13} aria-hidden="true" /></span>
                                 <span className="popover-item-body">
