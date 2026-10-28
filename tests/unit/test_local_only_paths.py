@@ -169,8 +169,10 @@ def test_eval_claude_client_refuses_each_call_after_a_switch(tmp_path, monkeypat
 
     monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    sdk = MagicMock()
-    monkeypatch.setattr(eval_claude.anthropic, "Anthropic", sdk)
+    # CI's unit environment has no anthropic SDK; a stub module stands in for it.
+    stub = MagicMock()
+    monkeypatch.setattr(eval_claude, "anthropic", stub)
+    sdk = stub.Anthropic
     client = eval_claude.ClaudeClient()  # built while cloud is allowed
     local_only.set_policy("local_ai_only")
     with pytest.raises(CloudDisabledError):

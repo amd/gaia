@@ -440,8 +440,13 @@ def test_create_client_claude_is_refused(local_only_on):
 
 
 def test_the_eval_claude_client_is_refused(local_only_on, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from gaia.eval import claude as eval_claude
     from gaia.eval.claude import ClaudeClient
 
+    # CI's unit environment has no anthropic SDK; a stub stands in for it.
+    monkeypatch.setattr(eval_claude, "anthropic", MagicMock())
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     with pytest.raises(CloudDisabledError, match="Anthropic Claude"):
         ClaudeClient()
