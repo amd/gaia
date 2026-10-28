@@ -152,7 +152,8 @@ func (l localRunner) Check(ctx context.Context, cfg Config) Report {
 	var models []gaiainit.Model
 	rep := l.walk(ctx, cfg, &models)
 	if l.asksWhereChatRuns() && len(rep.Steps()) > 0 {
-		rep = withChatStep(rep, chatOptions(downloadSize(models), l.localFit(ctx, rep, models)))
+		options := chatOptions(downloadSize(models), l.localFit(ctx, rep, models))
+		rep = withChatStep(rep, withGatewayReach(ctx, options))
 	}
 	return rep
 }

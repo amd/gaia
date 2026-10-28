@@ -1,0 +1,90 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* Long content opens as a preview that fades out, with a toggle under it.
+ * The fade is a mask, so it works on any surface in either theme. */
+.msg-collapsible.is-collapsed,
+.code-block.is-collapsed pre,
+.detail-result-content.is-collapsed {
+    overflow-y: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 3.5em), transparent);
+    mask-image: linear-gradient(to bottom, black calc(100% - 3.5em), transparent);
+}
+
+/* ~9 lines of the message. */
+.msg-collapsible.is-collapsed {
+    max-height: calc(9 * 1.65em);
+}
+
+/* 20 lines of 13px code at 1.65, plus the pre's 16px top and bottom padding. */
+.code-block.is-collapsed pre {
+    max-height: calc(20 * 13px * 1.65 + 32px);
+}
+
+/* 20 lines of step output. */
+.detail-result-content.is-collapsed {
+    max-height: calc(20 * 1.6em);
+}
+
+/* Same quiet pill as the "N steps · M tools" bar. */
+.expand-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 100%;
+    margin-top: 4px;
+    padding: 2px 8px 2px 4px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-xs);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-muted);
+    white-space: nowrap;
+    transition: background var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease), border-color var(--duration-fast) var(--ease);
+}
+.expand-toggle:hover,
+.expand-toggle:focus-visible {
+    background: var(--bg-tertiary);
+    border-color: var(--border);
+    color: var(--text-secondary);
+}
+
+.msg-expand-toggle {
+    margin-left: -4px;
+}
+
+/* On the code surface: a full-width footer in the code palette. */
+.code-expand-toggle {
+    display: flex;
+    width: 100%;
+    margin: 0;
+    padding: 6px 14px;
+    border: none;
+    border-top: 1px solid var(--border-code);
+    border-radius: 0;
+    background: var(--bg-code-raised);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-code-dim);
+}
+.code-expand-toggle:hover,
+.code-expand-toggle:focus-visible {
+    background: var(--bg-code-raised);
+    border-color: var(--border-code);
+    color: var(--text-code);
+}
+.code-expand-toggle:focus-visible {
+    outline-offset: -2px;
+}
+
+.step-expand-toggle {
+    margin-left: -4px;
+}
+
+.detail-result-note {
+    margin-bottom: 4px;
+    font-family: var(--font-sans);
+    font-size: 11.5px;
+    color: var(--text-muted);
+}

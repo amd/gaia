@@ -89,6 +89,7 @@ module_skips:
     runs_in: test_chat_agent.yml
     paths:
       - tests/unit/agents/test_registry.py
+      - tests/unit/chat/test_session_prompt_context.py
       - tests/unit/test_chat_agent_integration.py
       - tests/unit/test_chat_dynamic_tools.py
       - tests/unit/test_chat_fix_contracts.py
@@ -107,6 +108,8 @@ module_skips:
       - tests/unit/test_run_python_adversarial.py
       - tests/unit/test_run_python_frozen.py
       - tests/unit/test_run_python_frozen_adversarial.py
+      - tests/unit/test_run_python_untracked.py
+      - tests/unit/test_scratch_dir_lifecycle.py
       - tests/unit/test_skill_tools_same_turn.py
       - tests/unit/test_tool_admission_order.py
       - tests/unit/test_tool_loader_disambiguation.py
@@ -115,6 +118,7 @@ module_skips:
     runs_in: test_gaia_agent.yml
     paths:
       - tests/unit/messaging/test_bridge_contract.py
+      - tests/unit/messaging/test_bridge_hung_tool.py
       - tests/unit/test_execute_python_file_cwd.py
       - tests/unit/test_flagship_code_index_scope.py
       - tests/unit/test_stdio_permission_control.py

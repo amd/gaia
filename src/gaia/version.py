@@ -9,10 +9,10 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as get_package_version_metadata
 from typing import Optional, Tuple
 
-__version__ = "0.25.0"
+__version__ = "0.25.2"
 
 # Lemonade version used across CI and installer
-LEMONADE_VERSION = "2026.42.1"
+LEMONADE_VERSION = "2026.43.3"
 
 # Oldest Lemonade Server GAIA runs against. LEMONADE_VERSION is what we install;
 # this is the floor below which we refuse. Profiles may require newer

@@ -34,7 +34,7 @@ gaia-tui
 
 <Warning>
   This binary boots straight into the flagship, and it does not install, uninstall,
-  search, or vote on agents — that stays the Python CLI's job (`gaia hub install email --trust` for the email agent).
+  search, or vote on agents — that stays the Python CLI's job (`gaia hub install email` for the email agent).
   An earlier version of the TUI opened on an agent browser that did all of that,
   with the flagship listed as "Coming Soon." That screen, and the `list` / `install` /
   `uninstall` / `hub` subcommands that drove it, are gone for good.
@@ -223,6 +223,9 @@ search and memory use.
 - **Fireworks AI** or **AMD LLM Gateway** — step 2 installs Lemonade. Step 3
   opens that provider's key form; paste the key, pick a model, and setup
   downloads only the embedding model. No local chat model is downloaded.
+
+When the AMD gateway can't be reached (no AMD network or VPN), its option is
+greyed out and says "No network available". Connect, then press **r**.
 
 ```
   Setting up GAIA                                                    step 2 of 3
@@ -540,6 +543,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
 | `/copy all` | Copy the whole conversation as markdown |
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
+| `/update` | Check for a newer GAIA. `/update now` installs the newest, `/update v0.25.0` installs and pins that exact one, `/update auto on` installs new releases when you quit (off by default), `/update rc on` offers release candidates too. See [Updating GAIA](/guides/install#updating-gaia) |
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
 their own — `/model`, `/setup`, and `/provider` are flagship-only, and `/memory`
@@ -803,7 +807,7 @@ Installing or removing it is the Python CLI's job:
 
 ```bash
 gaia hub list
-gaia hub install email --trust
+gaia hub install email
 gaia hub uninstall email
 ```
 

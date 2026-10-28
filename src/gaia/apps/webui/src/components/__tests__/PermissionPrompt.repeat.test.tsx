@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * kw-08 asked "Allow GAIA to use run_python?" nine times in one turn while
+ * One task asked "Allow GAIA to use run_python?" nine times in one turn while
  * "Always allow" sat unnoticed beside "Allow once". From the second identical
  * prompt the card points at it. It never answers for the user, and a different
  * tool, scope, or risk gets no nudge.

@@ -590,3 +590,233 @@ async def test_time_spent_waiting_for_the_model_is_not_setup_time(monkeypatch):
     assert await asyncio.to_thread(built.wait, 5), failure
     assert not failure
     handler.turn_slot.release()
+
+
+# ── A relayed sidecar turn waiting on the user gives the model up too ────────
+
+
+class _ParkingSidecar:
+    """A flagship sidecar whose run parks on the user, then finishes.
+
+    After the answer it streams one more step before its final answer, so the
+    relayed turn has to take the model back before the run can go on.
+    """
+
+    agent_id = "gaia"
+
+    def __init__(self, kind):
+        self.kind = kind
+        self.answer = None
+        self.answered = threading.Event()
+
+    def query_stream(self, body, read_timeout, on_response):  # noqa: ARG002
+        if self.kind == "permission":
+            yield {
+                "type": "needs_confirmation",
+                "action": "run_shell_command",
+                "summary": "Run 'echo background-prompt-test'?",
+                "confirm_id": "c-1",
+            }
+        else:
+            yield {"type": "needs_input", "request_id": "q-1", "question": "Which?"}
+        if not self.answered.wait(10):
+            yield {"type": "error", "detail": "nobody answered"}
+            return
+        yield {"type": "token", "delta": "resumed "}
+        yield {"type": "final", "answer": f"answer={self.answer}"}
+
+    def tool_decision(self, run_id, decision, confirm_id):  # noqa: ARG002
+        self.answer = decision
+        self.answered.set()
+
+    def respond_query(self, run_id, request_id, value):  # noqa: ARG002
+        self.answer = value
+        self.answered.set()
+
+
+def _relay_through(sidecar):
+    from gaia.ui.email_sidecar import relay
+    from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+
+    def dispatch(sse_handler, request, *_a, **_k):
+        relay.relay_query(
+            sse_handler,
+            sidecar,
+            query=request.message,
+            context=[],
+            profile=GAIA_PROFILE,
+            answers_confirmations=True,
+        )
+
+    return patch.object(helpers, "_dispatch_sidecar_query", dispatch)
+
+
+def _answer_relayed(handler, kind):
+    if kind == "permission":
+        assert handler.resolve_relay_confirmation(True, "c-1")
+    else:
+        assert handler.resolve_relay_input("q-1", "the second")
+
+
+@pytest.mark.parametrize(
+    "kind,expected",
+    [("permission", "answer=allow"), ("question", "answer=the second")],
+)
+async def test_relayed_turn_waiting_on_the_user_lets_a_new_chat_run(
+    runtime, kind, expected
+):
+    rt = runtime
+    sidecar = _ParkingSidecar(kind)
+    a = rt.db.create_session(model="M-GGUF", agent_type="gaia")["id"]
+    # A brand-new chat: its first message must not wait behind A's prompt.
+    b, _ = _seed(rt.db, lambda _agent: "42")
+    try:
+        with _relay_through(sidecar):
+            await _start_detached(await _send(rt, a, "run echo"))
+            run_a = rt.manager.get(a)
+            await _until(
+                lambda: run_a.handler is not None and run_a.handler.waiting_on()
+            )
+            assert run_a.handler.waiting_on() == kind
+            assert run_a.handler.awaiting_user_input()
+            await _until(lambda: rt.queue.holder is None)
+
+            await _start_detached(await _send(rt, b, "what is 6 times 7?"))
+            run_b = rt.manager.get(b)
+            await asyncio.wait_for(run_b.task, 5)
+            assert _events(run_b)[-1]["content"] == "42"
+            assert not [e for e in _events(run_b) if e.get("phase") == "queued"]
+            assert not sidecar.answered.is_set(), "A's sidecar run stays parked"
+
+            _answer_relayed(run_a.handler, kind)
+            await asyncio.wait_for(run_a.task, 5)
+        assert _events(run_a)[-1]["content"] == expected
+        assert run_a.handler.waiting_on() is None
+        assert not rt.queue.locked()
+    finally:
+        sidecar.answered.set()
+        await _cleanup(rt, a, b)
+
+
+async def test_answered_relayed_turn_requeues_at_the_front_and_says_so(runtime):
+    rt = runtime
+    sidecar = _ParkingSidecar("permission")
+    a = rt.db.create_session(model="M-GGUF", agent_type="gaia")["id"]
+    b_release = threading.Event()
+    b, _ = _seed(rt.db, lambda _agent: b_release.wait(5) and "B")
+    c, _ = _seed(rt.db, lambda _agent: "C")
+    try:
+        with _relay_through(sidecar):
+            await _start_detached(await _send(rt, a, "run echo"))
+            run_a = rt.manager.get(a)
+            await _until(
+                lambda: run_a.handler is not None and run_a.handler.waiting_on()
+            )
+            await _until(lambda: rt.queue.holder is None)
+            # A sits on its prompt a while: its next wait in line counts from 0.
+            await asyncio.sleep(1.2)
+
+            await _start_detached(await _send(rt, b, "long"))
+            await _until(lambda: rt.queue.holder == b)
+            await _start_detached(await _send(rt, c, "next"))
+            await _until(lambda: rt.queue.waiting() == [c])
+            others = [rt.manager.get(sid) for sid in (b, c)]
+
+            _answer_relayed(run_a.handler, "permission")
+            await _until(lambda: rt.queue.waiting() == [a, c])
+            queued = [e for e in _events(run_a) if e.get("phase") == "queued"]
+            assert queued[-1]["queue_position"] == 1
+            assert queued[-1]["queue_waited_s"] == 0
+            assert run_a.handler.waiting_on() is None, "answered: no longer needs you"
+
+            b_release.set()
+            await asyncio.wait_for(run_a.task, 5)
+            events = _events(run_a)
+            phases = [e.get("phase") for e in events if e.get("phase")]
+            assert phases[-2:] == ["queued", "resumed"]
+            assert events[-1]["content"] == "answer=allow"
+            for run in others:
+                await asyncio.wait_for(run.task, 5)
+        assert not rt.queue.locked()
+    finally:
+        b_release.set()
+        sidecar.answered.set()
+        await _cleanup(rt, a, b, c)
+
+
+async def test_stopping_a_relayed_turn_while_it_waits_on_the_user(runtime):
+    rt = runtime
+    sidecar = _ParkingSidecar("permission")
+    a = rt.db.create_session(model="M-GGUF", agent_type="gaia")["id"]
+    try:
+        with _relay_through(sidecar):
+            await _start_detached(await _send(rt, a, "run echo"))
+            run_a = rt.manager.get(a)
+            await _until(
+                lambda: run_a.handler is not None and run_a.handler.waiting_on()
+            )
+            await _until(lambda: rt.queue.holder is None)
+            await rt.queue.acquire("another-chat")
+            await chat.cancel_stream(chat.CancelStreamRequest(session_id=a))
+            sidecar.answered.set()
+            await asyncio.wait_for(run_a.task, 5)
+        assert _events(run_a)[-1].get("cancelled") is True
+        assert rt.queue.holder == "another-chat", "a stopped turn never retakes it"
+        assert rt.queue.waiting() == []
+    finally:
+        sidecar.answered.set()
+        if rt.queue.holder == "another-chat":
+            rt.queue.release()
+        await _cleanup(rt, a)
+
+
+# ── A cloud turn doesn't wait for the local model ───────────────────────────
+
+_CLOUD = "fireworks.deepseek-v4p1-flash"
+
+
+async def test_cloud_turn_skips_the_line_for_the_local_model(runtime):
+    rt = runtime
+    session = rt.db.create_session(model=_CLOUD, agent_type="chat")
+    agent = _Agent(lambda _agent: "42")
+    helpers._store_agent(session["id"], _CLOUD, [], agent, "chat")
+    await rt.queue.acquire("local-chat")
+    try:
+        await _start_detached(await _send(rt, session["id"], "what is 6 times 7?"))
+        run = rt.manager.get(session["id"])
+        await asyncio.wait_for(run.task, 5)
+        events = _events(run)
+        assert events[-1]["content"] == "42"
+        assert not [e for e in events if e.get("phase") == "queued"]
+        assert rt.queue.holder == "local-chat" and rt.queue.waiting() == []
+    finally:
+        rt.queue.release()
+        await _cleanup(rt, session["id"])
+
+
+async def test_non_streamed_cloud_turn_skips_the_line(runtime):
+    rt = runtime
+    sid = rt.db.create_session(model=_CLOUD)["id"]
+    rt.server._get_chat_response = AsyncMock(return_value="the answer")
+    await rt.queue.acquire("local-chat")
+    try:
+        response = await asyncio.wait_for(_send(rt, sid, "hi", stream=False), 5)
+        assert response.content == "the answer"
+        assert rt.queue.holder == "local-chat" and rt.queue.waiting() == []
+    finally:
+        rt.queue.release()
+
+
+async def test_local_turn_still_waits_in_line_for_the_gpu(runtime):
+    rt = runtime
+    sid, agent = _seed(rt.db, lambda _agent: "local")
+    await rt.queue.acquire("another-chat")
+    try:
+        await _start_detached(await _send(rt, sid, "hi"))
+        await _until(lambda: rt.queue.waiting() == [sid])
+        assert not agent.started.is_set()
+        queued = [e for e in _events(rt.manager.get(sid)) if e.get("phase") == "queued"]
+        assert queued[-1]["message"].startswith("Waiting for the GPU")
+    finally:
+        rt.queue.release()
+        await _cleanup(rt, sid)

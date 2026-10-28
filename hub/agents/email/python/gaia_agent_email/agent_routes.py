@@ -62,6 +62,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectionRevokedError,
     ConnectorsError,
     ScopeMismatchError,
@@ -416,6 +417,11 @@ def _connectors_error_to_http(exc: ConnectorsError) -> HTTPException:
     was never the status code — it was letting the exception (and its
     already-actionable message) escape uncaught as a textless 500.
     """
+    if isinstance(exc, ConnectionBusyError):
+        # Transient: another GAIA operation is saving the connection.
+        return HTTPException(
+            status_code=503, detail=str(exc), headers={"Retry-After": "1"}
+        )
     if isinstance(exc, ConfigurationError):
         return HTTPException(status_code=503, detail=str(exc))
     if isinstance(exc, AuthRequiredError):

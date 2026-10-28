@@ -151,6 +151,12 @@ def _clean_env(monkeypatch, tmp_path):
     for name in ("LEMONADE_AMD_API_KEY", "LEMONADE_FIREWORKS_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
+    # The AMD gateway's network check must not reach the real network.
+    from gaia.ui.routers import providers
+
+    monkeypatch.setattr(
+        providers, "check_gateway_reachable", lambda base_url=None: None
+    )
 
 
 @pytest.fixture

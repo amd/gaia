@@ -14,6 +14,7 @@ Loud, typed errors map to distinct statuses:
 - provider not granted to the agent → 403 (the grant model is the source of
   truth; the daemon refuses to forward an ungranted connector)
 - sidecar not running, or alive but no longer answering → 503
+- connection mid-save by another GAIA operation → 503 with ``Retry-After``
 - sidecar rejected/dropped the forward → 502
 """
 
@@ -25,6 +26,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from starlette.concurrency import run_in_threadpool
 
+from gaia.connectors.errors import ConnectionBusyError
 from gaia.daemon.constants import API_PREFIX
 from gaia.daemon.forward import ForwardDeliveryError, NotGrantedError
 from gaia.daemon.sidecars.errors import (
@@ -80,6 +82,10 @@ def build_connections_router(token: str, registry, forwarder):
             raise HTTPException(status_code=403, detail=str(e)) from e
         except ForwardDeliveryError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
+        except ConnectionBusyError as e:
+            raise HTTPException(
+                status_code=503, detail=str(e), headers={"Retry-After": "1"}
+            ) from e
 
     @router.delete(f"{API_PREFIX}/agents/{{agent_id}}/connections/{{provider}}")
     async def withdraw(agent_id: str, provider: str) -> dict:

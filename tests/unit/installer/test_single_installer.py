@@ -412,17 +412,22 @@ def test_main_requires_exactly_one_source(tmp_path):
         fetch.main(["--publish-run-sha", "abc", "--out", str(tmp_path)])
 
 
-def test_workflow_publishes_the_windows_setup_after_the_raw_binaries():
-    # The Worker fills a version's `artifact` field from the FIRST publish, and
-    # hub installs download that field expecting the raw binary.
+def test_workflow_attaches_the_windows_setup_to_the_release_not_r2():
+    # Users get the setup from the GitHub release; an R2 copy has no reader.
     wf = (REPO_ROOT / ".github" / "workflows" / "release_components.yml").read_text(
         encoding="utf-8"
     )
-    job = re.search(r"^  publish-windows-setup:\n(.*?)(?=^  \S)", wf, re.M | re.S)
-    assert job, "release_components.yml has no publish-windows-setup job"
-    needs = re.search(r"needs: \[([^\]]+)\]", job.group(1)).group(1)
-    assert "terminal-hub" in needs
+    assert "publish-windows-setup:" not in wf
+    job = re.search(
+        r"^  github-release-installers:\n(.*?)(?=^  \S|\Z)", wf, re.M | re.S
+    )
+    assert job, "release_components.yml has no github-release-installers job"
+    assert "name: windows-setup" in job.group(1)
     assert "--platform win-x64" in job.group(1)
+    hub = re.search(r"^  terminal-hub:\n(.*?)(?=^  \S)", wf, re.M | re.S)
+    assert hub, "release_components.yml has no terminal-hub job"
+    assert "windows-setup" not in hub.group(1)
+    assert "artifacts.py" not in hub.group(1)
 
 
 def _function(name: str) -> str:

@@ -14,11 +14,14 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, grant_scope
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
 from gaia.security import PathValidator
 from gaia.ui.sse_handler import SSEOutputHandler
 
 
 class _RecordingConsole(SilentConsole):
+    blocking_confirmation = True
+
     def __init__(self, answer):
         super().__init__()
         self.answer = answer
@@ -448,3 +451,180 @@ def test_a_timeout_answer_never_approves_even_when_marked_approved(layout):
     worker.join(timeout=5)
 
     assert results["read"]["status"] == "error"
+
+
+class _BrowseAgent(_ReadAgent, FileSystemToolsMixin):
+    def _register_tools(self) -> None:
+        self.register_filesystem_tools()
+
+
+@pytest.fixture
+def home(layout, monkeypatch):
+    home = layout["file"].parent
+    (home / "Movies").mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    return home
+
+
+def _browse(agent, path):
+    return json.dumps(agent._execute_tool("browse_directory", {"path": str(path)}))
+
+
+def test_home_folder_refusal_points_at_a_folder_inside_it(layout, home):
+    console = _RecordingConsole(True)
+    agent = _BrowseAgent(layout["scope"], console)
+
+    refused = _browse(agent, home)
+    listed = _browse(agent, home / "Movies")
+
+    assert "too broad" in refused
+    assert json.dumps(str(home / "Movies"))[1:-1] in refused
+    assert "Access denied" not in listed
+    assert console.calls == [
+        (
+            PATH_ACCESS_PROMPT_TOOL,
+            {"path": str((home / "Movies").resolve()), "kind": "folder"},
+        )
+    ]
+
+
+def test_home_folder_refusal_names_no_folder_nobody_can_approve(layout, home):
+    agent = _BrowseAgent(layout["scope"], _RecordingConsole(True))
+    agent.path_validator.withhold_path(str(home / "Movies"))
+
+    assert "Movies" not in _browse(agent, home)
+
+
+def test_home_folder_refusal_skips_a_folder_linked_to_a_whole_drive(layout, home):
+    try:
+        (home / "Desktop").symlink_to(Path(home.anchor), target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"cannot create a symlink here: {exc}")
+    agent = _BrowseAgent(layout["scope"], _RecordingConsole(True))
+
+    refused = _browse(agent, home)
+
+    assert "Movies" in refused
+    assert "Desktop" not in refused
+
+
+def test_home_folder_refusal_names_no_folder_when_nobody_can_approve(layout, home):
+    validator = PathValidator(allowed_paths=[str(layout["scope"])])
+    validator.set_access_prompt(None)
+
+    with patch.object(PathValidator, "_can_prompt", return_value=False):
+        refused = validator.access_denied_message(str(home))
+
+    assert "too broad" in refused
+    assert "Movies" not in refused
+
+
+def test_refusal_of_a_path_outside_home_names_no_home_folder(layout, home):
+    systemp = layout["scope"].parent / "systemp"
+    systemp.mkdir()
+    agent = _BrowseAgent(layout["scope"], _RecordingConsole(True))
+
+    refused = _browse(agent, systemp)
+
+    assert "Access denied" in refused
+    assert "Movies" not in refused
+
+
+def test_the_hint_never_makes_the_home_folder_itself_askable(layout, home):
+    console = _RecordingConsole(True)
+    agent = _BrowseAgent(layout["scope"], console)
+
+    _browse(agent, home)
+    again = _browse(agent, home)
+
+    assert "too broad" in again
+    assert console.calls == []
+
+
+def _named(refused, home, name):
+    return json.dumps(str(home / name))[1:-1] in refused
+
+
+def test_a_background_run_is_offered_no_folder_it_would_be_refused(layout, home):
+    console = SSEOutputHandler(background_mode=True)
+    agent = _BrowseAgent(layout["scope"], console)
+
+    refused = _browse(agent, home)
+    asked = _browse(agent, home / "Movies")
+
+    assert "too broad" in refused
+    assert not _named(refused, home, "Movies")
+    # The folder the hint would have named is refused on this run.
+    assert "Access denied" in asked
+
+
+def test_an_agent_ui_chat_is_still_offered_the_folder(layout, home):
+    # In process, the Agent UI asks through its modal with answers_confirmations unset.
+    agent = _BrowseAgent(layout["scope"], SSEOutputHandler())
+
+    assert _named(_browse(agent, home), home, "Movies")
+
+
+def test_a_terminal_nobody_is_at_is_offered_no_folder(layout, home):
+    agent = _BrowseAgent(layout["scope"], SilentConsole())
+
+    with patch("gaia.agents.base.agent.terminal_is_interactive", return_value=False):
+        refused = _browse(agent, home)
+
+    assert "too broad" in refused
+    assert not _named(refused, home, "Movies")
+
+
+def test_full_access_on_a_background_run_is_offered_the_folder(layout, home):
+    console = SSEOutputHandler(background_mode=True)
+    console.full_access = True
+    agent = _BrowseAgent(layout["scope"], console)
+
+    refused = _browse(agent, home)
+
+    assert _named(refused, home, "Movies")
+    assert "Access denied" not in _browse(agent, home / "Movies")
+
+
+def test_home_folder_refusal_names_no_folder_when_tools_are_preapproved(layout, home):
+    console = _RecordingConsole(True)
+    console.auto_approve_gated_tools = True
+    agent = _BrowseAgent(layout["scope"], console)
+
+    refused = _browse(agent, home)
+
+    assert "too broad" in refused
+    assert "Movies" not in refused
+    assert console.calls == []
+
+
+def test_home_folder_refusal_skips_a_folder_declined_this_turn(layout, home):
+    (home / "Pictures").mkdir()
+    console = _RecordingConsole(False)
+    agent = _BrowseAgent(layout["scope"], console)
+
+    declined = _browse(agent, home / "Movies")
+    refused = _browse(agent, home)
+
+    assert "Access denied" in declined
+    assert json.dumps(str(home / "Pictures"))[1:-1] in refused
+    assert json.dumps(str(home / "Movies"))[1:-1] not in refused
+    assert len(console.calls) == 1
+
+
+def test_every_named_folder_is_granted_when_approved(layout, home):
+    for name in ("Desktop", "Documents", "Pictures"):
+        (home / name).mkdir()
+    console = _RecordingConsole(True)
+    agent = _BrowseAgent(layout["scope"], console)
+
+    refused = _browse(agent, home)
+    named = [
+        home / n
+        for n in ("Desktop", "Documents", "Movies", "Pictures")
+        if json.dumps(str(home / n))[1:-1] in refused
+    ]
+
+    assert len(named) == 4
+    for folder in named:
+        assert "Access denied" not in _browse(agent, folder)

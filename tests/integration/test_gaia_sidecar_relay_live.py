@@ -35,6 +35,7 @@ from gaia.daemon.sidecars.spec import builtin_specs
 from gaia.ui.email_sidecar.profiles import GAIA_PROFILE, api_version_supported
 from gaia.ui.email_sidecar.proxy import SidecarProxy
 from gaia.ui.email_sidecar.relay import relay_query
+from gaia.ui.turn_summary import TurnLedger
 
 pytestmark = pytest.mark.skipif(
     importlib.util.find_spec("gaia_agent") is None
@@ -49,6 +50,7 @@ class _Handler:
     def __init__(self):
         self.events = []
         self.cancelled = threading.Event()
+        self.turn_ledger = TurnLedger()
         self.active_relay_response = None
         self.active_relay_proxy = None
         self.active_relay_run_id = None

@@ -283,7 +283,9 @@ class TestAnotherGaiaHome:
 
 
 class TestOneServerWhenTwoRestart:
-    def test_two_processes_restarting_at_once_start_one_server(self):
+    def test_two_processes_restarting_at_once_start_one_server(
+        self, gaia_owned_lemonade
+    ):
         """The daemon serialises ensure(): the second finds the first's server."""
         from gaia.daemon.lemonade import EmbeddedLemonadeOwner
 

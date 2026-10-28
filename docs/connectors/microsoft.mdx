@@ -158,7 +158,7 @@ redirect entirely — useful for headless machines, or when a public **client
 ID** is already available (e.g. an org-published GAIA app registration).
 
 **In the Agent UI:** with a client ID configured (env or the OAuth-client
-form), each Microsoft tile in Settings → Connections shows a **Sign in with a
+form), each Microsoft tile in Settings → Connectors shows a **Sign in with a
 code** button next to **Connect**. Click it, then enter the displayed code at
 the Microsoft URL — the tile flips to **Connected** automatically when you
 finish. No browser redirect, no app registration.
@@ -241,7 +241,7 @@ restart the flow with the full default scope set.
 
 Two places — both work, per connector:
 
-- **From GAIA**: Settings → Connections → the connector tile →
+- **From GAIA**: Settings → Connectors → the connector tile →
   **Disconnect**. Removes that connector's refresh token from the keyring;
   the next API call for it errors with `NOT_CONNECTED`. The other Microsoft
   connector (if connected) is unaffected.

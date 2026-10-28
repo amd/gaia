@@ -184,7 +184,9 @@ jobs:
           uv venv .venv-freeze --python 3.12
           # faiss-cpu backs the stateful agent's memory index. [api] does not
           # carry it, and without it the binary boots with semantic recall off.
-          uv pip install --python .venv-freeze -e ".[api]" -e hub/agents/email/python "faiss-cpu>=1.7.0" pyinstaller
+          # tiktoken is named rather than left to arrive through tavily-python:
+          # freeze.py bundles its cl100k_base data and fails the build without it.
+          uv pip install --python .venv-freeze -e ".[api]" -e hub/agents/email/python "faiss-cpu>=1.7.0" tiktoken pyinstaller
 
       # #2590: hub/agents/email/python's declared floor (amd-gaia[api]>=0.22.0)
       # cannot express "needs gaia.connectors.setup_routes" — that module

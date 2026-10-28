@@ -340,6 +340,21 @@ _RETRY_AFTER_ATTR = "retry_after"
 _STATE_ATTR = "model_retry_state"
 
 
+def http_body_text(response: Any) -> str:
+    """*response*'s body as text, read as UTF-8 unless it names a charset.
+
+    ``requests`` decodes a ``text/*`` body with no charset as ISO-8859-1, which
+    turns the UTF-8 that Lemonade and hosted providers send ("—") into mojibake.
+    """
+    content = getattr(response, "content", None)
+    if not isinstance(content, bytes):
+        return response.text
+    content_type = str((response.headers or {}).get("Content-Type", ""))
+    if "charset=" in content_type.lower():
+        return response.text
+    return content.decode("utf-8", errors="replace")
+
+
 def tag_http_failure(
     error: BaseException,
     status: Optional[int],

@@ -541,6 +541,54 @@ def ensure_agent(
     return inst
 
 
+def stop_running_agent(agent_id: str, timeout: float = 30.0) -> bool:
+    """Stop *agent_id*'s sidecar if a running daemon has it up; True when it did.
+
+    For an install that replaced the agent's binary outside the daemon: the
+    running sidecar keeps executing the old one, and the next ensure starts
+    the new one. Never starts a daemon just to stop nothing.
+    """
+    import requests
+
+    inst = attach()
+    if inst is None:
+        return False
+    headers = {"Authorization": f"{AUTH_SCHEME} {inst.token}"}
+    try:
+        r = requests.get(
+            f"{inst.base_url}{API_PREFIX}/agents", headers=headers, timeout=timeout
+        )
+        if r.status_code != 200:
+            raise DaemonError(
+                f"the daemon at {inst.base_url} could not list its agents: "
+                f"{_error_detail(r)}"
+            )
+        running = any(
+            a.get("agent_id") == agent_id and a.get("state") == "running"
+            for a in r.json().get("agents", [])
+        )
+        if not running:
+            return False
+        r = requests.post(
+            f"{inst.base_url}{API_PREFIX}/agents/{agent_id}/stop",
+            headers=headers,
+            timeout=timeout,
+        )
+    except requests.exceptions.RequestException as e:
+        raise DaemonError(
+            f"could not reach the daemon at {inst.base_url} to restart the "
+            f"'{agent_id}' agent on its new version: {e}. Run `gaia daemon "
+            f"stop-agent {agent_id}`; the next chat starts the new version."
+        ) from e
+    if r.status_code != 200:
+        raise DaemonError(
+            f"the daemon could not stop the '{agent_id}' agent, so it is still "
+            f"running its previous version: {_error_detail(r)}. Run `gaia daemon "
+            f"stop-agent {agent_id}`; the next chat starts the new version."
+        )
+    return True
+
+
 def ensure_lemonade(
     timeout=_LEMONADE_ENSURE_TIMEOUT, host_dir: Optional[Path] = None
 ) -> dict:

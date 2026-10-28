@@ -18,6 +18,13 @@
 #                              its approval gate, so a release does not wait on a
 #                              human. A release candidate's own publish.yml run
 #                              passes its own SHA and embeds its own build.
+#   agent_ui_artifact          an artifact of the caller's own run, holding the
+#                              windows-installer build-installers.yml uploaded
+#                              (the release-train dry run).
+#
+# `artifact_prefix` lets one run build twice (a release candidate and its
+# final-stamped twin) without the artifacts colliding. It defaults to empty,
+# which is exactly the behaviour every other caller gets.
 #
 # `sidecar` works as it does in tui_installers.yml: pinned fetches the real
 # gaia-agent against the committed digest; stub stands gaia-tui in for it on
@@ -53,6 +60,16 @@ on:
         required: false
         default: ''
         type: string
+      agent_ui_artifact:
+        description: "Take the desktop app setup from this artifact of the caller's own run."
+        required: false
+        default: ''
+        type: string
+      artifact_prefix:
+        description: 'Prefix for every artifact this uploads or reads, except the sidecar. Empty (the default) keeps today''s names.'
+        required: false
+        default: ''
+        type: string
     outputs:
       ok:
         description: 'true when the setup built AND passed the clean-runner smoke test.'
@@ -78,28 +95,50 @@ jobs:
         with:
           python-version: '3.x'
 
+      - uses: actions/download-artifact@v8
+        if: inputs.agent_ui_artifact != ''
+        with:
+          name: ${{ inputs.agent_ui_artifact }}
+          path: agent-ui-artifact
+
       - name: Fetch
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ inputs.agent_ui_release }}
           RUN_SHA: ${{ inputs.agent_ui_publish_run_sha }}
+          ARTIFACT: ${{ inputs.agent_ui_artifact }}
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [ -n "${RELEASE}" ] && [ -z "${RUN_SHA}" ]; then
+          if [ -n "${RELEASE}" ] && [ -z "${RUN_SHA}" ] && [ -z "${ARTIFACT}" ]; then
             python installer/tui/fetch_agent_ui_setup.py --release "${RELEASE}" --out agent-ui
-          elif [ -n "${RUN_SHA}" ] && [ -z "${RELEASE}" ]; then
+          elif [ -n "${RUN_SHA}" ] && [ -z "${RELEASE}" ] && [ -z "${ARTIFACT}" ]; then
             python installer/tui/fetch_agent_ui_setup.py \
               --publish-run-sha "${RUN_SHA}" --version "${VERSION}" \
               --wait-minutes 60 --out agent-ui
+          elif [ -n "${ARTIFACT}" ] && [ -z "${RELEASE}" ] && [ -z "${RUN_SHA}" ]; then
+            # The same name, PE and size checks the other two sources get.
+            python - "${VERSION}" <<'PY'
+          import shutil, sys
+          from pathlib import Path
+          sys.path.insert(0, "installer/tui")
+          from fetch_agent_ui_setup import setup_name, verify
+          version = sys.argv[1]
+          src = Path("agent-ui-artifact") / setup_name(version)
+          if not src.is_file():
+              raise SystemExit(f"the desktop app artifact has no {src.name}")
+          out = Path("agent-ui")
+          out.mkdir(parents=True, exist_ok=True)
+          print(verify(Path(shutil.copy(src, out / src.name)), version))
+          PY
           else
-            echo "::error::name exactly one desktop app source: agent_ui_release or agent_ui_publish_run_sha (got '${RELEASE}' and '${RUN_SHA}')."
+            echo "::error::name exactly one desktop app source: agent_ui_release, agent_ui_publish_run_sha or agent_ui_artifact (got '${RELEASE}', '${RUN_SHA}' and '${ARTIFACT}')."
             exit 1
           fi
 
       - uses: actions/upload-artifact@v7
         with:
-          name: agent-ui-win-setup
+          name: ${{ inputs.artifact_prefix }}agent-ui-win-setup
           path: agent-ui/
           if-no-files-found: error
           retention-days: 7
@@ -121,12 +160,12 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: tui-binaries
+          name: ${{ inputs.artifact_prefix }}tui-binaries
           path: bin
 
       - uses: actions/download-artifact@v8
         with:
-          name: agent-ui-win-setup
+          name: ${{ inputs.artifact_prefix }}agent-ui-win-setup
           path: agent-ui
 
       - uses: actions/download-artifact@v8
@@ -210,7 +249,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: windows-setup
+          name: ${{ inputs.artifact_prefix }}windows-setup
           path: dist/
           if-no-files-found: error
           retention-days: 7
@@ -232,7 +271,7 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: windows-setup
+          name: ${{ inputs.artifact_prefix }}windows-setup
           path: dist
 
       - name: Install, verify, uninstall

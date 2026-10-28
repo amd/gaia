@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import * as api from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { cloudProviderName } from '../stores/modelStore';
 import { log } from '../utils/logger';
 import type { ChatPerformance, ContextUsage, TurnPerformance } from '../types';
@@ -450,10 +451,13 @@ export function ContextPanel({ sessionId, busy, onClose, onUsage }: ContextPanel
     }, []);
     const close = useCallback(() => onCloseRef.current(), []);
     useEscapeToClose(true, close);
+    const sheetRef = useRef<HTMLElement>(null);
+    useFocusTrap(sheetRef, true);
 
     return (
         <div className="cp-overlay" onClick={onClose}>
             <aside
+                ref={sheetRef}
                 className="cp-sheet"
                 role="dialog"
                 aria-modal="true"
