@@ -300,6 +300,20 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
                 "closed, so nothing after it would show. End it with a ``` line."
             ]
         )
+    if columns and (extra or "columns_table" in slide or "image" in slide):
+        what = (
+            "image"
+            if "image" in slide
+            else ("table" if "columns_table" in slide else "chart or KPI block")
+        )
+        names = ", ".join(c["heading"] for c in columns)
+        raise OutlineError(
+            [
+                f"slide {title!r}: a slide shows one {what} or '### ' boxes, not "
+                f"both, so the boxes ({names}) would not appear. Put them on their "
+                f"own '## ' slide, or drop the {what}."
+            ]
+        )
 
     if notes:
         slide["notes"] = "\n".join(n.strip() for n in notes).strip()
@@ -345,6 +359,9 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
         if text:
             slide["caption"] = " ".join(text)
         return slide
+    if not diagram and slide.get("x_axis") and (len(columns) >= 2 or bullets):
+        # An Axis: line names what grows along stages, so the parts are stages.
+        diagram = "process"
     if diagram or len(columns) >= 3:
         return _diagram_slide(slide, diagram or "boxes", columns, bullets, text)
     if len(columns) == 2:

@@ -18,7 +18,9 @@ into slides, builds them and checks them in one call.
   `pyramid` or `stack`. With `Diagram:` and no `###` headings, each top-level
   bullet is a box and its sub-bullets are the detail.
 - On a process, `Axis: More cost and effort` draws one arrow under the stages
-  naming what grows from left to right.
+  naming what grows from left to right. A list of what increases across the
+  stages goes here, not in a separate table or slide. An `Axis:` line on a
+  slide with no `Diagram:` line draws its boxes as a process.
 - A pipe table is a table slide; `![alt](path)` an image slide; a slide that
   is only a `>` block is a quote slide.
 - `Source: ...` adds the source line, `Note: ...` a footnote, and `Notes:`

@@ -130,6 +130,11 @@ class SkillCall:
     def skill_name(self) -> str:
         return str(self.skill.name)
 
+    @property
+    def request(self) -> str:
+        """The user message the agent is answering, or "" outside a turn."""
+        return str(getattr(self.agent, "_current_query", "") or "")
+
     def declares(self, domain: str, level: str, scope: Optional[str] = None) -> bool:
         for permission in self.skill.parsed_permissions():
             if (permission.domain, permission.level) != (domain, level):

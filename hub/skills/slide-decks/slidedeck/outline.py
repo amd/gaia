@@ -1300,6 +1300,21 @@ def _normalize_slide(
         )
         s["x_axis"] = raw.get("x_axis") or {}
         s["y_axis"] = raw.get("y_axis") or {}
+        axis = s["x_axis"]
+        axis = (
+            axis.get("label") or axis.get("title") if isinstance(axis, dict) else axis
+        )
+        if axis and layout not in ("process", "matrix"):
+            problems.append(
+                f"{where}: 'Axis: {_text(axis)}' is drawn only under a process "
+                "diagram, so it would not appear. Add a 'Diagram: process' line "
+                "to this slide, or move what it says into the boxes."
+            )
+        elif axis and layout == "process" and len(items) > 6:
+            problems.append(
+                f"{where}: the Axis arrow fits under 6 steps at most and this "
+                f"process has {len(items)}, so it would not appear. Merge steps."
+            )
         s["points"] = _as_list(raw.get("points"))
         s["paras"] = normalize_bullets(raw.get("bullets"))
         edges = []
@@ -1433,7 +1448,8 @@ def normalize_outline(outline: Any, base_dir: Optional[Path] = None) -> Dict[str
     if expected is not None and expected != len(slides):
         problems.append(
             f"The outline has {len(slides)} slides but expected_slides is {expected}. "
-            "Add or remove slides so the count is exactly what was asked."
+            "Add or remove slides so the count is exactly what was asked; "
+            "never change expected_slides to match the outline."
         )
     required_raw = data.get("required_items") or data.get("must_show") or []
     if isinstance(required_raw, str):

@@ -71,6 +71,197 @@ def _agent_key() -> int:
         return 0
 
 
+def _whole(value: Any) -> int:
+    """A positive slide count, or 0; a bad value is left to the outline check."""
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+_NUMBER_WORDS = {
+    "one": 1, "single": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}  # fmt: skip
+#: "one-slide", "single executive slide", "5 slides"; "one of the slides" is not a count.
+_COUNT_PHRASE = re.compile(
+    r"\b(\d{1,2}|" + "|".join(_NUMBER_WORDS) + r")"
+    r"(?:[\s-]+(?!(?:of|the|a|an|more|per|each|every|for|in|on|to|other|extra|"
+    r"additional|new|or|and)\b)[a-z]+){0,2}[\s-]+slides?\b",
+    re.I,
+)
+
+
+def _asked_count(request: str) -> tuple:
+    """The slide count the user's message names, with the phrase; (0, "") if none or mixed."""
+    found = {}
+    for m in _COUNT_PHRASE.finditer(request or ""):
+        word = m.group(1).lower()
+        n = int(word) if word.isdigit() else _NUMBER_WORDS[word]
+        if n > 0:
+            found.setdefault(n, m.group(0))
+    if len(found) != 1:
+        return 0, ""
+    return next(iter(found.items()))
+
+
+#: A line saying what grows across the stages and introducing a list, e.g.
+#: "As we move from left to right, increase:" or "Across the tiers these grow: a, b".
+_LEAD_LINE = re.compile(r"^([^\n:]*):[ \t]*(.*)$", re.M)
+_GROWTH = re.compile(r"\b(?:increas|grow|rise|rising|more)\w*", re.I)
+_ACROSS = re.compile(
+    r"\b(?:left[\s-]+to[\s-]+right|stages?|steps?|tiers?|levels?|phases?|"
+    r"moves?|progress\w*|across)\b",
+    re.I,
+)
+_LIST_ITEM = re.compile(r"^\s*(?:[*•-]|\d+[.)])\s+(.+?)\s*$")
+#: Words too generic to tell one listed dimension from another.
+_FILLER = {"number", "requirements", "requirement", "involved", "level", "amount"}
+
+
+def _grows_list(request: str) -> List[str]:
+    """What the user lists as growing across the stages; [] unless they list two or more."""
+    m = next(
+        (
+            x
+            for x in _LEAD_LINE.finditer(request or "")
+            if _GROWTH.search(x.group(1)) and _ACROSS.search(x.group(1))
+        ),
+        None,
+    )
+    if not m:
+        return []
+    inline = m.group(2).strip()
+    if inline:
+        items = [x.strip(" .") for x in re.split(r",|\band\b", inline)]
+    else:
+        items = []
+        for line in request[m.end() :].split("\n")[1:]:
+            item = _LIST_ITEM.match(line)
+            if item:
+                items.append(item.group(1))
+            elif line.strip() and items:
+                break
+    items = [x for x in items if x]
+    return items if len(items) >= 2 else []
+
+
+def _covered(item: str, axis: str) -> bool:
+    words = [
+        w
+        for w in re.findall(r"[a-z]+", item.lower())
+        if len(w) >= 4 and w not in _FILLER
+    ]
+    return not words or any(w[:5] in axis for w in words)
+
+
+def _missing_axis(slides: List[Dict[str, Any]]) -> Optional[str]:
+    """Why the slides do not show what the user listed as growing across the stages."""
+    try:
+        listed = _grows_list(current().request)
+    except SkillContextError:
+        return None
+    if not listed:
+        return None
+    stages = [
+        s
+        for s in slides
+        if s.get("type") == "diagram"
+        and (s.get("diagram") or s.get("layout") or "boxes") in ("process", "boxes")
+        and len(s.get("items") or s.get("steps") or s.get("stages") or []) >= 3
+    ]
+    named = "; ".join(listed)
+    if not stages:
+        shown = json.dumps(
+            [{k: v for k, v in s.items() if k != "notes"} for s in slides]
+        ).lower()
+        left_out = [x for x in listed if not _covered(x, shown)]
+        if not left_out:
+            return None
+        return (
+            "The user listed what grows across the stages, but the slides "
+            f"never show {'; '.join(left_out)}. Put the stages as '### ' boxes "
+            f"under 'Diagram: process' and name {named} on an 'Axis:' line."
+        )
+    axes = [_text_of(s.get("x_axis")).lower() for s in stages if s.get("x_axis")]
+    if not axes:
+        return (
+            "The user listed what grows across the stages, but the stages slide "
+            "has no 'Axis:' line, so that progression is missing or buried "
+            f"in a box. Add one 'Axis:' line on that slide naming: {named}. "
+            "Shorten each to a word or two, keep it under 10 words, and take it "
+            "out of the boxes."
+        )
+    left_out = [x for x in listed if not any(_covered(x, a) for a in axes)]
+    if left_out:
+        return (
+            "The 'Axis:' line leaves out what the user listed as growing: "
+            f"{'; '.join(left_out)}. Name every item of: {named}, a word or two "
+            "each, under 10 words."
+        )
+    return None
+
+
+def _text_of(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("label") or value.get("title") or "")
+    return str(value or "")
+
+
+def _merge_hint(count: int) -> str:
+    if count == 1:
+        return (
+            "For one slide: leave out the '# ' cover, put the parts as '### ' "
+            "boxes on a single '## ' slide, and for stages add 'Diagram: process' "
+            "with what grows across them on an 'Axis:' line instead of a "
+            "separate table or slide."
+        )
+    return (
+        "Merge slides that make one point, fold a table or list that only "
+        "explains a diagram into its 'Axis:' line or bullets, or cut the cover."
+    )
+
+
+def _hold_slide_count(expected: int) -> int:
+    """The slide count the user's message names, which ``expected`` must match.
+
+    A count error is fixed by changing the slides, so a model's own number
+    never replaces the user's, and 0 does not skip the check. With no count in
+    the message, ``expected`` is the model's choice.
+    """
+    try:
+        request = current().request
+    except SkillContextError:
+        return expected
+    asked, phrase = _asked_count(request)
+    if not asked:
+        return expected
+    if expected and expected != asked:
+        raise OutlineError(
+            [
+                f"The user asked for {asked} slide{'s' if asked > 1 else ''} "
+                f'("{phrase}"), so expected_slides is {asked}, not {expected}. '
+                f"Change the slides so there are exactly {asked}. " + _merge_hint(asked)
+            ]
+        )
+    return asked
+
+
+def _slides_built(data: Dict[str, Any], result: Dict[str, Any]) -> List[str]:
+    """One line per deck slide, from what was built: the reply describes these."""
+    slides = data.get("slides") or []
+    built = []
+    for outline_no, deck_nos in (result.get("slide_map") or {}).items():
+        idx = int(outline_no) - 1
+        s = slides[idx] if 0 <= idx < len(slides) else {}
+        kind = s.get("type") or "slide"
+        if s.get("diagram"):
+            kind = f"{kind}: {s['diagram']}"
+        for deck_no in deck_nos:
+            built.append((deck_no, f"{s.get('title') or '(untitled)'} [{kind}]"))
+    return [f"{n}. {text}" for n, text in sorted(built)]
+
+
 def _fingerprint(*parts: Any) -> str:
     return hashlib.sha256(
         json.dumps(parts, sort_keys=True, default=str).encode()
@@ -243,6 +434,21 @@ def _build_from(
         if problems:
             raise OutlineError(problems)
         data = dict(load_outline(outline))
+        count = _hold_slide_count(_whole(data.get("expected_slides")))
+        if count:
+            data["expected_slides"] = count
+        if count and count < len(data.get("slides") or []):
+            # The outline check only names the gap; say how to close it.
+            raise OutlineError(
+                [
+                    f"The outline has {len(data['slides'])} slides but the user "
+                    f"asked for {count}; keep expected_slides at {count} and "
+                    "change the slides. " + _merge_hint(count)
+                ]
+            )
+        missing = _missing_axis(data.get("slides") or [])
+        if missing:
+            raise OutlineError([missing])
         if request:
             data["style"] = _style.merge_prefs(data.get("style") or {}, request)
         if required_items:
@@ -288,8 +494,10 @@ def _build_from(
             _FAILED_IN_A_ROW.pop(_agent_key(), None)
             result["next"] = (
                 "The deck is built and passed its check. Report it to the user "
-                "now; build again only if they ask for a change."
+                "now, describing it only from slides_built; build again only if "
+                "they ask for a change."
             )
+        result["slides_built"] = _slides_built(data, result)
         result["style_options"] = _style.style_offer(
             _style.resolve_tokens(request, saved)
         )
@@ -328,12 +536,14 @@ def build_deck_from_markdown(
         prefs: Optional style the user asked for in this request.
         required_items: Facts the request needs visible on the slides; checked.
         expected_slides: The slide count the user asked for; 0 skips the check.
+            A count the user named always applies: on a count error, change the slides.
     """
     if "\n" not in markdown and "\\n" in markdown:
         # The model escaped its line breaks twice; the deck is one line otherwise.
         markdown = markdown.replace("\\n", "\n")
     try:
-        outline = _md.outline_from_markdown(markdown, expected_slides or None)
+        count = _hold_slide_count(_whole(expected_slides))
+        outline = _md.outline_from_markdown(markdown, count or None)
     except OutlineError as exc:
         return _error(exc)
     return _build_from(outline, output_path, theme, "", prefs, required_items)
@@ -381,10 +591,11 @@ def verify_deck(
                     ]
                 )
             png_dir = check_write(png_dir / "slide_01.png").parent
+        count = _hold_slide_count(_whole(expected_slides))
         renderer = _renderer() if render else None
         report = _verify.verify_deck(
             str(deck),
-            expected_slides=expected_slides or None,
+            expected_slides=count or None,
             require_native_charts=require_native_charts,
             outline=normalized,
             require_notes=require_notes,

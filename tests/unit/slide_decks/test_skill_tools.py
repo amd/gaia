@@ -304,3 +304,275 @@ def test_a_null_output_path_saves_in_gaia_documents(tools, tmp_path):
         )
     assert r["status"] == "ok", r
     assert r["path"].startswith(str(tmp_path / "home" / "documents"))
+
+
+_STAGES = (
+    "## Ferry service grows from one pier to a network\n"
+    "Diagram: process\n"
+    "### One pier\n- Hourly crossing\n"
+    "### Two piers\n- Half-hourly crossings\n"
+    "### Network\n- Four piers, every ten minutes\n"
+)
+_SPLIT = (
+    "# Ferry plan\n\n" + _STAGES + "\n## What grows at each stage\n"
+    "| Dimension | One pier | Two piers | Network |\n"
+    "|---|---|---|---|\n"
+    "| Boats | 1 | 2 | 6 |\n"
+    "Source: ferry_fleet.xlsx, 2026\n"
+)
+
+
+class _Asking(_Host):
+    """A stand-in agent answering *request*, as Agent keeps it in _current_query."""
+
+    def __init__(self, request: str = "") -> None:
+        self._current_query = request
+
+
+_ONE_SLIDE = "Make a crisp one-slide framework of how the ferry service grows."
+
+
+def test_a_count_error_is_not_cleared_by_changing_the_count(tools, tmp_path):
+    """A one-slide request built as three slides must be merged, not re-counted."""
+    skill, fns, _r = tools
+    out = str(tmp_path / "ferry.pptx")
+    with bind(_Asking(_ONE_SLIDE), skill):
+        first = fns["build_deck_from_markdown"](
+            markdown=_SPLIT, output_path=out, expected_slides=1
+        )
+        raised = fns["build_deck_from_markdown"](
+            markdown=_SPLIT, output_path=out, expected_slides=2
+        )
+        dropped = fns["build_deck_from_markdown"](
+            markdown=_SPLIT, output_path=out, expected_slides=0
+        )
+        merged = fns["build_deck_from_markdown"](
+            markdown=_STAGES + "Axis: More piers, boats and crossings\n",
+            output_path=out,
+            expected_slides=1,
+        )
+    assert first["status"] == "error"
+    assert "'Axis:' line" in first["problems"][0]
+    assert raised["status"] == "error"
+    assert '("one-slide")' in raised["problems"][0]
+    assert dropped["status"] == "error", "0 must apply the user's count, not skip it"
+    assert merged["status"] == "ok", merged
+    assert merged["slides"] == 1
+    assert merged["slides_built"] == [
+        "1. Ferry service grows from one pier to a network [diagram: process]"
+    ]
+
+
+def test_the_models_first_guess_never_overrides_the_users_count(tools, tmp_path):
+    """The model misread a one-slide request as five; the user's words win."""
+    skill, fns, _r = tools
+    with bind(_Asking(_ONE_SLIDE), skill):
+        guess = fns["build_deck_from_markdown"](
+            markdown=_STAGES, output_path=str(tmp_path / "g.pptx"), expected_slides=5
+        )
+        right = fns["build_deck_from_markdown"](
+            markdown=_STAGES, output_path=str(tmp_path / "r.pptx"), expected_slides=1
+        )
+    assert guess["status"] == "error"
+    assert "not 5" in guess["problems"][0]
+    assert right["status"] == "ok", right
+
+
+def test_without_a_count_in_the_request_the_model_chooses(tools, tmp_path):
+    skill, fns, _r = tools
+    with bind(_Asking("Make a deck about the ferry service."), skill):
+        two = fns["build_deck_from_markdown"](
+            markdown=_SPLIT, output_path=str(tmp_path / "b.pptx"), expected_slides=2
+        )
+    assert two["status"] == "ok", two
+    assert [line.split(" [")[0] for line in two["slides_built"]] == [
+        "1. Ferry service grows from one pier to a network",
+        "2. What grows at each stage",
+    ]
+
+
+def test_verify_applies_the_users_count(tools, tmp_path):
+    skill, fns, _r = tools
+    out = str(tmp_path / "ferry.pptx")
+    with bind(_Asking(_ONE_SLIDE), skill):
+        built = fns["build_deck_from_markdown"](markdown=_STAGES, output_path=out)
+        report = fns["verify_deck"](path=out, expected_slides=3, render=False)
+    assert built["status"] == "ok", built
+    assert report["status"] == "error"
+    assert "not 3" in report["problems"][0]
+
+
+@pytest.mark.parametrize(
+    "request_text, count",
+    [
+        ("a crisp one-slide framework ... a single executive slide", 1),
+        ("Make a 5-slide deck on Q3", 5),
+        ("Build a deck with three PowerPoint slides", 3),
+        ("Summarize one of the slides", 0),
+        ("make a slide deck about our roadmap", 0),
+        ("add two more slides", 0),
+        ("turn slide 3 into a chart", 0),
+        ("a 2 slide summary and 4 slides of appendix", 0),
+    ],
+)
+def test_the_count_comes_from_the_users_words(tools, request_text, count):
+    import tools as skill_tools  # the skill's tools.py, on sys.path via conftest
+
+    assert skill_tools._asked_count(request_text)[0] == count
+
+
+def test_skill_call_request_is_the_users_message(tools):
+    skill, _fns, _r = tools
+    with bind(_Asking("one slide please"), skill) as call:
+        assert call.request == "one slide please"
+    with bind(_Host(), skill) as call:
+        assert call.request == ""
+
+
+def test_an_axis_line_draws_the_boxes_as_stages(tools, tmp_path):
+    """Axis: names what grows along stages, so boxes with one become a process."""
+    skill, fns, _r = tools
+    boxes = _STAGES.replace("Diagram: process\n", "") + "Axis: More piers and boats\n"
+    with bind(_Asking(), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=boxes, output_path=str(tmp_path / "f.pptx"), expected_slides=1
+        )
+    assert r["status"] == "ok", r
+    assert r["slides_built"][0].endswith("[diagram: process]")
+
+
+def test_an_axis_on_a_diagram_that_cannot_draw_it_is_an_error(tools, tmp_path):
+    """A cycle ignores Axis:, so the dimensions it lists would vanish from the slide."""
+    skill, fns, _r = tools
+    cycle = _STAGES.replace("process", "cycle") + "Axis: More piers and boats\n"
+    with bind(_Asking(), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=cycle, output_path=str(tmp_path / "c.pptx"), expected_slides=1
+        )
+    assert r["status"] == "error"
+    assert "Diagram: process" in r["problems"][0]
+
+
+def test_an_axis_under_more_than_six_steps_is_an_error(tools, tmp_path):
+    skill, fns, _r = tools
+    steps = "".join(f"### Step {i}\n- Detail {i}\n" for i in range(1, 8))
+    md = f"## Seven steps to launch\nDiagram: process\n{steps}Axis: More effort\n"
+    with bind(_Asking(), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "s.pptx"), expected_slides=1
+        )
+    assert r["status"] == "error"
+    assert "6 steps at most" in r["problems"][0]
+
+
+_GROWS = (
+    "One slide of the ferry stages. From left to right, increase: boats, crossings."
+)
+
+
+def test_a_left_to_right_progression_needs_its_axis_line(tools, tmp_path):
+    """The user's 'from left to right, increase ...' must be the Axis, not a box's text."""
+    skill, fns, _r = tools
+    out = str(tmp_path / "ferry.pptx")
+    with bind(_Asking(_GROWS), skill):
+        buried = fns["build_deck_from_markdown"](
+            markdown=_STAGES + "**More boats and crossings**\n",
+            output_path=out,
+            expected_slides=1,
+        )
+        drawn = fns["build_deck_from_markdown"](
+            markdown=_STAGES + "Axis: More boats and crossings\n",
+            output_path=out,
+            expected_slides=1,
+        )
+    assert buried["status"] == "error"
+    assert "'Axis:' line" in buried["problems"][0]
+    assert drawn["status"] == "ok", drawn
+
+
+def test_no_axis_is_needed_without_a_left_to_right_request(tools, tmp_path):
+    skill, fns, _r = tools
+    with bind(_Asking(_ONE_SLIDE), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=_STAGES, output_path=str(tmp_path / "f.pptx"), expected_slides=1
+        )
+    assert r["status"] == "ok", r
+
+
+def test_an_axis_must_name_everything_the_user_listed(tools, tmp_path):
+    """A copied example axis that drops the user's items is refused, naming them."""
+    skill, fns, _r = tools
+    request = (
+        "One slide of the ferry stages. As we move from left to right, increase:\n"
+        "\n* Boats in service\n* Crossings per hour\n* Crew on shift\n\nKeep it simple."
+    )
+    out = str(tmp_path / "ferry.pptx")
+    with bind(_Asking(request), skill):
+        partial = fns["build_deck_from_markdown"](
+            markdown=_STAGES + "Axis: More boats\n", output_path=out
+        )
+        full = fns["build_deck_from_markdown"](
+            markdown=_STAGES + "Axis: More boats, crossings and crew\n", output_path=out
+        )
+    assert partial["status"] == "error"
+    assert "Crossings per hour; Crew on shift" in partial["problems"][0]
+    assert full["status"] == "ok", full
+
+
+def test_boxes_on_a_chart_slide_are_an_error_not_dropped(tools, tmp_path):
+    """A chart slide has no room for '### ' boxes; they must not vanish silently."""
+    skill, fns, _r = tools
+    md = (
+        "## Ferry demand rose at every pier\n"
+        "```chart bar\nsource: ferry_counts.xlsx, 2026\nPier,Crossings\nNorth,120\nSouth,90\n```\n"
+        "### North pier\n- Hourly crossing\n### South pier\n- Half-hourly\n"
+    )
+    with bind(_Asking(), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "c.pptx")
+        )
+    assert r["status"] == "error"
+    assert "(North pier, South pier) would not appear" in r["problems"][0]
+
+
+def test_a_chart_alone_cannot_drop_what_the_user_listed(tools, tmp_path):
+    skill, fns, _r = tools
+    request = (
+        "One slide of the ferry stages. As we move from left to right, increase:\n"
+        "\n* Boats in service\n* Crew on shift\n"
+    )
+    md = (
+        "## Ferry crossings grow at every stage\n"
+        "```chart bar\nsource: ferry_counts.xlsx, 2026\nStage,Crossings\n"
+        "One pier,10\nNetwork,60\n```\n"
+    )
+    with bind(_Asking(request), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "c.pptx")
+        )
+    assert r["status"] == "error"
+    assert "Boats in service; Crew on shift" in r["problems"][0]
+
+
+@pytest.mark.parametrize(
+    "request_text, listed",
+    [
+        (
+            "As we move from left to right, increase:\n\n* Task complexity\n* Compute\n",
+            ["Task complexity", "Compute"],
+        ),
+        (
+            "Across the tiers these grow: cost, staff and hours.",
+            ["cost", "staff", "hours"],
+        ),
+        ("From step to step, more of: risk, review effort", ["risk", "review effort"]),
+        ("Lay the three options out left to right.", []),
+        ("Revenue should increase: we need a deck on it.", []),
+        ("Show what grows across the stages: cost", []),
+        ("One slide: the stages; from left to right, increase boats and crew.", []),
+    ],
+)
+def test_what_grows_comes_only_from_an_explicit_list(tools, request_text, listed):
+    import tools as skill_tools
+
+    assert skill_tools._grows_list(request_text) == listed

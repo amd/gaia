@@ -190,8 +190,7 @@ metadata:
 
 **Do not write python-pptx code. Build the deck with
 `slide-decks/build_deck_from_markdown` (or `slide-decks/build_deck` for a JSON
-outline), then check it with `slide-decks/verify_deck`.** The tools fit the
-text, build native editable charts and apply the theme. Hand-written
+outline), then check it with `slide-decks/verify_deck`.** Hand-written
 python-pptx gets charts as pictures, text off the slide and the wrong slide
 count. Your job is the story and the numbers.
 
@@ -229,8 +228,10 @@ Axis: More channels, staff and hours
 lines are bullets, `Must show:` lists what has to be visible. Three or more
 `### ` headings on a slide are drawn as side-by-side boxes, each heading's
 bullets inside it. `Diagram: process` draws them as left-to-right stages
-(also `cycle`, `pyramid`, `stack`) and `Axis:` names what grows along them.
-Use this for stages, steps, levels or options instead of a wall of bullets.
+(also `cycle`, `pyramid`, `stack`). On a process,
+`Axis:` names what grows along them, never a separate table or slide.
+Use this for stages, steps, levels or options, never a chart of made-up
+scores or a wall of bullets.
 Keep the user's own names for each stage. Under each, write 2-4 bullets of
 2-6 words, with no labels like `Focus:`. Use the user's terms in titles
 without inventing abbreviations. Keep `Axis:` under 10 words.
@@ -272,9 +273,9 @@ without inventing abbreviations. Keep `Axis:` under 10 words.
    lists and rebuild (or `update_slide`) until its `status` is `pass`. Call
    `verify_deck(path, expected_slides=N, required_items=[...])` only after
    `add_slide` or `update_slide`, or for a deck you did not build.
-6. **Report** the path, one line per slide, the check status and anything not
-   done. On style feedback call `update_deck_prefs(feedback=...)` and say
-   whether it was saved.
+6. **Report** the path, one line per slide from `slides_built`, the check
+   status and anything not done. On style feedback call
+   `update_deck_prefs(feedback=...)` and say whether it was saved.
 
 ## References (paths relative to this skill's folder)
 
