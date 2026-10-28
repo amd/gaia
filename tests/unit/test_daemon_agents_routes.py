@@ -179,6 +179,39 @@ def test_atomic_write_json_cleans_temp_after_exhausting_windows_retries(
     assert not list(tmp_path.glob(".somefile.json.*.tmp"))
 
 
+@pytest.mark.parametrize(
+    "on_windows, error",
+    [
+        (False, PermissionError("denied")),  # POSIX never retries
+        (True, FileNotFoundError("gone")),  # only PermissionError is retried
+    ],
+)
+def test_atomic_write_json_fails_at_once_when_the_error_is_not_transient(
+    daemon_home, tmp_path, monkeypatch, on_windows, error
+):
+    from gaia.daemon import paths
+
+    target = tmp_path / "somefile.json"
+    calls = 0
+    delays = []
+
+    def _replace(source, destination):
+        nonlocal calls
+        calls += 1
+        raise error
+
+    monkeypatch.setattr(paths, "_is_windows", lambda: on_windows)
+    monkeypatch.setattr(paths.os, "replace", _replace)
+    monkeypatch.setattr(paths.time, "sleep", delays.append)
+
+    with pytest.raises(type(error)):
+        paths.atomic_write_json(target, {"ok": True})
+
+    assert calls == 1
+    assert delays == []
+    assert not list(tmp_path.glob(".somefile.json.*.tmp"))
+
+
 def test_new_registry_error_classes_are_sidecar_errors():
     from gaia.daemon.sidecars.errors import (
         CapacityError,
