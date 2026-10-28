@@ -1014,9 +1014,7 @@ def render_endpoint_spec_html() -> str:
   <code class="inl">/v1/email/agent/*</code> routes answer the same case with
   <strong>HTTP 503</strong> and a <code class="inl">Retry-After</code> header. Both are
   transient, not a broken mailbox: retry shortly and don&rsquo;t prompt the user to
-  reconnect. A connector <strong>HTTP 403</strong> (missing scope or revoked grant) is
-  what means the account needs reconnecting; a 403 from a confirmation-gated route
-  means a missing or invalid confirmation token.</p>
+  reconnect.</p>
 
 <h2>Endpoints</h2>
 
