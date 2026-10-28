@@ -371,8 +371,9 @@ retry:
   ; A freshly installed executable can be briefly held by antivirus or
   ; indexing software after the smoke-test's writable check. Give that
   ; transient lock a short window to clear before reporting a running app.
-  ; A real running process still reaches the refusal below unchanged.
+  ; A real running process still reaches the refusal below after this wait.
   StrCpy $R6 20
+  DetailPrint "Waiting for $R8 to be released..."
 wait_for_file:
   ClearErrors
   FileOpen $R9 "$R7\$R8" a
