@@ -11985,6 +11985,12 @@ Do NOT wrap conversational replies in JSON.
                     # Silent mode - just stop
                     break
 
+        # Before the step-cap call: its footer must count this step, and its
+        # stats must not be mistaken for this step's.
+        self._record_unrecorded_step(
+            response_stats, open_step, step_timer, conversation
+        )
+
         # Out of steps with no answer: one more call, tools withheld, so the
         # user hears what was found rather than only the canned note.
         max_steps_reached = (
@@ -12042,9 +12048,6 @@ Do NOT wrap conversational replies in JSON.
 
         # Closes the last step, filling its stats record before anyone reads
         # it. After the step-cap call above, so that call's time is counted.
-        self._record_unrecorded_step(
-            response_stats, open_step, step_timer, conversation
-        )
         timing_summary = step_timer.finish()
 
         # Cancelled mid-generation via the Agent UI Stop (#2157): end the turn

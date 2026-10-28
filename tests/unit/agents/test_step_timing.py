@@ -702,3 +702,130 @@ def test_last_call_finished_tells_a_reply_from_a_failure():
     assert not timer.last_call_finished()
     timer.record_llm_call(_call(1.0, finish="stop", completion=5))
     assert timer.last_call_finished()
+
+
+class _UsagePerCall(_FinishPerCall):
+    """Reports each reply's own finish reason and usage, in order."""
+
+    def __init__(self, replies, finishes, usages, **kwargs):
+        super().__init__(replies, finishes, **kwargs)
+        self.usages = list(usages)
+
+    def chat(self, messages, model=None, stream=False, **kwargs):
+        self.usage = self.usages.pop(0)
+        return super().chat(messages, model=model, stream=stream, **kwargs)
+
+
+_USAGE = {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
+
+
+def _cut_off_agent(provider, streaming=False):
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _TimedAgent(silent_mode=True, skip_lemonade=True)
+    agent.streaming = streaming
+    agent.chat = _sdk(provider)
+    agent.console.print_final_answer = Mock()
+    return agent
+
+
+def _footer_output_tokens(agent):
+    return agent.console.print_final_answer.call_args.kwargs["total_tokens"]
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["non-streaming", "streaming"])
+def test_cut_offs_in_a_row_are_each_recorded_once(_clean_registry, streaming):
+    provider = _FinishPerCall(
+        ["The value", "is still", json.dumps({"thought": "d", "answer": "Done."})],
+        ["length", "length", "stop"],
+        delay=LLM_DELAY,
+        usage=_USAGE,
+    )
+    agent = _cut_off_agent(provider, streaming)
+
+    result = agent.process_query("Go.", max_steps=5)
+
+    records = _stats_records(result)
+    assert [r["step"] for r in records] == [1, 2, 3]
+    assert result["timing_summary"]["llm_calls"] == 3
+    assert sum(r["performance_stats"]["completion_tokens"] for r in records) == 60
+
+
+def test_a_step_that_records_itself_is_not_recorded_again(_clean_registry):
+    """The boundary check must not add a second record for an ordinary step."""
+    provider = _FinishPerCall(
+        [json.dumps({"thought": "d", "answer": "Done."})],
+        ["stop"],
+        usage=_USAGE,
+    )
+    agent = _cut_off_agent(provider)
+
+    result = agent.process_query("Go.", max_steps=5)
+
+    assert [r["step"] for r in _stats_records(result)] == [1]
+
+
+_REJECTED_PLAN = json.dumps({"thought": "plan", "plan": "not a list"})
+
+
+def test_an_early_exit_on_the_last_step_counts_in_the_step_cap_footer(
+    _clean_registry,
+):
+    """Out of steps right after a rejected plan: the closing answer's footer
+    and the trace both carry the rejected step's tokens."""
+    provider = _FinishPerCall(
+        [_REJECTED_PLAN, json.dumps({"thought": "d", "answer": "Partial."})],
+        ["stop", "stop"],
+        usage=_USAGE,
+    )
+    agent = _cut_off_agent(provider)
+
+    result = agent.process_query("Go.", max_steps=1)
+
+    assert result["max_steps_reached"]
+    records = _stats_records(result)
+    assert sum(r["performance_stats"]["completion_tokens"] for r in records) == 40
+    assert _footer_output_tokens(agent) == 40
+
+
+def test_a_statless_early_exit_does_not_borrow_the_closing_calls_stats(
+    _clean_registry,
+):
+    """A rejected step with no stats of its own must not be filled with the
+    step-cap call's numbers, which already have their own record."""
+    provider = _UsagePerCall(
+        [_REJECTED_PLAN, json.dumps({"thought": "d", "answer": "Partial."})],
+        ["stop", "stop"],
+        [None, _USAGE],
+    )
+    agent = _cut_off_agent(provider)
+
+    result = agent.process_query("Go.", max_steps=1)
+
+    assert result["max_steps_reached"]
+    records = _stats_records(result)
+    assert [r["step"] for r in records] == [1, 2]
+    assert (
+        sum(r["performance_stats"].get("completion_tokens", 0) for r in records) == 20
+    )
+    assert _footer_output_tokens(agent) == 20
+    assert result["timing_summary"]["llm_calls"] == 2
+
+
+def test_a_failed_call_keeps_its_time_and_borrows_no_tokens(_clean_registry):
+    """The server still reports the previous turn's request; a step whose own
+    call raised must not claim those tokens."""
+    provider = _FinishPerCall(
+        [json.dumps({"thought": "d", "answer": "A."}), RuntimeError("boom")],
+        ["stop", "stop"],
+        delay=LLM_DELAY,
+        usage=_USAGE,
+    )
+    agent = _cut_off_agent(provider)
+    agent.process_query("Go.", max_steps=3)
+
+    result = agent.process_query("Again.", max_steps=3)
+
+    records = _stats_records(result)
+    assert [r["step"] for r in records] == [1]
+    assert records[0]["performance_stats"].get("completion_tokens") is None
+    assert result["timing_summary"]["llm_calls"] == 1
