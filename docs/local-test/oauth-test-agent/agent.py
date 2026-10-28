@@ -127,5 +127,5 @@ class OAuthTestAgent(Agent):
             "call list_recent_subjects() once and reply with the list. "
             "If the call returns ok=False, explain the reason in plain "
             "English and suggest the user grant access in Settings → "
-            "Connections."
+            "Connectors."
         )

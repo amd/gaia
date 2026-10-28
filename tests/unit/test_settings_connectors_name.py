@@ -28,10 +28,17 @@ _SCAN_EXTENSIONS = {
     ".yml",
 }
 _SKIP_PATH_PARTS = {"node_modules", "dist", "__pycache__"}
+# Implicitly concatenated Python literals split a phrase across lines.
+_LITERAL_SPLIT_RE = re.compile(r"[\"']\s*\n\s*[rbuf]*[\"']", re.IGNORECASE)
 # The UI still recognises the old wording from agent builds released before the rename.
 _ALLOWED = {
     Path("src/gaia/apps/webui/src/components/__tests__/EmailConnectCta.test.ts"),
 }
+
+
+def _join_literals(text: str) -> str:
+    # Keep the newline so reported line numbers still point at the source.
+    return _LITERAL_SPLIT_RE.sub("\n", text)
 
 
 def test_settings_path_names_the_connectors_tab():
@@ -47,6 +54,8 @@ def test_settings_path_names_the_connectors_tab():
             if rel in _ALLOWED:
                 continue
             text = path.read_text(encoding="utf-8", errors="ignore")
+            if path.suffix == ".py":
+                text = _join_literals(text)
             for match in _STALE_RE.finditer(text):
                 line_num = text.count("\n", 0, match.start()) + 1
                 offenders.append(f"{rel}:{line_num}")
@@ -75,6 +84,18 @@ def test_settings_path_names_the_connectors_tab():
 )
 def test_stale_pattern_catches_every_spelling(text):
     assert _STALE_RE.search(text)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        '"Settings → "\n    "Connections in the Agent UI."',
+        '"(or Settings -> "\n            "Connections in the Agent UI)."',
+        "'Settings → '\n    f'Connections'",
+    ],
+)
+def test_stale_pattern_catches_phrase_split_across_literals(source):
+    assert _STALE_RE.search(_join_literals(source))
 
 
 @pytest.mark.parametrize(
