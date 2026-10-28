@@ -100,7 +100,7 @@ export function Composer({
                                 : <FileText size={14} aria-hidden="true" />}
                             <span className="composer-attachment-name" title={a.name}>{a.name}</span>
                             {a.uploading && <span className="composer-attachment-state">Uploading…</span>}
-                            {a.error && <span className="composer-attachment-state" role="alert">{a.error}</span>}
+                            {a.error && <span className="composer-attachment-state" role="alert" title={a.error}>{a.error}</span>}
                             <button
                                 type="button"
                                 className="composer-icon-btn"

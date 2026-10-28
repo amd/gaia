@@ -78,7 +78,9 @@ from . import permissions as session_permissions
 from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
-from .session_environment import apply_environment
+from .session_environment import apply_environment, folders_refusal
+from .session_environment import load as load_environment
+from .session_environment import with_folder_note, withheld_refusal
 from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
 from .utils import attached_upload_paths, managed_documents_dir
@@ -2186,6 +2188,8 @@ def _dispatch_sidecar_query(
     session_id: str | None = None,
     documents: list | None = None,
     allowed_paths: list | None = None,
+    folders: list | None = None,
+    withheld: list | None = None,
     memory: str = "on",
     recording: TurnRecording | None = None,
     max_steps: int | None = None,
@@ -2200,6 +2204,12 @@ def _dispatch_sidecar_query(
     *allowed_paths* is the chat's computed file scope. A sidecar that takes it
     gets it with ``GAIA_ALLOWED_PATHS`` already applied — the sidecar process
     need not share this one's environment — so it works where the UI says.
+
+    *folders* are the folders the user added to the chat. They join the scope;
+    a sidecar too old to take a scope stops the turn rather than answer
+    without them. *withheld* are paths the user took away from the chat; an
+    allowed-paths list can't express them, so a chat with any stops the turn
+    rather than hand the sidecar what the user removed.
 
     *memory* is the chat's memory mode (:func:`_memory_mode`). Likewise, a
     private or memory-off turn is stopped rather than sent to a sidecar that
@@ -2271,10 +2281,33 @@ def _dispatch_sidecar_query(
             return
         relayed_documents = [str(Path(p).resolve()) for p in documents]
 
+    if withheld:
+        logger.warning(
+            "%s chat %s has withheld paths a relayed agent can't be held to",
+            agent_type,
+            (session_id or "")[:8],
+        )
+        sse_handler._emit({"type": "agent_error", "content": withheld_refusal()})
+        return
+
+    takes_scope = scope_supported(profile, handle.api_version)
+    if folders and not takes_scope:
+        logger.warning(
+            "%s agent at contract %s can't be given folders (needs %s)",
+            agent_type,
+            handle.api_version,
+            profile.min_scope_api_version,
+        )
+        sse_handler._emit(
+            {"type": "agent_error", "content": folders_refusal(agent_type)}
+        )
+        return
+    query = with_folder_note(request.message, folders or [])
+
     relayed_scope = None
-    if allowed_paths is not None and scope_supported(profile, handle.api_version):
+    if allowed_paths is not None and takes_scope:
         try:
-            relayed_scope = _effective_scope(allowed_paths)
+            relayed_scope = _effective_scope(sorted({*allowed_paths, *(folders or [])}))
         except AllowedPathsEnvError as exc:
             # In process, the agent's validator raises this same error. The
             # sidecar may not see this environment, so say it here instead of
@@ -2375,7 +2408,7 @@ def _dispatch_sidecar_query(
     if relayed_turns is None:
         try:
             context = _relayed_history(
-                history_pairs, model_id, request.message, sse_handler, session_id
+                history_pairs, model_id, query, sse_handler, session_id
             )
         except (LemonadeClientError, ModelFitError, GaiaConfigError) as exc:
             sse_handler._emit(
@@ -2394,7 +2427,7 @@ def _dispatch_sidecar_query(
     relay_query(
         sse_handler,
         proxy,
-        query=request.message,
+        query=query,
         context=context,
         model_id=model_id,
         # The chat's own mode, read per turn: the in-process path applies it
@@ -3428,8 +3461,11 @@ async def _get_chat_response(
 
         _apply_memory_state(agent, session, db)
         apply_environment(agent, session_id, db)
+        query = with_folder_note(
+            request.message, load_environment(db, session_id)["folders"]
+        )
 
-        _restore_model_history(agent, db, session_id, request.message)
+        _restore_model_history(agent, db, session_id, query)
 
         # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
         # omitted, the agent's __init__ set model_id via kwargs.setdefault —
@@ -3451,7 +3487,7 @@ async def _get_chat_response(
         try:
             # Never re-run on failure: tools the turn already ran would run
             # again. The error says whether sending it again can help.
-            result = agent.process_query(request.message)
+            result = agent.process_query(query)
         finally:
             agent.console = activity._inner
             warning = recording.close()
@@ -3920,6 +3956,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         agent_type,
                         session_id[:8],
                     )
+                    relayed_env = load_environment(db, session_id)
                     _dispatch_sidecar_query(
                         sse_handler,
                         request,
@@ -3929,6 +3966,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         session_id=session_id,
                         documents=_relayed_documents(rag_file_paths, attached),
                         allowed_paths=allowed,
+                        folders=relayed_env["folders"],
+                        withheld=relayed_env["withheld"],
                         memory=_memory_mode(session, db),
                         recording=recording,
                         turns=relay_turns,
@@ -4045,6 +4084,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                 _apply_memory_state(agent, session, db)
                 apply_environment(agent, request.session_id, db)
+                query = with_folder_note(
+                    request.message, load_environment(db, session_id)["folders"]
+                )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -4059,9 +4101,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     session_id, agent, _followup_taken
                 )
 
-                _restore_model_history(
-                    agent, db, session_id, request.message, sse_handler
-                )
+                _restore_model_history(agent, db, session_id, query, sse_handler)
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -4097,7 +4137,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # and the next turn's pre-flight reloads an evicted model.
                 t_query = _time.monotonic()
                 result_holder["agent"] = agent
-                result = agent.process_query(request.message)
+                result = agent.process_query(query)
                 logger.info(
                     "PERF process_query session=%s took=%.3fs",
                     session_id[:8],
