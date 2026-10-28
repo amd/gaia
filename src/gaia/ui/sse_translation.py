@@ -115,6 +115,7 @@ SUMMARY_VIEW_KEYS = (
     "image_path",
     # A ``search_web`` result's hits, so a relayed turn can cite them.
     "sources",
+    # The file a tool built, so a client can offer to open it.
     "path",
 )
 

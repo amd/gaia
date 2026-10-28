@@ -176,7 +176,8 @@ def test_a_real_question_is_shown_and_the_turn_ends(slack):
 
 
 #: Canonical types the adapter deliberately does not render.
-IGNORED = frozenset()
+#: ``draft`` is a tool call's text as it streams, for the Agent UI's live preview.
+IGNORED = frozenset({"draft"})
 
 
 def test_every_canonical_type_the_translator_emits_is_handled():

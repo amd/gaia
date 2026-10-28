@@ -2546,6 +2546,29 @@ model with no known price reads as unknown, never $0. Cloud models from
     "tools", "path"}], "invalid": {...}}`. **503** when the GAIA agent package
     is not installed.
   </Accordion>
+
+  <Accordion title="GET /api/skills/preferences">
+    Every skill with saved preferences on this machine: `{"skills": [...]}`.
+    **500** when the preference store can't be read.
+  </Accordion>
+
+  <Accordion title="GET /api/skills/{name}/preferences">
+    One skill's saved preferences: `{"skill", "preferences"}`, with `{}` when
+    none are saved. **400** for an invalid skill name.
+  </Accordion>
+
+  <Accordion title="PUT /api/skills/{name}/preferences">
+    Merge the body into the skill's preferences; a `null` value removes that
+    key. The change is checked against the skill's `preferences.schema.json`,
+    so the skill must be installed. Returns the saved preferences. **422** when
+    the change breaks the schema, **404** when the skill isn't found, **503**
+    when the GAIA agent package is not installed.
+  </Accordion>
+
+  <Accordion title="DELETE /api/skills/{name}/preferences">
+    Forget every saved preference of the skill: `{"skill", "reset"}`. **400**
+    for an invalid skill name.
+  </Accordion>
 </AccordionGroup>
 
 ### Hub
