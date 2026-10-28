@@ -151,13 +151,13 @@ async def test_a_small_upload_does_not_wait_behind_big_documents(slow_rag, tmp_p
 
 async def test_time_waiting_for_a_worker_does_not_count(slow_rag):
     rag, doc = slow_rag
-    rag.steps = 6
+    rag.steps = 12
     rag.step_seconds = 0.1
-    # Each document works for 0.6 s; allow a slow worker to begin its first
-    # heartbeat while still proving time spent queued for a worker is excluded.
+    # Docs 3-4 queue for one document's work (1.2 s), longer than the limit,
+    # so counting queue time fails; the 0.1 s step gap leaves slow runners headroom.
     with patch.object(helpers, "_INDEX_TIMEOUT_S", 1.0):
         counts = await asyncio.gather(*(helpers._index_document(doc) for _ in range(4)))
-    assert counts == [6] * 4
+    assert counts == [12] * 4
 
 
 async def test_waiting_in_line_for_the_embedder_counts_as_progress(slow_rag):
