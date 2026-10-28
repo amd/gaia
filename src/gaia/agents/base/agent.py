@@ -2065,7 +2065,10 @@ class Agent(abc.ABC):
     _pre_turn_spans: Optional[List[Any]] = None
     # Per-step timing for the running turn (always on); ``None`` between turns.
     _step_timer: Optional[StepTimer] = None
-    # Whether the open step's stats record was written; see _record_unrecorded_step.
+    # The open step, its own response stats, and whether its record was
+    # written; see _record_unrecorded_step. Only meaningful inside a turn.
+    _open_step: Optional[int] = None
+    _open_step_stats: Optional[Dict[str, Any]] = None
     _step_stats_recorded: bool = False
 
     # Skills (#888): lazily built manager + the skills loaded into this agent.
@@ -2909,20 +2912,20 @@ Do NOT wrap conversational replies in JSON.
             self._context_evictor.note_prompt_tokens(perf_stats)
         conversation.append({"role": "system", "content": stats_record})
 
-    def _record_unrecorded_step(
-        self,
-        response_stats: Optional[Dict[str, Any]],
-        step: Optional[int],
-        step_timer: StepTimer,
-        conversation: List[Dict[str, Any]],
-    ) -> None:
+    def _record_unrecorded_step(self, conversation: List[Dict[str, Any]]) -> None:
         """Record a step that called the model but left the loop early (a cut-off
         reply, a parse retry), so its tokens and time stay in the turn's totals."""
-        if step is None or self._step_stats_recorded or not step_timer.has_llm_calls():
+        step_timer = self._step_timer
+        if (
+            step_timer is None
+            or self._open_step is None
+            or self._step_stats_recorded
+            or not step_timer.has_llm_calls()
+        ):
             return
         self._record_step_stats(
-            response_stats,
-            step,
+            self._open_step_stats,
+            self._open_step,
             step_timer,
             conversation,
             poll=step_timer.last_call_finished(),
@@ -7059,6 +7062,8 @@ Do NOT wrap conversational replies in JSON.
         Returns the answer, or ``None`` when the user pressed Stop. Raises when
         the call fails or neither reply is an answer; the caller says why.
         """
+        # Before the closing call, whose stats must not be taken for this step's.
+        self._record_unrecorded_step(conversation)
         try:
             return self._closing_answer_once(messages, conversation, instruction, step)
         except _NotAnAnswer as first:
@@ -9200,8 +9205,8 @@ Do NOT wrap conversational replies in JSON.
         start_time = time.time()  # Track query processing start time
         step_timer = self._attach_step_timer()
         # Set per step; a step that exits early is recorded at the next boundary.
-        response_stats = None
-        open_step: Optional[int] = None
+        self._open_step = None
+        self._open_step_stats = None
         self._step_stats_recorded = False
 
         # Store query for error context (used in _execute_tool for error formatting)
@@ -9460,12 +9465,11 @@ Do NOT wrap conversational replies in JSON.
 
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array
-            self._record_unrecorded_step(
-                response_stats, open_step, step_timer, conversation
-            )
+            self._record_unrecorded_step(conversation)
             steps_taken += 1
             step_timer.begin_step(steps_taken)
-            open_step = steps_taken
+            self._open_step = steps_taken
+            self._open_step_stats = None
             self._step_stats_recorded = False
             logger.debug(f"Step {steps_taken}/{steps_limit}")
             if self._context_evictor is not None:
@@ -9918,6 +9922,7 @@ Do NOT wrap conversational replies in JSON.
                                 break
                             if chunk_response.is_complete:
                                 response_stats = chunk_response.stats
+                                self._open_step_stats = response_stats
                                 response_finish_reason = getattr(
                                     chunk_response, "finish_reason", None
                                 )
@@ -10153,6 +10158,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
+                        self._open_step_stats = response_stats
                         response_finish_reason = getattr(
                             chat_response, "finish_reason", None
                         )
@@ -11985,11 +11991,8 @@ Do NOT wrap conversational replies in JSON.
                     # Silent mode - just stop
                     break
 
-        # Before the step-cap call: its footer must count this step, and its
-        # stats must not be mistaken for this step's.
-        self._record_unrecorded_step(
-            response_stats, open_step, step_timer, conversation
-        )
+        # Before any footer below sums the conversation.
+        self._record_unrecorded_step(conversation)
 
         # Out of steps with no answer: one more call, tools withheld, so the
         # user hears what was found rather than only the canned note.

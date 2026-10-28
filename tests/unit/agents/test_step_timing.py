@@ -829,3 +829,131 @@ def test_a_failed_call_keeps_its_time_and_borrows_no_tokens(_clean_registry):
     assert [r["step"] for r in records] == [1]
     assert records[0]["performance_stats"].get("completion_tokens") is None
     assert result["timing_summary"]["llm_calls"] == 1
+
+
+def _closing_turn_agent(replies, usages, streaming, **agent_kwargs):
+    provider = _UsagePerCall(
+        replies, ["tool_calls"] * (len(replies) - 1) + ["stop"], usages
+    )
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _TimedAgent(silent_mode=True, skip_lemonade=True, **agent_kwargs)
+    agent.streaming = streaming
+    agent.chat = _sdk(provider)
+    agent.console.print_final_answer = Mock()
+    return agent
+
+
+_CLOSING = json.dumps({"thought": "d", "answer": "Here is what I did."})
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["non-streaming", "streaming"])
+@pytest.mark.parametrize("answered", [True, False], ids=["after-answer", "no-answer"])
+def test_a_statless_step_ended_by_the_turn_scope_does_not_borrow_the_closing_stats(
+    _clean_registry, streaming, answered
+):
+    """A tool that ends the turn: the closing call's 20 tokens are counted once."""
+
+    @tool
+    def wander() -> dict:
+        """Do something the request did not ask for."""
+        scope = agent._turn_scope
+        scope.answered = answered
+        scope.turn_should_end = True
+        scope.end_reason = "drift"
+        return {"status": "success"}
+
+    agent = _closing_turn_agent(
+        [_native_tool_calls("wander"), _CLOSING], [None, _USAGE], streaming
+    )
+
+    result = agent.process_query("Go.", max_steps=5)
+
+    records = _stats_records(result)
+    assert [r["step"] for r in records] == [1, 2]
+    assert records[0]["performance_stats"] == {}
+    assert _footer_output_tokens(agent) == 20
+    assert result["timing_summary"]["llm_calls"] == 2
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["non-streaming", "streaming"])
+def test_a_statless_step_stopped_by_the_loop_guard_does_not_borrow_the_closing_stats(
+    _clean_registry, streaming
+):
+    """Repeated identical calls end the turn: the closing call is counted once."""
+
+    @tool
+    def poke() -> dict:
+        """Poke the thing."""
+        return {"status": "success", "value": 1}
+
+    repeat = _native_tool_calls("poke")
+    agent = _closing_turn_agent(
+        [repeat] * 4 + [_CLOSING],
+        [None] * 4 + [_USAGE],
+        streaming,
+        max_consecutive_repeats=2,
+    )
+
+    result = agent.process_query("Go.", max_steps=10)
+
+    records = _stats_records(result)
+    assert agent.console.print_final_answer.called, result.get("result")
+    assert len({r["step"] for r in records}) == len(records)
+    assert (
+        sum(r["performance_stats"].get("completion_tokens", 0) for r in records) == 20
+    )
+    assert _footer_output_tokens(agent) == 20
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["non-streaming", "streaming"])
+def test_a_step_that_saved_its_stats_is_not_recorded_again_by_the_closing_call(
+    _clean_registry, streaming
+):
+    """With stats of its own, the ending step is recorded once and keeps them."""
+
+    @tool
+    def wander() -> dict:
+        """Do something the request did not ask for."""
+        scope = agent._turn_scope
+        scope.answered = True
+        scope.turn_should_end = True
+        scope.end_reason = "drift"
+        return {"status": "success"}
+
+    agent = _closing_turn_agent(
+        [_native_tool_calls("wander"), _CLOSING], [_USAGE, _USAGE], streaming
+    )
+
+    result = agent.process_query("Go.", max_steps=5)
+
+    records = _stats_records(result)
+    assert [r["step"] for r in records] == [1, 2]
+    assert [r["performance_stats"]["completion_tokens"] for r in records] == [20, 20]
+    assert _footer_output_tokens(agent) == 40
+
+
+def test_a_failing_closing_call_still_leaves_the_step_recorded_once(_clean_registry):
+    """The closing call raises: the ending step keeps one record, no borrowed tokens."""
+
+    @tool
+    def wander() -> dict:
+        """Do something the request did not ask for."""
+        scope = agent._turn_scope
+        scope.answered = True
+        scope.turn_should_end = True
+        scope.end_reason = "drift"
+        return {"status": "success"}
+
+    agent = _closing_turn_agent(
+        [_native_tool_calls("wander"), RuntimeError("closing call failed")],
+        [None, _USAGE],
+        False,
+    )
+
+    result = agent.process_query("Go.", max_steps=5)
+
+    records = _stats_records(result)
+    assert [r["step"] for r in records] == [1]
+    assert records[0]["performance_stats"] == {}
+    assert records[0]["llm_calls"] == 2
+    assert "couldn't be written" in result["result"]
