@@ -421,7 +421,7 @@ class StdioTransport(MCPTransport):
 
             logger.debug(f"MCP server process started (PID: {self._process.pid})")
 
-            self._ps_server = self._own_process(self._process)
+            self._ps_server = self._own_process(self._process.pid)
             self._start_readers()
 
             # Brief pause to catch immediate crashes (e.g. missing binary, SIGSEGV
@@ -507,19 +507,18 @@ class StdioTransport(MCPTransport):
             self._process = None
 
     @staticmethod
-    def _own_process(proc: subprocess.Popen) -> Optional["psutil.Process"]:
-        """Return the process this transport just launched, if psutil can inspect it.
+    def _own_process(pid: Any) -> Optional["psutil.Process"]:
+        """Return a just-launched child process when psutil can inspect its PID.
 
-        ``Popen.pid`` is the identity returned by this launch, so comparing its
-        wall-clock creation time to ``time.time()`` only risks rejecting our own
-        process on platforms with coarser or skewed process timestamps.
+        ``Popen`` retains the child until it is reaped, so this PID cannot be
+        recycled while the transport still owns that launch.
         """
-        if not isinstance(proc, subprocess.Popen):
+        if not isinstance(pid, int):
             return None
         try:
-            return psutil.Process(proc.pid)
+            return psutil.Process(pid)
         except psutil.Error as e:
-            logger.debug("MCP server PID %s not visible to psutil: %s", proc.pid, e)
+            logger.debug("MCP server PID %s not visible to psutil: %s", pid, e)
             return None
 
     def _track_children(self) -> None:

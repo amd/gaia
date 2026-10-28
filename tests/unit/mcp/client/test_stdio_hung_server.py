@@ -1376,7 +1376,7 @@ def test_the_popen_returned_by_launch_is_tracked_despite_a_coarse_timestamp(
             return getattr(self._process, name)
 
         def create_time(self):
-            return 0.0  # Simulates a timestamp behind time.time() on Linux.
+            return 0.0  # Any create time must not reject the launched process.
 
     monkeypatch.setattr(stdio_module.psutil, "Process", _CoarseTimestampProcess)
     transport = _transport(_stub(tmp_path, "time.sleep(3600)"))
