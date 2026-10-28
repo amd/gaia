@@ -396,6 +396,35 @@ class TestToolConfirmation:
             assert r.status_code == 409
             assert "No tool confirmation is pending" in r.json()["detail"]
 
+    def test_a_late_second_answer_is_rejected_and_cannot_flip_the_first(self, client):
+        from gaia.ui.sse_handler import SSEOutputHandler
+
+        client.post("/v1/email/agent/session", json={"session_id": "s1"})
+        handler = SSEOutputHandler()
+        agent_routes.registry.get("s1").handler = handler
+        outcome: list[bool] = []
+        waiter = threading.Thread(
+            target=lambda: outcome.append(
+                handler.confirm_tool_execution("send_now", {"to": "a@b.com"}, 5)
+            )
+        )
+        waiter.start()
+        assert self._wait_for_pending_gate(), "handler never opened a prompt"
+
+        first = client.post(
+            "/v1/email/agent/confirm-tool",
+            json={"session_id": "s1", "approved": True},
+        )
+        second = client.post(
+            "/v1/email/agent/confirm-tool",
+            json={"session_id": "s1", "approved": False},
+        )
+        waiter.join(timeout=5)
+
+        assert first.status_code == 200
+        assert second.status_code == 409
+        assert outcome == [True]
+
     def test_playground_shows_a_rejected_decision(self):
         from gaia_agent_email.playground_html import render_playground_html
 
