@@ -25,6 +25,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   install skills from the Agent Hub, because those tools carry no URL for the
   check to see. They are now refused with the same message as a web search.
 
+### For integrators: contract 2.24
+
+- **Relative file paths use the chat workspace.** A new `working_directory` field
+  on `/query` tells the agent where bare file names resolve, separately from
+  `allowed_paths`. New and retained sessions use the same workspace for reads,
+  writes, edits and approval prompts. Send it only after `/version` reports
+  contract 2.24 or later.
+
 ### For integrators: contract 2.23
 
 - **`/query` takes `internet_off`** (contract **2.23**, #5883). The Agent UI

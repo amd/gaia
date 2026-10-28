@@ -69,6 +69,7 @@ from gaia.ui.email_sidecar.profiles import (
     reasoning_supported,
     scope_supported,
     surface_supported,
+    working_directory_supported,
 )
 from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.turn_changes import TurnRecording
@@ -154,6 +155,22 @@ _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
 
 # asyncio keeps only weak references to tasks; this set keeps them alive.
 _background_tasks: set = set()
+
+
+def relayed_turns_in_flight() -> Optional[str]:
+    """Why restarting the daemon now would cut off a chat's agent turn, or None.
+
+    These turns go straight to the agent, so the daemon cannot count them. A
+    chat still starting its turn has no relayed run yet and does not count.
+    """
+    running = sum(
+        1
+        for handler in list(_active_sse_handlers.values())
+        if getattr(handler, "active_relay_run_id", None) is not None
+    )
+    if not running:
+        return None
+    return f"{running} Agent UI chat(s) are still answering"
 
 
 def _spawn_background(coro) -> asyncio.Task:
@@ -1594,6 +1611,20 @@ def _unsafe_directory_grant_reason(directory: Path) -> str:
     return ""
 
 
+def _session_working_directory(folders: Optional[list] = None) -> str:
+    """The folder the chat's chip shows, used for bare relative paths.
+
+    A folder the user picked for the chat comes first, so "create notes.txt"
+    lands where the chip and the agent's folder note both say it works.
+    """
+    if folders:
+        return str(Path(folders[0]).expanduser().resolve())
+    cwd = Path.cwd().resolve()
+    if _unsafe_directory_grant_reason(cwd):
+        return str(_managed_documents_dir())
+    return str(cwd)
+
+
 def _compute_allowed_paths(rag_file_paths: list) -> list:
     """Derive a session's filesystem scope from its attached documents.
 
@@ -1739,6 +1770,7 @@ def _session_agent_kwargs(
     library_paths: list,
     allowed: list,
     session_id: str,
+    working_directory: Optional[str] = None,
     dynamic_tools: bool = False,
     memory_incognito: bool = False,
 ) -> dict:
@@ -1767,6 +1799,7 @@ def _session_agent_kwargs(
         "rag_documents": rag_file_paths,
         "library_documents": library_paths,
         "allowed_paths": allowed,
+        "working_directory": working_directory or _session_working_directory(),
         "ui_session_id": session_id,
         "dynamic_tools": dynamic_tools,
         "memory_incognito": memory_incognito,
@@ -2214,6 +2247,7 @@ def _dispatch_sidecar_query(
     allowed_paths: list | None = None,
     folders: list | None = None,
     withheld: list | None = None,
+    working_directory: str | None = None,
     memory: str = "on",
     internet_off: bool = False,
     hold_internet_off: Callable[[], ContextManager[bool]] | None = None,
@@ -2290,6 +2324,13 @@ def _dispatch_sidecar_query(
         )
         return
 
+    from gaia.daemon.client import deferred_restart_notice
+
+    # An update is installed but the daemon waits for other work to finish.
+    notice = deferred_restart_notice()
+    if notice:
+        sse_handler._emit({"type": "status", "status": "info", "message": notice})
+
     if not api_version_supported(profile, handle.api_version):
         sse_handler._emit(
             {"type": "agent_error", "content": profile.version_upgrade_message}
@@ -2344,6 +2385,12 @@ def _dispatch_sidecar_query(
             # sending a scope that refuses every file without saying why.
             sse_handler._emit({"type": "agent_error", "content": str(exc)})
             return
+
+    relayed_working_directory = None
+    if working_directory is not None and working_directory_supported(
+        profile, handle.api_version
+    ):
+        relayed_working_directory = working_directory
 
     relayed_memory = None
     if memory_supported(profile, handle.api_version):
@@ -2485,6 +2532,7 @@ def _dispatch_sidecar_query(
             answers_confirmations=confirmations_supported(profile, handle.api_version),
             documents=relayed_documents,
             allowed_paths=relayed_scope,
+            working_directory=relayed_working_directory,
             memory=relayed_memory,
             internet_off=relayed_internet_off,
             hold_internet_off=(
@@ -3398,6 +3446,9 @@ async def _get_chat_response(
         # Reuse what a running warm-up is caching rather than read it twice.
         wait_for_warm_up()
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
+        working_directory = _session_working_directory(
+            load_environment(db, session_id)["folders"]
+        )
 
         if cached_agent is not None:
             from gaia.agents.base.console import SilentConsole
@@ -3408,6 +3459,8 @@ async def _get_chat_response(
             with writing_tool_registry():
                 agent._register_tools()
             _extend_cached_scope(agent, allowed)
+            if hasattr(agent, "config"):
+                agent.config.working_directory = working_directory
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                 new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
                 for fpath in new_paths:
@@ -3493,6 +3546,7 @@ async def _get_chat_response(
                             library_paths=library_paths,
                             allowed=allowed,
                             session_id=session_id,
+                            working_directory=working_directory,
                             dynamic_tools=dynamic_tools,
                             memory_incognito=_memory_off(session, db),
                         ),
@@ -3842,10 +3896,15 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if sse_handler.cancelled.is_set():
                     return
                 cached_agent = _get_cached_agent(session_id, model_id, agent_type)
+                working_directory = _session_working_directory(
+                    load_environment(db, session_id)["folders"]
+                )
 
                 if cached_agent is not None:
                     # -- Cache hit --
                     agent = cached_agent
+                    if hasattr(agent, "config"):
+                        agent.config.working_directory = working_directory
                     agent.console = sse_handler
                     # A non-streaming turn may have built this agent.
                     agent.streaming = True
@@ -3912,6 +3971,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         library_paths=library_paths,
                         allowed=allowed,
                         session_id=session_id,
+                        working_directory=working_directory,
                         dynamic_tools=dynamic_tools,
                         memory_incognito=_memory_off(session, db),
                     )
@@ -4024,6 +4084,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         allowed_paths=allowed,
                         folders=relayed_env["folders"],
                         withheld=relayed_env["withheld"],
+                        working_directory=working_directory,
                         memory=_memory_mode(session, db),
                         internet_off=relayed_env["internet_off"],
                         hold_internet_off=functools.partial(
@@ -4090,6 +4151,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                     library_paths=library_paths,
                                     allowed=allowed,
                                     session_id=session_id,
+                                    working_directory=working_directory,
                                     dynamic_tools=dynamic_tools,
                                     memory_incognito=_memory_off(session, db),
                                 ),
