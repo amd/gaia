@@ -182,9 +182,17 @@ def _build_register(
         killed = ledger.reap_stale(specs)
         if killed:
             logger.info("daemon: reaped stale sidecar pids %s", killed)
+        from gaia import version
+
         write_instance(
             DaemonInstance(
-                pid=pid, port=port, token=token, host=host, started_at=started_at
+                pid=pid,
+                port=port,
+                token=token,
+                host=host,
+                started_at=started_at,
+                gaia_version=version.__version__,
+                version_file=os.path.abspath(version.__file__),
             )
         )
         try:
