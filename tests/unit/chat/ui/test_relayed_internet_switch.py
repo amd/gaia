@@ -809,3 +809,125 @@ def test_switching_off_while_a_turn_starts_stops_the_flagships_web_search(
     assert agents[0].refusals == ["internet_off"]
     errors = [e for e in _events(handler) if e["type"] == "agent_error"]
     assert errors == []
+
+
+# -- an agent too old to be told: turning the internet off ends its turn ------
+
+
+class _FlipDuringTurn(_Proxy):
+    """A sidecar turn during which the user turns the chat's internet off."""
+
+    def __init__(self, db, session_id):
+        super().__init__()
+        self.db = db
+        self.session_id = session_id
+        self.flip_error = None
+        self.flag_during_turn = None
+
+    def query_stream(self, body, read_timeout, on_response):
+        self.bodies.append(body)
+        handler = helpers._active_sse_handlers[self.session_id]
+        self.flag_during_turn = handler.relay_ignores_internet
+        try:
+            session_environment.set_internet(self.db, self.session_id, False)
+        except session_environment.RelayedSwitchError as exc:
+            self.flip_error = exc
+        yield {"type": "final", "answer": "ok"}
+
+
+def _dispatch_old_agent(monkeypatch, relayed_db, proxy, session_id, version="2.22"):
+    handle = SimpleNamespace(api_version=version, proxy=lambda: proxy)
+    monkeypatch.setattr(daemon_client, "acquire_handle", lambda _id: handle)
+    monkeypatch.setattr(helpers, "_replay_cloud_key_for_relay", lambda *_a: None)
+    handler = SSEOutputHandler()
+    helpers._active_sse_handlers[session_id] = handler
+    helpers._dispatch_sidecar_query(
+        handler,
+        ChatRequest(session_id=session_id, message="news", agent_type="gaia"),
+        [],
+        None,
+        "gaia",
+        session_id=session_id,
+        internet_off=False,
+        hold_internet_off=functools.partial(
+            session_environment.held_internet_off, relayed_db, session_id
+        ),
+    )
+    return handler
+
+
+def test_turning_internet_off_ends_a_turn_an_old_agent_cannot_be_told(
+    monkeypatch, relayed_db, running_relays
+):
+    session = relayed_db.create_session(agent_type="gaia")
+    proxy = _FlipDuringTurn(relayed_db, session["id"])
+
+    handler = _dispatch_old_agent(monkeypatch, relayed_db, proxy, session["id"])
+
+    assert proxy.flag_during_turn is True
+    assert proxy.flip_error is not None
+    assert "too old to be told" in str(proxy.flip_error)
+    assert "Update GAIA" in str(proxy.flip_error)
+    assert handler.cancelled.is_set()
+    assert handler.relay_ignores_internet is False
+    assert session_environment.load(relayed_db, session["id"])["internet_off"] is True
+
+
+def test_a_switch_flipped_before_an_old_agents_turn_starts_stops_it(
+    monkeypatch, relayed_db, running_relays
+):
+    session = relayed_db.create_session(agent_type="gaia")
+    # Saved off after the chat read its switch, before the relay took the lock.
+    relayed_db.set_session_environment(
+        session["id"], folders=[], withheld=[], internet_off=True
+    )
+    proxy = _Proxy()
+
+    handler = _dispatch_old_agent(monkeypatch, relayed_db, proxy, session["id"])
+
+    assert proxy.bodies == []
+    assert {
+        "type": "agent_error",
+        "content": GAIA_PROFILE.internet_upgrade_message,
+    } in (_events(handler))
+    assert handler.relay_ignores_internet is False
+
+
+def test_turning_internet_on_never_ends_an_old_agents_turn(relayed_db, running_relays):
+    session = relayed_db.create_session(agent_type="gaia")
+    handler = SSEOutputHandler()
+    handler.relay_ignores_internet = True
+    helpers._active_sse_handlers[session["id"]] = handler
+
+    session_environment.set_internet(relayed_db, session["id"], True)
+
+    assert not handler.cancelled.is_set()
+
+
+def test_an_old_agents_finished_turn_is_not_ended_by_a_later_switch(
+    monkeypatch, relayed_db, running_relays
+):
+    session = relayed_db.create_session(agent_type="gaia")
+    handler = _dispatch_old_agent(monkeypatch, relayed_db, _Proxy(), session["id"])
+
+    session_environment.set_internet(relayed_db, session["id"], False)
+
+    assert not handler.cancelled.is_set()
+
+
+def test_a_current_agents_turn_is_never_marked_as_ignoring_the_switch(
+    monkeypatch, relayed_db, running_relays
+):
+    session = relayed_db.create_session(agent_type="gaia")
+    seen = []
+
+    class _Watch(_Proxy):
+        def query_stream(self, body, read_timeout, on_response):
+            seen.append(
+                helpers._active_sse_handlers[session["id"]].relay_ignores_internet
+            )
+            yield from super().query_stream(body, read_timeout, on_response)
+
+    _dispatch_old_agent(monkeypatch, relayed_db, _Watch(), session["id"], "2.23")
+
+    assert seen == [False]

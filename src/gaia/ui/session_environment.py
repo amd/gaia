@@ -441,6 +441,14 @@ def _tell_running_relay(session_id: str, internet_off: bool) -> None:
     from .email_sidecar.errors import SidecarError
 
     handler = _active_sse_handlers.get(session_id)
+    if internet_off and getattr(handler, "relay_ignores_internet", False) is True:
+        handler.cancelled.set()
+        handler.close_active_relay_response()
+        raise RelayedSwitchError(
+            "Internet is off from the next message, but the running agent is too "
+            "old to be told, so the Agent UI ended its turn. Update GAIA to the "
+            "latest version, then send the message again."
+        )
     proxy = getattr(handler, "active_relay_proxy", None)
     sidecar_session = getattr(handler, "active_relay_internet_session", None)
     if proxy is None or sidecar_session is None:

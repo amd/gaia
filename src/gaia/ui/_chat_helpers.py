@@ -2185,6 +2185,21 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
         )
 
 
+def _refuse_internet_off(
+    sse_handler: Any, profile: Any, agent_type: str, api_version: Any
+) -> None:
+    """End an internet-off turn for a sidecar too old to be told it is offline."""
+    logger.warning(
+        "%s agent at contract %s can't take internet_off (needs %s)",
+        agent_type,
+        api_version,
+        profile.min_internet_api_version,
+    )
+    sse_handler._emit(
+        {"type": "agent_error", "content": profile.internet_upgrade_message}
+    )
+
+
 def _dispatch_sidecar_query(
     sse_handler,
     request: ChatRequest,
@@ -2347,16 +2362,11 @@ def _dispatch_sidecar_query(
         if internet_supported(profile, handle.api_version):
             relayed_internet_off = internet_off
         elif internet_off:
-            logger.warning(
-                "%s agent at contract %s can't take internet_off (needs %s)",
-                agent_type,
-                handle.api_version,
-                profile.min_internet_api_version,
-            )
-            sse_handler._emit(
-                {"type": "agent_error", "content": profile.internet_upgrade_message}
-            )
+            _refuse_internet_off(sse_handler, profile, agent_type, handle.api_version)
             return
+    ignores_internet = (
+        profile.min_internet_api_version is not None and relayed_internet_off is None
+    )
 
     proxy = handle.proxy()
 
@@ -2443,43 +2453,55 @@ def _dispatch_sidecar_query(
 
     from gaia.ui.email_sidecar.profiles import full_access_supported
 
-    relay_query(
-        sse_handler,
-        proxy,
-        query=query,
-        context=context,
-        model_id=model_id,
-        # The chat's own mode, read per turn: the in-process path applies it
-        # to its handler, the relayed one to the sidecar session.
-        full_access=(
-            session_permissions.for_session(session_id).mode
-            == session_permissions.MODE_FULL_ACCESS
-            if session_id and full_access_supported(profile, handle.api_version)
-            else None
-        ),
-        profile=profile,
-        session_id=session_id,
-        answers_confirmations=confirmations_supported(profile, handle.api_version),
-        documents=relayed_documents,
-        allowed_paths=relayed_scope,
-        memory=relayed_memory,
-        internet_off=relayed_internet_off,
-        hold_internet_off=(
-            hold_internet_off if relayed_internet_off is not None else None
-        ),
-        changes_turn_id=(
-            recording.relay()
-            if recording is not None
-            and session_id
-            and changes_supported(profile, handle.api_version)
-            else None
-        ),
-        surface=(
-            "agent_ui" if surface_supported(profile, handle.api_version) else None
-        ),
-        reasoning=reasoning_supported(profile, handle.api_version),
-        max_steps=max_steps,
-    )
+    try:
+        if ignores_internet and hold_internet_off is not None:
+            # Read under the switch's lock, so a later flip to off ends this turn.
+            with hold_internet_off() as internet_off_now:
+                if internet_off_now:
+                    _refuse_internet_off(
+                        sse_handler, profile, agent_type, handle.api_version
+                    )
+                    return
+                sse_handler.relay_ignores_internet = True
+        relay_query(
+            sse_handler,
+            proxy,
+            query=query,
+            context=context,
+            model_id=model_id,
+            # The chat's own mode, read per turn: the in-process path applies it
+            # to its handler, the relayed one to the sidecar session.
+            full_access=(
+                session_permissions.for_session(session_id).mode
+                == session_permissions.MODE_FULL_ACCESS
+                if session_id and full_access_supported(profile, handle.api_version)
+                else None
+            ),
+            profile=profile,
+            session_id=session_id,
+            answers_confirmations=confirmations_supported(profile, handle.api_version),
+            documents=relayed_documents,
+            allowed_paths=relayed_scope,
+            memory=relayed_memory,
+            internet_off=relayed_internet_off,
+            hold_internet_off=(
+                hold_internet_off if relayed_internet_off is not None else None
+            ),
+            changes_turn_id=(
+                recording.relay()
+                if recording is not None
+                and session_id
+                and changes_supported(profile, handle.api_version)
+                else None
+            ),
+            surface=(
+                "agent_ui" if surface_supported(profile, handle.api_version) else None
+            ),
+            reasoning=reasoning_supported(profile, handle.api_version),
+            max_steps=max_steps,
+        )
+    finally:
+        sse_handler.relay_ignores_internet = False
     if session_id and profile.min_context_api_version is not None:
         record_relayed_context(
             session_id,

@@ -209,8 +209,9 @@ fields with `422`, so probe `/version` first. See
 2.23) every turn: `true` refuses web search, page fetches, the browser,
 connector tools and commands that contact another host; `false` allows them.
 Omit it and the agent keeps its own setting. Binaries older than 2.23 reject
-the field with `422`, so probe `/version` first and do not answer an
-internet-off turn on an older one. If the user flips the switch while a turn is
+the field with `422`, so probe `/version` first, do not answer an
+internet-off turn on an older one, and cancel its running turn when the switch
+goes off. If the user flips the switch while a turn is
 running, `POST /v1/gaia/sessions/{session_id}/internet` with
 `{"internet_off": true}` so the next tool call follows it rather than the next
 turn. Post it only once `/query` has answered: before then the turn's own

@@ -338,7 +338,8 @@ the refusal tells the model the internet is off for this chat. A retained
 session keeps the last value, so send it every turn; omit it to leave the
 agent as it is. Pre-2.23 binaries `422` the field, so a caller whose chat has
 the internet off should check `/version` and refuse the turn on an older
-binary rather than answer it online.
+binary rather than answer it online, and cancel an older binary's running
+turn when the switch goes off.
 
 `internet_off` is read when a turn starts. To change it for a turn already
 running, `POST /v1/gaia/sessions/{session_id}/internet` with
