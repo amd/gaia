@@ -1022,6 +1022,39 @@ _CLOUD_CONTEXT_DETAIL = (
 )
 
 
+def _trained_window(model_id: str) -> Optional[int]:
+    """The window Lemonade's catalog says *model_id* was trained for, if GAIA has no entry."""
+    from gaia.llm.lemonade_client import _model_ids_match, find_model_requirement
+
+    if find_model_requirement(model_id) is not None:
+        return None
+    status, body = _lemonade("GET", "models?show_all=true")
+    if status >= 400:
+        raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
+    for m in body.get("data") or []:
+        if _model_ids_match(str(m.get("id") or ""), model_id):
+            # ``context_length`` is the configured window; this is the trained one.
+            window = m.get("max_context_window")
+            ok = isinstance(window, int) and not isinstance(window, bool)
+            return window if ok and window > 0 else None
+    return None
+
+
+def _context_note(span: Optional[Dict[str, Any]], name: str) -> Optional[str]:
+    if span is None:
+        return (
+            "GAIA doesn't know how much memory this model needs per token, "
+            "so it keeps the automatic size."
+        )
+    if not span["fit_checked"]:
+        return (
+            f"Up to {span['max_fit'] // 1024}K, the most {name} was trained for. "
+            "GAIA doesn't know how much memory it needs per token, so it can't "
+            "check these fit this PC; a size too large fails to load and says so."
+        )
+    return None
+
+
 def _context_view(model_id: str) -> Dict[str, Any]:
     from gaia.config import GaiaConfigError
     from gaia.llm.context_choice import context_range, saved_context_size
@@ -1033,18 +1066,20 @@ def _context_view(model_id: str) -> Dict[str, Any]:
         capacity = capacity_from_system_info(_read_system_info())
         loaded_ctx = _loaded_ctx(_read_health(), model_id)
         chosen = saved_context_size(model_id)
+        trained = _trained_window(model_id)
     except ProviderError as e:
         _raise(e)
     except (ModelFitError, GaiaConfigError) as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     from gaia.llm.lemonade_client import GPU_CTX_SIZE, NPU_CTX_SIZE, runs_on_npu
 
-    span = context_range(model_id, capacity)
+    span = context_range(model_id, capacity, trained)
     # A model GAIA has no entry for loads at its device's flat window.
     flat = NPU_CTX_SIZE if runs_on_npu(model_id) else GPU_CTX_SIZE
+    name = display_name(model_id)
     return {
         "model": model_id,
-        "display_name": display_name(model_id),
+        "display_name": name,
         "chosen": chosen,
         "automatic": span["automatic"] if span else flat,
         "min": span["min"] if span else None,
@@ -1052,12 +1087,7 @@ def _context_view(model_id: str) -> Dict[str, Any]:
         "options": span["options"] if span else [],
         "loaded_ctx": loaded_ctx,
         "memory_source": capacity.memory_source,
-        "note": (
-            None
-            if span
-            else "GAIA doesn't know how much memory this model needs per token, "
-            "so it keeps the automatic size."
-        ),
+        "note": _context_note(span, name),
     }
 
 
@@ -1088,7 +1118,8 @@ def set_context(body: ContextRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=422, detail=_CLOUD_CONTEXT_DETAIL)
     try:
         capacity = capacity_from_system_info(_read_system_info())
-        save_context_size(model_id, body.ctx_size, capacity)
+        trained = _trained_window(model_id) if body.ctx_size is not None else None
+        save_context_size(model_id, body.ctx_size, capacity, trained)
     except ProviderError as e:
         _raise(e)
     except ContextChoiceError as e:

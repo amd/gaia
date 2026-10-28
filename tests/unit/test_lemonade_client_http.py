@@ -102,7 +102,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         )
 
     def _assert_one_load(self, model=TEST_MODEL):
-        """The request carried GAIA's window and the single-slot pin."""
+        """The request carried GAIA's window and the single-slot pin, saved."""
         loads = [c for c in responses.calls if c.request.url.endswith("/load")]
         self.assertEqual(len(loads), 1, [c.request.url for c in responses.calls])
         self.assertEqual(
@@ -111,6 +111,7 @@ class TestLemonadeClientMock(unittest.TestCase):
                 "model_name": model,
                 "ctx_size": GPU_CTX_SIZE,
                 "llamacpp_args": CHAT_LLAMACPP_ARGS,
+                "save_options": True,
             },
         )
 

@@ -142,8 +142,12 @@ def test_startup_switch_and_embedder_eviction_use_same_http_load(monkeypatch, wi
         if call.request.method == "POST"
     ]
     assert loads == [
-        {"model_name": "Gemma-4-E4B-it-GGUF", "ctx_size": window},
-        {"model_name": "user.another-local-model", "ctx_size": window},
+        {"model_name": "Gemma-4-E4B-it-GGUF", "ctx_size": window, "save_options": True},
+        {
+            "model_name": "user.another-local-model",
+            "ctx_size": window,
+            "save_options": True,
+        },
     ]
 
 

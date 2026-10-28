@@ -344,6 +344,58 @@ def test_an_unsized_model_offers_only_automatic_at_its_flat_window(
     assert "keeps the automatic size" in body["note"]
 
 
+UNREGISTERED = "Unlisted-Dense-30B-GGUF"
+
+
+@pytest.fixture
+def unregistered(lemonade):
+    lemonade.models.append(
+        {
+            "id": UNREGISTERED,
+            "recipe": "llamacpp",
+            "downloaded": True,
+            "size": 19.9,
+            "labels": ["chat"],
+            "max_context_window": 131072,
+        }
+    )
+    return lemonade
+
+
+def test_an_unregistered_model_offers_32k_up_to_its_trained_window(
+    client, unregistered
+):
+    body = client.get(
+        "/api/providers/local/context", params={"model": UNREGISTERED}
+    ).json()
+    assert body["options"] == [32768, 65536, 131072]
+    assert body["automatic"] == 65536
+    assert "can't check these fit" in body["note"]
+
+
+def test_an_unregistered_model_saves_a_chosen_size(client, unregistered):
+    resp = client.put(
+        "/api/providers/local/context",
+        json={"model": UNREGISTERED, "ctx_size": 131072},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["chosen"] == 131072
+    saved = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+    assert saved["context_sizes"] == {UNREGISTERED: 131072}
+
+
+@pytest.mark.parametrize("ctx_size", [16384, 262144])
+def test_an_unregistered_model_refuses_sizes_outside_its_range(
+    client, unregistered, ctx_size
+):
+    resp = client.put(
+        "/api/providers/local/context",
+        json={"model": UNREGISTERED, "ctx_size": ctx_size},
+    )
+    assert resp.status_code == 422
+    assert "not offered" in resp.json()["detail"]
+
+
 def test_cloud_models_have_no_context_choice(client, lemonade):
     resp = client.get("/api/providers/local/context", params={"model": "fireworks.glm"})
     assert resp.status_code == 422

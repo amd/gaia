@@ -1031,6 +1031,13 @@ def _chosen_ctx_size(model: str, base_url: Optional[str]) -> Optional[int]:
     tokens = saved_context_size(model)
     if tokens is None:
         return None
+    if find_model_requirement(model) is None:
+        # No memory figures to check against; only the 32K floor applies.
+        try:
+            check_saved_size(model, tokens, None)
+        except ContextChoiceError as e:
+            raise LemonadeClientError(str(e)) from e
+        return tokens
     try:
         capacity = machine_capacity(base_url)
     except (LemonadeClientError, ModelFitError) as e:
@@ -6933,7 +6940,10 @@ class LemonadeClient:
         self._wait_model_state(
             model, present=False, deadline_s=PIN_UNLOAD_SETTLE_DEADLINE_S
         )
-        self.load_model(model, auto_download=True, prompt=False, ctx_size=pin)
+        # A test pin must not become the window Lemonade reloads at afterwards.
+        self.load_model(
+            model, auto_download=True, prompt=False, ctx_size=pin, save_options=False
+        )
         settled = self._wait_model_state(
             model, present=True, deadline_s=PIN_LOAD_SETTLE_DEADLINE_S
         )
@@ -7377,7 +7387,7 @@ class LemonadeClient:
         _download_timeout: int = 7200,  # Reserved for future use
         llamacpp_args: Optional[str] = None,
         ctx_size: Optional[int] = None,
-        save_options: bool = False,
+        save_options: Optional[bool] = None,
         prompt: bool = True,
         load_retries: int = DEFAULT_MODEL_LOAD_RETRIES,
     ) -> Dict[str, Any]:
@@ -7438,7 +7448,7 @@ class LemonadeClient:
         _download_timeout: int = 7200,  # Reserved for future use
         llamacpp_args: Optional[str] = None,
         ctx_size: Optional[int] = None,
-        save_options: bool = False,
+        save_options: Optional[bool] = None,
         prompt: bool = True,
         load_retries: int = DEFAULT_MODEL_LOAD_RETRIES,
     ) -> Dict[str, Any]:
@@ -7465,7 +7475,9 @@ class LemonadeClient:
             save_options: If True, persists ctx_size and llamacpp_args to config file.
                          Model will use these settings on future loads.
                          Always on for an embedder whose backend GAIA picks
-                         (:func:`manages_embedder_backend`).
+                         (:func:`manages_embedder_backend`). None (the default)
+                         saves whenever *ctx_size* is given, except on a server
+                         the user runs.
             prompt: If True, prompt user before downloading (default: True).
                    Set to False to download automatically without user confirmation.
             load_retries: Number of times to retry on a TRANSIENT backend-startup
@@ -7539,6 +7551,10 @@ class LemonadeClient:
             # Saved so Lemonade's own auto-loads (``/embeddings``) use it too;
             # never into the config of a server the user runs.
             save_options = not self.is_users_server()
+        elif save_options is None:
+            # Lemonade's auto-load after an eviction would otherwise auto-tune
+            # the window, to 4096 for a model with no saved options.
+            save_options = ctx_size is not None and not self.is_users_server()
         if llamacpp_args:
             request_data["llamacpp_args"] = llamacpp_args
         if ctx_size is not None:

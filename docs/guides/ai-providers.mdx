@@ -144,6 +144,10 @@ the model. GAIA loads it with the largest window, in 8,192-token steps, whose
 cache fits beside the weights, leaving 10% of the memory free and room for the
 embedding model, which loads on the GPU too. It never goes below 65,536 tokens.
 
+On any Lemonade except one you run yourself, the window is saved with the model. If another load
+evicts it, Lemonade reloads it at that window on the next request instead of
+picking its own, which can be as small as 4,096 tokens.
+
 | PC | Memory for models | Window | KV cache |
 |----|-------------------|--------|----------|
 | Strix Halo 128 GB (96 GB carve-out) | ~112 GB | 262,144 | 5.4 GB |
