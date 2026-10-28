@@ -619,9 +619,11 @@ class _ParkingSidecar:
             }
         else:
             yield {"type": "needs_input", "request_id": "q-1", "question": "Which?"}
-        if not self.answered.wait(10):
-            yield {"type": "error", "detail": "nobody answered"}
-            return
+        # The test that owns this sidecar has its own task deadlines and
+        # always releases this event in cleanup.  A second wall-clock timeout
+        # here races slow CI setup and turns a valid delayed answer into an
+        # unrelated empty sidecar response.
+        self.answered.wait()
         yield {"type": "token", "delta": "resumed "}
         yield {"type": "final", "answer": f"answer={self.answer}"}
 
