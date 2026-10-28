@@ -23,7 +23,9 @@ class _Agent(MemoryMixin):
 
 
 @pytest.fixture
-def store(tmp_path):
+def store(tmp_path, monkeypatch):
+    # CI sets this for every unit test; these tests need a live store.
+    monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
     store = MemoryStore(db_path=tmp_path / "memory.db")
     original = memory_router._store
     memory_router._store = store
@@ -112,6 +114,7 @@ def test_a_memory_failure_keeps_the_chat_and_says_so(client, store):
 
 def test_the_chat_agent_files_memory_under_the_chat_id(store):
     """ChatAgent hands init_memory its UI session id, even across a rebuild."""
+    pytest.importorskip("gaia_agent_chat")
     from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
     seen = []
