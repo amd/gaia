@@ -9,6 +9,12 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Connect prompts name the right Settings tab.** The agent sent users to a
+  "Connections" tab in Settings, which the Agent UI doesn't have; it now says
+  "Settings → Connectors".
+- **One very long turn no longer vanishes from the conversation.** A pushed
+  turn bigger than the whole history budget was dropped, answer included. It is
+  now kept with its longest messages cut and a note saying how much.
 - **A follow-up about a thread shown last turn now works in the TUI.** Find a
   thread, then ask who said what in it: the second question used to fail,
   because the host pushes back only the conversation's words and the thread id

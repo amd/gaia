@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, EyeOff } from 'lucide-react';
+import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
 import { MessageBubble, isErrorContent } from './MessageBubble';
-import { toolActiveLabel } from './AgentActivity';
+import { toolRowText } from './AgentActivity';
+import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -30,6 +31,7 @@ import { AnswerComparison } from './AnswerComparison';
 import * as messageQueue from '../utils/messageQueue';
 import type { QueuedMessage } from '../utils/messageQueue';
 import { SessionPanel, SessionPanelToggle } from './session-panel/SessionPanel';
+import { PrivateChatButton } from './PrivateChatButton';
 import { OfflineNotice } from './session-panel/OfflineNotice';
 import { ExportErrorBar } from './ExportErrorBar';
 import { useSessionPanelStore } from '../stores/sessionPanelStore';
@@ -46,6 +48,7 @@ import { isPlaceholderTitle } from '../utils/sessionTitle';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
+import { useChatDraft } from '../hooks/useSavedDraft';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -126,85 +129,6 @@ function HistoryNotice({ text }: { text: string }) {
     return <div className="history-notice" role="note">{text}</div>;
 }
 
-/** Map an SSE agent event to an AgentStep for the UI. */
-function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<number>): AgentStep | null {
-    const id = ++stepIdRef.current;
-    const ts = Date.now();
-
-    switch (event.type) {
-        case 'thinking':
-            return {
-                id, type: 'thinking', label: 'Thinking',
-                detail: event.content, active: true, timestamp: ts,
-            };
-        case 'tool_start':
-            return {
-                id, type: 'tool',
-                // Label is determined by AgentActivity based on tool name
-                label: 'Using tool',
-                tool: event.tool,
-                detail: event.detail,
-                narration: event.narration,
-                active: true, timestamp: ts,
-                mcpServer: event.mcp_server,
-                mcpServerLabel: event.mcp_server_label,
-                mcpTool: event.mcp_tool,
-            };
-        case 'plan':
-            return {
-                id, type: 'plan', label: 'Created plan',
-                planSteps: event.steps, planNarrations: event.step_narrations,
-                currentStep: event.current_step, active: false,
-                success: true, timestamp: ts,
-            };
-        case 'step':
-            return {
-                id, type: 'status',
-                label: `Step ${event.step}${event.total ? ` of ${event.total}` : ''}`,
-                active: true, timestamp: ts,
-            };
-        case 'status':
-            if (event.message?.startsWith('Agent: ')) return null;
-            return {
-                id, type: 'status',
-                label: event.message || event.status || 'Working',
-                active: event.status === 'working',
-                timestamp: ts,
-            };
-        case 'agent_error':
-            return {
-                id, type: 'error', label: 'Error',
-                detail: event.content, success: false,
-                active: false, timestamp: ts,
-            };
-        case 'policy_alert': {
-            const toolName = event.tool || 'unknown tool';
-            const reason =
-                event.reason ||
-                event.message ||
-                event.content ||
-                'Tool execution was blocked by governance policy.';
-            return {
-                id,
-                type: 'policy_alert',
-                label: `Policy blocked ${toolName}`,
-                detail: reason,
-                tool: toolName,
-                decision: event.decision || 'BLOCK',
-                reason,
-                ruleIds: event.rule_ids ?? [],
-                policyVersion: event.policy_version,
-                receiptId: event.receipt_id,
-                success: false,
-                active: false,
-                timestamp: ts,
-            };
-        }
-        default:
-            return null;
-    }
-}
-
 function policyReceiptAnchor(receiptId: string): string {
     return `policy-receipt-${encodeURIComponent(receiptId)}`;
 }
@@ -240,7 +164,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const notificationPanelVisible = useNotificationStore((s) => s.showPanel);
     const setNotificationPanelVisible = useNotificationStore((s) => s.setShowPanel);
     const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
-    const pendingPrompt = useChatStore((s) => s.pendingPrompt);
+    const pendingPrompt = useChatStore((s) => (s.pendingPrompt?.sessionId === sessionId ? s.pendingPrompt : null));
     const liveStatus = useChatStore((s) => s.liveStatus);
     const awaitingUser = useChatStore((s) => s.awaitingUser);
     // Other events can arrive while a question waits; it still waits on the user.
@@ -251,7 +175,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const session = sessions.find((s) => s.id === sessionId);
     const sessionDocIds = new Set(session?.document_ids ?? []);
     const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
-    const [input, setInput] = useState('');
+    const [input, setInput] = useChatDraft(sessionId, session?.private);
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
     const [isDragOver, setIsDragOver] = useState(false);
@@ -447,9 +371,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
         return () => { mountedRef.current = false; };
     }, []);
     useEffect(() => {
-        const { pendingPrompt: pending, isLoadingMessages: loading } = useChatStore.getState();
+        const pending = pendingPrompt?.text;
         // Wait for the history load, or it would replace the message just sent.
-        if (!pending || loading) return;
+        if (!pending || useChatStore.getState().isLoadingMessages) return;
         useChatStore.getState().setPendingPrompt(null);
         openingRef.current = true;
         // A timer, not rAF: rAF never fires while the window is hidden, and
@@ -527,6 +451,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             }
             dismissPolicyToast();
             streamBufferRef.current = '';
+            // Clear this view's live turn now, before the next view's effects re-attach theirs.
+            useChatStore.getState().resetStreaming();
         };
     }, [sessionId]);
 
@@ -1065,16 +991,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         ...(detail ? { detail } : {}),
                         ...(event.narration ? { narration: event.narration } : {}),
                     });
+                    const store = useChatStore.getState();
+                    const tool = [...store.agentSteps].reverse().find((s) => s.type === 'tool');
+                    if (event.narration && tool?.active && store.livePhase === 'tool') {
+                        store.setLiveStatus(toolRowText(tool), 'tool');
+                    }
                     return;
                 }
 
-                // ── Consolidate thinking events ──────────────────────────
-                // Instead of creating a new step for every thought, update
-                // the existing thinking step so we get ONE "Thinking" entry
-                // that shows the latest thought, not a massive stream.
-                // Uses appendThinkingContent() which atomically reads the
-                // current detail and appends inside a single set() call,
-                // preventing stale-read races that can lose accumulated text.
+                // One "Thinking" step per turn. appendThinkingContent() appends
+                // inside a single set(), so racing chunks never lose text.
                 if (event.type === 'thinking') {
                     const currentSteps = useChatStore.getState().agentSteps;
                     const lastStep = currentSteps[currentSteps.length - 1];
@@ -1102,6 +1028,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.phase && msg) useChatStore.getState().setLiveStatus(msg, event.phase);
                     // The client's own wait notice is not a step of the turn.
                     if (event.phase === 'waiting') return;
+                    if (isProgressTick(event)) return;
                     // Skip "Executing <tool>" messages - redundant with tool_start
                     if (msg.toLowerCase().startsWith('executing ')) return;
                     if (status === 'working' || status === 'warning' || status === 'info') {
@@ -1145,7 +1072,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.type === 'tool_start') {
                         toolOccurredRef.current = true;
                         // The model's phase ended with the call; say a tool runs, not the model.
-                        useChatStore.getState().setLiveStatus(toolActiveLabel(event.tool, step), 'tool');
+                        useChatStore.getState().setLiveStatus(toolRowText(step), 'tool');
                     }
                 }
             },
@@ -1719,15 +1646,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     )}
                 </div>
                 <div className="task-header-right">
-                    <button
-                        className={`btn-icon-sm${session?.private ? ' active' : ''}`}
-                        onClick={handleTogglePrivate}
-                        title={session?.private ? 'Private: this chat is not saved to memory' : 'Make private (not saved to memory)'}
-                        aria-label={session?.private ? 'Private chat on' : 'Make chat private'}
-                        aria-pressed={!!session?.private}
-                    >
-                        <EyeOff size={15} />
-                    </button>
+                    <PrivateChatButton isPrivate={!!session?.private} onToggle={handleTogglePrivate} />
                     <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files on this PC" aria-label="Browse files on this PC">
                         <FolderSearch size={15} />
                     </button>

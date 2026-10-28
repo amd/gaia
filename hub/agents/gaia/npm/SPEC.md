@@ -135,6 +135,10 @@ failure anywhere: it is a 404 on a user's first run.
 | `linux-arm64`  |  **no**   |  yes  |
 | `win32-arm64`  |  **no**   |  yes  |
 
+The `linux-x64` sidecar is built on a glibc 2.34 floor (#5545), so it needs
+glibc 2.34 or newer at run time (Ubuntu 22.04, Debian 12, RHEL 9 or later).
+On an older distro it fails at launch.
+
 `terminal-hub` publishes all six. The sidecar is a PyInstaller freeze, produced on
 the platform it targets, and there is no arm64 Linux or arm64 Windows freeze.
 Resolving `sidecar` on those two keys raises `PlatformError` naming the platform
@@ -292,7 +296,9 @@ optional.
 `context` is the transcript you push. It replaces the agent's history for the
 turn. If it doesn't fit beside the agent's prompt and tools in the model's
 window, the agent drops the oldest whole turns until it does, and streams a
-`status` event saying older messages are out of the model's view.
+`status` event saying older messages are out of the model's view. A single turn
+bigger than the whole budget is kept, not dropped: its longest messages are cut
+with a note saying how many characters are missing, so its answer stays in view.
 
 `documents` (contract ≥ 2.16) carries the absolute paths of the files the user
 attached to the conversation. Send the whole set on every turn. Before the turn
@@ -386,11 +392,14 @@ daemon-transport counterpart of the stdio `MEMORY_DUMP_QUERY` sentinel; both
 paths call the same `build_memory_dump()` and return the identical shape.
 
 `GET /v1/gaia/skills` (contract ≥ 2.17) lists the skills the agent can load:
-`{ "skills": [{ "name", "description", "version", "tier", "tools", "path" }],
-"invalid": { "<folder>": "<why it failed to parse>" } }`. It reads the same
-roots the agent does — its bundled skills, `~/.gaia/skills`, Claude Code skill
-folders — so a host without the Python package (the bundled skills live inside
-the binary) can still show them. A skill root that cannot be read is a `500`
+`{ "skills": [{ "name", "description", "version", "tier", "tools", "path",
+"source" }], "invalid": { "<folder>": "<why it failed to parse>" } }`. It reads
+the same roots the agent does — its bundled skills, `~/.gaia/skills`, Claude
+Code skill folders — so a host without the Python package (the bundled skills
+live inside the binary) can still show them. `source` names the root a skill
+came from: `agent-bundled`, `user` or `claude-import`, or `null` for any other
+root. An agent that predates `source` omits the field; a host must treat a list
+where any skill lacks it as ungrouped and show it flat, not drop the skill. A skill root that cannot be read is a `500`
 naming it.
 
 `/query` streams the answer as `token` events before its terminal `final`. A
@@ -411,6 +420,14 @@ A turn that was stopped or ended on a model failure carries no `context`; a
 measurement that failed carries `context_error`, one sentence saying why, and
 the answer still stands. Older binaries send neither, so read `context` only
 when `/version` reports 2.21 or later.
+
+`final` also carries `performance`: the turn's step timings, as
+`{ "timing_summary", "conversation" }`. `timing_summary` holds the run's model
+and tool seconds and its model call count; `conversation` holds one
+`{ "role": "system", "content": { "type": "stats", ... } }` entry per model
+call, with that call's token counts and speed. The Agent UI turns it into the
+Context panel's "Under the hood" figures. A run that timed nothing
+carries none, and older binaries never send it, so read it only when present.
 
 ### 5.2 `session_id` and agent retention
 

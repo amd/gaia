@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronRight, FileText, Folder, X } from 'lucide-react';
+import { ChevronRight, FileText, X } from 'lucide-react';
 import { BrowserPaneToggle } from './browser-pane/BrowserPane';
 import { Composer } from './Composer';
+import { FolderChip } from './FolderChip';
 import { ModelChip } from './ModelChip';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PrivateChip } from './PrivateChip';
@@ -21,6 +22,8 @@ import { log } from '../utils/logger';
 import { deviceLabel } from '../utils/modelLabels';
 import type { StartCard, StartScreen } from '../types';
 import './NewChat.css';
+import { useSavedDraft } from '../hooks/useSavedDraft';
+import { NEW_CHAT_DRAFT_KEY } from '../utils/savedDraft';
 
 interface NewChatProps {
     /**
@@ -153,7 +156,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
     // Moot once chats run in the cloud or a local model has loaded after all.
     const setupError = useChatStore((s) => (s.systemStatus?.model_loaded ? null : s.systemStatus?.setup_error ?? null));
     const remote = useModelStore((s) => !!s.active?.remote);
-    const [text, setText] = useState(initialText);
+    const [text, setText] = useSavedDraft(NEW_CHAT_DRAFT_KEY, initialText);
     const [error, setError] = useState<string | null>(null);
     const [sending, setSending] = useState(false);
     const [start, setStart] = useState<StartScreen | null>(null);
@@ -275,19 +278,9 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                     leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /></>}
                     rightControls={<ModelChip />}
                 />
-                {folder && (
-                    <div className="new-chat-meta">
-                        <span
-                            className="new-chat-folder"
-                            title={folder.gaia_folder
-                                ? `GAIA works in its own folder, ${folder.path}. Attach a file or start GAIA from a project folder to work there.`
-                                : `GAIA works in ${folder.path}`}
-                        >
-                            <Folder size={13} aria-hidden="true" />
-                            <span>{folder.name}</span>
-                        </span>
-                    </div>
-                )}
+                <div className="new-chat-meta">
+                    {folder && <FolderChip folder={folder} disabled={starting || sending} />}
+                </div>
                 <LibraryDocuments />
                 {warming !== null && !starting && (
                     <p className="new-chat-warmup" role="status">{warmUpLine(warming)}</p>

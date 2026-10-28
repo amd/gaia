@@ -8,7 +8,7 @@ INSTALL: copy this file to ``~/.gaia/agents/oauth-test/agent.py``.
 Run flow (see ../README.md for the full local-test recipe):
   1. Set ``GAIA_GOOGLE_CLIENT_ID`` to your Cloud Console desktop client id.
   2. Start the AgentUI: ``gaia chat --ui``.
-  3. Open Settings → Connections → click "Connect" next to Google.
+  3. Open Settings → Connectors → click "Connect" next to Google.
   4. Complete OAuth in your browser; AgentUI updates within ~2s.
   5. Switch the active agent to "OAuth Test (Gmail)".
   6. The first message triggers the consent dialog (REQUIRED_CONNECTORS

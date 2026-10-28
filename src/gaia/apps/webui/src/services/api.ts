@@ -10,6 +10,7 @@ import type { SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, Un
 import type { PageElementWire } from '../../services/browser-pane/contract';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
+import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
 
 const API_BASE = getApiBase();
 
@@ -475,7 +476,7 @@ export async function listSessions(): Promise<{ sessions: Session[]; total: numb
     return { sessions: [...byId.values()], total };
 }
 
-export async function createSession(data: Partial<Session> = {}): Promise<Session> {
+export async function createSession(data: Partial<Session> & { folders?: string[] } = {}): Promise<Session> {
     return apiFetch('POST', '/sessions', data);
 }
 
@@ -484,7 +485,9 @@ export async function updateSession(id: string, data: { title?: string; title_is
 }
 
 export async function deleteSession(id: string): Promise<void> {
-    return apiFetch('DELETE', `/sessions/${id}`);
+    await apiFetch('DELETE', `/sessions/${id}`);
+    // Unsent text must not outlive the chat it was typed into.
+    clearSavedDraft(chatDraftKey(id));
 }
 
 export async function getSession(id: string): Promise<Session> {

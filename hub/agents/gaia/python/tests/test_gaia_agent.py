@@ -38,6 +38,7 @@ from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 # exactly the drift these tests exist to catch.
 from gaia.agents.base.memory import _MEMORY_TOOLS
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
 
 MANIFEST = Path(__file__).resolve().parent.parent / "gaia-agent.yaml"
 
@@ -56,9 +57,14 @@ def _isolated_registry():
 
 @pytest.fixture(scope="module")
 def tool_surfaces():
-    """``(core, full)`` tool names — memory off, then memory on."""
+    """``(core, full)`` tool names — memory off, then memory on.
+
+    Both are pinned open in GAIA desktop's browser pane, the one state where
+    every browser tool registers, so the count doesn't depend on the machine.
+    """
     with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
+        mp.setattr(BrowserUseToolsMixin, "_pane_at_startup", lambda self: (True, True))
         agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
         agent._register_tools()
         core = sorted(agent._tools_registry.keys())

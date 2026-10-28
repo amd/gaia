@@ -394,6 +394,8 @@ class CreateSessionRequest(BaseModel):
     # Mailbox provider for email-backed agents. Gmail by default; "microsoft"
     # routes the email agent to the Outlook backend (see EmailAgentConfig).
     mail_provider: Optional[str] = Field(None, pattern=r"^(google|microsoft)$")
+    # Folders the chat may read and write from its first message.
+    folders: List[str] = Field(default_factory=list)
 
 
 class UpdateSessionRequest(BaseModel):

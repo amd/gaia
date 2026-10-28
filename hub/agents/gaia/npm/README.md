@@ -39,6 +39,9 @@ however you arrive at the terminal UI, it behaves identically.
 - **Node.js 18+** (for the built-in `fetch`).
 - **[Lemonade Server](https://amd-gaia.ai/docs/reference/dev)** running locally —
   it hosts the model the agent thinks with. GAIA tells you if it isn't up.
+- **On Linux x64, glibc 2.34 or newer** for the agent sidecar (Ubuntu 22.04,
+  Debian 12 and RHEL 9 or later). An older distro cannot start the agent. Check
+  with `ldd --version`.
 - The `gaia` Python CLI **0.25.2 or newer** on `PATH` for the daemon the terminal
   UI starts. An earlier core cannot run this agent, so the UI comes up with
   nothing behind it. Install it with
@@ -231,7 +234,9 @@ get its own wording; a headless caller omits it. See
 **Showing how full the model's window is?** From contract 2.21 the `final`
 event carries `context`: the window size, the tokens the next call will take,
 and what takes them (prompt, tools, documents, history). Older binaries leave
-it out. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+it out. It also carries `performance`, the turn's model and tool timings and
+each model call's token counts, when the binary sends it. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message

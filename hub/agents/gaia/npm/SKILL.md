@@ -117,6 +117,10 @@ Windows sidecar build**.
 | `linux-arm64`  | **no**  | yes |
 | `win32-arm64`  | **no**  | yes |
 
+The `linux-x64` sidecar needs **glibc 2.34 or newer** (Ubuntu 22.04, Debian 12,
+RHEL 9 or later); an older distro fails at launch, so check `ldd --version`
+before blaming the package.
+
 Resolving the sidecar on those two keys raises `PlatformError` naming the
 platform and the supported set. It is not silently skipped, and the TUI is never
 launched with no agent behind it. `npx @amd-gaia/gaia version` prints the matrix
@@ -256,7 +260,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 |---|---|---|
 | `query` | yes | Non-empty. |
 | `run_id` | yes | **You mint it**, and it must be a UUID (non-UUID → 422). It is the cancel handle, valid from the instant the request is sent. |
-| `context` | yes | Transcript slice, pushed in the body — may be `[]`, never absent. Each item `{ role, content }`; `role` ∈ `user` / `assistant` / `system` / `tool`. If it doesn't fit beside the agent's prompt and tools in the model's window, the agent keeps the newest whole turns that do and says so in a `status` event. |
+| `context` | yes | Transcript slice, pushed in the body — may be `[]`, never absent. Each item `{ role, content }`; `role` ∈ `user` / `assistant` / `system` / `tool`. If it doesn't fit beside the agent's prompt and tools in the model's window, the agent keeps the newest whole turns that do and says so in a `status` event; one turn bigger than that is kept with its longest messages cut. |
 | `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. 1–128 characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a **400**. |
 | `documents` | no | Contract ≥ 2.16. Absolute paths of the files the user attached to this conversation — send the whole set **every turn**. The agent indexes any it has not read yet before the turn runs, granting each exact file and not its folder. A relative path is a **422**. A missing file, a folder, or a refused secret is named as not indexed in the turn's `index_documents` step, and the turn still runs. |
 | `allowed_paths` | no | Contract ≥ 2.18. Absolute folder or file paths the conversation may read — the scope your UI shows. A new session gets exactly this scope; a retained session adds any entry it lacks and never drops one until the session ends. `GAIA_ALLOWED_PATHS` still narrows it. A relative path is a **422**. Omit it for the agent's default scope. |
@@ -324,10 +328,10 @@ The canonical event shapes, as emitted:
 | `status` | `{ type, message, phase?, words?, chars?, queue? }` — progress and reasoning narration. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`, `model_queue`) names what the model is doing; show it as the live line, not as narration. `model_queue` means the turn is waiting for the model behind another request: it repeats every ~2 s with a `queue` object (`event`, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`), so its steady arrival means queued, not stuck |
 | `token` | `{ type, delta }` — answer text to append |
 | `tool_call` | `{ type, tool, args, mcp_server?, mcp_server_label?, mcp_tool? }` — an MCP tool names its connector (`mcp_server_label`, e.g. `"Git"`) and the server's own tool name (`mcp_tool`, e.g. `"git_log"`); label the call with those, not the prefixed `tool` |
-| `tool_result` | `{ type, tool, data, render? }` — an MCP tool that returned text carries it in `data.mcp_output` (`{ text, truncated }`) |
+| `tool_result` | `{ type, tool, data, render? }` — an MCP tool that returned text carries it in `data.mcp_output` (`{ text, truncated }`); a `search_web` result lists its hits in `data.sources` (`[{ title, url }]`) |
 | `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say), `risk_note` (why GAIA's checks don't cover the call) and `file_path` (the absolute path a write lands at, when the model gave a relative one) |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
-| `final` | `{ type, answer, usage?, failed? }` — terminal. `failed: true`: the model failed mid-turn and `answer` says what was and wasn't done; show it as an error, not a result |
+| `final` | `{ type, answer, usage?, failed?, context?, context_error?, performance? }` — terminal. `failed: true`: the model failed mid-turn and `answer` says what was and wasn't done; show it as an error, not a result. `context` / `context_error` and `performance` (the turn's step timings) are optional; see SPEC §5.1 |
 | `error` | `{ type, detail, status }` — terminal, surface `detail` verbatim |
 
 Rules a client must respect:

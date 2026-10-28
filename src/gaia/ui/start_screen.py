@@ -5,7 +5,8 @@
 
 Cards come from what is installed and set up on this PC — skills, indexed
 documents, connected mail accounts — never from a model call, so the screen
-costs nothing to open. A card only appears for a skill the agent has.
+costs nothing to open. A card's task runs on the agent's own tools; its skill,
+when installed, only sharpens it.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ MAIL_CONNECTORS = ("google", "microsoft", "microsoft_work")
 
 @dataclass(frozen=True)
 class Card:
+    #: The skill that sharpens this task when installed; also the card's id.
     skill: str
     title: str
     note: str
@@ -93,7 +95,10 @@ def _summarize(_ctx: Context) -> Card:
     )
 
 
-def _check_in(_ctx: Context) -> Card:
+def _check_in(ctx: Context) -> Optional[Card]:
+    # Without its skill, "Let's check in." is a greeting, not a task.
+    if "check-in" not in ctx.skills:
+        return None
     return Card(
         "check-in",
         "Check in",
@@ -114,11 +119,11 @@ _RULES: List[Callable[[Context], Optional[Card]]] = [
 
 
 def pick_cards(ctx: Context) -> List[Dict[str, Any]]:
-    """Up to :data:`MAX_CARDS` cards, each for a skill the agent has."""
+    """Up to :data:`MAX_CARDS` cards for what this PC is set up to do."""
     cards = []
     for rule in _RULES:
         card = rule(ctx)
-        if card is not None and card.skill in ctx.skills:
+        if card is not None:
             cards.append(asdict(card))
         if len(cards) == MAX_CARDS:
             break
@@ -126,15 +131,25 @@ def pick_cards(ctx: Context) -> List[Dict[str, Any]]:
 
 
 def working_folder() -> Dict[str, Any]:
-    """The folder a new chat's agent works in, as ``_compute_allowed_paths`` grants it."""
+    """The folder a new chat's agent works in, as ``_compute_allowed_paths`` grants it.
+
+    ``choosable`` says whether a new chat can be given another folder.
+    """
     from gaia.ui import _chat_helpers as chat
+    from gaia.ui.security import FLAGSHIP_AGENT_ID
+    from gaia.ui.session_environment import relayed
 
     cwd = Path.cwd().resolve()
     if chat._unsafe_directory_grant_reason(cwd):
         folder, own = chat._managed_documents_dir(), True
     else:
         folder, own = cwd, False
-    return {"path": str(folder), "name": folder.name or str(folder), "gaia_folder": own}
+    return {
+        "path": str(folder),
+        "name": folder.name or str(folder),
+        "gaia_folder": own,
+        "choosable": not relayed({"agent_type": FLAGSHIP_AGENT_ID}),
+    }
 
 
 def _mail_connected() -> bool:

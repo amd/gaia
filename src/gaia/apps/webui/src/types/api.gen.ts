@@ -442,6 +442,7 @@ export interface CreateSessionRequest {
   agent_type?: string | null;
   device?: string | null;
   document_ids?: string[];
+  folders?: string[];
   mail_provider?: string | null;
   model?: string | null;
   private?: boolean;
