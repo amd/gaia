@@ -157,6 +157,11 @@ def create_app(
     )
 
     require_token = build_require_token(token)
+    relay_turns = None
+    if registry is not None:
+        from gaia.daemon.relay import RelayTurns
+
+        relay_turns = RelayTurns()
 
     # Clients read a status that misses their probe as a hung daemon, so it
     # never queues for the worker pool that sync routes and lease waits share.
@@ -181,6 +186,9 @@ def create_app(
             payload["agent_read_timeout_s"] = None if math.isinf(budget) else budget
         except ValueError as exc:
             payload["agent_read_timeout_error"] = str(exc)
+        if relay_turns is not None:
+            # An update's restart waits while a relayed turn is still open.
+            payload["relayed_turns"] = relay_turns.count
         if clock is not None:
             if not status_limiters:  # created on the event loop, lazily
                 status_limiters.append(anyio.CapacityLimiter(4))
@@ -315,7 +323,7 @@ def create_app(
         app.include_router(build_agents_router(token, registry))
         # Data plane (#2150): ANY /v1/<agent>/* relays to the agent's sidecar
         # behind the SAME client-token guard as the control plane above.
-        app.include_router(build_relay_router(token, registry))
+        app.include_router(build_relay_router(token, registry, relay_turns))
 
         if forwarder is not None:
             # OAuth forward-out plane (#2154): forwards granted connector access
