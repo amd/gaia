@@ -119,16 +119,30 @@ LONG_INPUTS = {
 }
 
 
+def _credential_scan_seconds(text):
+    """Time both credential scans once without retaining their results."""
+    started = time.perf_counter()
+    MemoryMixin._mask_credentials(text)
+    MemoryMixin._looks_like_credential(text)
+    return time.perf_counter() - started
+
+
 @pytest.mark.parametrize("name", LONG_INPUTS)
 def test_masking_stays_fast_on_long_input(name):
     text = LONG_INPUTS[name]
-    started = time.perf_counter()
+    smaller = text[: len(text) // 2]
 
-    MemoryMixin._mask_credentials(text)
-    MemoryMixin._looks_like_credential(text)
+    # The minimum absorbs an isolated scheduling pause on a shared xdist runner.
+    # Comparing N/2 to N catches super-linear regex backtracking independently
+    # of how busy that runner happens to be.
+    smaller_seconds = min(_credential_scan_seconds(smaller) for _ in range(3))
+    full_seconds = min(_credential_scan_seconds(text) for _ in range(3))
 
-    # ~0.2s locally; the bound catches runaway backtracking, not a busy CI runner.
-    assert time.perf_counter() - started < 5.0
+    # Preserve a generous escape hatch for a genuine pathological input.
+    assert full_seconds < 10.0
+    # Linear growth is about 2x. The floor avoids overreacting to timer noise
+    # when a small input completes faster than the scheduler can resolve.
+    assert full_seconds <= max(smaller_seconds * 4, 0.05)
 
 
 def test_remember_refuses_a_pin(store):
