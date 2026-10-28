@@ -974,6 +974,47 @@ class TestToolHistory:
         assert stats["last_error"] is not None
         assert "FileNotFoundError" in stats["last_error"]
 
+    def test_denied_calls_are_visible_but_not_counted_as_failures(self, store):
+        """A pre-execution denial is retained without lowering success metrics."""
+        store.log_tool_call(
+            session_id="sess1",
+            tool_name="write_file",
+            args={"path": "/blocked.txt"},
+            result_summary="{'status': 'denied'}",
+            success=False,
+            error="permission denied",
+            executed=False,
+        )
+        store.log_tool_call(
+            session_id="sess1",
+            tool_name="write_file",
+            args={"path": "/ok.txt"},
+            result_summary="ok",
+            success=True,
+        )
+
+        stats = store.get_tool_stats("write_file")
+        assert stats["total_calls"] == 1
+        assert stats["success_rate"] == 1.0
+        assert stats["last_error"] is None
+        assert stats["denied_count"] == 1
+        assert store.get_tool_errors(tool_name="write_file") == []
+
+        overview = store.get_stats()["tools"]
+        assert overview["total_calls"] == 1
+        assert overview["total_errors"] == 0
+        assert overview["denied_calls"] == 1
+        summary = next(
+            row for row in store.get_tool_summary() if row["tool_name"] == "write_file"
+        )
+        assert summary["total_calls"] == 1
+        assert summary["failure_count"] == 0
+        assert summary["denied_count"] == 1
+
+        history = store.get_tool_history("write_file")
+        assert len(history) == 2
+        assert any(row["executed"] is False for row in history)
+
 
 # ===========================================================================
 # 7. Temporal
@@ -1715,12 +1756,12 @@ class TestEdgeCases:
             assert mode == "wal"
 
     def test_schema_version_exists(self, store):
-        """schema_version table exists at the current version (v7, decayed_at)."""
+        """schema_version table exists at the current version (v8, executed tool history)."""
         if hasattr(store, "_conn"):
             cursor = store._conn.execute("SELECT version FROM schema_version")
             row = cursor.fetchone()
             assert row is not None
-            assert row[0] == 7
+            assert row[0] == 8
 
 
 # ===========================================================================
@@ -3806,7 +3847,7 @@ class TestSchemaV2Migration:
             )
             row = cursor.fetchone()
         assert row is not None
-        assert row[0] == 7
+        assert row[0] == 8
 
 
 # ===========================================================================
@@ -4901,7 +4942,7 @@ class TestProceduresMigration:
         store = MemoryStore(db_path=db)
         store.close()
 
-        assert _schema_version(db) == 7
+        assert _schema_version(db) == 8
         assert "procedures" in _table_names(db)
         assert "skill_deltas" in _table_names(db)
         assert "synthesis_marks" in _table_names(db)
@@ -4949,7 +4990,7 @@ class TestProceduresMigration:
         # Reopen — triggers the v2→v3 migration.
         store2 = MemoryStore(db_path=db)
         try:
-            assert _schema_version(db) == 7
+            assert _schema_version(db) == 8
             assert "procedures" in _table_names(db)
 
             con = sqlite3.connect(str(db))
@@ -4974,6 +5015,33 @@ class TestProceduresMigration:
         finally:
             store2.close()
 
+    def test_v7_db_adds_executed_tool_history_column(self, tmp_path):
+        """Opening a v7 database adds executed and preserves existing rows."""
+        import sqlite3
+
+        db = tmp_path / "memory.db"
+        store = MemoryStore(db_path=db)
+        store.log_tool_call(
+            "sess1", "write_file", {}, "{'status': 'denied'}", False, error="denied"
+        )
+        store.close()
+
+        con = sqlite3.connect(str(db))
+        con.execute("UPDATE schema_version SET version = 7")
+        con.execute("ALTER TABLE tool_history DROP COLUMN executed")
+        con.commit()
+        con.close()
+
+        store2 = MemoryStore(db_path=db)
+        try:
+            assert _schema_version(db) == 8
+            row = store2.get_tool_history("write_file")[0]
+            assert (
+                row["executed"] is False
+            )  # explicit legacy denial is safely reclassified
+        finally:
+            store2.close()
+
     def test_v1_db_chains_through_v2_to_v3(self, tmp_path):
         """A v1 DB (no embedding column, no procedures) chains v1→v2→v3 on open."""
         import sqlite3
@@ -4992,7 +5060,7 @@ class TestProceduresMigration:
 
         store2 = MemoryStore(db_path=db)
         try:
-            assert _schema_version(db) == 7
+            assert _schema_version(db) == 8
             assert "procedures" in _table_names(db)
             # The v1→v2 ALTERs are re-applied idempotently; the legacy row survives.
             rows = store2.get_by_category("fact")
