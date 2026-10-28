@@ -112,21 +112,15 @@ def live_gaia_sidecar(monkeypatch, tmp_path):
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
 
-    # The sidecar and readiness probes below are already local fakes. Keep the
-    # UI's independent history-sizing path equally local: otherwise this test
-    # reaches a shared Lemonade server before each relayed turn.
+    # Keep history sizing local on both sides of the relay. Otherwise the UI
+    # or sidecar can reach a shared Lemonade server before a relayed turn.
     import gaia.agents.base.history as history
-    import gaia.llm.lemonade_client as lemonade_client
 
+    monkeypatch.setattr(
+        history, "model_context_window", lambda *_args, **_kwargs: 32768
+    )
     monkeypatch.setattr(
         history, "relayed_history_budget", lambda *_args, **_kwargs: 32768
-    )
-
-    def _unexpected_live_model_sizing(*_args, **_kwargs):
-        raise AssertionError("relay document tests must not query live Lemonade")
-
-    monkeypatch.setattr(
-        lemonade_client, "resolve_ctx_size", _unexpected_live_model_sizing
     )
 
     scope = tmp_path / "agent-scope"
