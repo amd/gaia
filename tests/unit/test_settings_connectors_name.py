@@ -16,6 +16,13 @@ _STALE_RE = re.compile(
     r"Settings[*_`\"']*\s*(?:\([^)]*\)\s*)?(?:→|->|>|»|›|&rarr;|&gt;)\s*(?:scroll\s+to\s+)?[*_`\"']*Connections\b",
     re.IGNORECASE,
 )
+
+
+def _normalize_python_literals(text: str) -> str:
+    """Join adjacent string literals, including f-strings, while preserving line numbers."""
+    return re.sub(r"([\"'])[ \t]*\n[ \t]*[rfbu]*\1", "\n", text)
+
+
 _SCAN_EXTENSIONS = {
     ".py",
     ".tsx",
@@ -47,6 +54,8 @@ def test_settings_path_names_the_connectors_tab():
             if rel in _ALLOWED:
                 continue
             text = path.read_text(encoding="utf-8", errors="ignore")
+            if path.suffix == ".py":
+                text = _normalize_python_literals(text)
             for match in _STALE_RE.finditer(text):
                 line_num = text.count("\n", 0, match.start()) + 1
                 offenders.append(f"{rel}:{line_num}")
@@ -77,6 +86,11 @@ def test_settings_path_names_the_connectors_tab():
 )
 def test_stale_pattern_catches_every_spelling(text):
     assert _STALE_RE.search(text)
+
+
+def test_split_python_literals_are_scanned_as_one_path():
+    source = '"Settings → "\n    f"Connections"'
+    assert _STALE_RE.search(_normalize_python_literals(source))
 
 
 @pytest.mark.parametrize(
