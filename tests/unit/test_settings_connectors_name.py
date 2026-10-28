@@ -13,7 +13,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _SCAN_ROOTS = [_ROOT / "src" / "gaia", _ROOT / "hub" / "agents", _ROOT / "docs"]
 # Any arrow spelling, with or without markdown or quotes around either word.
 _STALE_RE = re.compile(
-    r"Settings[*_`\"']*\s*(?:→|->|>|»|›|&rarr;|&gt;)\s*[*_`\"']*Connections\b",
+    r"Settings[*_`\"']*\s*(?:\([^)]*\)\s*)?(?:→|->|>|»|›|&rarr;|&gt;)\s*(?:scroll\s+to\s+)?[*_`\"']*Connections\b",
     re.IGNORECASE,
 )
 _SCAN_EXTENSIONS = {
@@ -71,6 +71,8 @@ def test_settings_path_names_the_connectors_tab():
         "`Settings` → `Connections`",
         "settings -> connections",
         "Settings →\n  Connections",
+        "**Settings** (gear) → **Connections**",
+        "Settings (gear icon) → scroll to **Connections**",
     ],
 )
 def test_stale_pattern_catches_every_spelling(text):
@@ -85,6 +87,8 @@ def test_stale_pattern_catches_every_spelling(text):
         "one Connections panel spanning agents",
         "stored connections for this client",
         "Settings → ConnectionsX",
+        "Settings (gear) → Connectors",
+        "Settings (gear icon) → scroll to **Connectors**",
     ],
 )
 def test_stale_pattern_leaves_correct_wording_alone(text):

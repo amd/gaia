@@ -340,6 +340,22 @@ def test_a_folder_added_to_the_chat_reaches_the_relayed_flagship(
     )
 
 
+def test_a_bare_file_name_lands_in_the_folder_picked_for_the_chat(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    # The chip shows the picked folder, so that is where "notes.txt" belongs.
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    folder = tmp_path / "picked"
+    folder.mkdir()
+    session_environment.grant_folder(chat.db, chat.session_id, str(folder))
+
+    _answer(chat.send("create notes.txt"))
+
+    [agent] = agents
+    assert agent.built_with["working_directory"] == str(folder.resolve())
+
+
 def test_an_older_flagship_says_folders_need_an_update(
     monkeypatch, live_gaia_sidecar, chat, tmp_path
 ):
