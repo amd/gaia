@@ -877,7 +877,8 @@ def render_endpoint_spec_html() -> str:
   <p class="desc">Approve or deny a tool the agent is blocking on (send / forward /
     delete / quarantine / calendar-create). Body:
     <code>{ "session_id": str, "approved": bool }</code>. The run resumes when this
-    returns. 404 when no run is awaiting confirmation.</p>
+    returns. 404 when no run is active; 409 when the run has no tool
+    confirmation pending, so the decision was not delivered.</p>
 </div>
 
 <div class="endpoint-block">
