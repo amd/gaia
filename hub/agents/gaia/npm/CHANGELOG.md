@@ -6,6 +6,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Memory downloads its embedding model when it is missing.** On the first
+  start that uses memory, the agent now fetches the required embedding model
+  from Lemonade instead of silently running without memory; the initial
+  download can be about 300 MB.
 - **The Agent UI's "Under the hood" figures cover GAIA chats.** It said every
   answer was "not measured", because only the agent saw its own step timings.
   `final` now carries `performance` with them: the turn's model and tool
