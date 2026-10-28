@@ -4,6 +4,7 @@
 """A new chat's task cards and working folder come from what is set up here."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -23,6 +24,14 @@ STARTER = frozenset(
         "inbox-triage",
     }
 )
+
+
+@pytest.fixture(autouse=True)
+def in_process_agent(monkeypatch):
+    """No agent registry in unit tests; the flagship runs in-process, as from source."""
+    from gaia.ui import session_environment
+
+    monkeypatch.setattr(session_environment, "relayed", lambda _session: False)
 
 
 def _ctx(skills=STARTER, docs=0, mail=False):
@@ -78,13 +87,10 @@ def test_cards_that_need_a_subject_say_so():
 
 
 def test_working_folder_is_the_project_directory(tmp_path, monkeypatch):
-    from gaia.ui import session_environment
-
-    monkeypatch.setattr(session_environment, "relayed", lambda _session: False)
     project = tmp_path / "proj"
     project.mkdir()
     monkeypatch.chdir(project)
-    folder = ss.working_folder()
+    folder = ss.working_folder(choosable=True)
     assert folder == {
         "path": str(project.resolve()),
         "name": "proj",
@@ -93,12 +99,66 @@ def test_working_folder_is_the_project_directory(tmp_path, monkeypatch):
     }
 
 
-def test_working_folder_is_not_choosable_for_a_relayed_flagship(tmp_path, monkeypatch):
+@pytest.fixture
+def relayed_gaia(monkeypatch):
+    """The flagship runs as a daemon sidecar, as on an installed GAIA."""
     from gaia.ui import session_environment
+    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.routers import skills
 
     monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
+    monkeypatch.setattr(ss, "_mail_connected", lambda: False)
+    monkeypatch.setattr(skills, "list_skills", lambda: {"skills": []})
+    agent = SimpleNamespace(api_version="2.21")
+    monkeypatch.setattr(
+        daemon_client,
+        "acquire_handle",
+        lambda _id: SimpleNamespace(api_version=agent.api_version),
+    )
+    return agent
+
+
+def _start(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    assert ss.working_folder()["choosable"] is False
+    app = FastAPI()
+    app.include_router(onboarding.router)
+    app.dependency_overrides[get_db] = lambda: _Db([])
+    res = TestClient(app).get("/api/onboarding/start")
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_a_relayed_flagship_that_takes_folders_can_pick_one(
+    tmp_path, monkeypatch, relayed_gaia
+):
+    body = _start(tmp_path, monkeypatch)
+    assert body["working_folder"]["choosable"] is True
+    assert body["skills_error"] is None
+
+
+def test_a_relayed_flagship_too_old_for_folders_shows_the_folder_as_text(
+    tmp_path, monkeypatch, relayed_gaia
+):
+    relayed_gaia.api_version = "2.17"
+    body = _start(tmp_path, monkeypatch)
+    assert body["working_folder"]["choosable"] is False
+    assert body["skills_error"] is None
+
+
+def test_a_flagship_that_cannot_start_says_why_and_offers_no_folder(
+    tmp_path, monkeypatch, relayed_gaia
+):
+    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.email_sidecar.errors import SidecarError
+
+    def fail(_agent_id):
+        raise SidecarError("sidecar crashed")
+
+    monkeypatch.setattr(daemon_client, "acquire_handle", fail)
+    body = _start(tmp_path, monkeypatch)
+    assert body["working_folder"]["choosable"] is False
+    assert body["cards"] == []
+    assert "couldn't start" in body["skills_error"]
 
 
 def test_working_folder_falls_back_to_gaias_folder_when_cwd_is_home(
@@ -109,7 +169,7 @@ def test_working_folder_falls_back_to_gaias_folder_when_cwd_is_home(
     managed = tmp_path / "documents"
     monkeypatch.setattr(chat, "_managed_documents_dir", lambda: managed)
     monkeypatch.chdir(Path.home())
-    folder = ss.working_folder()
+    folder = ss.working_folder(choosable=True)
     assert folder["path"] == str(managed) and folder["gaia_folder"] is True
 
 
@@ -125,7 +185,7 @@ def test_start_screen_counts_only_finished_documents(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(ss, "_mail_connected", lambda: False)
     db = _Db([{"indexing_status": "complete"}, {"indexing_status": "indexing"}])
-    result = ss.start_screen(db, [{"name": "document-brief"}])
+    result = ss.start_screen(db, [{"name": "document-brief"}], choosable=True)
     assert result["cards"][0]["note"] == "1 indexed document"
     assert result["working_folder"]["name"] == tmp_path.name
 
