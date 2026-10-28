@@ -294,3 +294,13 @@ def test_a_build_says_when_to_stop(tools, tmp_path):
     assert first["next"].startswith("The deck failed its check")
     assert second["next"].startswith("Stop building")
     assert passed["path"] == first["path"] == second["path"]
+
+
+def test_a_null_output_path_saves_in_gaia_documents(tools, tmp_path):
+    skill, fns, _r = tools
+    with bind(_Host(), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown="# Plan\n\n## Crossings rose\n- 1,180 a week\n", output_path=None
+        )
+    assert r["status"] == "ok", r
+    assert r["path"].startswith(str(tmp_path / "home" / "documents"))

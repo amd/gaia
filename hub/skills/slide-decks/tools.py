@@ -116,7 +116,8 @@ def _writable_deck(
     path: str, outline: Dict[str, Any], what: str = "output_path"
 ) -> Path:
     # A bare name or no path saves in GAIA's documents folder, which every chat can write.
-    p = Path(path.strip()).expanduser() if path.strip() else Path(_deck_name(outline))
+    path = (path or "").strip()
+    p = Path(path).expanduser() if path else Path(_deck_name(outline))
     if not p.is_absolute():
         p = gaia_home() / "documents" / p
         p.parent.mkdir(parents=True, exist_ok=True)
