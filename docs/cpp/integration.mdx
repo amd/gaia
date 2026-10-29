@@ -309,7 +309,7 @@ The agent uses a single HTTP endpoint: `POST {baseUrl}/chat/completions`. It sen
 }
 ```
 
-That is the entire API surface. No embeddings endpoint, no streaming (unless `cfg.streaming = true`), no fine-tuning API. Any server that handles this request/response format works — local or remote, open-source or commercial.
+That is the entire API surface. No embeddings endpoint, no streaming (unless `cfg.streaming = true`), no fine-tuning API. Any server that handles this request/response format and accepts unauthenticated requests works — local or remote, open-source or commercial.
 
 ### Local Inference Servers
 
@@ -401,7 +401,7 @@ If OpenSSL isn't found, the build still succeeds but falls back to HTTP only.
     ```
 
     <Warning>
-    The C++ framework does not currently read `OPENAI_API_KEY`, expose an API-key field, or send an `Authorization` header. OpenAI's hosted API therefore cannot be used directly with this configuration. Use an OpenAI-compatible endpoint that accepts unauthenticated requests, or extend the C++ transport in your integration to configure authentication.
+    The C++ framework does not currently read `OPENAI_API_KEY`, expose an API-key field, or send an `Authorization` header. OpenAI's hosted API therefore cannot be used directly with this configuration. Use an OpenAI-compatible endpoint that accepts unauthenticated requests, or patch the `gaia_core` C++ transport in your integration to configure authentication.
     </Warning>
   </Tab>
 
@@ -411,10 +411,14 @@ If OpenSSL isn't found, the build still succeeds but falls back to HTTP only.
     cfg.baseUrl = "https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT";
     cfg.modelId = "gpt-4o";
     ```
+
+    <Warning>
+    Azure OpenAI requires an `api-key` header, which the C++ framework does not currently send. This configuration will be rejected until authentication support is added to the transport.
+    </Warning>
   </Tab>
 
   <Tab title="Any OpenAI-compatible API">
-    Any hosted service that exposes a `/chat/completions` endpoint works:
+    Any hosted service that exposes a `/chat/completions` endpoint and accepts unauthenticated requests works:
 
     ```cpp
     gaia::AgentConfig cfg;
