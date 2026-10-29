@@ -8,7 +8,7 @@ import sqlite3
 import threading
 from typing import Optional, get_args
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, field_validator
 
 from gaia.agents.base.goal_store import AgentMode, GoalStatus, Priority, TaskStatus
@@ -260,6 +260,7 @@ def delete_goal(goal_id: str):
     """Hard-delete a goal and all its tasks."""
     if not _get_store().delete_goal(goal_id):
         raise HTTPException(status_code=404, detail="Goal not found")
+    return Response(status_code=204)
 
 
 @router.post("/api/goals/{goal_id}/tasks", status_code=201)

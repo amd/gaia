@@ -60,6 +60,10 @@
 #                  fetchable AND hash-matches at the public origin, then
 #                  `npm publish` via npm trusted publishing (OIDC, provenance —
 #                  NO npm token).
+#   6. pin-lock  — open a PR committing that verified lock to main
+#                  (util/open_flagship_lock_pr.py). The installer build and the
+#                  final core release read the COMMITTED lock, so merge it before
+#                  tagging the core release.
 #
 # Distribution model (identical to email): the Agent Hub Worker
 # (workers/agent-hub/) fronts the gaia-hub R2 bucket at hub.amd-gaia.ai.
@@ -117,6 +121,8 @@
 #                              (GET downloads stay on hub.amd-gaia.ai). REQUIRED —
 #                              the release fails loudly if it is unset (no silent
 #                              fallback).
+#   Settings → Actions → General → "Allow GitHub Actions to create and approve
+#   pull requests" must stay on: pin-lock opens its PR with the GITHUB_TOKEN.
 #   npm trusted publisher for @amd-gaia/gaia registered against THIS workflow
 #   file name: release_agent_gaia.yml (repo amd/gaia). The OIDC subject is tied
 #   to the exact filename — RENAMING THIS FILE BREAKS THE npm PUBLISH.
@@ -1187,6 +1193,16 @@ jobs:
           # executing in this OIDC-privileged job.
           python3 "${GITHUB_WORKSPACE}/util/npm_publish_once.py" --dist-tag latest -- --access public --provenance --ignore-scripts
 
+      # The lock that passed fetch-verify and shipped to npm; pin-lock commits it to main.
+      - name: Hand the published lock to pin-lock
+        uses: actions/upload-artifact@v7
+        with:
+          name: flagship-binaries-lock
+          path: ${{ env.PKG_DIR }}/binaries.lock.json
+          if-no-files-found: error
+          overwrite: true   # a re-run of publish replaces it
+          retention-days: 30
+
       - name: Redeploy the website to publish the new catalog entry
         shell: bash
         # The website builds its Agent Hub pages at deploy time from the live hub
@@ -1217,3 +1233,51 @@ jobs:
             echo "- npm: \`${NPM_PKG}@${VERSION}\`"
             echo "- Intel sidecar published: \`${DARWIN_X64_SIDECAR:-unknown}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Stage 6: pin the published hashes on main ──────────────────────
+  # installer/tui/fetch_sidecar.py and util/check_flagship_release.py read the
+  # COMMITTED lock, so without this the installer build and the final core
+  # release fail until someone pins the hashes by hand (#3949). Nothing pushes
+  # to main directly: this opens a PR that the merge queue lands. Separate from
+  # `publish` so the write token never shares a job with npm OIDC. Re-runs are
+  # safe: no PR when main already matches, never a second PR for one version.
+  pin-lock:
+    name: Open the lock PR on main
+    runs-on: ubuntu-latest
+    needs: [version, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    permissions:
+      contents: write        # push the flagship-lock/v<version> branch
+      pull-requests: write   # open the PR
+    concurrency:
+      group: flagship-lock-pr-${{ needs.version.outputs.version }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Download the published lock
+        uses: actions/download-artifact@v8
+        with:
+          name: flagship-binaries-lock
+          path: ${{ runner.temp }}/published-lock
+
+      - name: Open (or refresh) the lock PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python util/open_flagship_lock_pr.py \
+            --lock "${RUNNER_TEMP}/published-lock/binaries.lock.json" \
+            --version "${VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --run-url "${RUN_URL}"

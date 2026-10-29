@@ -203,7 +203,7 @@ def test_429_storm_ends_the_run_with_its_work_kept(clean_registry):
     result = agent.process_query("Check the ledger", max_steps=10)
     assert result["status"] == "failed"
     assert result["model_unreachable"] is True
-    assert "I stopped at step 2" in result["result"]
+    assert result["result"].startswith("The model stopped responding at step 2")
     assert "(read_ledger_for_retry_test 1x)" in result["result"]
     assert _TOOL_RUNS == [1]
     # 1 good call + the first failing step + 2 step retries.

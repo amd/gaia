@@ -62,6 +62,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectionRevokedError,
     ConnectorsError,
     ScopeMismatchError,
@@ -416,6 +417,11 @@ def _connectors_error_to_http(exc: ConnectorsError) -> HTTPException:
     was never the status code — it was letting the exception (and its
     already-actionable message) escape uncaught as a textless 500.
     """
+    if isinstance(exc, ConnectionBusyError):
+        # Transient: another GAIA operation is saving the connection.
+        return HTTPException(
+            status_code=503, detail=str(exc), headers={"Retry-After": "1"}
+        )
     if isinstance(exc, ConfigurationError):
         return HTTPException(status_code=503, detail=str(exc))
     if isinstance(exc, AuthRequiredError):
@@ -690,7 +696,15 @@ async def confirm_tool(request: ToolConfirmRequest) -> Dict[str, Any]:
         raise HTTPException(
             status_code=404, detail="No active run awaiting confirmation."
         )
-    session.handler.resolve_tool_confirmation(request.approved)
+    delivered = session.handler.resolve_tool_confirmation(request.approved)
+    if not delivered:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "No tool confirmation is pending on this run"
+                " — it was already answered, timed out, or never asked."
+            ),
+        )
     return {"status": "ok", "approved": request.approved}
 
 

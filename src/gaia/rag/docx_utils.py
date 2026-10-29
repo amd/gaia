@@ -81,7 +81,10 @@ def extract_docx_text(docx_path: str) -> str:
         )
 
     try:
-        doc = Document(docx_path)
+        # A stream, not the path: given a path, python-docx's is_zipfile check
+        # swallows a lock and reports the file as not a package.
+        with open(docx_path, "rb") as stream:
+            doc = Document(stream)
     except Exception as e:
         raise ValueError(
             f"Could not read Word file: {file_name}\nReason: {e}\n{_CORRUPT_HINT}"

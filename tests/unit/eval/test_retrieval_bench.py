@@ -168,6 +168,30 @@ def test_a_chunk_may_start_before_the_previous_one_only_if_it_runs_through_it():
     assert unlocated == [2]
 
 
+def test_an_overlap_through_a_split_tail_beats_a_later_repeat_of_its_text():
+    # Filings repeat whole passages; the in-order copy far ahead is the wrong one.
+    text = (
+        "alpha beta gamma delta epsilon zeta eta theta. "
+        "Appendix. gamma delta epsilon zeta again later."
+    )
+    doc = DocText.from_full_text("d.pdf", text)
+    paths, docs = {"d.pdf": [0, 1, 2, 3]}, {"d.pdf": doc}
+    chunks = ["alpha beta gamma", "delta", "gamma delta epsilon zeta", "eta theta."]
+    spans, unlocated = locate_chunks(chunks, paths, docs)
+    assert unlocated == []
+    assert spans[2].start == text.index("gamma")
+    # Without the near copy, the following chunks would all be unlocated.
+    assert spans[3].start == text.index("eta theta.")
+    # A chunk only the later repeat can explain is still placed there.
+    chunks[2] = "gamma delta epsilon zeta again"
+    spans, unlocated = locate_chunks(chunks[:3], {"d.pdf": [0, 1, 2]}, docs)
+    assert unlocated == [] and spans[2].start == text.rindex("gamma")
+    # And text that is nowhere in the document stays unlocated.
+    chunks[2] = "gamma delta omega"
+    _, unlocated = locate_chunks(chunks, paths, docs)
+    assert 2 in unlocated
+
+
 def test_a_quote_resolves_only_on_its_labelled_page():
     doc = DocText.from_full_text("d.pdf", PAGED)
     ev = resolve_evidence(Evidence("d.pdf", 2, "pump rate is 42"), doc)

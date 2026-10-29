@@ -24,9 +24,17 @@ describe('the model server is down', () => {
     it('never invents a start command the backend did not give', () => {
         useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: null } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
-        expect(screen.getByText(/The model server stopped responding/)).toBeInTheDocument();
+        expect(screen.getByText(/The model server isn't running/)).toBeInTheDocument();
         expect(container.querySelector('code')).toBeNull();
         expect(container).not.toHaveTextContent('lemonade-server serve');
+    });
+
+    it("doesn't claim a model server that never started stopped, and gives the backend's remedy", () => {
+        const install = 'Lemonade Server is not installed. Run `gaia init` to install it, or set LEMONADE_SERVER_PATH to an existing install.';
+        useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: null, start_instruction: install } as SystemStatus });
+        const { container } = render(<ConnectionBanner />);
+        expect(container).toHaveTextContent(`The model server isn't running. ${install}`);
+        expect(container).not.toHaveTextContent('stopped');
     });
 
     it('calls a model server whose health check failed busy, not stopped, and keeps the reason and remedy', () => {
@@ -36,7 +44,7 @@ describe('the model server is down', () => {
         const { container } = render(<ConnectionBanner />);
         expect(container).toHaveTextContent('The model server is not answering (Lemonade health query failed)');
         expect(container).toHaveTextContent('may be busy');
-        expect(container).not.toHaveTextContent('stopped responding');
+        expect(container).not.toHaveTextContent("isn't running");
         expect(container).toHaveTextContent('If it stays this way, restart it:');
         expect(container.querySelector('code')?.textContent).toBe('/usr/bin/lemond');
     });

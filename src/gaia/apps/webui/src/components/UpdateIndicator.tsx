@@ -3,7 +3,8 @@
 
 import { useCallback, useState } from 'react';
 import { Download, RefreshCw, AlertTriangle, X } from 'lucide-react';
-import { useUpdateStatus } from '../hooks/useUpdateStatus';
+import { getUpdaterBridge, useUpdateStatus } from '../hooks/useUpdateStatus';
+import { log } from '../utils/logger';
 import './UpdateIndicator.css';
 
 /**
@@ -12,21 +13,23 @@ import './UpdateIndicator.css';
  * `idle`, `checking`, and `disabled` states so it never distracts from
  * normal use. Wires up to the Electron main process via `gaiaUpdater`
  * (see preload.cjs + services/auto-updater.cjs). Phase F.
+ *
+ * Auto-update is off by default, so an available update is offered here with
+ * an "Update now" button rather than downloaded behind the user's back.
  */
 export function UpdateIndicator() {
     const update = useUpdateStatus();
     const [dismissed, setDismissed] = useState(false);
+    const [actionError, setActionError] = useState<string | null>(null);
 
-    const restart = useCallback(() => {
-        const updater = (window as unknown as {
-            gaiaUpdater?: { check: () => Promise<unknown> };
-        }).gaiaUpdater;
-        // We deliberately re-trigger the check here: electron-updater's
-        // checkForUpdates path is the same singleton that re-emits the
-        // `update-downloaded` event, which shows the native restart dialog.
-        // The user clicking the chip is treated as "I want to act on this".
-        updater?.check().catch(() => {
-            // Swallow — the auto-updater already logs errors.
+    const act = useCallback((what: 'downloadUpdate' | 'restart') => {
+        const updater = getUpdaterBridge();
+        if (!updater) return;
+        setActionError(null);
+        updater[what]().catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.system.error(`Update ${what} failed`, err);
+            setActionError(msg);
         });
     }, []);
 
@@ -35,7 +38,8 @@ export function UpdateIndicator() {
     if (
         update.status === 'idle' ||
         update.status === 'checking' ||
-        update.status === 'disabled'
+        update.status === 'disabled' ||
+        update.status === 'no-channel'
     ) {
         return null;
     }
@@ -62,12 +66,23 @@ export function UpdateIndicator() {
             <div
                 className="update-chip update-chip--available"
                 role="status"
-                title={update.releaseNotes || 'A new version is available.'}
+                title={actionError || update.releaseNotes || 'A new version is available.'}
             >
                 <Download size={13} className="update-chip__icon" />
                 <span className="update-chip__label">
-                    Update available{update.version ? `: ${update.version}` : ''}
+                    {actionError
+                        ? 'Update failed — try again'
+                        : `GAIA ${update.version ?? ''} is available`}
                 </span>
+                {!update.pinnedVersion && (
+                    <button
+                        type="button"
+                        className="update-chip__action"
+                        onClick={() => act('downloadUpdate')}
+                    >
+                        Update now
+                    </button>
+                )}
                 <button
                     type="button"
                     className="update-chip__dismiss"
@@ -91,10 +106,10 @@ export function UpdateIndicator() {
                 <button
                     type="button"
                     className="update-chip__action"
-                    onClick={restart}
-                    title="Click to restart and apply the update"
+                    onClick={() => act('restart')}
+                    title={actionError || 'Click to restart and apply the update'}
                 >
-                    Update ready — restart to apply
+                    {actionError ? 'Restart failed — try again' : 'Update ready — restart to apply'}
                 </button>
             </div>
         );

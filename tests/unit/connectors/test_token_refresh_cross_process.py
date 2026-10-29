@@ -198,7 +198,7 @@ async def test_keyring_calls_run_off_the_event_loop(monkeypatch, google):
         return wrapper
 
     monkeypatch.setattr(
-        tokens, "load_connection", record("load", tokens.load_connection)
+        tokens, "peek_connection", record("load", tokens.peek_connection)
     )
     monkeypatch.setattr(
         tokens, "save_connection", record("save", tokens.save_connection)

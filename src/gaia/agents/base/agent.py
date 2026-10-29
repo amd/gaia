@@ -37,23 +37,27 @@ from typing import (
     Literal,
     MutableMapping,
     Optional,
+    Sequence,
     Tuple,
     Union,
 )
 
 from gaia.agents.base import turn_metrics
-from gaia.agents.base.call_risk import RISK_NOTE_ARG, SHELL_TOOLS
+from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, RISK_NOTE_ARG, SHELL_TOOLS
 from gaia.agents.base.completion import (
     CompletionEvidence,
     caveated_answer,
     incomplete_answer,
     mentioned_paths,
+    saved_before_error,
 )
 from gaia.agents.base.console import (
     AgentConsole,
     SilentConsole,
+    TerminalConfirmationMixin,
     edit_is_inside,
     edit_target,
+    terminal_is_interactive,
     user_denial_message,
 )
 from gaia.agents.base.context_eviction import (
@@ -117,7 +121,7 @@ from gaia.agents.base.tool_grants import (
 from gaia.agents.base.tool_markup import (
     MalformedToolMarkup,
     has_tool_markup,
-    parse_deepseek_tool_calls,
+    parse_text_tool_calls,
     strip_tool_markup,
 )
 from gaia.agents.base.tool_outcome import (
@@ -240,6 +244,22 @@ LOCAL_MAX_OUTPUT_TOKENS = 8192
 # A cloud reasoning model spends output tokens on thinking too; its window is
 # the provider's, not local hardware's.
 CLOUD_MAX_OUTPUT_TOKENS = 32768
+# Share of a local window one reply may take: 8K of 32K, 16K of 64K.
+LOCAL_OUTPUT_CTX_FRACTION = 4
+
+
+def local_max_output_tokens(ctx_size: int) -> int:
+    """Output cap for a local model loaded with a *ctx_size*-token window.
+
+    A quarter of the window, never above the cloud cap, so a big script fits in
+    one reply when the window has room. Never below the 32K-window cap either,
+    except that a window under 16K gives half of itself, so the reply cannot
+    take the whole window and leave nothing for the prompt and history.
+    """
+    floor = min(LOCAL_MAX_OUTPUT_TOKENS, ctx_size // 2)
+    return max(
+        floor, min(CLOUD_MAX_OUTPUT_TOKENS, ctx_size // LOCAL_OUTPUT_CTX_FRACTION)
+    )
 
 
 def _skill_prompt_body(agent, skill) -> str:
@@ -527,12 +547,14 @@ def _trace_includes_schema_text() -> bool:
 class ToolCallTruncated(ValueError):
     """A native tool call ran past the output-token cap mid-arguments."""
 
-    def __init__(self, model_id: str, cap: int):
+    def __init__(self, model_id: str, cap: int, tools: Sequence[str] = ()):
         self.cap = cap
+        self.tools = tuple(tools)
         super().__init__(
             f"Tool call truncated mid-arguments (finish_reason=length). Model "
             f"{model_id} ran out of output tokens before finishing the call "
-            f"({cap} max) — pass a larger max_output_tokens to the agent."
+            f"({cap} max). Write long content in smaller parts across several "
+            "calls, or pass a larger max_output_tokens to the agent."
         )
 
 
@@ -1257,6 +1279,36 @@ _TOOL_CALL_MARKUP_PATTERN = re.compile(
     r"<invoke\s+name\s*=|<parameter\s+name\s*=|\{\s*\"tool\"\s*:"
 )
 _ENVELOPE_KEYS = ("thought", "goal", "tool", "tool_args", "plan")
+
+
+def _holds_complete_text_call(response: str) -> bool:
+    """Whether *response* carries at least one complete, parseable text tool call."""
+    try:
+        return parse_text_tool_calls(response) is not None
+    except MalformedToolMarkup:
+        return False
+
+
+def _typed_markup_args(
+    args: Dict[str, Any], declared: Dict[str, Any]
+) -> Dict[str, Any]:
+    """XML markup carries every value as text; type the non-string parameters.
+
+    A value that is not valid JSON for its declared type stays text, so the
+    tool's own validation reports it rather than this guessing.
+    """
+    typed = {}
+    for name, value in args.items():
+        kind = (declared.get(name) or {}).get("type")
+        if isinstance(value, str) and kind and kind != "string":
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                pass  # left as text; the tool rejects it with its own message
+        typed[name] = value
+    return typed
+
+
 # Broken tool-call markup gets one retry; after that the turn says so, never shows it.
 _MAX_MARKUP_RETRIES = 1
 _TOOL_MARKUP_FAILURE_ANSWER = (
@@ -1899,6 +1951,31 @@ def parse_skill_manifest(path: Optional[Path]) -> "SkillSets":
     return parse_skill_sets(data, where=f" in {path}")
 
 
+def _with_resolved_target(prompt_args: Any, preflight: Any) -> Any:
+    """*prompt_args* with ``file_path`` as the absolute path the tool will write.
+
+    The tool's pre-flight carries ``target_of``, the same resolution the tool
+    body uses, so ``notes.txt`` is shown as the folder it actually lands in.
+    """
+    target_of = getattr(preflight, "target_of", None)
+    if (
+        not callable(target_of)
+        or not isinstance(prompt_args, dict)
+        or not isinstance(prompt_args.get("file_path"), str)
+    ):
+        return prompt_args
+    try:
+        # Relative to this process's cwd, as the tool body opens it at write time.
+        target = os.path.abspath(str(target_of(prompt_args)))
+    except (KeyError, TypeError, ValueError, OSError) as e:
+        # Malformed arguments: the tool body reports them; the prompt shows them as sent.
+        logger.debug("could not resolve the prompt's file_path: %s", e)
+        return prompt_args
+    if target == prompt_args["file_path"]:
+        return prompt_args
+    return {**prompt_args, "file_path": target}
+
+
 def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
     """The scratch folder when this call runs code that may sit in it, else "".
 
@@ -1943,6 +2020,19 @@ def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
         if command_reaches_folder(command, bases, scratch):
             return scratch
     return ""
+
+
+# A sentence break: ". " before a capital, not inside "e.g. " / "i.e. ".
+_SENTENCE_BREAK_RE = re.compile(r"(?<!e\.g)(?<!i\.e)\.\s+(?=[A-Z])")
+
+
+def _split_cause_and_advice(message: str) -> Tuple[str, Optional[str]]:
+    """Split a provider's error message into what happened and what to do."""
+    text = message.strip()
+    match = _SENTENCE_BREAK_RE.search(text)
+    if match is None:
+        return text, None
+    return text[: match.start()], text[match.end() :].strip() or None
 
 
 class Agent(abc.ABC):
@@ -2010,6 +2100,11 @@ class Agent(abc.ABC):
     _pre_turn_spans: Optional[List[Any]] = None
     # Per-step timing for the running turn (always on); ``None`` between turns.
     _step_timer: Optional[StepTimer] = None
+    # The open step, its own response stats, and whether its record was
+    # written; see _record_unrecorded_step. Only meaningful inside a turn.
+    _open_step: Optional[int] = None
+    _open_step_stats: Optional[Dict[str, Any]] = None
+    _step_stats_recorded: bool = False
 
     # Skills (#888): lazily built manager + the skills loaded into this agent.
     # Instance-level once set, so one agent's skills never leak into a sibling.
@@ -2349,6 +2444,8 @@ Do NOT wrap conversational replies in JSON.
             "request_retries": 0,
             "step_retries": 0,
             "unreachable": False,
+            # The turn ended because a model call failed (any cause).
+            "failed": False,
         }
         # Earlier turns' user and tool text, for the grounding checks.
         self._grounding_history = ""
@@ -2429,10 +2526,14 @@ Do NOT wrap conversational replies in JSON.
 
             if cloud_model_provider(model_id):
                 # The local manager preloads a chat model even on an idle server.
+                probe_client = LemonadeClient(base_url=base_url, verbose=False)
                 try:
-                    LemonadeClient(base_url=base_url, verbose=False).health_check()
+                    probe_client.health_check()
                 except LemonadeUnresponsiveError:
                     LemonadeManager.report_busy(base_url, quiet=silent_mode)
+                else:
+                    # Before the prompt is composed: it decides the tool format.
+                    LemonadeManager.learn_tool_calling(probe_client, model_id)
             else:
                 # Unpinned, the manager checks the device profile's floor. This
                 # model's own (possibly memory-sized) window is applied when it
@@ -2598,14 +2699,18 @@ Do NOT wrap conversational replies in JSON.
         switch mid-session takes effect."""
         if self.max_output_tokens is not None:
             return self.max_output_tokens
+        from gaia.agents.base.history import context_window
         from gaia.llm.lemonade_client import LemonadeClient
 
         backend = getattr(getattr(self.chat, "llm_client", None), "_backend", None)
-        if isinstance(backend, LemonadeClient) and backend.cloud_model_provider(
-            self.chat.effective_model
-        ):
+        if not isinstance(backend, LemonadeClient):
+            return LOCAL_MAX_OUTPUT_TOKENS
+        if backend.cloud_model_provider(self.chat.effective_model):
             return CLOUD_MAX_OUTPUT_TOKENS
-        return LOCAL_MAX_OUTPUT_TOKENS
+        # The same window history budgets against, re-read each call: the user
+        # may pick another size, or a client may pin it. Its sizing is cached
+        # per process in lemonade_client, so this does not re-probe Lemonade.
+        return local_max_output_tokens(context_window(self))
 
     def _get_mixin_prompts(self) -> list[str]:
         """
@@ -2821,12 +2926,18 @@ Do NOT wrap conversational replies in JSON.
         step: int,
         step_timer: StepTimer,
         conversation: List[Dict[str, Any]],
+        poll: bool = True,
     ) -> None:
-        """Append this step's backend stats, timed by *step_timer*, to the trace."""
-        perf_stats = response_stats or self.chat.get_stats()
+        """Append this step's backend stats, timed by *step_timer*, to the trace.
+
+        *poll* False uses only the step's own response stats: a step whose call
+        failed must not borrow the server's last-request numbers.
+        """
+        perf_stats = response_stats or (self.chat.get_stats() if poll else None)
         # A step whose backend reported no stats still took model time.
         if not (perf_stats or step_timer.has_llm_calls()):
             return
+        self._step_stats_recorded = True
         stats_record = {
             "type": "stats",
             "step": step,
@@ -2839,6 +2950,25 @@ Do NOT wrap conversational replies in JSON.
         if self._context_evictor is not None:
             self._context_evictor.note_prompt_tokens(perf_stats)
         conversation.append({"role": "system", "content": stats_record})
+
+    def _record_unrecorded_step(self, conversation: List[Dict[str, Any]]) -> None:
+        """Record a step that called the model but left the loop early (a cut-off
+        reply, a parse retry), so its tokens and time stay in the turn's totals."""
+        step_timer = self._step_timer
+        if (
+            step_timer is None
+            or self._open_step is None
+            or self._step_stats_recorded
+            or not step_timer.has_llm_calls()
+        ):
+            return
+        self._record_step_stats(
+            self._open_step_stats,
+            self._open_step,
+            step_timer,
+            conversation,
+            poll=step_timer.last_call_finished(),
+        )
 
     def _attach_step_timer(self) -> StepTimer:
         """Start this turn's step timer and route the SDK's call timings to it."""
@@ -2872,6 +3002,16 @@ Do NOT wrap conversational replies in JSON.
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
             logger.warning("console rejected turn metrics: %s", e)
 
+    def _announce_turn_failed(self) -> None:
+        """Tell the console the answer about to print ends a failed turn.
+
+        Optional hook, like ``print_turn_metrics``: a console that does not
+        define ``mark_turn_failed`` still prints the answer, just unmarked.
+        """
+        hook = getattr(self.console, "mark_turn_failed", None)
+        if hook is not None:
+            hook()
+
     def _uses_native_tool_calls(self) -> bool:
         """True when this agent's backend takes tools via ``tools=``.
 
@@ -2884,6 +3024,18 @@ Do NOT wrap conversational replies in JSON.
         return bool(getattr(self, "_use_claude", False)) or is_tool_calling_model(
             getattr(self, "model_id", None)
         )
+
+    def _hosted_native_tool_caller(self) -> bool:
+        """True for Claude, or a cloud-routed model that takes ``tools=``."""
+        if getattr(self, "_use_claude", False):
+            return True
+        from gaia.llm.lemonade_client import cloud_model_info, cloud_model_provider
+
+        model_id = getattr(self, "model_id", None)
+        hosted = bool(cloud_model_provider(model_id)) or (
+            cloud_model_info(model_id) is not None
+        )
+        return hosted and self._uses_native_tool_calls()
 
     @property
     def system_prompt(self) -> str:
@@ -3072,40 +3224,74 @@ Do NOT wrap conversational replies in JSON.
         """Route out-of-scope path approvals through this agent's console."""
         validator = self._read_validator()
         if validator is not None:
-            validator.set_access_prompt(self._confirm_path_access)
+            validator.set_access_prompt(
+                self._confirm_path_access, declines=self._path_access_declined
+            )
 
-    def _confirm_path_access(self, path: Path) -> bool:
-        """Ask the user, via the console's confirmation dialog, to allow *path*."""
+    def _path_access_grants_unasked(self) -> bool:
+        """True when Full access grants an out-of-scope path without asking."""
         console = self.console
         # Full access widens the file scope; pre-approving gated tools does not.
         if getattr(console, "full_access", False):
-            logger.warning("Full access is on: granting %s without asking", path)
             return True
         watched = getattr(console, "answers_confirmations", False) is True
-        if watched and getattr(console, "grants_paths", False) is True:
-            logger.warning(
-                "Full access is on for this chat: granting %s without asking", path
-            )
-            return True
+        return watched and getattr(console, "grants_paths", False) is True
+
+    def _path_access_refusal_unasked(self, path: Path) -> str:
+        """Why an approval for *path* is refused without asking anyone, or ""."""
+        console = self.console
+        watched = getattr(console, "answers_confirmations", False) is True
         auto_approves = getattr(console, "auto_approve_confirmations_enabled", None)
         if callable(auto_approves) and auto_approves() and not watched:
-            logger.warning(
-                "Not granting %s: tools are pre-approved, nobody asked", path
-            )
-            return False
+            return "tools are pre-approved, nobody asked"
         # One prompt per path per turn: a user who stepped away is not asked
         # again, and made to wait out the timeout again, for what is inside it.
+        target = Path(path).resolve()
+        for seen_turn, denied in self._refused_paths:
+            if seen_turn == self._turn_seq and (
+                target == denied or denied in target.parents
+            ):
+                return f"{denied} was declined this turn"
+        return ""
+
+    def _path_access_declined(self, path: Path) -> bool:
+        """True when an approval for *path* would be refused, judged without asking."""
+        if self._path_access_grants_unasked():
+            return False
+        if self._path_access_refusal_unasked(path):
+            return True
+        console = self.console
+        # A background run or an unattended sidecar query denies every prompt.
+        if getattr(console, "background_mode", False) is True:
+            return True
+        if getattr(console, "nobody_answers", False) is True:
+            return True
+        if getattr(console, "blocking_confirmation", False):
+            return False
+        # A terminal console asks only on an interactive terminal; others deny.
+        return not (
+            isinstance(console, TerminalConfirmationMixin) and terminal_is_interactive()
+        )
+
+    def _path_access_without_asking(self, path: Path) -> Optional[bool]:
+        """The answer to a path-access question no one needs to be asked, or None."""
+        if self._path_access_grants_unasked():
+            logger.warning("Full access is on: granting %s without asking", path)
+            return True
+        refusal = self._path_access_refusal_unasked(path)
+        if refusal:
+            logger.warning("Not granting %s: %s", path, refusal)
+            return False
+        return None
+
+    def _confirm_path_access(self, path: Path) -> bool:
+        """Ask the user, via the console's confirmation dialog, to allow *path*."""
+        decided = self._path_access_without_asking(path)
+        if decided is not None:
+            return decided
         turn = self._turn_seq
         refused = self._refused_paths
         target = Path(path).resolve()
-        for seen_turn, denied in refused:
-            if seen_turn == turn and (target == denied or denied in target.parents):
-                logger.info(
-                    "Not asking again this turn about %s (%s was declined)",
-                    target,
-                    denied,
-                )
-                return False
         args = {"path": str(path)}
         # Lets the prompt say "file" or "folder" instead of a catch-all.
         if path.is_dir():
@@ -3128,6 +3314,42 @@ Do NOT wrap conversational replies in JSON.
             if clock is not None:
                 clock.end()
             self._confirmation_wait_s += time.perf_counter() - started
+
+    def _write_target_outside_scope(
+        self, tool_name: str, prompt_args: Any
+    ) -> Union[None, Path, Dict[str, Any]]:
+        """Where this write lands when that is outside the chat's folders.
+
+        Returns None when there is nothing to ask about the location, a refusal
+        when no answer could let the write through, and otherwise the resolved
+        target, for the write's own prompt to ask about.
+        """
+        preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
+        validator = self._read_validator()
+        target_of = getattr(preflight, "target_of", None)
+        if (
+            validator is None
+            or not callable(target_of)
+            or not isinstance(prompt_args, dict)
+        ):
+            return None
+        try:
+            target = Path(os.path.realpath(str(target_of(prompt_args))))
+        except (KeyError, TypeError, ValueError, OSError) as e:
+            logger.debug("could not resolve the write's target: %s", e)
+            return None
+        if validator.is_path_allowed(str(target), prompt_user=False):
+            return None
+        unreachable = bool(validator.grant_refusal_reason(str(target)))
+        decided = None if unreachable else self._path_access_without_asking(target)
+        if decided is True:
+            # The tool body's own path check grants it the same way.
+            return None
+        if unreachable or decided is False:
+            message = validator.access_denied_message(str(target))
+            validator.audit_write("write", str(target), 0, "denied", message)
+            return {**NOT_EXECUTED, "status": "error", "error": message}
+        return target
 
     def _check_extraction_sources(self):
         ledger = self._extraction_ledger
@@ -4560,7 +4782,8 @@ Do NOT wrap conversational replies in JSON.
             prompt = (
                 f"Your last tool call was cut off at the {reason.cap}-token output "
                 "limit before its arguments were finished, so nothing ran. Send "
-                "much shorter arguments."
+                "much shorter arguments: split the work into parts that each fit "
+                "well under the limit, and do them in several calls."
             )
             # write_file replaces the whole file, so a long file is built with edits.
             if "edit_file" in self._tools_registry:
@@ -4569,6 +4792,13 @@ Do NOT wrap conversational replies in JSON.
                     "old_content and new_content, never the whole file; to create "
                     "a long file, write_file a short first part, then add the rest "
                     "with edit_file in small pieces."
+                )
+            if "run_python" in reason.tools:
+                prompt += (
+                    " For run_python, do not send one big script: build the file "
+                    "in steps, one run_python call per part (e.g. one sheet or a "
+                    "few slides), each opening the file the previous call saved, "
+                    "adding its part and saving it again."
                 )
             return prompt
         if isinstance(reason, MalformedToolMarkup):
@@ -4591,12 +4821,12 @@ Do NOT wrap conversational replies in JSON.
         )
 
     def _parse_markup_tool_calls(self, response: str) -> Optional[Dict[str, Any]]:
-        """Tool calls the model wrote as DeepSeek markup, in parsed-response shape.
+        """Tool calls the model wrote as text markup, in parsed-response shape.
 
         Raises ``MalformedToolMarkup`` (a ``ValueError``) for markup that is
         there but cannot run, so the loop retries it instead of answering with it.
         """
-        markup = parse_deepseek_tool_calls(response)
+        markup = parse_text_tool_calls(response)
         if markup is None:
             return None
         calls = []
@@ -4604,6 +4834,8 @@ Do NOT wrap conversational replies in JSON.
         for call in markup.calls:
             declared = (self._tools_registry.get(call.name) or {}).get("parameters")
             args = dict(call.args)
+            if call.raw_strings:
+                args = _typed_markup_args(args, declared or {})
             # Models mixing in the JSON format add envelope keys as parameters.
             for key in _ENVELOPE_KEYS:
                 if key in args and (declared is None or key not in declared):
@@ -4873,7 +5105,8 @@ Do NOT wrap conversational replies in JSON.
         # Python-call syntax detector (#2521) before giving up.
         return self._extract_function_call_tool_syntax(response)
 
-    _FUNC_CALL_NAME_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+    # No space before "(": a call is ``remember(fact=...)``; "tree (v2)" is prose.
+    _FUNC_CALL_NAME_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\(")
 
     def _extract_function_call_tool_syntax(
         self, response: str
@@ -4905,7 +5138,9 @@ Do NOT wrap conversational replies in JSON.
                 list that could not be parsed as Python literals.
         """
         registry = self._tools_registry
-        if not registry:
+        # A hosted native tool-caller's text is prose. Local tool-calling
+        # models (Gemma, Qwen) still write ``remember(...)`` in text.
+        if not registry or self._hosted_native_tool_caller():
             return None
 
         for match in self._FUNC_CALL_NAME_RE.finditer(response):
@@ -5268,6 +5503,22 @@ Do NOT wrap conversational replies in JSON.
         return schemas
 
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
+        """Decode a reply and reject tool arguments that cannot be executed."""
+        parsed = self._decode_llm_response(response)
+        calls = parsed.get("tool_calls") or (
+            [{"name": parsed["tool"], "tool_args": parsed.get("tool_args", {})}]
+            if parsed.get("tool")
+            else []
+        )
+        for call in calls:
+            if not isinstance(call["tool_args"], dict):
+                raise ValueError(
+                    f"Malformed tool_call arguments for '{call['name']}': expected "
+                    f"a JSON object, got {type(call['tool_args']).__name__}."
+                )
+        return parsed
+
+    def _decode_llm_response(self, response: str) -> Dict[str, Any]:
         """
         Parse the LLM response to extract tool calls or conversational answers.
 
@@ -5377,7 +5628,15 @@ Do NOT wrap conversational replies in JSON.
                 # ``max_output_tokens`` (or, for one-off long tool calls,
                 # asking the model to pick a single value rather than
                 # concatenating).
-                raise ToolCallTruncated(self.model_id, self._max_output_tokens())
+                raise ToolCallTruncated(
+                    self.model_id,
+                    self._max_output_tokens(),
+                    [
+                        (tc.get("function") or {}).get("name", "")
+                        for tc in raw_tool_calls
+                        if isinstance(tc, dict)
+                    ],
+                )
             if not raw_tool_calls:
                 raise ValueError(
                     "Native tool_calls envelope contained an empty tool_calls list."
@@ -5961,12 +6220,19 @@ Do NOT wrap conversational replies in JSON.
         # Time spent on a question the body raised (e.g. path access) is the
         # user's, not the tool's: abandoning there strands a live prompt. Time
         # the PC sleeps is nobody's: the awake clock leaves it out.
-        started = awake_clock.monotonic()
-        while worker.is_alive():
-            remaining = started + timeout + user_wait.waited() - awake_clock.monotonic()
-            if remaining <= 0:
-                break
-            worker.join(min(remaining, 0.5))
+        try:
+            started = awake_clock.monotonic()
+            while worker.is_alive():
+                remaining = (
+                    started + timeout + user_wait.waited() - awake_clock.monotonic()
+                )
+                if remaining <= 0:
+                    break
+                worker.join(min(remaining, 0.5))
+        except BaseException:
+            # The clock (or a Ctrl+C) failed the call: the tool must not run on.
+            cancel.set()
+            raise
         if worker.is_alive():
             cancel.set()
             raise ToolExecutionTimeout(tool_name, timeout)
@@ -6199,7 +6465,9 @@ Do NOT wrap conversational replies in JSON.
             scratch = getattr(
                 reader() if callable(reader) else None, "scratch_dir", None
             )
-            target = edit_target(tool_args)
+            # Resolve as the tool will, so a session workspace can't move the write.
+            preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
+            target = edit_target(_with_resolved_target(tool_args, preflight))
             if scratch and target and edit_is_inside(target, (str(scratch),)):
                 logger.info("Writing %s in the agent's scratch folder unasked", target)
                 return True
@@ -6514,7 +6782,7 @@ Do NOT wrap conversational replies in JSON.
         reserved = sorted(
             key
             for key in (tool_args if isinstance(tool_args, dict) else {})
-            if key in (RISK_NOTE_ARG, SCRATCH_ARG)
+            if key in (RISK_NOTE_ARG, SCRATCH_ARG, NEEDS_PERSON_ARG)
         )
         if reserved:
             return {
@@ -6562,19 +6830,55 @@ Do NOT wrap conversational replies in JSON.
         # call runs. Display only: the tool runs with tool_args.
         shows = getattr(self, "confirmation_args_for_call", None)
         prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
+        prompt_args = _with_resolved_target(
+            prompt_args, (self._tools_registry.get(tool_name) or {}).get("preflight")
+        )
         # Scratch writes never ask, so code run from there is asked about on
         # every run — the marker keeps "always" (and any broader grant) off it.
         scratch = _scratch_reached_by(self, tool_name, prompt_args)
         if scratch:
             prompt_args = {**prompt_args, SCRATCH_ARG: scratch}
+        # A write outside the chat's folders is asked about once: its own
+        # prompt says so, and a person's yes to it grants that one file.
+        outside = self._write_target_outside_scope(tool_name, prompt_args)
+        if isinstance(outside, dict):
+            return outside
+        auto_approves = None
+        if outside is not None:
+            auto_approves = getattr(
+                self.console, "auto_approve_confirmations_enabled", None
+            )
+            auto_accepts = getattr(self.console, "edit_is_auto_accepted", None)
+            if (
+                (callable(auto_approves) and auto_approves())
+                or (callable(auto_accepts) and auto_accepts(tool_name, prompt_args))
+                or not self._tool_requires_confirmation(tool_name, tool_args)
+            ):
+                outside = None
+        if outside is not None:
+            # Shown where the write really lands: a link in scope can point out.
+            if "file_path" in prompt_args:
+                prompt_args = {**prompt_args, "file_path": str(outside)}
+            prompt_args = {
+                **prompt_args,
+                RISK_NOTE_ARG: (
+                    f"{outside} is outside this chat's folders. Allowing this "
+                    "also lets GAIA use that file for the rest of the chat."
+                ),
+            }
         # A one-time call is approved on its own prompt, which carries its
-        # risk note — never through the reroute question above.
+        # risk note — never through the reroute question above. So is a call
+        # only a person may approve.
         one_time = isinstance(prompt_args, dict) and bool(
-            prompt_args.get(RISK_NOTE_ARG)
+            prompt_args.get(RISK_NOTE_ARG) or prompt_args.get(NEEDS_PERSON_ARG)
         )
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
         ):
+            # A policy client matches on what the model sent, not what the prompt adds.
+            noting = getattr(self.console, "note_call_args", None)
+            if callable(noting) and isinstance(tool_args, dict):
+                noting(tool_name, tool_args)
             # Blocking on a human is not tool cost. Timed separately so a turn
             # where approval took five minutes does not report the tool as
             # having taken five minutes.
@@ -6604,6 +6908,12 @@ Do NOT wrap conversational replies in JSON.
             noted = getattr(self, "note_confirmed_call", None)
             if callable(noted):
                 noted(tool_name, tool_args)
+            # Pre-approval turned on mid-prompt answered without a person.
+            if outside is not None and not (
+                callable(auto_approves) and auto_approves()
+            ):
+                self._read_validator().add_allowed_path(str(outside))
+                logger.info("User allowed writing %s for this session", outside)
 
         # Dynamic tool loader (#1449): record use for LRU recency. The name is
         # fully resolved and confirmed in the registry here. Execution stays on
@@ -6916,6 +7226,8 @@ Do NOT wrap conversational replies in JSON.
         Returns the answer, or ``None`` when the user pressed Stop. Raises when
         the call fails or neither reply is an answer; the caller says why.
         """
+        # Before the closing call, whose stats must not be taken for this step's.
+        self._record_unrecorded_step(conversation)
         try:
             return self._closing_answer_once(messages, conversation, instruction, step)
         except _NotAnAnswer as first:
@@ -7015,7 +7327,10 @@ Do NOT wrap conversational replies in JSON.
         ).strip()
         if not response:
             raise _NotAnAnswer("the model returned an empty reply")
-        parsed = self._parse_llm_response(response)
+        try:
+            parsed = self._parse_llm_response(response)
+        except ValueError as exc:
+            raise _NotAnAnswer(str(exc)) from exc
         answer = parsed.get("answer")
         if not isinstance(answer, str):
             answer = ""
@@ -7750,6 +8065,7 @@ Do NOT wrap conversational replies in JSON.
             {"step": steps_taken, "error": str(exc), "type": "llm_unreachable"}
         )
         tally["unreachable"] = True
+        tally["failed"] = True
         return "unreachable", self._model_unreachable_answer(
             conversation, steps_taken, state, retries_used
         )
@@ -7768,32 +8084,108 @@ Do NOT wrap conversational replies in JSON.
         Never phrased as a result — the run is also marked failed — so it
         cannot be read as the task's answer.
         """
+        tries = f", then {step_retries} more after waiting" if step_retries else ""
+        return self._model_failure_answer(
+            conversation,
+            steps_taken,
+            stopped_responding=True,
+            cause=f"{describe_retry_state(state)}{tries}",
+            advice=None,
+        )
+
+    def _model_service_label(self) -> Optional[str]:
+        """Who serves the chat model ("Fireworks AI"), for failure messages.
+
+        ``None`` when this agent cannot tell; subclasses that know override it.
+        """
+        return None
+
+    def _model_call_failed_answer(
+        self,
+        exc: BaseException,
+        typed_msg: Optional[str],
+        steps_taken: int,
+        conversation: List[Dict[str, Any]],
+    ) -> str:
+        """The final answer when a model call failed for good mid-turn.
+
+        Built from the real failure: the provider's own message when it gave
+        one (split into what happened and what to do), else the raw error.
+        """
+        stalled = False
+        cur: Optional[BaseException] = exc
+        seen: set = set()
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            if isinstance(cur, StreamStalledError):
+                stalled = True
+                break
+            cur = cur.__cause__ or cur.__context__
+        if typed_msg:
+            cause, advice = _split_cause_and_advice(typed_msg)
+        else:
+            cause, advice = str(exc).strip()[:300] or type(exc).__name__, None
+        return self._model_failure_answer(
+            conversation,
+            steps_taken,
+            stopped_responding=stalled or retry_state_of(exc) is not None,
+            cause=cause,
+            advice=advice,
+        )
+
+    def _model_failure_answer(
+        self,
+        conversation: List[Dict[str, Any]],
+        steps_taken: int,
+        *,
+        stopped_responding: bool,
+        cause: str,
+        advice: Optional[str],
+    ) -> str:
+        """Say the turn is unfinished, why, what already ran, and what next."""
         from collections import Counter
 
+        what = "stopped responding" if stopped_responding else "call failed"
+        cause = cause.strip().rstrip(".")
+        cause = cause[:1].upper() + cause[1:]
+        # pylint: disable-next=assignment-from-none
+        label = self._model_service_label()
+        if label and label.lower() in cause.lower():
+            label = None  # the cause already names it
+        lines = [
+            f"The model {what} at step {steps_taken}, so this request is "
+            f"unfinished. {label + ': ' if label else ''}{cause}."
+        ]
         tools_used = Counter(
             msg["name"]
             for msg in conversation
             if msg.get("role") == "tool" and msg.get("name")
         )
-        tries = f", then {step_retries} more after waiting" if step_retries else ""
-        stopped = (
-            f"I stopped at step {steps_taken} because the model service stayed "
-            f"unavailable ({describe_retry_state(state)}{tries})"
-        )
-        if not tools_used:
-            return (
-                f"{stopped}, before any tool ran. "
-                "Send your request again once the service is back."
+        if tools_used:
+            calls = sum(tools_used.values())
+            done = ", ".join(
+                f"{tool} {count}x" for tool, count in tools_used.most_common(5)
             )
-        calls = sum(tools_used.values())
-        done = ", ".join(
-            f"{tool} {count}x" for tool, count in tools_used.most_common(5)
-        )
-        return (
-            f"{stopped}; the {calls} tool call{'s' if calls != 1 else ''} already "
-            f"made ({done}) and what they changed are kept. "
-            'Say "continue" once the service is back and I\'ll pick up from here.'
-        )
+            lines.append(
+                f"Done before it stopped: {calls} tool call"
+                f"{'s' if calls != 1 else ''} ({done}); what they changed is kept."
+            )
+        else:
+            lines.append("Nothing had run yet.")
+        if advice:
+            lines.append(advice)
+        elif not stopped_responding:
+            lines.append(
+                "Send the message again to retry. If it fails the same way, "
+                "pick another model or check its provider."
+            )
+        elif tools_used:
+            lines.append(
+                'Say "continue" once the service is back and I\'ll pick up from here.'
+            )
+        else:
+            lines.append("Send the message again once the service is back.")
+        return "\n\n".join(lines)
 
     def _shrink_messages_for_overflow(
         self, messages: List[Dict[str, Any]], store=None
@@ -8468,6 +8860,38 @@ Do NOT wrap conversational replies in JSON.
                 before=before,
                 executed=record["ran"],
             )
+            if record["ran"] and not record["failed"]:
+                self._verify_whole_write(evidence, tool_name, record["args"])
+
+    #: Above this a written file is left for the model to check in parts.
+    _MAX_FRAMEWORK_READBACK = 4 * 1024 * 1024
+
+    def _verify_whole_write(self, evidence: Any, tool_name: str, args: dict) -> None:
+        """Read back a whole-file write; if it matches, the model need not.
+
+        The model already holds exactly what it wrote, so re-reading it only
+        spends a turn. Anything that differs (encoding, a hook, a partial write)
+        is left unverified and the model is still asked to check it.
+        """
+        content, path = args.get("content"), args.get("file_path")
+        if tool_name != "write_file" or not isinstance(content, str):
+            return
+        if not isinstance(path, str) or not path or "\x00" in path:
+            return
+        # The same resolution the ledger keys the write by (project_dir included).
+        key = evidence.key(path, args.get("project_dir"))
+        if key.startswith(("\\\\", "//")):
+            return  # a network share: no round trip from the agent loop
+        target = Path(key)
+        try:
+            if target.stat().st_size > self._MAX_FRAMEWORK_READBACK:
+                return
+            on_disk = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            logger.debug("No framework read-back of %s: %s", target, e)
+            return
+        if on_disk.replace("\r\n", "\n") == content.replace("\r\n", "\n"):
+            evidence.read_by_framework(key)
 
     def _verification_project_root(self) -> Optional[str]:
         """The project this turn works in, from the shared project-root resolver."""
@@ -8685,7 +9109,7 @@ Do NOT wrap conversational replies in JSON.
         }
 
     def _gate_unsealed_answer(
-        self, answer: Optional[str]
+        self, answer: Optional[str], model_failed: bool = False
     ) -> Tuple[Optional[str], List[str]]:
         """Judge an answer that never passed the loop's own completion gate.
 
@@ -8695,9 +9119,15 @@ Do NOT wrap conversational replies in JSON.
         nothing is unverified: the caller's max-steps fallback owns that text.
         A non-empty *answer* always stays ahead of the report: it is often the
         only place the turn's findings exist.
+
+        *model_failed*: a model call ended the turn, so the model never had the
+        chance to read its writes back. Files a write tool reported saved are
+        listed as saved instead of calling the whole turn unconfirmed.
         """
         self._check_extraction_sources()
-        gaps = self._completion_evidence.gaps(answer or "", _claims_file_write)
+        gaps = self._completion_evidence.gaps(
+            answer or "", _claims_file_write, readback=not model_failed
+        )
         gaps.extend(self._extraction_ledger.gaps(self._turn_outputs()))
         unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
         if unsupported:
@@ -8713,6 +9143,12 @@ Do NOT wrap conversational replies in JSON.
         inventory = self._extraction_ledger.render()
         if inventory and answer:
             answer += "\n\n" + inventory
+        evidence = self._completion_evidence
+        saved = evidence.written_files() if model_failed else []
+        if saved and answer:
+            answer += "\n\n" + saved_before_error(
+                [evidence.written_as.get(key, key) for key in saved]
+            )
         return answer, gaps
 
     #: What warm_up primes with. Short and fixed, so the priming call itself
@@ -8964,6 +9400,10 @@ Do NOT wrap conversational replies in JSON.
         """Inner implementation of ``process_query`` — see public method docstring."""
         start_time = time.time()  # Track query processing start time
         step_timer = self._attach_step_timer()
+        # Set per step; a step that exits early is recorded at the next boundary.
+        self._open_step = None
+        self._open_step_stats = None
+        self._step_stats_recorded = False
 
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
@@ -9141,6 +9581,8 @@ Do NOT wrap conversational replies in JSON.
         loop_break_answer_unprinted = False
         # A refused cloud account ends the turn with nothing to verify.
         account_refused = False
+        # The model call failed, so the model never got to check its own work.
+        model_call_failed = False
         # Model-call retries this turn: client-level (inside one request) and
         # step-level (the agent waiting and asking again), plus whether the
         # model stayed unreachable. Reported on the result.
@@ -9148,6 +9590,8 @@ Do NOT wrap conversational replies in JSON.
             "request_retries": 0,
             "step_retries": 0,
             "unreachable": False,
+            # The turn ended because a model call failed (any cause).
+            "failed": False,
         }
         if self._context_evictor is not None:
             self._context_evictor.begin_turn()
@@ -9217,8 +9661,12 @@ Do NOT wrap conversational replies in JSON.
 
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array
+            self._record_unrecorded_step(conversation)
             steps_taken += 1
             step_timer.begin_step(steps_taken)
+            self._open_step = steps_taken
+            self._open_step_stats = None
+            self._step_stats_recorded = False
             logger.debug(f"Step {steps_taken}/{steps_limit}")
             if self._context_evictor is not None:
                 from gaia.agents.base.artifacts import store_for
@@ -9291,8 +9739,8 @@ Do NOT wrap conversational replies in JSON.
 
                     # Display the tool call in real-time
                     self.console.print_tool_usage(tool_name)
-                    if tool_args:
-                        self.console.pretty_print_json(tool_args, "Arguments")
+                    # Sent even when empty: it is what releases the call to the wire.
+                    self.console.pretty_print_json(tool_args, "Arguments")
 
                     # Start progress indicator for tool execution
                     self.console.start_progress(f"Executing {tool_name}")
@@ -9670,6 +10118,7 @@ Do NOT wrap conversational replies in JSON.
                                 break
                             if chunk_response.is_complete:
                                 response_stats = chunk_response.stats
+                                self._open_step_stats = response_stats
                                 response_finish_reason = getattr(
                                     chunk_response, "finish_reason", None
                                 )
@@ -9745,6 +10194,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                         logger.error(error_msg)
                         self.console.print_error(error_msg)
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -9752,6 +10202,7 @@ Do NOT wrap conversational replies in JSON.
                                 "type": "llm_connection_error",
                             }
                         )
+                        self._turn_model_retries["failed"] = True
                         final_answer = (
                             f"I'm having trouble reaching the language model right now. "
                             f"Please make sure Lemonade Server is running.\n\n"
@@ -9821,6 +10272,7 @@ Do NOT wrap conversational replies in JSON.
                             loop_break_answer_unprinted = True
                             break
 
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -9828,30 +10280,31 @@ Do NOT wrap conversational replies in JSON.
                                 "type": "llm_streaming_error",
                             }
                         )
+                        self._turn_model_retries["failed"] = True
                         if is_ctx_overflow:
                             # Name the actual constraint and a next step
                             # (#2763) -- "re-ask with just the essentials" told
                             # the user nothing about WHAT was too big or HOW to
                             # shrink it, so every retry looked identical.
                             final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
+                            loop_break_answer_unprinted = True
                         else:
                             # Streaming is the TUI's path; it must surface the
                             # same typed messages the non-streaming path does.
                             refusal = self._cloud_account_refusal(e)
                             if refusal is not None:
+                                # Already printed as the turn's error.
                                 self.console.print_error(refusal)
                                 account_refused = True
-                            typed_msg = refusal or self._extract_lemonade_user_message(
-                                e
-                            )
-                            if typed_msg is not None:
-                                final_answer = typed_msg
+                                final_answer = refusal
                             else:
-                                final_answer = (
-                                    f"Sorry, I ran into a problem while processing your request. "
-                                    f"This might be a temporary issue — try again in a moment.\n\n"
-                                    f"*Technical details: {str(e)}*"
+                                final_answer = self._model_call_failed_answer(
+                                    e,
+                                    self._extract_lemonade_user_message(e),
+                                    steps_taken,
+                                    conversation,
                                 )
+                                loop_break_answer_unprinted = True
                         break
                 if final_answer is not None or cancelled_by_console:
                     break
@@ -9901,6 +10354,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
+                        self._open_step_stats = response_stats
                         response_finish_reason = getattr(
                             chat_response, "finish_reason", None
                         )
@@ -9930,6 +10384,7 @@ Do NOT wrap conversational replies in JSON.
                         error_msg = f"LLM Server Connection Failed: {str(e)}"
                         logger.error(error_msg)
                         self.console.print_error(error_msg)
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -9937,6 +10392,7 @@ Do NOT wrap conversational replies in JSON.
                                 "type": "llm_connection_error",
                             }
                         )
+                        self._turn_model_retries["failed"] = True
                         final_answer = (
                             f"I'm having trouble reaching the language model right now. "
                             f"Please make sure Lemonade Server is running.\n\n"
@@ -10015,6 +10471,7 @@ Do NOT wrap conversational replies in JSON.
 
                         # Either context-overflow after trim, or unrelated.
                         # Give up gracefully.
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -10022,12 +10479,14 @@ Do NOT wrap conversational replies in JSON.
                                 "type": "llm_error",
                             }
                         )
+                        self._turn_model_retries["failed"] = True
                         if is_ctx_overflow:
                             # Name the actual constraint and a next step
                             # (#2763) -- "re-ask with just the essentials" told
                             # the user nothing about WHAT was too big or HOW to
                             # shrink it, so every retry looked identical.
                             final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
+                            loop_break_answer_unprinted = True
                         else:
                             # If we have a typed Lemonade error in the
                             # cause-chain (e.g. ``LemonadeUpstreamTimeoutError``
@@ -10038,20 +10497,18 @@ Do NOT wrap conversational replies in JSON.
                             # non-retryable failures.
                             refusal = self._cloud_account_refusal(e)
                             if refusal is not None:
+                                # Already printed as the turn's error.
                                 self.console.print_error(refusal)
                                 account_refused = True
-                            typed_msg = refusal or self._extract_lemonade_user_message(
-                                e
-                            )
-                            if typed_msg is not None:
-                                final_answer = typed_msg
+                                final_answer = refusal
                             else:
-                                final_answer = (
-                                    f"Sorry, I ran into an unexpected problem. "
-                                    f"This might be a temporary issue — try "
-                                    f"again in a moment.\n\n"
-                                    f"*Technical details: {str(e)}*"
+                                final_answer = self._model_call_failed_answer(
+                                    e,
+                                    self._extract_lemonade_user_message(e),
+                                    steps_taken,
+                                    conversation,
                                 )
+                                loop_break_answer_unprinted = True
                         break
                 if final_answer is not None or cancelled_by_console:
                     break
@@ -10070,8 +10527,12 @@ Do NOT wrap conversational replies in JSON.
 
             # A reply the output-token limit cut off is unfinished whatever it
             # says; parsing it would turn half a thought into the answer.
-            if response_finish_reason == "length" and not response.startswith(
-                '{"__tool_calls__":'
+            if (
+                response_finish_reason == "length"
+                and not response.startswith('{"__tool_calls__":')
+                # Some gateways report "length" when a model stops on its own
+                # text tool call; a complete call is not cut off.
+                and not _holds_complete_text_call(response)
             ):
                 self.error_history.append(
                     {
@@ -10541,8 +11002,8 @@ Do NOT wrap conversational replies in JSON.
 
                     # Display the tool call in real-time
                     self.console.print_tool_usage(tool_name)
-                    if tool_args:
-                        self.console.pretty_print_json(tool_args, "Arguments")
+                    # Sent even when empty: it is what releases the call to the wire.
+                    self.console.pretty_print_json(tool_args, "Arguments")
                     self.console.start_progress(f"Executing {tool_name}")
 
                     # Loop detection — same shape as legacy path so
@@ -10789,8 +11250,8 @@ Do NOT wrap conversational replies in JSON.
                 # Display the tool call in real-time
                 self.console.print_tool_usage(tool_name)
 
-                if tool_args:
-                    self.console.pretty_print_json(tool_args, "Arguments")
+                # Sent even when empty: it is what releases the call to the wire.
+                self.console.pretty_print_json(tool_args, "Arguments")
 
                 # Start progress indicator for tool execution
                 self.console.start_progress(f"Executing {tool_name}")
@@ -11730,6 +12191,9 @@ Do NOT wrap conversational replies in JSON.
                     # Silent mode - just stop
                     break
 
+        # Before any footer below sums the conversation.
+        self._record_unrecorded_step(conversation)
+
         # Out of steps with no answer: one more call, tools withheld, so the
         # user hears what was found rather than only the canned note.
         max_steps_reached = (
@@ -11821,9 +12285,16 @@ Do NOT wrap conversational replies in JSON.
         # only thing that prints, so without this the turn ends on the repeat
         # warning and the answer is never shown.
         if loop_break_answer_unprinted and final_answer is not None:
-            final_answer = self._with_verification_scope(
-                self.finalize_answer(_without_tool_markup(final_answer), conversation)
+            final_answer = self.finalize_answer(
+                _without_tool_markup(final_answer), conversation
             )
+            if self._turn_model_retries["failed"]:
+                # Name what the cut-off turn left undone (an unwritten file…).
+                final_answer, completion_gaps = self._gate_unsealed_answer(
+                    final_answer, model_failed=True
+                )
+                self._announce_turn_failed()
+            final_answer = self._with_verification_scope(final_answer)
             verification_scope_applied = True
             _break_input_tokens, break_output_tokens = _sum_conversation_tokens(
                 conversation, self._tool_reported_usage
@@ -11856,7 +12327,9 @@ Do NOT wrap conversational replies in JSON.
         )
 
         if not verification_scope_applied and not account_refused:
-            final_answer, completion_gaps = self._gate_unsealed_answer(final_answer)
+            final_answer, completion_gaps = self._gate_unsealed_answer(
+                final_answer, model_failed=model_call_failed
+            )
 
         # Every exit other than the parsed-answer seam sets ``final_answer``
         # directly — cancel-event timeout, LLM connection error, context
@@ -11922,6 +12395,8 @@ Do NOT wrap conversational replies in JSON.
                 "step_retries": self._turn_model_retries["step_retries"],
             },
             "model_unreachable": self._turn_model_retries["unreachable"],
+            # Any model-call failure ended the turn; front-ends report it failed.
+            "model_failed": self._turn_model_retries["failed"],
             "extraction_sources": sorted(self._extraction_ledger.results),
             "verification": self.verification_state(),
         }

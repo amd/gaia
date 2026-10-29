@@ -182,6 +182,32 @@ class TestTheIndexerRecordsWhatItCouldNotRead:
         assert metadata["pdf_status"] == "readable"
         assert "degraded_pages" not in metadata
 
+    def test_a_cancelled_wait_for_the_vision_model_stops_the_pdf(self, mocker):
+        """Cancel during a page's vision wait is a stop, not a page warning."""
+        from gaia.daemon.broker_client import LeaseWaitCancelled
+
+        sdk = self._sdk()
+        reader = mocker.MagicMock()
+        reader.pages = [
+            self._text_page(mocker, "page one"),
+            self._text_page(mocker, "two"),
+        ]
+        reader.is_encrypted = False
+        mocker.patch("gaia.rag.sdk.PdfReader", return_value=reader)
+        vlm = mocker.MagicMock()
+        vlm.check_availability.return_value = True
+        vlm.extract_from_page_images.side_effect = LeaseWaitCancelled("stopped")
+        mocker.patch("gaia.llm.VLMClient", return_value=vlm)
+        mocker.patch("gaia.rag.pdf_utils.count_images_in_page", return_value=(True, 1))
+        mocker.patch(
+            "gaia.rag.pdf_utils.extract_images_from_page_pymupdf",
+            return_value=[{"image_bytes": b"x", "width": 1, "height": 1, "size_kb": 1}],
+        )
+
+        with pytest.raises(LeaseWaitCancelled):
+            sdk._extract_text_from_pdf(str(self._pdf))
+        assert vlm.extract_from_page_images.call_count == 1
+
     def test_a_damaged_page_still_has_its_text_indexed(self, mocker):
         """The text pypdf *could* read is not thrown away with the inventory."""
         pages = [self._text_page(mocker, "text that did extract")]

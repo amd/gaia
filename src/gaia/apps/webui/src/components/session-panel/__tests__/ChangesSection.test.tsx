@@ -168,9 +168,19 @@ describe('ChangesSection', () => {
     });
 
     it('notes commands that may have changed files it cannot see', async () => {
-        mocked.getSessionChanges.mockResolvedValue({ ...CHANGES, incomplete: true });
+        mocked.getSessionChanges.mockResolvedValue({
+            ...CHANGES,
+            incomplete: true,
+            untracked: [
+                { kind: 'run_python', detail: 'save totals', paths: [] },
+                { kind: 'shell', detail: 'npm run build', paths: [] },
+                { kind: 'run_python', detail: 'write the chart', paths: [] },
+            ],
+        });
         renderSection();
-        expect(await screen.findByRole('note')).toHaveTextContent("can't see or undo");
+        expect(await screen.findByRole('note')).toHaveTextContent(
+            "In this chat, GAIA ran 2 Python snippets and 1 command it can't track. If they changed any files, Undo all won't restore them.",
+        );
     });
 
     it('re-reads totals when a reply ends', async () => {
