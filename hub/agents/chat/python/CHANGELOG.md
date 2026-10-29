@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The data profile's prompt no longer says it can browse the web or transcribe
+  audio and video. It registers neither, so the model promised a tool it could not
+  call. The web and media lines now appear only for profiles that register those
+  tools (#6036).
 - `get_system_info` reports free disk space (`disk_free_gb`) and available
   memory (`memory_available_gb`), and computes disk use from free space. On a
   Mac it reported only the share macOS's system volume uses, so a nearly full
