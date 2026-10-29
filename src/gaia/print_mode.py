@@ -150,7 +150,8 @@ def run(
 
     if output_format == "json":
         print(json.dumps(record, ensure_ascii=False))
-    else:
+    elif record["result"] or not record["is_error"]:
+        # A failed turn with no answer leaves stdout empty, not one blank line.
         print(record["result"])
     if record["is_error"]:
         print(

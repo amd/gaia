@@ -635,6 +635,37 @@ def test_a_failed_turn_says_why_on_stderr(stub_env, capsys):
     assert "HTTP 404 from the gateway" in captured.err
 
 
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"status": "error", "result": ""},
+        {"status": "error"},
+        {"status": "error", "result": None},
+        {"status": "failed", "result": "", "error": "boom"},
+    ],
+)
+def test_a_failed_text_turn_with_no_answer_leaves_stdout_empty(
+    stub_env, capsys, result
+):
+    _StubAgent.result = result
+    assert print_mode.run("q", model="m") == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "gaia -p" in captured.err
+
+
+def test_a_failed_text_turn_still_prints_its_partial_answer(stub_env, capsys):
+    _StubAgent.result = {"status": "failed", "result": "partial"}
+    assert print_mode.run("q", model="m") == 1
+    assert capsys.readouterr().out == "partial\n"
+
+
+def test_a_successful_empty_answer_still_prints_a_line(stub_env, capsys):
+    _StubAgent.result = {"status": "success", "result": ""}
+    assert print_mode.run("q", model="m") == 0
+    assert capsys.readouterr().out == "\n"
+
+
 def test_json_error_record_carries_the_reason(stub_env, capsys):
     _StubAgent.result = {"status": "error", "error": "context overflow"}
     assert print_mode.run("q", model="m", output_format="json") == 1

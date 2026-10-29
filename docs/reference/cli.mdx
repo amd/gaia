@@ -159,6 +159,9 @@ before the turn starts (no prompt, server down) prints only `type`, `is_error`,
 confirmation-gated tools are **denied** unless you pass
 `--dangerously-skip-permissions` (or the launching environment sets
 `GAIA_AUTO_APPROVE_TOOLS=1` — see [Confirming dangerous tools](#confirming-dangerous-tools)).
+When stdin and stdout are both an interactive terminal, GAIA asks you instead,
+as `gaia chat` does; piping either one in or out means nobody can answer, so the
+call is denied.
 Skipping permissions answers the prompts but does not widen the shell: a command
 outside `run_shell_command`'s no-prompt list (`pytest`, `go test`, `npm run …`) is
 still refused, and file tools stay in the current directory. `--full-access`
