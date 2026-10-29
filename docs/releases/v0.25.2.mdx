@@ -63,6 +63,7 @@ A selection of the user-visible fixes; the full list is in the changelog below.
 
 ## Known Issues
 
+- **The first chat after launching the desktop app can wait on "Waiting for the GPU" and never start** when a background task GAIA proposed for itself is holding the model. Restart the app to free it. Tracked in [#6006](https://github.com/amd/gaia/issues/6006).
 - **An update doesn't restart the daemon on its own** — run `gaia daemon restart` after updating. Tracked in [#6026](https://github.com/amd/gaia/issues/6026).
 - **Attaching an image on a PC that uses only AMD LLM Gateway models starts a ~5 GB vision-model download inside the turn**, which can take minutes while the screen says "Analyzing image". Run `gaia download --agent vlm` first so the download happens up front. Tracked in [#5990](https://github.com/amd/gaia/issues/5990).
 - **The terminal UI lists a saved gateway default as a ~4 GB download when launched on a local model.** The label is wrong: gateway models run in the cloud and need no download, so skip it. Tracked in [#6016](https://github.com/amd/gaia/issues/6016).

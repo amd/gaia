@@ -309,7 +309,8 @@ def test_step_exhaustion_after_write_returns_incomplete(agent, tmp_path):
     result = agent.process_query("Save to `summary.md`", max_steps=1)
     assert (tmp_path / "summary.md").read_text() == "real"
     assert result["status"] == "incomplete"
-    assert "read back" in result["result"]
+    # The framework read the whole write back and it matched; the model need not.
+    assert "read back" not in result["result"]
 
 
 def test_turn_reset_does_not_reuse_prior_save(agent):
@@ -1265,3 +1266,77 @@ def test_a_short_retraction_after_the_correction_does_not_bring_back_the_answer(
 )
 def test_only_an_acknowledgement_restores_the_earlier_answer(reply, restored):
     assert (_with_replaced_answer(reply, _SUMMARY) is not None) is restored
+
+
+_SHARE = r"\\server\share\f.pdf"
+
+
+@pytest.mark.parametrize("share", [_SHARE, "//server/share/f.pdf"])
+def test_a_unc_path_in_script_args_never_touches_the_network(
+    tmp_path, monkeypatch, share
+):
+    """A share named in code crashed a turn when resolving it raised WinError 64;
+    it must be keyed by its text, never resolved."""
+    from gaia.agents.base import completion
+
+    real = completion.os.path.realpath
+
+    def _no_network(path, *a, **kw):
+        if str(path).startswith(("\\\\", "//")):
+            raise AssertionError(f"resolved a network path: {path}")
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(completion.os.path, "realpath", _no_network)
+    ledger = CompletionEvidence("Fix it.", str(tmp_path))
+    key = ledger.key(share)
+    assert "server" in key and "f.pdf" in key
+    ledger.snapshot("run_python", {"code": f"open(r'{share}')"})
+
+
+def test_an_unresolvable_local_path_is_keyed_not_raised(tmp_path, monkeypatch):
+    import os
+
+    from gaia.agents.base import completion
+
+    def _broken(path, *a, **kw):
+        raise OSError(1920, "The file cannot be accessed by the system", path)
+
+    monkeypatch.setattr(completion.os.path, "realpath", _broken)
+    ledger = CompletionEvidence("Fix it.", str(tmp_path))
+    expected = os.path.normcase(os.path.join("out", "report.md"))
+    assert ledger.key("out/report.md").endswith(expected)
+
+
+def test_a_validator_is_never_asked_about_a_network_share(tmp_path):
+    validator = MagicMock()
+    ledger = CompletionEvidence("Fix it.", str(tmp_path), validator=validator)
+    assert ledger._readable(ledger.key(_SHARE), validator) is False
+    validator.validate_read.assert_not_called()
+
+
+@pytest.mark.parametrize("share", [_SHARE, "//server/share/f.pdf"])
+def test_a_unc_path_in_a_save_claim_never_touches_the_network(
+    tmp_path, monkeypatch, share
+):
+    from gaia.agents.base import completion
+
+    def _guard(real):
+        def _no_network(path, *a, **kw):
+            if str(path).startswith(("\\\\", "//")):
+                raise AssertionError(f"touched a network path: {path}")
+            return real(path, *a, **kw)
+
+        return _no_network
+
+    for name in ("realpath", "isfile", "isdir", "exists"):
+        monkeypatch.setattr(
+            completion.os.path, name, _guard(getattr(completion.os.path, name))
+        )
+    monkeypatch.setattr(completion.os, "stat", _guard(completion.os.stat))
+    monkeypatch.setattr(completion.os, "walk", _guard(completion.os.walk))
+
+    ledger = CompletionEvidence(f"Save the report to {share}", str(tmp_path))
+    ledger.exec_windows.append((0, 1, True, 0))  # a script ran and succeeded
+    ledger.snapshot("run_python", {"code": f"open(r'{share}', 'w')"})
+    found = gaps(ledger, f"I saved the report to {share}.")
+    assert any("f.pdf" in gap for gap in found)

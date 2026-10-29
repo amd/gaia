@@ -581,10 +581,12 @@ Two consequences an integrator needs to plan for:
   alongside `gaia-voice`'s 790.
 - **An embedding pass on the first semantic code search.** If the repo has no
   [code index](https://amd-gaia.ai/docs/guides/code-index), the first
-  `search_code_index` builds it, then searches. On a large monorepo that one
-  search takes minutes of local embedding; a task that never searches pays
-  nothing. `GAIA_PROJECT_MAP_AUTO_INDEX=1` builds it in the background at task
-  start instead.
+  `search_code_index` starts building it in the background. A small repo is
+  searched within that call; on a large monorepo the build takes many minutes
+  of local embedding, and each search until then reports its progress so the
+  agent greps meanwhile. A task that never searches pays nothing.
+  `GAIA_PROJECT_MAP_AUTO_INDEX=1` builds it in the background at task start
+  instead.
 
 The sidecar's CLI accepts only `--host` and `--port`, so pointing the map at a
 specific project means `GAIA_PROJECT_ROOT=/path/to/repo` in its environment, or
