@@ -161,6 +161,8 @@ def create(
     fire_at: float,
     origin: Optional[Dict[str, Any]] = None,
     model: Optional[str] = None,
+    internet_off: Optional[bool] = None,
+    memory: Optional[str] = None,
     now: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Register a follow-up; raises :class:`FollowUpError` over a limit."""
@@ -187,6 +189,9 @@ def create(
         "origin": origin or {},
         # The chat's model, so a cloud user's follow-up does not load a local one.
         "model": model,
+        # The chat's internet and memory switches, so the fired run honours them.
+        "internet_off": internet_off,
+        "memory": memory,
     }
     job_id = store.register_job(
         db,
@@ -255,8 +260,10 @@ def _view(job: Dict[str, Any]) -> Dict[str, Any]:
 
 # -- Firing ---------------------------------------------------------------
 
-#: ``(agent_id, prompt, model, session_id) -> answer``. Raises when the agent gave no answer.
-AskAgent = Callable[[str, str, Optional[str], str], str]
+#: ``(agent_id, prompt, run_settings, session_id) -> answer``. Raises when the agent gave no answer.
+AskAgent = Callable[[str, str, Dict[str, Any], str], str]
+#: The chat's settings a fired run is started with, when the chat set them.
+RUN_SETTINGS = ("model", "internet_off", "memory")
 #: ``(title, text) -> None``. Raises when the notification could not be posted.
 Notify = Callable[[str, str], None]
 
@@ -291,7 +298,7 @@ def make_executor(
             answer = ask_agent(
                 agent_id,
                 prompt_for(payload),
-                payload.get("model"),
+                run_settings(payload),
                 run_session_id(job["job_id"]),
             )
         except Exception as e:
@@ -333,6 +340,11 @@ def _first_line(text: str, limit: int = 200) -> str:
     return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
+def run_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """The chat's model, internet and memory switches the fired run inherits."""
+    return {k: payload[k] for k in RUN_SETTINGS if payload.get(k) is not None}
+
+
 def run_session_id(job_id: str) -> str:
     """The session a fired follow-up runs in, one per job."""
     return f"{RUN_SESSION_PREFIX}{job_id}"
@@ -349,7 +361,9 @@ def ask_sidecar(registry, *, read_timeout: float) -> AskAgent:
 
     from gaia.daemon.agent_query import _iter_sse_events
 
-    def ask(agent_id: str, prompt: str, model: Optional[str], session_id: str) -> str:
+    def ask(
+        agent_id: str, prompt: str, settings: Dict[str, Any], session_id: str
+    ) -> str:
         registry.ensure(agent_id)
         base_url, token = registry.connection(agent_id)
         body: Dict[str, Any] = {
@@ -359,9 +373,8 @@ def ask_sidecar(registry, *, read_timeout: float) -> AskAgent:
             "session_id": session_id,
             # Nobody is there to answer a question mid-run.
             "can_answer_questions": False,
+            **settings,
         }
-        if model:
-            body["model"] = model
         with requests.post(
             f"{base_url}/v1/{agent_id}/query",
             headers={"Authorization": f"Bearer {token}", "Accept": "text/event-stream"},

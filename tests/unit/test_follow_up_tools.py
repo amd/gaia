@@ -57,6 +57,23 @@ def test_scheduling_sends_the_time_and_says_when_it_will_run(calls):
     assert sent["origin"] == {"session": "s-1"}
     assert sent["model"] == "fireworks.deepseek-v4p1-flash"
     assert "Tell the user when it will run" in out["message"]
+    assert sent["internet_off"] is False and "memory" not in sent
+
+
+@pytest.mark.parametrize(
+    "reason,expected", [("private", "private"), ("memory_off", "off"), (None, "off")]
+)
+def test_a_private_or_offline_chat_schedules_a_private_or_offline_run(
+    calls, reason, expected
+):
+    host = _Host()
+    host.internet_off = True
+    host._incognito, host._incognito_reason = True, reason
+
+    host._schedule_follow_up("in 2 hours", "Check the draft")
+
+    sent = calls[0]["json"]
+    assert sent["internet_off"] is True and sent["memory"] == expected
 
 
 def test_a_time_it_cannot_read_is_refused_before_any_call(calls):

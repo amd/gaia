@@ -389,7 +389,8 @@ TUI.
 Follow-ups: `schedule_follow_up`, `list_follow_ups` and `cancel_follow_up` call
 the daemon's `/daemon/v1/followups` routes with its client token. A due
 follow-up is run by the daemon as a fresh `/v1/gaia/query` turn on the model
-the scheduling chat used, with no one to approve a gated tool. Its answer is
+the scheduling chat used and its `internet_off` and `memory` switches, with
+no one to approve a gated tool (`can_answer_questions: false`). Its answer is
 kept and prepended to the next turn's context (`follow_up_context`), then marked
 seen. With no daemon the tools return an error and a turn adds nothing.
 

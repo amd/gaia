@@ -27,8 +27,8 @@ NOW = datetime(2026, 10, 23, 14, 30).astimezone()
 def clock(tmp_path):
     asked, notified = [], []
 
-    def ask(agent_id, prompt, model, session_id):
-        asked.append((agent_id, prompt, model, session_id))
+    def ask(agent_id, prompt, settings, session_id):
+        asked.append((agent_id, prompt, settings, session_id))
         return "The build passed in 12 minutes.\nAll 340 tests green."
 
     def notify(title, text):
@@ -117,15 +117,85 @@ def test_a_due_follow_up_runs_notifies_and_keeps_its_answer(clock):
     fired = clock.fire_due(now=job["fire_at"] + 1)
 
     assert fired["fired"] == [job["id"]]
-    agent_id, prompt, model, session_id = clock.asked[0]
+    agent_id, prompt, settings, session_id = clock.asked[0]
     assert followups.is_run_session(session_id)
     assert session_id == followups.run_session_id(job["id"])
     assert agent_id == "gaia" and "Check CI run 4012" in prompt
-    assert model == "fireworks.deepseek-v4p1-flash"
+    assert settings == {"model": "fireworks.deepseek-v4p1-flash"}
     assert "search for files" in prompt and "shell commands" in prompt
     assert clock.notified == [("GAIA follow-up", "The build passed in 12 minutes.")]
     [result] = followups.unseen_results(_db(clock), agent_id="gaia")
     assert result["answer"].startswith("The build passed")
+
+
+def test_the_fired_run_keeps_the_chats_internet_and_memory_switches(clock):
+    db = _db(clock)
+    job = followups.create(
+        db,
+        agent_id="gaia",
+        task="Check the draft",
+        fire_at=time.time() + 120,
+        internet_off=True,
+        memory="private",
+    )
+
+    clock.fire_due(now=job["fire_at"] + 1)
+
+    _, _, settings, _ = clock.asked[0]
+    assert settings == {"internet_off": True, "memory": "private"}
+
+
+@pytest.mark.parametrize(
+    "payload,expected",
+    [
+        ({}, {}),
+        ({"model": None, "internet_off": None, "memory": None}, {}),
+        # False is a real choice (internet on), not "unset".
+        ({"internet_off": False}, {"internet_off": False}),
+        ({"agent_id": "gaia", "task": "x", "query": "injected"}, {}),
+    ],
+)
+def test_run_settings_carry_only_the_chats_switches(payload, expected):
+    assert followups.run_settings(payload) == expected
+
+
+def test_ask_sidecar_sends_the_switches_on_the_query(monkeypatch):
+    import requests
+
+    sent = {}
+
+    class _Resp:
+        status_code = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def post(url, json=None, **kw):
+        sent.update(json)
+        return _Resp()
+
+    class _Registry:
+        def ensure(self, agent_id):
+            pass
+
+        def connection(self, agent_id):
+            return "http://127.0.0.1:1", "tok"
+
+    monkeypatch.setattr(requests, "post", post)
+    monkeypatch.setattr(
+        "gaia.daemon.agent_query._iter_sse_events",
+        lambda r: iter([{"type": "final", "answer": "ok"}]),
+    )
+    ask = followups.ask_sidecar(_Registry(), read_timeout=5)
+    out = ask("gaia", "p", {"internet_off": True, "memory": "off"}, "follow-up-j")
+
+    assert out == "ok"
+    assert sent["internet_off"] is True and sent["memory"] == "off"
+    assert sent["can_answer_questions"] is False
+    assert sent["session_id"] == "follow-up-j" and "model" not in sent
 
 
 def test_a_follow_up_that_is_not_due_does_not_run(clock):
@@ -136,7 +206,7 @@ def test_a_follow_up_that_is_not_due_does_not_run(clock):
 
 
 def test_a_failed_follow_up_is_kept_so_the_user_hears_about_it(tmp_path):
-    def ask(agent_id, prompt, model, session_id):
+    def ask(agent_id, prompt, settings, session_id):
         raise RuntimeError("the gaia agent's stream ended without an answer")
 
     c = DaemonClock(
@@ -186,6 +256,34 @@ def api(clock):
     app = FastAPI()
     followup_routes.mount(app, lambda: None, clock)
     return TestClient(app)
+
+
+def test_the_route_keeps_the_switches_and_refuses_an_unknown_memory_mode(api, clock):
+    ok = api.post(
+        "/daemon/v1/followups",
+        json={
+            "agent_id": "gaia",
+            "task": "check",
+            "fire_at": time.time() + 600,
+            "internet_off": True,
+            "memory": "off",
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    job = store.get_job(_db(clock), job_id=ok.json()["id"])
+    assert job["payload"]["internet_off"] is True
+    assert job["payload"]["memory"] == "off"
+
+    bad = api.post(
+        "/daemon/v1/followups",
+        json={
+            "agent_id": "gaia",
+            "task": "check",
+            "fire_at": time.time() + 600,
+            "memory": "everything",
+        },
+    )
+    assert bad.status_code == 422
 
 
 def test_the_routes_create_list_and_cancel(api):

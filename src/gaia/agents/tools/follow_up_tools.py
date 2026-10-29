@@ -79,6 +79,7 @@ class FollowUpToolsMixin:
                     "fire_at": fire_at.timestamp(),
                     "origin": {"session": getattr(self, "_memory_session_id", None)},
                     "model": getattr(self, "model_id", None),
+                    **self._run_switches(),
                 },
             )
         except DaemonError as e:
@@ -95,6 +96,16 @@ class FollowUpToolsMixin:
                 "chat. Tell the user when it will run."
             ),
         }
+
+    def _run_switches(self) -> Dict[str, Any]:
+        """This chat's internet and memory switches, for the run that fires later."""
+        switches: Dict[str, Any] = {
+            "internet_off": bool(getattr(self, "internet_off", False))
+        }
+        if getattr(self, "_incognito", False):
+            private = getattr(self, "_incognito_reason", None) == "private"
+            switches["memory"] = "private" if private else "off"
+        return switches
 
     def _list_follow_ups(self) -> Dict[str, Any]:
         from gaia.daemon import client

@@ -8,7 +8,7 @@ tools call these with the daemon client token; see :mod:`gaia.daemon.followups`.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -23,6 +23,8 @@ class CreateFollowUp(BaseModel):
     fire_at: float
     origin: Dict[str, Any] = Field(default_factory=dict)
     model: Optional[str] = None
+    internet_off: Optional[bool] = None
+    memory: Optional[Literal["on", "private", "off"]] = None
 
 
 class MarkSeen(BaseModel):
@@ -49,6 +51,8 @@ def build_followup_router(require_token, clock) -> APIRouter:
                 fire_at=body.fire_at,
                 origin=body.origin,
                 model=body.model,
+                internet_off=body.internet_off,
+                memory=body.memory,
             )
         except followups.FollowUpError as e:
             raise HTTPException(status_code=422, detail=str(e)) from e
