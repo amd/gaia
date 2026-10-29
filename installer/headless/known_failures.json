@@ -2,13 +2,6 @@
   "about": "Open, filed installer bugs the journeys hit. Each entry matches one row's phase by an exact output signature (kind 'failure': the phase's output; kind 'finding': the finding's text) and shows as 'known #issue' instead of failing the row. A row fails again when its entry stops matching, so remove the entry in the PR that fixes the bug. Add one only for a filed issue. 'blocks': the phases after it cannot run, so they are skipped rather than failed.",
   "entries": [
     {
-      "issue": 5526,
-      "rows": ["ubuntu22-tui-deb", "ubuntu22-install-sh"],
-      "phase": "health",
-      "kind": "failure",
-      "signature": "GLIBC_2.38' not found"
-    },
-    {
       "issue": 5527,
       "rows": ["ubuntu22-agent-ui-deb", "ubuntu24-agent-ui-deb"],
       "phase": "install",
@@ -21,14 +14,6 @@
       "phase": "install",
       "kind": "finding",
       "signature": "`gaia-desktop` is not on PATH"
-    },
-    {
-      "issue": 5529,
-      "rows": ["mac-x64-install-sh"],
-      "phase": "install",
-      "kind": "failure",
-      "signature": "Failed to build `cryptography",
-      "blocks": true
     },
     {
       "issue": 5531,

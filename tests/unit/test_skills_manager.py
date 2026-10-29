@@ -198,6 +198,25 @@ def test_invalid_skill_is_reported_not_silently_dropped(roots):
     assert "broken" in next(iter(errors))
 
 
+def test_invalid_claude_import_warns_once_and_is_tagged_as_import(roots):
+    write_skill_dir(roots["claude"], "theirs", "not a skill file\n")
+    write_skill_dir(roots["user"], "mine", "not a skill file\n")
+
+    with (
+        patch("gaia.skills.manager.log") as log,
+        patch("gaia.skills.manager._WARNED_IMPORT_ERRORS", set()),
+    ):
+        manager = make_manager(roots)
+        manager.reload()
+        manager.reload()
+        make_manager(roots).reload()
+
+    assert len(manager.discovery_errors) == 2
+    assert list(manager.import_discovery_errors) == [str(roots["claude"] / "theirs")]
+    assert log.warning.call_count == 1  # the import, once across rescans
+    assert log.error.call_count == 3  # the user's own skill, every rescan
+
+
 def test_reload_picks_up_a_new_skill(roots):
     manager = make_manager(roots)
     assert manager.list_skills() == []

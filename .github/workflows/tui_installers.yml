@@ -41,7 +41,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: 'Version stamped into the binaries and the installer filenames (x.y.z; x.y.z-rc.N needs installers: false).'
+        description: 'Version stamped into the binaries and the installer filenames: x.y.z, or x.y.z-rc.N for a release candidate (its .deb/.rpm carry x.y.z~rc.N).'
         required: true
         type: string
       sidecar:
@@ -56,8 +56,7 @@ on:
         type: string
       installers:
         description: >-
-          Also build and smoke-test the macOS and Linux packages. A release
-          candidate builds only the binaries: an rpm Version cannot carry -rc.N.
+          Also build and smoke-test the macOS and Linux packages.
         required: false
         default: true
         type: boolean
@@ -471,6 +470,13 @@ jobs:
           set -euo pipefail
           DEB="$(python3 installer/tui/artifacts.py names --version "${VERSION}" --platform linux-x64 --ext deb)"
           RPM="$(python3 installer/tui/artifacts.py names --version "${VERSION}" --platform linux-x64 --ext rpm)"
+          # The version INSIDE the packages: X.Y.Z~rc.N for a candidate, so the
+          # final sorts after it and installs over it as an upgrade.
+          PKG_VERSION="$(installer/tui/linux/build-packages.sh --version "${VERSION}" --print-package-version)"
+          BASE="${VERSION%%-*}"
+          # dpkg operator and rpm.vercmp result against the bare X.Y.Z.
+          if [ "${VERSION}" = "${BASE}" ]; then ORDER=eq; RPMCMP=0; else ORDER=lt; RPMCMP=-1; fi
+          echo "package version ${PKG_VERSION} (files say ${VERSION}); ${ORDER} ${BASE}"
           # One assertion per line, never `test A && test B`: a failing
           # left-hand side of an && list is exempt from errexit, so the list
           # returns 1 and the script sails on. That silently disarms the only
@@ -479,6 +485,8 @@ jobs:
           docker run --rm -v "${PWD}/dist:/pkg:ro" debian:bookworm bash -euo pipefail -c "
             test ! -e /usr/bin/gaia-tui
             dpkg -i /pkg/${DEB}
+            test \"\$(dpkg-query -W -f='\${Version}' gaia)\" = '${PKG_VERSION}'
+            dpkg --compare-versions '${PKG_VERSION}' ${ORDER} '${BASE}'
             test -x /usr/bin/gaia-tui
             test -x /usr/bin/gaia-agent
             command -v gaia-tui
@@ -496,6 +504,8 @@ jobs:
           docker run --rm -v "${PWD}/dist:/pkg:ro" fedora:latest bash -euo pipefail -c "
             test ! -e /usr/bin/gaia-tui
             rpm -i /pkg/${RPM}
+            test \"\$(rpm -q --qf '%{VERSION}' gaia)\" = '${PKG_VERSION}'
+            test \"\$(rpm --eval '%{lua: print(rpm.vercmp(\"${PKG_VERSION}\", \"${BASE}\"))}')\" = '${RPMCMP}'
             test -x /usr/bin/gaia-tui
             test -x /usr/bin/gaia-agent
             command -v gaia-tui

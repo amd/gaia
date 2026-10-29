@@ -182,18 +182,57 @@ def test_the_timeout_is_enforced(make_run_python, project, monkeypatch):
     assert time.monotonic() - start < 20
 
 
-def test_a_disallowed_working_directory_is_refused(
+def test_a_disallowed_project_the_user_chose_is_refused(
     make_run_python, project, tmp_path, monkeypatch
 ):
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     monkeypatch.chdir(project)
+    monkeypatch.setenv(PROJECT_ROOT_ENV, str(project))
     _agent, run_python = make_run_python(elsewhere)
 
     result = run_python(code="open('ran.txt', 'w').write('x')")
 
     assert result["status"] == "error"
     assert "not in allowed paths" in result["error"]
+    assert not (project / "ran.txt").exists()
+
+
+def test_a_chosen_root_the_map_drops_is_named_in_the_refusal(
+    make_run_python, project, tmp_path, monkeypatch
+):
+    allowed = tmp_path / "docs"
+    allowed.mkdir()
+    monkeypatch.chdir(allowed)
+    monkeypatch.setenv(PROJECT_ROOT_ENV, str(project))
+    agent, run_python = make_run_python(allowed)
+    monkeypatch.setattr(agent, "_project_map_root", lambda: None, raising=False)
+
+    result = run_python(code="open('ran.txt', 'w').write('x')")
+
+    assert result["status"] == "error"
+    assert str(project) in result["error"]
+    assert not (allowed / "ran.txt").exists()
+
+
+def test_a_disallowed_repo_around_the_cwd_runs_in_the_scratch_dir(
+    make_run_python, project, tmp_path, monkeypatch
+):
+    """The daemon's launch folder is not a project the user approved (#5765)."""
+    allowed = tmp_path / "docs"
+    allowed.mkdir()
+    monkeypatch.chdir(project)
+    agent, run_python = make_run_python(allowed)
+
+    result = run_python(
+        code="import os, sys; open('ran.txt', 'w').write('x'); "
+        "print(os.getcwd()); print(os.environ.get('PYTHONPATH', ''))"
+    )
+
+    assert result["status"] == "success", result
+    cwd, pythonpath = (result["stdout"].splitlines() + [""])[:2]
+    assert Path(cwd).resolve() == agent.scratch_dir.resolve()
+    assert str(project) not in pythonpath
     assert not (project / "ran.txt").exists()
 
 

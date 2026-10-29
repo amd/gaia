@@ -352,6 +352,16 @@
         ],
         "title": "Latencyms"
       },
+      "mcpOutput": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/McpOutputResponse"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "mcpServer": {
         "anyOf": [
           {
@@ -362,6 +372,28 @@
           }
         ],
         "title": "Mcpserver"
+      },
+      "mcpServerLabel": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mcpserverlabel"
+      },
+      "mcpTool": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mcptool"
       },
       "narration": {
         "anyOf": [
@@ -949,6 +981,13 @@
         "title": "Document Ids",
         "type": "array"
       },
+      "folders": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Folders",
+        "type": "array"
+      },
       "mail_provider": {
         "anyOf": [
           {
@@ -1125,6 +1164,17 @@
       "chunk_count": {
         "title": "Chunk Count",
         "type": "integer"
+      },
+      "error_kind": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Error Kind"
       },
       "file_size": {
         "title": "File Size",
@@ -1866,6 +1916,11 @@
         "default": 0,
         "title": "Indexed",
         "type": "integer"
+      },
+      "skipped": {
+        "default": 0,
+        "title": "Skipped",
+        "type": "integer"
       }
     },
     "title": "IndexFolderResponse",
@@ -2374,6 +2429,23 @@
       }
     },
     "title": "LoadedModelInfo",
+    "type": "object"
+  },
+  "McpOutputResponse": {
+    "description": "The text an MCP tool returned, capped for the tool row.",
+    "properties": {
+      "text": {
+        "default": "",
+        "title": "Text",
+        "type": "string"
+      },
+      "truncated": {
+        "default": false,
+        "title": "Truncated",
+        "type": "boolean"
+      }
+    },
+    "title": "McpOutputResponse",
     "type": "object"
   },
   "MemorySettingsBody": {
@@ -3185,6 +3257,10 @@
         ],
         "title": "Created At"
       },
+      "description": {
+        "title": "Description",
+        "type": "string"
+      },
       "error_count": {
         "default": 0,
         "title": "Error Count",
@@ -3197,6 +3273,17 @@
       "interval_seconds": {
         "title": "Interval Seconds",
         "type": "integer"
+      },
+      "last_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Last Error"
       },
       "last_result": {
         "anyOf": [
@@ -3244,6 +3331,11 @@
         "title": "Run Count",
         "type": "integer"
       },
+      "running": {
+        "default": false,
+        "title": "Running",
+        "type": "boolean"
+      },
       "schedule_config": {
         "anyOf": [
           {
@@ -3276,7 +3368,8 @@
       "name",
       "interval_seconds",
       "prompt",
-      "status"
+      "status",
+      "description"
     ],
     "title": "ScheduleResponse",
     "type": "object"
@@ -3314,6 +3407,30 @@
       }
     },
     "title": "ScriptedUserRequest",
+    "type": "object"
+  },
+  "SearchSnippet": {
+    "description": "Text around a search hit, split so the UI can highlight ``match``.",
+    "properties": {
+      "after": {
+        "title": "After",
+        "type": "string"
+      },
+      "before": {
+        "title": "Before",
+        "type": "string"
+      },
+      "match": {
+        "title": "Match",
+        "type": "string"
+      }
+    },
+    "required": [
+      "before",
+      "match",
+      "after"
+    ],
+    "title": "SearchSnippet",
     "type": "object"
   },
   "SelectModelRequest": {
@@ -3534,6 +3651,65 @@
     "title": "SessionResponse",
     "type": "object"
   },
+  "SessionSearchResponse": {
+    "description": "Chats matching a search query, newest first, at most ``limit``.",
+    "properties": {
+      "query": {
+        "title": "Query",
+        "type": "string"
+      },
+      "results": {
+        "items": {
+          "$ref": "#/components/schemas/SessionSearchResult"
+        },
+        "title": "Results",
+        "type": "array"
+      },
+      "truncated": {
+        "default": false,
+        "title": "Truncated",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "query",
+      "results"
+    ],
+    "title": "SessionSearchResponse",
+    "type": "object"
+  },
+  "SessionSearchResult": {
+    "description": "One chat that matches a search, with where the first hit was.",
+    "properties": {
+      "field": {
+        "enum": [
+          "title",
+          "message"
+        ],
+        "title": "Field",
+        "type": "string"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "snippet": {
+        "$ref": "#/components/schemas/SearchSnippet"
+      },
+      "title": {
+        "title": "Title",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "title",
+      "field",
+      "snippet"
+    ],
+    "title": "SessionSearchResult",
+    "type": "object"
+  },
   "SettingsResponse": {
     "description": "Current user settings.",
     "properties": {
@@ -3645,8 +3821,13 @@
     "type": "object"
   },
   "SetupRunRequest": {
-    "description": "``skip_chat_model`` when the chat runs on a cloud provider.",
+    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``gaia_lemonade`` to set up GAIA's own server instead of the user's.",
     "properties": {
+      "gaia_lemonade": {
+        "default": false,
+        "title": "Gaia Lemonade",
+        "type": "boolean"
+      },
       "skip_chat_model": {
         "default": false,
         "title": "Skip Chat Model",
@@ -4000,6 +4181,17 @@
           }
         ],
         "title": "Processor Name"
+      },
+      "setup_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Setup Error"
       },
       "start_command": {
         "anyOf": [

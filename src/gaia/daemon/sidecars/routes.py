@@ -43,6 +43,7 @@ from starlette.concurrency import run_in_threadpool
 from gaia.daemon.constants import API_PREFIX
 from gaia.daemon.sidecars import install as install_svc
 from gaia.daemon.sidecars.errors import (
+    ERROR_KIND_HEADER,
     AgentNeedsNewerCoreError,
     AgentNotInstalledError,
     AgentTrustRequiredError,
@@ -53,11 +54,17 @@ from gaia.daemon.sidecars.errors import (
     InstallBusyError,
     InstallFailedError,
     ModeConflictError,
+    SidecarError,
     SidecarSpawnError,
     StopFailedError,
     UnknownAgentError,
     VersionMismatchError,
 )
+
+
+def _ensure_failed(status_code: int, e: SidecarError) -> HTTPException:
+    headers = {ERROR_KIND_HEADER: e.kind} if e.kind else None
+    return HTTPException(status_code=status_code, detail=str(e), headers=headers)
 
 
 def build_agents_router(token: str, registry):
@@ -123,13 +130,13 @@ def build_agents_router(token: str, registry):
                 registry.ensure, agent_id, mode=mode, dev_src_dir=dev_src_dir
             )
         except UnknownAgentError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
+            raise _ensure_failed(404, e) from e
         except (ModeConflictError, CapacityError) as e:
-            raise HTTPException(status_code=409, detail=str(e)) from e
+            raise _ensure_failed(409, e) from e
         except DevSrcDirResolutionError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+            raise _ensure_failed(400, e) from e
         except (SidecarSpawnError, HealthTimeoutError, VersionMismatchError) as e:
-            raise HTTPException(status_code=502, detail=str(e)) from e
+            raise _ensure_failed(502, e) from e
 
     @router.post(f"{API_PREFIX}/agents/{{agent_id}}/stop")
     async def stop(agent_id: str) -> dict:

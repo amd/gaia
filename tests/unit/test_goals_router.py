@@ -245,6 +245,13 @@ class TestDeleteGoal:
         resp = client.delete(f"/api/goals/{created['id']}")
         assert resp.status_code == 204
 
+    def test_delete_goal_does_not_claim_a_json_body(self, client):
+        # The Agent UI parses any response labelled JSON; an empty one throws.
+        created = _create_goal(client)
+        resp = client.delete(f"/api/goals/{created['id']}")
+        assert resp.content == b""
+        assert "application/json" not in resp.headers.get("content-type", "")
+
     def test_delete_goal_removes_it(self, client):
         created = _create_goal(client)
         client.delete(f"/api/goals/{created['id']}")

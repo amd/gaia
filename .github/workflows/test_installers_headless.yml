@@ -30,11 +30,12 @@
 #                 Lemonade, the same command must refuse within 120 s and name
 #                 the fix rather than hang.
 #
-# A release candidate publishes no terminal .pkg/.deb/.rpm (an rpm Version
-# cannot carry -rc.N). For one, `rebuild-packages` builds them in this run from
-# the candidate's own gaia-tui and gaia-agent binaries with the repo's build
-# scripts, and those rows say "rebuilt" in the table. A final release must carry
-# them, and a final that does not fails `resolve`.
+# A final release, and every release candidate from v0.25.1-rc4 on, carries
+# the terminal .pkg/.deb/.rpm, and those rows install the published files; one
+# that does not fails `resolve`. Older candidates published none, so for them
+# `rebuild-packages` builds them in this run from the candidate's own gaia-tui
+# and gaia-agent binaries, and those rows say "rebuilt" in the table
+# (TUI_PACKAGES_ON_RC_SINCE in installer/headless/resolve_release.py).
 #
 # Install time is gated. Each phase is timed with the monotonic clock
 # (installer/headless/journey.py) and compared to
@@ -135,8 +136,9 @@ jobs:
           path: release.json
           retention-days: 7
 
-  # A release candidate carries no terminal packages, so build them here from
-  # its own binaries. Unsigned, like the release build (see tui_installers.yml).
+  # A candidate older than v0.25.1-rc4 carries no terminal packages, so build
+  # them here from its own binaries. Unsigned, like the release build (see
+  # tui_installers.yml).
   rebuild-packages:
     name: Rebuild terminal packages (${{ matrix.label }})
     needs: resolve

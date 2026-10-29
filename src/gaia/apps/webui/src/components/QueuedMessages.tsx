@@ -18,10 +18,20 @@ interface QueuedMessagesProps {
     onSteer?: (id: number) => void;
     /** Put a message that failed to send back in line. */
     onRetry: (id: number) => void;
+    /** A reply is running in this chat, so queued messages wait for it. */
+    replying?: boolean;
+    /** The chat refused the last try as busy, so the queue waits and tries again. */
+    busyRetry?: boolean;
+}
+
+/** What a queued message is waiting on: this reply, a busy chat, or nothing. */
+export function queuedLabel(replying: boolean, busyRetry: boolean): string {
+    if (replying) return STATE_LABEL.queued;
+    return busyRetry ? 'GAIA is still busy in this chat. Trying again in a few seconds.' : 'Sending next.';
 }
 
 /** Messages typed while GAIA answers, above the composer, oldest first. */
-export function QueuedMessages({ items, onRemove, onSteer, onRetry }: QueuedMessagesProps) {
+export function QueuedMessages({ items, onRemove, onSteer, onRetry, replying = true, busyRetry = false }: QueuedMessagesProps) {
     // A message going out right now already shows in the chat.
     const shown = items.filter((m) => m.state !== 'starting');
     if (shown.length === 0) return null;
@@ -36,7 +46,11 @@ export function QueuedMessages({ items, onRemove, onSteer, onRetry }: QueuedMess
                             : <CornerDownRight size={12} aria-hidden="true" />}
                     <span className="queued-message-text" title={item.text}>{item.text}</span>
                     <span className="queued-message-state" title={item.error}>
-                        {item.state === 'failed' ? `Not sent. ${item.error ?? ''}`.trim() : STATE_LABEL[item.state as keyof typeof STATE_LABEL]}
+                        {item.state === 'failed'
+                            ? `Not sent. ${item.error ?? ''}`.trim()
+                            : item.state === 'queued'
+                                ? queuedLabel(replying, busyRetry)
+                                : STATE_LABEL[item.state as keyof typeof STATE_LABEL]}
                     </span>
                     {item.state === 'failed' && (
                         <button

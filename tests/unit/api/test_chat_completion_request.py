@@ -16,6 +16,7 @@ from gaia.agents.base.agent import Agent
 from gaia.api import openai_server
 from gaia.api.openai_server import app
 from gaia.api.sse_handler import SSEOutputHandler
+from gaia.llm import lemonade_client
 
 
 class _ProbeAgent(Agent):
@@ -191,7 +192,12 @@ def test_sampling_parameters_reach_the_llm_call(client, llm_calls):
     assert kwargs["max_tokens"] == 256
 
 
-def test_unset_sampling_parameters_keep_the_agent_defaults(client, llm_calls):
+def test_unset_sampling_parameters_keep_the_agent_defaults(
+    client, llm_calls, monkeypatch
+):
+    # The default cap scales with the local window, which is sized to this
+    # machine's memory; pin a 32K window, whose cap is 8K.
+    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", lambda *a, **k: 32768)
     response = _post(client, [{"role": "user", "content": "hello"}])
 
     assert response.status_code == 200, response.text

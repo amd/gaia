@@ -81,10 +81,7 @@ func TestPopulatedListShowsIDNameVersionAndState(t *testing.T) {
 func TestZeroInstalledAgentsShowsVerbatimMessage(t *testing.T) {
 	client := &stubLister{catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{}}}
 	m := loadSync(New(client, 80, 24))
-	want := "Only the flagship is installed. Install another with: gaia hub install <id>"
-	if !strings.Contains(m.View(), want) {
-		t.Fatalf("missing verbatim message: %s", m.View())
-	}
+	assertOnlyFlagshipMessage(t, m.View())
 }
 
 func TestUncachedHubIndexUsesLocallyKnownDisplayName(t *testing.T) {
@@ -116,9 +113,18 @@ func TestOnlyFlagshipInstalledShowsVerbatimMessage(t *testing.T) {
 		catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{{ID: "gaia", Name: "GAIA"}}},
 	}
 	m := loadSync(New(client, 80, 24))
-	want := "Only the flagship is installed. Install another with: gaia hub install <id>"
-	if !strings.Contains(m.View(), want) {
-		t.Fatalf("missing verbatim message: %s", m.View())
+	assertOnlyFlagshipMessage(t, m.View())
+}
+
+// GAIA ships one agent, and terminal-only installs have no `gaia` CLI, so the
+// panel must not offer an install command.
+func assertOnlyFlagshipMessage(t *testing.T, view string) {
+	t.Helper()
+	if !strings.Contains(view, "Only the GAIA agent is installed.") {
+		t.Fatalf("missing only-flagship message: %s", view)
+	}
+	if strings.Contains(view, "gaia hub") || strings.Contains(view, "Install another") {
+		t.Fatalf("panel names an install command: %s", view)
 	}
 }
 

@@ -209,6 +209,58 @@ describe('pickReleaseCandidate', () => {
     ]);
   });
 
+  // Every asset on the real v0.25.1-rc5 release, in GitHub's order.
+  const RC5_ASSETS = [
+    'amd_gaia-0.25.1rc5-py3-none-any.whl',
+    'amd_gaia-0.25.1rc5-py3-none-any.whl.sigstore.json',
+    'amd_gaia-0.25.1rc5.tar.gz',
+    'amd_gaia-0.25.1rc5.tar.gz.sigstore.json',
+    'gaia-0.25.1-rc.5-darwin-arm64.pkg',
+    'gaia-0.25.1-rc.5-darwin-x64.pkg',
+    'gaia-0.25.1-rc.5-win-x64-setup.exe',
+    'gaia-0.25.1-rc.5.x86_64.rpm',
+    'gaia-agent-darwin-arm64',
+    'gaia-agent-darwin-x64',
+    'gaia-agent-linux-x64',
+    'gaia-agent-release.json',
+    'gaia-agent-ui-0.25.1-rc.5-amd64.deb',
+    'gaia-agent-ui-0.25.1-rc.5-arm64.dmg',
+    'gaia-agent-ui-0.25.1-rc.5-arm64.dmg.blockmap',
+    'gaia-agent-ui-0.25.1-rc.5-x64-setup.exe',
+    'gaia-agent-ui-0.25.1-rc.5-x64-setup.exe.blockmap',
+    'gaia-agent-ui-0.25.1-rc.5-x86_64.AppImage',
+    'gaia-agent-win32-x64.exe',
+    'gaia-agent.yaml',
+    'gaia-darwin-amd64',
+    'gaia-darwin-arm64',
+    'gaia-installers-SHA256SUMS.txt',
+    'gaia-linux-amd64',
+    'gaia-linux-arm64',
+    'gaia-tui-SHA256SUMS.txt',
+    'gaia-windows-amd64.exe',
+    'gaia-windows-arm64.exe',
+    'gaia_0.25.1-rc.5_amd64.deb',
+    'latest-linux.yml',
+    'latest-mac.yml',
+    'latest.yml',
+  ];
+
+  it('offers the terminal installers as well as the desktop app, as the stable downloads do', () => {
+    const rc5 = release('v0.25.1-rc5', true, { assets: RC5_ASSETS.map(asset) });
+    const rc = pickReleaseCandidate([rc5, release('v0.25.0', false)]);
+    expect(rc!.downloads.map((d) => [d.label, d.url.split('/').at(-1)])).toEqual([
+      ['Windows — desktop app, terminal, or both (.exe)', 'gaia-0.25.1-rc.5-win-x64-setup.exe'],
+      ['Windows — desktop app only (.exe)', 'gaia-agent-ui-0.25.1-rc.5-x64-setup.exe'],
+      ['macOS (Apple Silicon) — desktop app (.dmg)', 'gaia-agent-ui-0.25.1-rc.5-arm64.dmg'],
+      ['macOS (Apple Silicon) — terminal app (.pkg)', 'gaia-0.25.1-rc.5-darwin-arm64.pkg'],
+      ['macOS (Intel) — terminal app (.pkg)', 'gaia-0.25.1-rc.5-darwin-x64.pkg'],
+      ['Linux — desktop app (.AppImage)', 'gaia-agent-ui-0.25.1-rc.5-x86_64.AppImage'],
+      ['Debian / Ubuntu — desktop app (.deb)', 'gaia-agent-ui-0.25.1-rc.5-amd64.deb'],
+      ['Debian / Ubuntu — terminal app (.deb)', 'gaia_0.25.1-rc.5_amd64.deb'],
+      ['Fedora / RHEL / SUSE — terminal app (.rpm)', 'gaia-0.25.1-rc.5.x86_64.rpm'],
+    ]);
+  });
+
   it('is hidden once the final for that version has shipped', () => {
     expect(pickReleaseCandidate([release('v0.25.0', false), RC1, STABLE])).toBeNull();
   });

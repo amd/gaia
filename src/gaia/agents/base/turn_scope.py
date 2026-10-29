@@ -21,7 +21,8 @@ the model varies its arguments on every call:
   the streak by one. Once the streak is reached, a corrected retry on a target
   that failed — new arguments for the same file — still runs; only a repeat of
   a failed call, or yet another new target, is refused. A failure whose error
-  names the valid arguments (``correctable``) does not move the streak.
+  names the valid arguments (``correctable``) does not move the streak, nor
+  does one the tool marks ``transient`` (its own working folder was missing).
 """
 
 from __future__ import annotations
@@ -195,6 +196,16 @@ def _call_signature(args: Dict[str, Any]) -> str:
         return json.dumps(args, sort_keys=True, default=str)
     except (TypeError, ValueError):
         return repr(sorted(args.items(), key=lambda kv: str(kv[0])))
+
+
+def _is_transient(result: Any) -> bool:
+    """The tool's own environment failed (a missing working folder), not the call.
+
+    The same call can succeed on retry once the tool has repaired it, so it
+    neither moves the streak nor marks the arguments as a failed call.
+    """
+    data = tool_result_dict(result)
+    return bool(data and data.get("transient") is True)
 
 
 def _is_correctable(result: Any) -> bool:
@@ -470,6 +481,8 @@ class TurnScopeGuard:
 
     def _record_failure(self, key: str, args: Dict[str, Any], result: Any) -> None:
         self.last_error[key] = _error_brief(result)
+        if _is_transient(result):
+            return
         self.failed_calls.setdefault(key, set()).add(_call_signature(args))
         target = self._target(args)
         on_target = 0

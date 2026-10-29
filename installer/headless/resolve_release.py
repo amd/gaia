@@ -39,6 +39,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 API = "https://api.github.com/repos/amd/gaia"
 TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?$")
+# The first release candidate publish.yml attaches the terminal .pkg/.deb/.rpm
+# to. Older candidates carry none, and their packages are rebuilt in the run.
+TUI_PACKAGES_ON_RC_SINCE = "v0.25.1-rc4"
 
 
 def parse_tag(tag: str) -> Tuple[int, int, int, Optional[int]]:
@@ -92,8 +95,8 @@ def expected_assets(tag: str) -> Dict[str, str]:
         "sidecar-linux-x64": "gaia-agent-linux-x64",
         "sidecar-darwin-arm64": "gaia-agent-darwin-arm64",
         "sidecar-darwin-x64": "gaia-agent-darwin-x64",
-        # installer/tui/artifacts.py's names. Built for finals only: an rpm
-        # Version cannot carry -rc.N, so a candidate publishes none.
+        # installer/tui/artifacts.py's names, for finals and (since
+        # TUI_PACKAGES_ON_RC_SINCE) candidates alike.
         "tui-pkg-darwin-arm64": f"gaia-{v}-darwin-arm64.pkg",
         "tui-pkg-darwin-x64": f"gaia-{v}-darwin-x64.pkg",
         "tui-deb": f"gaia_{v}_amd64.deb",
@@ -116,10 +119,13 @@ def required(tag: str) -> List[str]:
         "tui-bin-darwin-x64",
         "tui-bin-win-x64",
     ]
+    packages = ["tui-pkg-darwin-arm64", "tui-pkg-darwin-x64", "tui-deb", "tui-rpm"]
     if rc is None:
-        ids += ["tui-pkg-darwin-arm64", "tui-pkg-darwin-x64", "tui-deb", "tui-rpm"]
+        ids += packages
     else:
         ids += ["sidecar-linux-x64", "sidecar-darwin-arm64", "sidecar-darwin-x64"]
+        if sort_key(tag) >= sort_key(TUI_PACKAGES_ON_RC_SINCE):
+            ids += packages
     return ids
 
 

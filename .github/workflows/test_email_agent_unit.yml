@@ -29,6 +29,11 @@ on:
       - 'tests/unit/email/**'
       - 'tests/unit/connectors/**'
       - 'tests/unit/eval/**'
+      # tests/unit/eval/ reads the flagship eval tiers and baselines.
+      - 'eval/ci_tiers.json'
+      - 'util/eval_tiers.py'
+      - 'util/eval_backlog_trend.py'
+      - 'tests/fixtures/eval_baselines/gaia-flagship/**'
       - 'tests/fixtures/email/**'
       - 'tests/test_email_openapi_conformance.py'
       - 'tests/test_ui_email_scope_consent.py'
@@ -99,6 +104,11 @@ on:
       - 'tests/unit/email/**'
       - 'tests/unit/connectors/**'
       - 'tests/unit/eval/**'
+      # tests/unit/eval/ reads the flagship eval tiers and baselines.
+      - 'eval/ci_tiers.json'
+      - 'util/eval_tiers.py'
+      - 'util/eval_backlog_trend.py'
+      - 'tests/fixtures/eval_baselines/gaia-flagship/**'
       - 'tests/fixtures/email/**'
       - 'tests/test_email_openapi_conformance.py'
       - 'tests/test_ui_email_scope_consent.py'

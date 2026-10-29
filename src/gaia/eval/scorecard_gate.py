@@ -148,6 +148,25 @@ def _parse_baseline_ref(scorecard_path: Path, ref: str) -> str | None:
         )
 
     git_path = rel.as_posix()
+    # A bad ref and a missing file fail `git show` the same way, so ask whether
+    # the ref peels to a commit before reading "absent" as first adoption. A blob
+    # or tree hash resolves too, and `show <tree>:<path>` would look like a file
+    # that is not there.
+    try:
+        ref_check = subprocess.run(  # noqa: S603 (git is trusted here)
+            ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise ValueError(f"git not found: {exc}") from exc
+    if ref_check.returncode != 0:
+        raise ValueError(
+            f"baseline ref {ref!r} does not resolve to a commit. "
+            "Pass a tag or commit that exists, or use --baseline-file instead."
+        )
+
     try:
         result = subprocess.run(  # noqa: S603 (git is trusted here)
             ["git", "show", f"{ref}:{git_path}"],

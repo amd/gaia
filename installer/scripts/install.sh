@@ -151,19 +151,6 @@ fetch_file() {
     fi
 }
 
-# Warn about elevation before anything prompts for it.
-announce_elevation() {
-    echo ""
-    print_warning "One step later on needs your password:"
-    echo "  'gaia init' installs Lemonade Server (the local model runtime), which"
-    if [ "${OS_NAME:-}" = "Darwin" ]; then
-        echo "  installs a .pkg via sudo. This installer itself never asks for sudo."
-    else
-        echo "  installs a .deb via sudo. This installer itself never asks for sudo."
-    fi
-    echo ""
-}
-
 # Install uv package manager
 install_uv() {
     print_step "Checking for uv package manager..."
@@ -763,7 +750,7 @@ show_next_steps() {
         echo "  1. Open a new terminal (PATH was not written to a startup file)"
     fi
     printf '  2. Set up the local model runtime: %sgaia init%s\n' "$COLOR_GREEN" "$COLOR_RESET"
-    echo "     (installs Lemonade Server — asks for your password)"
+    echo "     (downloads GAIA's own Lemonade Server and a model — no password needed)"
     if [ "${FLAGSHIP_INSTALLED:-0}" = "1" ]; then
         printf '  3. Talk to the agent: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
         printf '     (it opens the GAIA agent; type %s/agents%s to list installed agents)\n' "$COLOR_GREEN" "$COLOR_RESET"
@@ -793,8 +780,6 @@ main() {
 
     # Before anything installs: a bad tag must not leave a half-pinned machine.
     resolve_pin
-
-    announce_elevation
 
     # Install uv
     install_uv

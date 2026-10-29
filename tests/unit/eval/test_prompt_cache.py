@@ -74,6 +74,38 @@ def test_the_whole_prompt_is_prefix_then_scenario():
     assert build_scenario_prompt(*args) == f"{prefix}\n{message}"
 
 
+def _dated_scenario():
+    scenario = _scenario("reminder")
+    scenario["turns"][0][
+        "objective"
+    ] = "today is {{eval_today}}, due {{eval_today_plus_14_days}}, keep {literal}"
+    return scenario
+
+
+@pytest.mark.parametrize(
+    "today", [runner.date(2026, 10, 21), runner.date(2026, 12, 31)]
+)
+def test_eval_dates_fill_the_scenario_and_never_the_prefix(monkeypatch, today):
+    class _Today(runner.date):
+        @classmethod
+        def today(cls):
+            return today
+
+    baseline, _ = build_scenario_prompt_parts(
+        _scenario("alpha"), MANIFEST, "http://localhost:4200"
+    )
+    monkeypatch.setattr(runner, "date", _Today)
+    prefix, message = build_scenario_prompt_parts(
+        _dated_scenario(), MANIFEST, "http://localhost:4200"
+    )
+    deadline = today + runner.timedelta(days=14)
+    assert prefix == baseline
+    assert today.isoformat() not in prefix and deadline.isoformat() not in prefix
+    assert f"today is {today.isoformat()}" in message
+    assert f"due {deadline.isoformat()}" in message
+    assert "{{eval_today" not in message and "{literal}" in message
+
+
 def _launch(tmp_path, monkeypatch, scenario):
     seen = {}
 

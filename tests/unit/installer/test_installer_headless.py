@@ -130,15 +130,29 @@ class TestReleaseNaming:
         assert resolve.previous_stable(rels, "v0.25.1-rc2")["tag_name"] == "v0.25.0"
         assert resolve.previous_stable(rels, "v0.25.0")["tag_name"] == "v0.24.1"
 
+    PACKAGES = {"tui-deb", "tui-rpm", "tui-pkg-darwin-arm64", "tui-pkg-darwin-x64"}
+
     def test_candidates_need_sidecars_and_finals_need_packages(self):
         assert "tui-deb" not in resolve.required("v0.25.1-rc2")
         assert "sidecar-linux-x64" in resolve.required("v0.25.1-rc2")
-        assert {
-            "tui-deb",
-            "tui-rpm",
-            "tui-pkg-darwin-arm64",
-            "tui-pkg-darwin-x64",
-        } <= set(resolve.required("v0.25.1"))
+        assert self.PACKAGES <= set(resolve.required("v0.25.1"))
+
+    @pytest.mark.parametrize("tag", ["v0.25.1-rc4", "v0.25.1-rc10", "v0.26.0-rc1"])
+    def test_candidates_since_rc4_must_carry_their_own_packages(self, tag):
+        # Required, so a tag-triggered run waits for them instead of falling
+        # back to rebuilding ("rebuilt" rows) when it catches them mid-upload.
+        assert self.PACKAGES <= set(resolve.required(tag))
+
+    @pytest.mark.parametrize("tag", ["v0.25.1-rc1", "v0.25.1-rc3", "v0.25.0-rc9"])
+    def test_older_candidates_still_rebuild_theirs(self, tag):
+        assert not self.PACKAGES & set(resolve.required(tag))
+
+    def test_a_candidate_names_its_packages_with_its_own_version(self):
+        names = resolve.expected_assets("v0.25.1-rc4")
+        assert names["tui-deb"] == "gaia_0.25.1-rc.4_amd64.deb"
+        assert names["tui-rpm"] == "gaia-0.25.1-rc.4.x86_64.rpm"
+        assert names["tui-pkg-darwin-arm64"] == "gaia-0.25.1-rc.4-darwin-arm64.pkg"
+        assert names["tui-pkg-darwin-x64"] == "gaia-0.25.1-rc.4-darwin-x64.pkg"
 
     def test_terminal_package_names_match_the_build_table(self):
         """The names this waits for are the ones installer/tui/artifacts.py builds."""
