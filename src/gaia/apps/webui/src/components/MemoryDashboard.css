@@ -1621,7 +1621,7 @@
 /* ── Responsive ──────────────────────────────────────────────── */
 @media (max-width: 768px) {
     .memory-dashboard-header {
-        padding-left: var(--sidebar-toggle-clearance);
+        padding-inline-start: var(--sidebar-toggle-clearance);
     }
 }
 

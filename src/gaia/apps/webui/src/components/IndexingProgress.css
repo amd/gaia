@@ -1,0 +1,58 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.index-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-block-start: 4px;
+    min-inline-size: 0;
+}
+
+.index-progress-track {
+    position: relative;
+    block-size: 4px;
+    border-radius: var(--radius-full);
+    background: var(--bg-tertiary);
+    overflow: hidden;
+}
+
+/* Logical size, so the bar fills from the start edge in either direction. */
+.index-progress-fill {
+    block-size: 100%;
+    inline-size: 0;
+    border-radius: inherit;
+    background: var(--accent-solid);
+    transition: inline-size var(--duration) var(--ease);
+}
+
+.index-progress.is-running .index-progress-track.is-indeterminate .index-progress-fill {
+    inline-size: 35%;
+    animation: indexProgressSweep var(--duration-shimmer) var(--ease-in-out) infinite;
+}
+.index-progress.is-running .index-progress-track.is-indeterminate:dir(rtl) .index-progress-fill {
+    animation-name: indexProgressSweepRtl;
+}
+
+@keyframes indexProgressSweep {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(300%); }
+}
+@keyframes indexProgressSweepRtl {
+    from { transform: translateX(100%); }
+    to { transform: translateX(-300%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .index-progress.is-running .index-progress-track.is-indeterminate .index-progress-fill {
+        animation: none;
+        inline-size: 100%;
+        opacity: 0.4;
+    }
+}
+
+.index-progress-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}

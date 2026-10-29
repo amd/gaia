@@ -48,6 +48,7 @@ import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { useChatDraft } from '../hooks/useSavedDraft';
+import { useT } from '../i18n/useT';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -160,6 +161,7 @@ interface SendOptions {
 }
 
 export function ChatView({ sessionId }: ChatViewProps) {
+    const t = useT();
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
@@ -1644,10 +1646,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             {...CLAIMS_ESCAPE}
                             autoFocus
                             aria-label="Chat title"
+                            dir="auto"
                         />
                     ) : (
-                        <button type="button" className="task-title" onClick={startEditTitle} title="Rename">
-                            <span>{session?.title || 'New chat'}</span>
+                        <button type="button" className="task-title" onClick={startEditTitle} title={t('row.rename')}>
+                            <span>{session?.title || t('sidebar.newChat')}</span>
                             <Edit3 size={12} aria-hidden="true" className="task-title-edit" />
                         </button>
                     )}
@@ -1874,8 +1877,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         attachments={attach}
                         inputRef={inputRef}
                         placeholder={isStreaming
-                            ? 'Queue your next message'
-                            : messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}
+                            ? t('composer.queueNext')
+                            : messages.length === 0 ? t('composer.placeholder') : t('composer.reply')}
                         leftControls={<PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />}
                         rightControls={(
                             <>

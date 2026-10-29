@@ -1606,7 +1606,16 @@ Used to reach the UI from a phone.
   </Accordion>
 
   <Accordion title="GET /api/documents/{doc_id}/status">
-    Indexing progress for a single document.
+    Indexing state for a single document. While it indexes, `progress` is
+    `{"phase", "done", "total"}`: `reading` counts PDF pages read (`total` is
+    `null` when the page count isn't known up front), then `embedding` counts
+    chunks embedded. `progress` is `null` when nothing is running.
+  </Accordion>
+
+  <Accordion title="GET /api/documents/{doc_id}/file">
+    The document's original file, served inline so the browser can show it.
+    A citation link opens a PDF at its page with `#page=N`. Only files in the
+    document library are served; a file deleted from disk returns 404.
   </Accordion>
 
   <Accordion title="POST /api/documents/{doc_id}/cancel">

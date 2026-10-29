@@ -3,13 +3,13 @@
 
 import React, { createContext, useCallback, useContext, useId, useRef, useState, useEffect, useMemo } from 'react';
 import type { Components } from 'react-markdown';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen, Square } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen, Square, FileText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
 import remarkWindowsPaths from '../utils/remarkWindowsPaths';
 import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
-import { AgentActivity, WAITING_ON_USER_LABEL } from './AgentActivity';
+import { AgentActivity } from './AgentActivity';
 import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
@@ -21,6 +21,12 @@ import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
+import { useT, type Translate } from '../i18n/useT';
+import { useChatStore } from '../stores/chatStore';
+import {
+    buildCitationIndex, docForToken, findCitations, findPages,
+    type CitationIndex, type FoundPage, type LibraryDoc,
+} from '../utils/citations';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
@@ -58,7 +64,8 @@ interface MessageBubbleProps {
  * Types out on first show, swaps text in place after that, erases when done.
  */
 function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
-    const text = awaitingUser ? WAITING_ON_USER_LABEL : (label || 'Thinking...');
+    const t = useT();
+    const text = awaitingUser ? t('activity.waiting') : (label || t('msg.thinking'));
     const [reduceMotion] = useState(prefersReducedMotion);
     const [chars, setChars] = useState(0);
     const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>(reduceMotion ? 'idle' : 'typing');
@@ -445,6 +452,7 @@ export function turnEnding(content: string, stopState: Message['stopState']): Tu
 }
 
 export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, agentStepCount, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+    const t = useT();
     useModelNames();
     const echo = useMemo(
         () => (message.role === 'assistant' && !isStreaming && agentSteps
@@ -533,7 +541,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     // bubbles get one; previously only the assistant had a visible
     // timestamp readout via msg-stats-ts.
     const hoverTimestamp = message.created_at
-        ? `${message.role === 'user' ? 'Sent' : 'Replied'} ${formatFullTimestamp(message.created_at)}`
+        ? t(message.role === 'user' ? 'msg.sent' : 'msg.replied', { time: formatFullTimestamp(message.created_at) })
         : undefined;
 
     return (
@@ -555,8 +563,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 <button
                                     className="msg-action-btn"
                                     onClick={handleResend}
-                                    title="Resend message"
-                                    aria-label="Resend message"
+                                    title={t('msg.resend')}
+                                    aria-label={t('msg.resend')}
                                 >
                                     <RefreshCw size={12} />
                                 </button>
@@ -565,8 +573,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             <button
                                 className={`msg-copy ${copied ? 'copied' : ''}`}
                                 onClick={handleCopy}
-                                title={copied ? 'Copied!' : 'Copy message'}
-                                aria-label={copied ? 'Copied to clipboard' : 'Copy message'}
+                                title={copied ? t('msg.copied') : t('msg.copy')}
+                                aria-label={copied ? t('msg.copiedAria') : t('msg.copy')}
                             >
                                 {copied ? <Check size={12} /> : <Copy size={12} />}
                             </button>
@@ -575,8 +583,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 <button
                                     className={`msg-action-btn msg-delete ${confirmDelete ? 'confirm' : ''}`}
                                     onClick={handleDelete}
-                                    title={confirmDelete ? 'Click again to confirm' : 'Delete message'}
-                                    aria-label={confirmDelete ? 'Confirm delete message' : 'Delete message'}
+                                    title={confirmDelete ? t('msg.confirmDelete') : t('msg.delete')}
+                                    aria-label={confirmDelete ? t('msg.confirmDeleteAria') : t('msg.delete')}
                                 >
                                     <Trash2 size={12} />
                                 </button>
@@ -598,7 +606,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {isError && (
                         <div className="error-banner">
                             <AlertTriangle size={14} />
-                            <span>Something went wrong</span>
+                            <span>{t('msg.error')}</span>
                         </div>
                     )}
                     {/* Structured cards (#2108) — finalized message.cards wins;
@@ -622,8 +630,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 expanded={userExpanded}
                                 onToggle={toggleUserExpanded}
                                 controls={userBodyId}
-                                collapsedLabel={`Show all (${sizeLabel(message.content)})`}
-                                expandedLabel="Show less"
+                                collapsedLabel={t.hint(t('msg.showAll'), sizeLabel(message.content))}
+                                expandedLabel={t('msg.showLess')}
                                 className="msg-expand-toggle"
                             />
                         </>
@@ -635,10 +643,10 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             <Square size={9} fill="currentColor" aria-hidden="true" />
                             <span>
                                 {stopState === 'unconfirmed'
-                                    ? 'Stopped. GAIA did not confirm the stop, so some steps may be missing here. Reload the chat to see what it saved.'
+                                    ? t('msg.stoppedUnconfirmed')
                                     : message.stopError
-                                        ? `Stopped. GAIA reported an error while stopping: ${message.stopError}`
-                                        : 'Stopped'}
+                                        ? t('msg.stoppedError', { error: message.stopError })
+                                        : t('msg.stopped')}
                             </span>
                         </div>
                     )}
@@ -648,9 +656,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         <EmailConnectCta content={cleanedContent} />
                     )}
                     {message.role === 'assistant' && !isStreaming && (message.stats || latencyMs != null || message.created_at) && (
-                        <div className="msg-stats" aria-label="About this answer">
+                        <div className="msg-stats" aria-label={t('msg.about')}>
                             {message.created_at && (
-                                <span className="msg-stats-ts" title="Message timestamp">
+                                <span className="msg-stats-ts" title={t('msg.timestamp')}>
                                     {formatFullTimestamp(message.created_at)}
                                 </span>
                             )}
@@ -674,6 +682,7 @@ const StreamingContext = createContext(false);
 
 /** Custom code block with copy button; a long one opens collapsed to a preview. */
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
+    const t = useT();
     const [copied, setCopied] = useState(false);
     const [expanded, setExpanded] = useState(false);
     const streaming = useContext(StreamingContext);
@@ -710,17 +719,18 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     }, [code]);
 
     return (
-        <div className={`code-block${collapsed ? ' is-collapsed' : ''}`}>
+        // Code reads left to right even inside an Arabic answer.
+        <div className={`code-block${collapsed ? ' is-collapsed' : ''}`} dir="ltr">
             <div className="code-header">
                 <span className="code-lang">{lang || 'code'}</span>
                 <button
                     className={`code-copy ${copied ? 'copied' : ''}`}
                     onClick={handleCopy}
-                    title={copied ? 'Copied!' : 'Copy'}
-                    aria-label={copied ? 'Copied to clipboard' : 'Copy code'}
+                    title={copied ? t('msg.copied') : t('code.copy')}
+                    aria-label={copied ? t('msg.copiedAria') : t('code.copyAria')}
                 >
                     {copied ? <Check size={13} /> : <Copy size={13} />}
-                    <span>{copied ? 'Copied' : 'Copy'}</span>
+                    <span>{copied ? t('code.copied') : t('code.copy')}</span>
                 </button>
             </div>
             <pre id={bodyId}><code>{code}</code></pre>
@@ -769,6 +779,7 @@ function FilePathLink({ path }: { path: string }) {
     return (
         <span
             className="file-path-link"
+            dir="ltr"
             onClick={handleClick}
             title={`Open in file explorer: ${path}`}
             role="button"
@@ -809,14 +820,135 @@ function linkifyFilePaths(text: string): React.ReactNode {
     return <>{parts}</>;
 }
 
+/** The library's documents, as citations in an answer can name them. */
+const CitationContext = createContext<CitationIndex>(buildCitationIndex([]));
+
+/** A cited library document; opens at `page` (the first page cited after it, when there is one). */
+function CitationLink({ doc, page, t }: { doc: LibraryDoc; page?: number; t: Translate }) {
+    return (
+        <a
+            className="citation-link"
+            href={api.documentFileUrl(doc.id, page)}
+            target="_blank"
+            rel="noopener noreferrer"
+            dir="ltr"
+            title={page ? t('citation.openPage', { page }) : t('citation.open', { name: doc.filename })}
+            data-doc-id={doc.id}
+            data-page={page}
+        >
+            <FileText size={12} className="citation-icon" aria-hidden="true" />
+            {doc.filename}
+        </a>
+    );
+}
+
+function PageLink({ doc, page, label, t }: { doc: LibraryDoc; page: number; label: string; t: Translate }) {
+    return (
+        <a
+            className="citation-page"
+            href={api.documentFileUrl(doc.id, page)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={t('citation.openPage', { page })}
+            data-doc-id={doc.id}
+            data-page={page}
+        >
+            {label}
+        </a>
+    );
+}
+
+/** Page numbers cited at the start of `text`, before it names another document. */
+function leadingPages(index: CitationIndex, text: string): FoundPage[] {
+    const next = findCitations(index, text)[0];
+    return findPages(next ? text.slice(0, next.start) : text);
+}
+
 /**
- * Recursively process React children, replacing string children with
- * linkified file paths. This is needed because react-markdown v9 does
- * not support a `text` component override.
+ * A text run with its cited documents and pages linked, and any other Windows
+ * path linked as before. `carried` is a document named just before this run
+ * (in inline code), whose pages may open the run.
  */
-function linkifyChildren(children: React.ReactNode): React.ReactNode {
-    return React.Children.map(children, (child) =>
-        typeof child === 'string' ? linkifyFilePaths(child) : child
+function citeText(text: string, index: CitationIndex, t: Translate, carried: LibraryDoc | null): React.ReactNode {
+    const citations = findCitations(index, text);
+    const parts: Array<{ start: number; end: number; node: React.ReactNode }> = [];
+    const addPages = (doc: LibraryDoc, pages: FoundPage[], offset: number) => {
+        for (const pg of pages) {
+            const start = offset + pg.start;
+            const end = offset + pg.end;
+            parts.push({ start, end, node: <PageLink key={`p${start}`} doc={doc} page={pg.page} label={text.slice(start, end)} t={t} /> });
+        }
+    };
+    if (carried) addPages(carried, findPages(text.slice(0, citations[0]?.start ?? text.length)), 0);
+    citations.forEach((c, i) => {
+        const tail = text.slice(c.end, citations[i + 1]?.start ?? text.length);
+        const pages = findPages(tail);
+        parts.push({ start: c.start, end: c.end, node: <CitationLink key={`c${c.start}`} doc={c.doc} page={pages[0]?.page} t={t} /> });
+        addPages(c.doc, pages, c.end);
+    });
+    if (parts.length === 0) return linkifyFilePaths(text);
+    parts.sort((a, b) => a.start - b.start);
+    const out: React.ReactNode[] = [];
+    let at = 0;
+    for (const part of parts) {
+        if (part.start > at) out.push(<React.Fragment key={`t${at}`}>{linkifyFilePaths(text.slice(at, part.start))}</React.Fragment>);
+        out.push(part.node);
+        at = part.end;
+    }
+    if (at < text.length) out.push(<React.Fragment key={`t${at}`}>{linkifyFilePaths(text.slice(at))}</React.Fragment>);
+    return <>{out}</>;
+}
+
+/** The library document an inline-code span names (a filename or a path to one), or null. */
+function inlineCodeDoc(index: CitationIndex, children: React.ReactNode): LibraryDoc | null {
+    return typeof children === 'string' ? docForToken(index, children) : null;
+}
+
+/**
+ * Process a block's children: cite library documents and their pages, and link
+ * other file paths. Needed because react-markdown v9 has no `text` override.
+ * A filename in inline code hands its document to the text after it, where
+ * "، الصفحتان 6–7" names the pages.
+ */
+function Linkified({ children }: { children?: React.ReactNode }) {
+    const index = useContext(CitationContext);
+    const t = useT();
+    const items = React.Children.toArray(children);
+    let carried: LibraryDoc | null = null;
+    const out = items.map((child, i) => {
+        if (typeof child === 'string') {
+            const node = citeText(child, index, t, carried);
+            carried = null;
+            return <React.Fragment key={`s${i}`}>{node}</React.Fragment>;
+        }
+        carried = null;
+        if (React.isValidElement(child) && child.type === InlineCode) {
+            const doc = inlineCodeDoc(index, (child.props as { children?: React.ReactNode }).children);
+            if (doc) {
+                const next = items[i + 1];
+                const pages = typeof next === 'string' ? leadingPages(index, next) : [];
+                carried = doc;
+                return <CitationLink key={`k${i}`} doc={doc} page={pages[0]?.page} t={t} />;
+            }
+        }
+        return child;
+    });
+    return <>{out}</>;
+}
+
+// `node` is the markdown AST; spread onto <code> it renders as node="[object Object]".
+function InlineCode({ className: _className, children, node: _node, ...props }: React.ComponentProps<'code'> & { node?: unknown }) {
+    const index = useContext(CitationContext);
+    const t = useT();
+    // A filename here outside a block Linkified handles (e.g. inside **bold**).
+    const doc = inlineCodeDoc(index, children);
+    if (doc) return <CitationLink doc={doc} t={t} />;
+    const path = inlineCodePath(children);
+    if (path) return <FilePathLink path={path} />;
+    return (
+        <code className="inline-code" dir="ltr" {...props}>
+            {children}
+        </code>
     );
 }
 
@@ -829,18 +961,8 @@ const MARKDOWN_COMPONENTS: Components = {
     // <pre><code>, inline in just <code>. We use our `pre`
     // override to render fenced blocks as CodeBlock, so the
     // `code` component only handles inline code.
-    // `node` is the markdown AST; spread onto <code> it renders as node="[object Object]".
-    code({ className, children, node: _node, ...props }) {
-        // If we get here, it's inline code (fenced blocks are
-        // handled by the `pre` override below).
-        const path = inlineCodePath(children);
-        if (path) return <FilePathLink path={path} />;
-        return (
-            <code className="inline-code" {...props}>
-                {children}
-            </code>
-        );
-    },
+    // If we get here, it's inline code (fenced blocks are handled by the `pre` override below).
+    code: InlineCode,
     // Fenced code blocks: react-markdown wraps them in <pre><code>.
     // Extract the language and code text, render as CodeBlock.
     // (The fence→card mount for email_pre_scan was retired at the
@@ -863,13 +985,13 @@ const MARKDOWN_COMPONENTS: Components = {
             );
         }
         // Fallback: render as-is
-        return <pre>{children}</pre>;
+        return <pre dir="ltr">{children}</pre>;
     },
     // Custom table styling
     table({ children }) {
         return (
             <div className="md-table-wrap">
-                <table className="md-table">{children}</table>
+                <table className="md-table" dir="auto">{children}</table>
             </div>
         );
     },
@@ -888,31 +1010,34 @@ const MARKDOWN_COMPONENTS: Components = {
     },
     // Paragraphs — linkify file paths in text children
     p({ children }) {
-        return <p className="md-p">{linkifyChildren(children)}</p>;
+        return <p className="md-p" dir="auto"><Linkified>{children}</Linkified></p>;
     },
     // Headers
     h1({ children }) {
-        return <h2 className="md-h2">{linkifyChildren(children)}</h2>;
+        return <h2 className="md-h2" dir="auto"><Linkified>{children}</Linkified></h2>;
     },
     h2({ children }) {
-        return <h3 className="md-h3">{linkifyChildren(children)}</h3>;
+        return <h3 className="md-h3" dir="auto"><Linkified>{children}</Linkified></h3>;
     },
     h3({ children }) {
-        return <h4 className="md-h4">{linkifyChildren(children)}</h4>;
+        return <h4 className="md-h4" dir="auto"><Linkified>{children}</Linkified></h4>;
+    },
+    h4({ children }) {
+        return <h5 className="md-h4" dir="auto"><Linkified>{children}</Linkified></h5>;
     },
     // Lists
     ul({ children }) {
-        return <ul className="md-ul">{children}</ul>;
+        return <ul className="md-ul" dir="auto">{children}</ul>;
     },
     ol({ children, start }) {
-        return <ol className="md-ol" start={start}>{children}</ol>;
+        return <ol className="md-ol" start={start} dir="auto">{children}</ol>;
     },
     li({ children }) {
-        return <li className="md-li">{linkifyChildren(children)}</li>;
+        return <li className="md-li" dir="auto"><Linkified>{children}</Linkified></li>;
     },
     // Blockquote
     blockquote({ children }) {
-        return <blockquote className="md-blockquote">{linkifyChildren(children)}</blockquote>;
+        return <blockquote className="md-blockquote" dir="auto"><Linkified>{children}</Linkified></blockquote>;
     },
     // Horizontal rule
     hr() {
@@ -920,19 +1045,22 @@ const MARKDOWN_COMPONENTS: Components = {
     },
     // Table cells
     td({ children }) {
-        return <td>{linkifyChildren(children)}</td>;
+        return <td dir="auto"><Linkified>{children}</Linkified></td>;
     },
     th({ children }) {
-        return <th>{linkifyChildren(children)}</th>;
+        return <th dir="auto"><Linkified>{children}</Linkified></th>;
     },
 };
 
 export function RenderedContent({ content, showCursor, isStreaming = false }: { content: string; showCursor?: boolean; isStreaming?: boolean }) {
+    const documents = useChatStore((s) => s.documents);
+    const citations = useMemo(() => buildCitationIndex(documents), [documents]);
     if (!content && !showCursor) return null;
     if (!content && showCursor) return <span className="cursor" />;
 
     return (
         <StreamingContext.Provider value={isStreaming}>
+        <CitationContext.Provider value={citations}>
         <div className="md-content">
             <ReactMarkdown
                 remarkPlugins={[remarkGfm, remarkWindowsPaths, remarkSoftBreaks]}
@@ -944,6 +1072,7 @@ export function RenderedContent({ content, showCursor, isStreaming = false }: { 
             </ReactMarkdown>
             {showCursor && <span className="cursor" />}
         </div>
+        </CitationContext.Provider>
         </StreamingContext.Provider>
     );
 }

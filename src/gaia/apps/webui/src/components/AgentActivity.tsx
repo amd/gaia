@@ -35,6 +35,8 @@ import * as api from '../services/api';
 import { CodeBlock } from './PermissionPrompt';
 import { log } from '../utils/logger';
 import { StepResult } from './LongContent';
+import { isMessageKey, ref, type MessageKey, type Param } from '../i18n/registry';
+import { getT, useT } from '../i18n/useT';
 import './AgentActivity.css';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -129,12 +131,17 @@ function getToolMeta(toolName?: string, mcp?: McpIdentity): ToolMeta {
 /** The fallback line for a tool row that arrived without a narration (older saved turns). */
 function toolFallbackLabel(step: AgentStep): string {
     const meta = getToolMeta(step.tool, step);
+    const t = getT();
+    const done = `tool.${step.tool}.done`;
+    const translated = !!step.tool && isMessageKey(done);
+    const activeLabel: Param = translated ? ref(`tool.${step.tool}.active` as MessageKey) : meta.activeLabel;
     // The done-label ("Wrote file") would claim a failed, denied or stopped call succeeded.
     const unfinished = step.success == null && !step.result;
     return step.active
-        ? meta.activeLabel
-        : step.success === false ? `${meta.activeLabel} failed`
-        : unfinished ? `${meta.activeLabel} didn't finish` : meta.label;
+        ? (translated ? t(`tool.${step.tool}.active` as MessageKey) : meta.activeLabel)
+        : step.success === false ? t('tool.failed', { label: activeLabel })
+        : unfinished ? t('tool.unfinished', { label: activeLabel })
+        : translated ? t(done as MessageKey) : meta.label;
 }
 
 /** The one plain line a tool row shows by default, and the live line while it runs. */
@@ -303,9 +310,6 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
     return result;
 }
 
-/** What a turn blocked on the user says, in the message header and its held tool row. */
-export const WAITING_ON_USER_LABEL = 'Waiting for you';
-
 /** `8` -> "8s", `125` -> "2m 05s". */
 export function formatElapsed(seconds: number): string {
     const s = Math.max(0, Math.floor(seconds));
@@ -341,6 +345,7 @@ interface AgentActivityProps {
 
 /** Displays agent activity as a single expandable "Thinking" panel with tool calls inline. */
 export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCount, awaitingUser = false }: AgentActivityProps) {
+    const t = useT();
     // Always start collapsed — thinking text is shown via ThinkingIndicator
     // in the message header. Users can expand to see details if they want.
     const [expanded, setExpanded] = useState(false);
@@ -427,9 +432,9 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
         ? agentStepCount
         : rowCount || displaySteps.length;
     const summaryText = hasPolicyAlerts
-        ? `Blocked by policy \u00b7 ${policySteps.length} alert${policySteps.length !== 1 ? 's' : ''}`
-        : `${stepCount} step${stepCount !== 1 ? 's' : ''}`
-            + (toolCallCount > 0 ? ` \u00b7 ${toolCallCount} tool${toolCallCount !== 1 ? 's' : ''}` : '');
+        ? t.plural('activity.policy', policySteps.length)
+        : t.plural('activity.steps', stepCount)
+            + (toolCallCount > 0 ? ` \u00b7 ${t.plural('activity.tools', toolCallCount)}` : '');
 
     return (
         <div className={`agent-activity ${variant} ${isActive ? 'active' : 'done'} ${hasErrors ? 'has-errors' : ''} ${hasPolicyAlerts ? 'has-policy-alerts' : ''}`}>
@@ -438,7 +443,7 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
                 className="agent-summary-bar"
                 onClick={() => setExpanded(!expanded)}
                 aria-expanded={expanded}
-                aria-label={expanded ? 'Collapse agent activity' : 'Expand agent activity'}
+                aria-label={expanded ? t('activity.collapse') : t('activity.expand')}
             >
                 <div className="agent-summary-left">
                     {hasErrors ? (
@@ -529,6 +534,7 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
 // ── Flow: Reasoning (collapsed unless it is streaming right now) ──────────
 
 function FlowThought({ step, live }: { step: AgentStep; live: boolean }) {
+    const t = useT();
     const text = step.detail || step.label || '';
     const [open, setOpen] = useState(live);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -556,8 +562,8 @@ function FlowThought({ step, live }: { step: AgentStep; live: boolean }) {
                 aria-expanded={open}
             >
                 <Brain size={13} className="flow-tool-icon" />
-                <span>{live ? 'Thinking' : 'Reasoning'}</span>
-                <span className="flow-reasoning-count">{words} word{words !== 1 ? 's' : ''}</span>
+                <span>{live ? t('activity.thinking') : t('activity.reasoning')}</span>
+                <span className="flow-reasoning-count">{t.plural('activity.words', words)}</span>
                 {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
             </button>
             {open && (
@@ -684,10 +690,11 @@ interface FlowToolCardProps {
 }
 
 function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }: FlowToolCardProps) {
+    const t = useT();
     const Icon = getToolMeta(step.tool, step).icon;
     // A call held for the user's answer hasn't started, so it neither runs nor times.
     const waiting = !!step.active && awaitingUser;
-    const line = waiting ? WAITING_ON_USER_LABEL : toolRowText(step);
+    const line = waiting ? t('activity.waiting') : toolRowText(step);
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
     const failure = step.success === false && step.result ? step.result : '';

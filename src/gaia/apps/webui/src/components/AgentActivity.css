@@ -22,7 +22,8 @@
     width: auto;
     max-width: 100%;
     gap: 6px;
-    padding: 2px 8px 2px 4px;
+    padding-block: 2px;
+    padding-inline: 4px 8px;
     border-radius: var(--radius-xs);
     background: transparent;
     border: 1px solid transparent;
@@ -167,7 +168,7 @@
     font-size: 12px;
     font-family: var(--font-sans);
     color: var(--text-secondary);
-    text-align: left;
+    text-align: start;
     cursor: pointer;
 }
 .flow-reasoning-toggle:hover {
@@ -210,7 +211,7 @@
     height: 1.1em;
     background: var(--accent);
     vertical-align: text-bottom;
-    margin-left: 1px;
+    margin-inline-start: 1px;
     animation: cursorBlink var(--duration-blink) var(--ease-step) infinite;
 }
 
@@ -256,7 +257,7 @@
     font-size: 13px;
     font-family: var(--font-sans);
     color: var(--text-secondary);
-    text-align: left;
+    text-align: start;
     transition: background var(--duration-fast) var(--ease);
     cursor: pointer;
 }
@@ -411,7 +412,7 @@
     font-size: 12px;
     color: var(--text-muted);
     white-space: nowrap;
-    margin-right: 4px;
+    margin-inline-end: 4px;
 }
 
 /* Chevron */
@@ -423,6 +424,10 @@
 }
 .flow-tool-chevron.expanded {
     transform: rotate(90deg);
+}
+/* The chevron inside is mirrored right to left, so it turns the other way to point down. */
+.flow-tool-chevron.expanded:dir(rtl) {
+    transform: rotate(-90deg);
 }
 
 /* Tool detail (expanded) */
@@ -472,7 +477,7 @@
     border: none;
     padding: 0;
     cursor: pointer;
-    text-align: left;
+    text-align: start;
     margin-bottom: 0;
 }
 .flow-plan-toggle:hover {
@@ -483,7 +488,7 @@
     font-size: 12px;
     font-weight: 400;
     color: var(--text-muted);
-    margin-left: 2px;
+    margin-inline-start: 2px;
 }
 
 .flow-plan-list {
@@ -585,7 +590,7 @@
 }
 
 .flow-policy-alert-decision {
-    margin-left: auto;
+    margin-inline-start: auto;
     padding: 1px 6px;
     border-radius: var(--radius-xs);
     background: color-mix(in srgb, var(--accent-yellow) 14%, transparent);
@@ -743,7 +748,7 @@
     text-decoration-style: dashed;
 }
 .tool-result-path svg {
-    margin-right: 3px;
+    margin-inline-end: 3px;
     vertical-align: -1px;
 }
 .tool-result-path:hover {
@@ -839,6 +844,9 @@
 }
 .chunk-chevron.expanded {
     transform: rotate(90deg);
+}
+.chunk-chevron.expanded:dir(rtl) {
+    transform: rotate(-90deg);
 }
 
 .chunk-body {
@@ -1010,7 +1018,8 @@
 }
 
 .cmd-stdout {
-    padding: 4px 10px 8px 22px;
+    padding-block: 4px 8px;
+    padding-inline: 22px 10px;
     margin: 0;
     color: var(--text-code);
     white-space: pre-wrap;
@@ -1034,7 +1043,8 @@
 }
 
 .cmd-stderr {
-    padding: 4px 10px 8px 22px;
+    padding-block: 4px 8px;
+    padding-inline: 22px 10px;
     margin: 0;
     color: var(--code-danger);
     white-space: pre-wrap;
@@ -1055,7 +1065,8 @@
 }
 
 .cmd-empty {
-    padding: 6px 10px 8px 22px;
+    padding-block: 6px 8px;
+    padding-inline: 22px 10px;
     color: var(--text-code-dim);
     font-style: italic;
 }

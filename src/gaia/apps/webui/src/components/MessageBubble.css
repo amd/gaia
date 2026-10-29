@@ -49,7 +49,7 @@
 
 .msg-actions {
     position: absolute;
-    right: 0;
+    inset-inline-end: 0;
     bottom: -14px;
     display: flex;
     gap: 2px;
@@ -114,7 +114,7 @@
 /* ── Error message styling ────────────────────────────────────── */
 .msg-error {
     background: color-mix(in srgb, var(--danger) 4%, transparent);
-    border-left: 2px solid var(--danger);
+    border-inline-start: 2px solid var(--danger);
 }
 
 [data-theme="dark"] .msg-error {
@@ -207,7 +207,7 @@
 .md-ul,
 .md-ol {
     margin: 8px 0;
-    padding-left: 24px;
+    padding-inline-start: 24px;
 }
 .md-ul {
     list-style-type: disc;
@@ -217,7 +217,7 @@
 }
 .md-li {
     margin-bottom: 4px;
-    padding-left: 4px;
+    padding-inline-start: 4px;
 }
 .md-li > .md-p {
     margin-bottom: 4px;
@@ -310,9 +310,11 @@
 .md-blockquote {
     margin: 12px 0;
     padding: 10px 18px;
-    border-left: 2px solid var(--accent);
+    border-inline-start: 2px solid var(--accent);
     background: var(--tint-subtle);
-    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    border-radius: var(--radius-md);
+    border-start-start-radius: 0;
+    border-end-start-radius: 0;
     color: var(--text-secondary);
 }
 .md-blockquote .md-p {
@@ -347,7 +349,7 @@
     line-height: 1.6;
 }
 .md-table th {
-    text-align: left;
+    text-align: start;
     padding: 8px 14px;
     font-weight: 600;
     font-size: 10.5px;
@@ -374,7 +376,7 @@
 /* Right-align numeric columns */
 .md-table td:last-child,
 .md-table th:last-child {
-    text-align: right;
+    text-align: end;
 }
 
 /* ── Collapsible sections (<details><summary>) ───────────────── */
@@ -402,12 +404,18 @@
 .md-content details summary::before {
     content: '\25B6';
     display: inline-block;
-    margin-right: 8px;
+    margin-inline-end: 8px;
     font-size: 10px;
     transition: transform var(--duration) var(--ease);
 }
 .md-content details[open] summary::before {
     transform: rotate(90deg);
+}
+.md-content details summary:dir(rtl)::before {
+    content: 'C0';
+}
+.md-content details[open] summary:dir(rtl)::before {
+    transform: rotate(-90deg);
 }
 .md-content details summary:hover {
     background: var(--tint-hover);
@@ -428,10 +436,10 @@
 /* ── Task lists (GFM) ────────────────────────────────────────── */
 .md-content .task-list-item {
     list-style: none;
-    margin-left: -20px;
+    margin-inline-start: -20px;
 }
 .md-content .task-list-item input[type="checkbox"] {
-    margin-right: 6px;
+    margin-inline-end: 6px;
 }
 
 /* ── Code blocks ──────────────────────────────────────────────── */
@@ -524,7 +532,7 @@
     width: 8px;
     height: 16px;
     background: var(--accent);
-    margin-left: 2px;
+    margin-inline-start: 2px;
     vertical-align: text-bottom;
     /* Pixelated terminal aesthetic - sharp edges */
     border-radius: 0;
@@ -538,13 +546,13 @@
         padding: 12px 16px;
     }
     .msg-body {
-        padding-left: 0;
+        padding-inline-start: 0;
     }
     .md-table-wrap {
         margin: 8px -8px;
         border-radius: 0;
-        border-left: none;
-        border-right: none;
+        border-inline-start: none;
+        border-inline-end: none;
     }
 }
 
@@ -615,6 +623,28 @@
 /* Separator dots between stat items */
 .msg-stats > span + span::before {
     content: '·';
-    margin-right: 6px;
+    margin-inline-end: 6px;
     opacity: 0.4;
+}
+
+/* ── Citations: a cited library document and its pages open the file ── */
+.citation-link,
+.citation-page {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 3px;
+    transition: color var(--duration-fast) var(--ease);
+}
+.citation-link:hover,
+.citation-page:hover {
+    text-decoration-style: solid;
+}
+.citation-link {
+    font-weight: 500;
+    overflow-wrap: anywhere;
+}
+.citation-icon {
+    vertical-align: -2px;
+    margin-inline-end: 3px;
 }

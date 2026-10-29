@@ -10,6 +10,7 @@ import codecs
 import errno
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -51,6 +52,7 @@ from gaia.llm.lemonade_client import (
     EMBEDDER_UBATCH_TOKENS,
 )
 from gaia.logger import get_logger
+from gaia.rag import pypdf_bidi
 from gaia.security import PathValidator
 from gaia.utils.file_lock import (
     FileLockError,
@@ -61,6 +63,9 @@ from gaia.utils.file_lock import (
     write_bytes_atomic,
     write_text_atomic,
 )
+
+if PdfReader is not None and PdfReader.__module__.startswith("pypdf."):
+    pypdf_bidi.install()
 
 _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF8, "utf-8-sig"),
@@ -283,11 +288,43 @@ def _cache_lock_target(cache_path: str) -> Path:
     return Path(cache_path).parent / _CACHE_LOCK_NAME
 
 
+# Letter ranges -> script name for document_scripts(); first match wins.
+_SCRIPT_RANGES = (
+    (
+        "Arabic",
+        (
+            (0x0600, 0x06FF),
+            (0x0750, 0x077F),
+            (0x08A0, 0x08FF),
+            (0xFB50, 0xFDFF),
+            (0xFE70, 0xFEFF),
+        ),
+    ),
+    ("Hebrew", ((0x0590, 0x05FF),)),
+    ("Cyrillic", ((0x0400, 0x04FF),)),
+    ("Devanagari", ((0x0900, 0x097F),)),
+    ("CJK", ((0x3040, 0x30FF), (0x4E00, 0x9FFF), (0xAC00, 0xD7AF))),
+)
+
+
+def _script_of(ch: str) -> Optional[str]:
+    """The script of a letter, "Latin" for ASCII/Latin letters, None for the rest."""
+    if not ch.isalpha():
+        return None
+    code = ord(ch)
+    if code < 0x0250:
+        return "Latin"
+    for name, ranges in _SCRIPT_RANGES:
+        if any(lo <= code <= hi for lo, hi in ranges):
+            return name
+    return None
+
+
 # Files the RAG cache writes: signed chunk caches, their sidecar signatures,
-# and extracted-text markdown. clear_cache() deletes nothing else.
+# saved vectors, and extracted-text markdown. clear_cache() deletes nothing else.
 _CACHE_OWNED_FILE = re.compile(
     r"^(?:[0-9a-f]{16}_[0-9a-f]{32}|[0-9a-f]{64}_notfound)(?:_[0-9a-f]{8})?"
-    r"\.json(?:\.sig)?$"
+    r"\.json(?:\.sig|\.[0-9a-f]{24}\.npy)?$"
     r"|_extracted\.md$"
 )
 
@@ -495,6 +532,7 @@ class RAGSDK:
         # Per-file indexing: maps file paths to their chunk indices
         # This enables efficient per-file searches
         self.file_to_chunk_indices = {}  # {file_path: [chunk_idx1, chunk_idx2, ...]}
+        self._scripts_cache = {}  # {file_path: ((first_idx,), n_chunks), scripts)}
         self.chunk_to_file = {}  # {chunk_idx: file_path} for reverse lookup
 
         # Per-file FAISS indices and embeddings (CACHED for performance)
@@ -800,6 +838,37 @@ class RAGSDK:
             return f"{hashlib.sha256(str(path).encode()).hexdigest()}_notfound"
         path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
         return f"{path_hash}_{hasher.hexdigest()[:32]}"
+
+    def document_scripts(self, file_path: str) -> List[str]:
+        """Writing systems that make up at least 10% of an indexed file's letters.
+
+        Lets the agent search a document in its own language when the question
+        is asked in another (an English question over an Arabic report).
+        """
+        with self._state_lock:
+            indices = list(self.file_to_chunk_indices.get(file_path, []))
+            chunks = [self.chunks[i] for i in indices if i < len(self.chunks)]
+        key = (tuple(indices[:1]), len(chunks))
+        cached = self._scripts_cache.get(file_path)
+        if cached and cached[0] == key:
+            return list(cached[1])
+        counts: Dict[str, int] = {}
+        for chunk in chunks:
+            for ch in chunk:
+                script = _script_of(ch)
+                if script:
+                    counts[script] = counts.get(script, 0) + 1
+        total = sum(counts.values())
+        scripts = (
+            sorted(
+                (name for name, n in counts.items() if n / total >= 0.1),
+                key=lambda name: -counts[name],
+            )
+            if total
+            else []
+        )
+        self._scripts_cache[file_path] = (key, scripts)
+        return list(scripts)
 
     def _get_cache_path(self, file_path: str, content_key: Optional[str] = None) -> str:
         """Chunk-cache path: :meth:`_content_key` plus :meth:`_chunking_fingerprint`.
@@ -1307,7 +1376,9 @@ class RAGSDK:
                 page_start = time_module.time()
 
                 # Step 1: Extract text with pypdf
-                pypdf_text = page.extract_text()
+                pypdf_text = pypdf_bidi.normalize_arabic_presentation_forms(
+                    page.extract_text() or ""
+                )
 
                 # Step 2: Check for images
                 has_imgs = False
@@ -2739,22 +2810,72 @@ These positions indicate where to split the text."""
         index.add(embeddings.astype("float32"))
         return index
 
+    def _vectors_path(self, cache_path: str, chunks: List[str]) -> str:
+        """Where the embeddings of *chunks* under the current embedder are kept.
+
+        The name binds the vectors to the embedding model and the exact chunk
+        text, so a different model, chunking or file never reads them.
+        """
+        digest = hashlib.sha256(self.config.embedding_model.encode("utf-8"))
+        for chunk in chunks:
+            digest.update(b"\x1e" + chunk.encode("utf-8"))
+        return f"{cache_path}.{digest.hexdigest()[:24]}.npy"
+
+    def _load_vectors(self, path: str, count: int) -> Optional["np.ndarray"]:
+        """Saved embeddings at *path*, or None when absent or not *count* rows."""
+        if not os.path.exists(path):
+            return None
+        try:
+            with file_lock(_cache_lock_target(path)):
+                vectors = np.load(path, allow_pickle=False)
+        except (OSError, ValueError) as e:
+            self.log.warning(f"Re-embedding: saved vectors unreadable ({path}): {e}")
+            return None
+        if vectors.ndim != 2 or vectors.shape[0] != count:
+            self.log.warning(
+                f"Re-embedding: saved vectors have shape {vectors.shape}, "
+                f"expected {count} rows ({path})"
+            )
+            return None
+        return vectors
+
+    def _save_vectors(self, path: str, vectors: "np.ndarray") -> None:
+        buf = io.BytesIO()
+        np.save(buf, np.ascontiguousarray(vectors, dtype="float32"))
+        with file_lock(_cache_lock_target(path)):
+            write_bytes_atomic(path, buf.getvalue())
+
     def _create_vector_index(
         self,
         chunks: List[str],
         return_embeddings: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         wait_callback: Optional[Callable[[int], None]] = None,
+        cache_path: Optional[str] = None,
     ) -> tuple:
         """Create FAISS vector index from chunks with progress reporting.
 
         ``progress_callback(done, total)`` is called before the first chunk is
         embedded and after every ``PROGRESS_SLICE_CHUNKS`` chunks.
         ``wait_callback`` is passed to ``_encode_texts``.
+
+        With ``cache_path`` (the document's chunk cache), embeddings are saved
+        beside it and reused, so reopening a document never re-embeds it.
         """
         import time as time_module  # pylint: disable=reimported
 
         self._load_embedder()
+
+        vectors_path = self._vectors_path(cache_path, chunks) if cache_path else None
+        saved = self._load_vectors(vectors_path, len(chunks)) if vectors_path else None
+        if saved is not None:
+            if progress_callback is not None and chunks:
+                progress_callback(len(chunks), len(chunks))
+            index = self._create_faiss_index(saved)
+            self.log.info(f"📚 Index ready with {index.ntotal} saved vectors")
+            if return_embeddings:
+                return index, chunks, saved
+            return index, chunks
 
         # Generate embeddings with detailed progress
         self.log.info(f"🔍 Generating embeddings for {len(chunks)} chunks...")
@@ -2788,6 +2909,12 @@ These positions indicate where to split the text."""
                 progress_callback(start + len(part), len(chunks))
             embeddings = np.concatenate(parts)
         embed_duration = time_module.time() - embed_start
+        if vectors_path:
+            try:
+                self._save_vectors(vectors_path, embeddings)
+            except (OSError, FileLockError) as e:
+                # Saved vectors only speed up reopening; the index itself is built.
+                self.log.warning(f"Could not save vectors to {vectors_path}: {e}")
 
         if self.config.show_stats:
             print(
@@ -3328,12 +3455,12 @@ These positions indicate where to split the text."""
                         vlm_info = f" (VLM: {cached_metadata['vlm_pages']} pages)"
                     print(f"  ✅ Loaded {len(cached_chunks)} cached chunks{vlm_info}")
 
-                # The cache holds chunks, not vectors, so this re-embeds.
                 new_index, _, file_embeddings = self._create_vector_index(
                     list(cached_chunks),
                     return_embeddings=True,
                     progress_callback=progress_callback,
                     wait_callback=wait_callback,
+                    cache_path=cache_path,
                 )
 
                 with self._state_lock:
@@ -3502,6 +3629,7 @@ These positions indicate where to split the text."""
                 return_embeddings=True,
                 progress_callback=progress_callback,
                 wait_callback=wait_callback,
+                cache_path=cache_path,
             )
 
             with self._state_lock:

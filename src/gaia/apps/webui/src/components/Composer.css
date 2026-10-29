@@ -6,7 +6,8 @@
     flex-direction: column;
     gap: 8px;
     width: 100%;
-    padding: 12px 12px 10px 16px;
+    padding-block: 12px 10px;
+    padding-inline: 16px 12px;
     background: var(--bg-input);
     border-radius: var(--radius-xl);
     box-shadow: var(--shadow-sm);
@@ -146,7 +147,8 @@
     align-items: center;
     gap: 6px;
     max-width: 260px;
-    padding: 3px 4px 3px 8px;
+    padding-block: 3px;
+    padding-inline: 8px 4px;
     border-radius: var(--radius-md);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
@@ -187,7 +189,8 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
     white-space: normal;
-    padding: 0 4px 2px 0;
+    padding-block: 0 2px;
+    padding-inline: 0 4px;
     color: var(--danger);
 }
 

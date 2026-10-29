@@ -3,8 +3,9 @@
 """What the RAG document cache is keyed on, and what it may reuse (#4606).
 
 Cached chunks are cut to ``chunk_size`` / ``chunk_overlap`` / ``use_llm_chunking``,
-so those settings are part of the key. The embedder is not: the cache stores
-text and chunks only, and every load re-embeds with the configured model.
+so those settings are part of the key. The embedder is not: the chunk cache stores
+text only, and its vectors sit beside it in a file named for the embedder and the
+exact chunks, so a reload reuses them and a different embedder re-embeds.
 """
 
 import json
@@ -85,7 +86,7 @@ def test_new_chunk_size_reindexes_instead_of_reusing_old_chunks(tmp_path, docume
     assert again.index_document(document).get("from_cache")
 
 
-def test_cache_holds_no_vectors_and_a_new_embedder_re_embeds(tmp_path, document):
+def test_chunk_cache_holds_no_vectors_and_a_new_embedder_re_embeds(tmp_path, document):
     first = _make(tmp_path, embedding_model="user.embedder-a")
     assert first.index_document(document)["success"]
     with open(first._get_cache_path(document), encoding="utf-8") as f:
@@ -94,8 +95,33 @@ def test_cache_holds_no_vectors_and_a_new_embedder_re_embeds(tmp_path, document)
     switched = _make(tmp_path, embedding_model="user.embedder-b")
     stats = switched.index_document(document)
     assert stats.get("from_cache")
-    assert switched.encoded_with, "cache load reused vectors instead of re-embedding"
+    assert switched.encoded_with, "cache load reused another embedder's vectors"
     assert set(switched.encoded_with) == {"user.embedder-b"}
+
+
+def test_reloading_with_the_same_embedder_reuses_saved_vectors(tmp_path, document):
+    first = _make(tmp_path)
+    assert first.index_document(document)["success"]
+    assert first.encoded_with
+
+    reopened = _make(tmp_path)
+    stats = reopened.index_document(document)
+    assert stats["success"] and stats.get("from_cache")
+    assert reopened.encoded_with == [], "a reopened document was re-embedded"
+    assert reopened.index.ntotal == len(reopened.chunks)
+
+
+def test_damaged_saved_vectors_are_re_embedded(tmp_path, document):
+    first = _make(tmp_path)
+    assert first.index_document(document)["success"]
+    vectors = [n for n in os.listdir(first.config.cache_dir) if n.endswith(".npy")]
+    assert len(vectors) == 1
+    with open(os.path.join(first.config.cache_dir, vectors[0]), "wb") as f:
+        f.write(b"not numpy")
+
+    reopened = _make(tmp_path)
+    assert reopened.index_document(document)["success"]
+    assert reopened.encoded_with, "unreadable vectors were used"
 
 
 def test_chunk_cache_and_markdown_share_one_content_key(tmp_path, document):
@@ -107,6 +133,7 @@ def test_chunk_cache_and_markdown_share_one_content_key(tmp_path, document):
     assert os.path.basename(sdk._get_cache_path(document)) in names
     # rag-cache.lock is the cross-process lock every entry in the dir shares.
     assert all(name.startswith(key) for name in names if name != "rag-cache.lock")
+    assert all(_CACHE_OWNED_FILE.search(n) for n in names if n != "rag-cache.lock")
 
 
 def test_an_edit_changes_the_content_key(tmp_path, document):
