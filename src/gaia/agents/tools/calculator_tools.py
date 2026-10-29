@@ -45,7 +45,7 @@ _FIELDS: Dict[str, Dict[str, _Field]] = {
     "show_loan_calculator": {
         "price": _Field("amount", 0, 1e10, "350000", low_open=True),
         "annual_rate_percent": _Field("annualRatePercent", 0, 50, "6.5"),
-        "years": _Field("years", 0, 50, "30", low_open=True),
+        "years": _Field("years", 1, 50, "30"),
         "down_payment": _Field("downPayment", 0, 1e10, "0"),
     },
 }
@@ -184,7 +184,7 @@ class CalculatorToolsMixin:
             Args:
                 price: The full price as the user said it, e.g. 300000. Never subtract the down payment.
                 annual_rate_percent: Yearly interest rate in percent, 0 to 50, e.g. 6.5.
-                years: Loan term in years, up to 50, e.g. 30.
+                years: Loan term in years, 1 to 50, e.g. 30.
                 down_payment: Optional amount paid up front, less than price, e.g. 60000.
                 currency: ISO code of the money in THIS request: "$" is "USD", "€" is "EUR", "£" is "GBP".
                 title: Optional name, e.g. "House on Elm Street".

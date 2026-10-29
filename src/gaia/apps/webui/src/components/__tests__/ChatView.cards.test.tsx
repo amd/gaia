@@ -217,6 +217,53 @@ describe('ChatView streaming cards (#2108)', () => {
         }
     });
 
+    it('a finished turn keeps its live confirmation card beside the saved tool card', async () => {
+        vi.useFakeTimers();
+        try {
+            await driveSend();
+            act(() => {
+                capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'pre_scan_inbox' } as unknown as StreamEvent);
+            });
+            act(() => {
+                capturedCallbacks!.onAgentEvent(toolResultWithRender);
+            });
+            act(() => {
+                capturedCallbacks!.onAgentEvent({
+                    type: 'needs_confirmation', action: 'Send reply', summary: 'To: pat',
+                } as unknown as StreamEvent);
+            });
+
+            mockedApi.getMessages.mockResolvedValue({
+                messages: [
+                    {
+                        id: 11,
+                        session_id: SESSION.id,
+                        role: 'assistant',
+                        content: 'Here is your inbox summary.',
+                        created_at: '2026-07-16T00:00:01.000Z',
+                        rag_sources: null,
+                        agent_steps: [
+                            { id: 1, type: 'tool', tool: 'pre_scan_inbox', active: false, render: 'email_pre_scan', data: preScanPayload },
+                        ],
+                    } as never,
+                ],
+                total: 1,
+            });
+            act(() => {
+                capturedCallbacks!.onDone({ type: 'done', content: 'Here is your inbox summary.' } as unknown as StreamEvent);
+            });
+            act(() => {
+                vi.advanceTimersByTime(400);
+            });
+            await act(async () => {});
+
+            const assistantMsg = useChatStore.getState().messages.find((m) => m.role === 'assistant');
+            expect(assistantMsg?.cards?.map((c) => c.render)).toEqual(['email_pre_scan', 'needs_confirmation']);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('a reloaded chat draws the cards its saved tool steps made', async () => {
         mockedApi.getMessages.mockResolvedValue({
             messages: [

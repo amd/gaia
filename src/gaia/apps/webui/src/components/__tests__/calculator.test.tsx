@@ -97,7 +97,7 @@ describe('calculator wire', () => {
         ['a tip over 100%', { ...tip, inputs: { ...tip.inputs, tipPercent: 120 } }, false],
         ['a down payment at the price', { ...loan, inputs: { ...loan.inputs, downPayment: 250000 } }, false],
         ['a zero term', { ...loan, inputs: { ...loan.inputs, years: 0 } }, false],
-        ['a three-month term', { ...loan, inputs: { ...loan.inputs, years: 0.25 } }, true],
+        ['a three-month term', { ...loan, inputs: { ...loan.inputs, years: 0.25 } }, false],
         ['a euro loan', { ...loan, currency: 'EUR' }, true],
         ['no currency', { ...loan, currency: undefined }, false],
         ['a made-up currency', { ...loan, currency: 'usd' }, false],

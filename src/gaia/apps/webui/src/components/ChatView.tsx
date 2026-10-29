@@ -1186,11 +1186,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         .then((data) => {
                             // A queued message may already be streaming; its own end refetches.
                             if (isStale() || useChatStore.getState().isStreaming) return;
-                            // The backend doesn't persist cards, so this replace
-                            // would drop them — merge from the pre-refetch
-                            // in-memory messages by id, else role+content.
-                            // #2109 replaces this merge with steps-derived hydration.
-                            // stopState isn't persisted either; carry it by id.
+                            // Saved steps rebuild only tool cards; the live list also
+                            // holds confirmation and question cards, so it wins when
+                            // the message has one (matched by id, else role+content).
+                            // stopState isn't persisted; carry it by id.
                             const prevMsgs = useChatStore.getState().messages;
                             const prevWithCards = prevMsgs.filter((m) => m.cards && m.cards.length > 0);
                             const msgs: Message[] = fromApiMessages(data.messages).map((m) => {
@@ -1199,7 +1198,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 );
                                 return {
                                     ...m,
-                                    cards: m.cards ?? prev?.cards,
+                                    cards: prev?.cards ?? m.cards,
                                     stopState: prevMsgs.find((p) => p.id === m.id)?.stopState,
                                 };
                             });

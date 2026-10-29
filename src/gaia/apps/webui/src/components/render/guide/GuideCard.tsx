@@ -25,7 +25,8 @@ function loadChecked(doc: GuideDoc): Set<number> {
         const raw = localStorage.getItem(storageKey(doc));
         const parsed: unknown = raw ? JSON.parse(raw) : [];
         return new Set(Array.isArray(parsed) ? parsed.filter((n): n is number => Number.isInteger(n)) : []);
-    } catch {
+    } catch (err) {
+        console.warn(`[guide] could not read saved checks for "${doc.title}"; starting unchecked`, err);
         return new Set();
     }
 }
@@ -34,8 +35,8 @@ function saveChecked(doc: GuideDoc, checked: ReadonlySet<number>): void {
     try {
         if (checked.size) localStorage.setItem(storageKey(doc), JSON.stringify([...checked]));
         else localStorage.removeItem(storageKey(doc));
-    } catch {
-        // Storage can be full or blocked; the checks still hold for this view.
+    } catch (err) {
+        console.warn(`[guide] could not save checks for "${doc.title}"; they hold until the chat closes`, err);
     }
 }
 

@@ -98,7 +98,7 @@ const LOAN: CalculatorSpec<LoanInputs> = {
         annualRatePercent: { label: 'Interest rate', min: 0, max: 50, step: 0.05, format: 'percent', sliderMax: 15 },
         years: { label: 'Term', min: 1, max: 50, step: 1, format: 'years' },
     },
-    validWire: (inputs) => inputs.amount > 0 && inputs.years > 0 && inputs.downPayment < inputs.amount,
+    validWire: (inputs) => inputs.amount > 0 && inputs.years >= 1 && inputs.downPayment < inputs.amount,
     results: (inputs) => {
         const { principal, monthly, totalPaid, interest } = loanResults(inputs);
         return [
