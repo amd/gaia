@@ -163,6 +163,9 @@ jobs:
           # for that).
           uv pip install --system -e ".[dev,api,browser]"
           uv pip install --system -e hub/agents/chat/python -e hub/agents/gaia/python
+          # The bundled slide-decks skill's declared dependencies (its SKILL.md):
+          # its tests build real decks, and a chart embeds an openpyxl workbook.
+          uv pip install --system "python-pptx>=1.0,<2" "lxml>=5.0" "pillow>=10.0" "openpyxl>=3.1,<4" "pymupdf>=1.24"
 
       - name: Check no test file skips wholesale
         run: python util/check_module_skips.py --workflow test_gaia_agent.yml --job test-gaia-agent

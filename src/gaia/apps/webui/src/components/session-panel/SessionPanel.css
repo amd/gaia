@@ -492,8 +492,7 @@
 .sd-preview { display: flex; flex-direction: column; gap: 10px; }
 .sd-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
 .sd-status.is-error { color: var(--danger); }
-.sd-spin { animation: sd-spin var(--duration-spin) var(--ease-linear) infinite; }
-@keyframes sd-spin { to { transform: rotate(360deg); } }
+.sd-spin { animation: spin var(--duration-spin) var(--ease-linear) infinite; }
 @media (prefers-reduced-motion: reduce) { .sd-spin { animation: none; } }
 .sd-slide {
     container-type: inline-size;
@@ -517,7 +516,7 @@
 .sd-bullets li + li { margin-top: 0.6cqw; }
 .sd-cover { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 1.5cqw; }
 .sd-cover-title { font-size: 5.4cqw; font-weight: 700; line-height: 1.1; }
-.sd-cover-sub { font-size: 2.6cqw; color: var(--slide-muted); }
+.sd-cover-sub { font-size: 2.6cqw; color: var(--slide-ink-dim); }
 .sd-stages { flex: 1; display: grid; gap: 0.6cqw; min-height: 0; }
 .sd-stage { display: flex; flex-direction: column; gap: 0.9cqw; min-width: 0; }
 .sd-stage-head {
@@ -552,7 +551,7 @@
 .sd-table { border-collapse: collapse; font-size: 1.9cqw; width: 100%; }
 .sd-table th { background: var(--slide-accent); color: var(--slide-on-accent); text-align: left; }
 .sd-table th, .sd-table td { padding: 0.6cqw 1cqw; border-bottom: 1px solid var(--slide-rule); }
-.sd-chart { flex: 1; display: flex; align-items: center; justify-content: center; background: var(--slide-panel); border-radius: 0.8cqw; color: var(--slide-muted); font-size: 2.2cqw; text-transform: capitalize; }
-.sd-source { font-size: 1.4cqw; color: var(--slide-muted); }
+.sd-chart { flex: 1; display: flex; align-items: center; justify-content: center; background: var(--slide-panel); border-radius: 0.8cqw; color: var(--slide-ink-dim); font-size: 2.2cqw; text-transform: capitalize; }
+.sd-source { font-size: 1.4cqw; color: var(--slide-ink-dim); }
 .sd-takeaway { background: var(--slide-ink); color: var(--slide-paper); font-weight: 700; font-size: 1.9cqw; padding: 1.1cqw 2cqw; border-radius: 0.6cqw; }
 .sd-open { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; }

@@ -94,6 +94,8 @@ jobs:
           # The hub agent packages are installed so Import Validation really
           # imports GaiaAgent and ChatAgent instead of skipping them.
           uv pip install --system -e . -e hub/agents/chat/python -e hub/agents/gaia/python
+          # The bundled slide-decks skill imports python-pptx when its tools load.
+          uv pip install --system "python-pptx>=1.0,<2"
 
       - name: Run lint checks
         env:
