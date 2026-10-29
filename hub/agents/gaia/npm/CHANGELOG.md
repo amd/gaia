@@ -51,10 +51,11 @@ Python CLI 0.25.2+ on `PATH`. Integrators: the sidecar contract is now
   turn's `final` carries `model_messages`, the turn as the model saw it, tool
   calls and results included. Send those back in `turns`, oldest first, and
   the agent replays them, keeping the newest whole turns that fit its context
-  window. `turns` replaces `context` when sent, and `[]` clears a retained
-  session's history. A caller that sends no `turns` gets no `model_messages`,
-  so a `final` stays small for text-only clients. Pre-2.25 binaries refuse the field with `422`, so probe `/version`
-  first.
+  window. `turns` replaces `context` when sent (a non-empty `context` beside
+  it is a `422`), and `[]` clears a retained session's history. A caller that
+  sends no `turns` gets no `model_messages`, so a `final` stays small for
+  text-only clients. Pre-2.25 binaries refuse the field with `422`, so probe
+  `/version` first.
 
 ### For integrators: contract 2.24
 

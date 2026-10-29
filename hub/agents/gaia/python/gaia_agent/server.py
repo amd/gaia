@@ -321,6 +321,15 @@ class QueryRequest(_Strict):
                     raise ValueError(f"unknown role {message.get('role')!r} in turns")
         return v
 
+    @model_validator(mode="after")
+    def _turns_replace_context(self) -> "QueryRequest":
+        if self.turns is not None and self.context:
+            raise ValueError(
+                "send `turns` or `context`, not both: with `turns`, `context` "
+                "must be [] (contract >= 2.25)."
+            )
+        return self
+
     reasoning: bool = Field(
         default=False,
         description=(
@@ -1299,7 +1308,7 @@ async def _with_turn_record(
     await asyncio.to_thread(thread.join, _TURN_RECORD_WAIT_SECONDS)
     if thread.is_alive():
         logger.warning(
-            "run_id=%s: the loop had not returned %.0fs after its answer; this "
+            "run_id=%s: the run had not finished %.0fs after its answer; this "
             "turn is sent without its tool record, so later turns see only its text",
             run.run_id,
             _TURN_RECORD_WAIT_SECONDS,

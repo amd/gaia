@@ -362,6 +362,51 @@ def test_only_a_caller_that_sends_turns_gets_the_record(live_sidecar):
     assert record["model_messages"][1]["tool_calls"] == [_CALL]
 
 
+def test_turns_and_context_together_are_refused(live_sidecar):
+    import uuid
+
+    import requests
+
+    base_url, agents, _ = live_sidecar
+    resp = requests.post(
+        f"{base_url}/v1/gaia/query",
+        json={
+            "run_id": uuid.uuid4().hex,
+            "query": "q",
+            "context": [{"role": "user", "content": "dropped?"}],
+            "turns": [],
+        },
+        timeout=30,
+    )
+
+    assert resp.status_code == 422
+    assert "not both" in resp.text
+    assert agents == []
+
+
+class _TextToolAgent(_ToolAgent):
+    def _uses_native_tool_calls(self):
+        return False
+
+
+@pytest.mark.parametrize("live_sidecar", [_TextToolAgent], indirect=True)
+def test_a_model_without_native_tools_reads_the_calls_as_text(
+    monkeypatch, live_sidecar, chat
+):
+    base_url, agents, api_version = live_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+
+    chat.send("list the PRs")
+    chat.send("why did that fail?")
+
+    [agent] = agents
+    second = agent.seen[1]
+    assert not [m for m in second if m.get("role") == "tool" or "tool_calls" in m]
+    text = json.dumps(second)
+    assert "[Recorded tool calls]" in text and "gh pr list" in text
+    assert "[Recorded tool result: " in text and _REFUSAL in text
+
+
 def test_empty_turns_replace_a_retained_sessions_history(live_sidecar):
     base_url, agents, _ = live_sidecar
     body = {"query": "q", "session_id": "s1"}
