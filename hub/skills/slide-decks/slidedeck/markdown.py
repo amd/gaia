@@ -303,10 +303,17 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
             continue
         if columns:
             col = columns[-1]
+            col.setdefault("lines", []).append(s)
             col["text"] = f"{col['text']} {s}".strip() if col.get("text") else s
             continue
         text.append(s)
     flush_table()
+    for col in columns:
+        lines = col.pop("lines", [])
+        if len(lines) >= 2 and not col["bullets"]:
+            # Several plain lines under a heading are its list, not one sentence.
+            col["bullets"] = [{"text": x, "level": 0} for x in lines]
+            col["text"] = ""
     if fence is not None:
         raise OutlineError(
             [
@@ -373,8 +380,13 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
         if text:
             slide["caption"] = " ".join(text)
         return slide
-    if not diagram and slide.get("x_axis") and (len(columns) >= 2 or bullets):
-        # An Axis: line names what grows along stages, so the parts are stages.
+    if (
+        diagram in ("", "boxes")
+        and slide.get("x_axis")
+        and (len(columns) >= 2 or bullets)
+    ):
+        # An Axis: line names what grows along stages, so the parts are stages;
+        # boxes cannot draw an axis, so it wins over "Diagram: boxes".
         diagram = "process"
     if diagram or len(columns) >= 3:
         return _diagram_slide(slide, diagram or "boxes", columns, bullets, text)
@@ -519,6 +531,14 @@ def outline_from_markdown(
         ):
             deck_title = s[2:].strip()
             stage = "cover"
+            continue
+        if not in_fence and re.match(r"^#\s+\S", s):
+            # A later "# " heading titles a new slide, as models often write it;
+            # it fills the empty slide a "---" just opened rather than adding one.
+            stage = "body"
+            if not (title == "" and not any(b.strip() for b in block)):
+                close()
+            title = s[2:].strip()
             continue
         if not in_fence and (
             re.match(r"^##\s+\S", s) or (s == "---" and (title is not None or block))

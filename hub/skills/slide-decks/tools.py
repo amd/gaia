@@ -499,14 +499,15 @@ def _hold_slide_count(expected: int) -> int:
 
 def _slides_built(data: Dict[str, Any], result: Dict[str, Any]) -> List[str]:
     """One line per deck slide, from what was built: the reply describes these."""
-    slides = data.get("slides") or []
+    # The engine's own reading of the outline: what it drew, not what was sent.
+    slides = normalize_outline(data)["slides"]
     built = []
     for outline_no, deck_nos in (result.get("slide_map") or {}).items():
         idx = int(outline_no) - 1
         s = slides[idx] if 0 <= idx < len(slides) else {}
         kind = s.get("type") or "slide"
-        if s.get("diagram"):
-            kind = f"{kind}: {s['diagram']}"
+        if s.get("type") == "diagram" and s.get("layout"):
+            kind = f"{kind}: {s['layout']}"
         for deck_no in deck_nos:
             built.append((deck_no, f"{s.get('title') or '(untitled)'} [{kind}]"))
     return [f"{n}. {text}" for n, text in sorted(built)]

@@ -878,3 +878,43 @@ def test_requested_numbers_hidden_in_the_notes_are_refused(tools, tmp_path):
         )
     assert r["status"] == "error"
     assert "only in the speaker notes" in r["problems"][0]
+
+
+def test_model_shapes_that_used_to_cost_rebuilds_now_build_first_time(tools, tmp_path):
+    """Real first attempts from stress runs that the skill used to refuse or garble."""
+    skill, fns, _r = tools
+    outline = {
+        "slides": [
+            {
+                "type": "diagram",
+                "diagram": "boxes",
+                "title": "Ferry service grows in three stages",
+                "axis": "More boats",
+                "items": [
+                    "One pier\n\nHourly crossing",
+                    "Two piers\n\nHalf-hourly",
+                    "Network\n\nEvery ten minutes",
+                ],
+            }
+        ]
+    }
+    md = (
+        "# Ferry plan\n\n## Three stages\n### One pier\nHourly crossing\nOne boat\n"
+        "### Two piers\nHalf-hourly\nTwo boats\n### Network\nEvery ten minutes\nSix boats\n"
+        "\n---\n\n# Recommendation\n- Order two boats\n"
+    )
+    with bind(_Asking(), skill):
+        j = fns["build_deck"](outline=outline, output_path=str(tmp_path / "j.pptx"))
+        m = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "m.pptx")
+        )
+    assert j["status"] == "ok", j
+    assert j["slides_built"] == [
+        "1. Ferry service grows in three stages [diagram: process]"
+    ]
+    assert m["status"] == "ok", m
+    assert [x.split(" [")[0] for x in m["slides_built"]] == [
+        "1. Ferry plan",
+        "2. Three stages",
+        "3. Recommendation",
+    ]

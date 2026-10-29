@@ -397,6 +397,7 @@ TYPE_FIELDS = {
         "diagram",
         "kind",
         "layout",
+        "axis",
         "items",
         "steps",
         "nodes",
@@ -1044,6 +1045,17 @@ def _items(value: Any) -> List[Dict[str, Any]]:
                     "bullets": [],
                 }
             )
+        elif isinstance(item, str) and "\n" in item.strip():
+            # "Title\n\nline\nline": the first line heads the box, the rest are its points.
+            lines = [x.strip(" -*•\t") for x in item.strip().splitlines()]
+            lines = [x for x in lines if x]
+            out.append(
+                {
+                    "title": _text(lines[0]),
+                    "text": "",
+                    "bullets": normalize_bullets(lines[1:]),
+                }
+            )
         else:
             out.append({"title": _text(item), "text": "", "bullets": []})
     return out
@@ -1302,12 +1314,15 @@ def _normalize_slide(
         s["columns_n"] = (
             raw.get("columns") if isinstance(raw.get("columns"), int) else None
         )
-        s["x_axis"] = raw.get("x_axis") or {}
+        s["x_axis"] = raw.get("x_axis") or raw.get("axis") or {}
         s["y_axis"] = raw.get("y_axis") or {}
         axis = s["x_axis"]
         axis = (
             axis.get("label") or axis.get("title") if isinstance(axis, dict) else axis
         )
+        if axis and layout == "boxes":
+            # Boxes cannot draw an axis; the axis says the boxes are stages.
+            layout = s["layout"] = "process"
         if axis and layout not in ("process", "matrix"):
             problems.append(
                 f"{where}: 'Axis: {_text(axis)}' is drawn only under a process "
