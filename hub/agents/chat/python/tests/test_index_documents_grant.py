@@ -86,3 +86,36 @@ def test_missing_document_grants_nothing(tmp_path):
 
     assert agent.rag.indexed == []
     assert not agent.path_validator.is_path_allowed(str(missing), prompt_user=False)
+
+
+def test_named_folder_is_not_granted(tmp_path):
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    sibling = docs / "secret.md"
+    sibling.write_text("not named", encoding="utf-8")
+    agent = _agent(cwd)
+
+    ChatAgent._index_documents(agent, [str(docs)])
+
+    assert agent.rag.indexed == []
+    assert not agent.path_validator.is_path_allowed(str(docs), prompt_user=False)
+    assert not agent.path_validator.is_path_allowed(str(sibling), prompt_user=False)
+
+
+def test_folder_before_file_does_not_widen_the_file_grant(tmp_path):
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    doc = docs / "report.md"
+    doc.write_text("named", encoding="utf-8")
+    sibling = docs / "secret.md"
+    sibling.write_text("not named", encoding="utf-8")
+    agent = _agent(cwd)
+
+    ChatAgent._index_documents(agent, [str(docs), str(doc)])
+
+    assert agent.rag.indexed == [str(doc)]
+    assert not agent.path_validator.is_path_allowed(str(sibling), prompt_user=False)
