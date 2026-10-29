@@ -390,6 +390,8 @@ TYPE_FIELDS = {
         "col_widths",
         "category_label",
         "csv_path",
+        "bullets",
+        "points",
     },
     "kpi": {"metrics", "items", "bullets", "takeaways"},
     "quote": {"quote", "text", "attribution", "author", "by"},
@@ -1252,6 +1254,7 @@ def _normalize_slide(
         s["table"] = normalize_table(raw, where, problems)
         if not s["source"]:
             s["source"] = s["table"]["source"]
+        s["paras"] = normalize_bullets(raw.get("bullets") or raw.get("points"))
     elif stype == "kpi":
         metrics = []
         for m in _as_list(raw.get("metrics") or raw.get("kpis") or raw.get("items")):

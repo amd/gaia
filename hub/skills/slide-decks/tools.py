@@ -90,6 +90,10 @@ _FAILED_IN_A_ROW: Dict[int, int] = {}
 _MAX_FAILED_IN_A_ROW = 2
 
 
+#: Decks each agent wrote, so a rebuild replaces its own file and never another chat's.
+_WRITTEN: Dict[int, set] = {}
+
+
 def _agent_key() -> int:
     try:
         return id(current().agent)
@@ -600,6 +604,7 @@ def _writable_deck(
     if not p.is_absolute():
         p = gaia_home() / "documents" / p
         p.parent.mkdir(parents=True, exist_ok=True)
+        p = _fresh_name(p)
     if p.suffix.lower() != ".pptx":
         raise OutlineError([f"{what} must end in .pptx, got {p.name!r}."])
     if _SKILL_DIR == p.resolve().parent or _SKILL_DIR in p.resolve().parents:
@@ -612,7 +617,20 @@ def _writable_deck(
         raise OutlineError(
             [f"the folder {p.parent} does not exist; save into an existing folder."]
         )
-    return check_write(p)
+    out = check_write(p)
+    _WRITTEN.setdefault(_agent_key(), set()).add(str(Path(out).resolve()))
+    return out
+
+
+def _fresh_name(p: Path) -> Path:
+    """*p*, or "name (2).pptx" when another chat's deck already has that name."""
+    mine = _WRITTEN.get(_agent_key(), set())
+    n = 1
+    found = p
+    while found.exists() and str(found.resolve()) not in mine:
+        n += 1
+        found = p.with_name(f"{p.stem} ({n}){p.suffix}")
+    return found
 
 
 def _input_paths(outline: Dict[str, Any]) -> List[str]:

@@ -349,6 +349,13 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
         if point:
             slide["takeaway"] = point
             columns = []
+        elif "image" not in slide and not slide.get("bullets"):
+            # Several points: a titled panel beside the chart or table.
+            col = columns[0]
+            slide["bullets"] = [
+                {"text": col["heading"], "bold": True, "bullets": col["bullets"]}
+            ]
+            columns = []
     if columns and shows_data:
         what = (
             "image"

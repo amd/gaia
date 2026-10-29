@@ -259,6 +259,11 @@ _STATUS = {
     "red": "bad", "off track": "bad", "blocked": "bad", "late": "bad",
 }  # fmt: skip
 _AMBER = Paint("B45309")
+#: "Mobile UI — Red", "QA (on track)": a heading that ends in a status word.
+_STATUS_TAIL = re.compile(
+    r"(?:\s*[—–:|-]\s*|\s*\(\s*)(" + "|".join(_STATUS) + r")\s*\)?\s*$",
+    re.I,
+)
 
 
 def _plain(text: str) -> str:
@@ -2091,6 +2096,17 @@ class DeckBuilder:
         bottom = self.footer(slide, s)
         self.notes_for(slide, s)
         box = self.content_box(bottom)
+        if s.get("paras"):
+            tx, tw = self.grid(8, 4, box)
+            self._side_text(
+                slide,
+                s["paras"],
+                Box(tx, box.y, tw, box.h),
+                "Points",
+                SIZES["body_max"] - 2,
+            )
+            cx, cw = self.grid(0, 8, box)
+            box = Box(cx, box.y, cw, box.h)
         header = t["columns"]
         ncols = len(header)
         texts = [
@@ -2812,13 +2828,17 @@ class DeckBuilder:
         for k, it in enumerate(items):
             r, c = divmod(k, cols)
             hl = self._hl(s, k, it["title"])
+            status = self._status_paint(it.get("title") or "")
             fill = self.theme.primary if hl else self.theme.panel
+            if status is not None and not hl:
+                fill = status.tinted(-0.6 if self._dark else 0.85)
             shp = self.shape(
                 slide,
                 MSO_SHAPE.ROUNDED_RECTANGLE,
                 Box(box.x + c * (bw + gap), box.y + r * (bh + gap), bw, bh),
                 f"Box {k + 1}",
                 fill,
+                status if status is not None and not hl else None,
                 round_adj=0.05,
             )
             ps, raws = self._card_paras(
@@ -2830,21 +2850,60 @@ class DeckBuilder:
                     on
                     if hl
                     else (
-                        self.theme.primary
+                        (status or self.theme.primary)
                         if j == 0 and it.get("title")
-                        else self.theme.text
+                        else self.theme.text_on(fill)
                     )
                 )
                 for j in range(len(ps))
             ]
             entries.append((shp, ps, raws, colors))
+        iy = Inches(0.12)
         self._write_group(
             entries,
             20,
             "boxes",
             align=PP_ALIGN.LEFT,
             inset_x=Inches(0.15),
-            inset_y=Inches(0.12),
+            inset_y=iy,
+        )
+        self._fit_heights(
+            [e[0] for e in entries], [e[1] for e in entries], cols, box, iy
+        )
+
+    def _fit_heights(self, shapes, paras, cols: int, box: Box, iy) -> None:
+        """Shrink a grid of cards to the tallest card's text, top-aligned in *box*."""
+        size = min(
+            self.fit(ps, int(shp.width), box.h, 20, None, inset_y=iy)[0]
+            for shp, ps in zip(shapes, paras)
+        )
+        need = max(
+            self.fit(ps, int(shp.width), box.h, size, None, inset_y=iy)[2]
+            for shp, ps in zip(shapes, paras)
+        )
+        rows = math.ceil(len(shapes) / cols)
+        tall = int((box.h - self.gap * (rows - 1)) / rows)
+        h = min(
+            tall,
+            max(int(Pt(need / FIT_SLACK * 1.08)) + 2 * iy + Inches(0.15), Inches(1.4)),
+        )
+        for k, shp in enumerate(shapes):
+            shp.height = h
+            shp.top = box.y + (k // cols) * (h + self.gap)
+
+    @property
+    def _dark(self) -> bool:
+        return luminance(self.theme.background.hex) < 0.4
+
+    def _status_paint(self, title: str) -> Optional[Paint]:
+        m = _STATUS_TAIL.search(_plain(title))
+        if not m:
+            return None
+        kind = _STATUS[m.group(1).lower()]
+        return (
+            self.theme.good
+            if kind == "good"
+            else self.theme.bad if kind == "bad" else _AMBER
         )
 
     def _diagram_grid(self, slide, s, box: Box):

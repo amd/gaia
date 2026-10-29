@@ -971,3 +971,59 @@ def test_one_box_beside_a_table_becomes_its_takeaway(tools, tmp_path):
         )
     assert r["status"] == "ok", r
     assert "Keep funding West" in json.dumps(r["slides_built"])
+
+
+def test_a_new_chat_never_overwrites_another_chats_deck(tools, tmp_path):
+    """Same title in a new chat: a fresh file, not an overwrite prompt."""
+    skill, fns, _r = tools
+    md = "## Ferry plan\n- Order a boat\n- Hire crew\n"
+    with bind(_Asking("one slide on the ferry plan"), skill):
+        first = fns["build_deck_from_markdown"](markdown=md)
+        again = fns["build_deck_from_markdown"](markdown=md)
+    with bind(_Asking("one slide on the ferry plan"), skill):
+        other = fns["build_deck_from_markdown"](markdown=md)
+    assert first["status"] == again["status"] == other["status"] == "ok", other
+    assert first["path"] == again["path"]
+    assert other["path"] != first["path"]
+    assert other["path"].endswith("(2).pptx")
+
+
+def test_status_words_colour_boxes_and_cards_fit_their_text(tools, tmp_path):
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    skill, fns, _r = tools
+    md = (
+        "## Weekly status\n\n### Backend — Green\n- Done\n\n"
+        "### Connector — Amber\n- Fix in review\n\n### Mobile UI — Red\n- Slipping\n"
+    )
+    out = tmp_path / "s.pptx"
+    with bind(_Asking("one slide weekly status"), skill):
+        r = fns["build_deck_from_markdown"](markdown=md, output_path=str(out))
+    assert r["status"] == "ok", r
+    boxes = [
+        s for s in Presentation(str(out)).slides[0].shapes if s.name.startswith("Box ")
+    ]
+    fills = {str(b.fill.fore_color.rgb) for b in boxes}
+    assert len(fills) == 3
+    assert all(b.height < Inches(3) for b in boxes)
+
+
+def test_several_points_beside_a_table_become_a_side_panel(tools, tmp_path):
+    skill, fns, _r = tools
+    md = (
+        "## Build vs license\n\n| | Build | License |\n|---|---|---|\n"
+        "| Time | 9 months | 6 weeks |\n| Cost | 4 engineers | $0.004/min |\n\n"
+        "### Recommendation: license now\n- Faster to market\n- Cost is manageable\n"
+        "- Revisit in 12 months\n"
+    )
+    with bind(
+        _Asking(
+            "One slide: build takes 9 months with 4 engineers; license takes 6 weeks at $0.004/min; revisit in 12 months."
+        ),
+        skill,
+    ):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "d.pptx")
+        )
+    assert r["status"] == "ok", r
