@@ -395,6 +395,120 @@ def test_a_packaged_agent_child_does_not_keep_the_outdated_daemon(
     assert client.outdated_daemon_busy(_inst()) is None
 
 
+def test_a_stopped_or_pidless_agent_does_not_hide_a_front_end(daemon_reports):
+    daemon_reports["agents"] = _Response(
+        200,
+        {
+            "agents": [
+                {"pid": 4343, "state": "stopped"},
+                {"pid": None, "state": "running"},
+                {"pid": "4345", "state": "running"},
+            ]
+        },
+    )
+    daemon_reports["clients"] = _Response(
+        200,
+        {
+            "clients": [
+                {"name": "gaia-tui", "pids": [4343]},
+                {"name": "gaia-ui", "pids": [4345]},
+            ]
+        },
+    )
+
+    assert "gaia-tui, gaia-ui is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_front_end_beside_a_supervised_agent_still_keeps_it(daemon_reports):
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200,
+        {
+            "clients": [
+                {"name": "gaia agent", "pids": [4343]},
+                {"name": "gaia-tui", "pids": [5151]},
+            ]
+        },
+    )
+
+    assert "gaia-tui is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_turn_in_a_supervised_agent_still_keeps_it(daemon_reports):
+    daemon_reports["status"] = _Response(
+        200, {"service": "gaia-daemon", "relayed_turns": 1}
+    )
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [{"name": "gaia agent", "pids": [4343]}]}
+    )
+
+    assert "1 agent turn(s) are still running" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_recent_model_request_from_a_supervised_agent_still_keeps_it(
+    daemon_reports,
+):
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200,
+        {
+            "clients": [{"name": "gaia agent", "pids": [4343]}],
+            "seconds_since_request": 5.0,
+        },
+    )
+
+    assert "answered a request 5s ago" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_launcher_that_exited_mid_check_still_counts_its_own_pid(
+    daemon_reports, monkeypatch
+):
+    import psutil
+
+    def gone(pid):
+        raise psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr(psutil, "Process", gone)
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200,
+        {
+            "clients": [
+                {"name": "gaia agent", "pids": [4343]},
+                {"name": "gaia-tui", "pids": [5151]},
+            ]
+        },
+    )
+
+    assert "gaia-tui is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_an_older_daemon_without_the_agents_route_is_judged_as_before(
+    daemon_reports,
+):
+    daemon_reports["agents"] = _Response(404)
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [{"name": "gaia agent", "pids": [4343]}]}
+    )
+
+    assert "gaia agent is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_an_agents_route_that_fails_says_it_could_not_check(daemon_reports):
+    daemon_reports["agents"] = _Response(500, {"detail": "registry exploded"})
+
+    assert "could not check whether it is busy" in client.outdated_daemon_busy(_inst())
+
+
 def test_this_process_and_exited_front_ends_do_not_keep_it(daemon_reports):
     daemon_reports["clients"] = _Response(
         200,
