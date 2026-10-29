@@ -367,4 +367,24 @@ func TestTwoWindowsDoNotShareOneResumeFile(t *testing.T) {
 	if got[0].Content != "other window" {
 		t.Fatalf("the other window's conversation was lost: %+v", got)
 	}
+	if last := got[len(got)-1].Content; strings.Contains(last, "after updating") || !strings.Contains(last, "saved ") {
+		t.Errorf("an hour-old save must say when it was made, not claim a fresh update: %q", last)
+	}
+}
+
+func TestUnreadableResumeFileIsKeptAndReportedOnce(t *testing.T) {
+	updateModel(t)
+	dir, _ := resumeDir()
+	os.MkdirAll(dir, 0o700)
+	bad := filepath.Join(dir, "7.json")
+	os.WriteFile(bad, []byte("{truncated"), 0o600)
+	if _, err := TakeResumedConversation(); err == nil || !strings.Contains(err.Error(), "kept at") {
+		t.Fatalf("want an error naming where the file is kept, got %v", err)
+	}
+	if _, err := os.Stat(bad + ".unreadable"); err != nil {
+		t.Errorf("the unreadable save was deleted: %v", err)
+	}
+	if got, err := TakeResumedConversation(); err != nil || got != nil {
+		t.Errorf("reported again on the next launch: %v, %v", got, err)
+	}
 }

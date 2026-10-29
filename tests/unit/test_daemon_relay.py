@@ -479,6 +479,18 @@ def test_relay_dead_upstream_maps_to_502_with_reensure_remedy():
 # ---------------------------------------------------------------------------
 
 
+# A turn parked mid-run: on a slow tool, or on the user's approval.
+_PARKED = {
+    "tool": {"type": "tool_call", "tool": "run_shell_command", "args": {}},
+    "confirm": {
+        "type": "needs_confirmation",
+        "action": "write_file",
+        "summary": "Allow writing file?",
+        "confirm_id": "c-1",
+    },
+}
+
+
 class _FakeSidecar:
     """Scripted stand-in for a sidecar agent server.
 
@@ -536,6 +548,8 @@ class _FakeSidecar:
                     )
                     if sidecar.mode == "crash":
                         return  # EOF without a terminal event
+                    if sidecar.mode in _PARKED:
+                        yield _frame(dict(_PARKED[sidecar.mode], run_id=run_id))
                     while not sidecar.release.is_set():
                         await asyncio.sleep(0.02)
                     yield _frame({"type": "final", "answer": "done"})
@@ -862,3 +876,68 @@ def test_control_plane_status_route_unchanged(live_relay):
     r = requests.get(f"{daemon_url}/daemon/v1/status", headers=_auth(), timeout=10)
     assert r.status_code == 200
     assert r.json()["service"]
+
+
+def _relayed_turns(daemon_url):
+    import requests
+
+    r = requests.get(f"{daemon_url}/daemon/v1/status", headers=_auth(), timeout=5)
+    return r.json()["relayed_turns"]
+
+
+@needs_live_servers
+@pytest.mark.parametrize("parked_on", ["tool", "confirm"])
+def test_a_parked_turn_counts_as_relayed_until_it_ends(
+    live_relay, parked_on, monkeypatch, tmp_path
+):
+    """An update's restart must see a turn waiting on a tool or an approval."""
+    import requests
+
+    from gaia.daemon import client
+    from gaia.daemon.instance import DaemonInstance
+
+    sidecar, daemon_url = live_relay
+    sidecar.mode = parked_on
+    monkeypatch.setattr(client.paths, "host_dir", lambda: tmp_path)
+    port = int(daemon_url.rsplit(":", 1)[1])
+    inst = DaemonInstance(pid=1, port=port, token=_DAEMON_TOKEN)
+    assert _relayed_turns(daemon_url) == 0
+
+    with requests.post(
+        f"{daemon_url}/v1/email/query",
+        json={"query": "q", "run_id": f"run-{parked_on}", "context": []},
+        headers=_auth(),
+        stream=True,
+        timeout=(5, 15),
+    ) as resp:
+        events = _iter_data_events(resp)
+        assert next(events)["type"] == "status"
+        assert next(events)["type"] == _PARKED[parked_on]["type"]
+        assert _relayed_turns(daemon_url) == 1
+        assert "1 agent turn(s) are still running" in client.outdated_daemon_busy(inst)
+        sidecar.release.set()
+        assert [e["type"] for e in events] == ["final"]
+
+    _wait_for(lambda: _relayed_turns(daemon_url) == 0)
+
+
+@needs_live_servers
+def test_a_turn_the_client_walked_away_from_stops_counting(live_relay):
+    import requests
+
+    sidecar, daemon_url = live_relay
+    sidecar.mode = "confirm"
+    resp = requests.post(
+        f"{daemon_url}/v1/email/query",
+        json={"query": "q", "run_id": "run-gone", "context": []},
+        headers=_auth(),
+        stream=True,
+        timeout=(5, 15),
+    )
+    events = _iter_data_events(resp)
+    next(events)
+    next(events)
+    assert _relayed_turns(daemon_url) == 1
+    resp.close()
+
+    _wait_for(lambda: _relayed_turns(daemon_url) == 0)

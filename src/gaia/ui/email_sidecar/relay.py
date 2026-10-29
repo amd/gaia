@@ -369,6 +369,9 @@ def _dispatch_one(
             handler._emit({"type": "context_usage", **context})
         elif isinstance(event.get("context_error"), str):
             handler.relay_context_error = event["context_error"]
+        if isinstance(event.get("model_messages"), list):
+            # Saved with the reply so later turns replay its tool calls.
+            handler.relayed_model_messages = event["model_messages"]
         performance = event.get("performance")
         problem = None if performance is None else turn_record_problem(performance)
         if performance is not None and problem is None:
@@ -512,6 +515,7 @@ def relay_query(
     hold_internet_off: Optional[Callable[[], ContextManager[bool]]] = None,
     changes_turn_id: Optional[str] = None,
     surface: Optional[str] = None,
+    turns: Optional[List[List[Dict[str, Any]]]] = None,
     reasoning: bool = False,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
@@ -542,6 +546,9 @@ def relay_query(
     *surface* — the front-end this turn comes from, for a sidecar the caller
     has established takes it (``profiles.surface_supported``).
 
+    *turns* — the session's earlier turns as the model recorded them, for a
+    sidecar the caller has established takes them (``profiles.turns_supported``);
+    they replace *context*.
     *reasoning* — ask the sidecar to stream the model's reasoning, for a
     sidecar the caller has established takes it (``profiles.reasoning_supported``).
 
@@ -624,6 +631,9 @@ def relay_query(
         body["changes_turn_id"] = changes_turn_id
     if surface is not None:
         body["surface"] = surface
+    if turns is not None:
+        body["turns"] = turns
+        body["context"] = []
     if reasoning:
         body["reasoning"] = True
 

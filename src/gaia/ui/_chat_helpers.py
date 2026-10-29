@@ -69,6 +69,7 @@ from gaia.ui.email_sidecar.profiles import (
     reasoning_supported,
     scope_supported,
     surface_supported,
+    turns_supported,
     working_directory_supported,
 )
 from gaia.ui.memory_settings import memory_enabled
@@ -155,6 +156,22 @@ _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
 
 # asyncio keeps only weak references to tasks; this set keeps them alive.
 _background_tasks: set = set()
+
+
+def relayed_turns_in_flight() -> Optional[str]:
+    """Why restarting the daemon now would cut off a chat's agent turn, or None.
+
+    These turns go straight to the agent, so the daemon cannot count them. A
+    chat still starting its turn has no relayed run yet and does not count.
+    """
+    running = sum(
+        1
+        for handler in list(_active_sse_handlers.values())
+        if getattr(handler, "active_relay_run_id", None) is not None
+    )
+    if not running:
+        return None
+    return f"{running} Agent UI chat(s) are still answering"
 
 
 def _spawn_background(coro) -> asyncio.Task:
@@ -1966,6 +1983,41 @@ def _relayed_history(
     return context
 
 
+def _relayed_turns(
+    turns: list,
+    model_id: str | None,
+    query: str,
+    sse_handler,
+    session_id: str | None,
+) -> list:
+    """The chat's recorded turns that fit *model_id*'s history budget, kept whole.
+
+    A turn larger than the whole budget is sent shortened (#5864); turns newly
+    out of the model's view stream a ``history_cut`` status.
+    """
+    from gaia.agents.base.history import CutReporter, fit_turns, relayed_history_budget
+
+    budget = relayed_history_budget(
+        model_id, query, cloud=bool(model_id) and bool(_ui_cloud_provider(model_id))
+    )
+    reporter = (
+        _history_cuts.setdefault(session_id, CutReporter()) if session_id else None
+    )
+
+    def on_cut(cut) -> None:
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": cut.notice,
+                "turns": cut.turns,
+                "tokens": cut.tokens,
+            }
+        )
+
+    return fit_turns(turns, budget, on_cut, reporter)
+
+
 #: What a stopped turn's reply is saved as when it wrote no text.
 _CANCELLED_REPLY = "Cancelled."
 
@@ -2237,6 +2289,7 @@ def _dispatch_sidecar_query(
     hold_internet_off: Callable[[], ContextManager[bool]] | None = None,
     recording: TurnRecording | None = None,
     max_steps: int | None = None,
+    turns: list | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
 
@@ -2307,6 +2360,13 @@ def _dispatch_sidecar_query(
             {"type": "agent_error", "content": profile.start_failed_text(exc.kind)}
         )
         return
+
+    from gaia.daemon.client import deferred_restart_notice
+
+    # An update is installed but the daemon waits for other work to finish.
+    notice = deferred_restart_notice()
+    if notice:
+        sse_handler._emit({"type": "status", "status": "info", "message": notice})
 
     if not api_version_supported(profile, handle.api_version):
         sse_handler._emit(
@@ -2462,10 +2522,23 @@ def _dispatch_sidecar_query(
     if sse_handler.cancelled.is_set():
         return
 
+    # A sidecar that takes recorded turns sees earlier tool calls; an older
+    # one gets the text pairs. Both are fitted here, and the sidecar re-fits.
+    relayed_turns = (
+        turns
+        if turns is not None and turns_supported(profile, handle.api_version)
+        else None
+    )
+    context: list = []
     try:
-        context = _relayed_history(
-            history_pairs, model_id, query, sse_handler, session_id
-        )
+        if relayed_turns is None:
+            context = _relayed_history(
+                history_pairs, model_id, query, sse_handler, session_id
+            )
+        else:
+            relayed_turns = _relayed_turns(
+                relayed_turns, model_id, query, sse_handler, session_id
+            )
     except (LemonadeClientError, ModelFitError, GaiaConfigError) as exc:
         sse_handler._emit(
             {
@@ -2527,6 +2600,7 @@ def _dispatch_sidecar_query(
             ),
             reasoning=reasoning_supported(profile, handle.api_version),
             max_steps=max_steps,
+            turns=relayed_turns,
         )
     finally:
         sse_handler.relay_ignores_internet = False
@@ -3769,14 +3843,18 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
         # A relayed sidecar only sees the transcript it is sent; in-process
         # agents restore traces below.
-        history_pairs = (
-            _build_history_pairs(model_context_messages(db, request.session_id))
+        relay_messages = (
+            model_context_messages(db, request.session_id)
             if _should_relay_to_sidecar(
                 request.agent_type or session.get("agent_type") or "chat",
                 _agent_registry,
             )
             else []
         )
+        from gaia.agents.base.history import transcript_turns
+
+        history_pairs = _build_history_pairs(relay_messages)
+        relay_turns = transcript_turns(relay_messages)
 
         # Resolve document IDs to file paths.
         # Session-specific docs get auto-indexed; library docs are available
@@ -4068,6 +4146,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             held_internet_off, db, session_id
                         ),
                         recording=recording,
+                        turns=relay_turns,
+                    )
+                    result_holder["model_messages"] = getattr(
+                        sse_handler, "relayed_model_messages", None
                     )
                     return
 

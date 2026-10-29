@@ -28,7 +28,6 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
         alternatives: [
             'Index PDFs that contain images — text is extracted automatically',
             'Paste image descriptions or OCR text directly into the chat',
-            'Use GAIA\'s VLM agent for image analysis: gaia vlm',
         ],
         featureTitle: 'Support image file indexing and OCR',
     },
@@ -122,7 +121,7 @@ export function getUnsupportedCategory(extension: string): FileTypeCategory | nu
  * legacy .doc/.ppt/.xls are intentionally excluded.
  */
 export const SUPPORTED_EXTENSIONS = new Set([
-    '.pdf', '.pptx', '.docx', '.txt', '.md', '.mdx', '.markdown', '.rst', '.csv', '.json', '.xlsx',
+    '.pdf', '.pptx', '.docx', '.txt', '.md', '.mdx', '.markdown', '.rst', '.csv', '.json', '.xlsx', '.epub',
     '.html', '.htm', '.xml', '.svg',
     '.yaml', '.yml', '.py', '.js', '.ts', '.java', '.c', '.cpp',
     '.h', '.rs', '.go', '.rb', '.sh', '.bat', '.ps1', '.log',

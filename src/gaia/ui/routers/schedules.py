@@ -65,6 +65,7 @@ class ScheduleResponse(BaseModel):
     schedule_config: Optional[str] = None
     description: str
     last_error: Optional[str] = None
+    running: bool = False
 
 
 class ScheduleListResponse(BaseModel):
@@ -231,6 +232,20 @@ async def update_schedule(
         raise HTTPException(status_code=404, detail=f"Schedule '{name}' not found")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/api/schedules/{name}/run", response_model=ScheduleResponse)
+async def run_schedule_now(
+    name: str,
+    scheduler: Scheduler = Depends(get_scheduler),
+):
+    """Run a scheduled task once now; its next scheduled time stays as it was."""
+    try:
+        return await scheduler.run_task_now(name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Schedule '{name}' not found")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.delete("/api/schedules/{name}")

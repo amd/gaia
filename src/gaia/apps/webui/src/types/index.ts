@@ -370,10 +370,10 @@ export interface ChatPerformance {
         tokens_in: number | null;
         tokens_cached: number | null;
         tokens_out: number | null;
-        tool_calls: number;
+        tool_calls: number | null;
         loads: number;
         load_seconds: number | null;
-        usd: number;
+        usd: number | null;
         unpriced_turns: number;
     };
     /** The model as Lemonade reports it now. */
@@ -703,6 +703,8 @@ export interface Schedule {
     description: string;
     /** The last run's error; null when it succeeded. */
     last_error: string | null;
+    /** A run is in flight right now, timed or Run now. */
+    running?: boolean;
 }
 
 /** A single execution result for a scheduled task. */

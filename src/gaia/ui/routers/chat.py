@@ -633,19 +633,21 @@ async def cancel_stream(request: CancelStreamRequest):
     """
     from .._chat_helpers import _active_sse_handlers
 
+    handler = _active_sse_handlers.get(request.session_id)
+    if handler:
+        # Mark a resumed relay cancelled before withdrawing its queued hand-back.
+        handler.cancelled.set()
+        turn_queue.cancel(request.session_id)
+        # #2109: an email-relay turn can be parked in a blocking socket read that
+        # the cancelled flag alone can't interrupt — force it to error out now.
+        handler.close_active_relay_response()
+        return {"status": "ok", "cancelled": True}
     # A turn still waiting in line has no handler yet; withdraw it instead.
     if turn_queue.cancel(request.session_id):
         return {"status": "ok", "cancelled": True}
-    handler = _active_sse_handlers.get(request.session_id)
-    if not handler:
-        raise HTTPException(
-            status_code=404, detail="No active chat session found for this session ID"
-        )
-    handler.cancelled.set()
-    # #2109: an email-relay turn can be parked in a blocking socket read that
-    # the cancelled flag alone can't interrupt — force it to error out now.
-    handler.close_active_relay_response()
-    return {"status": "ok", "cancelled": True}
+    raise HTTPException(
+        status_code=404, detail="No active chat session found for this session ID"
+    )
 
 
 @router.get("/api/chat/active")
