@@ -1,9 +1,8 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/** Pure helpers ChatView uses to turn the chat stream into messages and steps. */
+/** Pure helpers ChatView uses to turn the chat stream into messages. */
 
-import type { MutableRefObject } from 'react';
 import type { AgentStep, Message, StreamEvent } from '../types';
 
 /**
@@ -64,83 +63,6 @@ export function isEchoOfFailedTool(event: StreamEvent, steps: AgentStep[]): bool
     const last = steps[steps.length - 1];
     if (!last || last.type !== 'tool') return false;
     return last.success === false || (!!last.active && last.success == null);
-}
-
-/** Map an SSE agent event to an AgentStep for the UI. */
-export function agentEventToStep(event: StreamEvent, stepIdRef: MutableRefObject<number>): AgentStep | null {
-    const id = ++stepIdRef.current;
-    const ts = Date.now();
-
-    switch (event.type) {
-        case 'thinking':
-            return {
-                id, type: 'thinking', label: 'Thinking',
-                detail: event.content, active: true, timestamp: ts,
-            };
-        case 'tool_start':
-            return {
-                id, type: 'tool',
-                // Label is determined by AgentActivity based on tool name
-                label: 'Using tool',
-                tool: event.tool,
-                detail: event.detail,
-                narration: event.narration,
-                active: true, timestamp: ts,
-                mcpServer: event.mcp_server,
-            };
-        case 'plan':
-            return {
-                id, type: 'plan', label: 'Created plan',
-                planSteps: event.steps, planNarrations: event.step_narrations,
-                currentStep: event.current_step, active: false,
-                success: true, timestamp: ts,
-            };
-        case 'step':
-            return {
-                id, type: 'status',
-                label: `Step ${event.step}${event.total ? ` of ${event.total}` : ''}`,
-                active: true, timestamp: ts,
-            };
-        case 'status':
-            if (event.message?.startsWith('Agent: ')) return null;
-            return {
-                id, type: 'status',
-                label: event.message || event.status || 'Working',
-                active: event.status === 'working',
-                timestamp: ts,
-            };
-        case 'agent_error':
-            return {
-                id, type: 'error', label: 'Error',
-                detail: event.content, success: false,
-                active: false, timestamp: ts,
-            };
-        case 'policy_alert': {
-            const toolName = event.tool || 'unknown tool';
-            const reason =
-                event.reason ||
-                event.message ||
-                event.content ||
-                'Tool execution was blocked by governance policy.';
-            return {
-                id,
-                type: 'policy_alert',
-                label: `Policy blocked ${toolName}`,
-                detail: reason,
-                tool: toolName,
-                decision: event.decision || 'BLOCK',
-                reason,
-                ruleIds: event.rule_ids ?? [],
-                policyVersion: event.policy_version,
-                receiptId: event.receipt_id,
-                success: false,
-                active: false,
-                timestamp: ts,
-            };
-        }
-        default:
-            return null;
-    }
 }
 
 /** Messages as the API sends them, with steps and stats under the names the view reads. */

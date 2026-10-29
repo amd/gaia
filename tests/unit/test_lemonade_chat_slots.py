@@ -111,6 +111,7 @@ def test_an_unreadable_catalog_loads_without_the_chat_flags(client, caplog):
     assert sent == {
         "model_name": "Qwen3-30B-A3B-Instruct-2507-GGUF",
         "ctx_size": 65536,
+        "save_options": True,
     }
     assert "without the two-slot chat flags" in caplog.text
 

@@ -201,6 +201,8 @@ def read_first_preflight(
             logger.debug("read-first preflight deferred to the tool: %s", e)
             return None
 
+    # The confirmation prompt names this path, so it shows where the write lands.
+    preflight.target_of = target_of
     return preflight
 
 

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import * as api from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { cloudProviderName } from '../stores/modelStore';
 import { log } from '../utils/logger';
 import type { ChatPerformance, ContextUsage, TurnPerformance } from '../types';
@@ -202,10 +203,12 @@ function ChatTotals({ totals }: { totals: ChatPerformance['totals'] }) {
             <Row label="Reused from cache">
                 {totals.tokens_cached == null ? <span className="cp-unknown">{UNKNOWN}</span> : <><Tokens n={totals.tokens_cached} />{hit != null && ` (${hit}%)`}</>}
             </Row>
-            <Row label="Tool calls">{totals.tool_calls}</Row>
+            <Row label="Tool calls">{totals.tool_calls ?? <span className="cp-unknown">{UNKNOWN}</span>}</Row>
             <Row label="Model loads">{totals.loads === 0 ? 'none' : <>{totals.loads} · <Seconds s={totals.load_seconds} /></>}</Row>
             <Row label="Cost">
-                {totals.unpriced_turns > 0
+                {totals.usd == null
+                    ? <span className="cp-unknown">{UNKNOWN}</span>
+                    : totals.unpriced_turns > 0
                     ? <span title={`${totals.unpriced_turns} turn(s) on a model with no known price`}>${totals.usd.toFixed(2)} + {totals.unpriced_turns} unpriced</span>
                     : totals.usd === 0 ? '$0' : `about $${totals.usd.toFixed(2)}`}
             </Row>
@@ -450,10 +453,13 @@ export function ContextPanel({ sessionId, busy, onClose, onUsage }: ContextPanel
     }, []);
     const close = useCallback(() => onCloseRef.current(), []);
     useEscapeToClose(true, close);
+    const sheetRef = useRef<HTMLElement>(null);
+    useFocusTrap(sheetRef, true);
 
     return (
         <div className="cp-overlay" onClick={onClose}>
             <aside
+                ref={sheetRef}
                 className="cp-sheet"
                 role="dialog"
                 aria-modal="true"

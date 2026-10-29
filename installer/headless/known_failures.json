@@ -1,0 +1,27 @@
+{
+  "about": "Open, filed installer bugs the journeys hit. Each entry matches one row's phase by an exact output signature (kind 'failure': the phase's output; kind 'finding': the finding's text) and shows as 'known #issue' instead of failing the row. A row fails again when its entry stops matching, so remove the entry in the PR that fixes the bug. Add one only for a filed issue. 'blocks': the phases after it cannot run, so they are skipped rather than failed.",
+  "entries": [
+    {
+      "issue": 5527,
+      "rows": ["ubuntu22-agent-ui-deb", "ubuntu24-agent-ui-deb"],
+      "phase": "install",
+      "kind": "finding",
+      "signature": "the desktop app's .deb is named 'gaia'"
+    },
+    {
+      "issue": 5528,
+      "rows": ["ubuntu22-agent-ui-deb", "ubuntu24-agent-ui-deb"],
+      "phase": "install",
+      "kind": "finding",
+      "signature": "`gaia-desktop` is not on PATH"
+    },
+    {
+      "issue": 5531,
+      "rows": ["win-install-ps1"],
+      "phase": "uninstall",
+      "kind": "failure",
+      "signature": "permission denied removing",
+      "blocks": true
+    }
+  ]
+}

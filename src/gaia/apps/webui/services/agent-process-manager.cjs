@@ -26,7 +26,12 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const { EventEmitter } = require("events");
-const { killProcessTree, listDescendants } = require("./process-tree.cjs");
+const {
+  killProcessTree,
+  listDescendants,
+  listTimeoutMs,
+  worstCaseKillMs,
+} = require("./process-tree.cjs");
 
 // ── Constants ────────────────────────────────────────────────────────────
 
@@ -1183,5 +1188,15 @@ class AgentProcessManager extends EventEmitter {
     });
   }
 }
+
+/**
+ * Longest stopAgent can take on `platform` (ms): the tree read while the
+ * agent is alive, its shutdown wait, then killProcessTree. The quit's
+ * cleanup deadline must cover it.
+ */
+AgentProcessManager.worstCaseStopMs = (platform = process.platform) =>
+  listTimeoutMs(platform) +
+  SHUTDOWN_TIMEOUT +
+  worstCaseKillMs({ platform, graceMs: TREE_KILL_GRACE });
 
 module.exports = AgentProcessManager;

@@ -19,6 +19,15 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
+/**
+ * Size of a source file as committed (LF line endings). A Windows checkout
+ * converts to CRLF and adds a byte per line, so on-disk size would make these
+ * limits pass in CI and fail locally.
+ */
+function sourceSize(filePath) {
+  return Buffer.byteLength(fs.readFileSync(filePath, 'utf-8').replace(/\r\n/g, '\n'), 'utf-8');
+}
+
 const CHAT_APP_PATH = path.join(__dirname, '../../src/gaia/apps/webui');
 const FRAMEWORK_PATH = path.join(__dirname, '../../src/gaia/electron');
 const BACKEND_PATH = path.join(__dirname, '../../src/gaia/ui');
@@ -372,10 +381,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   // ── File Size Checks ───────────────────────────────────────────────
 
   describe('source file size validation', () => {
-    // Bytes as committed: a Windows checkout's CRLF must not fail a file CI passes.
-    const committedSize = (filePath) =>
-      Buffer.byteLength(fs.readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n'), 'utf8');
-
     it('should have reasonably sized TypeScript files (each < 56KB)', () => {
       const tsFiles = [
         'src/services/api.ts',
@@ -388,7 +393,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         const filePath = path.join(CHAT_APP_PATH, file);
         if (fs.existsSync(filePath)) {
           // api.ts is the whole client and sits near this; split it rather than raise it again.
-          expect(committedSize(filePath)).toBeLessThan(56 * 1024);
+          expect(sourceSize(filePath)).toBeLessThan(56 * 1024);
         }
       });
     });
@@ -407,7 +412,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           const filePath = path.join(componentDir, file);
           if (fs.statSync(filePath).isFile()) {
             const limit = LARGE_FILE_ALLOWLIST.has(file) ? LARGE_FILE_LIMIT : DEFAULT_LIMIT;
-            expect(committedSize(filePath)).toBeLessThan(limit);
+            expect(sourceSize(filePath)).toBeLessThan(limit);
           }
         });
       }

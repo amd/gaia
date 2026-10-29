@@ -1,7 +1,8 @@
 {
   "fit": {
     "memory_overhead_factor": 1.05,
-    "memory_overhead_gb": 1.0
+    "memory_overhead_gb": 1.0,
+    "windows_igpu_shared_ram_fraction": 0.5
   },
   "models": [
     {
