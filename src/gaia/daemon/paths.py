@@ -15,12 +15,12 @@ import os
 import time
 from pathlib import Path
 
-_ENV_HOME = "GAIA_DAEMON_HOME"
+HOME_ENV_VAR = "GAIA_DAEMON_HOME"
 
 
 def host_dir() -> Path:
     """Directory holding instance.json, the start lock, and the daemon log."""
-    override = os.environ.get(_ENV_HOME)
+    override = os.environ.get(HOME_ENV_VAR)
     if override:
         return Path(override)
     # GAIA_HOME isolates the whole runtime; a daemon outside it would manage

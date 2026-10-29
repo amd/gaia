@@ -45,6 +45,8 @@ from typing import (
 )
 from uuid import uuid4
 
+from gaia.utils.sqlite_wal import enable_wal
+
 logger = logging.getLogger(__name__)
 
 
@@ -777,7 +779,7 @@ class MemoryStore:
         tool history without discarding existing rows.
         """
         with self._locked():
-            self._conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(self._conn)
             # Allow up to 5 s of retries before raising SQLITE_BUSY.  This
             # prevents spurious errors when the dashboard REST singleton and
             # the ChatAgent instance share the same WAL file concurrently.
