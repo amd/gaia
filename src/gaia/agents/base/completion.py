@@ -37,6 +37,8 @@ SIDE_EFFECT_PATHS = {
     "take_screenshot": ("file_path", "output_path", "path"),
     "text_to_speech": ("file_path", "output_path", "audio_path"),
     "generate_image": ("file_path", "output_path", "image_path"),
+    "generate_music": ("audio_path",),
+    "generate_sound_effect": ("audio_path",),
 }
 _EXEC_TOOLS = frozenset({"run_python", "execute_python_file", "run_shell_command"})
 _UNOBSERVABLE = object()
