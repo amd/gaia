@@ -156,6 +156,9 @@ class SDToolsMixin:
         ) -> Dict[str, Any]:
             """Generate an image from a text prompt using Stable Diffusion.
 
+            Only for a picture. A slide, deck, chart or diagram is a file its
+            skill builds, never an image.
+
             Args:
                 prompt: Text description of the image. Be detailed for best results.
                 model: SDXL-Turbo (default), SD-Turbo (faster, lower quality),
@@ -170,6 +173,9 @@ class SDToolsMixin:
                 {"status": "success", "image_path": str, ...} or
                 {"status": "error", "error": str}.
             """
+            refusal = self._slide_image_refusal()
+            if refusal is not None:
+                return refusal
             return self._generate_image(prompt, model, size, steps, cfg_scale, seed)
 
         @tool(
@@ -225,6 +231,34 @@ class SDToolsMixin:
 
         # Tools are automatically registered by the @tool decorator above
         # No need to call register_tool() - it doesn't exist anyway
+
+    #: A request about a slide, deck or chart: its image is the built file, drawn.
+    _SLIDE_REQUEST = re.compile(
+        r"\b(?:slides?|decks?|presentations?|powerpoint|pptx|keynote|charts?)\b", re.I
+    )
+
+    def _slide_image_refusal(self) -> Optional[Dict[str, Any]]:
+        """Turn the first image call for a slide toward the slide-decks skill.
+
+        Stable Diffusion cannot draw a slide's text or numbers. A second call in
+        the same turn goes through: the model has judged it a real picture.
+        """
+        request = str(getattr(self, "_current_query", "") or "")
+        if not self._SLIDE_REQUEST.search(request):
+            return None
+        if getattr(self, "_slide_image_redirected", None) == request:
+            return None
+        self.__dict__["_slide_image_redirected"] = request
+        return {
+            "status": "error",
+            "error": (
+                "This request is about a slide, deck or chart, and image generation "
+                "cannot draw its words or numbers. Load the slide-decks skill, build "
+                "the slide, then save it with slide-decks/export_slide_image (PNG, or "
+                "JPEG if asked). If the user really wants an artwork, call "
+                "generate_image again."
+            ),
+        }
 
     def _generate_image(
         self,

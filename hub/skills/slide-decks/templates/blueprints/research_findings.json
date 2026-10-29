@@ -1,0 +1,99 @@
+{
+  "name": "research_findings",
+  "aliases": [
+    "research",
+    "findings",
+    "study_results",
+    "analysis",
+    "survey_results"
+  ],
+  "title": "Research findings",
+  "description": "Research or analysis readout: headline findings, method, one finding per slide with its evidence, quotes, implications, limitations, next steps.",
+  "default_slides": 9,
+  "min_slides": 1,
+  "max_slides": 17,
+  "one_slide": "exec_summary",
+  "storyline": "Headline findings first; then the method in one slide so the audience trusts the rest; then one finding per slide, each title the finding itself.",
+  "slots": [
+    {
+      "id": "title",
+      "type": "title",
+      "priority": 1,
+      "title": "<Study>: <the headline finding>",
+      "guidance": "Study name, team, date."
+    },
+    {
+      "id": "exec_summary",
+      "type": "bullets",
+      "priority": 1,
+      "title": "<What we found, in one sentence>",
+      "guidance": "3-5 findings with their numbers; the implication of each.",
+      "kind": "executive_summary"
+    },
+    {
+      "id": "method",
+      "type": "bullets",
+      "priority": 3,
+      "title": "<How we found it: sample and period>",
+      "guidance": "Sample size, period, method, and what it can and cannot show."
+    },
+    {
+      "id": "finding",
+      "type": "chart",
+      "priority": 1,
+      "title": "<Finding, stated as a sentence>",
+      "guidance": "One finding per slide with the chart that proves it; source, n and period on the slide.",
+      "repeat": 6,
+      "grow": 0.75,
+      "spec": {
+        "chart_type": "auto"
+      }
+    },
+    {
+      "id": "voice",
+      "type": "quote",
+      "priority": 4,
+      "title": "<What participants said>",
+      "guidance": "A representative quote with who said it (role, not name).",
+      "repeat": 2,
+      "grow": 2.0
+    },
+    {
+      "id": "implications",
+      "type": "bullets",
+      "priority": 2,
+      "title": "<What this means for us>",
+      "guidance": "The decisions or changes the findings point to."
+    },
+    {
+      "id": "limitations",
+      "type": "bullets",
+      "priority": 3,
+      "title": "<What the findings do not show>",
+      "guidance": "Sample limits, bias, open questions."
+    },
+    {
+      "id": "next_steps",
+      "type": "table",
+      "title": "Next steps: who does what by when",
+      "guidance": "Columns Action | Owner | Due. One row per commitment; a named owner and a date on every row.",
+      "spec": {
+        "columns": [
+          "Action",
+          "Owner",
+          "Due"
+        ]
+      },
+      "priority": 2
+    },
+    {
+      "id": "appendix_detail",
+      "type": "table",
+      "priority": 6,
+      "title": "<Supporting data>",
+      "guidance": "Detailed tables.",
+      "repeat": 3,
+      "min_deck": 12
+    }
+  ]
+}

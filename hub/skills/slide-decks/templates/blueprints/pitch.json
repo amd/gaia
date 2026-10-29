@@ -1,0 +1,119 @@
+{
+  "name": "pitch",
+  "aliases": [
+    "pitch_deck",
+    "investor",
+    "proposal",
+    "sales_pitch"
+  ],
+  "title": "Pitch / proposal",
+  "description": "Pitch or proposal deck: problem, solution, market, traction, model, competition, team, financials and the ask.",
+  "default_slides": 10,
+  "min_slides": 1,
+  "max_slides": 13,
+  "one_slide": "solution",
+  "storyline": "Problem, then why now, then the solution and proof it works; end on a specific ask. Each slide makes one claim the next slide builds on.",
+  "slots": [
+    {
+      "id": "title",
+      "type": "title",
+      "priority": 1,
+      "title": "<Name>: <one-line value proposition>",
+      "guidance": "Name, tagline, presenter, date."
+    },
+    {
+      "id": "why_now",
+      "type": "bullets",
+      "priority": 4,
+      "title": "<Why now>",
+      "guidance": "The change (technology, regulation, behaviour) that makes this possible now."
+    },
+    {
+      "id": "problem",
+      "type": "bullets",
+      "priority": 1,
+      "title": "<The problem, stated as the customer feels it>",
+      "guidance": "Who has the problem, how often, what it costs them; one number."
+    },
+    {
+      "id": "solution",
+      "type": "bullets",
+      "priority": 1,
+      "title": "<How we solve it, in one sentence>",
+      "guidance": "What it does and the outcome for the customer; no feature list."
+    },
+    {
+      "id": "market",
+      "type": "kpi",
+      "priority": 2,
+      "title": "<How big the opportunity is>",
+      "guidance": "2-3 metrics such as total, serviceable and obtainable market, with sources."
+    },
+    {
+      "id": "product",
+      "type": "diagram",
+      "priority": 3,
+      "title": "<How it works in three steps>",
+      "guidance": "A 3-5 step process or a product picture.",
+      "spec": {
+        "diagram": "process"
+      }
+    },
+    {
+      "id": "traction",
+      "type": "chart",
+      "priority": 2,
+      "title": "<Proof that it is working>",
+      "guidance": "Growth in users/revenue/pilots over time; source and period.",
+      "repeat": 2,
+      "spec": {
+        "chart_type": "auto",
+        "intent": "trend"
+      }
+    },
+    {
+      "id": "business_model",
+      "type": "diagram",
+      "priority": 3,
+      "title": "<How it makes money>",
+      "guidance": "Pricing and revenue streams as 2-4 boxes.",
+      "spec": {
+        "diagram": "boxes"
+      }
+    },
+    {
+      "id": "competition",
+      "type": "table",
+      "priority": 3,
+      "title": "<Why we win against the alternatives>",
+      "guidance": "Alternatives as columns, 3-5 criteria as rows."
+    },
+    {
+      "id": "team",
+      "type": "diagram",
+      "priority": 4,
+      "title": "<Why this team will deliver>",
+      "guidance": "2-4 people with one relevant credential each.",
+      "spec": {
+        "diagram": "boxes"
+      }
+    },
+    {
+      "id": "financials",
+      "type": "chart",
+      "priority": 3,
+      "title": "<Where the plan gets in 3 years>",
+      "guidance": "Revenue and cost (or margin) by year; label projections as such.",
+      "spec": {
+        "chart_type": "column"
+      }
+    },
+    {
+      "id": "ask",
+      "type": "kpi",
+      "priority": 1,
+      "title": "<What we are asking for and what it buys>",
+      "guidance": "The amount or decision, what it funds, and the milestone it reaches."
+    }
+  ]
+}

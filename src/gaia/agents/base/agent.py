@@ -9,6 +9,7 @@ from __future__ import annotations
 # Standard library imports
 import abc
 import ast
+import contextlib
 import contextvars
 import datetime
 import inspect
@@ -129,7 +130,12 @@ from gaia.agents.base.tool_outcome import (
     tool_result_error_fields,
     tool_result_failed,
 )
-from gaia.agents.base.tools import _TOOL_REGISTRY, tool_call_progress_message
+from gaia.agents.base.tools import (
+    _TOOL_REGISTRY,
+    bare_tool_name,
+    partial_json_string,
+    tool_call_progress_message,
+)
 from gaia.agents.base.turn_scope import (
     ANSWERED_MARKER,
     POST_ANSWER_CLOSING_PROMPT,
@@ -697,6 +703,9 @@ DECLINED_HINT = (
 # — including the skill-library reads, whose text comes from third-party
 # packages, and any name this build has never heard of. Read by
 # ``Agent.turn_content_provenance`` (see there for why an allowlist at all).
+#: How many user messages and tool results an agent keeps for fact checks.
+SEEN_SOURCES_MAX = 200
+
 TOOLS_WITHOUT_EXTERNAL_CONTENT = {
     "remember_skill_lesson",
     "sleep",
@@ -2453,6 +2462,8 @@ Do NOT wrap conversational replies in JSON.
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
+        # User messages and tool results, for skill tools that check facts (note_seen).
+        self._seen_sources: List[Tuple[str, Dict[str, Any], str]] = []
         self.max_steps = max_steps if max_steps is not None else default_max_steps()
         self.debug_prompts = debug_prompts
         self.show_prompts = show_prompts  # Separate flag for displaying prompts
@@ -4732,6 +4743,8 @@ Do NOT wrap conversational replies in JSON.
         provider = getattr(getattr(self, "chat", None), "llm_client", None)
         if provider is not None and hasattr(provider, "tool_call_progress"):
             provider.tool_call_progress = self._report_tool_call_progress
+        if provider is not None and hasattr(provider, "tool_call_draft"):
+            provider.tool_call_draft = self._report_tool_call_draft
         if provider is not None and hasattr(provider, "reasoning_progress"):
             provider.reasoning_progress = self._report_reasoning_progress
         backend = getattr(provider, "_backend", None)
@@ -4758,6 +4771,14 @@ Do NOT wrap conversational replies in JSON.
         self.console.report_phase(
             "tool_call", tool_call_progress_message(tool, chars), chars=chars
         )
+
+    def _report_tool_call_draft(self, tool: str, arguments: str) -> None:
+        field = (self._tools_registry.get(tool) or {}).get("draft_argument")
+        if not field:
+            return
+        text = partial_json_string(arguments, field)
+        if text:
+            self.console.report_draft(tool, text)
 
     def _report_reasoning_progress(self, words: int) -> None:
         self.console.report_phase(
@@ -6522,8 +6543,14 @@ Do NOT wrap conversational replies in JSON.
                 )
                 return True
 
-        if tool_name in self.confirmation_required_tools():
+        gated = self.confirmation_required_tools()
+        if tool_name in gated:
             return not self._call_is_pre_authorized(tool_name, tool_args)
+        if bare_tool_name(tool_name) in gated:
+            # A skill tool named like a gated core tool (``x/run_python``) is
+            # gated like it. No grant pre-authorizes it: grants describe what
+            # the core tool does with its arguments, not what skill code does.
+            return True
         entry = self._tools_registry.get(tool_name) or {}
         flag = entry.get("requires_confirmation")
         if flag is not None:
@@ -6659,6 +6686,34 @@ Do NOT wrap conversational replies in JSON.
         if lessons is None:
             return result
         return attach_task_lessons(result, lessons.record(tool_name, tool_args, result))
+
+    #: How many user messages and tool results ``seen_sources`` keeps.
+    SEEN_SOURCES_MAX = SEEN_SOURCES_MAX
+
+    def note_seen(self, source: str, args: Dict[str, Any], content: Any) -> None:
+        """Record a user message or tool result, so tools can check facts against it."""
+        # A test agent built via __new__ has no list yet.
+        seen = self.__dict__.setdefault("_seen_sources", [])
+        text = (
+            content
+            if isinstance(content, str)
+            else json.dumps(content, default=str, ensure_ascii=False)
+        )
+        seen.append((source, dict(args or {}), text))
+        del seen[:-SEEN_SOURCES_MAX]
+
+    def seen_sources(self) -> List[Tuple[str, Dict[str, Any], str]]:
+        """``(source, args, text)`` for each user message and tool result this conversation.
+
+        Earlier user messages restored from history come first; tool results
+        exist only for turns this agent ran.
+        """
+        restored = [
+            ("user", {}, str(m.get("content") or ""))
+            for m in (getattr(self, "conversation_history", None) or [])
+            if isinstance(m, dict) and m.get("role") == "user"
+        ]
+        return restored + list(getattr(self, "_seen_sources", []))
 
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
@@ -6994,8 +7049,43 @@ Do NOT wrap conversational replies in JSON.
         if tool_name not in TOOLS_WITHOUT_EXTERNAL_CONTENT:
             self._turn_saw_external_content = True
 
+        # A skill's own tool runs bound to this agent, so gaia.skills.context
+        # can check its paths and declared capabilities against this agent's
+        # scope; a path-named argument outside that scope never reaches it.
+        skill_name = (self._tools_registry.get(tool_name) or {}).get("skill")
+        skill = self.loaded_skills.get(skill_name) if skill_name else None
+        if skill_name and skill is None:
+            # Skill tools register process-wide, so a later chat can see one its
+            # agent never loaded; load the skill so the call runs in scope.
+            from gaia.skills.errors import SkillError
+
+            try:
+                skill = self.load_skill(skill_name)
+            except SkillError as e:
+                return {
+                    "status": "error",
+                    "error": f"{tool_name} needs the '{skill_name}' skill, which "
+                    f"did not load: {e}",
+                    "tool_name": tool_name,
+                }
+        skill_scope: Any = contextlib.nullcontext()
+        skill_refusals: tuple = ()
+        if skill is not None:
+            from gaia.skills.context import bind, path_argument_refusal
+            from gaia.skills.errors import SkillPermissionError
+
+            skill_refusals = (SkillPermissionError,)
+
+            refusal = path_argument_refusal(self, tool_args)
+            if refusal is not None:
+                logger.info("Skill tool %s refused: %s", tool_name, refusal["error"])
+                return refusal
+            skill_scope = bind(self, skill)
+
         try:
-            result = self._call_tool_bounded(tool, tool_args, tool_name)
+            with skill_scope:
+                result = self._call_tool_bounded(tool, tool_args, tool_name)
+            Agent.note_seen(self, tool_name, tool_args, result)
             logger.debug(f"Tool execution result: {result}")
             self._fold_tool_usage(tool_name, result)
             return result
@@ -7031,6 +7121,11 @@ Do NOT wrap conversational replies in JSON.
                 "timeout": True,
                 "tool_name": tool_name,
             }
+        except skill_refusals as e:
+            # A skill tool asked gaia.skills.context for something outside its
+            # declaration or this agent's scope. The message says what to do.
+            logger.warning("Skill tool %s refused: %s", tool_name, e)
+            return {"status": "error", "error": str(e), "tool_name": tool_name}
         except subprocess.TimeoutExpired as e:
             # Handle subprocess timeout specifically
             error_msg = f"Tool {tool_name} timed out: {str(e)}"
@@ -9371,6 +9466,13 @@ Do NOT wrap conversational replies in JSON.
 
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
+        # The user's own words: memory recall prepends past chats' text, not theirs.
+        Agent.note_seen(
+            self,
+            "user",
+            {},
+            getattr(self, "_original_user_input", None) or user_input,
+        )
         self._single_tool_done = False
         self._turn_seq += 1
         self._denied_effects = DeniedEffects(os.getcwd())

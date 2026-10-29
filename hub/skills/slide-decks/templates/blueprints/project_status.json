@@ -1,0 +1,82 @@
+{
+  "name": "project_status",
+  "aliases": [
+    "status_update",
+    "status_report",
+    "steering_committee",
+    "programme_update"
+  ],
+  "title": "Project status update",
+  "description": "Project or programme status: overall status (schedule, budget, scope), milestones, progress, risks and issues, decisions needed, next steps.",
+  "default_slides": 6,
+  "min_slides": 1,
+  "max_slides": 9,
+  "one_slide": "status_summary",
+  "storyline": "Lead with the overall status and what changed since last time; end with the decisions you need. State status in words (On track / At risk / Late), not only colours.",
+  "slots": [
+    {
+      "id": "title",
+      "type": "title",
+      "priority": 1,
+      "title": "<Project> status: <date>",
+      "guidance": "Project, reporting period, owner."
+    },
+    {
+      "id": "status_summary",
+      "type": "kpi",
+      "priority": 1,
+      "title": "<Overall status in one sentence>",
+      "guidance": "Tiles for Overall, Schedule, Budget, Scope with a word status and the change since last report.",
+      "kind": "executive_summary"
+    },
+    {
+      "id": "milestones",
+      "type": "timeline",
+      "priority": 2,
+      "title": "<Where the milestones stand>",
+      "guidance": "Milestones with dates; mark done and late ones in the label."
+    },
+    {
+      "id": "progress",
+      "type": "chart",
+      "priority": 3,
+      "title": "<Progress against plan>",
+      "guidance": "Planned vs actual (completion, burn-up or spend) over time.",
+      "repeat": 3,
+      "grow": 1.5,
+      "spec": {
+        "chart_type": "line",
+        "intent": "trend"
+      }
+    },
+    {
+      "id": "risks",
+      "type": "table",
+      "priority": 2,
+      "title": "<The risks and issues that need attention>",
+      "guidance": "Risk | Impact | Owner | Mitigation; the top 3-5 only."
+    },
+    {
+      "id": "decisions",
+      "type": "bullets",
+      "priority": 3,
+      "title": "<Decisions we need from you>",
+      "guidance": "Each decision, the options and the date it is needed by.",
+      "merge_into": "status_summary"
+    },
+    {
+      "id": "next_steps",
+      "type": "table",
+      "title": "Next steps: who does what by when",
+      "guidance": "Columns Action | Owner | Due. One row per commitment; a named owner and a date on every row.",
+      "spec": {
+        "columns": [
+          "Action",
+          "Owner",
+          "Due"
+        ]
+      },
+      "priority": 2
+    }
+  ]
+}

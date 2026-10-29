@@ -1,0 +1,101 @@
+{
+  "name": "one_slide_framework",
+  "aliases": [
+    "framework",
+    "one_pager",
+    "canvas",
+    "model",
+    "2x2",
+    "one_slide"
+  ],
+  "title": "One-slide framework",
+  "description": "A single framework slide (2x2 matrix, pyramid, cycle, process, layered stack or canvas grid), optionally with a cover, an explanation and an example.",
+  "default_slides": 1,
+  "min_slides": 1,
+  "max_slides": 4,
+  "one_slide": "framework",
+  "storyline": "The framework carries the message: label every box with a short noun phrase and one line of explanation; the title says what the framework shows.",
+  "variants": {
+    "2x2": {
+      "framework": {
+        "spec": {
+          "diagram": "matrix"
+        },
+        "guidance": "Four quadrants (top-left, top-right, bottom-left, bottom-right) with x_axis and y_axis labels; optional points with x, y in 0..1."
+      }
+    },
+    "pyramid": {
+      "framework": {
+        "spec": {
+          "diagram": "pyramid"
+        },
+        "guidance": "3-5 levels, top first, each with a one-line description."
+      }
+    },
+    "cycle": {
+      "framework": {
+        "spec": {
+          "diagram": "cycle"
+        },
+        "guidance": "3-8 stages in order; optional centre label."
+      }
+    },
+    "process": {
+      "framework": {
+        "spec": {
+          "diagram": "process"
+        },
+        "guidance": "3-6 steps, each a verb phrase with one line of detail."
+      }
+    },
+    "stack": {
+      "framework": {
+        "spec": {
+          "diagram": "stack"
+        },
+        "guidance": "Layers from top to bottom, each with a one-line role."
+      }
+    },
+    "canvas": {
+      "framework": {
+        "spec": {
+          "diagram": "grid"
+        },
+        "guidance": "Cells with row/col/rowspan/colspan for a canvas; a title and 1-3 bullets per cell."
+      }
+    }
+  },
+  "slots": [
+    {
+      "id": "title",
+      "type": "title",
+      "priority": 3,
+      "title": "<Framework name>",
+      "guidance": "Cover slide."
+    },
+    {
+      "id": "framework",
+      "type": "diagram",
+      "priority": 1,
+      "title": "<What the framework shows, as a sentence>",
+      "guidance": "The framework itself.",
+      "spec": {
+        "diagram": "matrix"
+      }
+    },
+    {
+      "id": "explanation",
+      "type": "bullets",
+      "priority": 2,
+      "title": "<How to use it>",
+      "guidance": "How to read and apply the framework, 3-4 points."
+    },
+    {
+      "id": "example",
+      "type": "two_column",
+      "priority": 4,
+      "title": "<The framework applied to a case>",
+      "guidance": "Left: the case; right: where it lands and what follows."
+    }
+  ]
+}

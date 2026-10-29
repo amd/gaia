@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "slide-decks preferences",
+  "description": "How this user likes their decks. An explicit request beats these; these beat a user template's own look; both beat the skill defaults.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "theme": {"type": "string", "enum": ["light", "dark", "minimal", "corporate", "default", "white", "black", "night", "mono", "clean", "simple"], "description": "Built-in theme."},
+    "colors": {
+      "type": "object",
+      "description": "Brand colours as hex, e.g. #1F4E79.",
+      "additionalProperties": false,
+      "properties": {
+        "primary": {"type": "string", "maxLength": 7},
+        "highlight": {"type": "string", "maxLength": 7},
+        "background": {"type": "string", "maxLength": 7},
+        "text": {"type": "string", "maxLength": 7},
+        "title": {"type": "string", "maxLength": 7},
+        "muted": {"type": "string", "maxLength": 7},
+        "panel": {"type": "string", "maxLength": 7},
+        "palette": {"type": "array", "items": {"type": "string", "maxLength": 7}, "maxItems": 8}
+      }
+    },
+    "fonts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": {"type": "string", "maxLength": 60},
+        "body": {"type": "string", "maxLength": 60}
+      }
+    },
+    "template_path": {"type": "string", "maxLength": 1024, "description": "A .pptx/.potx the user's decks should use."},
+    "logo_path": {"type": "string", "maxLength": 1024},
+    "density": {"type": "string", "enum": ["minimal", "balanced", "detailed"], "description": "Text per slide: minimal (presented), balanced, detailed (pre-read)."},
+    "tone": {"type": "string", "enum": ["formal", "neutral", "casual"]},
+    "prefer": {"type": "string", "enum": ["charts", "tables", "balanced"]},
+    "chart": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gridlines": {"type": "boolean"},
+        "data_labels": {"type": ["boolean", "string"]},
+        "legend": {"type": "string", "enum": ["auto", "bottom", "right", "top", "left", "none"]},
+        "palette": {"type": "array", "items": {"type": "string", "maxLength": 7}, "maxItems": 8}
+      }
+    },
+    "number_format": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "decimals": {"type": "integer", "minimum": 0, "maximum": 6},
+        "thousands": {"type": "boolean"},
+        "currency": {"type": "string", "maxLength": 4},
+        "percent_decimals": {"type": "integer", "minimum": 0, "maximum": 4}
+      }
+    },
+    "locale": {"type": "string", "maxLength": 20},
+    "date_format": {"type": "string", "maxLength": 30},
+    "speaker_notes": {"type": "boolean"},
+    "footer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {"type": "string", "maxLength": 120},
+        "slide_numbers": {"type": "boolean"}
+      }
+    },
+    "title_style": {"type": "string", "enum": ["action", "topic"]},
+    "aspect": {"type": "string", "enum": ["16:9", "4:3"]}
+  }
+}

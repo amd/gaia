@@ -119,6 +119,8 @@ SUMMARY_VIEW_KEYS = (
     "image_path",
     # A ``search_web`` result's hits, so a relayed turn can cite them.
     "sources",
+    # The file a tool built, so a client can offer to open it.
+    "path",
 )
 
 #: Which connector an MCP tool call belongs to, carried from ``tool_start``.
@@ -378,6 +380,15 @@ class CanonicalTranslator:
             if phase == "model_queue" and isinstance(queue, dict):
                 out[0]["queue"] = {k: queue[k] for k in _QUEUE_FIELDS if k in queue}
         return out
+
+    def _on_draft(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return [
+            {
+                "type": "draft",
+                "tool": str(event.get("tool", "")),
+                "text": str(event.get("text", "")),
+            }
+        ]
 
     def _on_step(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         step = event.get("step")
@@ -651,6 +662,7 @@ class CanonicalTranslator:
     # Dispatch table: every top-level source type sse_handler.py emits.
     _DISPATCH = {
         "status": _on_status,
+        "draft": _on_draft,
         "step": _on_step,
         "thinking": _on_thinking,
         "plan": _on_plan,
