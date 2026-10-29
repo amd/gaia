@@ -119,8 +119,8 @@ class CodeIndexToolsMixin:
     ) -> None:
         """Initialise mixin state. Safe to call multiple times.
 
-        A later call always refreshes the sandbox ceilings.  It retains an
-        already indexed repository and SDK only while that repository remains
+        A later call always refreshes the sandbox ceilings.  It retains the
+        current repository and SDK only while that repository remains
         within those refreshed ceilings; otherwise it starts from ``repo_path``.
 
         Args:
@@ -144,12 +144,7 @@ class CodeIndexToolsMixin:
             else (default_repo_path,)
         )
 
-        # The Agent UI refreshes tools on each cached-agent turn.  Do not throw
-        # away a repository selected by index_codebase merely because the next
-        # turn's default start directory differs.  The refreshed allowed paths
-        # are still authoritative: retain the SDK only while its repository is
-        # inside the new ceilings.  An explicit config is a caller-requested
-        # replacement and therefore intentionally reinitializes the state.
+        # Keep a repo selected by index_codebase across re-registration while it stays in scope.
         existing_repo_path = getattr(self, "_repo_path", None)
         if existing_repo_path and code_index_config is None:
             real_repo_path = str(Path(existing_repo_path).resolve())

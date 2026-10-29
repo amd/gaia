@@ -113,6 +113,30 @@ def test_re_registering_tools_keeps_the_repo_selected_for_code_index(
     assert agent._code_index_ceilings == (str(workspace),)
 
 
+def test_re_registering_tools_drops_repo_outside_narrowed_allowed_paths(
+    tmp_path, monkeypatch
+):
+    outside = tmp_path / "outside" / "repo"
+    workspace = tmp_path / "workspace"
+    outside.mkdir(parents=True)
+    workspace.mkdir()
+
+    with _isolated_registry():
+        monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+        agent = GaiaAgent(
+            config=GaiaAgentConfig(silent_mode=True, allowed_paths=[str(tmp_path)])
+        )
+        agent._repo_path = str(outside)
+        agent._code_index_sdk = object()
+        agent.config.allowed_paths = [str(workspace)]
+
+        agent._register_tools()
+
+    assert agent._repo_path != str(outside)
+    assert agent._code_index_sdk is None
+    assert agent._code_index_ceilings == (str(workspace),)
+
+
 # --------------------------------------------------------------------------
 # Capability breadth — the reason this agent exists
 # --------------------------------------------------------------------------
