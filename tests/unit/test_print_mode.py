@@ -719,8 +719,18 @@ def _grants_outside_path(skip, full, tmp_path):
 
     console = SilentConsole()
     print_mode.configure_console(console, skip_permissions=skip, full_access=full)
-    agent = types.SimpleNamespace(console=console, _turn_seq=0, _refused_paths={})
-    return Agent._confirm_path_access(agent, tmp_path / "outside" / "x.txt")
+
+    # A real Agent (not a stand-in) so the gate's own helper methods are used.
+    class _Bare(Agent):
+        def _register_tools(self):
+            pass
+
+    agent = object.__new__(_Bare)
+    agent.console = console
+    agent._turn_seq = 0
+    agent._refused_paths = []
+    agent._confirmation_wait_s = 0.0
+    return agent._confirm_path_access(tmp_path / "outside" / "x.txt")
 
 
 def test_full_access_grants_paths_outside_the_cwd(tmp_path):
@@ -730,6 +740,11 @@ def test_full_access_grants_paths_outside_the_cwd(tmp_path):
 
 def test_skip_permissions_alone_never_widens_the_file_scope(tmp_path):
     assert _grants_outside_path(True, False, tmp_path) is False
+
+
+def test_no_permission_flag_denies_an_outside_path_with_nobody_to_ask(tmp_path):
+    # pytest's captured stdio is not a terminal, so this is the headless case.
+    assert _grants_outside_path(False, False, tmp_path) is False
 
 
 def test_file_tools_start_in_the_cwd(stub_env, tmp_path, monkeypatch):
