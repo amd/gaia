@@ -939,7 +939,7 @@ def test_run_route_passes_the_switch_to_gaias_own(client, monkeypatch):
         ("\x1b[2K\x1b[1GStep 2/5: Pulling", "Step 2/5: Pulling"),
         ("\x9b0mdone", "done"),
         # OSC 8 hyperlink, ST- and BEL-terminated: the link text survives.
-        ("see \x1b]8;;https://x.example\x1b\docs\x1b]8;;\x1b\ now", "see docs now"),
+        ("see \x1b]8;;https://x.example\x1b\\docs\x1b]8;;\x1b\\ now", "see docs now"),
         ("\x1b]0;window title\x07Ready", "Ready"),
         # Escapes cut off at the end of a captured line.
         ("Downloading 40%\x1b[1;3", "Downloading 40%"),
