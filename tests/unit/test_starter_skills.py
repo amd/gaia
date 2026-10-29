@@ -333,6 +333,61 @@ def test_starter_skill_uses_only_real_memory_categories(skill_dir: Path):
     )
 
 
+_START_LINE_ARG = re.compile(r"\bstart_line\s*=\s*([^,)]+)")
+_START_LINE_MINUS = re.compile(r"\w\s*-\s*\w")
+
+
+def _unclamped_start_lines(text: str) -> list:
+    """``start_line=`` values that subtract without a ``max(1, ...)`` floor."""
+    return [
+        arg.strip()
+        for arg in _START_LINE_ARG.findall(text)
+        if _START_LINE_MINUS.search(arg) and not arg.strip().startswith("max(1")
+    ]
+
+
+@pytest.mark.parametrize(
+    "text, flagged",
+    [
+        ("read_file(p, start_line=line - 30, end_line=line + 10)", ["line - 30"]),
+        ("read_file(p, start_line=n-5)", ["n-5"]),
+        ("read_file(p, start_line=max(1, line - 30), end_line=line)", []),
+        ("read_file(p, start_line=1, end_line=40)", []),
+        ("read_file(p, start_line=line, end_line=line + 10)", []),
+        ("start_line is 1-based", []),
+    ],
+)
+def test_unclamped_start_line_detector(text: str, flagged: list):
+    assert _unclamped_start_lines(text) == flagged
+
+
+@pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
+def test_starter_skill_read_window_never_starts_below_line_one(skill_dir: Path):
+    """``read_file`` rejects ``start_line`` below 1, so ``line - N`` needs a floor."""
+    skill = parse_skill_file(skill_dir)
+    bad = _unclamped_start_lines(skill.body)
+
+    assert not bad, (
+        f"{skill.name} computes start_line={bad} with no max(1, ...) floor; "
+        "near the top of a file that asks read_file for line 0 or lower"
+    )
+
+
+@pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
+def test_starter_skill_references_never_start_below_line_one(skill_dir: Path):
+    """Reference files are loaded into the turn too, so they need the same floor."""
+    bad = {
+        ref.name: found
+        for ref in sorted((skill_dir / "references").glob("*.md"))
+        if (found := _unclamped_start_lines(ref.read_text(encoding="utf-8")))
+    }
+
+    assert not bad, (
+        f"{skill_dir.name} references compute start_line with no max(1, ...) "
+        f"floor: {bad}"
+    )
+
+
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
 def test_starter_skill_scratchpad_sql_uses_the_table_prefix(skill_dir: Path):
     """Scratchpad tables are only reachable through their ``scratch_`` prefix.
