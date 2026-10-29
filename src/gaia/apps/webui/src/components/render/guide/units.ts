@@ -145,17 +145,44 @@ export function metricText(n: number, u: Unit): string {
 
 const TEMPERATURE = /(\d{2,3})(?:\s*°\s*|\s*degrees?\s+|(?=[FC]\b))(Fahrenheit|Celsius|F|C)\b/g;
 
-const snap5 = (n: number) => Math.round(n / 5) * 5;
+/** Oven settings round to 5 degrees; doneness temperatures (74°C, 165°F) stay exact. */
+const roundDegrees = (n: number) => (n >= 150 ? Math.round(n / 5) * 5 : Math.round(n));
 
-/** Rewrite oven temperatures in `text` into `system`, rounded to 5 degrees. */
+const PAIR_GAP = /^\s*(?:\/|\(|or)\s*$/;
+
+/**
+ * Rewrite temperatures in `text` into `system`. A pair the author already wrote
+ * in both systems ("165°F/74°C", "425°F (220°C)") keeps only their own value
+ * for `system`, instead of converting each half into a duplicate.
+ */
 export function convertTemperatures(text: string, system: UnitSystem): string {
-    return text.replace(TEMPERATURE, (match, digits: string, scale: string) => {
-        const fahrenheit = scale.charAt(0) === 'F';
-        const value = Number(digits);
-        if (fahrenheit && system === 'metric') return `${snap5(((value - 32) * 5) / 9)}°C`;
-        if (!fahrenheit && system === 'us') return `${snap5((value * 9) / 5 + 32)}°F`;
-        return match;
-    });
+    const found = [...text.matchAll(TEMPERATURE)].map((m) => ({
+        start: m.index!,
+        end: m.index! + m[0].length,
+        value: Number(m[1]),
+        fahrenheit: m[2].charAt(0) === 'F',
+        text: m[0],
+    }));
+    let out = '';
+    let at = 0;
+    for (let i = 0; i < found.length; i++) {
+        const t = found[i];
+        const next = found[i + 1];
+        out += text.slice(at, t.start);
+        if (next && next.fahrenheit !== t.fahrenheit && PAIR_GAP.test(text.slice(t.end, next.start))) {
+            const wanted = (t.fahrenheit ? system === 'us' : system === 'metric') ? t : next;
+            out += wanted.text;
+            at = next.end;
+            if (text.slice(t.end, next.start).includes('(') && text.charAt(at) === ')') at += 1;
+            i += 1;
+            continue;
+        }
+        if (t.fahrenheit && system === 'metric') out += `${roundDegrees(((t.value - 32) * 5) / 9)}°C`;
+        else if (!t.fahrenheit && system === 'us') out += `${roundDegrees((t.value * 9) / 5 + 32)}°F`;
+        else out += t.text;
+        at = t.end;
+    }
+    return out + text.slice(at);
 }
 
 /** The unit system of the first temperature in `text`, if it names one. */

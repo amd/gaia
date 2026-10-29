@@ -50,9 +50,21 @@ export interface ParsedLine {
     rest: string;
 }
 
+/** "Olive oil (1 tablespoon)": the shape small models write when asked for amount first. */
+const TRAILING_AMOUNT = /^([^()]+?)\s*\(([^()]+)\)\s*$/;
+
+function lowerFirst(text: string): string {
+    return /^[A-Z][a-z]/.test(text) ? text.charAt(0).toLowerCase() + text.slice(1) : text;
+}
+
 export function parseQuantity(line: string): ParsedLine | null {
     const m = LEAD.exec(line);
-    if (!m) return null;
+    if (!m) {
+        const trailing = TRAILING_AMOUNT.exec(line);
+        const inner = trailing ? parseQuantity(trailing[2]) : null;
+        if (!trailing || !inner || inner.rest) return null;
+        return { ...inner, rest: lowerFirst(trailing[1].trim()) };
+    }
     const low = parseNumber(m[1]);
     const high = m[2] ? parseNumber(m[2]) : null;
     if (!(low > 0) || (high !== null && !(high > low))) return null;

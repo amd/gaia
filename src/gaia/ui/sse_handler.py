@@ -982,6 +982,8 @@ class SSEOutputHandler(OutputHandler):
         # set last so it always wins over the generic result_data shapes above.
         if render_card is not None:
             event["result_data"] = render_card
+            event["render"] = self._RENDER_TOOL_TO_LANG[self._last_tool_name]
+            event["data"] = render_card
 
         self._emit(event)
 

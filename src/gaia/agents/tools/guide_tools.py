@@ -71,6 +71,12 @@ def _check_lines(tool: str, arg: str, lines: Any, cap: int) -> Optional[str]:
     return None
 
 
+_SHOWN_MESSAGE = (
+    "The card is now on the user's screen with every line. Reply with one or "
+    "two short sentences of tips. Do not repeat the list or the steps."
+)
+
+
 class GuideToolsMixin:
     """
     Mixin providing guide-card tools.
@@ -106,7 +112,7 @@ class GuideToolsMixin:
             Args:
                 title: The dish, e.g. "Banana bread".
                 servings: How many people it serves, 1 to 99, e.g. 4.
-                ingredients: One ingredient per line, amount first, e.g. "2 cups flour".
+                ingredients: One ingredient per line, amount and unit first, e.g. "2 cups flour", "1 whole chicken (4 lb)", "salt to taste". Write the full recipe yourself; do not ask for ingredients.
                 steps: One step per line with durations inline, e.g. "Simmer 15 minutes". A step may start with a short title: "Make the dough: mix flour and water".
                 description: Optional one-sentence intro.
                 notes: Optional tips, swaps or storage advice.
@@ -265,6 +271,9 @@ class GuideToolsMixin:
 
         return {
             "ok": True,
+            # Read by the model right before it answers; the docstring alone
+            # did not stop a small model re-typing the card under it.
+            "message": _SHOWN_MESSAGE,
             "data": {
                 "kind": "guide",
                 "guideType": guide_type,

@@ -26,6 +26,9 @@ describe('parseQuantity', () => {
         ['2 large eggs', 2, null, null, 'large eggs'],
         ['4 garlic cloves', 4, null, null, 'garlic cloves'],
         ['3 Tbsp. olive oil', 3, null, 'tbsp', 'olive oil'],
+        ['Olive oil (1 tablespoon)', 1, null, 'tbsp', 'olive oil'],
+        ['Whole chicken (3-4 lbs)', 3, 4, 'lb', 'whole chicken'],
+        ['Eggs (2)', 2, null, null, 'eggs'],
     ])('%s', (line, low, high, unit, rest) => {
         const parsed = parseQuantity(line)!;
         expect(parsed.amount.low).toBeCloseTo(low);
@@ -34,7 +37,13 @@ describe('parseQuantity', () => {
         expect(parsed.rest).toBe(rest);
     });
 
-    it.each(['a pinch of salt', 'Salt and pepper to taste', 'Fresh parsley, to serve'])('%s has no amount', (line) => {
+    it.each([
+        'a pinch of salt',
+        'Salt and pepper to taste',
+        'Fresh parsley, to serve',
+        'Salt and pepper (to taste)',
+        'Chicken broth (low sodium)',
+    ])('%s has no amount', (line) => {
         expect(parseQuantity(line)).toBeNull();
     });
 });
@@ -97,6 +106,12 @@ describe('units', () => {
         ['Preheat to 200°C', 'us', 'Preheat to 390°F'],
         ['Preheat to 200°C', 'metric', 'Preheat to 200°C'],
         ['Add 3 C of water', 'metric', 'Add 3 C of water'],
+        ['Cook to 165°F', 'metric', 'Cook to 74°C'],
+        ['Cook to 74°C', 'us', 'Cook to 165°F'],
+        ['internal temp of 165°F/74°C), then rest', 'metric', 'internal temp of 74°C), then rest'],
+        ['internal temp of 165°F/74°C), then rest', 'us', 'internal temp of 165°F), then rest'],
+        ['Roast at 425°F (220°C) for 1 hour', 'metric', 'Roast at 220°C for 1 hour'],
+        ['Roast at 425°F (220°C) for 1 hour', 'us', 'Roast at 425°F for 1 hour'],
     ] as const)('%s in %s', (text, system, expected) => {
         expect(convertTemperatures(text, system)).toBe(expected);
     });

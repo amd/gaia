@@ -25,7 +25,7 @@ without Lemonade, a mailbox, or a live agent, and so the OpenAPI export stays
 cheap.
 
 Per-agent shape is injected, not hardcoded: ``agent_id`` (drives ``respond_url``),
-``render_tool_map`` (which tool draws which card), ``action_labels`` +
+``action_labels`` +
 ``summary_renderer`` (how a gated action is described to the human). Defaults are
 generic, so an agent that needs none of it constructs with just ``agent_id``.
 
@@ -160,9 +160,6 @@ class CanonicalTranslator:
         agent_id: Agent this run belongs to. Drives ``respond_url`` — the reason
             this is a parameter and not a constant: a hardcoded ``/v1/email/...``
             silently points every other agent's client at the wrong sidecar.
-        render_tool_map: ``tool name -> card key`` for ``tool_result.render``
-            (spec §4.2). Must mirror the caller's
-            ``SSEOutputHandler._RENDER_TOOL_TO_LANG``.
         action_labels: ``tool name -> human headline`` for confirmation prompts.
         summary_renderer: ``(tool, args) -> str`` override for the whole
             confirmation summary, when an agent wants domain detail (recipients,
@@ -179,7 +176,6 @@ class CanonicalTranslator:
         run_id: str,
         *,
         agent_id: str,
-        render_tool_map: Optional[Dict[str, str]] = None,
         action_labels: Optional[Dict[str, str]] = None,
         summary_renderer: Optional[Callable[[str, Dict[str, Any]], str]] = None,
         debug: Optional[bool] = None,
@@ -190,7 +186,6 @@ class CanonicalTranslator:
         self._reasoning = reasoning
         self._agent_id = agent_id
         self._debug = _debug_enabled_by_env() if debug is None else bool(debug)
-        self._render_tool_map = dict(render_tool_map or {})
         self._action_labels = dict(action_labels or {})
         self._summary_renderer = summary_renderer
         # Buffered tool_start awaiting its tool_args (spec §6.3). Shape:
@@ -433,7 +428,9 @@ class CanonicalTranslator:
             # nor the latency the preview line is made of.
             "preview": derive_preview(tool, event),
         }
-        render = self._render_tool_map.get(self._last_tool or "")
+        # The handler names the card only when it lifted one, so a failed call
+        # never draws an "Invalid payload" card ahead of the model's retry.
+        render = event.get("render")
         if render:
             canonical["render"] = render
         return [canonical]

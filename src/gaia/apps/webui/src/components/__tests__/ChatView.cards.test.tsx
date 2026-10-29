@@ -217,6 +217,33 @@ describe('ChatView streaming cards (#2108)', () => {
         }
     });
 
+    it('a reloaded chat draws the cards its saved tool steps made', async () => {
+        mockedApi.getMessages.mockResolvedValue({
+            messages: [
+                {
+                    id: 21,
+                    session_id: SESSION.id,
+                    role: 'assistant',
+                    content: 'Enjoy.',
+                    created_at: '2026-07-16T00:00:01.000Z',
+                    rag_sources: null,
+                    agent_steps: [
+                        { id: 1, type: 'tool', tool: 'search_documents', active: false },
+                        { id: 2, type: 'tool', tool: 'pre_scan_inbox', active: false, render: 'email_pre_scan', data: preScanPayload },
+                    ],
+                } as never,
+            ],
+            total: 1,
+        });
+
+        render(<ChatView sessionId={SESSION.id} />);
+        await act(async () => {});
+
+        const assistantMsg = useChatStore.getState().messages.find((m) => m.id === 21);
+        expect(assistantMsg?.cards).toEqual([{ render: 'email_pre_scan', data: preScanPayload }]);
+        expect(screen.getByText('Server down')).toBeInTheDocument();
+    });
+
     it('Stop transfers in-flight cards onto the stopped message', async () => {
         vi.useFakeTimers();
         try {

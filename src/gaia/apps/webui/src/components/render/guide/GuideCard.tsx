@@ -104,7 +104,7 @@ function Guide({ wire }: { wire: GuideWire }) {
                         <button
                             type="button"
                             className="render-guide__icon"
-                            onClick={() => setServings(Math.max(1, servings - 1))}
+                            onClick={() => setServings((n) => Math.max(1, (n ?? 1) - 1))}
                             disabled={servings <= 1}
                             aria-label="Fewer servings"
                         >
@@ -116,7 +116,7 @@ function Guide({ wire }: { wire: GuideWire }) {
                         <button
                             type="button"
                             className="render-guide__icon"
-                            onClick={() => setServings(Math.min(MAX_SERVINGS, servings + 1))}
+                            onClick={() => setServings((n) => Math.min(MAX_SERVINGS, (n ?? 1) + 1))}
                             disabled={servings >= MAX_SERVINGS}
                             aria-label="More servings"
                         >

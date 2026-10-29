@@ -59,6 +59,7 @@ def test_recipe_card_carries_servings_ingredients_and_steps(tools):
 
     assert result == {
         "ok": True,
+        "message": result["message"],
         "data": {
             "kind": "guide",
             "guideType": "recipe",
@@ -70,6 +71,12 @@ def test_recipe_card_carries_servings_ingredients_and_steps(tools):
             "steps": ["Mash: mash the bananas", "Bake 60 minutes"],
         },
     }
+
+
+def test_a_shown_card_tells_the_model_not_to_repeat_it(tools):
+    message = _call(tools, "show_checklist", title="Beach", items=["Towel"])["message"]
+
+    assert "Do not repeat" in message
 
 
 def test_workout_card_puts_equipment_in_items_and_exercises_in_steps(tools):
@@ -266,9 +273,7 @@ def _drain(handler):
 def test_handler_lifts_the_card_and_translator_marks_it_guide(tools, as_json):
     envelope = _call(tools, "show_recipe", **_RECIPE)
     handler = SSEOutputHandler()
-    translator = CanonicalTranslator(
-        "r1", agent_id="gaia", render_tool_map=SSEOutputHandler._RENDER_TOOL_TO_LANG
-    )
+    translator = CanonicalTranslator("r1", agent_id="gaia")
 
     handler.print_tool_usage("show_recipe")
     handler.pretty_print_json(dict(_RECIPE), title="Arguments")
