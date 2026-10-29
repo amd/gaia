@@ -1,8 +1,8 @@
 ---
 name: image-gen
-description: Turn a description into an image file with local Stable Diffusion, then iterate on it. Use when the user says draw, sketch, paint, render, "make a picture of", "generate an image", or asks for concept art, a thumbnail, a logo idea, a wallpaper, or a mockup — and when they want the last image changed rather than replaced.
+description: Turn a description into an image with a downloaded Lemonade model (Stable Diffusion or TheNoise), then iterate on it. Use for draw, sketch, paint, render, "make a picture of", "generate an image", concept art, game art, backgrounds, thumbnails, logos, wallpapers, mockups, and requests to change the last image rather than replace it.
 license: MIT
-version: 1.0.0
+version: 1.1.0
 metadata:
   gaia:
     security_tier: community
@@ -17,9 +17,8 @@ metadata:
 # Image Generation
 
 Generation runs locally and is slow — tens of seconds to minutes per image, and
-the first call for a model downloads gigabytes. That changes the job: you get
-few attempts, so spend the thinking *before* the call rather than firing off
-four variations and picking one.
+the first load can take a while. Select downloaded models, and plan the
+prompt before generating rather than firing off four variations and picking one.
 
 It also costs the conversation. Drawing loads the image model in place of the
 chat model, so the reply after an image pauses while the chat model comes back.
@@ -28,14 +27,13 @@ answer they did not ask to have illustrated.
 
 ## Check what is loaded before you promise anything
 
-Call `list_sd_models()` first. It tells you which models exist and what each
-costs, and the reported `default_model` is the one you get if you pass no
-`model`. Do not assume a specific model is resident — naming one the machine
-has not pulled turns a 20-second request into a multi-gigabyte download the
-user did not agree to.
+Call `list_sd_models()` first. It lists downloaded image models, including
+TheNoise models. Select an exact model ID from its `models` list, and read
+`image_defaults`. The `default_model` is only used when `model` is omitted.
+Do not assume a model is resident or silently switch to a different model.
 
-Tell the user the estimate before a slow model, not after: SDXL-Base-1.0 at
-1024x1024 is on the order of minutes, the Turbo models are seconds.
+Legacy SD models include approximate time estimates. For TheNoise models,
+no reliable device-independent estimate is available; do not invent one.
 
 ## Build the prompt for them
 
@@ -65,18 +63,19 @@ useful here:
 - Long negative-prompt boilerplate ("blurry, low quality, watermark, extra
   fingers…") is wasted. Spend those words describing what you *do* want.
 
-Leave `steps`, `cfg_scale`, and `size` unset unless you have a reason; the tool
-fills in the right values per model. Reach for `SDXL-Base-1.0` only when the
-user explicitly wants photorealism and has accepted the wait.
+Leave `steps`, `cfg_scale`, and `size` unset unless you have a reason. The
+legacy SD models use their historical defaults; TheNoise models use Lemonade's
+per-model image defaults. Never force SDXL's 20 steps or 7.5 CFG onto a
+4-step or 8-step distilled TheNoise model.
 
 ## Iterate instead of starting over
 
 `get_generation_history()` returns this session's generations with the exact
 prompt, model, size and seed of each. When the user says "same but at sunset"
 or "make it wider", read the previous entry, change the one thing they asked
-about, and keep everything else — including the `seed`. Reusing the seed is
-what makes the second image recognisably the same picture rather than an
-unrelated one that happens to match the words.
+about, and keep everything else — including the `seed` if it was supplied.
+When the server selected an unknown seed, iteration is not deterministic;
+changing the prompt can produce a substantially different image.
 
 Rewriting the prompt from scratch throws away everything that was already
 working, and the user has to re-explain the parts they liked.
@@ -98,8 +97,8 @@ The common failures and what to say:
 - **Timed out** — usually the first use of a model, downloading several GB.
   The server is fine. Tell them to pre-fetch it with the pull command the
   error names for their install, then retry, rather than restarting anything.
-- **Invalid model or size** — you passed something outside the supported set.
-  Call `list_sd_models()` and pick from what it returned.
+- **Invalid model or size** — choose a downloaded image model from
+  `list_sd_models()`; TheNoise accepts backend-specific dimensions.
 
 ## Reporting a generated image
 
