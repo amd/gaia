@@ -1014,3 +1014,92 @@ def test_gateway_install_restores_a_remembered_token_before_reporting_none(
     assert "Models discovered: 3" in output
     assert "Restored the remembered gateway token" in output
     assert "No token yet" not in output
+
+
+def test_gateway_install_keeps_no_token_hint_without_a_remembered_token(
+    monkeypatch, capsys
+):
+    """A fresh install without saved credentials keeps the existing guidance."""
+    from types import SimpleNamespace
+
+    import gaia.cli as cli
+    from gaia.llm import gateway as gateway_module
+
+    state = SimpleNamespace(base_url="", enabled_models=[], active_model=None)
+
+    class FakeManager:
+        def install(self, *args, **kwargs):
+            return {
+                "models_discovered": 0,
+                "auth_state": {"env_var_set": False, "runtime_key_set": False},
+            }
+
+        def ensure_authenticated(self, recall=None):
+            raise AssertionError("must not restore when no token is remembered")
+
+    monkeypatch.setattr(
+        gateway_module, "GatewayState", SimpleNamespace(load=lambda: state)
+    )
+    monkeypatch.setattr(gateway_module, "GatewayManager", FakeManager)
+    monkeypatch.setattr(gateway_module, "recall_token", lambda: None)
+
+    args = SimpleNamespace(
+        gateway_action="install",
+        base_url="https://gateway.example/v1",
+        skip_probe=True,
+        auth_header_name="Authorization",
+        auth_header_prefix="Bearer ",
+        allow_insecure_http=False,
+    )
+    cli.handle_gateway_command(args)
+
+    output = capsys.readouterr().out
+    assert "No token yet" in output
+    assert "remembered gateway token was not accepted" not in output
+    assert "Restored the remembered gateway token" not in output
+
+
+def test_gateway_install_reports_when_the_remembered_token_is_rejected(
+    monkeypatch, capsys
+):
+    """A remembered but rejected token must not be described as absent."""
+    from types import SimpleNamespace
+
+    import gaia.cli as cli
+    from gaia.llm import gateway as gateway_module
+
+    state = SimpleNamespace(base_url="", enabled_models=[], active_model=None)
+    calls = []
+
+    class FakeManager:
+        def install(self, *args, **kwargs):
+            return {
+                "models_discovered": 0,
+                "auth_state": {"env_var_set": False, "runtime_key_set": False},
+            }
+
+        def ensure_authenticated(self, recall=None):
+            calls.append(recall())
+            return False
+
+    monkeypatch.setattr(
+        gateway_module, "GatewayState", SimpleNamespace(load=lambda: state)
+    )
+    monkeypatch.setattr(gateway_module, "GatewayManager", FakeManager)
+    monkeypatch.setattr(gateway_module, "recall_token", lambda: "remembered-token")
+
+    args = SimpleNamespace(
+        gateway_action="install",
+        base_url="https://gateway.example/v1",
+        skip_probe=True,
+        auth_header_name="Authorization",
+        auth_header_prefix="Bearer ",
+        allow_insecure_http=False,
+    )
+    cli.handle_gateway_command(args)
+
+    output = capsys.readouterr().out
+    assert calls == ["remembered-token"]
+    assert "The remembered gateway token was not accepted" in output
+    assert "No token yet" not in output
+    assert "Restored the remembered gateway token" not in output

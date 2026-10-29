@@ -7160,10 +7160,10 @@ def handle_gateway_command(args):
                 )
                 if count is None:
                     print(
-                        "? Gateway reachable — it wants a token before it lists models"
+                        "✅ Gateway reachable — it wants a token before it lists models"
                     )
                 else:
-                    print(f"? Gateway reachable, advertising {count} model(s)")
+                    print(f"✅ Gateway reachable, advertising {count} model(s)")
             print(f"Registering '{base_url}' with Lemonade ...")
             result = manager.install(
                 base_url,
@@ -7173,6 +7173,7 @@ def handle_gateway_command(args):
             )
             auth = result.get("auth_state") or {}
             restored = False
+            remembered = None
             if not (auth.get("env_var_set") or auth.get("runtime_key_set")):
                 remembered = recall_token()
                 if remembered:
@@ -7186,11 +7187,16 @@ def handle_gateway_command(args):
                         }
                         result["models_discovered"] = status.models_discovered
             print(
-                f"? Registered. Models discovered: {result.get('models_discovered', 0)}"
+                f"✅ Registered. Models discovered: {result.get('models_discovered', 0)}"
             )
             if restored:
                 print(
                     "   Restored the remembered gateway token from the OS credential store."
+                )
+            elif remembered:
+                print(
+                    "\n  The remembered gateway token was not accepted — run "
+                    "`gaia gateway auth` with a current one."
                 )
             elif not (auth.get("env_var_set") or auth.get("runtime_key_set")):
                 print(
