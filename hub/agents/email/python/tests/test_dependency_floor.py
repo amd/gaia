@@ -5,8 +5,9 @@
 The email agent imports ``get_embedding_model_for_device`` from
 ``gaia.agents.registry``, first released in core v0.22.0. Its guided Outlook
 walkthrough also imports ``gaia.connectors.setup_routes``, first released in
-core v0.25.1. A published package must declare that floor so a fresh
-resolver cannot install a core that fails at import time.
+core v0.23.0. Its runtime imports ``gaia.agents.base.history.fit_pushed_history``,
+first released in core v0.25.1. A published package must declare that latter
+floor so a fresh resolver cannot install a core that fails at import time.
 """
 
 from __future__ import annotations
@@ -41,14 +42,16 @@ def test_pyproject_floor_covers_email_runtime_imports():
     assert _floor_tuple(match.group(1)) >= REQUIRED_FLOOR, (
         f"amd-gaia floor {match.group(1)} predates "
         "the email agent runtime imports (covered by 0.25.1); a fresh resolver "
-        "may select a core that ImportErrors when the agent starts "
-        "setup (#4430)"
+        "may select a core that ImportErrors when the email agent starts (#4430)"
     )
 
 
 def test_email_query_routes_imports_newest_core_symbols():
     """The module-level query route imports are covered by the package floor."""
     import gaia_agent_email.query_routes  # noqa: F401
+    from gaia.agents.base.history import fit_pushed_history
+
+    assert callable(fit_pushed_history)
 
 
 def test_setup_walkthrough_module_imports_and_setup_routes_symbol_exists():
