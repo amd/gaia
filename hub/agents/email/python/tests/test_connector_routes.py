@@ -58,6 +58,59 @@ def test_explicit_empty_scopes_takes_the_union_path(client, monkeypatch):
     assert captured["config"]["scopes"] != []
 
 
+def test_a_busy_connection_is_flagged_so_can_send_false_is_not_final(
+    client, monkeypatch
+):
+    """Mid-save by another GAIA operation: scopes are unknown, so the entry says
+    busy and the TUI does not read ``can_send: false`` as "reconnect"."""
+    import gaia.connectors.api as capi
+
+    monkeypatch.setattr(capi, "connected_mailbox_providers", lambda: ["google"])
+    monkeypatch.setattr(
+        capi,
+        "get_connection",
+        lambda p: (
+            {"scopes": [], "account_email": "me@g.com", "error": "busy"}
+            if p == "google"
+            else None
+        ),
+    )
+    monkeypatch.setattr(capi, "list_agent_grants", lambda p: {})
+
+    body = client.get("/v1/email/connectors").json()
+    by = {p["provider"]: p for p in body["providers"]}
+    assert by["google"]["busy"] is True
+    assert by["microsoft"]["busy"] is False
+
+
+def test_busy_and_can_send_come_from_one_read(client, monkeypatch):
+    """A save starting between two reads must not yield a busy row that can send."""
+    import gaia.connectors.api as capi
+
+    send = "https://www.googleapis.com/auth/gmail.send"
+    reads = []
+
+    def get_connection(provider):
+        if provider != "google":
+            return None
+        reads.append(provider)
+        if len(reads) == 1:
+            return {"scopes": [], "account_email": "me@g.com", "error": "busy"}
+        return {"scopes": [send], "account_email": "me@g.com"}
+
+    monkeypatch.setattr(capi, "connected_mailbox_providers", lambda: ["google"])
+    monkeypatch.setattr(capi, "get_connection", get_connection)
+    monkeypatch.setattr(
+        capi, "list_agent_grants", lambda p: {"installed:email": [send]}
+    )
+
+    body = client.get("/v1/email/connectors").json()
+    google = {p["provider"]: p for p in body["providers"]}["google"]
+    assert google["busy"] is True
+    assert google["can_send"] is False
+    assert reads == ["google"]
+
+
 def test_omitted_scopes_takes_the_same_union_path(client, monkeypatch):
     captured = {}
 

@@ -13,12 +13,22 @@ GAIA_VENV="$GAIA_HOME/venv"
 GAIA_BIN="$GAIA_HOME/bin"
 PYTHON_VERSION="3.12"
 
-# The Agent Hub is the canonical channel for the GAIA Terminal UI binary:
-# release_components.yml publishes all six platform builds there.
+# The GAIA Terminal UI binary comes from the GitHub release: publish.yml
+# attaches all six builds and gaia-tui-SHA256SUMS.txt to every release.
+GAIA_RELEASES_URL="${GAIA_RELEASES_URL:-https://github.com/amd/gaia/releases}"
+GAIA_RELEASES_URL="${GAIA_RELEASES_URL%/}"
+# Empty means the latest stable release. A tag pins the whole install to that
+# release (resolve_pin): v0.25.0 or a candidate such as v0.25.1-rc2.
+GAIA_RELEASE_TAG="${GAIA_RELEASE_TAG:-}"
+# Set by resolve_pin: the core package spec, and "", "final" or "rc".
+GAIA_PACKAGE_SPEC="amd-gaia[api]"
+PIN_KIND=""
+TUI_SUMS_FILE="gaia-tui-SHA256SUMS.txt"
+
+# The flagship agent ships on its own cadence through the Agent Hub, the same
+# place `gaia init` and `gaia hub install` take it from.
 GAIA_HUB_BASE_URL="${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}"
 GAIA_HUB_BASE_URL="${GAIA_HUB_BASE_URL%/}"
-# The published component id keeps its legacy name; published paths are immutable.
-TERMINAL_HUB_ID="terminal-hub"
 FLAGSHIP_AGENT_ID="gaia"
 
 # Network limits: a black-holed connection must fail, not hang silently.
@@ -141,19 +151,6 @@ fetch_file() {
     fi
 }
 
-# Warn about elevation before anything prompts for it.
-announce_elevation() {
-    echo ""
-    print_warning "One step later on needs your password:"
-    echo "  'gaia init' installs Lemonade Server (the local model runtime), which"
-    if [ "${OS_NAME:-}" = "Darwin" ]; then
-        echo "  installs a .pkg via sudo. This installer itself never asks for sudo."
-    else
-        echo "  installs a .deb via sudo. This installer itself never asks for sudo."
-    fi
-    echo ""
-}
-
 # Install uv package manager
 install_uv() {
     print_step "Checking for uv package manager..."
@@ -209,7 +206,7 @@ install_gaia() {
 
         # --upgrade exits 0 when there is nothing to do, so non-zero is a real
         # failure, not "already current".
-        if ! uv pip install --compile-bytecode --python "$GAIA_VENV/bin/python" --upgrade "amd-gaia[api]" --quiet; then
+        if ! uv pip install --compile-bytecode --python "$GAIA_VENV/bin/python" --upgrade "$GAIA_PACKAGE_SPEC" --quiet; then
             print_error "Failed to update the GAIA package in $GAIA_VENV."
             echo "  Fix:  re-run this installer, or delete $GAIA_HOME to start clean."
             exit 1
@@ -243,7 +240,7 @@ install_gaia() {
     # not `set -u` clean (it reads $OSTYPE, unset in dash) and noisily half-fails
     # under the documented `curl … | sh`. --compile-bytecode: uv skips it by
     # default, which leaves the first daemon start compiling all of GAIA.
-    if ! uv pip install --compile-bytecode --python "$GAIA_VENV/bin/python" "amd-gaia[api]"; then
+    if ! uv pip install --compile-bytecode --python "$GAIA_VENV/bin/python" "$GAIA_PACKAGE_SPEC"; then
         print_error "Failed to install GAIA package"
         exit 1
     fi
@@ -255,10 +252,9 @@ install_gaia() {
 # Terminal hub (Go binary)
 # ---------------------------------------------------------------------------
 
-# Print the Agent Hub platform key for this machine, e.g. "linux-x64".
-# These keys are what release_components.yml publishes under, so they are the
-# authority — not GOARCH ("amd64") and not `uname -m` ("x86_64").
-terminal_hub_platform() {
+# Print the Agent Hub platform key for this machine, e.g. "linux-x64" -- the
+# key the flagship agent publishes under, not GOARCH ("amd64").
+hub_platform() {
     _os=""
     _arch=""
     case "$(uname -s)" in
@@ -275,9 +271,96 @@ terminal_hub_platform() {
     printf '%s-%s\n' "$_os" "$_arch"
 }
 
+# Print this machine's terminal binary as publish.yml names it on the release:
+# gaia-<GOOS>-<GOARCH>, e.g. "gaia-linux-amd64".
+tui_asset_name() {
+    _os=""
+    _arch=""
+    case "$(uname -s)" in
+        Linux)  _os="linux" ;;
+        Darwin) _os="darwin" ;;
+    esac
+    case "$(uname -m)" in
+        x86_64|amd64)  _arch="amd64" ;;
+        arm64|aarch64) _arch="arm64" ;;
+    esac
+    if [ -z "$_os" ] || [ -z "$_arch" ]; then
+        return 1
+    fi
+    printf 'gaia-%s-%s\n' "$_os" "$_arch"
+}
+
+# Turn GAIA_RELEASE_TAG into one coherent release: the core package, the
+# terminal binary and the agent all from it. Sets GAIA_PACKAGE_SPEC and
+# PIN_KIND; refuses anything but vX.Y.Z or vX.Y.Z-rcN before anything installs.
+#   (unset)       latest everything
+#   v0.25.0       amd-gaia==0.25.0; the agent from the Agent Hub, as that
+#                 release's `gaia init` takes it
+#   v0.25.1-rc2   amd-gaia==0.25.1rc2; the agent frozen on that pre-release,
+#                 as an RC core takes it (gaia-agent-release.json)
+resolve_pin() {
+    GAIA_PACKAGE_SPEC="amd-gaia[api]"
+    PIN_KIND=""
+    _tag="$GAIA_RELEASE_TAG"
+    [ -n "$_tag" ] || return 0
+    _v="${_tag#v}"
+    # Character check first: grep matches line by line, so a newline in the
+    # value would otherwise let a valid first line through.
+    case "$_tag" in
+        *[!A-Za-z0-9.-]*) _v="" ;;
+        v*) ;;
+        *) _v="" ;;
+    esac
+    if [ -n "$_v" ] && printf '%s\n' "$_v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        PIN_KIND="final"
+        GAIA_PACKAGE_SPEC="amd-gaia[api]==$_v"
+    elif [ -n "$_v" ] && printf '%s\n' "$_v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-rc[1-9][0-9]*$'; then
+        PIN_KIND="rc"
+        GAIA_PACKAGE_SPEC="amd-gaia[api]==${_v%-rc*}rc${_v##*-rc}"
+    else
+        print_error "GAIA_RELEASE_TAG='$_tag' is not a GAIA release tag."
+        echo "  Expected vX.Y.Z (e.g. v0.25.0) or a candidate vX.Y.Z-rcN (e.g. v0.25.1-rc2)."
+        echo "  Fix:  unset it to install the latest release, or name one from"
+        echo "        $GAIA_RELEASES_URL"
+        exit 1
+    fi
+    print_step "Installing GAIA release $_tag ($GAIA_PACKAGE_SPEC)"
+    return 0
+}
+
+# Sets RELEASE_TAG. Asked once, so the checksums and the binary always come
+# from the same release even if a new one is published mid-install.
+resolve_release_tag() {
+    RELEASE_TAG="$GAIA_RELEASE_TAG"
+    if [ -z "$RELEASE_TAG" ]; then
+        # /releases/latest redirects to /releases/tag/<newest stable>; reading
+        # the redirect needs no API call, so no rate limit applies.
+        _loc=""
+        if [ "${DOWNLOAD_CMD:-curl}" = "wget" ]; then
+            _loc="$(wget --max-redirect=0 -S -O /dev/null --timeout="$CONNECT_TIMEOUT" \
+                "$GAIA_RELEASES_URL/latest" 2>&1 \
+                | sed -n 's/^ *[Ll]ocation: *\([^ ]*\).*/\1/p' | tail -n 1 | tr -d '\r')"
+        else
+            _loc="$(curl -fsS -o /dev/null --connect-timeout "$CONNECT_TIMEOUT" --max-time 60 \
+                -w '%{redirect_url}' "$GAIA_RELEASES_URL/latest")" || _loc=""
+        fi
+        case "$_loc" in
+            */releases/tag/*) RELEASE_TAG="${_loc##*/releases/tag/}" ;;
+        esac
+    fi
+    case "$RELEASE_TAG" in
+        v[0-9]*) ;;
+        *) return 1 ;;
+    esac
+    case "$RELEASE_TAG" in
+        *[!A-Za-z0-9.-]*) return 1 ;;
+    esac
+    return 0
+}
+
 # Resolve the Python interpreter used to read the hub manifest. install_gaia has
 # already created the venv by the time this runs.
-terminal_hub_python() {
+hub_python() {
     if [ -x "$GAIA_VENV/bin/python" ]; then
         printf '%s\n' "$GAIA_VENV/bin/python"
     elif command -v python3 > /dev/null 2>&1; then
@@ -328,6 +411,43 @@ if not digest:
 
 print("%s %s" % (version, digest))
 MANIFEST_PY
+}
+
+# Read one platform's agent version and SHA-256 out of a release candidate's
+# gaia-agent-release.json (util/flagship_rc_assets.py writes it), the file an RC
+# core installs its flagship from.
+#
+# Args: python, manifest path, platform key, filename. Echoes "<version> <sha256>".
+read_release_manifest() {
+    "$1" - "$2" "$3" "$4" <<'RELEASE_PY'
+import json
+import re
+import sys
+
+manifest_path, platform, filename = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(manifest_path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+except (OSError, ValueError) as exc:
+    sys.exit("gaia-agent-release.json is not readable JSON: %s" % exc)
+
+version = manifest.get("agentVersion")
+if not version:
+    sys.exit("gaia-agent-release.json declares no agentVersion")
+
+entry = (manifest.get("platforms") or {}).get(platform)
+if not isinstance(entry, dict):
+    listed = ", ".join(sorted(manifest.get("platforms") or {})) or "none"
+    sys.exit("this release candidate carries no agent for %s (it carries: %s)" % (platform, listed))
+if entry.get("filename") != filename:
+    sys.exit("gaia-agent-release.json names %r for %s, expected %r" % (entry.get("filename"), platform, filename))
+
+digest = entry.get("sha256") or ""
+if not re.fullmatch(r"[0-9a-f]{64}", digest):
+    sys.exit("gaia-agent-release.json publishes %s with no valid SHA-256" % filename)
+
+print("%s %s" % (version, digest))
+RELEASE_PY
 }
 
 # Download one hub artifact and refuse to install it unless its SHA-256 matches
@@ -391,61 +511,63 @@ download_and_verify() {
 install_tui() {
     print_step "Installing the GAIA Terminal UI"
 
-    platform=""
-    if ! platform="$(terminal_hub_platform)"; then
+    filename=""
+    if ! filename="$(tui_asset_name)"; then
         print_error "No GAIA Terminal UI build for $(uname -s)/$(uname -m)."
-        echo "Published targets: linux-x64, linux-arm64, darwin-x64, darwin-arm64,"
-        echo "win-x64, win-arm64. See $GAIA_HUB_BASE_URL/index.json"
+        echo "Published builds: Linux and macOS on x86_64 and arm64, and Windows."
+        echo "See $GAIA_RELEASES_URL/latest"
         exit 1
     fi
-    filename="gaia-${platform}"
 
-    py=""
-    if ! py="$(terminal_hub_python)"; then
-        print_error "No Python interpreter available to read the Agent Hub manifest."
-        echo "Expected $GAIA_VENV/bin/python (created earlier in this install)."
+    RELEASE_TAG=""
+    if ! resolve_release_tag; then
+        print_error "Could not find the GAIA release to install the Terminal UI from."
+        if [ -n "$GAIA_RELEASE_TAG" ]; then
+            echo "  GAIA_RELEASE_TAG='$GAIA_RELEASE_TAG' is not a release tag (expected e.g. v0.25.0)."
+            echo "  Fix:  unset it to install the latest release, or name one from"
+            echo "        $GAIA_RELEASES_URL"
+        else
+            echo "  URL:  $GAIA_RELEASES_URL/latest"
+            echo "  Fix:  check your network (github.com must be reachable), then retry."
+        fi
         exit 1
     fi
 
     scratch_dir tui
     tmp="$SCRATCH"
 
-    manifest_url="$GAIA_HUB_BASE_URL/agents/$TERMINAL_HUB_ID/manifest.json"
-    if ! fetch_file "$manifest_url" "$tmp/manifest.json"; then
-        print_error "Could not fetch the GAIA Terminal UI manifest."
-        echo "  URL:  $manifest_url"
-        echo "  Fix:  check your network, then retry. If the component is not yet"
-        echo "        published for this release, build from source:"
-        echo "          git clone https://github.com/amd/gaia && cd gaia/tui && make build"
-        echo "  Look: $GAIA_HUB_BASE_URL/index.json lists what the hub serves."
+    release_url="$GAIA_RELEASES_URL/download/$RELEASE_TAG"
+    if ! fetch_file "$release_url/$TUI_SUMS_FILE" "$tmp/$TUI_SUMS_FILE"; then
+        print_error "Could not fetch the GAIA Terminal UI checksums for $RELEASE_TAG."
+        echo "  URL:  $release_url/$TUI_SUMS_FILE"
+        echo "  Fix:  check your network and retry. A release published in the last"
+        echo "        few minutes may still be uploading its files."
         exit 1
     fi
 
-    # The manifest is the only source for the version, the per-platform
-    # filename, and the Worker-computed SHA-256.
-    resolved=""
-    if ! resolved="$(read_hub_manifest "$py" "$tmp/manifest.json" "$filename")"; then
-        print_error "Could not resolve the GAIA Terminal UI build for $platform."
-        echo "  Reported above by the manifest reader."
-        echo "  Fix:  if your platform is genuinely unpublished, build from source:"
-        echo "          git clone https://github.com/amd/gaia && cd gaia/tui && make build"
-        echo "  Look: $manifest_url"
+    # The checksum file is the only source for the digest: exactly one entry of
+    # lowercase hex, or no install. A second line for the file is a newline in
+    # $want, which the character check below refuses.
+    want="$(awk -v f="$filename" '$2 == f || $2 == "*" f { print $1 }' "$tmp/$TUI_SUMS_FILE")"
+    case "$want" in
+        *[!0-9a-f]*|"") want="" ;;
+    esac
+    if [ "${#want}" -ne 64 ]; then
+        print_error "$RELEASE_TAG publishes no single valid SHA-256 for $filename — refusing to install unverified."
+        echo "  Look: $release_url/$TUI_SUMS_FILE"
+        echo "  Fix:  report it at https://github.com/amd/gaia/issues"
         exit 1
     fi
 
-    version="${resolved%% *}"
-    want="${resolved##* }"
-
-    binary_url="$GAIA_HUB_BASE_URL/agents/$TERMINAL_HUB_ID/$version/$filename"
-    print_step "Downloading GAIA Terminal UI $version for $platform"
+    print_step "Downloading GAIA Terminal UI $RELEASE_TAG ($filename)"
     # Never `gaia`: tui/internal/daemon/client.go resolves `gaia` on PATH to
     # start the Python-owned daemon, so a Go binary by that name finds itself.
-    if ! download_and_verify "$binary_url" "$tmp/$filename" "$want" \
+    if ! download_and_verify "$release_url/$filename" "$tmp/$filename" "$want" \
             "$GAIA_BIN/gaia-tui" "GAIA Terminal UI"; then
-        echo "  Look: $manifest_url lists what is published for $version."
+        echo "  Look: $GAIA_RELEASES_URL/tag/$RELEASE_TAG lists the release's files."
         exit 1
     fi
-    print_success "GAIA Terminal UI $version installed to $GAIA_BIN/gaia-tui"
+    print_success "GAIA Terminal UI $RELEASE_TAG installed to $GAIA_BIN/gaia-tui"
 }
 
 # The flagship agent's frozen sidecar. The terminal hub spawns `gaia-agent` as a
@@ -463,7 +585,7 @@ install_flagship_agent() {
     print_step "Installing the GAIA flagship agent"
 
     platform=""
-    if ! platform="$(terminal_hub_platform)"; then
+    if ! platform="$(hub_platform)"; then
         print_warning "No flagship agent build for $(uname -s)/$(uname -m) — skipping."
         echo "  The GAIA Terminal UI still works; the GAIA agent will show as unavailable."
         return 0
@@ -471,7 +593,7 @@ install_flagship_agent() {
     filename="gaia-agent-${platform}"
 
     py=""
-    if ! py="$(terminal_hub_python)"; then
+    if ! py="$(hub_python)"; then
         print_warning "No Python interpreter available to read the agent manifest — skipping."
         return 0
     fi
@@ -479,7 +601,14 @@ install_flagship_agent() {
     scratch_dir agent
     tmp="$SCRATCH"
 
-    manifest_url="$GAIA_HUB_BASE_URL/agents/$FLAGSHIP_AGENT_ID/manifest.json"
+    # A pinned candidate carries its own frozen agent; everything else takes
+    # the Agent Hub's, the same source as `gaia init`.
+    if [ "${PIN_KIND:-}" = "rc" ]; then
+        base_url="$GAIA_RELEASES_URL/download/$GAIA_RELEASE_TAG"
+        manifest_url="$base_url/gaia-agent-release.json"
+    else
+        manifest_url="$GAIA_HUB_BASE_URL/agents/$FLAGSHIP_AGENT_ID/manifest.json"
+    fi
     if ! fetch_file "$manifest_url" "$tmp/manifest.json"; then
         print_warning "Could not fetch the flagship agent manifest — skipping."
         echo "  URL:  $manifest_url"
@@ -488,7 +617,12 @@ install_flagship_agent() {
     fi
 
     resolved=""
-    if ! resolved="$(read_hub_manifest "$py" "$tmp/manifest.json" "$filename")"; then
+    if [ "${PIN_KIND:-}" = "rc" ]; then
+        resolved="$(read_release_manifest "$py" "$tmp/manifest.json" "$platform" "$filename")" || resolved=""
+    else
+        resolved="$(read_hub_manifest "$py" "$tmp/manifest.json" "$filename")" || resolved=""
+    fi
+    if [ -z "$resolved" ]; then
         print_warning "Could not resolve the flagship agent for $platform — skipping."
         echo "  Reported above by the manifest reader."
         echo "  Look: $manifest_url"
@@ -498,7 +632,11 @@ install_flagship_agent() {
     version="${resolved%% *}"
     want="${resolved##* }"
 
-    binary_url="$GAIA_HUB_BASE_URL/agents/$FLAGSHIP_AGENT_ID/$version/$filename"
+    if [ "${PIN_KIND:-}" = "rc" ]; then
+        binary_url="$base_url/$filename"
+    else
+        binary_url="$GAIA_HUB_BASE_URL/agents/$FLAGSHIP_AGENT_ID/$version/$filename"
+    fi
     print_step "Downloading GAIA agent $version for $platform"
     # `|| _rc=$?` rather than `if !`: `set -e` must stay armed, and the two
     # failure modes are not the same failure.
@@ -612,7 +750,7 @@ show_next_steps() {
         echo "  1. Open a new terminal (PATH was not written to a startup file)"
     fi
     printf '  2. Set up the local model runtime: %sgaia init%s\n' "$COLOR_GREEN" "$COLOR_RESET"
-    echo "     (installs Lemonade Server — asks for your password)"
+    echo "     (downloads GAIA's own Lemonade Server and a model — no password needed)"
     if [ "${FLAGSHIP_INSTALLED:-0}" = "1" ]; then
         printf '  3. Talk to the agent: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
         printf '     (it opens the GAIA agent; type %s/agents%s to list installed agents)\n' "$COLOR_GREEN" "$COLOR_RESET"
@@ -640,7 +778,8 @@ main() {
     detect_environment
     check_download_tool
 
-    announce_elevation
+    # Before anything installs: a bad tag must not leave a half-pinned machine.
+    resolve_pin
 
     # Install uv
     install_uv

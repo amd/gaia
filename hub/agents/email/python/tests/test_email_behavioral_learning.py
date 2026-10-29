@@ -916,32 +916,32 @@ class TestReplyObservationEndToEnd:
 
 
 # ---------------------------------------------------------------------------
-# Tests — Outlook ISO-8601 internalDate anchor
+# Tests — ISO-8601 internalDate anchor
 # ---------------------------------------------------------------------------
 
 
-class TestOutlookReplyLatency:
-    """_compute_reply_latency_seconds parses Outlook receivedDateTime ISO anchors."""
+class TestIsoReplyLatency:
+    """_compute_reply_latency_seconds also accepts an ISO-8601 internalDate.
 
-    def test_outlook_iso_anchor_returns_latency(self, tmp_path):
-        """An Outlook-shaped message with an ISO internalDate ~120 s ago returns ~120 s.
+    Every backend now emits epoch millis (the Outlook backend converts Graph's
+    ``receivedDateTime``), so this covers ISO input to the shared parser, not
+    the Outlook wire shape.
+    """
 
-        The Outlook backend maps ``receivedDateTime`` (ISO-8601 string) into
-        ``internalDate``.  ``_compute_reply_latency_seconds`` must parse this
-        format and return a numeric latency rather than None.
-        """
+    def test_iso_anchor_returns_latency(self, tmp_path):
+        """A message with an ISO internalDate ~120 s ago returns ~120 s."""
         from gaia_agent_email.tools.reply_tools import _compute_reply_latency_seconds
 
         received_seconds_ago = 120.0
-        # Build an ISO-8601 anchor the way Outlook does (trailing Z).
+        # Build an ISO-8601 anchor with a trailing Z.
         received_utc = datetime.fromtimestamp(
             time.time() - received_seconds_ago, tz=timezone.utc
         )
         iso_anchor = received_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         original_msg = {
-            "id": "outlook-msg-1",
-            "internalDate": iso_anchor,  # Outlook-style ISO string
+            "id": "iso-msg-1",
+            "internalDate": iso_anchor,  # ISO-8601 string
             "payload": {
                 "headers": [
                     {"name": "From", "value": "Boss <boss@example.com>"},
@@ -957,14 +957,13 @@ class TestOutlookReplyLatency:
         # Allow generous drift for test execution time (±30 s around 120 s).
         assert (
             90.0 <= latency <= 200.0
-        ), f"Expected latency ~120 s for Outlook ISO anchor, got {latency}"
+        ), f"Expected latency ~120 s for ISO anchor, got {latency}"
 
-    def test_outlook_reply_observation_recorded(self, tmp_path):
-        """An Outlook-shaped original_msg with ISO internalDate records an observation.
+    def test_iso_reply_observation_recorded(self, tmp_path):
+        """An original_msg with an ISO internalDate records an observation.
 
-        Drives _record_reply_observation with an Outlook-shaped message and
-        asserts the reply interaction is written for the sender — proving the
-        Outlook path is wired end-to-end, not just parsed in isolation.
+        Drives _record_reply_observation and asserts the reply interaction is
+        written for the sender, not just parsed in isolation.
         """
         from gaia_agent_email.tools.reply_tools import _record_reply_observation
 
@@ -975,7 +974,7 @@ class TestOutlookReplyLatency:
         iso_anchor = received_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         original_msg = {
-            "id": "outlook-msg-2",
+            "id": "iso-msg-2",
             "internalDate": iso_anchor,
             "payload": {
                 "headers": [
@@ -995,20 +994,20 @@ class TestOutlookReplyLatency:
 
             _record_reply_observation(agent, original_msg)
 
-            # Observation was recorded for the Outlook sender.
+            # Observation was recorded for the sender.
             rows = agent._memory_store.get_by_entity(
                 f"{_REPLY_ENTITY_PREFIX}boss@outlook.com"
             )
             assert (
                 len(rows) == 1
-            ), f"Expected 1 reply record for Outlook sender, got {len(rows)}"
+            ), f"Expected 1 reply record for the sender, got {len(rows)}"
             payload = json.loads(rows[0]["content"])
             latencies = payload["reply_latencies_seconds"]
             assert len(latencies) == 1
             # Latency should be close to 120 s (allow drift for test execution).
             assert (
                 90.0 <= latencies[0] <= 200.0
-            ), f"Computed Outlook latency {latencies[0]} not near 120 s anchor"
+            ), f"Computed latency {latencies[0]} not near 120 s anchor"
         finally:
             agent.close_db()
 

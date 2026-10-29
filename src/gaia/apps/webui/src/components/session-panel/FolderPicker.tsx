@@ -1,12 +1,16 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUp, Folder, Loader2, X } from 'lucide-react';
 import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import type { BrowseResponse } from '../../types';
+import './SessionPanel.css';
+
+const isHiddenName = (name: string) => name.startsWith('.');
 
 /** Pick a folder on this PC to give the chat, by browsing or by pasting its path. */
 export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => void; onClose: () => void }) {
@@ -14,7 +18,10 @@ export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => vo
     const [typed, setTyped] = useState('');
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
+    const [showHidden, setShowHidden] = useState(false);
     useEscapeToClose(true, onClose);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useFocusTrap(dialogRef, true);
 
     const open = useCallback((path?: string) => {
         setLoading(true);
@@ -31,10 +38,12 @@ export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => vo
     }, []);
     useEffect(() => open(), [open]);
 
-    const folders = listing?.entries.filter((e) => e.type === 'folder') ?? [];
+    const allFolders = listing?.entries.filter((e) => e.type === 'folder') ?? [];
+    const folders = showHidden ? allFolders : allFolders.filter((f) => !isHiddenName(f.name));
     return (
         <div className="modal-overlay" onClick={onClose}>
             <div
+                ref={dialogRef}
                 className="modal-panel sp-picker"
                 role="dialog"
                 aria-modal="true"
@@ -66,6 +75,10 @@ export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => vo
                             {listing.quick_links.map((q) => (
                                 <button key={q.path} type="button" className="sp-action" onClick={() => open(q.path)}>{q.name}</button>
                             ))}
+                            <label className="sp-picker-hidden">
+                                <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />
+                                Show hidden
+                            </label>
                         </div>
                     )}
                     <ul className="sp-picker-list" aria-busy={loading}>
@@ -83,7 +96,13 @@ export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => vo
                                 </button>
                             </li>
                         ))}
-                        {listing && folders.length === 0 && <li className="sp-meta">No folders inside.</li>}
+                        {listing && folders.length === 0 && (
+                            <li className="sp-meta">
+                                {allFolders.length > 0
+                                    ? 'Only hidden folders here. Turn on Show hidden to see them.'
+                                    : 'No folders inside.'}
+                            </li>
+                        )}
                         {loading && <li className="sp-meta"><Loader2 size={12} className="spin" aria-hidden="true" /> Loading…</li>}
                     </ul>
                     {error && <p className="sp-error" role="alert">{error}</p>}

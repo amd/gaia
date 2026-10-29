@@ -26,6 +26,7 @@ const BUILD_TUI = read(new URL('../../../.github/workflows/build_tui.yml', impor
 const RELEASE_COMPONENTS = read(
   new URL('../../../.github/workflows/release_components.yml', import.meta.url),
 );
+const PUBLISH = read(new URL('../../../.github/workflows/publish.yml', import.meta.url));
 
 const V = '1.2.3';
 
@@ -39,8 +40,8 @@ function job(workflow: string, id: string): string {
 }
 
 describe('the terminal installers', () => {
-  // installer/tui/artifacts.py is the one table the build, the R2 publish and
-  // the GitHub attach all read; the site's names must be that table's.
+  // installer/tui/artifacts.py is the one table the build and the GitHub
+  // attach both read; the site's names must be that table's.
   const table = [...ARTIFACTS_PY.matchAll(/\(\s*"([^"]*\{version\}[^"]*)",\s*"([a-z0-9-]+)"\s*\)/g)].map(
     ([, template, key]) => [key, template.replace('{version}', V)] as const,
   );
@@ -56,7 +57,7 @@ describe('the terminal installers', () => {
     expect([...offered].sort()).toEqual([...table].sort());
   });
 
-  it('are attached to the GitHub release, not only published to R2', () => {
+  it('are attached to the GitHub release', () => {
     const attach = job(RELEASE_COMPONENTS, 'github-release-installers');
     expect(attach).toContain('installer/tui/artifacts.py publish-args');
     expect(attach).toMatch(/gh release upload "\$\{TAG\}"[^\n]*\n[^\n]*--clobber/);
@@ -84,14 +85,15 @@ describe('the raw terminal binaries', () => {
 });
 
 describe('the desktop app', () => {
-  // The agent-ui job waits for these three on the release before republishing
-  // them to R2, so a rename that reached electron-builder but not here fails
-  // that job loudly — and this keeps the site on the same three names.
-  it('looks for the three builds the release pipeline waits for', () => {
-    const waited = [...job(RELEASE_COMPONENTS, 'agent-ui').matchAll(/want_\w+="([^"]+)"/g)].map(
-      ([, name]) => name.replace('${VERSION}', V),
-    );
-    expect(waited).toHaveLength(3);
-    expect(DESKTOP_PLATFORMS.map((p) => desktopArtifactFileName(p, V)).sort()).toEqual(waited.sort());
+  // publish.yml's release-candidate notes name the files it attaches, one per
+  // platform, so a rename that reached electron-builder but not the notes or
+  // here shows up as a mismatch rather than a missing button.
+  it('looks for the three builds publish.yml attaches', () => {
+    const named = [
+      ...PUBLISH.matchAll(/`(gaia-agent-ui-@NPM_VERSION@-[^`]+\.(?:exe|dmg|AppImage))`/g),
+    ].map(([, name]) => name.replace('@NPM_VERSION@', V));
+    const attached = [...new Set(named)];
+    expect(attached).toHaveLength(3);
+    expect(DESKTOP_PLATFORMS.map((p) => desktopArtifactFileName(p, V)).sort()).toEqual(attached.sort());
   });
 });

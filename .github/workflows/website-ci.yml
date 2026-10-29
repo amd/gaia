@@ -32,6 +32,7 @@ on:
       - 'docs/spec/gaia-design-language.mdx'
       - 'installer/tui/artifacts.py'
       - '.github/workflows/build_tui.yml'
+      - '.github/workflows/publish.yml'
       - '.github/workflows/release_components.yml'
       - '.github/workflows/website-ci.yml'
   push:
@@ -43,6 +44,7 @@ on:
       - 'docs/spec/gaia-design-language.mdx'
       - 'installer/tui/artifacts.py'
       - '.github/workflows/build_tui.yml'
+      - '.github/workflows/publish.yml'
       - '.github/workflows/release_components.yml'
       - '.github/workflows/website-ci.yml'
 

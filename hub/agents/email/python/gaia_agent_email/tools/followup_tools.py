@@ -25,12 +25,11 @@ Detection semantics (per thread reached from a Sent-folder scan):
 
 from __future__ import annotations
 
-import re
 import time
-from datetime import datetime, timezone
 from email.utils import getaddresses
 from typing import Any, Dict, List, Optional
 
+from gaia_agent_email.timestamps import parse_timestamp_ms
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.tools.read_tools import extract_sender_email
 from gaia_agent_email.verbose import log_tool_call
@@ -57,8 +56,9 @@ _DAY_MS = 24 * 60 * 60 * 1000
 def _timestamp_ms(msg: Dict[str, Any]) -> int:
     """Return a message's ``internalDate`` as epoch milliseconds.
 
-    Gmail returns epoch-millis strings; the Outlook translation carries the
-    Graph ISO-8601 ``receivedDateTime``. Anything else raises — an age
+    Every backend emits epoch-millis strings (the Outlook translation converts
+    Graph's ISO-8601 ``receivedDateTime``); an ISO-8601 string is still
+    accepted. Anything else raises — an age
     computed from a guessed timestamp would silently mis-flag threads.
     """
     raw = msg.get("internalDate")
@@ -67,23 +67,13 @@ def _timestamp_ms(msg: Dict[str, Any]) -> int:
             f"message {msg.get('id')!r} has no internalDate; cannot compute "
             "its follow-up age"
         )
-    text = str(raw)
     try:
-        return int(text)
-    except ValueError:
-        pass
-    # Graph emits 7-digit (100 ns) fractions; py3.10 fromisoformat caps at 6.
-    iso = re.sub(r"(\.\d{6})\d+", r"\1", text.replace("Z", "+00:00"))
-    try:
-        parsed = datetime.fromisoformat(iso)
+        return parse_timestamp_ms(raw)
     except ValueError as exc:
         raise ValueError(
             f"message {msg.get('id')!r} internalDate {raw!r} is neither epoch "
             "milliseconds nor ISO-8601"
         ) from exc
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return int(parsed.timestamp() * 1000)
 
 
 def _header_map(msg: Dict[str, Any]) -> Dict[str, str]:
@@ -206,7 +196,9 @@ def check_followups_impl(
                 continue
             headers = _header_map(latest)
             recipients = [
-                a for a in _recipient_addresses(headers.get("to", "")) if a != user_email
+                a
+                for a in _recipient_addresses(headers.get("to", ""))
+                if a != user_email
             ]
             if not recipients:
                 # Note-to-self (or no recipient) — an inbound reply can never

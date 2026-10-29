@@ -597,6 +597,14 @@ class FileChangeHandler(FileSystemEventHandler):
         if self._ignore_directories and event.is_directory:
             return
         if self._should_process(event.src_path):
+            if os.path.exists(event.src_path):
+                # macOS reports a file replaced by rename as deleted; it is not.
+                if self._on_modified or self._on_created:
+                    self._schedule_settle(
+                        "modified" if self._on_modified else "created",
+                        event.src_path,
+                    )
+                return
             with self._cond:
                 self._pending.pop(event.src_path, None)
                 self._locked_retries.pop(event.src_path, None)

@@ -14,6 +14,7 @@ import (
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
+	"github.com/amd/gaia/tui/internal/update"
 )
 
 // dev is developer mode: rich in-TUI output (per-turn timings, step and turn
@@ -187,7 +188,15 @@ var rootCmd = &cobra.Command{
 		if cmd.Flags().Changed("full-access") {
 			fullAccess, fromSaved = fullAccessFlag, false
 		}
-		return ui.RunFlagship(dev, mockAgent, ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace)
+		if err := update.RemoveLeftover(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		if err := ui.RunFlagship(dev, mockAgent, ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace); err != nil {
+			return err
+		}
+		// An install the user asked for in /update runs now, after the TUI
+		// has closed, so the installer can replace this binary.
+		return update.RunPending(cmd.Context(), os.Stdout, os.Stderr)
 	},
 }
 

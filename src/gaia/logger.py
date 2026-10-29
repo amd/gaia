@@ -14,6 +14,8 @@ from gaia.tool_cancellation import AbandonedWorkerLogFilter
 
 #: Env override for the log file of an agent run from the CLI (`gaia chat`).
 AGENT_LOG_ENV = "GAIA_AGENT_LOG"
+#: Env override for every GAIA process's log file, instead of ``~/.gaia/gaia.log``.
+LOG_FILE_ENV = "GAIA_LOG_FILE"
 
 
 def _home_log_file():
@@ -69,7 +71,8 @@ class GaiaLogger:
         # current working directory with gaia.log files and don't crash
         # when CWD is not writable (e.g. /, system dirs, read-only mounts).
         if log_file is None:
-            log_file = _home_log_file()
+            override = os.environ.get(LOG_FILE_ENV, "").strip()
+            log_file = Path(override).expanduser() if override else _home_log_file()
             if log_file is None:
                 # No resolvable home dir -- use the tempdir the handler
                 # fallback below would have picked anyway.

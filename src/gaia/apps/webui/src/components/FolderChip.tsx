@@ -1,40 +1,94 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { Folder } from 'lucide-react';
+import { ChevronDown, Folder, X } from 'lucide-react';
+import { useFolderPicker } from '../hooks/useFolderPicker';
 import { useSessionEnvironment } from '../hooks/useSessionEnvironment';
+import { useChatStore } from '../stores/chatStore';
+import type { StartScreen } from '../types';
 import './FolderChip.css';
 
-interface FolderChipProps {
-    path: string;
-    name: string;
-    /** GAIA is in its own documents folder, not one the user started it from. */
-    gaiaFolder?: boolean;
-    /** Opens where the folder can be changed; without it the chip only names the folder. */
-    onClick?: () => void;
-}
+type WorkingFolder = StartScreen['working_folder'];
 
-/** The folder GAIA works in, shown beside the model in the composer. */
-export function FolderChip({ path, name, gaiaFolder = false, onClick }: FolderChipProps) {
-    const title = gaiaFolder
-        ? `GAIA works in its own folder, ${path}. Attach a file or start GAIA from a project folder to work there.`
-        : `GAIA works in ${path}`;
-    const body = (
+const baseName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+
+/** The new chat's folder: picks one more folder the chat may use, when the agent can be held to it. */
+export function FolderChip({ folder, disabled }: { folder: WorkingFolder; disabled?: boolean }) {
+    const picked = useChatStore((s) => s.draftFolder);
+    const setPicked = useChatStore((s) => s.setDraftFolder);
+    const { open, picker, error } = useFolderPicker(setPicked);
+
+    const where = folder.gaia_folder
+        ? `GAIA works in its own folder, ${folder.path}.`
+        : `GAIA works in ${folder.path}.`;
+
+    if (!folder.choosable) {
+        return (
+            <span
+                className="new-chat-folder"
+                title={folder.gaia_folder
+                    ? `${where} Attach a file or start GAIA from a project folder to work there.`
+                    : where}
+            >
+                <Folder size={13} aria-hidden="true" />
+                <span className="new-chat-folder-name">{folder.name}</span>
+            </span>
+        );
+    }
+
+    return (
         <>
-            <Folder size={13} aria-hidden="true" />
-            <span className="composer-chip-label">{name}</span>
+            <button
+                type="button"
+                className={`new-chat-folder is-button${picked ? ' is-on' : ''}`}
+                onClick={() => open(folder.path)}
+                disabled={disabled}
+                aria-haspopup="dialog"
+                aria-label={picked
+                    ? `Folder for this chat: ${folder.name}, plus ${baseName(picked)}`
+                    : `Folder for this chat: ${folder.name}`}
+                title={picked
+                    ? `This chat can read and write ${picked}. Click to pick another folder.`
+                    : `${where} Click to give this chat another folder.`}
+            >
+                <Folder size={13} aria-hidden="true" />
+                <span className="new-chat-folder-name">{picked ? `${folder.name} + ${baseName(picked)}` : folder.name}</span>
+                <ChevronDown size={12} aria-hidden="true" />
+            </button>
+            {picked && (
+                <button
+                    type="button"
+                    className="btn-icon-sm new-chat-folder-clear"
+                    onClick={() => setPicked(null)}
+                    disabled={disabled}
+                    aria-label={`Don't give this chat ${baseName(picked)}`}
+                    title="Don't add this folder"
+                >
+                    <X size={12} />
+                </button>
+            )}
+            {error && <span className="new-chat-folder-error" role="alert">{error}</span>}
+            {picker}
         </>
     );
-    return onClick
-        ? <button type="button" className="composer-chip folder-chip" title={title} aria-label={`Working folder ${name}, show the chat's folders`} onClick={onClick}>{body}</button>
-        : <span className="composer-chip folder-chip" title={title}>{body}</span>;
 }
 
-/** The folder a chat started in, from its environment; opens the panel where it can be changed. */
+/** The folder a chat started in, beside the model in its composer; opens the panel where it can be changed. */
 export function SessionFolderChip({ sessionId, onOpen }: { sessionId: string; onOpen: () => void }) {
     const { env } = useSessionEnvironment(sessionId);
     const folder = env?.folders.find((f) => f.source === 'working_folder');
     if (!folder) return null;
-    const name = folder.path.split(/[\\/]/).filter(Boolean).pop() ?? folder.path;
-    return <FolderChip path={folder.path} name={name} onClick={onOpen} />;
+    const name = baseName(folder.path);
+    return (
+        <button
+            type="button"
+            className="composer-chip folder-chip"
+            title={`GAIA works in ${folder.path}`}
+            aria-label={`Working folder ${name}, show the chat's folders`}
+            onClick={onOpen}
+        >
+            <Folder size={13} aria-hidden="true" />
+            <span className="composer-chip-label">{name}</span>
+        </button>
+    );
 }

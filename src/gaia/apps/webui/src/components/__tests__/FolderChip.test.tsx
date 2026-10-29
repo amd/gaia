@@ -3,7 +3,7 @@
 
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FolderChip, SessionFolderChip } from '../FolderChip';
+import { SessionFolderChip } from '../FolderChip';
 import { useSessionEnvironment } from '../../hooks/useSessionEnvironment';
 import type { SessionEnvironment } from '../../types/sessionPanel';
 
@@ -21,27 +21,11 @@ const ENV: SessionEnvironment = {
     ],
     removed: [],
     internet: true,
+    internet_enforced: true,
     enforced: true,
 };
 
 beforeEach(() => vi.clearAllMocks());
-
-describe('FolderChip', () => {
-    it('names the folder and gives its full path on hover', () => {
-        render(<FolderChip path="/home/u/my-project" name="my-project" />);
-        expect(screen.getByText('my-project').parentElement).toHaveAttribute('title', 'GAIA works in /home/u/my-project');
-    });
-
-    it('says when GAIA works in its own folder', () => {
-        render(<FolderChip path="/home/u/.gaia/documents" name="documents" gaiaFolder />);
-        expect(screen.getByText('documents').parentElement!.getAttribute('title')).toMatch(/its own folder/);
-    });
-
-    it('is only a label without somewhere to open', () => {
-        render(<FolderChip path="/p/x" name="x" />);
-        expect(screen.queryByRole('button')).not.toBeInTheDocument();
-    });
-});
 
 describe('SessionFolderChip', () => {
     it("shows the chat's working folder by name, on Windows paths too", () => {

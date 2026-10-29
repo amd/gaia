@@ -28,6 +28,15 @@ def pre_dotenv_env(name: str) -> "_typing.Optional[str]":
     return _PRE_DOTENV_ENVIRON.get(name)
 
 
+def pre_dotenv_environ() -> "_typing.Dict[str, str]":
+    """A copy of the whole startup environment, before ``.env`` was merged in.
+
+    For spawning a process whose startup files must be the operator's own, not
+    a project directory's.
+    """
+    return dict(_PRE_DOTENV_ENVIRON)
+
+
 # pylint: disable=wrong-import-position
 from gaia.env import load_env  # noqa: E402
 

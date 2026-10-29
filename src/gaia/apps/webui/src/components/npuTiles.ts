@@ -110,7 +110,7 @@ export class TileField {
 
     /** Quiet behind the greeting and composer, fading out at the top and bottom edges. */
     setHole(hole: TileHole): void {
-        this.mask = new Float32Array(this.cols * this.rows);
+        if (this.mask.length !== this.cols * this.rows) this.mask = new Float32Array(this.cols * this.rows);
         for (let r = 0; r < this.rows; r++) {
             for (let c = 0; c < this.cols; c++) {
                 const [x, y] = this.center(c, r);

@@ -5,7 +5,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.installer.init_command import _DownloadProgress
-from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+from gaia.llm.lemonade_client import (
+    LemonadeClient,
+    LemonadeClientError,
+    ModelDownloadCancelledError,
+)
 
 
 @pytest.fixture
@@ -121,3 +125,15 @@ def test_a_pull_outlasts_the_servers_silent_hash_check(client):
         list(client.pull_model_stream("Qwen3.6-35B-A3B-GGUF"))
     _connect, idle = post.call_args.kwargs["timeout"]
     assert idle >= 15 * 60
+
+
+def test_a_cancelled_stream_is_not_converted_to_a_failed_download(client):
+    def stream(*_args, **_kwargs):
+        yield {"event": "progress", "percent": 10}
+        raise ModelDownloadCancelledError("Download stopped at your request.")
+
+    client.pull_model_stream = stream
+    seen = []
+    with pytest.raises(ModelDownloadCancelledError):
+        client.ensure_model_downloaded("m", on_progress=seen.append)
+    assert seen == [{"event": "progress", "percent": 10}]
