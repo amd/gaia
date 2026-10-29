@@ -327,9 +327,30 @@ def test_print_url_emits_only_the_url(monkeypatch):
 def _sleeper(*extra_argv):
     import subprocess
     import sys
+    import time
 
-    return subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)", *extra_argv]
+    import psutil
+
+    script = "import time; time.sleep(30)"
+    proc = subprocess.Popen([sys.executable, "-c", script, *extra_argv])
+    deadline = time.monotonic() + 5
+    last_cmdline = None
+    while time.monotonic() < deadline:
+        try:
+            last_cmdline = psutil.Process(proc.pid).cmdline()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            last_cmdline = None
+        if last_cmdline and script in last_cmdline:
+            return proc
+        if proc.poll() is not None:
+            break
+        time.sleep(0.01)
+
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait()
+    pytest.fail(
+        "child process never reached its test script; " f"last cmdline={last_cmdline!r}"
     )
 
 
