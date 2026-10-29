@@ -205,7 +205,7 @@ def get_forwarded_token(provider: str, scopes: List[str]) -> str:
             "has not re-forwarded a fresh one yet. Retry in a moment; if it "
             f"persists, reconnect with `gaia connectors connect {provider} "
             f"--scopes {' '.join(_all_scopes_for(provider))}` (or Settings -> "
-            "Connections in the Agent UI)."
+            "Connectors in the Agent UI)."
         )
     missing = [s for s in scopes if s not in cred.scopes]
     if missing:

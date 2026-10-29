@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Callable, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from gaia.daemon import paths
 from gaia.daemon.constants import API_PREFIX, AUTH_SCHEME, DAEMON_API_VERSION
@@ -40,6 +40,7 @@ from gaia.daemon.instance import (
     pid_alive,
     probe_state,
     read_instance,
+    runs_replaced_install,
     terminate_instance,
 )
 from gaia.daemon.lock import StartLock
@@ -112,6 +113,13 @@ _LEMONADE_ENSURE_TIMEOUT = (5.0, 80.0)
 # routine stop kills the daemon before its custody store closes.
 # tests/unit/test_daemon_lemonade.py pins the margin.
 STOP_WAIT_TIMEOUT = 45.0
+
+# A daemon that served a Lemonade request this recently may be mid-turn.
+OUTDATED_BUSY_RECENT_S = 120.0
+# Work this process runs on the daemon that no route of the daemon reports.
+_LOCAL_WORK: List[Callable[[], Optional[str]]] = []
+# Why the daemon was last kept running on the previous release, for front ends.
+_deferred_notice: Optional[str] = None
 
 UPGRADE_CORE_GUIDANCE = (
     "Upgrade the installed GAIA core so it matches this app: "
@@ -294,7 +302,8 @@ def start_or_attach(
         inst = attach()
     except DaemonHungError:
         inst = None  # replaced below, under the lock
-    if inst is not None:
+    if inst is not None and runs_replaced_install(inst) is None:
+        _set_deferred_notice(None)
         return inst
 
     with StartLock(timeout=timeout):
@@ -303,7 +312,24 @@ def start_or_attach(
         try:
             if inst is not None and _answers(inst, 1.5):
                 _check_version(inst)
-                return inst
+                stale = runs_replaced_install(inst)
+                if stale is None:
+                    _set_deferred_notice(None)
+                    return inst
+                busy = outdated_daemon_busy(inst)
+                if busy is not None:
+                    notice = (
+                        f"GAIA's background service is out of date ({stale}). "
+                        f"It keeps running because {busy}, and restarts on the "
+                        "next GAIA command once that work is done. Run `gaia "
+                        "daemon restart` to restart it now."
+                    )
+                    _set_deferred_notice(notice)
+                    logger.warning("daemon: pid %s: %s", inst.pid, notice)
+                    return inst
+                _replace_outdated(inst, stale)
+                _set_deferred_notice(None)
+                inst = None
         except DaemonHungError as e:
             logger.warning("daemon: %s Replacing it.", e)
         # Stale registry. A live pid whose port refuses us, answers as
@@ -329,6 +355,163 @@ def start_or_attach(
         return _spawn_and_wait(timeout, on_progress, drop_env)
 
 
+_JOBS_AT_WORK_SQL = (
+    "SELECT SUM(status = 'firing' AND claimed_at > :stale), "
+    "SUM(status = 'pending' AND fire_at <= :now) FROM daemon_jobs"
+)
+_JOBS_AT_WORK_SQL_OLD = (
+    "SELECT SUM(status = 'firing'), "
+    "SUM(status = 'pending' AND fire_at <= :now) FROM daemon_jobs"
+)
+
+
+def _scheduled_work() -> Optional[str]:
+    """Scheduled jobs the daemon is running or is due to start, or None.
+
+    Read straight from its job store: older daemons report only a pending
+    count, and a recurring schedule is always pending.
+    """
+    import sqlite3
+    from contextlib import closing
+
+    from gaia.daemon.scheduler.clock import DEFAULT_STALE_FIRING_SECONDS
+
+    path = paths.host_dir() / "scheduler.db"
+    if not path.exists():
+        return None
+    now = time.time()
+    try:
+        with closing(
+            sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=2.0)
+        ) as db:
+            columns = {row[1] for row in db.execute("PRAGMA table_info(daemon_jobs)")}
+            if not columns:
+                return None
+            # Stores before 0.25.1 have no heartbeat, so a firing row counts as is.
+            query = (
+                _JOBS_AT_WORK_SQL if "claimed_at" in columns else _JOBS_AT_WORK_SQL_OLD
+            )
+            running, due = db.execute(
+                query, {"stale": now - DEFAULT_STALE_FIRING_SECONDS, "now": now}
+            ).fetchone()
+    except sqlite3.Error as e:
+        return f"GAIA could not read its scheduled jobs at {path} ({e})"
+    if running:
+        return f"{running} scheduled job(s) are running on it"
+    if due:
+        return f"{due} scheduled job(s) are due to run on it"
+    return None
+
+
+def add_local_work(check: Callable[[], Optional[str]]) -> None:
+    """Have this process's own work on the daemon delay an update's restart.
+
+    *check* returns why stopping the daemon now would cut that work off, or
+    None. A front end that talks to agents directly (the Agent UI) registers
+    its turns here, since the daemon cannot see them.
+    """
+    _LOCAL_WORK.append(check)
+
+
+def remove_local_work(check: Callable[[], Optional[str]]) -> None:
+    """Undo :func:`add_local_work`."""
+    if check in _LOCAL_WORK:
+        _LOCAL_WORK.remove(check)
+
+
+def deferred_restart_notice() -> Optional[str]:
+    """Why the daemon still runs the previous release, or None.
+
+    Set when this process last found the daemon out of date but busy, cleared
+    once it found a current one.
+    """
+    return _deferred_notice
+
+
+def _set_deferred_notice(notice: Optional[str]) -> None:
+    global _deferred_notice
+    _deferred_notice = notice
+
+
+def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
+    """Why stopping *inst* now could cut off work, or None when it is free.
+
+    Uses what older daemons expose too: their job store, the front ends
+    registered with them, and when Lemonade last served a request. A daemon
+    from this release also reports the turns relayed through it, so a turn
+    waiting on a tool or an approval counts even when its front end is the
+    caller.
+    """
+    import requests
+
+    for check in list(_LOCAL_WORK):
+        mine = check()
+        if mine is not None:
+            return mine
+    jobs = _scheduled_work()
+    if jobs is not None:
+        return jobs
+    headers = {"Authorization": f"{AUTH_SCHEME} {inst.token}"}
+    try:
+        status = requests.get(
+            f"{inst.base_url}{API_PREFIX}/status", headers=headers, timeout=5.0
+        )
+    except requests.exceptions.RequestException as e:
+        return f"GAIA could not check whether it is busy ({e})"
+    if status.status_code != 200:
+        return f"GAIA could not check whether it is busy ({_error_detail(status)})"
+    relayed = status.json().get("relayed_turns") or 0
+    if relayed:
+        return f"{relayed} agent turn(s) are still running on it"
+    try:
+        clients = requests.get(
+            f"{inst.base_url}{API_PREFIX}/lemonade/clients",
+            headers=headers,
+            timeout=5.0,
+        )
+    except requests.exceptions.RequestException as e:
+        return f"GAIA could not check whether it is busy ({e})"
+    if clients.status_code == 404:
+        return None
+    if clients.status_code != 200:
+        return f"GAIA could not check whether it is busy ({_error_detail(clients)})"
+    snapshot = clients.json()
+    ours = {os.getpid(), os.getppid()}
+    users = [
+        c.get("name") or c.get("kind") or "a GAIA app"
+        for c in snapshot.get("clients") or []
+        if any(pid_alive(p) for p in c.get("pids") or [] if p not in ours)
+    ]
+    if users:
+        return f"{', '.join(users)} is still using it"
+    ago = snapshot.get("seconds_since_request")
+    if ago is not None and ago < OUTDATED_BUSY_RECENT_S:
+        return f"its model server answered a request {ago:.0f}s ago"
+    return None
+
+
+def _replace_outdated(inst: DaemonInstance, why: str) -> None:
+    """Stop a daemon an update left running on the previous release's code."""
+    logger.warning(
+        "daemon: pid %s is out of date (%s); restarting it and its agents",
+        inst.pid,
+        why,
+    )
+    try:
+        accepted = request_shutdown(inst)
+    except DaemonError as e:
+        raise DaemonError(
+            f"the GAIA daemon (pid {inst.pid}) is out of date ({why}) and could "
+            f"not be asked to stop: {e} Run `gaia daemon restart`."
+        ) from e
+    if not accepted or not wait_until_gone(inst, timeout=STOP_WAIT_TIMEOUT):
+        raise DaemonError(
+            f"the GAIA daemon (pid {inst.pid}) is out of date ({why}) and did not "
+            "stop when asked. Run `gaia daemon restart`. Where to look: `gaia "
+            f"daemon logs` ({paths.log_path()})."
+        )
+
+
 def missing_daemon_deps() -> list:
     """Distributions the daemon needs that this interpreter cannot import."""
     import importlib.util
@@ -343,13 +526,26 @@ def _daemon_env(drop: tuple = ()) -> dict:
     a stale ``GAIA_HOST_CUSTODY_URL`` would reach its sidecars without a secret.
     ``GAIA_CHILD_ENV_DENY`` is not applied: the daemon is GAIA itself.
     """
-    return {
+    env = {
         name: value
         for name, value in os.environ.items()
         if not is_internal_secret(name)
         and name != CUSTODY_URL_ENV_VAR
         and name not in drop
     }
+    # The daemon runs from its host dir, so a relative path must not follow it.
+    for name in ("GAIA_HOME", "GAIA_CONFIG_DIR"):
+        raw = env.get(name, "").strip()
+        if raw:
+            env[name] = os.path.abspath(os.path.expandvars(os.path.expanduser(raw)))
+    if env.get(paths.HOME_ENV_VAR):
+        env[paths.HOME_ENV_VAR] = os.path.abspath(env[paths.HOME_ENV_VAR])
+    if env.get("PYTHONPATH"):
+        env["PYTHONPATH"] = os.pathsep.join(
+            os.path.abspath(entry) if entry else entry
+            for entry in env["PYTHONPATH"].split(os.pathsep)
+        )
+    return env
 
 
 def _is_spawned_daemon(registered_pid: int, spawned_pid: int) -> bool:
@@ -384,7 +580,7 @@ def _spawn_and_wait(
     drop_env: tuple = (),
 ) -> DaemonInstance:
     """Spawn the daemon detached, wait until it registers a live instance.json."""
-    paths.ensure_host_dir()
+    host = paths.ensure_host_dir()
     # The daemon's stdout can't be rotated while it runs, so cap it per start.
     try:
         rotate_if_oversized(paths.log_path())
@@ -409,6 +605,9 @@ def _spawn_and_wait(
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             env=_daemon_env(drop_env),
+            # Not the launcher's cwd: the daemon outlives it, and on Windows a
+            # process's cwd cannot be deleted or renamed while it runs.
+            cwd=str(host),
             **spawn_kwargs,
         )
     except OSError as e:
