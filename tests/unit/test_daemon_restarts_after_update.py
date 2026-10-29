@@ -371,6 +371,30 @@ def test_a_supervised_agent_does_not_keep_the_outdated_daemon(daemon_reports):
     assert client.outdated_daemon_busy(_inst()) is None
 
 
+def test_a_packaged_agent_child_does_not_keep_the_outdated_daemon(
+    daemon_reports, monkeypatch
+):
+    import psutil
+
+    class _Child:
+        pid = 4344
+
+    class _Launcher:
+        def children(self, recursive=False):
+            assert recursive is True
+            return [_Child()]
+
+    monkeypatch.setattr(psutil, "Process", lambda pid: _Launcher())
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [{"name": "gaia agent", "pids": [4344]}]}
+    )
+
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
 def test_this_process_and_exited_front_ends_do_not_keep_it(daemon_reports):
     daemon_reports["clients"] = _Response(
         200,

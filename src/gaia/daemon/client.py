@@ -475,11 +475,21 @@ def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     if agents.status_code != 404:
         if agents.status_code != 200:
             return f"GAIA could not check whether it is busy ({_error_detail(agents)})"
-        owned_sidecars = {
-            agent["pid"]
-            for agent in agents.json().get("agents") or []
-            if agent.get("state") == "running" and isinstance(agent.get("pid"), int)
-        }
+        import psutil
+
+        for agent in agents.json().get("agents") or []:
+            pid = agent.get("pid")
+            if agent.get("state") != "running" or not isinstance(pid, int):
+                continue
+            owned_sidecars.add(pid)
+            try:
+                owned_sidecars.update(
+                    child.pid for child in psutil.Process(pid).children(recursive=True)
+                )
+            except psutil.Error:
+                # A launcher can exit while its packaged child is being
+                # reparented; an unavailable process contributes no children.
+                pass
     try:
         clients = requests.get(
             f"{inst.base_url}{API_PREFIX}/lemonade/clients",
