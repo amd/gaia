@@ -3016,6 +3016,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         for doc in documents:
             try:
                 if os.path.exists(doc):
+                    # Naming a file to index is the grant to read it; the folder stays closed.
+                    self.path_validator.add_allowed_path(doc)
                     logger.info(f"Indexing document: {doc}")
                     result = self.rag.index_document(doc)
 
