@@ -104,6 +104,10 @@ metadata:
             type: string
             required: false
             default: ""
+          orientation:
+            type: string
+            required: false
+            default: auto
         returns:
           type: object
         atomic: false
@@ -142,7 +146,8 @@ the order of work that prevents both. Use it with whatever builds the file.
 
 1. **Inventory.** Show a table of every file: what it covers, its period or
    as-of date, and its use (primary, comparison, facts). A file under
-   `not_read` needs the fallback in `references/inventory.md`.
+   `not_read` needs the fallback in `references/inventory.md` (`list_files`
+   then `run_python`).
 2. **Ledger.** Read each document in full with `read_file`, following
    `next_offset` until it is null. Record each fact, its value, stated or
    computed, and where it is. When two sources disagree, keep both rows.

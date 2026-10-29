@@ -226,3 +226,31 @@ def test_lookup_errors_come_back_as_structured_results(tools, data):
     # A string instead of a list still works: semicolons separate labels.
     out = tools["series_from_workbook"](str(src), "Revenue")
     assert out["status"] == "success"
+
+
+@pytest.mark.parametrize(
+    "orientation, ok",
+    [
+        ("periods_in_columns", True),
+        (" Periods_In_Columns ", True),
+        ("auto", True),
+        ("", True),
+        ("periods_in_rows", False),
+        ("sideways", False),
+    ],
+)
+def test_chart_tool_takes_the_same_orientation_as_the_reader(
+    tools, data, orientation, ok
+):
+    src = _book(data / "book.xlsx")
+    out_path = data / "chart.xlsx"
+    read = tools["series_from_workbook"](str(src), ["Revenue"], orientation=orientation)
+    charted = tools["chart_into_workbook"](
+        str(out_path), str(src), ["Revenue"], orientation=orientation
+    )
+    assert read["status"] == charted["status"] == ("success" if ok else "error")
+    assert out_path.is_file() == ok
+    if not ok:
+        assert charted["error"] == read["error"]
+    if orientation == "sideways":
+        assert "periods_in_rows" in charted["error"]

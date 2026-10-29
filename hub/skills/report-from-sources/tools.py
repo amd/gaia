@@ -173,6 +173,7 @@ def chart_into_workbook(
     secondary_labels: Optional[List[str]] = None,
     source_note: str = "",
     filters: str = "",
+    orientation: str = "auto",
 ) -> dict:
     """Chart named series from a source file into an .xlsx as a native Excel chart, checked on reopen.
 
@@ -193,6 +194,7 @@ def chart_into_workbook(
         secondary_labels: For combo: the series drawn as lines on the right axis.
         source_note: Extra text for the footnote; the source file, sheet and period are always added.
         filters: As for series_from_workbook.
+        orientation: As for series_from_workbook.
     """
     try:
         src = _guard(file_path)
@@ -214,6 +216,7 @@ def chart_into_workbook(
             _labels(labels),
             sheet=sheet or None,
             periods=periods,
+            orientation=orientation,
             filters=filters or None,
         )
         names = chart_names(result["series"])
