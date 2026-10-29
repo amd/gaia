@@ -139,6 +139,8 @@ public:
 
     /// Register list_skills, load_skill, unload_skill and skill_status.
     /// @p onChange runs after any load or unload (rebuild the system prompt).
+    /// A newly loaded skill's instructions are also in load_skill's result,
+    /// since the agent keeps one system prompt for the whole turn.
     void registerTools(ToolRegistry& registry, std::function<void()> onChange);
 
 private:

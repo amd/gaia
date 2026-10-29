@@ -186,6 +186,11 @@ TEST_F(FlagshipToolsTest, ScratchpadIsReadOnlyThroughQueryData) {
     ASSERT_EQ(q["status"], "success") << q.dump();
     EXPECT_NE(q["output"].get<std::string>().find("| west | 10.5 |"), std::string::npos) << q["output"];
     EXPECT_NE(q["output"].get<std::string>().find("(2 rows returned)"), std::string::npos);
+    // A leftover table says how full it is, so the model checks before answering from it.
+    json again = tools_->createTable({{"table_name", "sales"}, {"columns", "region TEXT"}});
+    EXPECT_EQ(again["status"], "error");
+    EXPECT_NE(again.dump().find("already exists with 2 rows, possibly from an earlier session"), std::string::npos)
+        << again.dump();
     EXPECT_EQ(tools_->queryData({{"sql", "DELETE FROM scratch_sales"}})["status"], "error");
     EXPECT_EQ(tools_->queryData({{"sql", "SELECT 1; DROP TABLE scratch_sales"}})["status"], "error");
     // A forbidden word inside a string literal is data, not SQL.

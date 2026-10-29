@@ -140,18 +140,79 @@ TEST_F(FlagshipAgentTest, ReadsAFileWithANativeToolCallAndAnswers) {
     EXPECT_TRUE(sawResult);
 }
 
-TEST_F(FlagshipAgentTest, LoadSkillMidTurnPutsItsBodyInTheNextRequest) {
+TEST_F(FlagshipAgentTest, LoadSkillMidTurnKeepsTheSystemPromptAndJoinsItNextTurn) {
     bench::MockLlmServer mock;
     mock.pushResponse(toolCall("c1", "load_skill", {{"name", "data-explore"}}));
     mock.pushResponse(answer("Loaded."));
+    mock.pushResponse(answer("Next turn."));
     FlagshipAgent agent(cfg(mock), opts());
     agent.processQuery("explore my sales csv");
+    agent.processQuery("and again");
     const auto bodies = mock.receivedBodies();
-    ASSERT_EQ(bodies.size(), 2u);
-    const std::string before = json::parse(bodies[0])["messages"][0]["content"];
-    const std::string after = json::parse(bodies[1])["messages"][0]["content"];
-    EXPECT_EQ(before.find("--- SKILL: data-explore ---"), std::string::npos);
-    EXPECT_NE(after.find("--- SKILL: data-explore ---\nLoad the CSV into a table"), std::string::npos);
+    ASSERT_EQ(bodies.size(), 3u);
+    const json second = json::parse(bodies[1]);
+    // Mid-turn the system prompt is unchanged, so the server keeps its cached prefix...
+    EXPECT_EQ(json::parse(bodies[0])["messages"][0]["content"], second["messages"][0]["content"]);
+    // ...and the skill's instructions reach the model in load_skill's result.
+    bool inResult = false;
+    for (const auto& m : second["messages"]) {
+        if (m.value("role", "") == "tool") {
+            inResult = json::parse(m["content"].get<std::string>()).value("instructions", "") ==
+                       "Load the CSV into a table, then query it.";
+        }
+    }
+    EXPECT_TRUE(inResult);
+    const std::string next = json::parse(bodies[2])["messages"][0]["content"];
+    EXPECT_NE(next.find("--- SKILL: data-explore ---\nLoad the CSV into a table"), std::string::npos);
+    // History keeps no second copy, which would outlive unload_skill.
+    for (const auto& m : json::parse(bodies[2])["messages"]) {
+        if (m.value("role", "") != "tool") continue;
+        const json r = json::parse(m["content"].get<std::string>());
+        EXPECT_FALSE(r.contains("instructions"));
+        EXPECT_TRUE(r.contains("instructions_note"));
+    }
+}
+
+TEST_F(FlagshipAgentTest, SystemPromptIsTheSameInEveryFolderAndTheFolderRidesWithTheRequest) {
+    fs::create_directories(root_ / "other");
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("One."));
+    mock.pushResponse(answer("Two."));
+    mock.pushResponse(answer("Three."));
+    FlagshipAgent a(cfg(mock), opts());
+    a.loadStartupSkills({});
+    a.processQuery("first");
+    a.processQuery("second");
+    FlagshipOptions o = opts();
+    o.workDir = (root_ / "other").u8string();
+    o.allowedPaths = {o.workDir};
+    FlagshipAgent b(cfg(mock), o);
+    b.loadStartupSkills({});
+    b.processQuery("third");
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 3u);
+    const json first = json::parse(bodies[0]);
+    const json second = json::parse(bodies[1]);
+    const json other = json::parse(bodies[2]);
+    const std::string system = first["messages"][0]["content"];
+    EXPECT_EQ(system, other["messages"][0]["content"]);
+    EXPECT_EQ(system.find((root_ / "work").u8string()), std::string::npos);
+
+    const std::string ask = first["messages"].back()["content"];
+    EXPECT_EQ(ask.rfind("[Context for this request]\n- Working folder: " + (root_ / "work").u8string(), 0), 0u);
+    EXPECT_NE(ask.find("[End of context]\n\nfirst"), std::string::npos);
+    EXPECT_NE(std::string(other["messages"].back()["content"]).find((root_ / "other").u8string()),
+              std::string::npos);
+    // Turn 2 starts with turn 1's exact messages, so the server's cache covers all of turn 1.
+    const json& msgs = second["messages"];
+    ASSERT_EQ(msgs.size(), 4u);
+    EXPECT_EQ(msgs[1], first["messages"][1]);
+    EXPECT_EQ(msgs[2]["content"], "One.");
+    EXPECT_EQ(std::string(msgs.back()["content"]).rfind("[Context for this request]", 0), 0u);
+    // The session list still previews the user's own words.
+    EXPECT_EQ(stripTurnContext(a.history().front().content), "first");
+    EXPECT_EQ(stripTurnContext("plain words"), "plain words");
 }
 
 TEST_F(FlagshipAgentTest, OversizedResultIsPagedNotLost) {
@@ -345,7 +406,7 @@ TEST_F(FlagshipAgentTest, HistoryStubsOldToolOutputToFitTheWindow) {
     }
     EXPECT_TRUE(stubbed);
     // The question and the answer survive.
-    EXPECT_EQ(agent.history().front().content, "what's in huge.txt?");
+    EXPECT_EQ(stripTurnContext(agent.history().front().content), "what's in huge.txt?");
     EXPECT_EQ(agent.history().back().content, "It's all h.");
 }
 

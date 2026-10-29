@@ -212,7 +212,8 @@ TEST_F(StdioServerTest, OneQueryOneTerminalEventWithToolEventsBetween) {
     EXPECT_TRUE(sawCall && sawResult);
     // The multi-line query arrived as one question.
     const json body = json::parse(mock_.receivedBodies().front());
-    EXPECT_EQ(body["messages"][1]["content"], "what do my\nnotes say?");
+    const std::string asked = body["messages"][1]["content"];
+    EXPECT_NE(asked.find("[End of context]\n\nwhat do my\nnotes say?"), std::string::npos) << asked;
 }
 
 TEST_F(StdioServerTest, ConfirmationIsAnsweredMidTurnOverStdin) {

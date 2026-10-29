@@ -1188,7 +1188,13 @@ json FlagshipTools::createTable(const json& args) {
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND substr(name, 1, 8) = 'scratch_'");
     count.step();
     if (count.columnInt64(0) >= 100) return error("The scratchpad holds at most 100 tables; drop one first.");
-    if (scratch_.tableExists(table)) return error("Table '" + name + "' already exists.");
+    if (scratch_.tableExists(table)) {
+        auto rows = scratch_.prepare("SELECT COUNT(*) FROM \"" + table + "\"");
+        rows.step();
+        return error("Table '" + name + "' already exists with " + std::to_string(rows.columnInt64(0)) +
+                     " rows, possibly from an earlier session. To load this data, drop_table it first or "
+                     "pick another name; never answer from it without checking where its rows came from.");
+    }
     try {
         scratch_.execute("CREATE TABLE \"" + table + "\" (" + columns + ")");
     } catch (const DatabaseError& e) {

@@ -1323,6 +1323,21 @@ void writeTraceFile(const std::string& path, const json& trace) {
 }
 } // namespace
 
+namespace {
+constexpr const char* kTurnContextOpen = "[Context for this request]\n";
+constexpr const char* kTurnContextClose = "\n[End of context]\n\n";
+}  // namespace
+
+std::string withTurnContext(const std::string& context, const std::string& text) {
+    return kTurnContextOpen + context + kTurnContextClose + text;
+}
+
+std::string stripTurnContext(const std::string& text) {
+    if (text.rfind(kTurnContextOpen, 0) != 0) return text;
+    const auto end = text.find(kTurnContextClose);
+    return end == std::string::npos ? text : text.substr(end + std::char_traits<char>::length(kTurnContextClose));
+}
+
 void Agent::setHistory(std::vector<Message> history) {
     if (inFlight_.load()) {
         throw std::runtime_error("Cannot set history while processQuery() is running");
@@ -1411,6 +1426,16 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     const std::string userInput = summarizeUserInput(userMessages);
     onTurnStart(userInput);
 
+    if (const std::string context = turnContext();
+        !context.empty() && !userMessages.empty() && messages.back().role == MessageRole::USER) {
+        Message& m = messages.back();
+        if (m.parts.has_value()) {
+            m.parts->insert(m.parts->begin(), ContentPart::makeText(withTurnContext(context, "")));
+        } else {
+            m.content = withTurnContext(context, m.content);
+        }
+    }
+
     console_->printProcessingStart(userInput, stepsLimit, cfg.modelId);
 
     int stepsTaken = 0;
@@ -1424,6 +1449,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     // Per-turn guidance (budget notices, the closing prompt): sent in this
     // turn's requests, never saved, or the next turn opens with a stale notice.
     std::vector<size_t> transientMessages;
+    std::string turnSystemPrompt;
+    std::vector<std::string> turnToolNames;
     int malformedStreak = 0;
     std::string llmError;  // set when the turn ended because the model could not be reached or read
     int unfinishedReprompts = 0;
@@ -1550,10 +1577,13 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             }
         }
 
-        // Recomposed each step so mid-loop tool changes are visible, but always
-        // from the turn's config snapshot — the same one callLlm() uses to
-        // decide whether to send `tools`.
-        const std::string turnSystemPrompt = composeSystemPromptFor(cfg);
+        // Recomposed only when the tool set changes: any other edit mid-turn would
+        // make the server re-read the whole prompt. Always from the turn's config
+        // snapshot — the same one callLlm() uses to decide whether to send `tools`.
+        if (auto names = tools_.enabledTools(); turnSystemPrompt.empty() || names != turnToolNames) {
+            turnToolNames = std::move(names);
+            turnSystemPrompt = composeSystemPromptFor(cfg);
+        }
 
         // Call LLM (retry once on failure).
         // Skip progress spinner when streaming — tokens serve as live progress.
@@ -1844,7 +1874,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         try {
             const auto closingStart = std::chrono::steady_clock::now();
             LlmResult closingResult =
-                callLlm(messages, composeSystemPromptFor(cfg), closingCfg);
+                callLlm(messages, turnSystemPrompt.empty() ? composeSystemPromptFor(cfg) : turnSystemPrompt,
+                        closingCfg);
             if (tracing) {
                 traceEvents.push_back({{"type", "llm"}, {"step", stepsTaken}, {"closing", true},
                                        {"ms", msSince(closingStart)}, {"finish_reason", closingResult.finishReason},
@@ -1889,7 +1920,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                       {"duration_ms", msSince(turnStart)},
                       {"usage", totalUsage.toJson()},
                       {"error_count", errorCount},
-                      {"system_prompt", composeSystemPromptFor(cfg)},
+                      {"system_prompt", turnSystemPrompt.empty() ? composeSystemPromptFor(cfg) : turnSystemPrompt},
                       {"events", std::move(traceEvents)},
                       {"messages", std::move(sent)}};
         if (!llmError.empty()) trace["llm_error"] = llmError;
@@ -1902,6 +1933,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     if (cfg.historyTokenBudget) {
         fitHistoryToContext(messages, cfg.contextSize);
     }
+
+    beforeHistorySave(messages);
 
     // Store conversation history for session persistence.
     // Prompt-JSON tool results are converted to USER messages so the LLM server

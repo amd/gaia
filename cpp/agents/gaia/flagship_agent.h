@@ -78,8 +78,12 @@ protected:
     std::string getSystemPrompt() const override;
     /// Logs both sides of the turn for search_past_conversations.
     void onTurnComplete(const std::string& userInput, const std::string& answer) override;
-    /// Looks up memories close to this turn's request for its system prompt.
+    /// Looks up memories close to this turn's request for its context.
     void onTurnStart(const std::string& userInput) override;
+    /// Working folder, allowed folders and this turn's memories.
+    std::string turnContext() const override;
+    /// Drops skill instructions from load_skill results; the system prompt carries them.
+    void beforeHistorySave(std::vector<Message>& messages) override;
 
 private:
     VisionReader visionReader();

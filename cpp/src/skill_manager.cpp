@@ -485,6 +485,8 @@ json SkillRuntime::loadSkillTool(const std::string& name) {
                          "pretending they ran.";
     }
     if (!unavailable.empty()) out["unavailable_commands"] = unavailable;
+    // The system prompt picks the skill up next turn; this turn reads it here.
+    if (!already && !d->skill.body.empty()) out["instructions"] = bodyFor(d->skill);
     return out;
 }
 

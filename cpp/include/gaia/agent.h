@@ -34,6 +34,11 @@
 
 namespace gaia {
 
+/// A user message with Agent::turnContext() framed in front of it.
+GAIA_API std::string withTurnContext(const std::string& context, const std::string& text);
+/// The user's own words from a message withTurnContext() built; other text unchanged.
+GAIA_API std::string stripTurnContext(const std::string& text);
+
 /// Base Agent class providing the core conversation loop and tool execution.
 /// Subclass and override registerTools() and getSystemPrompt() for domain agents.
 ///
@@ -314,6 +319,16 @@ protected:
     /// Called once per processQuery() before the first model call, with the
     /// user's text. Runs on the querying thread.
     virtual void onTurnStart(const std::string& /*userInput*/) {}
+
+    /// Context for this turn (working folder, recalled memories), called after
+    /// onTurnStart. It goes in front of the user's message, framed by
+    /// withTurnContext(), and is saved with it: the system prompt stays the
+    /// same across turns and sessions, and each request starts with the bytes
+    /// of the one before, so the server can reuse its cached prefix.
+    virtual std::string turnContext() const { return ""; }
+
+    /// Edit this turn's messages just before they are saved as history.
+    virtual void beforeHistorySave(std::vector<Message>& /*messages*/) {}
 
 private:
     /// Unified entry point for all processQuery overloads. Owns the full
