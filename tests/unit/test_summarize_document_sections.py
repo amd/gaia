@@ -133,6 +133,11 @@ def test_a_thinking_model_summarizes_with_thinking_off(summarize):
             ("at most three top-level bullets", "under 20 words", "nested sub-bullets"),
             ("## Key Takeaways", "Use sub-bullets"),
         ),
+        (
+            "detailed",
+            ("at least 250 words", "every number, percentage, dollar amount"),
+            ("## Key Takeaways",),
+        ),
     ],
 )
 def test_business_summary_styles_match_the_skill_contract(
@@ -147,6 +152,28 @@ def test_business_summary_styles_match_the_skill_contract(
     [prompt] = chat.prompts
     assert all(text in prompt for text in required)
     assert all(text not in prompt for text in forbidden)
+
+
+def test_long_documents_keep_section_detail_for_final_style_synthesis(summarize):
+    chat = _Chat()
+    tool = summarize(chat, pages=6)
+
+    result = tool(file_path=DOC, summary_type="brief", max_words_per_section=120)
+
+    assert result["status"] == "success"
+    *section_prompts, final_prompt = chat.prompts
+    assert len(section_prompts) > 1
+    assert "at most three complete sentences" in final_prompt
+    assert "# Document Summary" not in final_prompt
+    assert "## Key Takeaways" not in final_prompt
+    assert all(
+        "Extract the key facts, numbers, decisions" in prompt
+        for prompt in section_prompts
+    )
+    assert all("[Page N] markers" in prompt for prompt in section_prompts)
+    assert all(
+        "at most three complete sentences" not in prompt for prompt in section_prompts
+    )
 
 
 def test_a_summary_cut_off_at_the_limit_is_an_error_not_a_summary(summarize):

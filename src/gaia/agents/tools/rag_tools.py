@@ -1861,9 +1861,10 @@ class RAGToolsMixin:
                         "'Overall' or 'In summary'."
                     ),
                     "detailed": (
-                        "Write a comprehensive summary covering every major topic, "
-                        "key point, and important detail in full paragraphs. Do not "
-                        "use bullets."
+                        "Write a comprehensive summary of at least 250 words covering "
+                        "every major topic, key point, and important detail in full "
+                        "paragraphs. Keep every number, percentage, dollar amount, "
+                        "date, and metric. Do not use bullets."
                     ),
                     "bullets": (
                         "Write only a flat Markdown bullet list with at most three "
@@ -1874,6 +1875,11 @@ class RAGToolsMixin:
                 }
 
                 summary_instruction = type_instructions[summary_type]
+                section_instruction = (
+                    "Extract the key facts, numbers, decisions, and [Page N] markers "
+                    "from this section for a later final synthesis. Do not apply the "
+                    "requested final output style yet."
+                )
 
                 # Get all chunks from the RAG index
                 # Since we can't directly filter chunks by document, we'll use a workaround:
@@ -1975,11 +1981,6 @@ class RAGToolsMixin:
                     f"Document has {total_words} words, {len(pages)} pages, grouped into {len(sections)} sections"
                 )
 
-                # Get document metadata for enhanced summary
-                file_metadata = self.rag.file_metadata.get(target_file, {})
-                num_pages = file_metadata.get("num_pages", len(pages))
-                _vlm_pages = file_metadata.get("vlm_pages", 0)
-
                 # If document is small enough (single section), summarize in one pass
                 if len(sections) <= 1:
                     prompt = f"""{summary_instruction}
@@ -2036,7 +2037,7 @@ heading/template that conflicts with the requested style.
 
                     # Generate summary for this section
                     section_prompt = f"""This is section {section_num} of {num_sections} from the document.
-{summary_instruction}
+{section_instruction}
 
 Section content:
 {section_text}
