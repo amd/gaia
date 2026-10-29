@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from "vitest";
-import { collectAll, collectReleases, collectRuns, insertMany, type CollectEnv } from "../src/collector";
+import { collectAll, collectReleases, collectRuns, insertMany, SOURCES, unknownSources, type CollectEnv } from "../src/collector";
 
 interface Stmt {
   sql: string;
@@ -191,6 +191,23 @@ describe("collectAll", () => {
     await expect(collectAll(env(db), { runDays: 1, fetcher: f, now: new Date("2026-10-26T12:00:00Z") })).rejects.toThrow(/collector:releases/);
     const logs = stmts.filter((s) => s.sql.includes("collect_log")).map((s) => [s.args[1], s.args[2]]);
     expect(logs).toEqual([["releases", 0], ["repo", 1], ["stars", 1], ["forks", 1], ["issues", 1], ["commits", 1], ["code stats", 1], ["package history", 1], ["runs", 1], ["tests", 1], ["evals", 1]]);
+    // SOURCES is what `only=` is validated against; it must name exactly the sources collected.
+    expect(logs.map((l) => l[0])).toEqual([...SOURCES]);
+  });
+
+  it("names unknown sources, case- and whitespace-exact, and accepts every real one", () => {
+    expect(unknownSources(undefined)).toEqual([]);
+    expect(unknownSources([...SOURCES])).toEqual([]);
+    expect(unknownSources(["evals", "Evals", "eval", "code-stats", ""])).toEqual(["Evals", "eval", "code-stats", ""]);
+  });
+
+  it("refuses an unknown source before collecting anything", async () => {
+    const { db, stmts } = fakeDb();
+    const f = async () => {
+      throw new Error("must not fetch");
+    };
+    await expect(collectAll(env(db), { runDays: 1, only: ["nope"], fetcher: f })).rejects.toThrow(/Unknown source\(s\): nope/);
+    expect(stmts).toEqual([]);
   });
 });
 

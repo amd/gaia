@@ -64,6 +64,25 @@ describe("collect origin check", () => {
   });
 });
 
+describe("collect source selection", () => {
+  const collect = (q: string) =>
+    worker.fetch(new Request(`http://localhost:8787/admin/api/collect?days=1&${q}`, { method: "POST", headers: { "x-admin-action": "collect" } }), env);
+
+  it("answers 400, not 502, for an unknown only= source, naming the known ones", async () => {
+    const res = await collect("only=evals,nope");
+    expect(res.status).toBe(400);
+    const body = await res.text();
+    expect(body).toContain("nope");
+    expect(body).toContain("evals");
+    expect(body).not.toContain("finished with errors");
+  });
+
+  it("rejects a source with the wrong case or spelling", async () => {
+    expect((await collect("only=Evals")).status).toBe(400);
+    expect((await collect("only=code-stats")).status).toBe(400);
+  });
+});
+
 describe("parseMaintainerGroups", () => {
   it("reads one person per entry, + joining their accounts, and rejects anything that is not a login", async () => {
     const { parseMaintainerGroups, parseMaintainers } = await import("../src/page");

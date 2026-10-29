@@ -197,6 +197,7 @@ export async function collectEvals(env: CollectEnv, f: Fetcher, days: number, to
   let runsRead = 0;
   let scenarios = 0;
   let noArtifacts = 0;
+  let kept = 0;
   const failures: string[] = [];
   const todo: GhRun[] = [];
   for (const wf of EVAL_WORKFLOWS) {
@@ -226,6 +227,11 @@ export async function collectEvals(env: CollectEnv, f: Fetcher, days: number, to
         { headers: ghHeaders(env) },
       );
       const unusable = arts.artifacts.filter((a) => a.expired || a.size_in_bytes > MAX_ARTIFACT_BYTES);
+      if (unusable.length && known.get(run.id) === run.run_attempt) {
+        // Already stored from when its artifacts were readable; a refresh keeps that data.
+        kept++;
+        continue;
+      }
       if (unusable.length) {
         // A run stored without some of its artifacts would show a wrong pass rate forever.
         throw new Error(
@@ -282,6 +288,7 @@ export async function collectEvals(env: CollectEnv, f: Fetcher, days: number, to
   const summary =
     `${runsRead} eval runs, ${scenarios} scenario results` +
     (noArtifacts ? `; ${noArtifacts} finished runs had no scorecards` : "") +
+    (kept ? `; ${kept} stored runs kept as stored (their artifacts have expired)` : "") +
     (deferred ? `; ${deferred} more runs left for the next collection (at most ${MAX_RUNS_PER_INVOCATION} per run)` : "");
   if (failures.length) throw new Error(`${summary}; ${failures.length} run(s) could not be read: ${failures.join(" | ")}`);
   return summary;

@@ -3,7 +3,7 @@
 
 import { handleApi } from "./api";
 import { authenticate, AuthError, type AuthEnv } from "./auth";
-import { collectAll, type CollectEnv } from "./collector";
+import { collectAll, SOURCES, unknownSources, type CollectEnv } from "./collector";
 import { renderEvalsPage } from "./evalspage";
 import { renderGrowthPage } from "./growthpage";
 import { parseMaintainerGroups, parseMaintainers, renderCiPage, renderDevelopersPage, renderUsersPage } from "./page";
@@ -57,8 +57,10 @@ export default {
       if (!Number.isInteger(days) || days < 1 || days > 95 || !Number.isInteger(skip) || skip < 0 || skip > 95) {
         return text("days must be 1-95 and skip 0-95 (whole numbers).", 400);
       }
+      const only = url.searchParams.get("only")?.split(",").map((x) => x.trim()).filter(Boolean);
+      const unknown = unknownSources(only);
+      if (unknown.length) return text(`Unknown source(s): ${unknown.join(", ")}. Known: ${SOURCES.join(", ")}.`, 400);
       try {
-        const only = url.searchParams.get("only")?.split(",").map((x) => x.trim()).filter(Boolean);
         await collectAll(env, { runDays: days, skipDays: skip, fullHistory: url.searchParams.get("full") === "1", only });
       } catch (e) {
         return text(`Collection finished with errors:\n${(e as Error).message}`, 502);

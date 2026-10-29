@@ -253,6 +253,13 @@ export async function collectRuns(
   return `${total} runs over ${days} day(s)`;
 }
 
+export const SOURCES = ["releases", "repo", "stars", "forks", "issues", "commits", "code stats", "package history", "runs", "tests", "evals"] as const;
+
+/** Names in `only` that are not a known source; the caller should reject them before collecting. */
+export function unknownSources(only: string[] | undefined): string[] {
+  return (only ?? []).filter((o) => !(SOURCES as readonly string[]).includes(o));
+}
+
 export async function collectAll(
   env: CollectEnv,
   opts: { runDays: number; skipDays?: number; fullHistory?: boolean; only?: string[]; fetcher?: Fetcher; now?: Date } = { runDays: 3 },
@@ -276,8 +283,8 @@ export async function collectAll(
     ["evals", () => collectEvals(env, f, EVAL_ARTIFACT_DAYS, now, opts.fullHistory ?? false)],
   ];
   // Independent sources: one failing must not stop the others from recording.
-  const unknown = (opts.only ?? []).filter((o) => !steps.some(([n]) => n === o));
-  if (unknown.length) throw new Error(`Unknown source(s): ${unknown.join(", ")}. Known: ${steps.map(([n]) => n).join(", ")}.`);
+  const unknown = unknownSources(opts.only);
+  if (unknown.length) throw new Error(`Unknown source(s): ${unknown.join(", ")}. Known: ${SOURCES.join(", ")}.`);
   for (const [name, fn] of steps) {
     if (opts.only && !opts.only.includes(name)) continue;
     try {

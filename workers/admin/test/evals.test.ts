@@ -366,6 +366,27 @@ describe("collectEvals against real SQLite", () => {
     expect(after.filter((r) => r.collected_at === before.get(r.run_id))).toEqual([]);
   });
 
+  it("keeps a stored run's data on a full refresh after its artifacts expire, without reporting a failure", async () => {
+    const { memoryD1 } = await import("./d1");
+    const { collectEvals } = await import("../src/evals");
+    const db = memoryD1();
+    await collectEvals(evalEnv(db), await github({ "eval_flagship.yml": [ghRun(1)] }, { 1: await zipWith("PASS") }, []), 14, new Date());
+    const summary = await collectEvals(evalEnv(db), await github({ "eval_flagship.yml": [ghRun(1)] }, { 1: "gone" }, []), 14, new Date(), true);
+    expect(summary).toMatch(/1 stored runs kept/);
+    expect((await db.prepare("SELECT status FROM eval_scenarios WHERE run_id = 1").all()).results).toEqual([{ status: "PASS" }]);
+  });
+
+  it("still reports a newer attempt whose artifacts are unreadable, keeping the old attempt's data", async () => {
+    const { memoryD1 } = await import("./d1");
+    const { collectEvals } = await import("../src/evals");
+    const db = memoryD1();
+    await collectEvals(evalEnv(db), await github({ "eval_flagship.yml": [ghRun(1, 1)] }, { 1: await zipWith("FAIL") }, []), 14, new Date());
+    await expect(
+      collectEvals(evalEnv(db), await github({ "eval_flagship.yml": [ghRun(1, 2)] }, { 1: "gone" }, []), 14, new Date(), true),
+    ).rejects.toThrow(/1 run\(s\) could not be read/);
+    expect((await db.prepare("SELECT e.status, r.run_attempt FROM eval_scenarios e JOIN eval_runs r USING(run_id)").all()).results).toEqual([{ status: "FAIL", run_attempt: 1 }]);
+  });
+
   it("remembers a run with no scorecards so it is not fetched again", async () => {
     const { memoryD1 } = await import("./d1");
     const { collectEvals } = await import("../src/evals");

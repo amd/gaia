@@ -43,7 +43,7 @@ curl -X POST -H "x-admin-action: collect" "http://localhost:8787/admin/api/colle
 - `days=N` is how many days of workflow runs and test counts to read, newest first
   (the nightly job reads 3). GitHub keeps about 90 days; `skip=N` lets a long backfill
   run in chunks (`days=30`, then `days=30&skip=30`, ...). Busy days take about a minute each.
-- `only=a,b` re-reads just those sources (names as in the data-collection log).
+- `only=a,b` re-reads just those sources (names as in the data-collection log); an unknown name is refused with HTTP 400 before anything is read.
 - The collector only answers a request carrying `x-admin-action: collect` from the same
   site, so a link or form on another site cannot trigger it.
 
@@ -227,7 +227,8 @@ shows the last result of each source.
 - Each collection downloads at most 40 new or changed eval runs, newest first across the
   workflows; the rest wait for the next night (artifacts last 14 days, so the nightly job
   catches up well within that). With `full=1` every run is re-read, the ones read longest ago
-  first, so repeating the call works through all of them.
+  first, so repeating the call works through all of them. A stored run whose artifacts have
+  since expired keeps its stored results and is not reported as a failure.
 - Unit-test counts are read from the pytest summary line in the main-branch
   `Unit Tests` job log (the workflow uploads no JUnit file). Change `TEST_WORKFLOW`
   in `wrangler.toml` to follow a different workflow.
