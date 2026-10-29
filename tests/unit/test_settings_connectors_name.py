@@ -20,7 +20,7 @@ _STALE_RE = re.compile(
 
 def _normalize_python_literals(text: str) -> str:
     """Join adjacent string literals, including f-strings, while preserving line numbers."""
-    return re.sub(r"([\"'])[ \t]*\n[ \t]*[rfbu]*\1", "\n", text)
+    return re.sub(r"[\"'][ \t]*\n[ \t]*[rfbu]*[\"']", "\n", text, flags=re.I)
 
 
 _SCAN_EXTENSIONS = {
@@ -88,9 +88,24 @@ def test_stale_pattern_catches_every_spelling(text):
     assert _STALE_RE.search(text)
 
 
-def test_split_python_literals_are_scanned_as_one_path():
-    source = '"Settings → "\n    f"Connections"'
+@pytest.mark.parametrize(
+    "source",
+    [
+        '"Settings → "\n    f"Connections"',
+        '"(or Settings -> "\n            "Connections in the Agent UI)."',
+        "'Settings → '\n    F\"Connections\"",
+        "\"Settings → \"\n    rb'Connections'",
+    ],
+)
+def test_split_python_literals_are_scanned_as_one_path(source):
     assert _STALE_RE.search(_normalize_python_literals(source))
+
+
+def test_joining_split_literals_keeps_source_line_numbers():
+    source = 'x = 1\nmsg = ("Settings → "\n    f"Connections")\n'
+    joined = _normalize_python_literals(source)
+    match = _STALE_RE.search(joined)
+    assert match and joined.count("\n", 0, match.end()) == 2
 
 
 @pytest.mark.parametrize(
