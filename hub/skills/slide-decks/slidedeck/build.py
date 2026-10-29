@@ -3793,6 +3793,17 @@ def save_deck(prs, output: Path) -> None:
     prs.save(str(output))
 
 
+def deck_owner(path: Path) -> str:
+    """The owner :func:`build_deck` stamped on a deck, or "" for any other file."""
+    from pptx.exc import PackageNotFoundError
+
+    try:
+        return str(Presentation(str(path)).core_properties.identifier or "")
+    except (PackageNotFoundError, KeyError, zipfile.BadZipFile):
+        # Not a deck we can open, so not one this chat made: pick a fresh name.
+        return ""
+
+
 def _renumber(prs) -> None:
     """Refresh the cached text of slide-number fields after slides move."""
     for i, slide in enumerate(prs.slides, 1):
@@ -3861,6 +3872,9 @@ def build_deck(
         normalized, theme=theme, template_path=template_path, prefs=prefs
     )
     prs = builder.build()
+    if normalized.get("owner"):
+        # Which chat made this file, so another chat never takes it as its own.
+        prs.core_properties.identifier = normalized["owner"]
     save_deck(prs, out)
     result: Dict[str, Any] = {
         "status": "ok",

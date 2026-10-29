@@ -1133,3 +1133,24 @@ def test_table_numbers_keep_the_separators_the_user_typed(tools, tmp_path):
     assert "6,400" in cells and "20,000" in cells and "2026" in cells
     text = json.dumps(r["slides_built"])
     assert "Biggest drop: signup. Two in three" in text
+
+
+def test_a_rebuild_replaces_its_own_deck_even_after_the_skill_reloads(tools, tmp_path):
+    """Ownership is stamped in the file, so reloading the skill loses nothing."""
+    from gaia.skills.loader import register_skill_tools
+
+    skill, fns, _r = tools
+    md = "## Ferry plan\n- Order a boat\n- Hire crew\n"
+    with bind(_Asking("one slide on the ferry plan"), skill):
+        theirs = fns["build_deck_from_markdown"](markdown=md)
+    me = _Asking("one slide on the ferry plan")
+    with bind(me, skill):
+        first = fns["build_deck_from_markdown"](markdown=md)
+    reloaded = {
+        k.split("/", 1)[1]: v["function"]
+        for k, v in register_skill_tools(skill).items()
+    }
+    with bind(me, skill):
+        again = reloaded["build_deck_from_markdown"](markdown=md)
+    assert first["path"] != theirs["path"]
+    assert again["path"] == first["path"], (first["path"], again["path"])

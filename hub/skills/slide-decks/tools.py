@@ -20,6 +20,7 @@ import hashlib
 import io
 import json
 import re
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -90,8 +91,17 @@ _FAILED_IN_A_ROW: Dict[int, int] = {}
 _MAX_FAILED_IN_A_ROW = 2
 
 
-#: Decks each agent wrote, so a rebuild replaces its own file and never another chat's.
-_WRITTEN: Dict[int, set] = {}
+def _owner() -> str:
+    """This chat's mark on the decks it builds; "" outside a skill call."""
+    try:
+        agent = current().agent
+    except SkillContextError:
+        return ""
+    token = getattr(agent, "_slide_decks_owner", "")
+    if not token:
+        token = uuid.uuid4().hex
+        setattr(agent, "_slide_decks_owner", token)
+    return token
 
 
 def _agent_key() -> int:
@@ -669,24 +679,21 @@ def _writable_deck(
         raise OutlineError(
             [f"the folder {p.parent} does not exist; save into an existing folder."]
         )
-    out = check_write(p)
-    _WRITTEN.setdefault(_agent_key(), set()).add(str(Path(out).resolve()))
-    return out
+    return check_write(p)
 
 
 def _fresh_name(p: Path) -> Path:
     """*p*, or "name (2).pptx" when another chat's deck already has that name."""
-    mine = _WRITTEN.get(_agent_key(), set())
+    owner = _owner()
     n = 1
     found = p
-    while found.exists() and str(found.resolve()) not in mine:
+    while found.exists() and not (owner and _build_engine().deck_owner(found) == owner):
         n += 1
         found = p.with_name(f"{p.stem} ({n}){p.suffix}")
     if found != p:
         log.info(
-            "slide-decks: %s exists and this agent (%s) did not write it; saving %s",
+            "slide-decks: %s exists and this chat did not build it; saving %s",
             p,
-            _agent_key(),
             found.name,
         )
         _NOTES.append(
@@ -834,6 +841,7 @@ def _build_from(
                 dict.fromkeys([*(data.get("required_items") or []), *required_items])
             )
         _check_inputs(data, saved, template_path)
+        data["owner"] = _owner()
         out = _writable_deck(output_path, data)
         key = _fingerprint(data, theme, template_path, saved)
         failed = _FAILED_BUILDS.get(str(out))

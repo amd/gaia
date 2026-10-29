@@ -1583,6 +1583,7 @@ def normalize_outline(outline: Any, base_dir: Optional[Path] = None) -> Dict[str
         "require_notes": bool(data.get("require_notes", False)),
         "style": data.get("style") if isinstance(data.get("style"), dict) else {},
         "required_items": required,
+        "owner": _text(data.get("owner")),
         "figures_from_user": [
             int(i) for i in data.get("figures_from_user") or [] if str(i).isdigit()
         ],
