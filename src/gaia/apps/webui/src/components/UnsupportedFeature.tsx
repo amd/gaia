@@ -306,7 +306,7 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
         Icon = AlertTriangle;
     } else if (isFileTypeError) {
         title = `File type not supported: ${ext}`;
-        detail = 'This file format cannot be indexed. Supported: PDF, PPTX, TXT, MD, CSV, JSON, XLSX, HTML, XML, YAML, and 30+ code file formats.';
+        detail = 'This file format cannot be indexed. Supported: PDF, DOCX, PPTX, XLSX, EPUB, images (PNG, JPG, WEBP, ...), TXT, MD, CSV, JSON, HTML, XML, YAML, and 30+ code file formats.';
         issueUrl = featureRequestUrl(`Support ${ext} file indexing`);
         Icon = AlertTriangle;
     } else if (isConnectionError) {
