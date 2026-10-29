@@ -140,6 +140,27 @@
 }
 
 /* Breadcrumb */
+.fb-pathbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.fb-pathbar .fb-breadcrumb {
+    flex: 1;
+    min-width: 0;
+}
+
+.fb-hidden-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
 .fb-breadcrumb {
     display: flex;
     align-items: center;

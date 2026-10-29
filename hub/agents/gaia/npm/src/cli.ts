@@ -64,7 +64,8 @@ const VALUE_FLAGS = new Set([
 export class UsageError extends Error {}
 
 export function parseArgs(argv: string[]): ParsedArgs {
-  const out: ParsedArgs = { _: [], flags: {}, passthrough: [] };
+  // No prototype, so `--__proto__` or `--constructor` is stored as an own key.
+  const out: ParsedArgs = { _: [], flags: Object.create(null), passthrough: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--") {
@@ -186,13 +187,37 @@ const VALUE_FLAG_SCOPE: Record<string, { commands: readonly string[]; why: strin
   },
 };
 
-/** Refuse a value flag the chosen command would otherwise silently ignore. */
+const BOOLEAN_FLAG_SCOPE: Record<string, { commands: readonly string[]; why: string }> = {
+  force: {
+    commands: ["run", "fetch", "serve"],
+    why: "only commands that download binaries can re-download them",
+  },
+  "allow-insecure-base-url": {
+    commands: ["run", "fetch", "serve"],
+    why: "it only changes download-source validation",
+  },
+  help: {
+    commands: ["run", "fetch", "serve", "version", "help"],
+    why: "help is available for every command",
+  },
+};
+
+const FLAG_SCOPE = { ...VALUE_FLAG_SCOPE, ...BOOLEAN_FLAG_SCOPE };
+
+/** Refuse an unknown option or one the chosen command would otherwise ignore. */
 function assertFlagsInScope(args: ParsedArgs, cmd: string): void {
-  for (const [flag, scope] of Object.entries(VALUE_FLAG_SCOPE)) {
-    if (args.flags[flag] === undefined || scope.commands.includes(cmd)) continue;
+  for (const flag of Object.keys(args.flags)) {
+    const scope = Object.hasOwn(FLAG_SCOPE, flag) ? FLAG_SCOPE[flag] : undefined;
+    if (scope === undefined) {
+      throw new UsageError(
+        `unknown option '--${flag}'. Run \`gaia --help\` to see supported options; ` +
+          "arguments for the terminal UI go after a bare `--`.",
+      );
+    }
+    if (scope.commands.includes(cmd)) continue;
     throw new UsageError(
       `--${flag} is not valid for \`gaia ${cmd}\` — ${scope.why}. ` +
-        `It is accepted by: ${scope.commands.map((c) => `\`gaia ${c}\``).join(", ")}.`,
+        `It is accepted by: ${scope.commands.map((command) => `\`gaia ${command}\``).join(", ")}.`,
     );
   }
 }
@@ -513,12 +538,13 @@ export async function main(argv: string[]): Promise<number> {
   const args = parseArgs(argv);
   const explicit = args._[0];
   const cmd = explicit ?? (args.flags["help"] ? "help" : "run");
+  if (!(KNOWN_COMMANDS as readonly string[]).includes(cmd)) {
+    throw new UsageError(`unknown command '${cmd}'`);
+  }
+  assertFlagsInScope(args, cmd);
   if (args.flags["help"] && cmd !== "help") {
     process.stdout.write(HELP);
     return 0;
-  }
-  if (!(KNOWN_COMMANDS as readonly string[]).includes(cmd)) {
-    throw new UsageError(`unknown command '${cmd}'`);
   }
   // A dropped positional means a mistyped invocation whose flags may also be
   // wrong; refuse rather than run something the user did not ask for.
@@ -529,7 +555,6 @@ export async function main(argv: string[]): Promise<number> {
         "Arguments for the terminal UI go after a bare `--`.",
     );
   }
-  assertFlagsInScope(args, cmd);
   switch (cmd) {
     case "run":
       return cmdRun(args);

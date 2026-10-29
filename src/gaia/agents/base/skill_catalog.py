@@ -5,9 +5,9 @@
 Every installed skill's name and description sit in the system prompt, and the
 model calls ``load_skill`` for each one that fits the work — at the start of a
 task or halfway through it. Skills combine: a deck built from a folder of
-documents needs both the documents skill and the deck skill, and a model told
-"when the work matches a skill" loaded one, or none when several fit. The model has read the whole request, so it is a better judge
-of fit than a matcher scoring the user's words. The per-turn lexical matcher this
+documents needs both the documents skill and the deck skill. The model has read
+the whole request, so it is a better judge of fit than a matcher scoring the
+user's words. The per-turn lexical matcher this
 replaces loaded a skill on 0 of 24 benchmark tasks: the repo names, issue numbers
 and output formats that make a request precise counted against every match (#3764).
 

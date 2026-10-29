@@ -36,6 +36,20 @@ logger = get_logger(__name__)
 DEFAULT_VLM_MODEL = "Gemma-4-E4B-it-GGUF"
 
 
+def _image_file_error(path: Path, image_path: str) -> Optional[Dict[str, Any]]:
+    """Tool error when *path* is not an existing file, or None when it is."""
+    if path.is_file():
+        return None
+    if path.is_dir():
+        return {
+            "status": "error",
+            "error": f"Not an image file: {image_path} is a directory",
+        }
+    if path.exists():
+        return {"status": "error", "error": f"Not an image file: {image_path}"}
+    return {"status": "error", "error": f"Image not found: {image_path}"}
+
+
 class VLMToolsMixin:
     """
     Mixin providing Vision Language Model (VLM) tools for image analysis.
@@ -116,11 +130,9 @@ class VLMToolsMixin:
         denied = read_access_error(self, path)
         if denied:
             return denied
-        if not path.exists():
-            return {
-                "status": "error",
-                "error": f"Image not found: {image_path}",
-            }
+        not_a_file = _image_file_error(path, image_path)
+        if not_a_file:
+            return not_a_file
 
         # Build analysis prompt based on focus
         focus_prompts = {
@@ -173,11 +185,9 @@ class VLMToolsMixin:
         denied = read_access_error(self, path)
         if denied:
             return denied
-        if not path.exists():
-            return {
-                "status": "error",
-                "error": f"Image not found: {image_path}",
-            }
+        not_a_file = _image_file_error(path, image_path)
+        if not_a_file:
+            return not_a_file
 
         try:
             # Read image as bytes

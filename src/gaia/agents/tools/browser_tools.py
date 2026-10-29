@@ -13,10 +13,15 @@ search the web, and download files for local analysis.
 import json
 import logging
 import os
+import threading
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 from gaia.agents.base.file_snapshots import before_change
+from gaia.tool_cancellation import ToolCancelled, tool_cancelled
+
+if TYPE_CHECKING:
+    from gaia.web.client import SearchUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +50,114 @@ def _download_denied(validator, dest_path: Path) -> str:
         f"{message} Save it somewhere else instead, such as save_to='~/Downloads' "
         "or a folder this session already allows."
     )
+
+
+#: Consecutive refused searches after which ``search_web`` stops asking the
+#: loop to wait and retry, so the failure breaker can end a dead search loop.
+SEARCH_UNAVAILABLE_STREAK_LIMIT = 3
+
+_TAVILY_CONNECTOR_ID = "mcp-tavily"
+
+#: Parallel ``search_web`` calls share one refusal streak per agent.
+_STREAK_LOCK = threading.Lock()
+
+_NO_BACKUP_SEARCH_NOTE = (
+    "No backup search provider is set up. Tell the user that adding a Tavily "
+    "API key (gaia connectors configure mcp-tavily --set TAVILY_API_KEY=...) "
+    "lets search keep working when DuckDuckGo throttles it."
+)
+
+
+def _search_stop_requested(mixin) -> bool:
+    """True once the user stopped the turn or the agent gave up on the tool."""
+    cancel_event = getattr(mixin, "_cancel_event", None)
+    console_cancelled = getattr(getattr(mixin, "console", None), "cancelled", None)
+    return (
+        (cancel_event is not None and cancel_event.is_set())
+        or (console_cancelled is not None and console_cancelled.is_set())
+        or tool_cancelled()
+    )
+
+
+def _tavily_fallback(
+    query: str, num_results: int
+) -> Tuple[Optional[List[Dict[str, str]]], Optional[str]]:
+    """Results from the Tavily connector when the user configured one.
+
+    Returns ``(results, None)``, ``(None, None)`` when Tavily is not
+    configured, or ``(None, error)`` when it is configured but failed.
+    """
+    from gaia.connectors.mcp_server import is_mcp_server_configured
+
+    try:
+        if not is_mcp_server_configured(_TAVILY_CONNECTOR_ID):
+            return None, None
+        from gaia.web.tavily import TavilyClient
+
+        client = TavilyClient()
+        try:
+            if not client.configured:
+                return None, None
+            response = client.search(query, max_results=num_results)
+        finally:
+            client.close()
+    # Tool boundary: the error is reported to the model, never swallowed.
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.warning("Tavily fallback search failed: %s", e)
+        return None, f"The Tavily connector also failed: {e}"
+    results = [
+        {
+            "title": r.get("title", ""),
+            "url": r.get("url", ""),
+            "snippet": r.get("content", ""),
+        }
+        for r in response.get("results", [])
+        if r.get("url")
+    ]
+    return results, None
+
+
+def _search_unavailable_result(
+    mixin, error: "SearchUnavailableError", fallback_error: Optional[str]
+) -> Dict[str, Any]:
+    """What the model gets when every search route refused the query.
+
+    Marked ``rate_limited`` so the loop waits it out instead of counting it as
+    a repeat or a tool failure; after a streak of refusals the mark is dropped
+    so the failure breaker can stop a search loop that cannot recover.
+    """
+    with _STREAK_LOCK:
+        streak = getattr(mixin, "_search_unavailable_streak", 0) + 1
+        mixin._search_unavailable_streak = streak
+    detail = f" {fallback_error}" if fallback_error else ""
+    backup = "" if fallback_error else f" {_NO_BACKUP_SEARCH_NOTE}"
+    if streak >= SEARCH_UNAVAILABLE_STREAK_LIMIT:
+        return {
+            "status": "error",
+            "error": (
+                f"Web search is temporarily unavailable: {error}{detail} "
+                f"{streak} searches in a row were refused, so stop calling "
+                "search_web for now."
+            ),
+            "retryable": False,
+            "hint": (
+                "Call fetch_page on a URL you already know (an official site, "
+                "documentation page or Wikipedia article), or answer with what "
+                "you have and say web search was unavailable. Do not invent "
+                f"search results.{backup}"
+            ),
+        }
+    return {
+        "status": "error",
+        "error": f"Web search is temporarily unavailable: {error}{detail}",
+        "rate_limited": True,
+        "wait_time_seconds": round(error.retry_after, 1),
+        "retryable": True,
+        "hint": (
+            "Try search_web again shortly, with a narrower query, or call "
+            "fetch_page on a URL you already know. Do not invent search results."
+        ),
+    }
 
 
 def _find_spans(text: str, term: str) -> List[Tuple[int, int]]:
@@ -295,7 +408,7 @@ class BrowserToolsMixin:
         def search_web(
             query: str,
             num_results: int = 5,
-        ) -> str:
+        ) -> Union[str, Dict[str, Any]]:
             """Search the web and return results with titles, URLs, and snippets.
 
             Uses DuckDuckGo to find relevant web pages. Returns titles, URLs, and
@@ -308,23 +421,46 @@ class BrowserToolsMixin:
             if not _ensure_web_client():
                 return "Error: Browser tools not initialized. Web search is disabled."
 
+            from gaia.web.client import SearchUnavailableError
+
             # Clamp num_results
             num_results = max(1, min(num_results, 10))
 
+            source_note = None
             try:
                 results = mixin._web_client.search_duckduckgo(
-                    query, num_results=num_results
+                    query,
+                    num_results=num_results,
+                    should_stop=lambda: _search_stop_requested(mixin),
                 )
+            except ToolCancelled as e:
+                return f"Web search stopped: {e}."
             except ImportError as e:
                 return f"Error: {e}"
             except ValueError as e:
                 return f"Error: {e}"
+            except SearchUnavailableError as e:
+                logger.warning("Web search unavailable: %s", e)
+                results, fallback_error = _tavily_fallback(query, num_results)
+                if results is None:
+                    return _search_unavailable_result(mixin, e, fallback_error)
+                logger.warning(
+                    "DuckDuckGo refused the search; answered by the Tavily "
+                    "connector instead (%d results)",
+                    len(results),
+                )
+                source_note = (
+                    "(DuckDuckGo is rate-limiting searches; these results are "
+                    "from the configured Tavily connector.)"
+                )
             except Exception as e:
                 logger.error(f"Error searching web: {e}")
                 return (
                     f"Error performing web search: {e}\n"
                     "Try using fetch_page with a direct URL instead."
                 )
+            with _STREAK_LOCK:
+                mixin._search_unavailable_streak = 0
 
             if not results:
                 return (
@@ -333,6 +469,8 @@ class BrowserToolsMixin:
                 )
 
             lines = [f'Web search results for: "{query}"', ""]
+            if source_note:
+                lines[1:1] = [source_note]
             for i, result in enumerate(results, 1):
                 lines.append(f"{i}. {result['title']}")
                 lines.append(f"   {result['url']}")

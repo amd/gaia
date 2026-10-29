@@ -244,6 +244,11 @@ def cache_age_seconds(
     document = cached if cached is not None else _read_disk_cache(path)
     if document is None:
         return None
+    if not isinstance(document, dict):
+        raise CatalogError(
+            f"Offline GAIA Agent Hub cache at {path} is not a valid catalog "
+            "index. Delete it and reconnect to refresh the catalog."
+        )
 
     stamped = _parse_stamp(document.get(CACHE_STAMP_KEY))
     if stamped is not None:
@@ -353,6 +358,13 @@ def load_index(
                 f"available. Check your internet connection or GAIA_HUB_URL "
                 f"(currently {base_url}). Original error: {exc}"
             ) from exc
+        try:
+            cached_agents = _validate_index(cached)
+        except CatalogError as cache_exc:
+            raise CatalogError(
+                f"Offline GAIA Agent Hub cache at {cache_path} is not a valid "
+                "catalog index. Delete it and reconnect to refresh the catalog."
+            ) from cache_exc
         age = cache_age_seconds(cache_path, cached=cached)
         stale = age is not None and age >= CACHE_STALE_AFTER_SECONDS
         if stale:
@@ -367,7 +379,7 @@ def load_index(
                 base_url,
             )
         return CatalogResult(
-            agents=_validate_index(cached),
+            agents=cached_agents,
             offline=True,
             source="cache",
             generated_at=cached.get("generated_at"),

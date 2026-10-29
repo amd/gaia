@@ -22,6 +22,10 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { killProcessTree } = require("./process-tree.cjs");
+
+const BACKEND_KILL_GRACE_MS = 3000;
+const BACKEND_FORCE_WAIT_MS = 1000;
 
 /**
  * Resolve the GAIA home directory lazily so tests can point it elsewhere
@@ -54,86 +58,29 @@ function findFreePort() {
 }
 
 /**
- * Terminate a spawned backend: SIGTERM, wait up to 3 s, then SIGKILL.
+ * Terminate a spawned backend and everything it started: SIGTERM the tree,
+ * wait up to 3 s, then SIGKILL what is left. Without the tree walk, killing
+ * the uv `gaia.exe` launcher on Windows left its Python running.
  * Accepts either a ChildProcess reference (preferred — lets us
  * short-circuit via `exitCode` so PID reuse can never hit us) or a raw
- * pid (useful for tests). Safe to call with nullish.
+ * pid (the orphan cleanup and tests). Safe to call with nullish.
  */
 async function killBackend(procOrPid, logger) {
   const log = (logger && logger.log) || console.log;
   const logError = (logger && logger.error) || console.error;
-
   if (!procOrPid) return;
-
-  // Distinguish ChildProcess vs raw pid. A ChildProcess has both .pid
-  // and .exitCode/.signalCode; typeof === "object" is enough.
-  const isChildProcess = typeof procOrPid === "object";
-  const proc = isChildProcess ? procOrPid : null;
-  const pid = isChildProcess ? procOrPid.pid : procOrPid;
-
-  if (!pid) return;
-
-  // If we have the ChildProcess handle, trust it — the exitCode is set
-  // synchronously by Node's child_process before any pid reuse could
-  // happen, so this closes the PID-reuse TOCTOU that a pid-only API has.
+  const proc = typeof procOrPid === "object" ? procOrPid : null;
   if (proc && (proc.exitCode !== null || proc.signalCode !== null)) {
-    log(`[port-manager] child pid ${pid} already exited (exitCode=${proc.exitCode} signal=${proc.signalCode})`);
+    log(`[port-manager] child pid ${proc.pid} already exited (exitCode=${proc.exitCode} signal=${proc.signalCode})`);
     return;
   }
-
-  // Is the process still alive? kill(pid, 0) throws ESRCH if not.
-  // Only relied on when the caller passed a raw pid (tests); callers
-  // with a ChildProcess were already short-circuited above.
-  const alive = (p) => {
-    try {
-      process.kill(p, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
-  if (!alive(pid)) {
-    log(`[port-manager] pid ${pid} already gone`);
-    return;
-  }
-
-  try {
-    process.kill(pid, "SIGTERM");
-    log(`[port-manager] SIGTERM sent to pid ${pid}`);
-  } catch (err) {
-    logError(`[port-manager] SIGTERM failed for pid ${pid}: ${err.message}`);
-    return;
-  }
-
-  const deadline = Date.now() + 3000;
-  while (Date.now() < deadline) {
-    if (!alive(pid)) {
-      log(`[port-manager] pid ${pid} exited after SIGTERM`);
-      return;
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-
-  try {
-    process.kill(pid, "SIGKILL");
-    log(`[port-manager] SIGKILL sent to pid ${pid} (did not exit on SIGTERM)`);
-  } catch (err) {
-    logError(`[port-manager] SIGKILL failed for pid ${pid}: ${err.message}`);
-    return;
-  }
-
-  // Poll until the kernel reaps the process so callers can safely rebind
-  // the port immediately after we return. 1 s cap at 50 ms intervals —
-  // SIGKILL is synchronous in the kernel but reaping the zombie can lag.
-  const killDeadline = Date.now() + 1000;
-  while (Date.now() < killDeadline) {
-    if (!alive(pid)) return;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  logError(
-    `[port-manager] pid ${pid} still alive 1s after SIGKILL — orphan risk`,
-  );
+  await killProcessTree(procOrPid, {
+    graceMs: BACKEND_KILL_GRACE_MS,
+    forceWaitMs: BACKEND_FORCE_WAIT_MS,
+    log,
+    logError,
+    label: "backend",
+  });
 }
 
 /**
@@ -231,4 +178,6 @@ module.exports = PortManager;
 module.exports.PortManager = PortManager;
 module.exports.findFreePort = findFreePort;
 module.exports.killBackend = killBackend;
+module.exports.BACKEND_KILL_GRACE_MS = BACKEND_KILL_GRACE_MS;
+module.exports.BACKEND_FORCE_WAIT_MS = BACKEND_FORCE_WAIT_MS;
 module.exports.writeDiagnosticsBundle = writeDiagnosticsBundle;

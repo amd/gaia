@@ -145,7 +145,7 @@ func TestBuiltinRatesPriceTheModelsWeShip(t *testing.T) {
 // the published card does. The two generations look interchangeable and are
 // not: 5.3 charges nearly double 5.2 for cached input, which is the token
 // class most of a long session is made of.
-func TestGLMRatesMatchThePublishedCard(t *testing.T) {
+func TestBuiltinRatesMatchThePublishedCard(t *testing.T) {
 	noPriceFile(t)
 	for _, tc := range []struct {
 		model           string
@@ -156,6 +156,7 @@ func TestGLMRatesMatchThePublishedCard(t *testing.T) {
 		{"fireworks.accounts/fireworks/routers/glm-5p3-fast", 2.10, 0.39, 6.60},
 		{"fireworks.glm-5p3", 1.40, 0.26, 4.40},
 		{"fireworks.glm-5p3-flash", 0.15, 0.03, 0.50},
+		{"fireworks.deepseek-v4p1-flash", 0.30, 0.006, 1.20},
 	} {
 		p := lookupPrice(tc.model)
 		if p == nil {
@@ -275,5 +276,44 @@ func TestTheLedgerCallsItActiveTimeNotWallTime(t *testing.T) {
 	}
 	if strings.Contains(out, "wall time") {
 		t.Errorf("the sum of the turns is still called wall time:\n%s", out)
+	}
+}
+
+// The rate GAIA recommends first must be priced, and dated by the day it was
+// read rather than the older table date it was added after.
+func TestRecommendedModelIsPricedWithItsOwnDate(t *testing.T) {
+	noPriceFile(t)
+	p := lookupPrice("fireworks.deepseek-v4p1-flash")
+	if p == nil {
+		t.Fatal("fireworks.deepseek-v4p1-flash: no built-in rate")
+	}
+	if got := p.source(); got != "published rates as of 2026-10-22" {
+		t.Errorf("source = %q, want the day the DeepSeek rate was read", got)
+	}
+	if got := lookupPrice("fireworks.glm-5p3-flash").source(); got != "published rates as of "+pricesAsOf {
+		t.Errorf("GLM source = %q, want the table date", got)
+	}
+	if help := costHelp("fireworks.deepseek-v4p1-flash"); !strings.Contains(help, "read on 2026-10-22") {
+		t.Errorf("/cost help quotes the wrong date for DeepSeek:\n%s", help)
+	}
+}
+
+// A daemon-relayed session — what the desktop app and the terminal installers
+// run — opens on its model without a ping, so /cost and the status-bar spend
+// have to price the model it opened on.
+func TestARelayedSessionPricesTheModelItOpenedOn(t *testing.T) {
+	noPriceFile(t)
+	m, _, _ := relayedChat(t)
+	m = m.WithRelayedModel(StartupRestore, "fireworks", "fireworks.deepseek-v4p1-flash")
+	m.cost.add(turnCost{duration: time.Second, steps: 1, inTok: 1_000_000, outTok: 1_000_000, measured: true})
+
+	updated, _ := m.submit("/cost")
+	m = updated.(ChatModel)
+	got := m.messages[len(m.messages)-1].Content
+	if !strings.Contains(got, "$1.5000 USD") {
+		t.Errorf("/cost on a relayed session did not price the model:\n%s", got)
+	}
+	if hint := m.sessionSpendHint(); hint != "$1.500 this session" {
+		t.Errorf("status-bar spend = %q, want dollars", hint)
 	}
 }

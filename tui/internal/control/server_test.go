@@ -691,6 +691,11 @@ func TestStopGivesUpOnAStuckRequestAtItsBudget(t *testing.T) {
 	if _, err := conn.Write([]byte("GET " + APIPrefix + "/status HTTP/1.1\r\nHost: x\r\n")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	// The listener accepts in order, so once a later request is answered the
+	// half request is tracked; without this Stop can race the accept and pass.
+	if status, _ := request(t, srv, http.MethodGet, "/status", nil, srv.Token()); status != http.StatusOK {
+		t.Fatalf("warm-up /status = %d, want 200", status)
+	}
 
 	start := time.Now()
 	err = srv.Stop()

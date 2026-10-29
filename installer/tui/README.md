@@ -54,10 +54,13 @@ in the lock is refused outright rather than downgraded to that weaker check. Sam
 contract as `hub/agents/gaia/npm/src/fetch.ts`. There is no unverified path; do
 not add one.
 
-The lock ships `PENDING-replace-with-real-sha256` until a release fills it in, so
-the installer build fails until it is regenerated with
-`hub/agents/gaia/python/packaging/gen_binaries_lock.py`. That is the intended
-state — the same placeholder already blocks `npx @amd-gaia/gaia`.
+The committed lock carries real hashes only once a flagship release fills it in:
+`release_agent_gaia.yml` regenerates it with
+`hub/agents/gaia/python/packaging/gen_binaries_lock.py` and opens a PR
+(`flagship-lock/v<version>`) committing it to main. Until that PR merges,
+the installer build fails — on a placeholder, or on hashes from the previous
+release. That is the intended state; the same placeholder already blocks
+`npx @amd-gaia/gaia`. Merge the PR rather than editing the hashes by hand.
 
 The Windows setup also bundles IBM Plex Mono for its Windows Terminal profile.
 Stage it separately and pass the directory as `--fonts`. Same contract: the

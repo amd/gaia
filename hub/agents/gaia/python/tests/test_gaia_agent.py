@@ -243,7 +243,7 @@ def test_passing_both_a_config_and_kwargs_is_refused():
 
 
 def test_flagship_step_limit_defaults_to_150(monkeypatch):
-    """50 steps ended a nine-datasheet BOM task mid-research (kw-02)."""
+    """50 steps ended a nine-datasheet BOM task mid-research."""
     from gaia_agent.agent import FLAGSHIP_MAX_STEPS
 
     from gaia.agents.base.agent import DEFAULT_MAX_STEPS

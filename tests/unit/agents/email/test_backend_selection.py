@@ -583,8 +583,9 @@ class TestAgentConstructsWhenCalendarUnavailable:
         agent, unavailable = self._build(tmp_path, monkeypatch, _no_keyring)
         try:
             assert isinstance(agent._calendar, unavailable)
-            # Calendar use still fails loudly (no silent fallback).
-            with pytest.raises(ConfigurationError):
+            # Calendar use still fails loudly (no silent fallback), with the
+            # keyring error itself rather than a rewrapped one.
+            with pytest.raises(ConnectorsError, match="Keyring get_password"):
                 agent._calendar.list_events(time_min="a", time_max="b")
         finally:
             agent.close_db()

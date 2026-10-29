@@ -68,8 +68,9 @@ HOW_TO_FIX = (
     "dispatch release_components.yml if the terminal-hub version the lock "
     f"pins is not on the hub yet, tag {TAG_PREFIX}<version> on the release "
     "commit, approve "
-    "release_agent_gaia.yml, commit the binaries.lock.json it regenerates, and "
-    "tag the core release on that commit. See the gaia-release skill."
+    "release_agent_gaia.yml, merge the 'pin flagship agent <version>'s published "
+    "hashes' PR it opens (branch flagship-lock/v<version>), and tag the "
+    "core release on that commit. See the gaia-release skill."
 )
 
 
@@ -116,8 +117,8 @@ def check_lock(lock: dict, version: str) -> list[str]:
         sha = str((platforms.get(p) or {}).get("sha256", ""))
         if not _SHA_RE.match(sha):
             problems.append(
-                f"{LOCK} has no real sha256 for sidecar/{p} (found {sha!r}); commit "
-                "the lock release_agent_gaia.yml regenerated when it published."
+                f"{LOCK} has no real sha256 for sidecar/{p} (found {sha!r}); merge "
+                "the lock PR release_agent_gaia.yml opened when it published."
             )
     return problems
 

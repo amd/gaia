@@ -6,7 +6,8 @@
 import type { FileChangeKind, UntrackedWork } from './changes';
 
 export type ScopeSource =
-    | 'added' | 'gaia_documents' | 'scratch' | 'document' | 'working_folder' | 'approved';
+    | 'added' | 'gaia_documents' | 'scratch' | 'document' | 'working_folder' | 'approved'
+    | 'allowed_paths';
 
 export interface ScopeEntry {
     path: string;
@@ -22,6 +23,8 @@ export interface SessionEnvironment {
     internet: boolean;
     /** False when the chat's agent keeps its own file scope (a relayed sidecar). */
     enforced: boolean;
+    /** False when the chat's agent keeps its own network rules (the email agent). */
+    internet_enforced: boolean;
 }
 
 export type OutputKind = 'file' | 'export' | 'image' | 'document' | 'memory' | 'schedule';

@@ -352,6 +352,8 @@ class MCPTool:
             # mcp_servers.json key so routing back to a client still
             # works after sanitisation changes the prefix.
             "_mcp_server": raw_server_name,
+            # The server's own tool name, so the UI never splits the prefixed one.
+            "_mcp_tool": self.name,
         }
 
 

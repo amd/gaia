@@ -9,10 +9,11 @@ first come first served, and — unlike the bare semaphore it replaces —
 knows who is waiting and in what order, so the UI can show "2nd in line"
 instead of two chats quietly competing.
 
-The line is for the model, not for the whole turn. A turn paused on the user
-(a permission prompt, a question) gives its place up and comes back at the
-front of the line once answered, so an unanswered prompt in a background chat
-never holds every other chat. The other shared state has its own guard: the
+The line is for the local model, not for the whole turn. A turn answered by a
+cloud model never joins it. A turn paused on the user (a permission prompt, a
+question, in process or relayed from a sidecar) gives its place up and comes
+back at the front of the line once answered, so an unanswered prompt in a
+background chat never holds every other chat. The other shared state has its own guard: the
 process-global tool registry is written only under ``tool_registry_lock`` in
 ``_chat_helpers``, and another process's use of the model is arbitrated by the
 daemon's broker lease.
@@ -27,6 +28,7 @@ import asyncio
 import concurrent.futures
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
@@ -210,9 +212,12 @@ class TurnSlot:
         self.held = False
         # Set once the turn is over: a late come_back must not retake the model.
         self.closed = False
+        # When the current wait in line began, so a resumed turn counts afresh.
+        self.waiting_since = time.monotonic()
 
     async def acquire(self, *, front: bool = False) -> None:
         """Wait in line, then hold the model (event loop only)."""
+        self.waiting_since = time.monotonic()
         await self._queue.acquire(self._owner, self._on_position, front=front)
         self.held = True
 

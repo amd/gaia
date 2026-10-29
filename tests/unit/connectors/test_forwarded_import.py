@@ -263,17 +263,16 @@ class TestProviderAwareScopeDefaults:
         default is an empty list.  The forwarded Graph scopes need not include
         any gmail.* URL.
 
-        We patch ``gaia.connectors.api.get_provider`` rather than injecting
-        into ``_registry`` because ``import_forwarded_connection`` pops the
-        registry entry (step 5) before re-calling ``get_provider`` to compute
-        the fresh ``client_id_hash``.  Patching the function avoids the pop.
+        We patch ``gaia.connectors.providers.reload`` rather than injecting
+        into ``_registry`` because ``import_forwarded_connection`` rebuilds the
+        provider (step 5) to compute the fresh ``client_id_hash``.
         """
         import zlib
         from unittest.mock import MagicMock
 
         fake_ms = MagicMock()
         fake_ms.client_id_hash = format(zlib.crc32(b"ms-client-id"), "08x")
-        monkeypatch.setattr("gaia.connectors.api.get_provider", lambda _: fake_ms)
+        monkeypatch.setattr("gaia.connectors.providers.reload", lambda _: fake_ms)
 
         result = import_forwarded_connection(
             provider="microsoft",

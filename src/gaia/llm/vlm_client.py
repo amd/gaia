@@ -12,6 +12,7 @@ import base64
 import logging
 from typing import Optional
 
+from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.env import load_env
 
 # Load environment variables from .env file
@@ -265,7 +266,8 @@ Output format: Clean markdown with the ACTUAL text from the image."""
                 logger.error(error_msg)
                 raise VLMExtractionError(error_msg, page_num, image_num)
 
-        except VLMExtractionError:
+        except (VLMExtractionError, LeaseWaitCancelled):
+            # A cancelled wait for the model is a stop, not a failed page.
             raise
         except Exception as e:
             logger.error(

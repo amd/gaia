@@ -15,7 +15,7 @@ const { EventEmitter } = require("events");
 const mockChildren = [];
 function mockMakeChild() {
   const child = new EventEmitter();
-  child.stdin = { write: jest.fn(), destroyed: false };
+  child.stdin = Object.assign(new EventEmitter(), { write: jest.fn(), destroyed: false });
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.pid = 40000 + mockChildren.length;
