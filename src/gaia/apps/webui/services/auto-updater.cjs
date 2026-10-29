@@ -365,12 +365,14 @@ function _withConfigLock(fn) {
   const lock = `${UPDATE_CONFIG_PATH}.lock`;
   const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {
+    let openErr;
     try {
       fs.closeSync(fs.openSync(lock, "wx"));
       break;
     } catch (err) {
       // Windows reports a lock still being deleted as EPERM/EACCES.
       if (!err || !["EEXIST", "EPERM", "EACCES"].includes(err.code)) throw err;
+      openErr = err;
     }
     let stat = null;
     try {
@@ -378,8 +380,15 @@ function _withConfigLock(fn) {
     } catch (err) {
       if (err.code !== "ENOENT") throw err;
     }
+    if (!stat && openErr.code !== "EEXIST" && process.platform !== "win32") {
+      throw new Error(
+        `Cannot save update settings: ${path.dirname(UPDATE_CONFIG_PATH)} does not allow new files ` +
+          `(${openErr.message}) — fix its permissions.`
+      );
+    }
     if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
-      // Left by a crashed app. Only one taker's rename wins.
+      // Left by a crashed app. Two takers racing on the same stale lock can
+      // both get in; rare enough to accept for a settings file.
       const aside = `${lock}.${process.pid}.stale`;
       try {
         fs.renameSync(lock, aside);
@@ -390,6 +399,12 @@ function _withConfigLock(fn) {
       continue;
     }
     if (Date.now() > deadline) {
+      if (!stat) {
+        throw new Error(
+          `Cannot lock ${UPDATE_CONFIG_PATH} (${openErr.message}) — check the permissions of ` +
+            `${path.dirname(UPDATE_CONFIG_PATH)}.`
+        );
+      }
       throw new Error(
         `${UPDATE_CONFIG_PATH} is busy (another GAIA app holds ${lock}) — try again in a moment.`
       );

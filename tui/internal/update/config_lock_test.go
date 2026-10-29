@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -68,5 +69,31 @@ func TestHeldLockFailsLoudly(t *testing.T) {
 	err := SetAutoUpdate(true)
 	if err == nil || !strings.Contains(err.Error(), "busy") {
 		t.Fatalf("want a busy error while another app holds the lock, got %v", err)
+	}
+}
+
+func TestReadOnlySettingsFolderReadsAndFailsSavesPlainly(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a POSIX folder that refuses new files")
+	}
+	withHome(t)
+	path, _ := ConfigPath()
+	dir := filepath.Dir(path)
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(path, []byte(`{"autoUpdate": true}`), 0o644)
+	os.Chmod(dir, 0o555)
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	start := time.Now()
+	cfg, err := ReadConfig()
+	if err != nil || !cfg.AutoUpdate {
+		t.Fatalf("a read-only folder must still read the settings: %+v, %v", cfg, err)
+	}
+	err = SetAutoUpdate(false)
+	if err == nil || strings.Contains(err.Error(), "busy") || !strings.Contains(err.Error(), "permissions") {
+		t.Fatalf("want a permissions error, not busy, got %v", err)
+	}
+	if time.Since(start) > lockWait {
+		t.Errorf("waited %v for a lock that can never be taken", time.Since(start))
 	}
 }

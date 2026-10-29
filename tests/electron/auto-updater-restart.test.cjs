@@ -196,3 +196,53 @@ test("auto-update switched off in the Terminal UI after a download stops the ins
   electronMock.app.emit("before-quit");
   expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
 });
+
+describe("a settings folder that refuses the lock file", () => {
+  function denyLock(code) {
+    const realOpen = fs.openSync;
+    return jest.spyOn(fs, "openSync").mockImplementation((p, flags, ...rest) => {
+      if (String(p).endsWith(".lock")) {
+        const err = new Error(`${code}: permission denied, open '${p}'`);
+        err.code = code;
+        throw err;
+      }
+      return realOpen(p, flags, ...rest);
+    });
+  }
+
+  function onPlatform(value, fn) {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value });
+    return Promise.resolve(fn()).finally(() => Object.defineProperty(process, "platform", platform));
+  }
+
+  test("fails at once on Linux, naming permissions, not busy", async () => {
+    const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+    const spy = denyLock("EACCES");
+    try {
+      await onPlatform("linux", async () => {
+        const start = Date.now();
+        const err = await m.setAutoUpdate(true).catch((e) => e);
+        expect(err.message).toMatch(/permissions/);
+        expect(err.message).not.toMatch(/busy/);
+        expect(Date.now() - start).toBeLessThan(400);
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("on Windows waits for a lock being deleted, then names the real error", async () => {
+    const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+    const spy = denyLock("EPERM");
+    try {
+      await onPlatform("win32", async () => {
+        const err = await m.setAutoUpdate(true).catch((e) => e);
+        expect(err.message).toMatch(/Cannot lock .*EPERM/);
+        expect(err.message).not.toMatch(/busy/);
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

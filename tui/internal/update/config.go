@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -55,7 +56,7 @@ func ReadConfig() (Config, error) {
 		return Config{}, err
 	}
 	var raw map[string]any
-	err = withConfigLock(path, func() error {
+	err = withConfigLock(path, true, func() error {
 		raw, err = readRaw(path)
 		return err
 	})
@@ -116,7 +117,7 @@ func writeKey(key string, value any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("cannot create %s: %w", filepath.Dir(path), err)
 	}
-	return withConfigLock(path, func() error {
+	return withConfigLock(path, false, func() error {
 		raw, err := readRaw(path)
 		if err != nil {
 			return err
@@ -152,9 +153,10 @@ const (
 	lockStale = 10 * time.Second
 )
 
-func withConfigLock(path string, fn func() error) error {
+func withConfigLock(path string, readOnly bool, fn func() error) error {
 	lock := path + ".lock"
 	deadline := time.Now().Add(lockWait)
+	var lastErr error
 	for {
 		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 		if err == nil {
@@ -168,8 +170,19 @@ func withConfigLock(path string, fn func() error) error {
 		if !errors.Is(err, fs.ErrExist) && !errors.Is(err, fs.ErrPermission) {
 			return fmt.Errorf("cannot lock %s: %w", path, err)
 		}
-		if info, serr := os.Stat(lock); serr == nil && time.Since(info.ModTime()) > lockStale {
-			// Left by a crashed app. Only one taker's rename wins.
+		lastErr = err
+		info, serr := os.Stat(lock)
+		if errors.Is(err, fs.ErrPermission) && errors.Is(serr, fs.ErrNotExist) && runtime.GOOS != "windows" {
+			// The folder refuses new files, so no writer can replace the file
+			// under a reader either (rename is atomic here).
+			if readOnly {
+				return fn()
+			}
+			return fmt.Errorf("cannot save update settings: %s does not allow new files (%v) — fix its permissions", filepath.Dir(path), err)
+		}
+		if serr == nil && time.Since(info.ModTime()) > lockStale {
+			// Left by a crashed app. Two takers racing on the same stale lock
+			// can both get in; rare enough to accept for a settings file.
 			aside := fmt.Sprintf("%s.%d.stale", lock, os.Getpid())
 			if os.Rename(lock, aside) == nil {
 				os.Remove(aside)
@@ -177,7 +190,10 @@ func withConfigLock(path string, fn func() error) error {
 			continue
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%s is busy (another GAIA app holds %s) — try again in a moment", path, lock)
+			if serr == nil {
+				return fmt.Errorf("%s is busy (another GAIA app holds %s) — try again in a moment", path, lock)
+			}
+			return fmt.Errorf("cannot lock %s: %w — check the permissions of %s", path, lastErr, filepath.Dir(path))
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
