@@ -222,6 +222,7 @@ class TestAuth:
             "non_streaming_models",
             "tool_calling_models",
             "no_tool_calling_models",
+            "tool_calling_probe_failures",
             "unavailable_models",
         }
 

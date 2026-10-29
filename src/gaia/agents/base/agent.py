@@ -3020,6 +3020,18 @@ Do NOT wrap conversational replies in JSON.
             getattr(self, "model_id", None)
         )
 
+    def _hosted_native_tool_caller(self) -> bool:
+        """True for Claude, or a cloud-routed model that takes ``tools=``."""
+        if getattr(self, "_use_claude", False):
+            return True
+        from gaia.llm.lemonade_client import cloud_model_info, cloud_model_provider
+
+        model_id = getattr(self, "model_id", None)
+        hosted = bool(cloud_model_provider(model_id)) or (
+            cloud_model_info(model_id) is not None
+        )
+        return hosted and self._uses_native_tool_calls()
+
     @property
     def system_prompt(self) -> str:
         """
@@ -5121,8 +5133,9 @@ Do NOT wrap conversational replies in JSON.
                 list that could not be parsed as Python literals.
         """
         registry = self._tools_registry
-        # A native tool-calling model calls tools through the API; its text is prose.
-        if not registry or self._uses_native_tool_calls():
+        # A hosted native tool-caller's text is prose. Local tool-calling
+        # models (Gemma, Qwen) still write ``remember(...)`` in text.
+        if not registry or self._hosted_native_tool_caller():
             return None
 
         for match in self._FUNC_CALL_NAME_RE.finditer(response):

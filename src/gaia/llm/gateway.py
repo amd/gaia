@@ -24,6 +24,7 @@ import json
 import os
 import socket
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -219,6 +220,9 @@ class GatewayState:
     # costs it accuracy on every tool call.
     tool_calling_models: List[str] = field(default_factory=list)
     no_tool_calling_models: List[str] = field(default_factory=list)
+    # When a model's tool-calling probe last failed, ``{model_id: "<UTC ISO>"}``,
+    # so a down gateway is not re-probed at every start.
+    tool_calling_probe_failures: Dict[str, str] = field(default_factory=dict)
     # Models whose last call came back "not found" (HTTP 404) from the cloud
     # provider, keyed by id: ``{"status": 404, "at": "<UTC ISO time>"}``. A
     # later successful call clears the entry. Nothing switches models on it —
@@ -251,6 +255,10 @@ class GatewayState:
             non_streaming_models=list(raw.get("non_streaming_models") or []),
             tool_calling_models=list(raw.get("tool_calling_models") or []),
             no_tool_calling_models=list(raw.get("no_tool_calling_models") or []),
+            tool_calling_probe_failures={
+                str(k): str(v)
+                for k, v in (raw.get("tool_calling_probe_failures") or {}).items()
+            },
             unavailable_models={
                 str(k): dict(v)
                 for k, v in (raw.get("unavailable_models") or {}).items()
@@ -268,15 +276,31 @@ class GatewayState:
             "non_streaming_models": sorted(self.non_streaming_models),
             "tool_calling_models": sorted(self.tool_calling_models),
             "no_tool_calling_models": sorted(self.no_tool_calling_models),
+            "tool_calling_probe_failures": dict(
+                sorted(self.tool_calling_probe_failures.items())
+            ),
             "unavailable_models": dict(sorted(self.unavailable_models.items())),
         }
-        target.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        # Preferences, not secrets — but this sits next to config.json in a
-        # user-private directory, so match its posture.
+        # Another GAIA process reading mid-write must never see half a file.
+        fd, tmp = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
+        )
         try:
-            os.chmod(target, 0o600)
-        except OSError as e:
-            log.debug(f"Could not tighten permissions on {target}: {e}")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(json.dumps(payload, indent=2) + "\n")
+            # Preferences, not secrets, but this sits next to config.json in a
+            # user-private directory, so match its posture.
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError as e:
+                log.debug(f"Could not tighten permissions on {tmp}: {e}")
+            os.replace(tmp, target)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError as e:
+                log.debug(f"Could not remove {tmp}: {e}")
+            raise
 
 
 def clear_default_model_if(model_id: Optional[str]) -> bool:

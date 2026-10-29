@@ -307,6 +307,8 @@ class LemonadeManager:
     # Server confirmed up for a cloud-model caller. Kept apart from
     # ``_initialized`` so a later local-model caller still gets the idle preload.
     _ready_for_cloud = False
+    # Models whose skipped tool-calling probe was already reported.
+    _probe_skip_reported: set = set()
     _log = get_logger(__name__)
 
     # Rate-limit the per-turn context re-check that fires when context_size==0.
@@ -1263,13 +1265,17 @@ class LemonadeManager:
     def learn_tool_calling(cls, client: "LemonadeClient", model: str) -> None:
         """Probe a cloud model's native tool calling once, when nothing says.
 
-        A failed probe is logged and left unrecorded, so the next start tries
-        again; until then the model runs on the in-text JSON tool format.
+        A failed or inconclusive probe is logged and remembered for
+        ``PROBE_RETRY_AFTER_S``, so a down gateway is not probed again at every
+        start; until a probe succeeds the model runs on the in-text tool format.
         """
         from gaia.llm.lemonade_client import (
+            PROBE_RETRY_AFTER_S,
             cloud_model_info,
             learned_tool_calling,
             probe_cloud_tool_calling,
+            probe_recently_failed,
+            record_probe_failure,
         )
 
         info = cloud_model_info(model)
@@ -1279,14 +1285,47 @@ class LemonadeManager:
             or learned_tool_calling(model) is not None
         ):
             return
+        retry_in = f"{PROBE_RETRY_AFTER_S // 60} minutes"
+        if probe_recently_failed(model):
+            if model not in cls._probe_skip_reported:
+                cls._probe_skip_reported.add(model)
+                cls._log.warning(
+                    "The native tool-calling probe for %s failed within the last "
+                    "%s; it runs on the in-text tool format until the next try. "
+                    "Remove it from tool_calling_probe_failures in "
+                    "~/.gaia/gateway.json to probe it now.",
+                    model,
+                    retry_in,
+                )
+            return
+        # A restarted server has no key until it is replayed, and a keyless
+        # probe can only fail; that is not the model's answer.
+        if not client._replay_cloud_key(model):
+            cls._log.warning(
+                "Skipped the native tool-calling probe for %s: its cloud provider "
+                "has no usable key on this server yet.",
+                model,
+            )
+            return
         try:
-            probe_cloud_tool_calling(client, model)
+            supported = probe_cloud_tool_calling(client, model)
         except LemonadeClientError as e:
+            record_probe_failure(model)
             cls._log.warning(
                 "Could not probe native tool calling for %s (%s); it runs on the "
-                "in-text tool format this session.",
+                "in-text tool format, and the probe is retried in %s.",
                 model,
                 e,
+                retry_in,
+            )
+            return
+        if supported is None:
+            record_probe_failure(model)
+            cls._log.warning(
+                "The native tool-calling probe for %s was inconclusive; it runs "
+                "on the in-text tool format, and the probe is retried in %s.",
+                model,
+                retry_in,
             )
 
     @classmethod

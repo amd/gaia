@@ -162,8 +162,11 @@ which models do, so the first time GAIA readies a gateway model it sends one
 tiny request with a single tool and records the answer in
 `~/.gaia/gateway.json` (`tool_calling_models` / `no_tool_calling_models`).
 Models that call the tool get native tool schemas from then on; the others keep
-the in-text tool format. A probe that fails on the network is not recorded, so
-the next start tries again. Delete the model from those lists to re-probe it.
+the in-text tool format. The probe gives up after about 30 seconds. A probe
+that fails or proves nothing is logged and noted under
+`tool_calling_probe_failures`, and is tried again an hour later rather than at
+every start; until then the model uses the in-text format. Delete the model
+from those lists to re-probe it.
 
 ## Troubleshooting
 

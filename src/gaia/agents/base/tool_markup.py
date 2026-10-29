@@ -118,6 +118,9 @@ _XML_PARAM = re.compile(
     r"<parameter\s+name\s*=\s*\"([^\"]*)\"\s*>(.*?)</parameter>", re.DOTALL
 )
 _JSON_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+_JSON_OPEN = re.compile(r"<tool_call>")
+_XML_CLOSE = re.compile(r"</invoke>")
+_XML_PARAM_OPEN = re.compile(r"<parameter\b")
 
 
 def parse_text_tool_calls(text: str) -> Optional[MarkupParse]:
@@ -133,10 +136,14 @@ def parse_text_tool_calls(text: str) -> Optional[MarkupParse]:
     if found is not None or not text:
         return found
     start = _outside_code(_XML_OPEN, text)
-    # No closing tag and no parameter is prose about the format, not a call.
-    if start is not None and ("</invoke>" in text or "<parameter" in text[start:]):
+    # No closing tag and no parameter is prose about the format, not a call;
+    # one shown inside a code example later on does not make it a call.
+    if start is not None and (
+        _outside_code(_XML_CLOSE, text, start) is not None
+        or _outside_code(_XML_PARAM_OPEN, text, start) is not None
+    ):
         return _parse_xml_invokes(text, start)
-    start = _outside_code(re.compile(r"<tool_call>"), text)
+    start = _outside_code(_JSON_OPEN, text)
     if start is not None:
         return _parse_json_calls(text, start)
     return None
@@ -182,7 +189,15 @@ def _parse_xml_invokes(text: str, start: int) -> MarkupParse:
 
 def _parse_json_calls(text: str, start: int) -> MarkupParse:
     calls: List[MarkupToolCall] = []
-    for match in _JSON_CALL.finditer(text, start):
+    pos, spans = start, []
+    while True:
+        # Every call, not just the first, must sit outside fenced/inline code.
+        at = _outside_code(_JSON_OPEN, text, pos)
+        if at is None:
+            break
+        match = _JSON_CALL.match(text, at)
+        if match is None:
+            break  # an opening tag with no close: reported below if nothing ran
         try:
             payload = json.loads(match.group(1))
         except json.JSONDecodeError as exc:
@@ -204,11 +219,17 @@ def _parse_json_calls(text: str, start: int) -> MarkupParse:
                 f"Arguments of '{payload['name']}' must be an object."
             )
         calls.append(MarkupToolCall(name=str(payload["name"]), args=args))
+        spans.append(match.span())
+        pos = match.end()
     if not calls:
         raise MalformedToolMarkup(
             "A <tool_call> block was cut off before </tool_call>."
         )
-    return MarkupParse(calls=calls, prose=_JSON_CALL.sub("", text).strip())
+    # Examples left in code stay in the answer; only the calls that run go.
+    prose = text
+    for lo, hi in reversed(spans):
+        prose = prose[:lo] + prose[hi:]
+    return MarkupParse(calls=calls, prose=prose.strip())
 
 
 def _strip_one_newline(value: str) -> str:

@@ -234,3 +234,66 @@ def test_a_complete_call_inside_a_code_fence_is_never_run(text):
 )
 def test_prose_naming_a_tool_with_parentheses_is_not_a_text_call(text):
     assert parse_text_tool_calls(text) is None
+
+
+# ---------------------------------------------------------------------------
+# Adversarial: a fenced example after a real call never runs (any dialect)
+# ---------------------------------------------------------------------------
+
+_REAL_HERMES = (
+    '<tool_call>{"name": "read_file", "arguments": {"file_path": "a"}}</tool_call>'
+)
+_FENCED_HERMES = (
+    '<tool_call>{"name": "run_shell_command", '
+    '"arguments": {"command": "rm -rf x"}}</tool_call>'
+)
+
+
+@pytest.mark.parametrize(
+    "example",
+    [
+        f"For example:\n```\n{_FENCED_HERMES}\n```",
+        f"For example:\n~~~json\n{_FENCED_HERMES}\n~~~",
+        f"Inline, `{_FENCED_HERMES}` is the shape.",
+        # Unclosed fence at the end of the reply: still an example.
+        f"For example:\n```\n{_FENCED_HERMES}",
+    ],
+)
+def test_a_later_tool_call_inside_code_is_an_example_not_a_call(example):
+    parsed = parse_text_tool_calls(f"{_REAL_HERMES}\n{example}")
+    assert [c.name for c in parsed.calls] == ["read_file"]
+    # The example stays in what the user sees; only the call that ran goes.
+    assert "run_shell_command" in parsed.prose
+    assert "read_file" not in parsed.prose
+
+
+def test_real_hermes_calls_around_a_fenced_example_both_run():
+    text = (
+        f"{_REAL_HERMES}\n```\n{_FENCED_HERMES}\n```\n"
+        '<tool_call>{"name": "list_dir", "arguments": {}}</tool_call>'
+    )
+    assert [c.name for c in parse_text_tool_calls(text).calls] == [
+        "read_file",
+        "list_dir",
+    ]
+
+
+def test_a_fenced_example_with_bad_json_after_a_real_call_is_not_malformed():
+    # Only real calls are parsed; a broken example must not fail the turn.
+    text = f"{_REAL_HERMES}\n```\n<tool_call>{{not json</tool_call>\n```"
+    assert [c.name for c in parse_text_tool_calls(text).calls] == ["read_file"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Prose names the tag; the only closing tag is inside a later example.
+        'The model wraps a call in <invoke name="tool"> tags, like:\n'
+        "```\n</invoke>\n```",
+        'Write <invoke name="run_shell_command"> then, in a block:\n'
+        '```xml\n<parameter name="command">rm -rf ~</parameter></invoke>\n```',
+        'Use `x` then <invoke name="t"> and `</invoke>`.',
+    ],
+)
+def test_prose_invoke_paired_only_with_a_fenced_close_is_not_a_call(text):
+    assert parse_text_tool_calls(text) is None
