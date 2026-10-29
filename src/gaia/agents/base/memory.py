@@ -3943,9 +3943,11 @@ class MemoryMixin(ProceduralMemoryMixin):
             # keyword directly adjacent to a value: "password is X", "secret: X"
             r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"
             r"|auth[_ -]?token|credential)s?\b\s*(?:is|:|=)\s*\S+",
-            # generic dash/underscore-joined high-entropy-looking token, e.g.
-            # HALIBUT-4417-ZULU: 2+ alnum groups with at least one numeric group.
-            r"\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b",
+            # dash/underscore-joined token in any case, e.g. HALIBUT-4417-ZULU
+            # or tango-9921-delta; a file extension right after it
+            # (sales_2024_report.pdf) marks a filename, not a secret.
+            r"\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b"
+            r"(?!\.[A-Za-z0-9]{1,5}\b)",
             # A PIN/passcode or card security code in a user-owned context.
             # Keep the PIN forms bounded: generic uses such as GPIO pins,
             # and page numbers are ordinary data.
