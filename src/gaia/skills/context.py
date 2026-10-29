@@ -160,6 +160,13 @@ class SkillCall:
             out.append(text)
         return out
 
+    def user_messages(self) -> List[str]:
+        """What the user said this conversation, oldest first."""
+        seen = getattr(self.agent, "seen_sources", None)
+        if seen is None:
+            return [self.request] if self.request else []
+        return [text for source, _args, text in seen() if source == "user"]
+
     def declares(self, domain: str, level: str, scope: Optional[str] = None) -> bool:
         for permission in self.skill.parsed_permissions():
             if (permission.domain, permission.level) != (domain, level):

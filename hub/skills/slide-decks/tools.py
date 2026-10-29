@@ -296,6 +296,45 @@ def _grounded(value: float, token: str, known: List[float]) -> bool:
     return False
 
 
+def _derived(given: List[float]) -> List[float]:
+    """Differences, sums, shares and growth between the user's own numbers.
+
+    Only the user's numbers: a handful, so a chance match cannot excuse an
+    invented figure, as it could among the hundreds in a file.
+    """
+    base = sorted(set(given))[:40]
+    out = [sum(base)]
+    for a in base:
+        for b in base:
+            if a == b:
+                continue
+            out += [abs(a - b), a + b]
+            if b:
+                out += [a / b * 100, abs(a - b) / b * 100]
+    return out
+
+
+def _hidden_in_notes(slides: List[Dict[str, Any]], said: List[str]) -> Optional[str]:
+    """Numbers the user gave that are only in the speaker notes, not on a slide."""
+    asked = {v for text in said for _t, v in _numbers_in(text)}
+    on_slides = set()
+    in_notes: Dict[float, str] = {}
+    for s in slides:
+        shown: List[Tuple[str, float, str]] = []
+        _shown_numbers(s, "body", shown)
+        on_slides |= {v for _t, v, _w in shown}
+        for t, v in _numbers_in(str(s.get("notes") or "")):
+            in_notes.setdefault(v, t)
+    hidden = sorted(t for v, t in in_notes.items() if v in asked and v not in on_slides)
+    if not hidden:
+        return None
+    return (
+        f"{', '.join(hidden)} from the user's request is only in the speaker notes. "
+        "Requested content goes on a slide: cut other words, merge slides, or use "
+        "cards, and keep notes for extra detail."
+    )
+
+
 def _invented_numbers(slides: List[Dict[str, Any]]) -> Optional[str]:
     """Numbers on the slides that nothing the user said or a tool returned contains."""
     try:
@@ -305,7 +344,12 @@ def _invented_numbers(slides: List[Dict[str, Any]]) -> Optional[str]:
     if not call.request:
         # No user message to check against: a library call, not a chat turn.
         return None
+    said = call.user_messages()
+    hidden = _hidden_in_notes(slides, said)
+    if hidden:
+        return hidden
     known = [v for text in call.sources() for _t, v in _numbers_in(text)]
+    known += _derived([v for text in said for _t, v in _numbers_in(text)])
     this_year = datetime.date.today().year
     invited = bool(_INVENTED.search(call.request))
     problems: List[str] = []

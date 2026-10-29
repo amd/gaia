@@ -703,6 +703,9 @@ DECLINED_HINT = (
 # — including the skill-library reads, whose text comes from third-party
 # packages, and any name this build has never heard of. Read by
 # ``Agent.turn_content_provenance`` (see there for why an allowlist at all).
+#: How many user messages and tool results an agent keeps for fact checks.
+SEEN_SOURCES_MAX = 200
+
 TOOLS_WITHOUT_EXTERNAL_CONTENT = {
     "remember_skill_lesson",
     "sleep",
@@ -6634,7 +6637,7 @@ Do NOT wrap conversational replies in JSON.
         return attach_task_lessons(result, lessons.record(tool_name, tool_args, result))
 
     #: How many user messages and tool results ``seen_sources`` keeps.
-    SEEN_SOURCES_MAX = 200
+    SEEN_SOURCES_MAX = SEEN_SOURCES_MAX
 
     def note_seen(self, source: str, args: Dict[str, Any], content: Any) -> None:
         """Record a user message or tool result, so tools can check facts against it."""
@@ -6646,7 +6649,7 @@ Do NOT wrap conversational replies in JSON.
             else json.dumps(content, default=str, ensure_ascii=False)
         )
         seen.append((source, dict(args or {}), text))
-        del seen[: -self.SEEN_SOURCES_MAX]
+        del seen[:-SEEN_SOURCES_MAX]
 
     def seen_sources(self) -> List[Tuple[str, Dict[str, Any], str]]:
         """``(source, args, text)`` for each user message and tool result this conversation.
@@ -7031,7 +7034,7 @@ Do NOT wrap conversational replies in JSON.
         try:
             with skill_scope:
                 result = self._call_tool_bounded(tool, tool_args, tool_name)
-            self.note_seen(tool_name, tool_args, result)
+            Agent.note_seen(self, tool_name, tool_args, result)
             logger.debug(f"Tool execution result: {result}")
             self._fold_tool_usage(tool_name, result)
             return result
@@ -9380,7 +9383,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
-        self.note_seen("user", {}, user_input)
+        Agent.note_seen(self, "user", {}, user_input)
         self._single_tool_done = False
         self._turn_seq += 1
         self._denied_effects = DeniedEffects(os.getcwd())

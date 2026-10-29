@@ -814,3 +814,53 @@ def test_export_slide_image_saves_a_png_by_default_and_jpeg_on_request(
     )
     assert bad["status"] == "error" and "png" in bad["problems"][0]
     assert missing["status"] == "error" and "has 1" in missing["problems"][0]
+
+
+_FUNNEL = (
+    "One slide on our October funnel: 20,000 visited signup, 6,400 created an "
+    "account, 1,600 were active after 7 days."
+)
+
+
+def test_arithmetic_on_the_users_own_numbers_needs_no_tool(tools, tmp_path):
+    """13,600 lost (68%) is the user's numbers subtracted and divided, not invented."""
+    skill, fns, _r = tools
+    md = (
+        "## Signup loses 13,600 visitors (68%)\n"
+        "- 20,000 visited, 6,400 created an account\n- 8% were active after 7 days\n"
+    )
+    with bind(_Seeing(_FUNNEL), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "f.pptx")
+        )
+    assert r["status"] == "ok", r
+
+
+def test_a_share_the_users_numbers_do_not_give_is_still_refused(tools, tmp_path):
+    skill, fns, _r = tools
+    md = "## Signup loses 45% of visitors\n- 20,000 visited, 6,400 signed up\n"
+    with bind(_Seeing(_FUNNEL), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "f.pptx")
+        )
+    assert r["status"] == "error" and "45" in r["problems"][0]
+
+
+def test_requested_numbers_hidden_in_the_notes_are_refused(tools, tmp_path):
+    """Two of three themes moved to the notes used to pass the check."""
+    skill, fns, _r = tools
+    request = (
+        "Two slides on our interviews: setup is slow (9 of 14), calendar wanted "
+        "(7 of 14), privacy worries (6 of 14)."
+    )
+    md = (
+        "## Setup is the top pain\n- 9 of 14 said setup is slow\n"
+        "Notes: also calendar (7 of 14) and privacy (6 of 14)\n"
+        "## Next\n- Cut setup time\n"
+    )
+    with bind(_Seeing(request), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "n.pptx")
+        )
+    assert r["status"] == "error"
+    assert "only in the speaker notes" in r["problems"][0]
