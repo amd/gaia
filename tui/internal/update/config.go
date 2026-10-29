@@ -13,6 +13,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
+	"time"
 )
 
 // The preferences live in ~/.gaia/update-config.json, the file the Agent UI's
@@ -53,7 +55,11 @@ func ReadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	raw, err := readRaw(path)
+	var raw map[string]any
+	err = withConfigLock(path, true, func() error {
+		raw, err = readRaw(path)
+		return err
+	})
 	if err != nil {
 		return Config{Path: path}, err
 	}
@@ -108,24 +114,101 @@ func writeKey(key string, value any) error {
 	if err != nil {
 		return err
 	}
-	raw, err := readRaw(path)
-	if err != nil {
-		return err
-	}
-	raw[key] = value
-	data, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return fmt.Errorf("cannot encode update settings: %w", err)
-	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("cannot create %s: %w", filepath.Dir(path), err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("cannot write %s: %w", tmp, err)
+	return withConfigLock(path, false, func() error {
+		raw, err := readRaw(path)
+		if err != nil {
+			return err
+		}
+		raw[key] = value
+		data, err := json.MarshalIndent(raw, "", "  ")
+		if err != nil {
+			return fmt.Errorf("cannot encode update settings: %w", err)
+		}
+		tmp, err := os.CreateTemp(filepath.Dir(path), "update-config-*.tmp")
+		if err != nil {
+			return fmt.Errorf("cannot write update settings next to %s: %w", path, err)
+		}
+		defer os.Remove(tmp.Name())
+		_, werr := tmp.Write(data)
+		if cerr := tmp.Close(); werr == nil {
+			werr = cerr
+		}
+		if werr != nil {
+			return fmt.Errorf("cannot write %s: %w", tmp.Name(), werr)
+		}
+		if err := os.Rename(tmp.Name(), path); err != nil {
+			return fmt.Errorf("cannot save %s: %w", path, err)
+		}
+		return nil
+	})
+}
+
+// The Agent UI's updater honours the same lock file, so neither app's
+// read-modify-write drops the other's change.
+const (
+	lockWait  = 3 * time.Second
+	lockStale = 10 * time.Second
+)
+
+// renameLock is swapped in tests to simulate a lock that cannot be moved aside.
+var renameLock = os.Rename
+
+func withConfigLock(path string, readOnly bool, fn func() error) error {
+	lock := path + ".lock"
+	deadline := time.Now().Add(lockWait)
+	var lastErr error
+	for {
+		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err == nil {
+			f.Close()
+			break
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			return fn() // no ~/.gaia yet: nothing to race over
+		}
+		// Windows reports a lock still being deleted as access denied.
+		if !errors.Is(err, fs.ErrExist) && !errors.Is(err, fs.ErrPermission) {
+			return fmt.Errorf("cannot lock %s: %w", path, err)
+		}
+		lastErr = err
+		info, serr := os.Stat(lock)
+		if errors.Is(err, fs.ErrPermission) && errors.Is(serr, fs.ErrNotExist) && runtime.GOOS != "windows" {
+			// The folder refuses new files, so no writer can replace the file
+			// under a reader either (rename is atomic here).
+			if readOnly {
+				return fn()
+			}
+			return fmt.Errorf("cannot save update settings: %s does not allow new files (%v) — fix its permissions", filepath.Dir(path), err)
+		}
+		var staleErr error
+		if serr == nil && time.Since(info.ModTime()) > lockStale {
+			// Left by a crashed app. Two takers racing on the same stale lock
+			// can both get in; rare enough to accept for a settings file.
+			aside := fmt.Sprintf("%s.%d.stale", lock, os.Getpid())
+			rerr := renameLock(lock, aside)
+			if rerr == nil || errors.Is(rerr, fs.ErrNotExist) {
+				os.Remove(aside)
+				continue
+			}
+			if readOnly && errors.Is(rerr, fs.ErrPermission) && runtime.GOOS != "windows" {
+				return fn() // the folder refuses changes, so no writer can race the read
+			}
+			staleErr = rerr
+		}
+		if time.Now().After(deadline) {
+			if staleErr != nil {
+				return fmt.Errorf("cannot remove %s, left by a GAIA app that stopped (%v) — fix the permissions of %s or delete the lock file by hand", lock, staleErr, filepath.Dir(path))
+			}
+			if serr == nil {
+				return fmt.Errorf("%s is busy (another GAIA app holds %s) — try again in a moment", path, lock)
+			}
+			return fmt.Errorf("cannot lock %s: %w — check the permissions of %s", path, lastErr, filepath.Dir(path))
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("cannot save %s: %w", path, err)
-	}
-	return nil
+	defer os.Remove(lock)
+	return fn()
 }
