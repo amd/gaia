@@ -61,14 +61,14 @@ Deliver three things:
 1. Read every meeting in full: `list_files`, then `read_file`, following
    `next_offset` until it is null. Put the meetings in date order.
 2. Find commitments and decisions with the test above, then run the cue scan
-   as a safety net.
+   with `run_python` as a safety net.
 3. Fill each action: ID (`A-001`; never changed or reused, keep an existing
    tracker's IDs), Action (starts with a verb), Owner, Contributors, Due
    ("Friday (2024-05-10)"), Status, First raised, Latest, Evidence (date and
    a short quote). Fill each decision: ID (`D-001`), Decision, Date, Decided
    by, Rationale, Source.
-4. Merge across meetings, run the duplicate check, and report the count of
-   commitments before merging and of rows after.
+4. Merge across meetings, run the duplicate check with `run_python`, and
+   report the count of commitments before merging and of rows after.
 5. Questions: open actions with owner `unassigned` ("needs owner") or no due
    date ("needs date"), and any important "someone should..." nobody took.
 6. Deliver the tracker, decision log and questions; save with `write_file`
