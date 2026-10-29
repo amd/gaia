@@ -828,7 +828,7 @@ class ProjectMapMixin:
         if indexed:
             return "built — use search_code_index before grepping"
         state = getattr(self, "_project_map_index_state", _IDLE)
-        if state == _RUNNING:
+        if state == _RUNNING or self._code_index_is_building():
             return "building now in the background; grep until it lands"
         if state == _FAILED:
             return "build FAILED — grep instead, or call index_codebase to see why"
@@ -852,6 +852,14 @@ class ProjectMapMixin:
         # Presence check, not get_status(): this runs on every prompt
         # composition and get_status parses every indexed chunk.
         return bool(sdk.is_indexed())
+
+    def _code_index_is_building(self) -> bool:
+        """Is a build a search started still running in the background?"""
+        running = getattr(self, "_code_index_build_running", None)
+        if running is None:
+            return False
+        sdk = self._get_code_index_sdk()
+        return sdk is not None and running(sdk) is not None
 
     def _auto_index_enabled(self) -> bool:
         override = auto_index_env_override()

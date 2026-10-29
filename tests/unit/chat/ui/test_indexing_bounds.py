@@ -13,6 +13,7 @@ error while one that keeps moving runs to the end.
 import asyncio
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -151,30 +152,81 @@ async def test_a_small_upload_does_not_wait_behind_big_documents(slow_rag, tmp_p
 
 async def test_time_waiting_for_a_worker_does_not_count(slow_rag):
     rag, doc = slow_rag
-    rag.steps = 6
-    rag.step_seconds = 0.1
-    with patch.object(helpers, "_INDEX_TIMEOUT_S", 0.5):
-        counts = await asyncio.gather(*(helpers._index_document(doc) for _ in range(4)))
-    assert counts == [6] * 4
+    # The watchdog reads a clock only this test moves, so a slow runner can't
+    # trip it and the time spent in line is exactly what the test sets.
+    clock = {"now": 0.0}
+    release = threading.Event()
+    beats = threading.Semaphore(0)
+
+    def index_until_released(self, path, progress_callback=None, heartbeat=None):
+        seen = None
+        while not release.is_set():
+            now = clock["now"]
+            heartbeat()
+            if now != seen:
+                seen = now
+                beats.release()
+            time.sleep(0.005)
+        return {"success": True, "num_chunks": 1}
+
+    rag.index_document = index_until_released
+    fake_time = SimpleNamespace(monotonic=lambda: clock["now"], time=time.time)
+    with (
+        patch.object(helpers, "_INDEX_TIMEOUT_S", 1.0),
+        patch.object(helpers, "_time", fake_time),
+    ):
+        indexing = asyncio.gather(*(helpers._index_document(doc) for _ in range(4)))
+        try:
+            # Two documents take the workers; the other two wait in line.
+            for _ in range(2):
+                assert await asyncio.to_thread(beats.acquire, timeout=5)
+            clock["now"] = 10 * helpers._INDEX_TIMEOUT_S
+            # Hold the loop until both running documents report at the new
+            # time, so no watchdog check reads their old progress as a stall.
+            for _ in range(2):
+                assert beats.acquire(timeout=5)
+            await asyncio.sleep(3 * helpers._INDEX_POLL_S)
+        finally:
+            release.set()
+        counts = await asyncio.wait_for(indexing, 10)
+    assert counts == [1] * 4
 
 
 async def test_waiting_in_line_for_the_embedder_counts_as_progress(slow_rag):
     from gaia.daemon import broker_client
 
+    class _Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def advance(self, seconds):
+            self.now += seconds
+
+        def __getattr__(self, name):
+            return getattr(time, name)
+
     rag, doc = slow_rag
     rag.steps = 1
     real_index = rag.index_document
+    clock = _Clock()
 
     def index_after_a_long_queue(self, path, progress_callback=None, heartbeat=None):
-        # Queued behind a long chat for the embedder: the broker reports the
-        # wait every so often, but no page or batch moves for 1.5 s.
+        # Advance well past the logical watchdog window. Each queue beat must
+        # reset it; real sleeps only give the polling loop opportunities to run.
         for _ in range(15):
+            clock.advance(0.3)
             broker_client.notify_wait({"event": "queued", "scope": "daemon"})
             time.sleep(0.1)
         return real_index(self, path, progress_callback, heartbeat)
 
     rag.index_document = index_after_a_long_queue
-    with patch.object(helpers, "_INDEX_TIMEOUT_S", 0.4):
+    with (
+        patch.object(helpers, "_INDEX_TIMEOUT_S", 0.4),
+        patch.object(helpers, "_time", clock),
+    ):
         assert await asyncio.wait_for(helpers._index_document(doc), 10) == 1
 
 

@@ -97,8 +97,10 @@ Common options:
 | `--component <name>`  | Fetch only `sidecar` or `tui`                                  | `fetch` |
 | `--port <n>`          | Sidecar bind port (default `8141`)                             | `serve` |
 
-A flag a command does not read is **refused**, not ignored — `gaia run --port
-9000` exits 2 rather than silently coming up on the default port.
+A flag a command does not read, or an option the launcher does not know, is
+**refused**, not ignored — `gaia run --port 9000` and `gaia --forse` exit 2
+rather than silently doing something else. Arguments intended for the terminal
+UI must come after a bare `--`, for example `gaia -- --debug`.
 
 Set `DEBUG=gaia` for download, spawn, and sidecar output on stderr. Diagnostics
 never touch stdout, which the terminal UI owns.
@@ -259,6 +261,14 @@ and what takes them (prompt, tools, documents, history). Older binaries leave
 it out. It also carries `performance`, the turn's model and tool timings and
 each model call's token counts, when the binary sends it. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**Keeping a multi-turn conversation? Send `turns`, not `context`** (contract ≥
+2.25). Send `turns: []` on the first turn so its `final` carries
+`model_messages`, store that with the reply, and send them back, oldest first,
+so the agent sees the tool calls it made and what they returned.
+Text-only `context` loses them, and the agent can't explain its own last turn.
+An empty `turns` list clears a retained session's history. Older binaries
+reject `turns` with `422`.
 
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
