@@ -54,6 +54,8 @@ def _same_path(a, b):
 
 def _run_child(code, tmp_path, drop_home_vars=False):
     env = dict(os.environ)
+    # The suite moves the log file; these tests are about the home fallback.
+    env.pop(gaia_logger.LOG_FILE_ENV, None)
     if drop_home_vars:
         for key in list(env):
             if key.upper() in {"USERPROFILE", "HOMEDRIVE", "HOMEPATH", "HOME"}:
@@ -87,10 +89,22 @@ def test_home_log_file_is_none_when_home_unresolvable(monkeypatch):
 
 
 def test_logger_writes_to_tempdir_and_says_so(monkeypatch, clean_root, capsys):
+    monkeypatch.delenv(gaia_logger.LOG_FILE_ENV, raising=False)
     monkeypatch.setattr(Path, "home", classmethod(_no_home))
     gl = gaia_logger.GaiaLogger()
     assert gl.log_file == Path(tempfile.gettempdir()) / "gaia.log"
     assert "Home directory is not resolvable" in capsys.readouterr().err
+
+
+def test_gaia_log_file_moves_the_log_off_the_home(monkeypatch, clean_root, tmp_path):
+    """No home lookup at all: the test suite relies on this to spare ~/.gaia."""
+    monkeypatch.setenv(gaia_logger.LOG_FILE_ENV, str(tmp_path / "logs" / "g.log"))
+    monkeypatch.setattr(Path, "home", classmethod(_no_home))
+    gl = gaia_logger.GaiaLogger()
+    logging.getLogger("gaia.probe").warning("probe-log-file")
+    gl.file_handler.flush()
+    assert gl.log_file == tmp_path / "logs" / "g.log"
+    assert "probe-log-file" in gl.log_file.read_text(encoding="utf-8")
 
 
 def test_import_gaia_succeeds_when_path_home_raises(tmp_path):

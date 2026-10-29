@@ -22,13 +22,34 @@ const childProcess = require("child_process");
 
 const DEFAULT_GRACE_MS = 3000;
 const DEFAULT_FORCE_WAIT_MS = 1000;
-const LIST_TIMEOUT_MS = 5000;
+// PowerShell's CIM query takes about a second on an idle PC and several on a
+// loaded one; timing out strands every process the agent started. `ps` is fast.
+const WINDOWS_LIST_TIMEOUT_MS = 20000;
+const POSIX_LIST_TIMEOUT_MS = 5000;
 const POLL_MS = 50;
 
 // The daemon by its module or CLI verb; Lemonade by its executable's name,
 // so a tool that merely mentions Lemonade (--lemonade-url) is still stopped.
 const SHARED_SERVER_PATTERN =
   /(?:-m\s+gaia\.daemon\b)|(?:\bgaia(?:\.exe)?["']?\s+daemon\b)|(?:^|[\\/"'\s])(?:lemonade|lemonade-server|lemonadeserver|lemonade-tray|lemond)(?:\.exe)?(?=["'\s]|$)/i;
+
+/** Longest one read of the process table may take on `platform` (ms). */
+function listTimeoutMs(platform = process.platform) {
+  return platform === "win32" ? WINDOWS_LIST_TIMEOUT_MS : POSIX_LIST_TIMEOUT_MS;
+}
+
+/**
+ * Longest killProcessTree can take (ms): one table read, the grace period,
+ * a second read outside Windows, and the SIGKILL wait.
+ */
+function worstCaseKillMs({
+  platform = process.platform,
+  graceMs = DEFAULT_GRACE_MS,
+  forceWaitMs = DEFAULT_FORCE_WAIT_MS,
+} = {}) {
+  const reads = platform === "win32" ? 1 : 2;
+  return reads * listTimeoutMs(platform) + graceMs + forceWaitMs;
+}
 
 /** True for a command line that belongs to a server shared by every GAIA client. */
 function isSharedServer(command) {
@@ -86,7 +107,7 @@ function listProcesses({ platform = process.platform, execFile = childProcess.ex
     execFile(
       cmd,
       args,
-      { windowsHide: true, timeout: LIST_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 },
+      { windowsHide: true, timeout: listTimeoutMs(platform), maxBuffer: 32 * 1024 * 1024 },
       (err, stdout) => {
         if (err) {
           reject(new Error(`could not read the process table with ${cmd}: ${err.message}`, { cause: err }));
@@ -295,6 +316,8 @@ async function killProcessTree(target, opts = {}) {
 }
 
 module.exports = {
+  listTimeoutMs,
+  worstCaseKillMs,
   killProcessTree,
   listDescendants,
   listProcesses,

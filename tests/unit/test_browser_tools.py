@@ -18,7 +18,21 @@ try:
 except ImportError:
     ChatAgent = ChatAgentConfig = None
 
-from gaia.web.client import WebClient
+from gaia.web import client as web_client
+from gaia.web.client import WebClient, _SearchGate
+
+
+@pytest.fixture(autouse=True)
+def _instant_search_backoff(monkeypatch):
+    """Search pacing and backoff are pinned in test_web_search_rate_limit.py."""
+    monkeypatch.setattr(
+        web_client, "_SEARCH_GATE", _SearchGate(min_interval=0.0, sleep=lambda s: None)
+    )
+    # A Tavily connector configured on the dev box must not answer these tests.
+    monkeypatch.setattr(
+        "gaia.connectors.mcp_server.is_mcp_server_configured", lambda _id: False
+    )
+
 
 # ===== WebClient Tests =====
 
@@ -827,9 +841,10 @@ class TestBrowserToolsMixin:
 
         result = self.registered_tools["search_web"]("test", num_results=100)
         # Should have been clamped to 10
-        self.agent._web_client.search_duckduckgo.assert_called_once_with(
-            "test", num_results=10
-        )
+        self.agent._web_client.search_duckduckgo.assert_called_once()
+        call = self.agent._web_client.search_duckduckgo.call_args
+        assert call.args == ("test",) and call.kwargs["num_results"] == 10
+        assert callable(call.kwargs["should_stop"])
 
     def test_download_file_formats_size(self):
         """download_file formats file sizes correctly."""

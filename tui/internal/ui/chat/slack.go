@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -36,6 +37,9 @@ type slackStatusMsg struct {
 	// opposed to one the user asked for with /slack.
 	offer bool
 }
+
+// slackOfferRetry is how often a held-back offer checks whether the turn ended.
+var slackOfferRetry = time.Second
 
 // slackDeclinedMsg is delivered once a skip/never has been recorded.
 type slackDeclinedMsg struct {
@@ -279,6 +283,10 @@ func (m ChatModel) handleSlackStatus(msg slackStatusMsg) (tea.Model, tea.Cmd) {
 		// twice into the same transcript.
 		if !msg.status.ShouldOfferSetup || m.slackOffered {
 			return m, nil
+		}
+		// Landing mid-turn splits the user's question from its answer; wait.
+		if m.streaming {
+			return m, tea.Tick(slackOfferRetry, func(time.Time) tea.Msg { return msg })
 		}
 		m.slackOffered = true
 		return m.statusNote(slackOfferText()), nil

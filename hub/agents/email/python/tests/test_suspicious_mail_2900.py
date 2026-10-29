@@ -1231,3 +1231,31 @@ class TestSystemPromptWording:
                 f"system prompt hardcodes example phrasing {phrase!r} — "
                 "this is exactly the router-table shortcut #2762 forbids"
             )
+
+
+class _HostWithFailedRefresh(_Host):
+    """An agent whose cached backends survived a refresh that now fails."""
+
+    def _refresh_mail_backends(self) -> None:
+        from gaia_agent_email.config import ConfigurationError
+
+        raise ConfigurationError("mail_provider names a provider that isn't connected")
+
+    def _pre_scan_all_backends(
+        self, *, max_messages: int, include_informational: bool = False
+    ):
+        raise AssertionError("a failed refresh must not scan the cached backends")
+
+
+class TestCheckSuspiciousMailRefreshFailure:
+    """#5771: the refresh error is the answer, not "no mailbox connected"."""
+
+    def test_the_real_refresh_error_reaches_the_caller(self):
+        host = _HostWithFailedRefresh({"google": FakeGmailBackend()})
+        fn = _tool(host, "check_suspicious_mail")
+
+        out = json.loads(fn(max_messages=25))
+
+        assert out["ok"] is False
+        assert "provider that isn't connected" in out["error"]
+        assert out["error"] != NO_MAILBOX_CONNECTED_MESSAGE

@@ -130,6 +130,10 @@ var (
 	failStyle = lipgloss.NewStyle().
 			Foreground(theme.Danger)
 
+	// A step error the agent is retrying past: worth seeing, not an alarm.
+	retryStyle = lipgloss.NewStyle().
+			Foreground(theme.Warning)
+
 	dividerStyle = lipgloss.NewStyle().
 			Foreground(theme.Divider)
 
@@ -156,6 +160,10 @@ const (
 )
 
 type ChatModel struct {
+	// updateCheckOnLaunch makes Init ask once whether a newer GAIA is out
+	// (WithUpdateCheck). Off unless the launch opts in.
+	updateCheckOnLaunch bool
+
 	providerPanel *providers.Model
 	// agentsPanel is the in-chat "/agents" listing (nil unless open). It only
 	// lists and selects (agents.SelectedMsg's own doc comment); switching to
@@ -669,6 +677,9 @@ func (m ChatModel) Init() tea.Cmd {
 	if m.startup.pending && !m.setupChecking {
 		cmds = append(cmds, startupModelCmd())
 	}
+	if m.updateCheckOnLaunch {
+		cmds = append(cmds, checkUpdateCmd(true /* launch */, ""))
+	}
 	if m.setupChecking {
 		// The flagship agent's first-boot gate (see applyFirstBootGate):
 		// hold the initial query, if any, until the check -- and the setup
@@ -976,6 +987,15 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case slackStatusMsg:
 		return m.handleSlackStatus(msg)
+
+	case updateCheckedMsg:
+		return m.handleUpdateChecked(msg)
+
+	case updatePlannedMsg:
+		return m.handleUpdatePlanned(msg)
+
+	case updateSavedMsg:
+		return m.handleUpdateSaved(msg)
 
 	case slackDeclinedMsg:
 		return m.handleSlackDeclined(msg)
@@ -1758,6 +1778,11 @@ func (m *ChatModel) restoreToComposer(text string) {
 // "/clear" typed mid-turn still clears when it finally lands instead of being
 // sent to the agent as a literal question.
 func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
+	// `/update` takes a free-form version argument, so like /model it is
+	// dispatched before the exact-match switch.
+	if isUpdateCommand(query) {
+		return m.runUpdateCommand(updateCommandArg(query))
+	}
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
@@ -3027,7 +3052,7 @@ func (m ChatModel) renderLiveRegion() string {
 	// Paused while a prompt waits on the user, so it never jumps back on answering.
 	elapsed := m.turnElapsed(time.Now())
 
-	log := collapseActivity(m.visibleWork(m.activity))
+	log := collapseActivity(m.visibleWork(settleFailures(m.activity, false)))
 	if len(log) > workLogLines {
 		log = log[len(log)-workLogLines:]
 	}
@@ -3201,8 +3226,13 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 			last := &out[n-1]
 			// Different confirmation answers never fold: "x2 · approved" over a
 			// denied second call would misstate what the user said.
+			// Nor does a failed row, retried or not: folded, the next call's
+			// outcome would replace its error line. A failure folds under an
+			// earlier row only when it is a retry of that same call.
+			keep := stepFailed(*last) ||
+				(stepFailed(item) && (item.RetryKey == "" || item.RetryKey != last.RetryKey))
 			if last.Kind == item.Kind && activityKey(*last) == activityKey(item) &&
-				last.Approval == item.Approval {
+				last.Approval == item.Approval && !keep {
 				last.Repeat++
 				last.Content = mergeTargets(last.Content, item.Content)
 				last.Done = item.Done
@@ -3213,6 +3243,7 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 				// arguments under a line reading "x14" would be a lie about
 				// which call they came from.
 				last.Detail = item.Detail
+				last.Recovery = item.Recovery
 				last.Args = item.Args
 				last.Output = item.Output
 				continue
@@ -3278,8 +3309,9 @@ func formatElapsed(d time.Duration) string {
 // to a description of what it is timing.
 //
 // Failure is never signalled by colour or a glyph alone: a failed call's outcome
-// line begins with the word "failed" (see toolResultDetail / failureDetail), so
-// the state survives a terminal with no colour.
+// line begins with the word "failed" (see toolResultDetail / failureDetail) —
+// or "error" / "error, retried" while it is not a standing failure (see
+// settleFailures) — so the state survives a terminal with no colour.
 // maxRows is the height this ONE action may occupy, or 0 for the standard caps.
 // The live region passes a real number only when a single action is taller than
 // the whole region's budget: the cut has to be made HERE, inside the text, or
@@ -3326,7 +3358,7 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 		style = thinkingStyle
 	case item.Kind == "tool" || item.Kind == "confirm":
 		glyph, style = glyphTool, toolNameStyle
-		if item.Success != nil && !*item.Success {
+		if item.Success != nil && !*item.Success && item.Recovery == "" {
 			style = failStyle
 		}
 	case item.Kind == "status" || item.Kind == "thinking":
@@ -3349,14 +3381,25 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 	detail := clean(item.Detail)
 	// A sidecar's preview can report the failure its data did not flag; the
 	// word is the signal (markFailed puts it there for every failure we see).
-	failed := (item.Success != nil && !*item.Success) ||
-		strings.HasPrefix(strings.ToLower(detail), "failed")
+	failed := stepFailed(item)
+	// A failure the agent is working past, or already did, keeps its error
+	// in words but not in red: red is for what the turn ended on.
+	calm := failed && item.Recovery != ""
+	if calm {
+		detail, failed = calmDetail(detail, item.Recovery), false
+	}
 	detailRows := logDetailRows
 	if !m.expandWork {
 		switch {
 		case strings.HasPrefix(item.Approval, "denied"):
 			// The approval already says why it failed.
 			detail = ""
+		case item.Recovery == recoveryRetried:
+			// Settled: the one-line error is history. A pending one keeps its
+			// rows — if the turn ends on it, its tail is the remedy.
+			detailRows = 1
+		case calm:
+			// Still open: keeps its rows, like the failure it may become.
 		case !failed:
 			// A success earns one row, and only for what it found. A failure
 			// keeps its rows: its tail is the remedy.
@@ -3368,8 +3411,11 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 	}
 	if detail != "" && detailRows > 0 {
 		dstyle := activityStyle
-		if failed {
+		switch {
+		case failed:
 			dstyle = failStyle
+		case calm:
+			dstyle = retryStyle
 		}
 		drows := wrapLog(detail, "", width-2, detailRows)
 		lines = append(lines, "    "+dstyle.Render(glyphDetail+" "+drows[0]))
