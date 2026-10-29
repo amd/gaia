@@ -369,10 +369,10 @@ export interface ChatPerformance {
         tokens_in: number | null;
         tokens_cached: number | null;
         tokens_out: number | null;
-        tool_calls: number;
+        tool_calls: number | null;
         loads: number;
         load_seconds: number | null;
-        usd: number;
+        usd: number | null;
         unpriced_turns: number;
     };
     /** The model as Lemonade reports it now. */
