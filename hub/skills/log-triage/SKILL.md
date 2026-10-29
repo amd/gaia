@@ -49,8 +49,8 @@ incident.
    timestamp, how many lines, how many distinct hosts, and which templates
    occur only there (`share_of_all` near 1.0).
 6. **Read around the first burst line.** With the burst's `file` and `line`,
-   `read_file(file_path, start_line=line - 30, end_line=line + 10)` shows what
-   happened just before. The cause comes before its symptoms. A flood of
+   `read_file(file_path, start_line=max(1, line - 30), end_line=line + 10)`
+   shows what happened just before. The cause comes before its symptoms. A flood of
    timeouts after a hardware fault is the effect, not the root cause.
 7. **Check the numbers add up.** Template counts sum to the parsed line count
    (the snippet asserts this). Per-level counts sum to the same total. Hosts
