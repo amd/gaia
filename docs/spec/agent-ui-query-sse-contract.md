@@ -85,7 +85,7 @@ net-new agent instrumentation.
 | `documents` | array of strings (absolute file paths) | no | **Flagship (`gaia`) only, contract ≥ 2.16** (#4166) — the email agent and an older flagship 422 the unknown field (see §7). The files the user attached to this conversation. Send the whole set on every turn; the agent indexes the ones it has not indexed yet before the turn runs, so a file attached mid-conversation is read on the next turn. Each path is granted as that exact file — never its folder — and a relative path is a 422. A file that is missing, a folder, or a secret the path policy refuses is named as not indexed in the turn's `index_documents` step, and the turn still runs. See §2.5. |
 | `allowed_paths` | array of absolute path strings | no | **Flagship (`gaia`) only, contract ≥ 2.18** — the email agent and an older flagship 422 the unknown field (see §7). Caller-computed conversation scope. A new session gets exactly this scope; a retained session gains newly supplied entries and keeps what the user granted; `GAIA_ALLOWED_PATHS` can only narrow it. A relative path is a 422. This is an access allowlist, not the chat working directory. Omitted ⇒ the agent's default scope. |
 | `memory` | `"on"` \| `"private"` \| `"off"` | no | **Flagship (`gaia`) only, contract ≥ 2.18** — the email agent and an older flagship 422 the unknown field (see §7). Controls whether this turn may write memory. `private` and `off` suppress all writes, including errors and lessons. Send it every turn when the caller owns the setting; omit it to retain the agent's current mode. |
-| `changes_turn_id` | string | no | **Flagship (`gaia`) only, contract ≥ 2.19** — the email agent and older flagship 422 the unknown field (see §7). Records file changes for this turn's Undo history. Requires `session_id`; omit it to record no changes. |
+| `changes_turn_id` | string matching `^\d{14}-[0-9a-f]{8}$` | no | **Flagship (`gaia`) only, contract ≥ 2.19** — the email agent and older flagship 422 the unknown field (see §7). Records file changes for this turn's Undo history. Requires `session_id`; omit it to record no changes. |
 | `surface` | `"agent_ui"` \| `"tui"` \| `"cli"` | no | **Flagship (`gaia`) only, contract ≥ 2.20** — identifies the front-end so provider errors and feature wording fit the caller. Omit for headless callers. |
 | `internet_off` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.23** — when true, blocks tools and commands that contact another host for this retained session. Send it every turn when the caller owns the setting; omit it to retain the current mode. |
 | `working_directory` | string (absolute path) | no | **Flagship (`gaia`) only, contract ≥ 2.24** — chat workspace for resolving relative file paths. It is separate from `allowed_paths`, which controls access. Relative paths are rejected with 422. |
@@ -121,7 +121,7 @@ net-new agent instrumentation.
     "documents": { "type": "array", "items": { "type": "string" } },
     "allowed_paths": { "type": "array", "items": { "type": "string" } },
     "memory": { "enum": ["on", "private", "off"] },
-    "changes_turn_id": { "type": "string" },
+    "changes_turn_id": { "type": "string", "pattern": "^\\d{14}-[0-9a-f]{8}$" },
     "surface": { "enum": ["agent_ui", "tui", "cli"] },
     "internet_off": { "type": "boolean" },
     "working_directory": { "type": "string" },
@@ -129,14 +129,25 @@ net-new agent instrumentation.
       "type": "array",
       "items": {
         "type": "array",
-        "items": { "type": "object" }
+        "items": {
+          "type": "object",
+          "properties": {
+            "role": { "enum": ["user", "assistant", "system", "tool"] }
+          }
+        }
       }
     },
     "reasoning": { "type": "boolean", "default": false }
   },
   "dependentRequired": {
     "changes_turn_id": ["session_id"]
-  }
+  },
+  "allOf": [
+    {
+      "if": { "required": ["turns"] },
+      "then": { "properties": { "context": { "maxItems": 0 } } }
+    }
+  ]
 }
 ```
 
