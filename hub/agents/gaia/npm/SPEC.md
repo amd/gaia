@@ -340,8 +340,8 @@ the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
 
 `internet_off` (contract ≥ 2.23) is `true` when the caller's chat has the
 Internet switched off and `false` when it is on. With `true` the turn refuses
-web search and page fetches, the browser, connector (MCP), mailbox and Agent
-Hub tools and any call or shell command that contacts a host other than the agent's own machine, and
+web search and page fetches, the browser, connector (MCP) and Agent Hub
+tools, mailbox reads, and any call or shell command that contacts a host other than the agent's own machine, and
 the refusal tells the model the internet is off for this chat. A retained
 session keeps the last value, so send it every turn; omit it to leave the
 agent as it is. Pre-2.23 binaries `422` the field, so a caller whose chat has

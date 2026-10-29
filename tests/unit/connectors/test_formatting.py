@@ -139,6 +139,22 @@ def test_format_connector_error_unknown_agent_falls_back_to_generic():
     assert "scope-x" in msg
 
 
+def test_flagship_grant_gap_never_borrows_the_email_agents_remedy():
+    """The email agent's migration text asks for gmail.modify + send. The
+    read-only flagship must get the scope it actually lacks instead."""
+    readonly = "https://www.googleapis.com/auth/gmail.readonly"
+    err = AuthRequiredError(
+        AuthRequiredError.Reason.AGENT_NOT_GRANTED,
+        provider="google",
+        agent_id="installed:gaia",
+        missing_scopes=[readonly],
+    )
+    msg = format_connector_error(err)
+    assert readonly in msg
+    assert "gmail.send" not in msg
+    assert "gmail.modify" not in msg
+
+
 @pytest.mark.parametrize(
     "exc",
     [

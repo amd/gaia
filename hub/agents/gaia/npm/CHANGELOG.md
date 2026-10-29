@@ -6,6 +6,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Mail: whole conversations, what's waiting on you, and which account.**
+  Three read-only tools join the mail set, for Gmail and Outlook alike.
+  `get_thread` reads a whole conversation, oldest first, clipping long bodies
+  so no message is dropped. `list_waiting_on_you` finds the inbox threads where
+  someone asked you directly for a reply and you were already in that
+  conversation. Newsletters, cold outreach and automated mail never qualify.
+  `list_connected_mailboxes` says which mailboxes are connected and which one
+  the agent reads, without a network call, so it still answers with the
+  internet off. The registered tool count is now 101.
+- **A forwarded read-only Gmail connection is accepted.** A host app that
+  forwarded a connection carrying `gmail.readonly`, which is all the agent
+  asks for, without naming the required scopes, was refused because GAIA
+  defaulted to the email agent's `gmail.modify` + `gmail.send`. Any one mail
+  read scope now satisfies the default, for Gmail and Outlook.
+
 ### For integrators: contract 2.25
 
 - **The agent remembers its own tool calls across turns** (contract **2.25**,

@@ -186,11 +186,17 @@ app that forwarded it, or from the account's connected-apps page.
 it and GAIA need.** GAIA refreshes with the forwarded `refresh_token` and
 **cannot widen scope at refresh time** — a refresh only ever returns the
 scopes the original consent granted. If the forwarded `scopes` don't cover
-what the target agent needs (for the Email agent: `gmail.modify`,
-`gmail.send`, and a calendar scope), the import **fails loudly** with
-`ScopeMismatchError` (HTTP 403 + `missing_scopes`) rather than silently
-under-provisioning. Re-consent by the host app — with the wider scope set —
-is the only fix.
+what the target agent needs (for the flagship `installed:gaia`:
+`gmail.readonly`; for the Email agent: `gmail.modify` and `gmail.send`), the
+import **fails loudly** with `ScopeMismatchError` (HTTP 403 +
+`missing_scopes`) rather than silently under-provisioning. Re-consent by the
+host app — with the wider scope set — is the only fix.
+
+The REST route checks the scopes the agents in `grant_agents` declare. A
+Python call that passes no `required_scopes` checks only that a Google or
+Microsoft connection carries **one** mail read scope (`gmail.readonly` or
+`gmail.modify`; `Mail.Read` or `Mail.ReadWrite`), so a read-only forward for
+the flagship is accepted.
 </Warning>
 
 <Note>
