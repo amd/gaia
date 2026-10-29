@@ -236,3 +236,53 @@ func TestDaemonGateChecksThePickedLocalModelOverACloudDefault(t *testing.T) {
 		t.Fatalf("a missing picked model was not reported by name: %+v", rep.Rows)
 	}
 }
+
+// Whatever the launch picks, a cloud default must never reach the download
+// branch, and a missing local default must still offer its download.
+func TestDaemonGateNeverOffersACloudDefaultUnderALocalPick(t *testing.T) {
+	stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
+		t.Error("a local launch must not ask a cloud provider anything")
+		return nil, nil
+	})
+	orig := downloadedLocalModels
+	t.Cleanup(func() { downloadedLocalModels = orig })
+
+	cases := []struct {
+		name, def, pick string
+		onDisk          []lemonade.Model
+		listErr         error
+		wantState       State
+	}{
+		{"fireworks default, pick on disk", "fireworks.kimi-k2", "Qwen3-4B-GGUF",
+			[]lemonade.Model{{ID: "Qwen3-4B-GGUF", Downloaded: true}}, nil, StateOK},
+		{"user. prefix on disk only", "amd.Gemma-4-31B", "Qwen3-4B-GGUF",
+			[]lemonade.Model{{ID: "user.Qwen3-4B-GGUF", Downloaded: true}}, nil, StateOK},
+		{"pick missing", "amd.Gemma-4-31B", "Qwen3-4B-GGUF",
+			[]lemonade.Model{{ID: "Gemma-4-E4B-it-GGUF", Downloaded: true}}, nil, StateFailed},
+		{"Lemonade list fails", "amd.Gemma-4-31B", "Qwen3-4B-GGUF",
+			nil, errors.New("connection refused"), StateUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			downloadedLocalModels = func(context.Context) ([]lemonade.Model, error) { return tc.onDisk, tc.listErr }
+			rep := Check(context.Background(), gaiaFake(503, cloudDefault(tc.def)), cloudDaemonCfg(tc.pick))
+			row, _ := rep.Find(KeyModel)
+			if row.State != tc.wantState {
+				t.Fatalf("state %v, want %v: %+v", row.State, tc.wantState, row)
+			}
+			if row.Fix == FixPullModel || strings.Contains(row.Line, tc.def) || strings.Contains(row.Detail, "4 GB") {
+				t.Fatalf("the cloud default %s was offered as a download: %+v", tc.def, row)
+			}
+		})
+	}
+
+	// A local default under a local pick is still a real download to offer.
+	downloadedLocalModels = func(context.Context) ([]lemonade.Model, error) {
+		t.Error("a local default must keep the sidecar's own answer")
+		return nil, nil
+	}
+	rep := Check(context.Background(), gaiaFake(503, initModelMissing), cloudDaemonCfg("Gemma-4-E4B-it-GGUF"))
+	if blocker, blocked := rep.Blocker(); !blocked || blocker.Key != KeyModel || blocker.Fix != FixPullModel {
+		t.Fatalf("a missing local default lost its download offer: %+v", rep.Rows)
+	}
+}
