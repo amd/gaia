@@ -31,6 +31,7 @@ from gaia.ui.database import ChatDatabase
 from gaia.ui.models import ChatRequest
 from gaia.ui.routers import chat
 from gaia.ui.run_manager import RunManager
+from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.turn_queue import TurnQueue
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.allow_network]
@@ -658,10 +659,35 @@ def _answer_relayed(handler, kind):
         assert handler.resolve_relay_input("q-1", "the second")
 
 
+async def test_failed_model_slot_retake_emits_named_error():
+
+    events = []
+    handler = object.__new__(SSEOutputHandler)
+    handler.cancelled = threading.Event()
+    handler.turn_slot = SimpleNamespace(come_back=lambda _cancelled: False)
+    handler.on_model_regained = None
+    handler._emit = events.append
+
+    SSEOutputHandler.come_back_to_model(handler)
+
+    assert events == [
+        {
+            "type": "agent_error",
+            "content": (
+                "The approved turn could not resume because the model slot was "
+                "no longer available. Send the message again."
+            ),
+            "fatal": True,
+        }
+    ]
+    assert handler.cancelled.is_set()
+
+
 @pytest.mark.parametrize(
     "kind,expected",
     [("permission", "answer=allow"), ("question", "answer=the second")],
 )
+
 async def test_relayed_turn_waiting_on_the_user_lets_a_new_chat_run(
     runtime, kind, expected
 ):

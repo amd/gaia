@@ -2079,7 +2079,19 @@ class SSEOutputHandler(OutputHandler):
         if self.cancelled.is_set():
             return
         if not self.turn_slot.come_back(self.cancelled):
-            # Withdrawn from the line: the turn must not use the model.
+            # Withdrawn from the line: the turn must not use the model. Emit a
+            # named error so the UI does not misdiagnose an empty relay as a
+            # Lemonade health failure (#6019).
+            self._emit(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        "The approved turn could not resume because the model "
+                        "slot was no longer available. Send the message again."
+                    ),
+                    "fatal": True,
+                }
+            )
             self.cancelled.set()
         elif not self.cancelled.is_set() and self.on_model_regained is not None:
             try:
