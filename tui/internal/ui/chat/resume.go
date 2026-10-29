@@ -85,6 +85,9 @@ func (m ChatModel) KeepConversationForUpdate() error {
 	return nil
 }
 
+// A save older than this was not made by the update that just ran.
+const staleResume = 30 * time.Minute
+
 // TakeResumedConversation returns the most recent conversation an update
 // saved, with a divider saying what happened, and removes it so it is shown
 // once. Nothing saved is (nil, nil).
@@ -118,12 +121,17 @@ func TakeResumedConversation() ([]Message, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the conversation saved before the update (%s): %w", path, err)
 	}
-	if err := os.Remove(path); err != nil {
-		return nil, fmt.Errorf("cannot clear %s, so the restored conversation would show again next launch — delete it by hand: %w", path, err)
-	}
 	var rf resumeFile
 	if err := json.Unmarshal(data, &rf); err != nil {
-		return nil, fmt.Errorf("the conversation saved before the update (%s) cannot be read: %w", path, err)
+		// Kept aside, not deleted, so it is reported once and nothing is lost.
+		bad := path + ".unreadable"
+		if rerr := os.Rename(path, bad); rerr != nil {
+			return nil, fmt.Errorf("the conversation saved before the update (%s) cannot be read (%v), nor set aside: %w", path, err, rerr)
+		}
+		return nil, fmt.Errorf("the conversation saved before the update cannot be read (%v); it is kept at %s", err, bad)
+	}
+	if err := os.Remove(path); err != nil {
+		return nil, fmt.Errorf("cannot clear %s, so the restored conversation would show again next launch — delete it by hand: %w", path, err)
 	}
 	out := make([]Message, 0, len(rf.Messages)+1)
 	for _, rm := range rf.Messages {
@@ -132,6 +140,11 @@ func TakeResumedConversation() ([]Message, error) {
 	what := fmt.Sprintf("Reopened after updating to GAIA %s (was %s).", update.Current, rf.FromVersion)
 	if update.Current == rf.FromVersion {
 		what = fmt.Sprintf("Reopened: the update to %s did not finish, so this is still GAIA %s.", rf.ToTag, update.Current)
+	}
+	if time.Since(newest) > staleResume {
+		// Another window's save, or one left by an install that never ran.
+		what = fmt.Sprintf("Reopened a conversation saved %s, before an update to %s.",
+			newest.Format("Jan 2 15:04"), rf.ToTag)
 	}
 	out = append(out, Message{Role: RoleStatus, Content: "— " + what + " Your conversation is shown above; " +
 		"the agent started a new session, so mention anything from it you still need. —"})
