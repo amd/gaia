@@ -647,9 +647,6 @@ var listedCloudModels = func(ctx context.Context, provider string) ([]lemonade.M
 	return lemonade.New("").Models(ctx, provider)
 }
 
-// runsInCloud reports that this launch chats on a cloud model.
-func (c Config) runsInCloud() bool { return lemonade.IsCloudID(c.Model) }
-
 // checkCloudModel confirms the Lemonade GAIA talks to can serve the chosen
 // cloud model. Provider settings live in each server, so a provider connected on
 // another one — the system server, before setup installed GAIA's own — is unknown
