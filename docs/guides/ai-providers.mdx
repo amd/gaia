@@ -54,7 +54,7 @@ For **Local**, the list shows every chat model Lemonade offers, downloaded or no
 On a new machine, the list becomes available once the setup step that installs
 Lemonade is done; the panel names that step until then.
 **Recommended** models come first — Qwen3.6 35B A3B, Qwen3.8 Flash Next,
-Gemma 4 E4B, gpt-oss 20B and 120B, and the Qwen3 Coder models — marked with ★. The panel names how
+Gemma 4 E4B, gpt-oss 20B and 120B, LFM3 1.7B, and the Qwen3 Coder models — marked with ★. The panel names how
 much memory this PC has for models and how much disk is free, both read from
 Lemonade:
 
@@ -135,6 +135,24 @@ the whole conversation. The next message starts at medium again. Set
 `GAIA_REASONING_EFFORT` to `low`, `medium` or `high` to change that starting
 point. Calls that need only a short, structured reply always use low: chat
 titles, memory upkeep, document summaries and `gaia llm`.
+
+### LFM3 1.7B (preview)
+
+Liquid AI's LFM3 1.7B is an optional small agent model, never picked for you. It
+calls tools natively and reasons before it answers; it does not read images.
+
+| Model | Lemonade id | Download | Needs for models (64K window) | Fits |
+|---|---|---|---|---|
+| LFM3 1.7B | `user.LFM3-1.7B-GGUF` | 1.0 GB | ~3 GB | every PC, 16 GB ones included |
+
+It needs llama.cpp b11960 or newer, and no Lemonade release bundles that yet, so
+a stock Lemonade fails to load it. To try it now, point Lemonade at a newer build
+with `lemonade config set llamacpp.vulkan_bin=b11969`. That switches every
+llama.cpp model on that Lemonade, so set it back with
+`lemonade config set llamacpp.vulkan_bin=builtin` when you are done.
+
+It reads up to 262,144 tokens. Only 6 of its 24 layers keep a full context cache,
+12 KiB per token (3 GB at 256K), and the window grows with memory like Qwen3.6's.
 
 ### Context length follows memory
 
