@@ -227,7 +227,7 @@ def test_the_plan_cap_binds_exactly_from_half_the_budget(limit):
     assert fired == list(range(fired[0], limit + 1))
 
 
-# --------------------------------- the kw-02 gate keeps the substance it judges
+# ----------------------------- the completion gate keeps the substance it judges
 
 _MULTI = (
     "## Recommendation\n\nCM5 8GB carrier board.\n\n"

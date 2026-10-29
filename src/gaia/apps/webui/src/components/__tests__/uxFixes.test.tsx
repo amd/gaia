@@ -71,15 +71,16 @@ describe('tool latency', () => {
     });
 });
 
-describe('step count', () => {
-    it('does not count progress-status rows, which are not saved with the turn', () => {
+describe('progress-status rows', () => {
+    it('leave a finished turn, which does not save them', () => {
         const steps: AgentStep[] = [
             { id: 1, type: 'tool', label: 'x', tool: 'read_file', active: false, success: true, timestamp: 1 },
             { id: 2, type: 'status', label: 'Model is processing', active: false, timestamp: 2 },
             { id: 3, type: 'tool', label: 'x', tool: 'read_file', active: false, success: true, timestamp: 3 },
         ];
-        render(<AgentActivity steps={steps} isActive={false} variant="summary" />);
-        expect(screen.getByText(/^2 steps/)).toBeInTheDocument();
+        render(<AgentActivity steps={steps} isActive={false} />);
+        expect(screen.queryByText('Model is processing')).toBeNull();
+        expect(screen.getByLabelText('2 identical calls')).toBeInTheDocument();
     });
 });
 
@@ -108,6 +109,42 @@ describe('a recoverable tool error', () => {
     it('is not shown twice when the tool raised, before its result lands', () => {
         const running: AgentStep = { id: 1, type: 'tool', label: 'x', tool: 'run_shell_command', active: true, timestamp: 1 };
         expect(isEchoOfFailedTool({ type: 'agent_error', content: 'boom', recoverable: true }, [running])).toBe(true);
+    });
+});
+
+describe('a run that fails before answering', () => {
+    const error = 'Failed to start the query run: Not enough free memory to load Gemma-4-E4B-it-GGUF with a '
+        + '32,768-token window: needs about 7.8 GB and only 6.0 GB is free. Close apps that use a lot of memory, '
+        + 'then try again. See https://amd-gaia.ai/docs/reference/troubleshooting';
+    const errorStep: AgentStep = { id: 1, type: 'error', label: 'Error', detail: error, active: false, success: false, timestamp: 1 };
+    const occurrences = (container: HTMLElement) => container.textContent!.split('Not enough free memory').length - 1;
+
+    it('shows its error once, as the answer with its link, marked as an error', () => {
+        const { container } = render(<MessageBubble message={{ ...baseMessage, content: error }} agentSteps={[errorStep]} />);
+        expect(occurrences(container)).toBe(1);
+        expect(container.querySelector('.flow-error')).toBeNull();
+        expect(screen.getByRole('link', { name: /amd-gaia\.ai/ })).toBeInTheDocument();
+        expect(container.querySelector('.msg-error')).not.toBeNull();
+        expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+    });
+
+    it('keeps an error the answer does not repeat in the steps', () => {
+        const other: AgentStep = { ...errorStep, detail: 'The search tool timed out.' };
+        const { container } = render(<MessageBubble message={{ ...baseMessage, content: 'Here is what I found.' }} agentSteps={[other]} />);
+        expect(container.querySelector('.flow-error')?.textContent).toContain('The search tool timed out.');
+    });
+
+    it('keeps a recoverable error the answer only quotes, and does not mark the answer failed', () => {
+        const toolError: AgentStep = { ...errorStep, detail: 'File not found: report.pdf' };
+        const content = 'File not found: report.pdf, so I used summary.pdf instead. Here is the summary.';
+        const { container } = render(<MessageBubble message={{ ...baseMessage, content }} agentSteps={[toolError]} />);
+        expect(container.querySelector('.flow-error')?.textContent).toContain('File not found: report.pdf');
+        expect(container.querySelector('.msg-error')).toBeNull();
+    });
+
+    it('shows the error in the steps while the turn is still streaming', () => {
+        const { container } = render(<MessageBubble message={{ ...baseMessage, id: -1 }} isStreaming agentSteps={[errorStep]} />);
+        expect(container.querySelector('.flow-error')?.textContent).toContain('Not enough free memory');
     });
 });
 

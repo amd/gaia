@@ -34,8 +34,9 @@ def _run_gaia(*argv):
         "PYTHONIOENCODING": "utf-8",
     }
     # Windows resolves the home dir from USERPROFILE, not HOME, and Python
-    # there needs SYSTEMROOT to start at all.
-    for name in ("USERPROFILE", "SYSTEMROOT"):
+    # there needs SYSTEMROOT to start at all. GAIA_LOG_FILE keeps the child's
+    # log out of the real ~/.gaia, as the root conftest does for this process.
+    for name in ("USERPROFILE", "SYSTEMROOT", "GAIA_LOG_FILE"):
         if name in os.environ:
             env[name] = os.environ[name]
     return subprocess.run(

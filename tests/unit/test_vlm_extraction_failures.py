@@ -18,6 +18,7 @@ No Lemonade server required.
 
 from __future__ import annotations
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -55,6 +56,14 @@ class TestTheThreeFailureSites:
 
         with pytest.raises(VLMExtractionError):
             vlm.extract_from_image(b"fake-png")
+
+    def test_a_cancelled_wait_for_the_model_is_a_stop_not_a_failed_page(self, vlm):
+        from gaia.daemon.broker_client import LeaseWaitCancelled
+
+        vlm.client.chat_completions.side_effect = LeaseWaitCancelled("stopped")
+
+        with pytest.raises(LeaseWaitCancelled):
+            vlm.extract_from_image(b"fake-png", page_num=2)
 
     def test_an_unexpected_exception_raises_with_the_cause_attached(self, vlm):
         vlm.client.chat_completions.side_effect = ConnectionError("refused")
@@ -200,6 +209,43 @@ class TestToolCallersReportAnError:
 
         assert result["status"] == "error"
         assert "answer" not in result
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda host, p: host._analyze_image(p),
+            lambda host, p: host._answer_question_about_image(p, "what is 2+2?"),
+        ],
+        ids=["analyze_image", "answer_question_about_image"],
+    )
+    def test_a_directory_is_refused_without_a_traceback(self, tmp_path, caplog, call):
+        """#5575: a small model passed "." and the read raised IsADirectoryError."""
+        host = self._mixin(None)
+
+        result = call(host, str(tmp_path))
+
+        assert result == {
+            "status": "error",
+            "error": f"Not an image file: {tmp_path} is a directory",
+        }
+        host.vlm_client.extract_from_image.assert_not_called()
+        assert not [r for r in caplog.records if r.exc_info]
+
+    def test_a_missing_path_is_still_image_not_found(self, tmp_path):
+        missing = tmp_path / "nope.png"
+
+        result = self._mixin(None)._answer_question_about_image(str(missing), "q")
+
+        assert result == {"status": "error", "error": f"Image not found: {missing}"}
+
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs a FIFO")
+    def test_a_path_that_exists_but_is_no_file_is_not_called_missing(self, tmp_path):
+        fifo = tmp_path / "pipe"
+        os.mkfifo(fifo)
+
+        result = self._mixin(None)._answer_question_about_image(str(fifo), "q")
+
+        assert result == {"status": "error", "error": f"Not an image file: {fifo}"}
 
 
 class TestIngestReportsAnError:

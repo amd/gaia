@@ -81,6 +81,7 @@ net-new agent instrumentation.
 | `max_steps` | integer ≥ 1 | no | Agent-loop step ceiling. Omitted ⇒ the sidecar's configured default. |
 | `can_answer_questions` | boolean | no | Whether **this caller** can render a `needs_input` event and POST the answer (§5.1). **Send only to a peer at contract ≥ 2.6** — an older sidecar 422s the unknown field (see §7). **The two shipped sidecars default this differently when it's omitted.** The email agent's field is a plain `bool` defaulting to `False` — the safe answer, since a caller that cannot answer would otherwise park the run until the question times out, which is indistinguishable from a hang. The flagship (`gaia`) agent's field is `Optional[bool]` defaulting to `None`, and only an *explicit* `false` turns answering off — an omitted field behaves as answerable. A client driving both sidecars with the same "omit when unsure" logic gets opposite behavior; send the field explicitly rather than relying on either default. |
 | `session_id` | string, `^[A-Za-z0-9_-]{1,128}$` | no | Opaque conversation id, host-minted once per conversation and reused across turns (#2829). **Send only to a peer at contract ≥ 2.12** — an older sidecar 422s the unknown field (see §7). Omitted ⇒ today's stateless behaviour: a throwaway agent per call. Present ⇒ the run resolves the SAME agent every other turn on this id used, so a reference to something an earlier turn surfaced (e.g. "reply to number 1") can resolve. See §2.4. |
+| `reasoning` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.22** — an older sidecar 422s the unknown field (see §7). `true` streams the model's reasoning as `reasoning` events (§4) instead of folding it into `status` lines, for a client that shows reasoning on its own. Omitted ⇒ `false`, today's behaviour. |
 | `documents` | array of strings (absolute file paths) | no | **Flagship (`gaia`) only, contract ≥ 2.16** (#4166) — the email agent and an older flagship 422 the unknown field (see §7). The files the user attached to this conversation. Send the whole set on every turn; the agent indexes the ones it has not indexed yet before the turn runs, so a file attached mid-conversation is read on the next turn. Each path is granted as that exact file — never its folder — and a relative path is a 422. A file that is missing, a folder, or a secret the path policy refuses is named as not indexed in the turn's `index_documents` step, and the turn still runs. See §2.5. |
 
 ```jsonc
@@ -110,7 +111,8 @@ net-new agent instrumentation.
     "max_steps": { "type": "integer", "minimum": 1 },
     "can_answer_questions": { "type": "boolean", "default": false },
     "session_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$" },
-    "documents": { "type": "array", "items": { "type": "string" } }
+    "documents": { "type": "array", "items": { "type": "string" } },
+    "reasoning": { "type": "boolean", "default": false }
   }
 }
 ```
@@ -164,24 +166,31 @@ as "no documents are indexed" about a file the user can see attached.
 - **Ordering:** `status`/`token`/`tool_call`/`tool_result` may interleave freely
   during a run. `needs_confirmation` pauses the logical run pending the §0.4
   handoff. A terminal `final`/`error` is always last.
+- **Undo finalization:** recording finishes before the terminal event. If saving
+  undo history also fails after a failed turn, a `status` warning reports the undo
+  failure and the terminal `error` preserves the original turn error. A successful
+  answer is likewise preserved when only undo saving fails. Both failures remain
+  available in the server log.
 
 ---
 
 ## 4. The seven canonical event types
 
 The contract is exactly these `type` values (design §0.2 — the original seven,
-plus `needs_input` added as an additive MINOR by #2469). No others are valid on
+plus `needs_input` added as an additive MINOR by #2469, and `reasoning`, sent
+only on request, by contract 2.22). No others are valid on
 the wire; a receiver applies the §7 unknown-type rule to anything else.
 
 | `type` | Payload | UI effect |
 |---|---|---|
 | `status` | `{message, phase?, words?, chars?, queue?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label |
 | `token` | `{delta}` | stream assistant text |
+| `reasoning` | `{delta}` | stream the model's reasoning, apart from the answer. Sent only when the request asked for it (`reasoning: true`, contract ≥ 2.22); pieces keep their own spacing, so a client joins them as they come |
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
-| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it |
+| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
-| `final` | `{answer, usage?}` | finalize the message; terminal |
+| `final` | `{answer, usage?, failed?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done |
 | `error` | `{detail, status}` | surface the actionable error verbatim; terminal |
 
 A `:`-prefixed SSE comment may appear at any point as a heartbeat. It carries no
@@ -218,7 +227,10 @@ indistinguishable from a dead one.
   "properties": {
     "type": { "const": "tool_call" },
     "tool": { "type": "string" },
-    "args": { "type": "object" }     // {} when the tool takes no arguments
+    "args": { "type": "object" },    // {} when the tool takes no arguments
+    "mcp_server":       { "type": "string" },  // optional, MCP tools only: mcp_servers.json key
+    "mcp_server_label": { "type": "string" },  // optional: the connector's name, e.g. "Git"
+    "mcp_tool":         { "type": "string" }   // optional: the server's own tool name
   } }
 
 // tool_result
@@ -239,6 +251,19 @@ indistinguishable from a dead one.
     "run_id":      { "type": "string", "format": "uuid" },
     "action":      { "type": "string" },   // e.g. "send", "archive", "input"
     "summary":     { "type": "string" },   // the literal text the user approves
+    "confirm_id":  { "type": "string" },   // echoed back by a live decision channel
+    "always_scope": { "type": "string" },  // what an "always" answer grants; absent = don't offer it
+    "risk":        { "enum": ["read", "write", "execute", "destructive"] },
+    "tool_label":  { "type": "string" },   // the tool in plain words
+    "args":        { "type": "object" },   // exactly the model's arguments, values capped
+    "args_truncated": { "const": true },   // a value in args was cut
+    "prompt_context": {                    // what the agent adds; never part of the call
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "working_directory": { "type": "string" },
+        "risk_note":         { "type": "string" },
+        "file_path":         { "type": "string" }   // where a relative write lands
+      } },
     "confirm_url": { "type": "string" }    // resume-model only (§0.4); omitted under stateless
   } }
 
@@ -274,7 +299,8 @@ indistinguishable from a dead one.
   "properties": {
     "type":   { "const": "final" },
     "answer": { "type": "string" },
-    "usage":  { "type": "object" }   // optional {steps?, tools_used?, elapsed?, tokens?, ttft?, tok_per_s?}
+    "usage":  { "type": "object" },  // optional {steps?, tools_used?, elapsed?, tokens?, ttft?, tok_per_s?}
+    "failed": { "const": true }      // optional; a model failure ended the turn
   } }
 
 // error
@@ -496,10 +522,10 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 
 | Source event | → Canonical | Transform |
 |---|---|---|
-| `tool_start` | `tool_call` | Rename; carry `tool`. `args` filled from the paired `tool_args` (§6.3). `detail`/`mcp_server` dropped (host derives its own label). |
+| `tool_start` | `tool_call` | Rename; carry `tool`. `args` filled from the paired `tool_args` (§6.3). `detail` dropped (host derives its own label). An MCP tool's `mcp_server`, `mcp_server_label` and `mcp_tool` ride along (additive): only the agent knows which connector a prefixed tool name belongs to. |
 | `chunk` | `token` | `content` → `delta`. |
 | `answer` | `final` | `content` → `answer`; `elapsed`/`steps`/`tools_used`/`tokens`/`ttft`/`tok_per_s`/`input_tokens`/`cached_tokens` → `usage`. An `answer` marked `streamed` (text pulled out of a streaming JSON reply, mid-turn) maps to a `token` instead: the agent's printed answer is the one `final`. |
-| `permission_request` | `needs_confirmation` | `tool` → `action`; render `args` as `summary` (for a shell command whose `risk` is `write` or `execute`, plus one plain line on what it can do; for a call GAIA's checks don't cover — `args._risk_note` set — the exact command unshortened, `in <folder>`, then that note, and no `always_scope`); carry `run_id`; `confirm_url` per §5. |
+| `permission_request` | `needs_confirmation` | `tool` → `action`; render `args` as `summary` (for a shell command whose `risk` is `write` or `execute`, plus one plain line on what it can do; for a call GAIA's checks don't cover — `args._risk_note` set — the exact command unshortened, `in <folder>`, then that note, and no `always_scope`); the wire `args` are the source's `call_args` (what the model sent) when present, else its `args` without the prompt-only `_risk_note` / `_scratch_dir`; a folder or note the agent added goes to `prompt_context`; carry `run_id`; `confirm_url` per §5. |
 
 ### 6.2 Every remaining top-level source event
 
@@ -507,7 +533,8 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 |---|---|---|---|---|
 | `status` | `print_processing_start`, `print_goal`, `print_warning`, `print_info`, `start_progress`, `print_repeated_tool_warning`, `print_completion`, confirm-timeout | **map** | `status` | Already the canonical shape; keep `message`, drop the `status`/`steps`/`elapsed` sub-fields (progress-only). |
 | `step` | `print_step_header` | **fold** | `status` | Step counter is progress narration; render as a `status` line (e.g. `"Step 3/20"`). No dedicated canonical type. |
-| `thinking` | `print_thought`, `print_streaming_text` (`<think>…</think>`) | **fold** | `status` | Reasoning narration, not final assistant text — folds to `status`, **not** `token` (which is answer text the UI commits to the message). See open question Q1. |
+| `thinking` | `print_thought`, `print_streaming_text` (`<think>…</think>`) | **fold** / **map** | `status`, or `reasoning` | Reasoning narration, not final assistant text — never `token` (which is answer text the UI commits to the message). Folds to `status` unless the request set `reasoning: true` (contract ≥ 2.22), which maps it to `reasoning` unchanged. See §9 Q1, now resolved. |
+| `commentary` | `_emit` (before a `tool_start`) | **drop** | — | Re-derived from the `token` text by the receiving host's own handler, so the sidecar's copy would double it. |
 | `plan` | `print_plan` | **fold** | `status` | Plan preview is progress narration; join `steps` into one `status` message. |
 | `tool_args` | `pretty_print_json` (`title == "Arguments"`) | **fold** | `tool_call` | Merged into the preceding `tool_call` as `args` (§6.3), not a standalone event. |
 | `tool_result` | `pretty_print_json` (result branch) | **map** | `tool_result` | Direct. `result_data` (incl. nested `file_list` / `search_results`) → canonical `data`; `render` set from the sidecar's declared card type (replaces the #1000 fence hack). |
@@ -525,8 +552,12 @@ The in-process handler emits `tool_start` (name only) and then, separately,
 `tool_args` (arguments) once they're known. The canonical `tool_call` carries
 `{tool, args}` **together**. The translation layer buffers the `tool_start`,
 attaches `args` from the following `tool_args`, and emits a single `tool_call`.
-If no `tool_args` arrives (argument-less tool), it emits `tool_call{tool,
-args:{}}`.
+Every call the agent loop makes sends `tool_args` before the tool runs, with
+`args: {}` for a tool that takes no arguments, so the `tool_call` is on the
+wire while the tool is still running. A host must treat that `tool_call` as a
+running tool: the messaging bridge stops counting idle time from it until the
+`tool_result`. If a producer sends `tool_start` with no `tool_args` at all,
+the next event (or stream close) flushes it as `tool_call{tool, args:{}}`.
 
 ---
 
@@ -602,10 +633,9 @@ canonical stream and never re-derive the mapping.
 
 ## 9. Open questions
 
-- **Q1 — dedicated reasoning stream?** `thinking` currently folds into `status`.
-  If the v2 UI wants a distinct "reasoning" affordance separate from progress
-  narration and from committed answer text, that is an **additive MINOR** (a new
-  event type or a `status` subtype) — not a change to the frozen seven.
+- **Q1 — dedicated reasoning stream? RESOLVED (contract 2.22).** A client that
+  sends `reasoning: true` gets the model's reasoning as `reasoning` events, an
+  additive MINOR. Without the field, `thinking` still folds into `status`.
 - **Q2 — `policy_alert` terminal vs per-tool.** Mapped to `error`, but a
   governance block is per-*tool* (the run may continue), whereas the canonical
   `error` is documented as terminal. Either the translation layer distinguishes

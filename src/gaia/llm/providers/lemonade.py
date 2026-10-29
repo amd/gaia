@@ -28,6 +28,7 @@ from ..lemonade_client import (
     resolve_ctx_size,
 )
 from ..lemonade_launcher import describe_client_hint
+from ..surface_hints import TUI_MODEL_SWITCH_HINT, TUI_PROVIDER_AUTH_HINT
 
 logger = logging.getLogger(__name__)
 
@@ -332,16 +333,6 @@ class LemonadeCloudAccountError(LemonadeError):
     )
 
 
-#: How a TUI user picks another model. The Agent UI swaps this exact sentence
-#: for :data:`AGENT_UI_MODEL_SWITCH_HINT` (``gaia.ui._chat_helpers``).
-TUI_MODEL_SWITCH_HINT = "Pick another model with /model in the TUI."
-AGENT_UI_MODEL_SWITCH_HINT = (
-    "Pick another model from the model menu next to the Send button. If you "
-    "typed this model ID yourself, clear it under Settings > Advanced > "
-    "Custom model ID."
-)
-
-
 class LemonadeCloudModelUnavailableError(LemonadeError):
     """The cloud provider answered 404 for the model (not deployed, renamed,
     or no access). Retrying the same model can never succeed."""
@@ -376,10 +367,7 @@ class LemonadeAuthRejectedError(LemonadeError):
     """
 
     retryable = False
-    user_message = (
-        "The request was rejected as unauthorized. Run /provider in the TUI "
-        "to reconnect the provider, or verify LEMONADE_API_KEY."
-    )
+    user_message = f"The request was rejected as unauthorized. {TUI_PROVIDER_AUTH_HINT}"
 
 
 def _classify_lemonade_response(
@@ -826,7 +814,8 @@ class LemonadeProvider(LLMClient):
         finish_reason = choice.get("finish_reason", "")
         self._last_finish_reason = finish_reason or None
         tool_calls = message.get("tool_calls")
-        self._last_reasoning = message.get("reasoning_content") or None
+        reasoning = message.get("reasoning_content") or None
+        self._last_reasoning = reasoning
 
         if tool_calls:
             logger.debug(
@@ -855,7 +844,7 @@ class LemonadeProvider(LLMClient):
             )
 
         content = message.get("content") or ""
-        if not content and finish_reason == "stop" and self._last_reasoning:
+        if not content and finish_reason == "stop" and reasoning:
             # Some llama.cpp builds route a completed answer into
             # ``reasoning_content``. A reply cut off by the token limit
             # (``finish_reason="length"``) is left empty on purpose — that text
@@ -865,7 +854,7 @@ class LemonadeProvider(LLMClient):
                 "treating 'reasoning_content' as the answer (model=%s)",
                 effective_model,
             )
-            content = self._last_reasoning
+            content = reasoning
             self._last_reasoning = None
         logger.debug(
             "tool_call_path=%s model_id=%s tool_calling_flag=%s finish_reason=%s",
