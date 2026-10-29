@@ -281,7 +281,7 @@ target_link_libraries(time_agent PRIVATE gaia::gaia_core)
 
 ## Using Alternative LLM Backends
 
-The GAIA C++ agent framework is **not tied to [Lemonade](https://lemonade-server.ai) or any specific LLM provider**. It talks to a standard HTTP endpoint — any server that implements the OpenAI chat completions API works out of the box. Switch backends by changing two fields:
+The GAIA C++ agent framework is **not tied to [Lemonade](https://lemonade-server.ai) or any specific LLM provider**. It talks to a standard HTTP endpoint that implements the OpenAI chat completions API and accepts requests without additional authentication. Switch backends by changing two fields:
 
 ```cpp
 gaia::AgentConfig cfg;
@@ -400,7 +400,9 @@ If OpenSSL isn't found, the build still succeeds but falls back to HTTP only.
     cfg.modelId = "gpt-4o";
     ```
 
-    Set the `Authorization` header via the `OPENAI_API_KEY` environment variable, or modify the HTTP request in a custom `Agent` subclass.
+    <Warning>
+    The C++ framework does not currently read `OPENAI_API_KEY`, expose an API-key field, or send an `Authorization` header. OpenAI's hosted API therefore cannot be used directly with this configuration. Use an OpenAI-compatible endpoint that accepts unauthenticated requests, or extend the C++ transport in your integration to configure authentication.
+    </Warning>
   </Tab>
 
   <Tab title="Azure OpenAI">
