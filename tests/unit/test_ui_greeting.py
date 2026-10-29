@@ -611,7 +611,14 @@ def test_the_greeting_is_never_logged(monkeypatch, caplog):
 
 @pytest.mark.parametrize(
     "version, expected",
-    [("2.26", True), ("3.0", True), ("2.25", False), ("2.19", False), ("2.18", False), (None, False)],
+    [
+        ("2.26", True),
+        ("3.0", True),
+        ("2.25", False),
+        ("2.19", False),
+        ("2.18", False),
+        (None, False),
+    ],
 )
 def test_the_flagship_greets_from_contract_2_26(version, expected):
     from gaia.ui.email_sidecar.profiles import (
@@ -622,3 +629,175 @@ def test_the_flagship_greets_from_contract_2_26(version, expected):
 
     assert greeting_supported(GAIA_PROFILE, version) is expected
     assert greeting_supported(EMAIL_PROFILE, "9.9") is False
+
+
+# ── A greeting on a cloud model is a paid request ─────────────────────────
+
+CLOUD = "fireworks.glm-5p3-flash"
+
+
+class _GreetingAgent:
+    def __init__(self, usage):
+        self.usage = usage
+        self.greeted = 0
+
+    def greet(self, on_text, cancel=None):
+        self.greeted += 1
+        on_text("Hello.")
+        return {"text": "Hello.", "seconds": 0.1, **self.usage}
+
+
+@pytest.fixture
+def spend_db():
+    from gaia.ui.database import ChatDatabase
+
+    database = ChatDatabase(":memory:")
+    yield database
+    database.close()
+
+
+def _greet_on(monkeypatch, db, model, usage=None):
+    """Run the in-process greeting on *model*; returns the agent and the loads."""
+    from contextlib import contextmanager
+
+    from gaia.llm import lemonade_client
+    from gaia.ui import _chat_helpers as chat
+
+    agent = _GreetingAgent(
+        usage
+        if usage is not None
+        else {"prompt_tokens": 20_000, "cached_tokens": 0, "completion_tokens": 30}
+    )
+    loads = []
+
+    @contextmanager
+    def built(*_args):
+        yield agent, model
+
+    class _Client:
+        def __init__(self, **_kw):
+            pass
+
+        def get_model_info(self, name):
+            return {"downloaded": True}
+
+    monkeypatch.setattr(warmup, "_warmer", warmup.PrefixWarmer(lambda: None))
+    monkeypatch.setattr(warmup, "_new_chat_model", lambda db, reg: (model, None, None))
+    monkeypatch.setattr(warmup, "new_chat_agent", built)
+    monkeypatch.setattr(warmup, "_device_for", lambda client, m: "gpu")
+    monkeypatch.setattr(lemonade_client, "LemonadeClient", _Client)
+    monkeypatch.setattr(
+        chat, "_maybe_load_expected_model", lambda m, **kw: loads.append(m)
+    )
+    result = greeting._greet_here(db, None, lambda _t: None, None)
+    return agent, loads, result
+
+
+def test_a_cloud_greeting_counts_toward_this_months_spending(monkeypatch, spend_db):
+    from gaia.ui import spending
+
+    _greet_on(monkeypatch, spend_db, CLOUD)
+
+    report = spending.month_report(spend_db)
+    assert report["turns"] == 1
+    assert report["total_usd"] == pytest.approx(
+        spending.turn_cost(CLOUD, 20_000, 30), abs=1e-4
+    )
+
+
+def test_a_cloud_greeting_without_token_counts_is_still_counted(monkeypatch, spend_db):
+    from gaia.ui import spending
+
+    _greet_on(monkeypatch, spend_db, CLOUD, usage={})
+
+    report = spending.month_report(spend_db)
+    assert (report["turns"], report["unpriced_turns"]) == (1, 1)
+
+
+def test_no_cloud_greeting_once_the_monthly_limit_is_reached(monkeypatch, spend_db):
+    from gaia.ui import spending
+
+    spending.set_limit(spend_db, 0.01)
+    spending.record_turn(
+        spend_db, CLOUD, {"input_tokens": 1_000_000, "output_tokens": 100_000}
+    )
+
+    with pytest.raises(greeting.GreetingUnavailable, match="monthly limit"):
+        _greet_on(monkeypatch, spend_db, CLOUD)
+
+
+def test_the_limit_stops_a_cloud_greeting_before_any_model_call(monkeypatch, spend_db):
+    from contextlib import contextmanager
+
+    from gaia.llm import lemonade_client
+    from gaia.ui import _chat_helpers as chat
+    from gaia.ui import spending
+
+    spending.set_limit(spend_db, 0.01)
+    spending.record_turn(
+        spend_db, CLOUD, {"input_tokens": 1_000_000, "output_tokens": 100_000}
+    )
+    agent = _GreetingAgent({})
+    loads = []
+
+    @contextmanager
+    def built(*_args):
+        yield agent, CLOUD
+
+    class _Client:
+        def __init__(self, **_kw):
+            pass
+
+        def get_model_info(self, name):
+            return {"downloaded": False}
+
+    monkeypatch.setattr(warmup, "_warmer", warmup.PrefixWarmer(lambda: None))
+    monkeypatch.setattr(warmup, "_new_chat_model", lambda db, reg: (CLOUD, None, None))
+    monkeypatch.setattr(warmup, "new_chat_agent", built)
+    monkeypatch.setattr(lemonade_client, "LemonadeClient", _Client)
+    monkeypatch.setattr(
+        chat, "_maybe_load_expected_model", lambda m, **kw: loads.append(m)
+    )
+
+    with pytest.raises(greeting.GreetingUnavailable):
+        greeting._greet_here(spend_db, None, lambda _t: None, None)
+    assert (agent.greeted, loads) == (0, [])
+    assert spending.month_report(spend_db)["turns"] == 1
+
+
+def test_a_local_greeting_is_never_stopped_or_counted_by_the_cloud_limit(
+    monkeypatch, spend_db
+):
+    from gaia.ui import spending
+
+    spending.set_limit(spend_db, 0.01)
+    spending.record_turn(
+        spend_db, CLOUD, {"input_tokens": 1_000_000, "output_tokens": 100_000}
+    )
+
+    agent, loads, result = _greet_on(monkeypatch, spend_db, MODEL)
+
+    assert result["text"] == "Hello." and agent.greeted == 1 and loads == [MODEL]
+    assert spending.month_report(spend_db)["turns"] == 1
+
+
+def test_a_corrupt_saved_limit_fails_the_greeting_loudly(monkeypatch, spend_db):
+    spend_db.set_setting("cloud_spend_limit_usd", "lots")
+
+    with pytest.raises(ValueError, match="not a number"):
+        _greet_on(monkeypatch, spend_db, CLOUD)
+
+
+def test_greet_reports_the_completion_tokens_it_spent():
+    agent = _Agent()
+    agent.chat.llm_client = SimpleNamespace(
+        get_last_usage=lambda: {
+            "prompt_tokens": 100,
+            "cached_tokens": 40,
+            "completion_tokens": 12,
+        }
+    )
+
+    result = agent.greet(lambda _t: None)
+
+    assert (result["prompt_tokens"], result["completion_tokens"]) == (100, 12)

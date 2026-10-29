@@ -21,7 +21,7 @@ import logging
 import threading
 from typing import Any, Callable, Dict, Optional
 
-from gaia.ui import warmup
+from gaia.ui import spending, warmup
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +96,10 @@ def _greet_here(db, registry, on_text, cancel) -> Optional[Dict[str, Any]]:
                 "a message to download it, or pick a downloaded model in the "
                 "model menu."
             )
+        # On a cloud model the greeting is a paid request like any turn.
+        refusal = spending.limit_refusal(db, model)
+        if refusal:
+            raise GreetingUnavailable(refusal)
         warmup.get_warmer().set_target(model, warmup._device_for(client, model))
         if stopped():
             return None
@@ -104,7 +108,16 @@ def _greet_here(db, registry, on_text, cancel) -> Optional[Dict[str, Any]]:
         if stopped():
             return None
         warmup._set_phase("priming")
-        return agent.greet(on_text, cancel=cancel)
+        result = agent.greet(on_text, cancel=cancel)
+        spending.record_turn(
+            db,
+            model,
+            {
+                "input_tokens": result.get("prompt_tokens"),
+                "output_tokens": result.get("completion_tokens"),
+            },
+        )
+        return result
 
 
 def _greet_in_sidecar(db, on_text, cancel) -> Optional[Dict[str, Any]]:

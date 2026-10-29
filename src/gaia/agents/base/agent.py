@@ -9174,13 +9174,14 @@ Do NOT wrap conversational replies in JSON.
         return self._with_prompt_usage(result)
 
     def _with_prompt_usage(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """Add the last call's prompt and cached token counts to *result*."""
+        """Add the last call's prompt, cached and completion token counts to *result*."""
         client = getattr(self.chat, "llm_client", None)
         usage_of = getattr(client, "get_last_usage", None)
         usage = usage_of() if callable(usage_of) else None
         if isinstance(usage, dict):
             result["prompt_tokens"] = usage.get("prompt_tokens")
             result["cached_tokens"] = usage.get("cached_tokens")
+            result["completion_tokens"] = usage.get("completion_tokens")
         return result
 
     def _prepare_first_turn(self, prompt: str, say: Callable[[str], None]) -> None:
