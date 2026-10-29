@@ -847,6 +847,14 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     )
 
 
+def _declare_who_answers(handler: Any, session: Any, request: "QueryRequest") -> None:
+    """Tell *handler* whether a person can answer a confirmation on this turn."""
+    handler.answers_confirmations = (
+        session is not None and request.can_answer_questions is not False
+    )
+    handler.nobody_answers = not handler.answers_confirmations
+
+
 def _apply_memory_mode(agent: Any, mode: Optional[str]) -> None:
     """Turn *agent*'s memory writes off or back on for this turn (>= 2.18).
 
@@ -1525,9 +1533,7 @@ async def query(request: QueryRequest):
         # AND there is a session to hold the grant. ``can_answer_questions`` is
         # the caller's own declaration that a human is watching (spec >= 2.6); a
         # one-shot sets it False precisely so the agent never parks on a prompt.
-        handler.answers_confirmations = (
-            session is not None and request.can_answer_questions is not False
-        )
+        _declare_who_answers(handler, session, request)
         _apply_memory_mode(agent, request.memory)
         _apply_internet_switch(agent, request.internet_off)
         if request.can_answer_questions is False:

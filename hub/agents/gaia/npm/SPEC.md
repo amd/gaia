@@ -794,7 +794,7 @@ failed start never leaks a process.
 | ------- | ----------------------------------------------------------------------- |
 | `0`     | Success                                                                 |
 | `1`     | A typed failure: `IntegrityError`, `PlatformError`, `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`, `PortInUseError`, `SidecarExitedError`, `MalformedResponseError`, or an unexpected error; also `serve` on Ctrl+C when the sidecar survives the forced kill (the message names its pid and the kill command) |
-| `2`     | Usage error: unknown command, invalid `--port`, or a flag the command does not read (`run --port`, `serve --component`, `serve --cache-dir`, `run`/`serve` `--platform`), an unknown `--component`, or a non-https `--base-url` without `--allow-insecure-base-url` |
+| `2`     | Usage error: unknown command, an unknown option, invalid `--port`, or a flag the command does not read (`run --port`, `serve --component`, `serve --cache-dir`, `run`/`serve` `--platform`), an unknown `--component`, or a non-https `--base-url` without `--allow-insecure-base-url` |
 | *other* | From `run`: the TUI's own exit code, propagated verbatim                 |
 
 A TUI killed by a signal propagates as `128 + signum` (the shell convention), so a

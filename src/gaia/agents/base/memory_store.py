@@ -45,6 +45,8 @@ from typing import (
 )
 from uuid import uuid4
 
+from gaia.utils.sqlite_wal import enable_wal
+
 logger = logging.getLogger(__name__)
 
 
@@ -512,6 +514,7 @@ CREATE TABLE IF NOT EXISTS tool_history (
     args        TEXT,
     result_summary TEXT,
     success     INTEGER NOT NULL,
+    executed    INTEGER NOT NULL DEFAULT 1,
     error       TEXT,
     duration_ms INTEGER,
     timestamp   TEXT NOT NULL
@@ -771,12 +774,12 @@ class MemoryStore:
     def _init_schema(self):
         """Create tables, indexes, triggers, and set WAL mode.
 
-        Fresh installs get the full v7 schema.  Existing databases at v1–v6 are
-        migrated automatically (v1→v2 and v6→v7 via ALTER TABLE ADD COLUMN;
-        v2→v3 through v5→v6 via CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
+        Fresh installs get the full v8 schema. Existing databases at v1–v7 are
+        migrated automatically; v8 adds the executed/not-run distinction to
+        tool history without discarding existing rows.
         """
         with self._locked():
-            self._conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(self._conn)
             # Allow up to 5 s of retries before raising SQLITE_BUSY.  This
             # prevents spurious errors when the dashboard REST singleton and
             # the ChatAgent instance share the same WAL file concurrently.
@@ -795,7 +798,7 @@ class MemoryStore:
             if cursor.fetchone()[0] == 0:
                 self._conn.execute(
                     "INSERT INTO schema_version VALUES (?, ?)",
-                    (7, _now_iso()),
+                    (8, _now_iso()),
                 )
             else:
                 # Run migrations for existing databases
@@ -923,6 +926,28 @@ class MemoryStore:
             )
             logger.info("[MemoryStore] schema migration to v7 complete")
             current_version = 7
+
+        if current_version < 8:
+            # v7 -> v8: distinguish a pre-execution denial from a real failure.
+            try:
+                self._conn.execute(
+                    "ALTER TABLE tool_history ADD COLUMN executed INTEGER NOT NULL DEFAULT 1"
+                )
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+            self._conn.execute("""
+                UPDATE tool_history
+                SET executed = 0
+                WHERE success = 0 AND executed = 1
+                  AND (result_summary LIKE '%"status": "denied%'
+                       OR result_summary LIKE '%''status'': ''denied''%')
+                """)
+            self._conn.execute(
+                "UPDATE schema_version SET version = 8, migrated_at = ?", (_now_iso(),)
+            )
+            logger.info("[MemoryStore] schema migration to v8 complete")
+            current_version = 8
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -2703,6 +2728,7 @@ class MemoryStore:
         success: bool,
         error: str | None = None,
         duration_ms: int | None = None,
+        executed: bool = True,
     ) -> None:
         """Log a tool call to tool_history."""
         now = _now_iso()
@@ -2720,8 +2746,8 @@ class MemoryStore:
                 self._conn.execute(
                     """
                     INSERT INTO tool_history
-                        (session_id, tool_name, args, result_summary, success, error, duration_ms, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        (session_id, tool_name, args, result_summary, success, executed, error, duration_ms, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         session_id,
@@ -2729,6 +2755,7 @@ class MemoryStore:
                         args_json,
                         result_summary,
                         int(success),
+                        int(executed),
                         error,
                         duration_ms,
                         now,
@@ -2748,7 +2775,7 @@ class MemoryStore:
                 SELECT id, session_id, tool_name, args, result_summary,
                        success, error, duration_ms, timestamp
                 FROM tool_history
-                WHERE success = 0 AND tool_name = ?
+                WHERE executed = 1 AND success = 0 AND tool_name = ?
                 ORDER BY timestamp DESC
                 LIMIT ?
             """
@@ -2758,7 +2785,7 @@ class MemoryStore:
                 SELECT id, session_id, tool_name, args, result_summary,
                        success, error, duration_ms, timestamp
                 FROM tool_history
-                WHERE success = 0
+                WHERE executed = 1 AND success = 0
                 ORDER BY timestamp DESC
                 LIMIT ?
             """
@@ -2769,13 +2796,13 @@ class MemoryStore:
             return [self._row_to_tool_dict(r) for r in cursor.fetchall()]
 
     def get_tool_stats(self, tool_name: str) -> Dict:
-        """Returns: {total_calls, success_rate, avg_duration_ms, last_error}"""
+        """Executed-call stats plus the separately visible denial count."""
         with self._locked():
             cursor = self._conn.execute(
                 """
-                SELECT COUNT(*) as total,
-                       SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successes,
-                       AVG(duration_ms) as avg_ms
+                SELECT SUM(CASE WHEN executed = 1 THEN 1 ELSE 0 END) as total,
+                       SUM(CASE WHEN executed = 1 AND success = 1 THEN 1 ELSE 0 END) as successes,
+                       AVG(CASE WHEN executed = 1 THEN duration_ms END) as avg_ms
                 FROM tool_history
                 WHERE tool_name = ?
                 """,
@@ -2790,19 +2817,25 @@ class MemoryStore:
             cursor = self._conn.execute(
                 """
                 SELECT error FROM tool_history
-                WHERE tool_name = ? AND success = 0 AND error IS NOT NULL
+                WHERE tool_name = ? AND executed = 1 AND success = 0 AND error IS NOT NULL
                 ORDER BY timestamp DESC LIMIT 1
                 """,
                 (tool_name,),
             )
             err_row = cursor.fetchone()
             last_error = err_row[0] if err_row else None
+            denied_row = self._conn.execute(
+                "SELECT COUNT(*) FROM tool_history WHERE tool_name = ? AND executed = 0",
+                (tool_name,),
+            ).fetchone()
+            denied_count = denied_row[0] if denied_row else 0
 
         return {
             "total_calls": total,
             "success_rate": (successes / total) if total > 0 else 0.0,
             "avg_duration_ms": round(avg_ms) if avg_ms is not None else None,
             "last_error": last_error,
+            "denied_count": denied_count,
         }
 
     def _row_to_tool_dict(self, row) -> Dict:
@@ -2889,19 +2922,19 @@ class MemoryStore:
 
             # Tool stats
             t_total = self._conn.execute(
-                "SELECT COUNT(*) FROM tool_history"
+                "SELECT COUNT(*) FROM tool_history WHERE executed = 1"
             ).fetchone()[0]
 
             t_unique = self._conn.execute(
-                "SELECT COUNT(DISTINCT tool_name) FROM tool_history"
+                "SELECT COUNT(DISTINCT tool_name) FROM tool_history WHERE executed = 1"
             ).fetchone()[0]
 
             t_successes = self._conn.execute(
-                "SELECT COUNT(*) FROM tool_history WHERE success = 1"
+                "SELECT COUNT(*) FROM tool_history WHERE executed = 1 AND success = 1"
             ).fetchone()[0]
 
             t_errors = self._conn.execute(
-                "SELECT COUNT(*) FROM tool_history WHERE success = 0"
+                "SELECT COUNT(*) FROM tool_history WHERE executed = 1 AND success = 0"
             ).fetchone()[0]
 
             # Temporal stats
@@ -2972,6 +3005,9 @@ class MemoryStore:
                     round(t_successes / t_total, 4) if t_total > 0 else 0.0
                 ),
                 "total_errors": t_errors,
+                "denied_calls": self._conn.execute(
+                    "SELECT COUNT(*) FROM tool_history WHERE executed = 0"
+                ).fetchone()[0],
             },
             "temporal": {
                 "upcoming_count": upcoming_count,
@@ -3124,24 +3160,28 @@ class MemoryStore:
     def get_tool_summary(self, limit: int = 200) -> List[Dict]:
         """Per-tool stats for the tool activity table.
 
-        Uses a single LEFT JOIN to retrieve the last error per tool —
-        no N+1 queries. Capped at `limit` rows (default 200) to prevent
-        unbounded payloads when many distinct tool names are recorded.
+        Success and failure metrics include only calls that reached a tool;
+        pre-execution denials are reported separately. Uses a single LEFT JOIN
+        to retrieve the last error per tool — no N+1 queries. Capped at
+        `limit` rows (default 200) to prevent unbounded payloads when many
+        distinct tool names are recorded.
         """
         sql = """
             SELECT t.tool_name,
                    t.total,
                    t.successes,
                    t.failures,
+                   t.denied,
                    t.avg_ms,
                    t.last_used,
                    e.error AS last_error
             FROM (
                 SELECT tool_name,
-                       COUNT(*) AS total,
-                       SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS successes,
-                       SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failures,
-                       AVG(duration_ms) AS avg_ms,
+                       SUM(CASE WHEN executed = 1 THEN 1 ELSE 0 END) AS total,
+                       SUM(CASE WHEN executed = 1 AND success = 1 THEN 1 ELSE 0 END) AS successes,
+                       SUM(CASE WHEN executed = 1 AND success = 0 THEN 1 ELSE 0 END) AS failures,
+                       SUM(CASE WHEN executed = 0 THEN 1 ELSE 0 END) AS denied,
+                       AVG(CASE WHEN executed = 1 THEN duration_ms END) AS avg_ms,
                        MAX(timestamp) AS last_used
                 FROM tool_history
                 GROUP BY tool_name
@@ -3154,7 +3194,7 @@ class MemoryStore:
                            PARTITION BY tool_name ORDER BY timestamp DESC
                        ) AS rn
                 FROM tool_history
-                WHERE success = 0 AND error IS NOT NULL
+                WHERE executed = 1 AND success = 0 AND error IS NOT NULL
             ) e ON t.tool_name = e.tool_name AND e.rn = 1
         """
         with self._locked():
@@ -3167,10 +3207,11 @@ class MemoryStore:
                 "total_calls": r[1],
                 "success_count": r[2],
                 "failure_count": r[3],
+                "denied_count": r[4],
                 "success_rate": round(r[2] / r[1], 4) if r[1] > 0 else 0.0,
-                "avg_duration_ms": round(r[4]) if r[4] is not None else None,
-                "last_used": r[5],
-                "last_error": r[6],
+                "avg_duration_ms": round(r[5]) if r[5] is not None else None,
+                "last_used": r[6],
+                "last_error": r[7],
             }
             for r in rows
         ]
@@ -3197,7 +3238,7 @@ class MemoryStore:
                 """
                 SELECT SUBSTR(timestamp, 1, 10) as day, COUNT(*)
                 FROM tool_history
-                WHERE timestamp >= ?
+                WHERE timestamp >= ? AND executed = 1
                 GROUP BY day
                 """,
                 (cutoff,),
@@ -3221,7 +3262,7 @@ class MemoryStore:
                 """
                 SELECT SUBSTR(timestamp, 1, 10) as day, COUNT(*)
                 FROM tool_history
-                WHERE timestamp >= ? AND success = 0
+                WHERE timestamp >= ? AND executed = 1 AND success = 0
                 GROUP BY day
                 """,
                 (cutoff,),
@@ -3260,13 +3301,13 @@ class MemoryStore:
     def get_recent_errors(self, limit: int = 20) -> List[Dict]:
         """Recent tool errors for the error log view.
 
-        Returns tool_history rows where success=0, newest first.
+        Returns executed tool_history rows where success=0, newest first.
         """
         sql = """
             SELECT id, session_id, tool_name, args, result_summary,
                    success, error, duration_ms, timestamp
             FROM tool_history
-            WHERE success = 0
+            WHERE executed = 1 AND success = 0
             ORDER BY timestamp DESC
             LIMIT ?
         """
@@ -3380,7 +3421,7 @@ class MemoryStore:
         with self._locked():
             cursor = self._conn.execute(
                 """
-                SELECT tool_name, args, result_summary, success, error, duration_ms, timestamp
+                SELECT tool_name, args, result_summary, success, executed, error, duration_ms, timestamp
                 FROM tool_history
                 WHERE tool_name = ?
                 ORDER BY timestamp DESC
@@ -3394,9 +3435,10 @@ class MemoryStore:
                     "args": _safe_json_loads(row[1]),
                     "result_summary": row[2],
                     "success": bool(row[3]),
-                    "error": row[4],
-                    "duration_ms": row[5],
-                    "timestamp": row[6],
+                    "executed": bool(row[4]),
+                    "error": row[5],
+                    "duration_ms": row[6],
+                    "timestamp": row[7],
                 }
                 for row in cursor.fetchall()
             ]
@@ -4056,6 +4098,7 @@ class MemoryStore:
                 SELECT session_id
                 FROM tool_history
                 WHERE (:since IS NULL OR timestamp > :since)
+                  AND executed = 1
                 GROUP BY session_id
                 HAVING SUM(success) >= :min_steps
             )
@@ -4073,6 +4116,7 @@ class MemoryStore:
                 )
             ) g ON g.session_id = th.session_id
             WHERE (:since IS NULL OR th.timestamp > :since)
+              AND th.executed = 1
             ORDER BY th.session_id, th.id
         """
         params = {"since": since, "min_steps": min_steps}

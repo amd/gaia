@@ -194,7 +194,7 @@ class AuthRequiredError(ConnectorsError):
             return (
                 f"The stored {prov} credentials are no longer valid (client "
                 "rotation or remote revocation). Reconnect from Settings → "
-                f"Connections, or run `gaia connectors connect "
+                f"Connectors, or run `gaia connectors connect "
                 f"{pid}`. "
                 "See docs/runbooks/google-oauth-client.md."
             )
@@ -280,7 +280,7 @@ class ScopeMismatchError(ConnectorsError):
         return (
             f"The {prov} stored connection is missing required scopes "
             f"({missing}). Reconnect with the missing scopes via Settings → "
-            f"Connections, or run `gaia connectors connect "
+            f"Connectors, or run `gaia connectors connect "
             f"{pid} --scopes "
             f"{' '.join(full_scopes) or '<none>'}`. "
             "See docs/sdk/infrastructure/connections.mdx."

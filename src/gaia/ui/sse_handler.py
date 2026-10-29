@@ -534,6 +534,10 @@ class SSEOutputHandler(OutputHandler):
     #: permission mode; ``None`` when no relayed run is doing so.
     active_relay_mode_session: Optional[str] = None
 
+    #: Set by a transport that knows no person can answer a confirmation on
+    #: this run (an unattended sidecar query), so nothing offers to ask one.
+    nobody_answers: bool = False
+
     #: The sidecar session a relayed run keeps in step with the chat's Internet
     #: switch; ``None`` when no relayed run is doing so.
     active_relay_internet_session: Optional[str] = None

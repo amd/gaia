@@ -97,8 +97,10 @@ Common options:
 | `--component <name>`  | Fetch only `sidecar` or `tui`                                  | `fetch` |
 | `--port <n>`          | Sidecar bind port (default `8141`)                             | `serve` |
 
-A flag a command does not read is **refused**, not ignored — `gaia run --port
-9000` exits 2 rather than silently coming up on the default port.
+A flag a command does not read, or an option the launcher does not know, is
+**refused**, not ignored — `gaia run --port 9000` and `gaia --forse` exit 2
+rather than silently doing something else. Arguments intended for the terminal
+UI must come after a bare `--`, for example `gaia -- --debug`.
 
 Set `DEBUG=gaia` for download, spawn, and sidecar output on stderr. Diagnostics
 never touch stdout, which the terminal UI owns.

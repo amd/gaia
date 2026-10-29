@@ -158,6 +158,22 @@ _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
 _background_tasks: set = set()
 
 
+def relayed_turns_in_flight() -> Optional[str]:
+    """Why restarting the daemon now would cut off a chat's agent turn, or None.
+
+    These turns go straight to the agent, so the daemon cannot count them. A
+    chat still starting its turn has no relayed run yet and does not count.
+    """
+    running = sum(
+        1
+        for handler in list(_active_sse_handlers.values())
+        if getattr(handler, "active_relay_run_id", None) is not None
+    )
+    if not running:
+        return None
+    return f"{running} Agent UI chat(s) are still answering"
+
+
 def _spawn_background(coro) -> asyncio.Task:
     """Run *coro* fire-and-forget without letting it be garbage-collected."""
     task = asyncio.create_task(coro)
@@ -2309,6 +2325,13 @@ def _dispatch_sidecar_query(
             {"type": "agent_error", "content": profile.start_failed_text(exc.kind)}
         )
         return
+
+    from gaia.daemon.client import deferred_restart_notice
+
+    # An update is installed but the daemon waits for other work to finish.
+    notice = deferred_restart_notice()
+    if notice:
+        sse_handler._emit({"type": "status", "status": "info", "message": notice})
 
     if not api_version_supported(profile, handle.api_version):
         sse_handler._emit(
