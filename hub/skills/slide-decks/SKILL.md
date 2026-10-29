@@ -214,8 +214,7 @@ metadata:
 
 **Do not write python-pptx code. Build the deck with
 `slide-decks/build_deck_from_markdown` (or `slide-decks/build_deck` for a JSON
-outline), then check it with `slide-decks/verify_deck`.** Hand-written code
-gets chart pictures and the wrong slide count. Your job is the story and the numbers.
+outline), then check it with `slide-decks/verify_deck`.** Hand-written code gets chart pictures. Your job is the story and the numbers.
 
 ````markdown
 # Northwind Q3 2026 review
@@ -259,8 +258,7 @@ bullets inside it. `Diagram: process` draws them as left-to-right stages
 Use this for stages, steps, levels or options, never a chart of made-up
 scores or a wall of bullets. Values over stages or time: a chart.
 Keep the user's own names for each stage. Under each, a lead line, then 2-4
-bullets of 2-6 words, with no labels like `Focus:`. Use the user's terms in titles
-without inventing abbreviations. Keep `Axis:` under 10 words.
+bullets of 2-6 words, with no labels like `Focus:`. Use the user's terms; invent no abbreviations. Keep `Axis:` under 10 words.
 
 ## Hard rules
 
@@ -271,8 +269,7 @@ without inventing abbreviations. Keep `Axis:` under 10 words.
   `required_items`: short facts and names, not the deck's overall message.
   Never move requested content into the notes: cut other words or split. Notes hold extra detail and the spoken script.
 - **Only numbers the user gave or a tool returned** (compute with
-  `run_python`); data slides name their source. No data given: build anyway,
-  with an `Evidence to add` box.
+  `run_python`); data slides name their source.
 - **On `status: "error"`**, fix every listed problem and call again. Never
   switch to writing code.
 
@@ -281,7 +278,8 @@ without inventing abbreviations. Keep `Axis:` under 10 words.
 1. **Brief.** Settle audience, purpose and slide count. Saved preferences
    apply; this request's `prefs`, `theme`, `template_path` win. Ask **one** short question **only** for a material
    ambiguity, through `request_user_input` with a default.
-   Never ask about anything a default covers.
+   Never ask about anything a default covers. No numbers given is not a
+   reason to ask: build the case with an `Evidence to add` box.
 2. **Key facts.** From files: `list_files`, read each document in full with
    `read_file`, compute numbers from data with `run_python`. Keep a ledger
    (fact, value, source) of headline numbers, changes, events and risks.

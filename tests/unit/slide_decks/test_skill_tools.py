@@ -1106,3 +1106,30 @@ def test_a_count_the_user_gave_out_of_a_base_keeps_its_base(tools, tmp_path):
         )
     assert r1["status"] == "error" and "7 of 14" in r1["problems"][0]
     assert r2["status"] == "ok", r2
+
+
+def test_table_numbers_keep_the_separators_the_user_typed(tools, tmp_path):
+    from pptx import Presentation
+
+    skill, fns, _r = tools
+    md = (
+        "## Signup is the biggest leak\n\n| Stage | Users | Year |\n|---|---|---|\n"
+        "| Visited | 20,000 | 2026 |\n| Signed up | 6,400 | 2026 |\n\n"
+        "### Biggest drop: signup\nTwo in three visitors never sign up\n"
+    )
+    with bind(_Asking("One slide: 20,000 visited, 6,400 signed up, in 2026."), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "f.pptx")
+        )
+    assert r["status"] == "ok", r
+    shapes = Presentation(r["path"]).slides[0].shapes
+    cells = [
+        c.text
+        for sh in shapes
+        if sh.has_table
+        for row in sh.table.rows
+        for c in row.cells
+    ]
+    assert "6,400" in cells and "20,000" in cells and "2026" in cells
+    text = json.dumps(r["slides_built"])
+    assert "Biggest drop: signup. Two in three" in text

@@ -190,7 +190,10 @@ def _box_as_takeaway(col: Dict[str, Any]) -> str:
     said = "; ".join(body)
     if not said:
         return head
-    return said if _TAKEAWAY_HEAD.match(head) else f"{head}: {said}"
+    if _TAKEAWAY_HEAD.match(head):
+        return said
+    # "Biggest drop: signup" already has its colon; a second reads as a typo.
+    return f"{head}. {said}" if ":" in head else f"{head}: {said}"
 
 
 def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
@@ -213,7 +216,19 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
         nonlocal table
         if len(table) >= 2:
             slide.setdefault("columns_table", table[0])
-            slide.setdefault("rows_table", [[_number(c) for c in r] for r in table[1:]])
+            rows = table[1:]
+            slide.setdefault("rows_table", [[_number(c) for c in r] for r in rows])
+            # A column written "6,400" keeps its separators once parsed to 6400.
+            commas = {
+                j: "#,##0"
+                for j in range(len(table[0]))
+                if any(
+                    j < len(r) and re.fullmatch(r"[-+]?\d{1,3}(,\d{3})+", r[j].strip())
+                    for r in rows
+                )
+            }
+            if commas:
+                slide.setdefault("table_formats", commas)
         table = []
 
     for raw in lines:
@@ -396,12 +411,15 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
         return {
             k: v
             for k, v in slide.items()
-            if v is not None and k not in ("columns_table", "rows_table", "image")
+            if v is not None
+            and k not in ("columns_table", "rows_table", "table_formats", "image")
         }
     if "columns_table" in slide:
         slide["type"] = "table"
         slide["columns"] = slide.pop("columns_table")
         slide["rows"] = slide.pop("rows_table")
+        if "table_formats" in slide:
+            slide.setdefault("formats", slide.pop("table_formats"))
         if text:
             slide["footnote"] = slide.get("footnote") or " ".join(text)
         return slide
