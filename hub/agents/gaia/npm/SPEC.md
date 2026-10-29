@@ -258,7 +258,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.25"`                  |
+| Contract version   | `API_VERSION = "2.26"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -278,6 +278,7 @@ the header.
 | `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
 | `POST` | `/v1/gaia/sessions/{session_id}/internet` | Turn one session's internet on or off from its next tool call, including in a turn already running (≥ 2.23) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
+| `POST` | `/v1/gaia/greeting`              | Stream the first message of a new chat (contract ≥ 2.26) |
 
 #### `/query` request body
 
@@ -479,6 +480,22 @@ and tool seconds and its model call count; `conversation` holds one
 call, with that call's token counts and speed. The Agent UI turns it into the
 Context panel's "Under the hood" figures. A run that timed nothing
 carries none, and older binaries never send it, so read it only when present.
+
+`POST /v1/gaia/greeting` (contract ≥ 2.26) writes the first message of a new
+chat and streams it as `text/event-stream`. The body is `{ "memory": "on" |
+"private" | "off" }` (optional; an unknown field is a `422`). The agent sends
+a first turn's real request (system prompt, tools, the turn's memory context
+and the newest session summary) with thinking off, so the model loads and
+the prompt prefix is cached before the user types; a greeting that arrives
+also shows the stack works. Reasoning a model sends anyway is stripped: only
+the greeting's words reach `chunk` and `done`, and a reply that is all
+reasoning ends with an `error`. Under `"private"` or
+`"off"` it draws on no memory and is a plain welcome. It leases the model
+like a user's turn and writes no session history. Events: `status`
+(`phase`: `building`, `model_queue` while another client holds the model,
+then `priming`), `chunk` (`content`), then exactly one `done` (`text`) or
+`error` (`message`). Closing the connection stops it at its next step. The
+greeting's text is not logged.
 
 ### 5.2 `session_id` and agent retention
 

@@ -104,11 +104,12 @@ _EXPECTED_REST_OP_NAMES = {
     "sessions/{session_id}/internet",
     "memory",
     "skills",
+    "greeting",
 }
-_EXPECTED_REST_FUNCTIONAL_COUNT = 9
+_EXPECTED_REST_FUNCTIONAL_COUNT = 10
 # + the init readiness probe and the three liveness/version probes
 # (/health, /version, /v1/gaia/version).
-_EXPECTED_REST_IN_CONTRACT_COUNT = 13
+_EXPECTED_REST_IN_CONTRACT_COUNT = 14
 
 _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 

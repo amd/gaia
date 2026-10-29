@@ -18,6 +18,7 @@ import { useNotificationStore } from './stores/notificationStore';
 import { useScheduleStore } from './stores/scheduleStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
+import { forgetGreeting } from './hooks/useGreeting';
 import { startActiveRunsPoll } from './services/activeRuns';
 import { startQueueDispatcher } from './services/queueDispatch';
 import * as api from './services/api';
@@ -459,6 +460,7 @@ function App() {
             store = useChatStore.getState();
         }
         store.clearDraftDocuments();
+        forgetGreeting();
         store.setDraftPrivate(false);
         store.setDraftFolder(null);
         // Always sent, so the chat runs in exactly the mode its chip showed.

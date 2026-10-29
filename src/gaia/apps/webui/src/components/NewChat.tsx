@@ -10,7 +10,7 @@ import { NpuBackdrop } from './NpuBackdrop';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PrivateChip } from './PrivateChip';
 import { useAttachments } from '../hooks/useAttachments';
-import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
+import { useGreeting, type Greeting } from '../hooks/useGreeting';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import { displayModelName, useModelNames, useModelStore } from '../stores/modelStore';
@@ -20,6 +20,7 @@ import { STARTING_REASON } from '../utils/constants';
 import { log } from '../utils/logger';
 import { durationMs, prefersReducedMotion } from '../utils/motion';
 import { deviceLabel } from '../utils/modelLabels';
+import gaiaRobot from '../assets/gaia-robot.png';
 import type { StartScreen } from '../types';
 import './NewChat.css';
 import { useSavedDraft } from '../hooks/useSavedDraft';
@@ -40,16 +41,42 @@ interface NewChatProps {
 /** How often the start screen is asked for again while the assistant is unavailable. */
 export const START_RETRY_MS = 15_000;
 
-export function greeting(now: Date = new Date()): string {
-    const h = now.getHours();
-    const part = h < 5 ? 'evening' : h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
-    return `Good ${part}. What should we work on?`;
+type Loading = Extract<Greeting, { kind: 'loading' }>;
+
+/** The start-up step the agent is on, e.g. "Loading Gemma 4 E4B on your GPU… 3s". */
+export function loadingLine({ phase, model, device, seconds }: Loading, bootTask: string | null = null): string {
+    let step: string;
+    if (phase === 'waiting') step = 'Waiting for another chat to finish';
+    else if (phase === 'model_queue') step = 'Waiting for the model: another app is using it';
+    else if (phase === 'building') step = 'Starting the agent';
+    else if (phase === 'priming') step = 'Reading GAIA’s instructions';
+    else if (phase === 'loading' && model) {
+        const where = deviceLabel(device);
+        step = `Loading ${displayModelName(model)}${where ? ` on ${where}` : ''}`;
+    } else if (phase === 'loading') step = 'Loading the model';
+    else step = bootTask ?? 'Starting GAIA';
+    return `${step}… ${seconds}s`;
 }
 
-export function warmUpLine({ seconds, model, device }: WarmUpProgress): string {
-    if (!model) return `Getting GAIA ready… ${seconds}s`;
-    const where = deviceLabel(device);
-    return `Loading ${displayModelName(model)}${where ? ` on ${where}` : ''}… ${seconds}s`;
+/** Where the agent's greeting goes: its loading state, its words, or why it has none. */
+function AgentGreeting({ greeting, bootTask, docked, onRetry }: { greeting: Greeting; bootTask: string | null; docked: boolean; onRetry: () => void }) {
+    if (greeting.kind === 'loading') {
+        return (
+            <div className="new-chat-loading is-live" role="status" aria-hidden={docked}>
+                <img className="new-chat-loading-robot" src={gaiaRobot} alt="" width={40} height={40} />
+                <p className="new-chat-loading-line">{loadingLine(greeting, bootTask)}</p>
+            </div>
+        );
+    }
+    if (greeting.kind === 'failed') {
+        return (
+            <p className="new-chat-greeting-error" role="alert">
+                {greeting.message}{' '}
+                <button type="button" className="link-btn" onClick={onRetry}>Try again</button>
+            </p>
+        );
+    }
+    return <h1 className="new-chat-greeting" aria-busy={greeting.kind === 'writing'} aria-hidden={docked}>{greeting.text}</h1>;
 }
 
 /** The assistant didn't start: one plain sentence, a retry, and the full error behind Details. */
@@ -147,7 +174,7 @@ function SetupFailed({ error }: { error: string }) {
     );
 }
 
-/** An empty chat: a greeting and the composer over the NPU backdrop. Created on the first message. */
+/** An empty chat: the agent's greeting and the composer over the NPU backdrop. Created on the first message. */
 export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatProps) {
     const starting = useChatStore((s) => s.systemStatus?.init_state === 'initializing');
     const download = useChatStore((s) => s.systemStatus?.download_progress ?? null);
@@ -163,7 +190,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
     const innerRef = useRef<HTMLDivElement | null>(null);
     const composerRef = useRef<HTMLDivElement | null>(null);
     const attachments = useAttachments();
-    const warming = useWarmUp();
+    const { greeting, retry: retryGreeting } = useGreeting();
+    const bootTask = useChatStore((s) => s.systemStatus?.init_tasks?.find((t) => t.status === 'running')?.name ?? null);
     useModelNames();
 
     const live = useRef(true);
@@ -267,7 +295,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
     });
 
     const downloading = download?.state === 'starting' || download?.state === 'downloading';
-    const activity = sending ? 'sending' : downloading ? 'download' : starting || warming !== null ? 'loading' : 'idle';
+    const activity = sending ? 'sending' : downloading ? 'download' : starting || greeting.kind === 'loading' ? 'loading' : 'idle';
     const folder = start?.working_folder;
 
     return (
@@ -281,7 +309,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                 composerRef={composerRef}
             />
             <div className="new-chat-inner" ref={innerRef}>
-                <h1 className="new-chat-greeting" aria-hidden={docked}>{greeting()}</h1>
+                <AgentGreeting greeting={greeting} bootTask={bootTask} docked={docked} onRetry={retryGreeting} />
                 {setupError && !remote && <SetupFailed error={setupError} />}
                 <div ref={composerRef}>
                     <Composer
@@ -300,9 +328,6 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                     {folder && <FolderChip folder={folder} disabled={starting || sending} />}
                 </div>
                 <LibraryDocuments />
-                {warming !== null && !starting && (
-                    <p className="new-chat-warmup" role="status">{warmUpLine(warming)}</p>
-                )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
                 {startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>

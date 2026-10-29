@@ -3,11 +3,12 @@
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
+import { NewChat, START_RETRY_MS, loadingLine } from '../NewChat';
+import { forgetGreeting } from '../../hooks/useGreeting';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
-import type { ActiveModel, Document, StartScreen, SystemStatus } from '../../types';
+import type { ActiveModel, Document, GreetingEvent, StartScreen, SystemStatus } from '../../types';
 
 vi.mock('../../services/api');
 
@@ -19,10 +20,33 @@ const START: StartScreen = {
     working_folder: { path: '/home/u/my-project', name: 'my-project', gaia_folder: false, choosable: true },
 };
 
+/** The greeting stream answers with *events*, then ends. */
+function greetWith(...events: GreetingEvent[]) {
+    vi.mocked(api.streamGreeting).mockImplementation(async (onEvent) => {
+        for (const event of events) onEvent(event);
+    });
+}
+
+/** The greeting stream stays open; the test sends its events. */
+function pendingGreeting() {
+    let onEvent: ((event: GreetingEvent) => void) | null = null;
+    let signal: AbortSignal | null = null;
+    vi.mocked(api.streamGreeting).mockImplementation((handler, abort) => {
+        onEvent = handler;
+        signal = abort;
+        return new Promise(() => {});
+    });
+    return {
+        emit: (event: GreetingEvent) => onEvent?.(event),
+        signal: () => signal,
+    };
+}
+
 beforeEach(() => {
     vi.clearAllMocks();
+    forgetGreeting();
     useChatStore.setState({ systemStatus: null });
-    vi.mocked(api.requestWarmUp).mockResolvedValue({ state: 'ready' });
+    greetWith({ type: 'done', text: 'Hello. What should we work on?' });
     vi.mocked(api.getStartScreen).mockResolvedValue(START);
     vi.mocked(api.listDocuments).mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
     useChatStore.setState({ documents: [], draftDocumentIds: [], showDocLibrary: false });
@@ -169,15 +193,17 @@ describe('NewChat while the chat is being created (#5712)', () => {
     });
 });
 
-describe('NewChat while the first prompt is being primed', () => {
-    it('shows the wait without holding the message box', async () => {
+describe('NewChat while the agent gets ready', () => {
+    it('shows the loading screen, not a greeting, and keeps the message box open', async () => {
         useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
-        vi.mocked(api.requestWarmUp).mockResolvedValue({ state: 'warming', elapsed_seconds: 4.6 });
-        vi.mocked(api.getWarmUp).mockResolvedValue({ state: 'warming', elapsed_seconds: 5.2 });
+        const greet = pendingGreeting();
         const onSend = vi.fn().mockResolvedValue(undefined);
         render(<NewChat onSend={onSend} />);
 
-        expect(await screen.findByRole('status')).toHaveTextContent('Getting GAIA ready… 4s');
+        expect(await screen.findByRole('status')).toHaveTextContent('Starting GAIA… 0s');
+        act(() => greet.emit({ type: 'status', phase: 'building' }));
+        expect(screen.getByRole('status')).toHaveTextContent('Starting the agent… 0s');
+        expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
         const box = screen.getByLabelText('Message');
         expect(box).toBeEnabled();
         fireEvent.change(box, { target: { value: 'hello' } });
@@ -185,38 +211,86 @@ describe('NewChat while the first prompt is being primed', () => {
         expect(onSend).toHaveBeenCalledWith('hello');
     });
 
-    it('clears the wait once the prompt is ready', async () => {
+    it('names the start-up task while GAIA itself is starting', async () => {
+        useChatStore.setState({
+            systemStatus: {
+                init_state: 'initializing',
+                init_tasks: [{ name: 'Checking LLM server', status: 'done' }, { name: 'Loading AI model', status: 'running' }],
+            } as SystemStatus,
+        });
+        pendingGreeting();
+        render(<NewChat onSend={vi.fn()} />);
+        expect(await screen.findByRole('status')).toHaveTextContent('Loading AI model… 0s');
+    });
+
+    it('counts the seconds while it waits', async () => {
         vi.useFakeTimers({ shouldAdvanceTime: true });
         try {
-            useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
-            vi.mocked(api.requestWarmUp).mockResolvedValue({ state: 'warming', elapsed_seconds: 1 });
-            vi.mocked(api.getWarmUp).mockResolvedValue({ state: 'ready', elapsed_seconds: 3 });
+            pendingGreeting();
             render(<NewChat onSend={vi.fn()} />);
-
-            await screen.findByText(/Getting GAIA ready/);
-            await vi.advanceTimersByTimeAsync(1_100);
-            await waitFor(() => expect(screen.queryByText(/Getting GAIA ready/)).toBeNull());
+            await screen.findByText('Starting GAIA… 0s');
+            await act(() => vi.advanceTimersByTimeAsync(2_000));
+            expect(screen.getByRole('status')).toHaveTextContent('Starting GAIA… 2s');
         } finally {
             vi.useRealTimers();
         }
     });
+});
 
-    it('stays quiet when nothing needs priming', async () => {
+describe('NewChat greeting', () => {
+    it("shows the agent's own words as they stream in", async () => {
+        const greet = pendingGreeting();
         render(<NewChat onSend={vi.fn()} />);
-        await waitFor(() => expect(api.requestWarmUp).toHaveBeenCalled());
-        expect(screen.queryByText(/Getting GAIA ready/)).toBeNull();
+        act(() => greet.emit({ type: 'chunk', content: 'Welcome back. ' }));
+        expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Welcome back.');
+        expect(screen.queryByRole('status')).toBeNull();
+        act(() => greet.emit({ type: 'chunk', content: 'Shall we finish the parser?' }));
+        act(() => greet.emit({ type: 'done', text: 'Welcome back. Shall we finish the parser?' }));
+        expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Welcome back. Shall we finish the parser?');
+        expect(screen.getByRole('heading', { level: 1 })).toHaveClass('new-chat-greeting');
+    });
+
+    it('asks once per empty chat, not on every render or remount', async () => {
+        greetWith({ type: 'done', text: 'Hi there. What are we building today?' });
+        const { unmount } = render(<NewChat onSend={vi.fn()} />);
+        await screen.findByRole('heading', { name: 'Hi there. What are we building today?' });
+        unmount();
+        render(<NewChat onSend={vi.fn()} />);
+        expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Hi there. What are we building today?');
+        expect(api.streamGreeting).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks again for the next empty chat once this one is started', async () => {
+        greetWith({ type: 'done', text: 'Hello.' });
+        const { unmount } = render(<NewChat onSend={vi.fn()} />);
+        await screen.findByRole('heading', { name: 'Hello.' });
+        unmount();
+        forgetGreeting();
+        render(<NewChat onSend={vi.fn()} />);
+        await waitFor(() => expect(api.streamGreeting).toHaveBeenCalledTimes(2));
+    });
+
+    it('says why there is no greeting, with a retry, instead of a canned one', async () => {
+        greetWith({ type: 'error', message: "GAIA's agent couldn't write a greeting: Lemonade is not reachable." });
+        render(<NewChat onSend={vi.fn()} />);
+        expect(await screen.findByRole('alert')).toHaveTextContent("GAIA's agent couldn't write a greeting: Lemonade is not reachable.");
+        expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+
+        greetWith({ type: 'done', text: 'Back on track. What next?' });
+        fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+        expect(await screen.findByRole('heading', { name: 'Back on track. What next?' })).toBeInTheDocument();
+        expect(api.streamGreeting).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops the greeting when the empty chat goes away', () => {
+        const greet = pendingGreeting();
+        const { unmount } = render(<NewChat onSend={vi.fn()} />);
+        unmount();
+        expect(greet.signal()?.aborted).toBe(true);
     });
 });
 
 describe('NewChat empty state', () => {
-    it('greets in one line', () => {
-        render(<NewChat onSend={vi.fn()} />);
-        expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/^Good (morning|afternoon|evening)\. What should we work on\?$/);
-        expect(greeting(new Date(2026, 0, 1, 9))).toBe('Good morning. What should we work on?');
-        expect(greeting(new Date(2026, 0, 1, 14))).toBe('Good afternoon. What should we work on?');
-        expect(greeting(new Date(2026, 0, 1, 21))).toBe('Good evening. What should we work on?');
-    });
-
     it('takes focus when New chat is chosen while it is already showing', () => {
         const { rerender } = render(<NewChat onSend={vi.fn()} focusRequest={1} />);
         const box = screen.getByPlaceholderText('Ask GAIA anything');
@@ -248,6 +322,18 @@ describe('NewChat empty state', () => {
         expect(main).toHaveClass('is-docked');
         fireEvent.change(screen.getByLabelText('Message'), { target: { value: '' } });
         expect(main).not.toHaveClass('is-docked');
+    });
+
+    it('steps the loading line aside once typing starts, but never a failed greeting', async () => {
+        const greet = pendingGreeting();
+        render(<NewChat onSend={vi.fn()} />);
+        expect(await screen.findByRole('status')).toHaveTextContent('Starting GAIA');
+
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'h' } });
+        expect(screen.queryByRole('status')).toBeNull();
+
+        act(() => greet.emit({ type: 'error', message: 'Lemonade is not reachable.' }));
+        expect(screen.getByRole('alert')).toHaveTextContent('Lemonade is not reachable.');
     });
 
     it('shows the working folder under the message box, where its picker opens', async () => {
@@ -388,7 +474,7 @@ describe('NewChat empty state', () => {
         }
     });
 
-    it('makes no model call of its own', async () => {
+    it('sends no chat message of its own', async () => {
         render(<NewChat onSend={vi.fn()} />);
         await screen.findByText('my-project');
         expect(api.sendMessageStream).not.toHaveBeenCalled();
@@ -396,27 +482,31 @@ describe('NewChat empty state', () => {
     });
 });
 
-describe('NewChat warm-up line', () => {
+describe('NewChat loading line', () => {
+    const base = { kind: 'loading' as const, model: null, device: null, seconds: 2 };
 
-    it('names the model and device being loaded', async () => {
-        vi.mocked(api.requestWarmUp).mockResolvedValue({
-            state: 'warming', elapsed_seconds: 3.4, model: 'Qwen3.6-35B-A3B-GGUF', device: 'gpu',
-        });
-        vi.mocked(api.getWarmUp).mockResolvedValue({ state: 'warming', elapsed_seconds: 4 });
-        render(<NewChat onSend={vi.fn()} />);
-        expect(await screen.findByRole('status')).toHaveTextContent('Loading Qwen3.6-35B-A3B-GGUF on your GPU… 3s');
+    it('names each start-up step', () => {
+        expect(loadingLine({ ...base, phase: 'starting' })).toBe('Starting GAIA… 2s');
+        expect(loadingLine({ ...base, phase: 'starting' }, 'Loading ML libraries')).toBe('Loading ML libraries… 2s');
+        expect(loadingLine({ ...base, phase: 'waiting' })).toBe('Waiting for another chat to finish… 2s');
+        expect(loadingLine({ ...base, phase: 'model_queue' })).toBe('Waiting for the model: another app is using it… 2s');
+        expect(loadingLine({ ...base, phase: 'building' })).toBe('Starting the agent… 2s');
+        expect(loadingLine({ ...base, phase: 'loading' })).toBe('Loading the model… 2s');
+        expect(loadingLine({ ...base, phase: 'priming' })).toBe('Reading GAIA’s instructions… 2s');
     });
 
     it('words each device, and leaves out one Lemonade did not report', () => {
-        expect(warmUpLine({ seconds: 1, model: 'gemma4-it-e2b-FLM', device: 'npu' })).toBe('Loading gemma4-it-e2b-FLM on your NPU… 1s');
-        expect(warmUpLine({ seconds: 2, model: 'Gemma-4-E4B-it-GGUF', device: 'cpu' })).toBe('Loading Gemma-4-E4B-it-GGUF on the CPU… 2s');
-        expect(warmUpLine({ seconds: 2, model: 'Gemma-4-E4B-it-GGUF', device: null })).toBe('Loading Gemma-4-E4B-it-GGUF… 2s');
-        expect(warmUpLine({ seconds: 0, model: null, device: null })).toBe('Getting GAIA ready… 0s');
+        expect(loadingLine({ ...base, phase: 'loading', model: 'gemma4-it-e2b-FLM', device: 'npu' })).toBe('Loading gemma4-it-e2b-FLM on your NPU… 2s');
+        expect(loadingLine({ ...base, phase: 'loading', model: 'Gemma-4-E4B-it-GGUF', device: 'cpu' })).toBe('Loading Gemma-4-E4B-it-GGUF on the CPU… 2s');
+        expect(loadingLine({ ...base, phase: 'loading', model: 'Gemma-4-E4B-it-GGUF', device: null })).toBe('Loading Gemma-4-E4B-it-GGUF… 2s');
     });
 
-    it('names the model the way the model chip does once its friendly name is known', () => {
+    it('names the model the way the model chip does once its friendly name is known', async () => {
         useModelStore.setState({ names: { 'Gemma-4-E4B-it-GGUF': 'Gemma 4 E4B' } });
-        expect(warmUpLine({ seconds: 3, model: 'Gemma-4-E4B-it-GGUF', device: 'gpu' })).toBe('Loading Gemma 4 E4B on your GPU… 3s');
+        const greet = pendingGreeting();
+        render(<NewChat onSend={vi.fn()} />);
+        act(() => greet.emit({ type: 'status', phase: 'loading', model: 'Gemma-4-E4B-it-GGUF', device: 'gpu' }));
+        expect(await screen.findByRole('status')).toHaveTextContent('Loading Gemma 4 E4B on your GPU… 0s');
         useModelStore.setState({ names: {} });
     });
 });

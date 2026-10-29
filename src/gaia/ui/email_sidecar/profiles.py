@@ -166,6 +166,12 @@ class RelayProfile:
     #: agent can't take ``memory`` — it is below :attr:`min_memory_api_version`,
     #: or that floor is ``None`` — so it would save to memory.
     memory_upgrade_message: str = ""
+    #: Contract version from which ``POST /v1/<agent>/greeting`` writes a new
+    #: chat's first message. ``None`` means the agent has no such route.
+    min_greeting_api_version: Optional[Tuple[int, int]] = None
+    #: Shown in place of the greeting when the installed agent is below
+    #: :attr:`min_greeting_api_version`.
+    greeting_upgrade_message: str = ""
     #: Contract version from which ``/query`` takes ``internet_off``. ``None``
     #: means the relay never sends it: the agent keeps its own network rules.
     min_internet_api_version: Optional[Tuple[int, int]] = None
@@ -557,6 +563,14 @@ GAIA_PROFILE = RelayProfile(
         "GAIA to the latest version, then reopen this page. Its skills still "
         "work in chat."
     ),
+    # 2.26 added POST /greeting.
+    min_greeting_api_version=(2, 26),
+    # No update command here: until a release ships a 2.26+ agent binary,
+    # `gaia init` installs the same agent.
+    greeting_upgrade_message=(
+        "The GAIA agent installed on this PC can't write greetings yet (it "
+        "predates contract 2.26). Chat works as usual: type a message to start."
+    ),
     # 2.18 added /query's memory field.
     min_memory_api_version=(2, 18),
     memory_upgrade_message=(
@@ -672,6 +686,15 @@ def skills_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     return floor is not None and _meets(api_version, floor)
 
 
+def greeting_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar writes greetings on ``POST /v1/<agent>/greeting``.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_greeting_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def scope_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when the sidecar takes the chat's file scope on ``/query``.
 
@@ -767,6 +790,7 @@ __all__ = [
     "confirmations_supported",
     "documents_supported",
     "skills_supported",
+    "greeting_supported",
     "scope_supported",
     "working_directory_supported",
     "memory_supported",

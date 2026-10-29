@@ -56,7 +56,7 @@ beforeEach(() => {
         provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma', remote: false, is_default: true,
     });
     mocked.checkSetup.mockResolvedValue(READY);
-    mocked.requestWarmUp.mockResolvedValue({ state: 'ready' });
+    mocked.streamGreeting.mockResolvedValue(undefined);
     mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
     mocked.getSetupPlan.mockRejectedValue(new Error('no plan'));
     mocked.getSystemStatus.mockResolvedValue({

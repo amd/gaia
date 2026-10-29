@@ -210,6 +210,13 @@ than 2.18 reject `allowed_paths` and older than 2.24 reject `working_directory`,
 so probe `/version` first. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Opening a new chat? `POST /v1/gaia/greeting`** (contract ≥ 2.26) streams a
+first message the agent writes itself, following up on the last conversation
+when memory holds one. Writing it loads the model and caches the prompt, so
+the user's first question answers quickly. Send `memory` as for `/query`.
+Binaries older than 2.26 answer `404`, so probe `/version` first. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
 **Internet switched off for the chat? Send `internet_off`** (contract ≥
 2.23) every turn: `true` refuses web search, page fetches, the browser,
 connector, mailbox and Agent Hub tools and commands that contact another host;

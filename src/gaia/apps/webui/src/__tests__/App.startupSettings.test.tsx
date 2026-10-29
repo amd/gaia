@@ -59,7 +59,7 @@ beforeEach(() => {
     } as never);
     mocked.listProviderModels.mockResolvedValue({ models: [] } as never);
     mocked.checkSetup.mockResolvedValue(READY);
-    mocked.requestWarmUp.mockResolvedValue({ state: 'ready' });
+    mocked.streamGreeting.mockResolvedValue(undefined);
     mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
     mocked.getSystemStatus.mockResolvedValue({ lemonade_running: true, model_loaded: 'x', initialized: true } as never);
     mocked.listAgents.mockReset().mockResolvedValue({ agents: [GAIA_AGENT], total: 1 });
