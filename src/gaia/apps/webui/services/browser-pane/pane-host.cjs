@@ -22,7 +22,7 @@
 "use strict";
 
 const { WebContentsView, nativeImage } = require("electron");
-const { attachTabPolicy, classifyNavigation, isLocalPageHost } = require("./navigation-policy.cjs");
+const { attachTabPolicy, classifyNavigation, isLocalPageHost, isLoopbackHost } = require("./navigation-policy.cjs");
 const { TabCdp } = require("./cdp-session.cjs");
 const { BridgeError } = require("./bridge-error.cjs");
 const input = require("./input.cjs");
@@ -97,6 +97,18 @@ function isLoopbackUrl(url) {
   } catch {
     return false;
   }
+}
+
+/** True for a frame served from this computer that the op was not approved to read. */
+function isUnapprovedLocalFrame(frame, allowedOrigins) {
+  const onThisPc = [input.frameUrl(frame), frame.url].some((u) => {
+    try {
+      return isLoopbackHost(new URL(u).hostname);
+    } catch {
+      return false;
+    }
+  });
+  return onThisPc && !inScope(input.frameUrl(frame), allowedOrigins);
 }
 
 /**
@@ -606,10 +618,11 @@ class PaneHost {
 
   // ── Agent ops (the bridge) ────────────────────────────────────────────
   //
-  // Every op that loads or reads a page takes allowedOrigins: loopback plus
-  // the origins Python's site gate approved for that one call. A page on any
-  // other origin is never read, and a navigation that would land on one
-  // while the op runs is stopped.
+  // Every op that loads or reads a page takes allowedOrigins: this chat's dev
+  // servers plus the origins Python's site gate approved for that one call. A
+  // page on any other origin is never read, nor is a frame from another
+  // program on this PC, and a navigation that would land on one while the op
+  // runs is stopped.
   //
   // Every op names its chat (sessionId) and only ever finds that chat's
   // tabs: another chat's tab id is "no such tab", like a closed one.
@@ -862,6 +875,11 @@ class PaneHost {
       const results = [];
       for (const frame of targets) {
         const frameId = frame === main ? null : `${frame.processId}:${frame.routingId}`;
+        // Another program on this PC is not the user's app just because a page frames it.
+        if (frame !== main && isUnapprovedLocalFrame(frame, allowedOrigins)) {
+          results.push({ frameId, url: frame.url, ok: false, error: `Not read: a frame from ${originOf(input.frameUrl(frame)) || frame.url} on this PC, which was not approved.` });
+          continue;
+        }
         try {
           const read = await this.raceDialog(tab, withTimeout(frame.executeJavaScript(code, false), EVAL_TIMEOUT_MS, "Reading the page"));
           if (read.dialog) throw this.dialogError(read.dialog);

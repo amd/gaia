@@ -254,9 +254,10 @@ class BrowserUseToolsMixin:
     def _reading(self, tool_name: str) -> Iterator["BrowserDriver"]:
         """The driver for one tool call, scoped to the site its gate approved.
 
-        A pane op may read loopback plus the one origin the user approved for
-        this call; main refuses any other page, so content the user was never
-        asked about cannot reach the model even if the gate was skipped.
+        A pane op may read this chat's dev servers plus the one origin the
+        user approved for this call; main refuses any other page, so content
+        the user was never asked about cannot reach the model even if the
+        gate was skipped.
         """
         from gaia.browser.pane_driver import PaneDriver
 

@@ -350,6 +350,39 @@ describe("agent ops", () => {
     ]);
   });
 
+  test("a frame from another program on this PC is not read unless approved; other frames are", async () => {
+    const { host } = makeHost();
+    host.navigate(host.activeTabId, "http://localhost:5173/");
+    const wc = host.tabs.get(host.activeTabId).view.webContents;
+    wc.mainFrame.executeJavaScript.mockResolvedValue({ title: "App" });
+    let next = 1;
+    const frame = (url, origin = undefined) => ({ url, origin, processId: 9, routingId: next++, executeJavaScript: jest.fn(() => Promise.resolve({ read: url })) });
+    const lemonade = frame("http://127.0.0.1:13305/");
+    const sandboxed = frame("http://127.0.0.1:13305/admin", "null");
+    const mapped = frame("http://[::ffff:7f00:1]:13305/");
+    const anyAddr = frame("http://0.0.0.0:8888/");
+    const otherLocal = frame("http://app.localhost:9000/");
+    const own = frame("http://localhost:5173/inner");
+    const srcdoc = frame("about:srcdoc", "http://localhost:5173");
+    const widget = frame("https://widget.example/pay");
+    wc.mainFrame.framesInSubtree = [wc.mainFrame, lemonade, sandboxed, mapped, anyAddr, otherLocal, own, srcdoc, widget];
+
+    const res = await host.agentEvaluate("chat-1", null, "() => 1", null, "all", ["http://localhost:5173"]);
+    for (const f of [lemonade, sandboxed, mapped, anyAddr, otherLocal]) expect(f.executeJavaScript).not.toHaveBeenCalled();
+    for (const f of [own, srcdoc, widget]) expect(f.executeJavaScript).toHaveBeenCalled();
+    const unread = res.frames.filter((f) => !f.ok);
+    expect(unread.map((f) => f.url)).toEqual([lemonade.url, sandboxed.url, mapped.url, anyAddr.url, otherLocal.url]);
+    for (const f of unread) {
+      expect(f).not.toHaveProperty("value");
+      expect(f.error).toMatch(/not approved/);
+    }
+
+    // Once the user approves that local site, its frame is read like any other.
+    await host.agentEvaluate("chat-1", null, "() => 1", null, "all", ["http://localhost:5173", "http://127.0.0.1:13305"]);
+    for (const f of [lemonade, sandboxed]) expect(f.executeJavaScript).toHaveBeenCalled();
+    for (const f of [mapped, anyAddr, otherLocal]) expect(f.executeJavaScript).not.toHaveBeenCalled();
+  });
+
   test("a new tab page has nothing to read", async () => {
     const { host } = makeHost();
     await expect(host.agentEvaluate("chat-1", null, "() => 1", null, "main", [])).rejects.toMatchObject({ code: "no_page" });

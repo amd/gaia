@@ -312,6 +312,18 @@ describe("navigation policy", () => {
     [`http://app.localhost:${BACKEND_PORT}/`, false],
     [`http://[::1]:${BACKEND_PORT}/`, false],
     [`http://0.0.0.0:${BACKEND_PORT}/`, false],
+    // Other spellings of this computer's addresses reach the same service.
+    [`http://127.1:${BACKEND_PORT}/`, false],
+    [`http://2130706433:${BACKEND_PORT}/`, false],
+    [`http://LOCALHOST.:${BACKEND_PORT}/`, false],
+    [`http://[::ffff:127.0.0.1]:${BACKEND_PORT}/`, false],
+    [`http://[::ffff:127.0.0.2]:${BACKEND_PORT}/`, false],
+    [`http://[::ffff:0.0.0.0]:${BACKEND_PORT}/`, false],
+    [`http://[::127.0.0.1]:${BACKEND_PORT}/`, false],
+    [`http://[0:0:0:0:0:0:0:1]:${BACKEND_PORT}/`, false],
+    [`http://[::ffff:8.8.8.8]:${BACKEND_PORT}/`, true],
+    [`http://[2001:db8::1]:${BACKEND_PORT}/`, true],
+    [`http://128.0.0.1:${BACKEND_PORT}/`, true],
     [`http://example.com:${BACKEND_PORT}/`, true],
     ["not a url", false],
   ])("%s allowed: %s", (url, allowed) => {

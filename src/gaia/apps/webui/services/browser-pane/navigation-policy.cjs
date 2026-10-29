@@ -16,6 +16,31 @@ const PANE_SCHEMES = new Set(["http:", "https:"]);
 /** Permissions a pane page gets; everything else (camera, mic, location, notifications, ...) is denied. */
 const ALLOWED_PERMISSIONS = new Set(["clipboard-sanitized-write"]);
 
+/** The 8 groups of a bracketed IPv6 host as URL spells it ("[::ffff:7f00:1]"), or null. */
+function ipv6Groups(host) {
+  const m = /^\[([0-9a-f:]+)\]$/.exec(host);
+  if (!m) return null;
+  const halves = m[1].split("::");
+  if (halves.length > 2) return null;
+  const part = (s) => (s === "" ? [] : s.split(":").map((g) => parseInt(g, 16)));
+  const head = part(halves[0]);
+  const tail = halves.length === 2 ? part(halves[1]) : [];
+  const fill = halves.length === 2 ? 8 - head.length - tail.length : 0;
+  const groups = [...head, ...Array(Math.max(fill, 0)).fill(0), ...tail];
+  return groups.length === 8 && groups.every((g) => Number.isInteger(g) && g >= 0 && g <= 0xffff) ? groups : null;
+}
+
+/** ::1, ::, and an IPv4-mapped or IPv4-compatible 127.0.0.0/8 or 0.0.0.0: each reaches this computer. */
+function isLoopbackIpv6(host) {
+  const g = ipv6Groups(host);
+  if (!g) return false;
+  if (g.slice(0, 7).every((x) => x === 0)) return g[7] <= 1;
+  const mapped = g.slice(0, 5).every((x) => x === 0) && (g[5] === 0xffff || g[5] === 0);
+  if (!mapped) return false;
+  const firstOctet = g[6] >> 8;
+  return firstOctet === 127 || (g[6] === 0 && g[7] === 0);
+}
+
 function isLoopbackHost(hostname) {
   const host = hostname.toLowerCase().replace(/\.$/, "");
   return (
@@ -23,9 +48,7 @@ function isLoopbackHost(hostname) {
     host.endsWith(".localhost") ||
     /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
     host === "0.0.0.0" ||
-    host === "[::1]" ||
-    host === "[::]" ||
-    host === "[::ffff:7f00:1]"
+    isLoopbackIpv6(host)
   );
 }
 

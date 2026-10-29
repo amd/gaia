@@ -87,7 +87,9 @@ its turn ends.
 
 GAIA reads and acts inside frames too, including frames from another site, such
 as a payment or sign-in widget embedded in your app. Acting in a frame from a
-site other than this PC asks for that site, as opening it would.
+site other than the chat's own dev servers asks for that site, as opening it
+would. A frame served by another program on this PC isn't read until you
+approve its site.
 
 Elements are addressed by **ref** (`e1`, `e7`) from the last snapshot, never by
 screen coordinates:
