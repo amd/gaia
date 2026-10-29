@@ -4,7 +4,8 @@
 
 - Resolves the user's real Documents folder for the session guidance, including
   Windows Known Folder Move/OneDrive and Linux `XDG_DOCUMENTS_DIR`, instead of
-  assuming it is always `~/Documents` (#5885).
+  assuming it is always `~/Documents` (#5885). File search and the Agent UI's
+  Documents quick link use the same folder.
 - `gaia chat --index <file>` indexes the named file from any working
   directory. A file outside the folder `gaia chat` ran in was refused as "not
   in allowed paths", the error was only logged, and the agent answered without

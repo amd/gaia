@@ -15,11 +15,17 @@ _WINDOWS_DOCUMENTS_FOLDER = (
     0x46AF,
     (0xAD, 0xB4, 0x6C, 0x85, 0x48, 0x03, 0x69, 0xC7),
 )
+_WINDOWS_PROFILE_FOLDER = (
+    0x5E6C858F,
+    0x0E22,
+    0x4760,
+    (0x9A, 0xFE, 0xEA, 0x33, 0x17, 0xB6, 0x71, 0x73),
+)
 _XDG_DOCUMENTS_DIR = re.compile(r"^XDG_DOCUMENTS_DIR=(?P<value>.*)$")
 
 
-def _windows_documents_dir() -> Path | None:
-    """Return Windows' Documents known folder, if the shell can resolve it."""
+def _windows_known_folder(folder: tuple) -> Path | None:
+    """Return a Windows known folder, if the shell can resolve it."""
     try:
         import ctypes
         from ctypes import wintypes
@@ -32,7 +38,7 @@ def _windows_documents_dir() -> Path | None:
                 ("Data4", ctypes.c_ubyte * 8),
             ]
 
-        folder_id = _GUID(*_WINDOWS_DOCUMENTS_FOLDER)
+        folder_id = _GUID(*folder)
         path = wintypes.LPWSTR()
         result = ctypes.windll.shell32.SHGetKnownFolderPath(
             ctypes.byref(folder_id), 0, None, ctypes.byref(path)
@@ -45,6 +51,23 @@ def _windows_documents_dir() -> Path | None:
             ctypes.windll.ole32.CoTaskMemFree(path)
     except (AttributeError, OSError):
         return None
+
+
+def _windows_documents_dir() -> Path | None:
+    """Return Windows' Documents known folder, if the shell can resolve it."""
+    return _windows_known_folder(_WINDOWS_DOCUMENTS_FOLDER)
+
+
+def _windows_profile_dir() -> Path | None:
+    """Return the signed-in user's profile folder, independent of HOME."""
+    return _windows_known_folder(_WINDOWS_PROFILE_FOLDER)
+
+
+def _same_folder(a: Path, b: Path) -> bool:
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return a == b
 
 
 def _linux_documents_dir(home: Path) -> Path | None:
@@ -67,7 +90,9 @@ def _linux_documents_dir(home: Path) -> Path | None:
             return None
         value = value.replace("${HOME}", str(home)).replace("$HOME", str(home))
         path = Path(value).expanduser()
-        return path if path.is_absolute() else home / path
+        path = path if path.is_absolute() else home / path
+        # xdg-user-dirs marks a disabled folder by pointing it at $HOME.
+        return None if _same_folder(path, home) else path
     return None
 
 
@@ -79,16 +104,14 @@ def documents_dir(home: Path | None = None) -> Path:
     If the platform setting is unavailable, the conventional home/Documents is
     still the least surprising location.
     """
-    actual_home = Path.home().expanduser()
-    home = (home or actual_home).expanduser()
+    home = (home or Path.home()).expanduser()
     if sys.platform == "win32":
-        try:
-            is_current_home = home.resolve() == actual_home.resolve()
-        except OSError:
-            is_current_home = home == actual_home
-        return (
-            _windows_documents_dir() if is_current_home else None
-        ) or home / "Documents"
+        # Only the signed-in user's own profile is redirected: a test or
+        # sandbox HOME must not pick up that user's real Documents.
+        profile = _windows_profile_dir()
+        if profile is not None and _same_folder(home, profile):
+            return _windows_documents_dir() or home / "Documents"
+        return home / "Documents"
     if sys.platform.startswith("linux"):
         return _linux_documents_dir(home) or home / "Documents"
     return home / "Documents"

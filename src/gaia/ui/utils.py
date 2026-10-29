@@ -31,6 +31,7 @@ from gaia.config import (
     unsafe_gaia_home_reason,
 )
 from gaia.llm.lemonade_embedded import gaia_home
+from gaia.utils.user_folders import documents_dir
 
 from .models import (
     DocumentResponse,
@@ -860,7 +861,7 @@ def build_quick_links() -> list:
 
     candidates = [
         ("Desktop", home / "Desktop", "desktop"),
-        ("Documents", home / "Documents", "documents"),
+        ("Documents", documents_dir(home), "documents"),
         ("Downloads", home / "Downloads", "download"),
     ]
 

@@ -23,6 +23,8 @@ from typing import List, Optional
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+from gaia.utils.user_folders import documents_dir
+
 from ..models import (
     BrowseResponse,
     FileEntry,
@@ -568,7 +570,7 @@ async def search_files(
 
         home = Path.home()
         priority_dirs = [
-            home / "Documents",
+            documents_dir(home),
             home / "Downloads",
             home / "Desktop",
             home / "OneDrive",
