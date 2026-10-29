@@ -267,7 +267,8 @@ each model call's token counts, when the binary sends it. See
 `model_messages`, store that with the reply, and send them back, oldest first,
 so the agent sees the tool calls it made and what they returned.
 Text-only `context` loses them, and the agent can't explain its own last turn.
-Older binaries reject `turns` with `422`.
+An empty `turns` list clears a retained session's history. Older binaries
+reject `turns` with `422`.
 
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message

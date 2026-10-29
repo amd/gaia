@@ -52,6 +52,10 @@ class _ToolAgent:
         self.conversation_history: list = []
         self._cancel_event = None
         self.seen: list = []
+        self.external_marks = 0
+
+    def mark_external_content(self):
+        self.external_marks += 1
 
     def _uses_native_tool_calls(self):
         return True
@@ -416,3 +420,47 @@ def test_empty_turns_replace_a_retained_sessions_history(live_sidecar):
 
     [agent] = agents
     assert agent.seen[1] == []
+
+
+@pytest.mark.parametrize("live_sidecar", [_BigToolAgent], indirect=True)
+def test_the_sidecar_refits_turns_to_its_own_window(monkeypatch, live_sidecar, chat):
+    base_url, agents, api_version = live_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    import gaia.agents.base.history as history
+
+    # The UI budgets generously; only the sidecar's own window is tight.
+    monkeypatch.setattr(history, "relayed_history_budget", lambda *a, **k: 100_000)
+    real = history.history_budget
+    monkeypatch.setattr(
+        history,
+        "history_budget",
+        lambda agent, query: (
+            300 if isinstance(agent, _ToolAgent) else real(agent, query)
+        ),
+    )
+
+    for i in range(5):
+        chat.send(f"q{i}")
+
+    [agent] = agents
+    questions = _turn_questions(agent.seen[-1])
+    assert questions and "q0" not in questions
+    assert all(
+        m["content"].startswith("[Left out of the")
+        for m in agent.seen[-1]
+        if m.get("role") == "tool"
+    )
+
+
+def test_replayed_turns_count_as_external_content(monkeypatch, live_sidecar, chat):
+    base_url, agents, api_version = live_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+
+    chat.send("list the PRs")
+    [agent] = agents
+    # The first turn sends `turns: []`: nothing pushed, nothing to mark.
+    assert agent.external_marks == 0
+
+    chat.send("why did that fail?")
+    # Replayed tool results are not the user speaking (memory provenance).
+    assert agent.external_marks == 1
