@@ -253,7 +253,7 @@ Axis: More channels, staff and hours
 lines are bullets, `Takeaway:` the line to act on, `Must show:` what must be seen. Three or more
 `### ` headings on a slide are drawn as side-by-side boxes, each heading's
 bullets inside it. `Diagram: process` draws them as left-to-right stages
-(also `cycle`, `pyramid`, `stack`). On a process,
+(also `cycle`, `pyramid`, `stack`; dated plans: `timeline`, `### Feb 3 — Beta`). On a process,
 `Axis:` names what grows along them, never a separate table or slide.
 Use this for stages, steps, levels or options, never a chart of made-up
 scores or a wall of bullets. Values over stages or time: a chart.
@@ -279,7 +279,8 @@ bullets of 2-6 words, with no labels like `Focus:`. Use the user's terms; invent
    apply; this request's `prefs`, `theme`, `template_path` win. Ask **one** short question **only** for a material
    ambiguity, through `request_user_input` with a default.
    Never ask about anything a default covers. No numbers given is not a
-   reason to ask: build the case with an `Evidence to add` box.
+   reason to ask: show how it would work, claim no results, add an
+   `Evidence to add` box.
 2. **Key facts.** From files: `list_files`, read each document in full with
    `read_file`, compute numbers from data with `run_python`. Keep a ledger
    (fact, value, source) of headline numbers, changes, events and risks.
@@ -288,9 +289,8 @@ bullets of 2-6 words, with no labels like `Focus:`. Use the user's terms; invent
 3. **Storyline.** One message per slide, answer first, end with next steps.
    For a standard deck call `list_blueprints`, then
    `outline_from_blueprint(name, slide_count=N)` and fill every TODO slot.
-4. **Build** with Markdown, or `build_deck` with JSON for timelines, flows,
-   2x2 matrices and combo charts. Big decks: 6-8 slides first, then
-   `add_slide`. Leave `output_path` empty unless the user named where to save it.
+4. **Build** with Markdown, or `build_deck` with JSON for flows,
+   2x2 matrices and combo charts. Leave `output_path` empty unless the user named where to save it.
 5. **Check.** The build result's `verify` is the check. Fix every error it
    lists and rebuild (or `update_slide`) until its `status` is `pass`. Call
    `verify_deck(path, expected_slides=N, required_items=[...])` only after
