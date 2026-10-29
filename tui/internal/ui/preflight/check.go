@@ -790,6 +790,15 @@ func probeInit(ctx context.Context, t Transport, cfg Config, rep *Report) (State
 		return row.State, false
 	}
 
+	// A cloud default_model arrives as the sidecar's model; a launch on a picked
+	// local model never uses it, so check the picked one instead. No window check:
+	// the sidecar's ctx describes the default, not the pick.
+	if cfg.Model != "" && gaiaLemonade.IsCloudID(body.Model.ID) {
+		row := checkLocalModelDownloaded(ctx, cfg.Model, model)
+		setRow(rep, row)
+		return row.State, false
+	}
+
 	// KeyModel is not agent-repairable either — a missing model blocks the
 	// same way a down daemon does.
 	if !body.Model.Present {

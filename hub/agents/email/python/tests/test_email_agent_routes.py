@@ -622,7 +622,7 @@ class TestAutonomyRoutes:
                     "and grant it in one command — no Agent UI required: "
                     "`gaia connectors connect microsoft --scopes <scopes> "
                     "--grant-agent installed:email`, or use Settings -> "
-                    "Connections in the Agent UI."
+                    "Connectors in the Agent UI."
                 )
 
         client.built["next"] = _ConnectorsErrorAgent()
