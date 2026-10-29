@@ -297,3 +297,45 @@ def test_a_fenced_example_with_bad_json_after_a_real_call_is_not_malformed():
 )
 def test_prose_invoke_paired_only_with_a_fenced_close_is_not_a_call(text):
     assert parse_text_tool_calls(text) is None
+
+
+def test_a_prose_invoke_never_pairs_with_a_fenced_body_before_a_real_call():
+    # The real call satisfies the "is this a call" check; the prose opener
+    # must still not borrow the fenced example's parameter and close.
+    text = (
+        'Use <invoke name="run_shell_command"> like so:\n'
+        "```xml\n"
+        '<parameter name="command">rm -rf x</parameter></invoke>\n'
+        "```\n"
+        '<invoke name="read_file"><parameter name="file_path">a</parameter></invoke>'
+    )
+    calls = parse_text_tool_calls(text).calls
+    assert [(c.name, c.args) for c in calls] == [("read_file", {"file_path": "a"})]
+
+
+def test_a_prose_invoke_never_borrows_the_next_real_calls_body():
+    text = (
+        'The <invoke name="run_shell_command"> tag is how it starts. '
+        '<invoke name="read_file"><parameter name="file_path">a</parameter></invoke>'
+    )
+    calls = parse_text_tool_calls(text).calls
+    assert [(c.name, c.args) for c in calls] == [("read_file", {"file_path": "a"})]
+
+
+def test_a_real_call_whose_value_holds_a_code_fence_still_runs():
+    text = (
+        '<invoke name="write_file"><parameter name="content">'
+        "# Title\n```py\nprint(1)\n```\n</parameter></invoke>"
+    )
+    (call,) = parse_text_tool_calls(text).calls
+    assert call.name == "write_file" and "print(1)" in call.args["content"]
+
+
+def test_a_real_call_whose_value_opens_an_unclosed_fence_still_runs():
+    # Its first tag sits outside code even though the value never closes the fence.
+    text = (
+        '<invoke name="write_file"><parameter name="content">'
+        "```\nhalf a fence</parameter></invoke>"
+    )
+    (call,) = parse_text_tool_calls(text).calls
+    assert call.name == "write_file"

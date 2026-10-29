@@ -34,6 +34,7 @@ from urllib.parse import urlparse
 import requests
 
 from gaia.config import GAIA_CONFIG_DIR
+from gaia.daemon.paths import _replace_file
 from gaia.llm.lemonade_client import (
     CLOUD_RECIPE,
     LemonadeClient,
@@ -294,7 +295,7 @@ class GatewayState:
                 os.chmod(tmp, 0o600)
             except OSError as e:
                 log.debug(f"Could not tighten permissions on {tmp}: {e}")
-            os.replace(tmp, target)
+            _replace_file(Path(tmp), target)
         except BaseException:
             try:
                 os.unlink(tmp)

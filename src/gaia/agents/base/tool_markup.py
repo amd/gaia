@@ -121,6 +121,7 @@ _JSON_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 _JSON_OPEN = re.compile(r"<tool_call>")
 _XML_CLOSE = re.compile(r"</invoke>")
 _XML_PARAM_OPEN = re.compile(r"<parameter\b")
+_XML_STRUCT = re.compile(r"<parameter\b|</invoke>")
 
 
 def parse_text_tool_calls(text: str) -> Optional[MarkupParse]:
@@ -158,6 +159,16 @@ def _parse_xml_invokes(text: str, start: int) -> MarkupParse:
         if at is None:
             break
         opening = _XML_INVOKE.match(text, at)
+        first = _XML_STRUCT.search(text, opening.end())
+        nxt = _XML_INVOKE.search(text, opening.end())
+        if first is not None and (
+            (nxt is not None and nxt.start() < first.start())
+            or _outside_code(_XML_STRUCT, text, opening.end()) != first.start()
+        ):
+            # Its first tag belongs to another invoke or sits in a later code
+            # example: prose naming the tag, not a call.
+            pos = opening.end()
+            continue
         close = text.find("</invoke>", opening.end())
         if close < 0:
             raise MalformedToolMarkup(

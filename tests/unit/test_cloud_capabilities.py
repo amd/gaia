@@ -391,7 +391,7 @@ def test_ensure_ready_replays_the_key_before_it_probes():
 
     src = inspect.getsource(LemonadeManager.ensure_ready)
     assert src.index("_replay_cloud_key(chat_model)") < src.index(
-        "learn_tool_calling(client, chat_model)"
+        "learn_tool_calling(client, chat_model, key_replayed=True)"
     )
 
 
@@ -417,7 +417,7 @@ def test_a_failed_write_leaves_the_old_file_and_no_temp(isolated, monkeypatch):
     def boom(*_a, **_k):
         raise OSError("disk full")
 
-    monkeypatch.setattr("gaia.llm.gateway.os.replace", boom)
+    monkeypatch.setattr("gaia.daemon.paths.os.replace", boom)
     with pytest.raises(OSError):
         GatewayState(active_model="amd.Flash").save()
     assert isolated.read_text(encoding="utf-8") == before
@@ -463,4 +463,58 @@ def test_concurrent_writers_never_leave_a_torn_file(isolated):
         t.join()
     assert errors == []
     json.loads(isolated.read_text(encoding="utf-8"))  # whole, parseable
+    assert [p.name for p in isolated.parent.iterdir()] == [isolated.name]
+
+
+def test_stop_during_the_probe_is_not_remembered_as_a_failure(manager, monkeypatch):
+    from gaia.llm.retry import model_retry_notices
+
+    client, _clock, _attempts = _failing_gateway_client(
+        monkeypatch, lc.requests.exceptions.ConnectionError("refused"), 0.1
+    )
+    monkeypatch.setattr(client, "_replay_cloud_key", lambda model: True)
+    with model_retry_notices(lambda n: None, is_cancelled=lambda: True):
+        manager.learn_tool_calling(client, "amd.Opus")
+    assert not lc.probe_recently_failed("amd.Opus")
+    assert lc.learned_tool_calling("amd.Opus") is None
+
+
+def test_a_stopped_probe_raises_its_own_error(monkeypatch):
+    from gaia.llm.retry import model_retry_notices
+
+    client, _clock, _attempts = _failing_gateway_client(
+        monkeypatch, lc.requests.exceptions.ConnectionError("refused"), 0.1
+    )
+    with model_retry_notices(lambda n: None, is_cancelled=lambda: True):
+        with pytest.raises(lc.ToolCallingProbeStopped):
+            lc.probe_cloud_tool_calling(client, "amd.Opus")
+
+
+def test_a_key_already_replayed_is_not_replayed_again(manager):
+    client = _manager_client()
+    with patch("gaia.llm.lemonade_client.probe_cloud_tool_calling", return_value=True):
+        manager.learn_tool_calling(client, "amd.Opus", key_replayed=True)
+    client._replay_cloud_key.assert_not_called()
+
+
+def test_a_reader_holding_the_file_briefly_does_not_fail_the_save(
+    isolated, monkeypatch
+):
+    from gaia.daemon import paths
+    from gaia.llm.gateway import GatewayState
+
+    GatewayState(active_model="amd.Opus").save()
+    real_replace = paths.os.replace
+    denials = [PermissionError("in use"), PermissionError("in use")]
+
+    def busy_then_free(src, dst):
+        if denials:
+            raise denials.pop()
+        real_replace(src, dst)
+
+    monkeypatch.setattr(paths, "_is_windows", lambda: True)
+    monkeypatch.setattr(paths.os, "replace", busy_then_free)
+    monkeypatch.setattr(paths.time, "sleep", lambda s: None)
+    GatewayState(active_model="amd.Flash").save()
+    assert json.loads(isolated.read_text())["active_model"] == "amd.Flash"
     assert [p.name for p in isolated.parent.iterdir()] == [isolated.name]

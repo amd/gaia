@@ -2327,13 +2327,21 @@ def probe_cloud_tool_calling(client: "LemonadeClient", model_id: str) -> Optiona
                 auto_download=False,
                 timeout=PROBE_TIMEOUT_S,
             )
-    except LemonadeClientError:
+    except LemonadeClientError as e:
+        if outer_cancel is not None and outer_cancel():
+            raise ToolCallingProbeStopped(
+                f"Native tool-calling probe for {model_id} was stopped"
+            ) from e
         raise
     except (
         requests.exceptions.RequestException,
         StreamCancelledError,
         StreamStalledError,
     ) as e:
+        if outer_cancel is not None and outer_cancel():
+            raise ToolCallingProbeStopped(
+                f"Native tool-calling probe for {model_id} was stopped"
+            ) from e
         raise LemonadeClientError(
             f"Native tool-calling probe for {model_id} failed after "
             f"{_probe_clock() - started:.0f}s: {e}"
@@ -2666,6 +2674,10 @@ def _chosen_backend_hint(backend: Optional[str]) -> str:
 
 class LemonadeClientError(Exception):
     """Base exception for Lemonade client errors."""
+
+
+class ToolCallingProbeStopped(LemonadeClientError):
+    """The user pressed Stop during the probe: it proved nothing about the model."""
 
 
 class LemonadeAuthError(LemonadeClientError):

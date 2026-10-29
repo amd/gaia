@@ -1018,9 +1018,9 @@ class LemonadeManager:
 
                 if is_cloud:
                     # Lemonade holds cloud keys in memory only; a fresh start has none.
-                    client._replay_cloud_key(chat_model)
-                    # After the key replay: without a key the probe can only fail.
-                    cls.learn_tool_calling(client, chat_model)
+                    if client._replay_cloud_key(chat_model):
+                        # After the key replay: without a key it can only fail.
+                        cls.learn_tool_calling(client, chat_model, key_replayed=True)
                     cls._ready_for_cloud = True
                     cls._remember_server(client)
                     cls._log.debug(
@@ -1262,7 +1262,9 @@ class LemonadeManager:
             cls.print_ceiling_message(cls._context_size, min_context_size)
 
     @classmethod
-    def learn_tool_calling(cls, client: "LemonadeClient", model: str) -> None:
+    def learn_tool_calling(
+        cls, client: "LemonadeClient", model: str, key_replayed: bool = False
+    ) -> None:
         """Probe a cloud model's native tool calling once, when nothing says.
 
         A failed or inconclusive probe is logged and remembered for
@@ -1271,6 +1273,7 @@ class LemonadeManager:
         """
         from gaia.llm.lemonade_client import (
             PROBE_RETRY_AFTER_S,
+            ToolCallingProbeStopped,
             cloud_model_info,
             learned_tool_calling,
             probe_cloud_tool_calling,
@@ -1300,7 +1303,7 @@ class LemonadeManager:
             return
         # A restarted server has no key until it is replayed, and a keyless
         # probe can only fail; that is not the model's answer.
-        if not client._replay_cloud_key(model):
+        if not key_replayed and not client._replay_cloud_key(model):
             cls._log.warning(
                 "Skipped the native tool-calling probe for %s: its cloud provider "
                 "has no usable key on this server yet.",
@@ -1309,6 +1312,9 @@ class LemonadeManager:
             return
         try:
             supported = probe_cloud_tool_calling(client, model)
+        except ToolCallingProbeStopped as e:
+            cls._log.info("%s; it is probed again at the next start.", e)
+            return
         except LemonadeClientError as e:
             record_probe_failure(model)
             cls._log.warning(
