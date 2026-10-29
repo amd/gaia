@@ -7174,11 +7174,13 @@ def handle_gateway_command(args):
             auth = result.get("auth_state") or {}
             restored = False
             remembered = None
-            # The stored token was issued for the previously registered URL;
-            # never hand it to a different gateway.
+            # The stored token was issued for the previously registered URL and
+            # is not bound to it, so a new URL must drop it: every later
+            # ensure_authenticated() would otherwise hand it to the new gateway.
             url_changed = base_url.rstrip("/").lower() != (
                 (state.base_url or "").rstrip("/").lower()
             )
+            dropped = url_changed and recall_token() is not None and forget_token()
             needs_token = not (auth.get("env_var_set") or auth.get("runtime_key_set"))
             if needs_token and not url_changed:
                 remembered = recall_token()
@@ -7201,10 +7203,11 @@ def handle_gateway_command(args):
                     "\n  The remembered gateway token was not accepted — run "
                     "`gaia gateway auth` with a current one."
                 )
-            elif needs_token and url_changed and recall_token():
+            elif dropped:
                 print(
-                    "\n  The gateway URL changed, so the remembered token was not "
-                    "reused — run `gaia gateway auth` with a token for this gateway."
+                    "\n  The gateway URL changed, so GAIA forgot the token remembered "
+                    "for the old one — run `gaia gateway auth` with a token for "
+                    "this gateway."
                 )
             elif needs_token:
                 print(

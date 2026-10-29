@@ -1122,7 +1122,11 @@ def _run_gateway_install(monkeypatch, *, saved_url, install_url, manager_cls, to
         gateway_module, "GatewayState", SimpleNamespace(load=lambda: state)
     )
     monkeypatch.setattr(gateway_module, "GatewayManager", manager_cls)
-    monkeypatch.setattr(gateway_module, "recall_token", lambda: token)
+    store = {"token": token} if token else {}
+    monkeypatch.setattr(gateway_module, "recall_token", lambda: store.get("token"))
+    monkeypatch.setattr(
+        gateway_module, "forget_token", lambda: store.pop("token", None) is not None
+    )
     cli.handle_gateway_command(
         SimpleNamespace(
             gateway_action="install",
@@ -1133,6 +1137,7 @@ def _run_gateway_install(monkeypatch, *, saved_url, install_url, manager_cls, to
             allow_insecure_http=False,
         )
     )
+    return store
 
 
 class _NoRestoreManager:
@@ -1159,7 +1164,7 @@ def test_gateway_install_never_sends_the_remembered_token_to_a_new_url(
     monkeypatch, capsys, install_url
 ):
     secret = "sk-remembered-secret-123"
-    _run_gateway_install(
+    store = _run_gateway_install(
         monkeypatch,
         saved_url="https://gateway.example/v1",
         install_url=install_url,
@@ -1167,9 +1172,50 @@ def test_gateway_install_never_sends_the_remembered_token_to_a_new_url(
         token=secret,
     )
     output = capsys.readouterr().out
-    assert "The gateway URL changed" in output
+    assert "The gateway URL changed, so GAIA forgot the token" in output
     assert "Restored the remembered" not in output
     assert secret not in output
+    # Dropped, not merely skipped: a later run against the new URL has nothing
+    # to replay, so runtime ensure_authenticated() cannot leak it either.
+    assert store == {}
+
+
+def test_a_second_install_at_the_new_url_cannot_restore_the_old_token(
+    monkeypatch, capsys
+):
+    secret = "sk-remembered-secret-123"
+    store = _run_gateway_install(
+        monkeypatch,
+        saved_url="https://gateway.example/v1",
+        install_url="https://evil.example/v1",
+        manager_cls=_NoRestoreManager,
+        token=secret,
+    )
+    assert store == {}
+    capsys.readouterr()
+    _run_gateway_install(
+        monkeypatch,
+        saved_url="https://evil.example/v1",
+        install_url=None,
+        manager_cls=_NoRestoreManager,
+        token=store.get("token"),
+    )
+    output = capsys.readouterr().out
+    assert "No token yet" in output
+    assert secret not in output
+
+
+def test_a_new_url_with_no_remembered_token_keeps_the_plain_hint(monkeypatch, capsys):
+    _run_gateway_install(
+        monkeypatch,
+        saved_url="https://gateway.example/v1",
+        install_url="https://other.example/v1",
+        manager_cls=_NoRestoreManager,
+        token=None,
+    )
+    output = capsys.readouterr().out
+    assert "No token yet" in output
+    assert "forgot" not in output
 
 
 @pytest.mark.parametrize(
