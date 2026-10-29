@@ -50,7 +50,7 @@ interface ScheduleState {
     loading: boolean;
     /** Why the last load failed. Owned by loadSchedules; replaces the list. */
     error: string | null;
-    /** Why the last pause, resume or delete failed. Shown above the list until dismissed. */
+    /** Why the last pause, resume, run now or delete failed. Shown above the list until dismissed, the next action succeeds, or the dialog closes. */
     actionError: string | null;
 
     /** Currently selected schedule (for viewing results). */
@@ -131,11 +131,11 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
             const updated = await api.runScheduleNow(name);
             set((state) => ({
                 schedules: state.schedules.map((s) => (s.name === name ? updated : s)),
-                error: null,
+                actionError: null,
             }));
         } catch (err) {
             log.api.error(`Failed to run schedule "${name}" now`, err);
-            set({ error: parseApiError(err, 'Could not run the schedule now') });
+            set({ actionError: parseApiError(err, 'Could not run the schedule now') });
         }
     },
 
