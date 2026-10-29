@@ -65,9 +65,7 @@ from gaia.connectors.store import (
     delete_connection,
 )
 from gaia.connectors.store import list_connections as _store_list
-from gaia.connectors.store import (
-    peek_connection,
-)
+from gaia.connectors.store import peek_connection
 from gaia.connectors.tokens import get_or_refresh, load_current_connection
 
 logger = logging.getLogger(__name__)
@@ -587,11 +585,14 @@ def import_forwarded_connection(
     from gaia.connectors.providers import _registry as _provider_registry
     from gaia.connectors.providers import reload as reload_provider
     from gaia.connectors.store import (
+        clear_forward_recovery,
+        recover_forward_recovery,
         restore_connection_slots,
         save_connection,
         save_provider_credentials,
         snapshot_connection_slots,
         verify_keyring_backend,
+        write_forward_recovery,
     )
     from gaia.connectors.tokens import _cache as _token_cache
 
@@ -645,7 +646,11 @@ def import_forwarded_connection(
     # that fails partway is undone before the lock is released, for the same
     # reason.
     with held_sync(provider):
+        # A prior process may have died after changing only one of the two
+        # keyring slots. Recover that pair before taking a new snapshot.
+        recover_forward_recovery(provider)
         previous = snapshot_connection_slots(provider)
+        write_forward_recovery(provider, previous)
         try:
             # 4. Persist the forwarded OAuth client → ``provider:<provider>`` slot.
             save_provider_credentials(
@@ -678,10 +683,12 @@ def import_forwarded_connection(
                 # host app's own OAuth grant — see save_connection's docstring.
                 forwarded=True,
             )
+            clear_forward_recovery(provider)
         except BaseException as e:
             _provider_registry.pop(provider, None)
             try:
                 restore_connection_slots(previous)
+                clear_forward_recovery(provider)
             except Exception as restore_err:
                 if not isinstance(e, Exception):
                     # Ctrl+C or shutdown: say what was left behind, don't mask it.
