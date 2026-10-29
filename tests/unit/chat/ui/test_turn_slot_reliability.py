@@ -659,7 +659,7 @@ def _answer_relayed(handler, kind):
         assert handler.resolve_relay_input("q-1", "the second")
 
 
-async def test_unexpected_model_slot_retake_emits_named_error():
+async def test_unexpected_model_slot_retake_emits_named_error(caplog):
     events = []
     handler = object.__new__(SSEOutputHandler)
     handler.cancelled = threading.Event()
@@ -673,12 +673,32 @@ async def test_unexpected_model_slot_retake_emits_named_error():
         {
             "type": "agent_error",
             "content": (
-                "The approved turn could not resume because the model slot was "
-                "no longer available. Send the message again."
+                "This chat ended while your approved step was waiting for the "
+                "model, so it didn't run. Send your message again to retry."
             ),
             "fatal": True,
         }
     ]
+    assert handler.cancelled.is_set()
+    assert "approved step did not run" in caplog.text
+
+
+async def test_a_stop_during_the_retake_wait_is_not_an_error():
+    events = []
+    handler = object.__new__(SSEOutputHandler)
+    handler.cancelled = threading.Event()
+
+    def stopped_while_waiting(cancelled):
+        cancelled.set()
+        return False
+
+    handler.turn_slot = SimpleNamespace(come_back=stopped_while_waiting)
+    handler.on_model_regained = None
+    handler._emit = events.append
+
+    SSEOutputHandler.come_back_to_model(handler)
+
+    assert events == []
     assert handler.cancelled.is_set()
 
 

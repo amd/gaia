@@ -2081,13 +2081,18 @@ class SSEOutputHandler(OutputHandler):
         if not self.turn_slot.come_back(self.cancelled):
             if self.cancelled.is_set():
                 return
-            # A non-user withdrawal cannot resume safely, so name the failure.
+            # Not a Stop: the turn ended (cleanup or shutdown) while it waited in line.
+            logger.warning(
+                "Turn ended while waiting to retake the model after the user "
+                "answered; the approved step did not run"
+            )
             self._emit(
                 {
                     "type": "agent_error",
                     "content": (
-                        "The approved turn could not resume because the model "
-                        "slot was no longer available. Send the message again."
+                        "This chat ended while your approved step was waiting "
+                        "for the model, so it didn't run. Send your message "
+                        "again to retry."
                     ),
                     "fatal": True,
                 }
