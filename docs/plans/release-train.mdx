@@ -88,7 +88,7 @@ flowchart LR
 
 ### The flagship agent joins the core version
 
-Only the flagship agent ships, and its version equals core's.
+Only the flagship agent exists and ships, and its version equals core's.
 
 | Today | Train |
 |---|---|
@@ -105,7 +105,7 @@ Only the flagship agent ships, and its version equals core's.
 - The wire contract stays independent (`API_VERSION` in `gaia_agent/server.py`, the lock `schemaVersion`, the daemon host API), so compatibility is still expressed where it's real.
 - The agent CHANGELOG says this in one line.
 
-The chat agent (`hub/agents/chat`) and the email agent (`hub/agents/email`) are legacy and don't join the train. Both are removed in [Phase 8](#5-phases) once a parity check confirms the flagship covers them. `ChatAgent` is the flagship's base class, so its code folds into the flagship package or core rather than being deleted.
+Every other agent harness GAIA built is removed in [Phase 8](#5-phases): the chat agent, the email agent, and the teaching templates (`hello-world`, `word-count`, `connectors-demo`). None of them joins the train. `ChatAgent` is the flagship's base class, so its code folds into the flagship package or core. The SDK base classes in `src/gaia/agents/base/` stay; they aren't harnesses.
 
 ## 2. One version source
 
@@ -123,7 +123,7 @@ The chat agent (`hub/agents/chat`) and the email agent (`hub/agents/email`) are 
   - `write` stamps the tree.
   - `--check` fails on any drift and runs in `lint.yml` and a unit test.
   - `--stamp <tag>` writes RC versions (`0.26.0rc1` for PyPI, `0.26.0-rc.1` for npm, `0.26.0~rc1` for deb/rpm) into every generated field at build time. Today only `version.py` and webui are stamped (`release_tag.py:159`).
-- **Not generated:** the TUI version (already set from the tag via `-ldflags`), the legacy chat and email agents (chat's drift stays held until Phase 8 removes it), teaching templates (`hello-world`, `word-count`, `connectors-demo`), skills, and any third-party agent.
+- **Not generated:** the TUI version (already set from the tag via `-ldflags`), the agents Phase 8 removes (chat's drift stays held until then), skills, and any third-party agent.
 - **`check_component_core_api.py` stays.** It already reads released daemon API versions from PyPI rather than a table.
 - **The next-version bot** runs after a final publishes. It opens one PR to `main`: navbar, a release-notes stub, and `version.py` bumped if `main` isn't already ahead. For a patch, it opens a second PR to the branch.
   - `docs.yml` and `test_docs_json_release.py` currently resolve `docs/releases/v<__version__>.mdx` on `main`. They must accept a `main` that's ahead of the latest release.
@@ -179,7 +179,7 @@ Evals inform the promotion decision and record it. They never block an RC.
 
 ## 5. Phases
 
-Each phase is one mergeable PR that leaves releases working (Phase 8 is four). **S** ≤ 1 day, **M** 2–4 days, **L** 1–2 weeks.
+Each phase is one mergeable PR that leaves releases working (Phase 8 is several). **S** ≤ 1 day, **M** 2–4 days, **L** 1–2 weeks.
 
 | # | PR | Size | Lands | Acceptance |
 |---|---|---|---|---|
@@ -190,7 +190,7 @@ Each phase is one mergeable PR that leaves releases working (Phase 8 is four). *
 | 5 | The train in `publish.yml`: Phase 2's build stages + verify + the publish order + `@amd-gaia/agent` (name claimed with a one-time token first, then OIDC). Hub secrets move to a reviewer-less `hub-publish` environment, so `agent-publish` (2 reviewers) leaves the `v*` path. `release_components.yml` and `release_agent_gaia.yml` drop their tag triggers but stay dispatchable. | L | after Phase 4. First live use: **v0.26.0-rc1** | An RC publishes everything on pre-release channels with zero prompts. Killing the run during step 3 and re-running finishes with no tag moved. The GitHub release carries every asset the website links. |
 | 6 | Delete the `release` pointer branch and retire `update-release-branch.yml`, then: `release/vX.Y` branches, validate-on-branch, staged twins, the promote path on a final tag (with `rebuild_final`), the backport bot, the eval promotion check, and skipping the eval on a final. | L | after one RC on Phase 5 | v0.26.0 final = rcN's SHA, one approval, no build jobs. A final on a non-RC SHA is refused. `main` takes merges throughout. |
 | 7 | Delete: `release_components.yml`, `release_agent_gaia.yml`, `check_flagship_release.py`, `open_flagship_lock_pr.py`, the committed lock and the `agent-pkg-gaia-*` docs. Write `docs/reference/releasing.mdx` and rewrite the `gaia-release` and `agent-hub-release` skills. | M | after v0.26.0 final ships on the train | The acceptance in #5172: one tag, one approval, `git grep agent-pkg-gaia` shows only history. |
-| 8 | Retire the legacy agents, one PR per step, each leaving `main` releasable: **8a** close the parity gaps the audit finds; **8b** fold `ChatAgent` into the flagship package or core; **8c** remove the email agent; **8d** remove the chat agent. Details pending the parity audit (in progress). | TBD | independent of Phases 3–7; starts when the audit lands | The flagship covers every capability the audit lists. After 8d, `hub/agents/` holds only the flagship and the teaching templates. |
+| 8 | Remove every agent harness except the flagship, one PR per step, each leaving `main` releasable: **8a** add the capabilities the parity audit says the flagship needs before each removal; **8b** fold `ChatAgent` into the flagship package or core; **8c** remove the email agent; **8d** remove the chat agent; **8e** remove the teaching templates and any other registered agent. (BuilderAgent is already gone, #4843.) Details pending the parity audit (in progress). | TBD | independent of Phases 3–7; each removal lands once its 8a gaps are closed | `hub/agents/` holds only the flagship, the registry lists only the flagship, and `src/gaia/agents/base/` is unchanged. |
 
 ## 6. Risks and rollback
 
@@ -203,7 +203,7 @@ Each phase is one mergeable PR that leaves releases working (Phase 8 is four). *
 | 5 | Trusted-publisher mismatch, npm name claim, first live run | First use is an RC (pre-release channels only). The old workflows stay dispatchable for a final. Revert `publish.yml` to restore today's flow. |
 | 6 | Twin staging corrupts or misses; promote half-publishes; a backport PR conflicts | Promote resumes on re-run (same-bytes skip). `rebuild_final: true` is the explicit escape hatch. A conflicting backport is cherry-picked by hand. Reverting restores Phase 5's rebuild-on-final. |
 | 7 | Something still read a deleted file | `git revert`. Phase 7 waits for a full final on the train. |
-| 8 | A user loses something only chat or email did | Nothing is removed until the parity check passes. Each step is one revertable PR. |
+| 8 | A user loses something only a removed agent did | Each removal waits for its 8a gaps to close. Each step is one revertable PR. |
 
 **Dry-run matrix before first real use** (Phase 2's workflow, plus a `train-test-*` tag pattern that only ever runs `dry_run: true`):
 
@@ -221,7 +221,7 @@ Recorded 2026-10-29.
 
 1. **Branches.** RCs and finals are tagged on `release/vX.Y`. The force-pushed `release` pointer branch is deleted and `update-release-branch.yml` retired. Fixes land on `main` first; a bot backports them via a label. `main` never freezes for a release.
 2. **Finals.** A final promotes the RC's staged, final-stamped twin with one approval and no rebuild. `rebuild_final` stays as the opt-in escape hatch.
-3. **Agents.** Only the flagship ships, at core's version. The chat and email agents are legacy and will be removed (Phase 8) once the in-progress parity check confirms the flagship covers them. `ChatAgent` folds into the flagship package or core. Agent wheels on PyPI (#2240) stay a separate issue.
+3. **Agents.** Only the flagship agent exists and ships, at core's version. Every other GAIA-built agent harness is removed (Phase 8): chat, email, the teaching templates, and any other registered agent. Removal is decided, not conditional; the in-progress parity audit only sets which capabilities the flagship must gain before each removal lands. `ChatAgent` folds into the flagship package or core; the SDK base classes in `src/gaia/agents/base/` stay. Agent wheels on PyPI (#2240) stay a separate issue.
 4. **Evals.** Promotion needs a finished eval run on the RC's SHA: `success`, or `failure` with a maintainer's `release-waived` label. No score threshold. A final doesn't re-run the eval.
 5. **`@amd-gaia/agent` bin name:** `gaia-agent`, decided by default. `gaia` would shadow the core CLI on PATH; the deprecated `@amd-gaia/gaia` shim keeps `gaia` for existing scripts.
 
