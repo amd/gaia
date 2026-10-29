@@ -879,3 +879,45 @@ def test_content_slides_carry_the_deck_name_above_a_one_line_title(out):
     assert kicker.text_frame.text == "Q3 REVIEW"
     assert kicker.top + kicker.height <= title.top
     assert kicker.left == title.left > 0
+
+
+def _fill(cell):
+    return str(cell.fill.fore_color.rgb)
+
+
+def test_a_status_column_is_coloured_and_a_notes_column_is_not(out):
+    from slidedeck.markdown import outline_from_markdown
+
+    md = (
+        "## Mobile is slipping\n| Workstream | Status | Note |\n|---|---|---|\n"
+        "| API | Green | Done |\n| Connector | Amber | Rate-limit fix pending |\n"
+        "| Mobile | Red | Designer out sick |\n| QA | Green | On track |\n"
+    )
+    path = out("status.pptx")
+    assert build_deck(outline_from_markdown(md), path)["status"] in (
+        "ok",
+        "built_with_issues",
+    )
+    table = next(s for s in Presentation(path).slides[0].shapes if s.has_table).table
+    status = [_fill(table.cell(i, 1)) for i in range(1, 5)]
+    assert status[0] == status[3] != status[1] != status[2]
+    assert _fill(table.cell(1, 2)) != status[0], "a 'Done' note is not a status cell"
+
+
+def test_the_row_the_takeaway_names_first_is_highlighted(out):
+    from slidedeck.markdown import outline_from_markdown
+
+    md = (
+        "## Model B is the pick\n| Model | RAM |\n|---|---|\n"
+        "| Model A | 16 GB |\n| Model B | 32 GB |\n| Model C | 64 GB |\n"
+        "Takeaway: Buy Model B: double the RAM of Model A\n"
+    )
+    path = out("pick.pptx")
+    assert build_deck(outline_from_markdown(md), path)["status"] in (
+        "ok",
+        "built_with_issues",
+    )
+    table = next(s for s in Presentation(path).slides[0].shapes if s.has_table).table
+    b = table.cell(2, 0)
+    assert all(r.font.bold for r in b.text_frame.paragraphs[0].runs)
+    assert _fill(b) not in {_fill(table.cell(1, 0)), _fill(table.cell(3, 0))}

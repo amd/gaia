@@ -251,6 +251,16 @@ def _split_bold(text: str) -> List[Tuple[str, bool]]:
     return [(p, i % 2 == 1) for i, p in enumerate(parts) if p]
 
 
+#: Status words a table cell may hold, coloured as a status slide shows them.
+_STATUS = {
+    "green": "good", "on track": "good", "done": "good", "complete": "good",
+    "completed": "good", "shipped": "good",
+    "amber": "warn", "yellow": "warn", "at risk": "warn", "in review": "warn",
+    "red": "bad", "off track": "bad", "blocked": "bad", "late": "bad",
+}  # fmt: skip
+_AMBER = Paint("B45309")
+
+
 def _plain(text: str) -> str:
     return "".join(t for t, _b in _split_bold(text))
 
@@ -2205,11 +2215,37 @@ class DeckBuilder:
         for i, h in enumerate(heights):
             table.rows[i].height = int(h * EMU_PER_PT)
         zebra = self.theme.panel
+        dark = luminance(self.theme.background.hex) < 0.4
+        lit = self.theme.primary.tinted(-0.45 if dark else 0.82)
+        highlight = set(t["highlight_rows"])
+        takeaway = _plain(str(s.get("takeaway") or ""))
+        if takeaway and not highlight:
+            # The row the takeaway names first ("Buy Model B ...") is the one to see.
+            hits = []
+            for k, r in enumerate(rows_all):
+                name = _plain(str(r[0] or "")).strip()
+                m = len(name) >= 2 and re.search(
+                    rf"(?<!\w){re.escape(name)}(?!\w)", takeaway, re.I
+                )
+                if m:
+                    hits.append((m.start(), k))
+            if hits:
+                highlight = {min(hits)[1]}
+        # Status colours only in a column that is mostly status words.
+        status_cols = {
+            j
+            for j in range(ncols)
+            if rows_all
+            and sum(
+                _plain(str(r[j] or "")).strip().lower() in _STATUS for r in rows_all
+            )
+            >= 0.6 * len(rows_all)
+        }
         for i, row in enumerate(grid):
             is_header = has_header and i == 0
             data_i = i - (1 if has_header else 0)
             is_total = t["total_row"] and i == nrows - 1
-            hl = data_i in t["highlight_rows"]
+            hl = data_i in highlight
             for j in range(ncols):
                 cell = table.cell(i, j)
                 cell.margin_left = cell.margin_right = cell_mx
@@ -2235,15 +2271,27 @@ class DeckBuilder:
                     p.alignment = PP_ALIGN.RIGHT
                 else:
                     p.alignment = PP_ALIGN.LEFT
-                fill = (
-                    self.theme.primary
-                    if is_header
-                    else (
-                        zebra
-                        if (is_total or hl or data_i % 2 == 1)
-                        else self.theme.background
-                    )
+                status = (
+                    None
+                    if is_header or j not in status_cols
+                    else _STATUS.get(_plain(str(row[j])).strip().lower())
                 )
+                if status is not None:
+                    fill = (
+                        self.theme.good
+                        if status == "good"
+                        else self.theme.bad if status == "bad" else _AMBER
+                    )
+                    for r in runs:
+                        r.font.bold = True
+                elif is_header:
+                    fill = self.theme.primary
+                elif hl:
+                    fill = lit
+                elif is_total or data_i % 2 == 1:
+                    fill = zebra
+                else:
+                    fill = self.theme.background
                 fill_shape(cell, fill)
                 for r in runs:
                     _apply_color(r.font.color, self.theme.text_on(fill))
