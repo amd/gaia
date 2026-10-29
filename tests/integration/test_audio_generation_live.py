@@ -28,8 +28,8 @@ def test_audio_generation_after_fresh_model_pull(require_lemonade, tmp_path):
     if model in downloaded:
         pytest.skip("ThinkSound-SFX is already downloaded; use a fresh model cache")
 
-    # The real auto-download / model-load path, not a pre-populated model stub.
-    client.load_model(model, auto_download=True, timeout=1800, prompt=False)
+    # Download only; the generation request must perform the cold model load.
+    assert client.ensure_model_downloaded(model, show_progress=False, timeout=1800)
     audio = AudioGenerationToolsMixin()
     audio.audio_gen_client = client
     audio.audio_gen_output_dir = tmp_path

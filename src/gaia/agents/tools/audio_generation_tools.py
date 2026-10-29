@@ -15,8 +15,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
-import requests
-
 from gaia.agents.base.file_snapshots import SnapshotError, before_change
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 from gaia.logger import get_logger
@@ -193,41 +191,11 @@ class AudioGenerationToolsMixin:
         )
         staging = None
         try:
-            with requests.post(
-                f"{client.base_url}/audio/generations",
-                json=payload,
-                headers={"Content-Type": "application/json", **client._auth_headers()},
-                timeout=(10, 1800),
-                stream=True,
-            ) as response:
-                if response.status_code == 401:
-                    return {
-                        "status": "error",
-                        "error": "Lemonade rejected the API key (401).",
-                    }
-                if response.status_code >= 400:
-                    return {
-                        "status": "error",
-                        "error": (
-                            f"Lemonade audio generation failed ({response.status_code}): "
-                            f"{response.text[:600]}"
-                        ),
-                    }
-                content_type = response.headers.get("Content-Type", "").lower()
-                if "json" in content_type:
-                    return {
-                        "status": "error",
-                        "error": (
-                            "Expected WAV audio but received a JSON response from Lemonade."
-                        ),
-                    }
-                with tempfile.NamedTemporaryFile(
-                    dir=self.audio_gen_output_dir, suffix=".part", delete=False
-                ) as temporary:
-                    staging = Path(temporary.name)
-                    for chunk in response.iter_content(chunk_size=64 * 1024):
-                        if chunk:
-                            temporary.write(chunk)
+            with tempfile.NamedTemporaryFile(
+                dir=self.audio_gen_output_dir, suffix=".part", delete=False
+            ) as temporary:
+                staging = Path(temporary.name)
+            client.generate_audio(payload, staging, timeout=1800)
             # Reject empty/truncated/JSON responses even when the HTTP status
             # was 200; an agent must never claim a broken file was generated.
             with staging.open("rb") as wav:
@@ -251,7 +219,7 @@ class AudioGenerationToolsMixin:
                 "format": "wav",
                 "duration_requested": duration,
             }
-        except (requests.RequestException, OSError, SnapshotError) as exc:
+        except (LemonadeClientError, OSError, SnapshotError) as exc:
             return {"status": "error", "error": f"Audio generation failed: {exc}"}
         finally:
             if staging is not None:
