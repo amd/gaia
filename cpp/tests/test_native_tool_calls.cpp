@@ -18,6 +18,8 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <set>
 #include <string>
@@ -1297,3 +1299,50 @@ TEST(ModelLoadTest, AFailedLoadIsAnErrorNotAWarning) {
     EXPECT_NE(r["error"].get<std::string>().find(kToolCallingModel), std::string::npos);
     EXPECT_EQ(mock.requestCount(), 0);  // no chat request against the wrong model
 }
+
+// ---------------------------------------------------------------------------
+// --trace: every model call and tool call is written, with what the model saw
+// ---------------------------------------------------------------------------
+
+TEST(TraceTest, TurnTraceRecordsModelCallsToolCallsAndMessages) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(toolCallsResponse(
+        R"([{"id":"call_1","type":"function","function":{"name":"echo","arguments":"{\"message\":\"hi\"}"}}])"));
+    mock.pushResponse(kPlainAnswer);
+
+    const auto path = std::filesystem::temp_directory_path() / "gaia_trace_test" / "turn.json";
+    std::filesystem::remove_all(path.parent_path());
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.traceFile = path.u8string();
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("say hi");
+
+    std::ifstream in(path);
+    ASSERT_TRUE(in) << "no trace at " << path.u8string();
+    const json trace = json::parse(in);
+    in.close();  // Windows can't remove a file that is still open.
+    EXPECT_EQ(trace.at("query"), "say hi");
+    EXPECT_EQ(trace.at("result"), "All done.");
+    EXPECT_EQ(trace.at("steps_taken"), 2);
+    EXPECT_TRUE(trace.at("duration_ms").is_number());
+    EXPECT_EQ(trace.at("system_prompt").get<std::string>().rfind("You are a tool agent.", 0), 0u);
+
+    std::vector<std::string> kinds;
+    for (const auto& e : trace.at("events")) kinds.push_back(e.at("type"));
+    EXPECT_EQ(kinds, (std::vector<std::string>{"llm", "tool", "llm"}));
+    const json& llm = trace.at("events")[0];
+    EXPECT_EQ(llm.at("tool_calls")[0].at("name"), "echo");
+    const json& tool = trace.at("events")[1];
+    EXPECT_EQ(tool.at("name"), "echo");
+    EXPECT_EQ(tool.at("args"), (json{{"message", "hi"}}));
+    EXPECT_EQ(tool.at("result"), (json{{"echoed", "hi"}}));
+    EXPECT_TRUE(tool.at("ms").is_number());
+
+    // The messages the model saw, tool reply included, in order.
+    std::vector<std::string> roles;
+    for (const auto& m : trace.at("messages")) roles.push_back(m.at("role"));
+    EXPECT_EQ(roles, (std::vector<std::string>{"user", "assistant", "tool", "assistant"}));
+    std::filesystem::remove_all(path.parent_path());
+}
+

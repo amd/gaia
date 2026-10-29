@@ -429,6 +429,10 @@ struct AgentConfig {
     /// and turns this off so they cannot silently override its flags.
     bool legacyEnvOverrides = true;
 
+    /// When set, each turn writes a JSON trace here (Python's --trace): every
+    /// model call and tool call with timings, results and the messages sent.
+    std::string traceFile;
+
     // ---- Flagship loop behaviors (Python base Agent parity). All default off
     // ---- so an agent that does not opt in sees byte-identical prompts.
 

@@ -92,6 +92,9 @@ void printUsage() {
               << "  --max-steps <n>     Step limit for a turn (default 150, or GAIA_AGENT_MAX_STEPS)\n"
               << "  --no-tui / --tui    Force plain console or the TUI\n"
               << "  --debug, --dev      Log requests to stderr\n"
+              << "  --trace             Save each turn's model calls, tool calls and timings as JSON in\n"
+              << "                      ~/.gaia/native/traces (named after --prompt-file when given)\n"
+              << "  --trace-file <f>    Save the trace to <f> instead\n"
               << "  --version           Print the version\n\n"
               << color::BOLD << "Environment:" << color::RESET << "\n"
               << "  LEMONADE_BASE_URL, LEMONADE_API_KEY, GAIA_AGENT_MAX_STEPS, GAIA_CTX_SIZE, GAIA_FAST,\n"
@@ -170,13 +173,14 @@ int main(int argc, char* argv[]) {
         if (!stem.empty()) g_prog = stem;
     }
     try {
-        std::string query, queryArg, resumeId, modelOverride, promptFile;
+        std::string query, queryArg, resumeId, modelOverride, promptFile, traceFile;
         int maxSteps = 0;
         std::vector<std::string> skills, allow;
         int port = 8150;
         bool serve = false, mcp = false, jsonEvents = false, printMode = false, noTui = false,
              forceTui = false, debug = false, yes = false, noWeb = false, noMemory = false,
-             listSkillsFlag = false, listSessionsFlag = false, stdio = false, acceptEdits = false;
+             listSkillsFlag = false, listSessionsFlag = false, stdio = false, acceptEdits = false,
+             trace = false;
         bool fast = gaia::envFlag("GAIA_FAST").value_or(false);
 
         for (int i = 1; i < argc; ++i) {
@@ -205,6 +209,8 @@ int main(int argc, char* argv[]) {
             else if (arg == "--query") queryArg = requireValue(i, argc, argv, arg);
             else if (arg == "--print" || arg == "-p") printMode = true;
             else if (arg == "--prompt-file") promptFile = requireValue(i, argc, argv, arg);
+            else if (arg == "--trace") trace = true;
+            else if (arg == "--trace-file") traceFile = requireValue(i, argc, argv, arg);
             else if (arg == "--max-steps") {
                 const std::string v = requireValue(i, argc, argv, arg);
                 std::size_t used = 0;
@@ -270,6 +276,13 @@ int main(int argc, char* argv[]) {
         if (maxSteps > 0) config.maxSteps = maxSteps;
         if (serve || mcp || stdio || printMode) config.silentMode = true;
         if (stdio) config.streaming = config.useNativeToolCalls();
+        if (trace && traceFile.empty()) {
+            // Named after the prompt file when there is one, so a batch run maps each trace to its task.
+            const std::string stem = promptFile.empty() ? "trace_" + std::to_string(std::time(nullptr))
+                                                        : fs::u8path(promptFile).stem().u8string();
+            traceFile = (fs::u8path(gaia::gaiaHomeDir()) / "native" / "traces" / (stem + ".json")).u8string();
+        }
+        config.traceFile = traceFile;
         if (jsonEvents) {
             config.streaming = false;
             config.structuredEvents = true;

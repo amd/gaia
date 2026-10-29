@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <fstream>
 #include <filesystem>
 #include <iostream>
 #include <regex>
@@ -1296,6 +1298,29 @@ void repairToolCallPairing(std::vector<Message>& messages) {
     }
     messages = std::move(kept);
 }
+
+// Keeps a trace readable when a tool returns a whole document.
+json traceCapped(const json& result) {
+    constexpr std::size_t kMax = 64 * 1024;
+    std::string text = result.dump(-1, ' ', false, json::error_handler_t::replace);
+    if (text.size() <= kMax) return result;
+    std::size_t cut = kMax;
+    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) --cut;
+    return json{{"truncated_from_bytes", text.size()}, {"head", text.substr(0, cut)}};
+}
+
+void writeTraceFile(const std::string& path, const json& trace) {
+    std::error_code ec;
+    const auto target = std::filesystem::u8path(path);
+    if (target.has_parent_path()) std::filesystem::create_directories(target.parent_path(), ec);
+    std::ofstream out(target, std::ios::binary | std::ios::trunc);
+    out << trace.dump(1, ' ', false, json::error_handler_t::replace);
+    if (!out) {
+        std::cerr << "gaia: could not write the trace to " << path
+                  << (ec ? " (" + ec.message() + ")" : std::string()) << "; pick a writable --trace location."
+                  << std::endl;
+    }
+}
 } // namespace
 
 void Agent::setHistory(std::vector<Message> history) {
@@ -1461,6 +1486,17 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         }
         return false;
     };
+    const bool tracing = !cfg.traceFile.empty();
+    json traceEvents = json::array();
+    const auto turnStart = std::chrono::steady_clock::now();
+    auto msSince = [](std::chrono::steady_clock::time_point t) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t).count();
+    };
+    auto traceTool = [&](const std::string& name, const json& args, const json& result, long long ms) {
+        if (!tracing) return;
+        traceEvents.push_back({{"type", "tool"}, {"step", stepsTaken}, {"name", name}, {"args", args},
+                               {"ms", ms}, {"result", traceCapped(result)}});
+    };
     const ToolOutputBudget outputBudget = ToolOutputBudget::forContext(cfg.contextSize);
     auto renderToolResult = [&](const std::string& toolName, const json& result) {
         if (!cfg.toolOutputPaging) return truncateToolResult(result);
@@ -1523,11 +1559,17 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         // Skip progress spinner when streaming — tokens serve as live progress.
         if (!config_.streaming) console_->startProgress("Thinking");
         LlmResult llmResult;
+        auto llmStart = std::chrono::steady_clock::now();
         try {
             llmResult = callLlm(messages, turnSystemPrompt, cfg);
         } catch (const std::exception& e) {
             if (!config_.streaming) console_->stopProgress();
             console_->printWarning(std::string("LLM call failed, retrying: ") + e.what());
+            if (tracing) {
+                traceEvents.push_back({{"type", "llm_error"}, {"step", stepsTaken}, {"ms", msSince(llmStart)},
+                                       {"error", e.what()}, {"retrying", true}});
+            }
+            llmStart = std::chrono::steady_clock::now();
 
             // Retry once
             if (!config_.streaming) console_->startProgress("Retrying");
@@ -1536,12 +1578,24 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             } catch (const std::exception& e2) {
                 if (!config_.streaming) console_->stopProgress();
                 console_->printError(std::string("LLM error: ") + e2.what());
+                if (tracing) {
+                    traceEvents.push_back({{"type", "llm_error"}, {"step", stepsTaken}, {"ms", msSince(llmStart)},
+                                           {"error", e2.what()}, {"retrying", false}});
+                }
                 finalAnswer = std::string("Unable to complete task due to LLM error: ") + e2.what();
                 llmError = e2.what();
                 break;
             }
         }
         if (!config_.streaming) console_->stopProgress();
+        if (tracing) {
+            json calls = json::array();
+            for (const auto& tc : llmResult.toolCalls) calls.push_back({{"name", tc.name}, {"arguments", tc.arguments}});
+            traceEvents.push_back({{"type", "llm"}, {"step", stepsTaken}, {"ms", msSince(llmStart)},
+                                   {"messages_sent", messages.size()}, {"finish_reason", llmResult.finishReason},
+                                   {"usage", llmResult.usage.toJson()}, {"content", llmResult.content},
+                                   {"tool_calls", std::move(calls)}});
+        }
 
         if (cancelled_.load()) {
             console_->printWarning("Cancelled by user");
@@ -1646,7 +1700,9 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 console_->prettyPrintJson(toolArgs, "Tool Args");
                 console_->startProgress("Executing " + tc.name);
 
+                const auto toolStart = std::chrono::steady_clock::now();
                 json toolResult = executeTool(tc.name, toolArgs);
+                traceTool(tc.name, toolArgs, toolResult, msSince(toolStart));
 
                 console_->stopProgress();
                 console_->printToolComplete();
@@ -1737,7 +1793,9 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             console_->prettyPrintJson(toolArgs, "Tool Args");
             console_->startProgress("Executing " + toolName);
 
+            const auto toolStart = std::chrono::steady_clock::now();
             json toolResult = executeTool(toolName, toolArgs);
+            traceTool(toolName, toolArgs, toolResult, msSince(toolStart));
 
             console_->stopProgress();
             console_->printToolComplete();
@@ -1784,8 +1842,14 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         AgentConfig closingCfg = cfg;
         closingCfg.toolChoice = "none";
         try {
+            const auto closingStart = std::chrono::steady_clock::now();
             LlmResult closingResult =
                 callLlm(messages, composeSystemPromptFor(cfg), closingCfg);
+            if (tracing) {
+                traceEvents.push_back({{"type", "llm"}, {"step", stepsTaken}, {"closing", true},
+                                       {"ms", msSince(closingStart)}, {"finish_reason", closingResult.finishReason},
+                                       {"usage", closingResult.usage.toJson()}, {"content", closingResult.content}});
+            }
             totalUsage += closingResult.usage;
             std::string text = cfg.stripThinking ? stripReasoning(closingResult.content)
                                                  : closingResult.content;
@@ -1813,6 +1877,24 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
 
     console_->printCompletion(stepsTaken, stepsLimit);
+
+    if (tracing) {
+        json sent = json::array();
+        for (const auto& m : messages) sent.push_back(m.toJson());
+        json trace = {{"query", userInput},
+                      {"model", cfg.modelId},
+                      {"result", finalAnswer},
+                      {"steps_taken", stepsTaken},
+                      {"steps_limit", stepsLimit},
+                      {"duration_ms", msSince(turnStart)},
+                      {"usage", totalUsage.toJson()},
+                      {"error_count", errorCount},
+                      {"system_prompt", composeSystemPromptFor(cfg)},
+                      {"events", std::move(traceEvents)},
+                      {"messages", std::move(sent)}};
+        if (!llmError.empty()) trace["llm_error"] = llmError;
+        writeTraceFile(cfg.traceFile, trace);
+    }
 
     for (auto it = transientMessages.rbegin(); it != transientMessages.rend(); ++it) {
         messages.erase(messages.begin() + static_cast<std::ptrdiff_t>(*it));
