@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""GuideToolsMixin — show a recipe, workout, how-to or checklist as a card.
+"""GuideToolsMixin — show a recipe, workout, how-to, checklist or itinerary as a card.
 
 Each tool returns a ``guide`` render card (``docs/spec/agent-ui-query-sse-contract.md``
 §4.3) that the Agent UI draws from the tool result, so the model's reply only
@@ -9,7 +9,7 @@ has to add a tip or two.
 
 from typing import Any, Dict, List, Literal, NamedTuple, Optional
 
-GuideType = Literal["recipe", "workout", "howto", "checklist"]
+GuideType = Literal["recipe", "workout", "howto", "checklist", "itinerary"]
 
 MAX_TITLE_CHARS = 120
 MAX_LINE_CHARS = 500
@@ -33,6 +33,7 @@ _SHAPES: Dict[str, _GuideShape] = {
     "workout": _GuideShape("show_workout", "equipment", "exercises"),
     "howto": _GuideShape("show_how_to", "materials", "steps"),
     "checklist": _GuideShape("show_checklist", "items", None),
+    "itinerary": _GuideShape("show_itinerary", "packing", "days"),
 }
 
 #: The tools this mixin registers, in registration order.
@@ -86,6 +87,7 @@ class GuideToolsMixin:
     - show_workout: A workout with exercises and equipment
     - show_how_to: Repair, install or setup instructions with materials
     - show_checklist: A shopping, packing or to-do list
+    - show_itinerary: A day-by-day trip plan with a packing list
 
     The tools only validate and package what the model sends. A bad argument
     comes back as ``{"ok": False, "error": ...}`` naming the fix, so the model
@@ -112,7 +114,7 @@ class GuideToolsMixin:
             Args:
                 title: The dish, e.g. "Banana bread".
                 servings: How many people it serves, 1 to 99, e.g. 4.
-                ingredients: One ingredient per line, amount and unit first, e.g. "2 cups flour", "1 whole chicken (4 lb)", "salt to taste". Write the full recipe yourself; do not ask for ingredients.
+                ingredients: One per line, amount and unit first, e.g. "2 cups flour", "1 whole chicken (4 lb)". Write the full recipe yourself; do not ask for ingredients.
                 steps: One step per line with durations inline, e.g. "Simmer 15 minutes". A step may start with a short title: "Make the dough: mix flour and water".
                 description: Optional one-sentence intro.
                 notes: Optional tips, swaps or storage advice.
@@ -204,6 +206,34 @@ class GuideToolsMixin:
                 items=items,
                 steps=[],
                 description=description,
+            )
+
+        @tool(display_label="Showing itinerary")
+        def show_itinerary(
+            title: str,
+            days: List[str],
+            packing: Optional[List[str]] = None,
+            description: str = "",
+            notes: str = "",
+        ) -> Dict[str, Any]:
+            """Show an itinerary card when the user asks for a trip itinerary, travel plan or day-by-day schedule.
+
+            The card shows everything. After calling, reply with one or two short sentences of tips. Do not repeat the list or steps.
+
+            Args:
+                title: The trip, e.g. "4 days in Lisbon".
+                days: One line per day, the day and place first, e.g. "Day 1 - Lisbon: Alfama walk, tram 28, dinner in Bairro Alto".
+                packing: Optional packing list, one item per line, e.g. "Comfortable walking shoes".
+                description: Optional one-sentence intro.
+                notes: Optional booking, transport or budget tips.
+            """
+            return self._guide_card(
+                "itinerary",
+                title=title,
+                items=[] if packing is None else packing,
+                steps=days,
+                description=description,
+                notes=notes,
             )
 
     def _guide_card(

@@ -1071,6 +1071,9 @@ class SSEOutputHandler(OutputHandler):
         "show_workout": "guide",
         "show_how_to": "guide",
         "show_checklist": "guide",
+        "show_itinerary": "guide",
+        "show_tip_calculator": "calculator",
+        "show_loan_calculator": "calculator",
     }
 
     def _render_card_payload(self, data: Any) -> Optional[Dict[str, Any]]:

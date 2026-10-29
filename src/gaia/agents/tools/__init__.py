@@ -9,6 +9,7 @@ This package contains tool mixins that can be used across multiple agents.
 from .audio_tools import AudioToolsMixin
 from .browser_tools import BrowserToolsMixin
 from .browser_use_tools import BrowserUseToolsMixin
+from .calculator_tools import CalculatorToolsMixin
 from .cli_setup_tools import CliSetupToolsMixin
 from .code_index_tools import CodeIndexToolsMixin
 from .file_io_tools import FileIOToolsMixin
@@ -27,6 +28,7 @@ __all__ = [
     "AudioToolsMixin",
     "BrowserToolsMixin",
     "BrowserUseToolsMixin",
+    "CalculatorToolsMixin",
     "CliSetupToolsMixin",
     "CodeIndexToolsMixin",
     "FileIOToolsMixin",

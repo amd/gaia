@@ -9,14 +9,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Recipes, workouts, how-tos and checklists show as cards.** Four new tools
   (`show_recipe`, `show_workout`, `show_how_to`, `show_checklist`) send the
   answer as a `guide` card the Agent UI draws, so the reply is a short tip
-  instead of a long list. The registered tool count is now 99.
+  instead of a long list.
+- **Trip itineraries show as a day-by-day card.** `show_itinerary` sends one
+  line per day plus a packing list as a fifth kind of `guide` card.
+- **Tip and loan calculators.** `show_tip_calculator` and
+  `show_loan_calculator` send only the starting numbers as a `calculator`
+  card; the card does the math and recomputes as the person edits it, so a
+  small model's arithmetic never reaches the answer. The registered tool count
+  is now 102.
 
 ### For integrators
 
 - **`tool_result.render` now reaches HTTP clients.** The sidecar's `/query`
   stream never set `render`, so a card tool's result arrived as plain data and
-  no card was drawn. It now carries the card type (`guide` for the four tools
-  above). The stdio transport still never sends it.
+  no card was drawn. It now carries the card type (`guide` or `calculator` for
+  the tools above). The stdio transport still never sends it.
 
 ### For integrators: contract 2.25
 

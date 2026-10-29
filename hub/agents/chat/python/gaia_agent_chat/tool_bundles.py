@@ -560,12 +560,26 @@ FULL_BUNDLES = [
     ToolBundle(
         name="guide",
         members=frozenset(
-            {"show_recipe", "show_workout", "show_how_to", "show_checklist"}
+            {
+                "show_recipe",
+                "show_workout",
+                "show_how_to",
+                "show_checklist",
+                "show_itinerary",
+            }
         ),
         description=(
-            "Show a recipe, workout, how-to or checklist as a card: cooking "
-            "and baking, exercise routines, fixing or setting something up, "
-            "and shopping, packing or to-do lists."
+            "Show a recipe, workout, how-to, checklist or itinerary as a card: "
+            "cooking and baking, exercise routines, fixing or setting something "
+            "up, shopping, packing or to-do lists, and trip plans."
+        ),
+    ),
+    ToolBundle(
+        name="calculator",
+        members=frozenset({"show_tip_calculator", "show_loan_calculator"}),
+        description=(
+            "Show a tip or loan calculator card that does the math: tips and "
+            "splitting a bill, mortgages, car loans and monthly payments."
         ),
     ),
 ]
@@ -580,8 +594,8 @@ FULL_BUNDLES = [
 #    always fails. (``search_web`` is NOT optional here: the browser mixin
 #    registers it unconditionally for this profile.)
 # 2. Subclass-provided mixins -- the skill-library, skill-learning,
-#    code-index, and guide tools come from GaiaAgent, so a plain ChatAgent on
-#    prompt_profile="full" has none.
+#    code-index, guide, and calculator tools come from GaiaAgent, so a plain
+#    ChatAgent on prompt_profile="full" has none.
 # 3. Memory. MemoryMixin registers nothing when the embedder is unreachable, so
 #    a degraded-but-running agent has a store and no memory tools. Selection
 #    already skips CORE names absent from the registry; without this, validation
@@ -636,6 +650,9 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "show_workout",
         "show_how_to",
         "show_checklist",
+        "show_itinerary",
+        "show_tip_calculator",
+        "show_loan_calculator",
     }
 )
 

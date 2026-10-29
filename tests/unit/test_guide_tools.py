@@ -129,6 +129,47 @@ def test_checklist_card_has_items_and_no_steps(tools):
     assert data["notes"] == ""
 
 
+def test_itinerary_card_puts_days_in_steps_and_packing_in_items(tools):
+    data = _call(
+        tools,
+        "show_itinerary",
+        title="4 days in Lisbon",
+        days=["Day 1 - Lisbon: Alfama walk, tram 28", "Day 2 - Sintra day trip"],
+        packing=["Walking shoes"],
+        notes="Book Pena Palace ahead.",
+    )["data"]
+
+    assert data["guideType"] == "itinerary"
+    assert data["steps"] == [
+        "Day 1 - Lisbon: Alfama walk, tram 28",
+        "Day 2 - Sintra day trip",
+    ]
+    assert data["items"] == ["Walking shoes"]
+    assert data["notes"] == "Book Pena Palace ahead."
+    assert data["servings"] is None
+
+
+def test_itinerary_without_packing_has_no_items(tools):
+    data = _call(tools, "show_itinerary", title="Day trip", days=["Day 1 - Porto"])[
+        "data"
+    ]
+    assert data["items"] == []
+
+
+def test_itinerary_needs_a_day(tools):
+    result = _call(tools, "show_itinerary", title="Nowhere", days=[])
+    assert result["ok"] is False
+    assert "show_itinerary needs at least one entry in days" in result["error"]
+
+
+def test_itinerary_validates_packing_lines(tools):
+    result = _call(
+        tools, "show_itinerary", title="T", days=["Day 1 - Rome"], packing=[3]
+    )
+    assert result["ok"] is False
+    assert "packing[0] is int" in result["error"]
+
+
 def test_lines_are_passed_through_unchanged(tools):
     """Validation only: nothing is trimmed or rewritten."""
     data = _call(tools, "show_checklist", title=" Trip ", items=["  Tent  "])["data"]
@@ -237,6 +278,7 @@ def test_each_tool_ships_its_trigger_words_and_reply_rule(tools):
         "show_workout": "workout",
         "show_how_to": "how to fix",
         "show_checklist": "shopping list",
+        "show_itinerary": "itinerary",
     }
     for name, word in triggers.items():
         description = tools[name]["description"]
