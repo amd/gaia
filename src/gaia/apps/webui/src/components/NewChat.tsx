@@ -1,15 +1,15 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight, FileText, X } from 'lucide-react';
 import { BrowserPaneToggle } from './browser-pane/BrowserPane';
 import { Composer } from './Composer';
 import { FolderChip } from './FolderChip';
 import { ModelChip } from './ModelChip';
+import { NpuBackdrop } from './NpuBackdrop';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PrivateChip } from './PrivateChip';
-import { StartCards } from './StartCards';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
@@ -19,8 +19,9 @@ import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { STARTING_REASON } from '../utils/constants';
 import { log } from '../utils/logger';
+import { durationMs, prefersReducedMotion } from '../utils/motion';
 import { deviceLabel } from '../utils/modelLabels';
-import type { StartCard, StartScreen } from '../types';
+import type { StartScreen } from '../types';
 import './NewChat.css';
 import { useSavedDraft } from '../hooks/useSavedDraft';
 import { NEW_CHAT_DRAFT_KEY } from '../utils/savedDraft';
@@ -37,7 +38,7 @@ interface NewChatProps {
     focusRequest?: number;
 }
 
-/** How often the new-chat cards are asked for again while they are unavailable. */
+/** How often the start screen is asked for again while the assistant is unavailable. */
 export const START_RETRY_MS = 15_000;
 
 export function greeting(now: Date = new Date()): string {
@@ -52,13 +53,13 @@ export function warmUpLine({ seconds, model, device }: WarmUpProgress): string {
     return `Loading ${displayModelName(model)}${where ? ` on ${where}` : ''}… ${seconds}s`;
 }
 
-/** No suggestions: one plain sentence, a retry, and the full error behind Details. */
-function SuggestionsUnavailable({ detail, onRetry }: { detail: string; onRetry: () => void }) {
+/** The assistant didn't start: one plain sentence, a retry, and the full error behind Details. */
+function AssistantUnavailable({ detail, onRetry }: { detail: string; onRetry: () => void }) {
     const [open, setOpen] = useState(false);
     return (
         <div className="new-chat-note">
             <p>
-                GAIA&rsquo;s assistant didn&rsquo;t start, so it can&rsquo;t suggest tasks yet.{' '}
+                GAIA&rsquo;s assistant didn&rsquo;t start yet.{' '}
                 <button type="button" className="link-btn" onClick={onRetry}>Try again</button>
             </p>
             <button type="button" className="new-chat-details" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
@@ -68,9 +69,6 @@ function SuggestionsUnavailable({ detail, onRetry }: { detail: string; onRetry: 
         </div>
     );
 }
-
-/** The start card that asks about the library's documents. */
-const DOCUMENT_CARD = 'document-brief';
 
 /** Hold every indexed library document for the chat about to be created. */
 function attachWholeLibrary() {
@@ -150,9 +148,10 @@ function SetupFailed({ error }: { error: string }) {
     );
 }
 
-/** An empty chat: a greeting, the composer, tasks to start from. Created on the first message. */
+/** An empty chat: a greeting and the composer over the NPU backdrop. Created on the first message. */
 export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatProps) {
     const starting = useChatStore((s) => s.systemStatus?.init_state === 'initializing');
+    const download = useChatStore((s) => s.systemStatus?.download_progress ?? null);
     // Moot once chats run in the cloud or a local model has loaded after all.
     const setupError = useChatStore((s) => (s.systemStatus?.model_loaded ? null : s.systemStatus?.setup_error ?? null));
     const remote = useModelStore((s) => !!s.active?.remote);
@@ -162,6 +161,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
     const [start, setStart] = useState<StartScreen | null>(null);
     const [startError, setStartError] = useState<string | null>(null);
     const inputRef = useRef<HTMLTextAreaElement | null>(null);
+    const innerRef = useRef<HTMLDivElement | null>(null);
+    const composerRef = useRef<HTMLDivElement | null>(null);
     const attachments = useAttachments();
     const warming = useWarmUp();
     useModelNames();
@@ -177,7 +178,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                 setStartError(s.skills_error ?? null);
             })
             .catch((err) => {
-                log.api.warn('New-chat suggestions unavailable', err);
+                log.api.warn('New-chat start screen unavailable', err);
                 if (live.current) setStartError(err instanceof Error ? err.message : String(err));
             });
     }, []);
@@ -246,38 +247,59 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         if (focusRequest) inputRef.current?.focus();
     }, [focusRequest]);
 
-    const pick = useCallback((card: StartCard) => {
-        // The card counts the library's documents; without them attached the chat has none.
-        if (card.skill === DOCUMENT_CARD) attachWholeLibrary();
-        if (!card.needs_input) {
-            void send(attachments.compose(card.prompt));
-            return;
-        }
-        setText(card.prompt);
-        inputRef.current?.focus();
-    }, [attachments, send]);
+    // Typing drops the composer to the bottom, where the chat will continue.
+    const docked = text.length > 0 || sending;
+    const innerTop = useRef<{ top: number; docked: boolean } | null>(null);
+    useLayoutEffect(() => {
+        const el = innerRef.current;
+        if (!el) return;
+        // Measure from where it sits now, not mid-way through a previous move.
+        if (typeof el.getAnimations === 'function') el.getAnimations().forEach((a) => a.cancel());
+        const top = el.getBoundingClientRect().top;
+        const before = innerTop.current;
+        innerTop.current = { top, docked };
+        if (!before || before.docked === docked || prefersReducedMotion() || typeof el.animate !== 'function') return;
+        const easing = getComputedStyle(document.documentElement).getPropertyValue('--ease').trim();
+        if (!easing) throw new Error('Motion token --ease is not set; check styles/index.css.');
+        el.animate(
+            [{ transform: `translateY(${before.top - top}px)` }, { transform: 'none' }],
+            { duration: durationMs('--duration-spring'), easing },
+        );
+    });
 
+    const downloading = download?.state === 'starting' || download?.state === 'downloading';
+    const activity = sending ? 'sending' : downloading ? 'download' : starting || warming !== null ? 'loading' : 'idle';
     const folder = start?.working_folder;
 
     return (
-        <main className="new-chat" aria-label="New chat">
+        <main className={`new-chat${docked ? ' is-docked' : ''}`} aria-label="New chat">
+            <NpuBackdrop
+                activity={activity}
+                progress={(download?.percent ?? 0) / 100}
+                pulse={text.length}
+                docked={docked}
+                contentRef={innerRef}
+                composerRef={composerRef}
+            />
             <div className="new-chat-actions">
                 <BrowserPaneToggle />
             </div>
-            <div className="new-chat-inner">
-                <h1 className="new-chat-greeting">{greeting()}</h1>
+            <div className="new-chat-inner" ref={innerRef}>
+                <h1 className="new-chat-greeting" aria-hidden={docked}>{greeting()}</h1>
                 {setupError && !remote && <SetupFailed error={setupError} />}
-                <Composer
-                    value={text}
-                    onChange={setText}
-                    onSubmit={submit}
-                    attachments={attachments}
-                    disabledReason={starting ? STARTING_REASON : null}
-                    autoFocus
-                    inputRef={inputRef}
-                    leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /></>}
-                    rightControls={<ModelChip />}
-                />
+                <div ref={composerRef}>
+                    <Composer
+                        value={text}
+                        onChange={setText}
+                        onSubmit={submit}
+                        attachments={attachments}
+                        disabledReason={starting ? STARTING_REASON : null}
+                        autoFocus
+                        inputRef={inputRef}
+                        leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /></>}
+                        rightControls={<ModelChip />}
+                    />
+                </div>
                 <div className="new-chat-meta">
                     {folder && <FolderChip folder={folder} disabled={starting || sending} />}
                 </div>
@@ -286,8 +308,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                     <p className="new-chat-warmup" role="status">{warmUpLine(warming)}</p>
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
-                {start && <StartCards cards={start.cards} onPick={pick} disabled={starting || sending} />}
-                {startError && <SuggestionsUnavailable detail={startError} onRetry={() => loadStart()} />}
+                {startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>
         </main>
     );
