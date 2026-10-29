@@ -12,6 +12,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on every step. On Gemma, on the GPU or the NPU, they are now left out, along
   with the skills built on them; larger models keep everything.
   `GAIA_FEATURE_TIER=full` or `compact` forces one set for any model.
+- **Memory downloads its embedding model when it is missing.** On the first
+  start that uses memory, the agent now fetches the required embedding model
+  from Lemonade instead of silently running without memory; the initial
+  download can be about 300 MB.
 - **Unknown or misplaced switches are refused.** `gaia --forse` and
   `gaia fetch --developer-mode` now exit 2 instead of silently starting the TUI;
   pass terminal-UI arguments after a bare `--`.

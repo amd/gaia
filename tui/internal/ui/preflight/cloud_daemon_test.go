@@ -2,6 +2,7 @@ package preflight
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -85,6 +86,107 @@ func TestDaemonGateReplaysTheKeptKeyForACloudModel(t *testing.T) {
 
 	if row, _ := rep.Find(KeyModel); row.State != StateOK || !replayed {
 		t.Fatalf("the kept key was not handed back before refusing: replayed=%v row=%+v", replayed, row)
+	}
+}
+
+// With a gateway model saved as default_model the launch passes no model, so
+// the sidecar names it — and a restarted Lemonade, keyless, lists it as missing.
+// It was offered as a ~4 GB download instead of having its key handed back.
+func TestDaemonGateTreatsACloudDefaultModelAsCloud(t *testing.T) {
+	replayed := false
+	stubReplayKeptKey(t, func(_ context.Context, provider string) (bool, error) {
+		replayed = provider == "amd"
+		return replayed, nil
+	})
+	stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
+		if !replayed {
+			return nil, nil
+		}
+		return []lemonade.Model{{ID: "amd.DeepSeek-V4.1-Flash", Recipe: "cloud"}}, nil
+	})
+	missing := strings.ReplaceAll(initModelMissing, "Gemma-4-E4B-it-GGUF", "amd.DeepSeek-V4.1-Flash")
+
+	rep := Check(context.Background(), gaiaFake(503, missing), cloudDaemonCfg(""))
+
+	row, _ := rep.Find(KeyModel)
+	if row.State != StateOK || !replayed {
+		t.Fatalf("a cloud default model was not checked as cloud: replayed=%v row=%+v", replayed, row)
+	}
+	if row.Fix == FixPullModel || strings.Contains(row.Detail, "4 GB") {
+		t.Errorf("a cloud model was described as a download: %+v", row)
+	}
+}
+
+// cloudDefault is the sidecar's /init answer when default_model is a gateway
+// model and a restarted, keyless Lemonade lists no amd.* models.
+func cloudDefault(id string) string {
+	return strings.ReplaceAll(initModelMissing, "Gemma-4-E4B-it-GGUF", id)
+}
+
+// No kept key, a failed replay, or a model the provider does not list: each
+// must ask for the provider, never offer the gateway model as a download.
+func TestDaemonGateNeverOffersACloudDefaultAsADownload(t *testing.T) {
+	cases := map[string]func(context.Context, string) (bool, error){
+		"no kept key":      func(context.Context, string) (bool, error) { return false, nil },
+		"replay failed":    func(context.Context, string) (bool, error) { return false, errors.New("daemon unreachable") },
+		"model not listed": func(context.Context, string) (bool, error) { return true, nil },
+	}
+	for name, replay := range cases {
+		t.Run(name, func(t *testing.T) {
+			stubReplayKeptKey(t, replay)
+			stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
+				return nil, nil
+			})
+
+			rep := Check(context.Background(), gaiaFake(503, cloudDefault("amd.DeepSeek-V4.1-Flash")), cloudDaemonCfg(""))
+
+			blocker, blocked := rep.Blocker()
+			if !blocked || blocker.Key != KeyModel {
+				t.Fatalf("an unservable cloud default passed the gate: %+v", rep.Rows)
+			}
+			if blocker.Fix == FixPullModel || strings.Contains(blocker.Detail, "4 GB") ||
+				strings.Contains(blocker.Line, "not downloaded") {
+				t.Errorf("a cloud default was described as a download: %+v", blocker)
+			}
+			if !strings.Contains(blocker.Remedy.Action, "Press p") {
+				t.Errorf("remedy %q does not say how to reconnect", blocker.Remedy.Action)
+			}
+		})
+	}
+}
+
+// A model passed for this launch outranks the sidecar's saved default.
+func TestDaemonGateChecksTheLaunchCloudModelOverACloudDefault(t *testing.T) {
+	var asked []string
+	stubListedCloudModels(t, func(_ context.Context, provider string) ([]lemonade.Model, error) {
+		asked = append(asked, provider)
+		return []lemonade.Model{{ID: "fireworks.kimi-k2", Recipe: "cloud"}}, nil
+	})
+
+	rep := Check(context.Background(), gaiaFake(503, cloudDefault("amd.DeepSeek-V4.1-Flash")),
+		cloudDaemonCfg("fireworks.kimi-k2"))
+
+	row, _ := rep.Find(KeyModel)
+	if row.State != StateOK || row.Line != "chat uses fireworks.kimi-k2" {
+		t.Fatalf("the launch's cloud model was not the one checked: %+v", row)
+	}
+	if strings.Join(asked, ",") != "fireworks" {
+		t.Errorf("asked providers %v, want only fireworks", asked)
+	}
+}
+
+// Only a provider-prefixed id is cloud: a local model whose name merely starts
+// with "amd" keeps its download gate.
+func TestDaemonGateKeepsTheDownloadForALocalLookalikeDefault(t *testing.T) {
+	stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
+		t.Error("a local default must not ask a cloud provider anything")
+		return nil, nil
+	})
+	for _, id := range []string{"amdgpu-Qwen3-4B-GGUF", "AMD-Llama-3B-GGUF", "fireworks-mini-GGUF"} {
+		rep := Check(context.Background(), gaiaFake(503, cloudDefault(id)), cloudDaemonCfg(""))
+		if blocker, blocked := rep.Blocker(); !blocked || blocker.Fix != FixPullModel {
+			t.Errorf("%s lost its download gate: %+v", id, rep.Rows)
+		}
 	}
 }
 
