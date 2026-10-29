@@ -1596,6 +1596,11 @@ class DeckBuilder:
                 else first
             )
         fmt = spec.get("number_format") or self.number_code
+        if not fmt and not scatter:
+            values = [v for ser in series for v in ser["values"] if is_number(v)]
+            if values and all(float(v).is_integer() for v in values):
+                if max(abs(float(v)) for v in values) >= 1000:
+                    fmt = "#,##0"  # 20,000 reads at a glance; 20000 does not.
         if scatter:
             cd = XyChartData()
             for ser in series:

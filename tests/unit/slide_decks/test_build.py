@@ -969,3 +969,30 @@ def test_chart_js_data_at_the_slide_level_is_read():
     chart = out["slides"][0]["chart"]
     assert chart["categories"] == ["West", "East"]
     assert chart["series"][0]["values"] == [5.6, 4.1]
+
+
+def test_whole_number_charts_in_the_thousands_get_separators(tmp_path):
+    from pptx import Presentation
+    from slidedeck.build import build_deck
+
+    out = tmp_path / "c.pptx"
+    build_deck(
+        {
+            "slides": [
+                {
+                    "type": "chart",
+                    "title": "Most visitors never sign up",
+                    "chart_type": "column",
+                    "categories": ["Visited", "Signed up"],
+                    "series": {"People": [20000, 6400]},
+                    "source": "analytics, Oct 2026",
+                }
+            ]
+        },
+        str(out),
+    )
+    chart = next(
+        s.chart for s in Presentation(str(out)).slides[0].shapes if s.has_chart
+    )
+    assert chart.plots[0].series[0].values == (20000.0, 6400.0)
+    assert "#,##0" in chart.part.blob.decode("utf-8", "ignore")
