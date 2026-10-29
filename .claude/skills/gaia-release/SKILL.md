@@ -16,9 +16,9 @@ Accept one argument in any of these shapes:
 - `0.17.5` — bare semver
 - `v0.17.5` — with the `v` prefix (the actual tag form)
 - `0.17.5.1` — hotfix-style four-part version (rare; e.g. `v0.15.4.1`)
-- *(no argument)* — read `__version__` from [src/gaia/version.py](../../../src/gaia/version.py), then suggest the next-patch bump (e.g. `0.17.4` → propose `0.17.5`) and ask the user to confirm or override before continuing.
+- *(no argument)* — read `__version__` from [src/gaia/version.py](../../../src/gaia/version.py) and propose it: after every final, the next-version PR moves `main` to the next minor (e.g. `0.26.0` once `v0.25.2` ships). Ask the user to confirm or override before continuing.
 
-Normalise to the bare form internally (`0.17.5`) and the tag form externally (`v0.17.5`). If the user gives a version that is **older than or equal to** the current `__version__`, stop and ask — never silently roll backwards.
+Normalise to the bare form internally (`0.17.5`) and the tag form externally (`v0.17.5`). If the user gives a version that is **older than** the current `__version__`, stop and ask — never silently roll backwards. That includes a patch for the previous line (`0.25.3` while `main` says `0.26.0`): `publish.yml` refuses a tag that doesn't match `main`'s `version.py`, and patch branches (`release/vX.Y`) arrive only in Phase 6 of the [release train](../../../docs/plans/release-train.mdx), so a maintainer decides how it ships.
 
 ## Resume detection (run before any phase)
 
@@ -28,6 +28,8 @@ The skill is reinvocation-safe — releases span days, and the user will return 
 git fetch origin --tags
 git checkout main && git pull
 NOTES_ON_MAIN=$(git ls-tree -r origin/main --name-only | grep -c "^docs/releases/v<version>\.mdx$" || true)
+# The next-version PR opens each release's notes as a stub; a stub is not notes.
+git show "origin/main:docs/releases/v<version>.mdx" 2>/dev/null | grep -q release-notes-stub && NOTES_ON_MAIN=0
 PR_OPEN=$(gh pr list --repo amd/gaia --search "Release v<version> in:title" --state open --json number --jq '.[0].number' || true)
 PR_MERGED=$(gh pr list --repo amd/gaia --search "Release v<version> in:title" --state merged --json number --jq '.[0].number' || true)
 TAG_EXISTS=$(git tag --list "v<version>")
@@ -48,11 +50,6 @@ Resume table:
 
 Always announce the resume decision before continuing: *"Detected `v<version>` state: PR #831 merged, no tag yet. Resuming at Phase 3 (pre-tag verification)."*
 
-A `PR_OPEN` or `PR_MERGED` state may have been produced by the nightly automation
-rather than a person: [`.github/workflows/nightly-patch-release.yml`](../../../.github/workflows/nightly-patch-release.yml)
-drafts Phase 1-2 on its own when a patch release is due, and stops before merge and
-tag. Treat that PR exactly like a human-drafted one — review the notes, then resume
-at the phase the table gives.
 
 ## Hard rules (do not violate)
 
@@ -63,7 +60,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 - **No silent fallbacks** — if a validator fails, a step times out, or a workflow run isn't found, stop with an actionable error. Do not retry blindly. Do not "proceed anyway."
 - **Release notes are bulleted, plain, and short** — see *Notes format* in Phase 1. Every entry is one bullet, never a prose block; no narrative overview paragraph; no emoji; a hard word budget that is checked, not eyeballed. Sections in order: `## Breaking Changes` (only if any), `## What's New`, `## Bug Fixes`, `## Known Issues` (only if any), `## Contributors`, `## Full Changelog`. Patch releases do **not** include a `pip install` block.
 - **Match the previous release PR body shape exactly** — read the most recent merged `Release vX.Y.Z` PR (e.g. `gh pr list --repo amd/gaia --state merged --search "Release v in:title" --limit 3`). Open with `# GAIA vX.Y.Z Release Notes` (no MDX frontmatter in the PR body), end with a `Release checklist` section. Style drift here costs review cycles.
-- **The `version.py` bump and its notes land in the same commit.** `docs.yml` and `tests/unit/test_docs_json_release.py` both resolve `docs/releases/v<version>.mdx` and the `docs.json` navbar label from the *declared* `__version__`, so bumping ahead of the notes (the old `0.17.3` → "bump to 0.17.4 for development" pattern) turns every later docs and unit run red, not just the release PR. Never bump on its own.
+- **Listing a release in `docs.json` makes it current, so list it only with its notes.** `main` declares the next version as soon as a final ships, but `docs.yml`, `tests/unit/test_docs_json_release.py` and the navbar follow the newest `releases/vX.Y.Z` page in the Releases tab. Adding `releases/v<version>` there is what moves them, so it belongs in the release PR with finished notes, never on its own.
 - **Bulletproof commits only** — every change made by this skill must satisfy the four criteria in CLAUDE.md (validated, critiqued, scope-clean, no half-finished work) before being committed.
 - **Pushing tags is irreversible.** Always confirm the SHA the tag will point to and the green status of the pre-tag verification run before `git push origin v<version>`.
 - **Manual approval gate at the publish step** is human-only — Claude cannot click the GitHub environment "approve" button. Surface the run URL and stop.
@@ -103,7 +100,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 
    Patch releases are short. Minor/major releases carry more bullets and a `pip install` block — the per-bullet shape is identical, only the count grows.
 
-3. **Create [docs/releases/v<version>.mdx](../../../docs/releases/)** with this skeleton (adapt to whether it's patch / minor / major):
+3. **Write [docs/releases/v<version>.mdx](../../../docs/releases/)** with this skeleton (adapt to whether it's patch / minor / major). It usually exists already as the next-version PR's stub: replace the whole file, including the `release-notes-stub` comment, which `validate_release_notes.py` rejects.
 
    ```mdx
    ---
@@ -210,23 +207,23 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    > - **Triage your inbox from the terminal** — `gaia email` sorts mail, drafts replies to
    >   routine messages, and flags what needs you. Runs locally. (PR [#1234](https://github.com/amd/gaia/pull/1234))
 
-4. **Add the release page to [docs/docs.json](../../../docs/docs.json):** add `releases/v<version>` to the Releases tab. Step 5 stamps the navbar label.
+4. **Add the release page to [docs/docs.json](../../../docs/docs.json):** add `releases/v<version>` to the Releases tab. That makes it the newest listed release, so step 5 moves the navbar label to it.
 
-5. **Set the version and stamp every field that follows it.** Edit `__version__` in [src/gaia/version.py](../../../src/gaia/version.py) if it doesn't already read `<version>` (the post-prior-release bump usually handles it, but a squash-merge can revert it silently). Then:
+5. **Check the version and stamp every field that follows it.** `__version__` in [src/gaia/version.py](../../../src/gaia/version.py) should already read `<version>`: the next-version PR set it after the previous final. If it doesn't (a squash-merge can revert it silently), set it. Then:
    ```bash
    grep -E '^__version__' src/gaia/version.py   # must read <version>
-   python util/release_versions.py --stamp      # writes every field from version.py
+   python util/release_versions.py --stamp      # writes every field from its source
    python util/release_versions.py --check      # what lint runs; must exit 0
    ```
-   `--stamp` writes, from `version.py`:
-   - the Agent UI's `package.json` and lockfile (formerly `bump-ui-version.mjs`);
+   On a release PR, `--stamp` should only move the `docs.json` navbar label to `v<version> · Lemonade <LEMONADE_VERSION>`; the next-version PR already stamped everything that follows `version.py`. The label follows the newest listed release, not `version.py`, so `main` can declare the next version while the site still names the one users can install. It can lag `LEMONADE_VERSION`, because Lemonade bumps land outside release PRs.
+
+   For reference, the fields that follow `version.py`:
+   - the Agent UI's `package.json` and lockfile (`bump-ui-version.mjs` is now a wrapper for this);
    - the Terminal UI's hub manifest `version` (`hub/components/terminal-hub/gaia-agent.yaml`). Its six raw binaries publish to the Agent Hub R2 catalog because the flagship's `binaries.lock.json` pins them there, and `release_components.yml` gates the tag against the manifest. R2 paths are immutable, so a mismatch **fails the release** by design. `hub/components/agent-ui/` is no longer published and needs no bump;
-   - the `docs.json` navbar label, `v<version> · Lemonade <LEMONADE_VERSION>`. It can lag `LEMONADE_VERSION`, because Lemonade bumps land outside release PRs;
+   - the flagship agent's own version, since it ships at core's: `gaia_agent/__init__.py`, `pyproject.toml`, `gaia-agent.yaml`, `npm/package.json` and its lockfile, and the lock's `agentVersion` and sidecar URL (`stamp_version.py` is now a wrapper for this);
    - the flagship and chat agents' `amd-gaia>=` floors and `min_gaia_version`, and the minimum core the flagship's npm `README.md` and `SKILL.md` quote.
 
-   Two consequences of the floors moving. The flagship's next `npm/CHANGELOG.md` entry must quote the new minimum (``Python CLI <version>+ on `PATH` ``): `test_npm_doc_min_version.py` reads the first such line, and the stamp never edits a past entry. And the floors live in files the flagship binary is frozen from, so a final needs a flagship release cut from this commit (Phase 3, step 4).
-
-   It leaves the flagship and chat agents' own versions alone: they follow their own sources until they join core's (#5172). Two `HELD` lines, the chat agent's `__init__.py` and the flagship npm lockfile's root version, are known drift held for the same reason. They print but don't fail.
+   The flagship's `npm/CHANGELOG.md` entry for `<version>` must quote the minimum (``Python CLI <version>+ on `PATH` ``): `test_npm_doc_min_version.py` reads the first such line. The next-version PR opens that entry; fill it in with what changed. The chat agent keeps its own version until the release train removes it, so its `__init__.py` prints one `HELD` line that doesn't fail.
 
 6. **Bump the Terminal UI's `min_gaia_version` by hand** to `<version>`. It is not stamped. It needs
    daemon host API v1.1, which no release before this one ships — so the release it
@@ -366,10 +363,10 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    python util/check_flagship_release.py --ref "$MERGED_SHA"
    ```
    If it fails, release the flagship in this order. Skipping step 2 deadlocks: `release_agent_gaia.yml` refuses to run until the Terminal UI (`terminal-hub`) version the lock pins is on the hub, and it normally publishes only on the final tag, which this gate blocks.
-   1. Bump the flagship in a PR: edit `__version__` in `hub/agents/gaia/python/gaia_agent/__init__.py`, run `python util/release_versions.py --stamp`, add a `hub/agents/gaia/npm/CHANGELOG.md` entry. (`hub/agents/gaia/python/packaging/stamp_version.py` writes the same flagship fields and still works; `release_agent_gaia.yml` runs its `--check`.)
+   1. The flagship's version is already `<version>`: it ships at core's, and `release_versions.py --check` fails lint if any of its fields drift. There is nothing to bump. (`release_agent_gaia.yml` still runs `hub/agents/gaia/python/packaging/stamp_version.py --check`, now a wrapper for that check.)
    2. **Publish the Terminal UI (`terminal-hub`) first.** Dispatch **Publish Hub Components (R2)** (`release_components.yml`) on main with `dry_run` unchecked; a dispatch skips this gate. Its Windows-setup leg fails because there is no GitHub release or new flagship yet, and its installer-attach job finds no GitHub release, warns, and attaches nothing; neither publishes anything. **Publish terminal-hub** going green is what this step needs. Skip this if `hub/components/terminal-hub/gaia-agent.yaml`'s version is already on the hub.
-   3. Tag `agent-pkg-gaia-v<flagship-version>` on the merged commit and approve `release_agent_gaia.yml`.
-   4. Merge the PR the release opens once it publishes: its `pin-lock` job commits the regenerated `binaries.lock.json` (real hashes) to branch `flagship-lock/v<flagship-version>` and opens `chore(release): pin flagship agent <version>'s published hashes`. It is a bot PR, so CI only runs when the merge queue picks it up. Never hand-edit the hashes; if the PR is missing, re-run that release run's `pin-lock` job, which never opens a second PR and does nothing when main already matches. Then re-run Phase 3 on the merged commit. Code the binary is frozen from must not change between the agent tag and the core tag.
+   3. Tag `agent-pkg-gaia-v<version>` on the merged commit and approve `release_agent_gaia.yml`.
+   4. Merge the PR the release opens once it publishes: its `pin-lock` job commits the regenerated `binaries.lock.json` (real hashes) to branch `flagship-lock/v<version>` and opens `chore(release): pin flagship agent <version>'s published hashes`. It is a bot PR, so CI only runs when the merge queue picks it up. Never hand-edit the hashes; if the PR is missing, re-run that release run's `pin-lock` job, which never opens a second PR and does nothing when main already matches. Then re-run Phase 3 on the merged commit. Code the binary is frozen from must not change between the agent tag and the core tag.
 
 5. **Trigger Build Installers via `workflow_dispatch` against the merged SHA.** This builds the same artifacts the tag push will build, on the same code, *before* the tag exists.
    ```bash
@@ -536,6 +533,8 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
    copy the template verbatim. Every element in it is load-bearing (the `@gaia` role
    mention, the backticked version, the fenced install block, the fixed boilerplate
    sentences); do not improvise the shape.
+
+4. **For a final: check the next-version PR opened.** When `publish.yml` succeeds on a final tag, **Next Version PR** (`next_version.yml`, `util/next_version.py`) opens `chore(release): start <next> after v<version>` from `next-version/v<version>`: `version.py` moves to the next minor and every field that follows it is stamped, the flagship CHANGELOG gets its `<next>` entry, and `docs/releases/v<next>.mdx` is opened as a stub. It is a bot PR, so its checks start when the merge queue picks it up; ask the user to merge it. If it is missing, dispatch the workflow with `tag: v<version>` (a dispatch is a dry run unless `dry_run` is unchecked). For a patch it also reports that no `release/vX.Y` branch exists yet; those arrive in Phase 6 of the release train.
 
 ### Gate 6 — present, do not auto-post
 

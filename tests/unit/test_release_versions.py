@@ -10,6 +10,7 @@ release.
 from __future__ import annotations
 
 import fnmatch
+import json
 import re
 import shutil
 import sys
@@ -25,8 +26,10 @@ import release_tag  # noqa: E402
 import release_versions as rv  # noqa: E402
 
 CORE_TARGETS = [t for t in rv.TARGETS if t.path != rv.CORE_PY]
-ENFORCED = [t for t in CORE_TARGETS if not t.held]
+ENFORCED = [t for t in CORE_TARGETS if not t.held and t.count is not None]
+OPTIONAL = [t for t in rv.TARGETS if t.count is None]
 HELD = [t for t in rv.TARGETS if t.held]
+FLAGSHIP = rv.select("flagship")
 
 
 def _all_paths() -> list[str]:
@@ -92,7 +95,6 @@ def test_main_tree_passes():
 def test_only_the_declared_targets_are_held():
     """Held drift is reported, never failed; the list must not quietly grow."""
     assert {(t.path, t.what) for t in HELD} == {
-        ("hub/agents/gaia/npm/package-lock.json", "root version"),
         ("hub/agents/chat/python/gaia_agent_chat/__init__.py", "__version__"),
     }
 
@@ -161,60 +163,210 @@ def test_a_floor_that_is_not_core_fails(tree, floor):
     assert rv.run(tree, stamp=False).drift == []
 
 
-def test_a_core_bump_moves_every_floor_and_component_but_no_agent_version(tree):
-    _set_source(tree, rv.CORE_PY, rv._PY_VERSION, "0.26.0")
+def test_a_core_bump_moves_every_core_field_but_not_the_navbar_or_chat(tree):
+    _set_source(tree, rv.CORE_PY, rv._PY_VERSION, "0.27.0")
     report = rv.run(tree, stamp=False)
     drifted = {line.split(":")[0] for line in report.drift}
     core_fields = {
         f"{t.path} ({t.what})"
         for t in CORE_TARGETS
-        if t.source in ("core", "core-floor")
+        if t.source in ("core", "core-floor") and t.count is not None
     }
     assert drifted == core_fields
 
     rv.run(tree, stamp=True)
     assert rv.run(tree, stamp=False).drift == []
-    flagship = rv.read_sources(tree).flagship
-    assert flagship == rv.read_sources(REPO_ROOT).flagship
-    assert '"amd-gaia>=0.26.0"' in _raw(tree / "hub/agents/gaia/python/pyproject.toml")
+    src = rv.read_sources(tree)
+    assert src.released == rv.read_sources(REPO_ROOT).released
+    assert src.chat == rv.read_sources(REPO_ROOT).chat
+    assert '"amd-gaia>=0.27.0"' in _raw(tree / "hub/agents/gaia/python/pyproject.toml")
 
 
-# -- Agent versions ------------------------------------------------------------
+# -- The flagship follows core -------------------------------------------------
 
 
-def test_a_flagship_target_behind_its_agent_fails(tree):
-    flagship = rv.read_sources(tree).flagship
-    target = _target("hub/agents/gaia/npm/package.json", "version")
-    _set(tree, target, "0.0.7")
-    report = rv.run(tree, stamp=False)
+def test_every_flagship_field_follows_core():
+    assert FLAGSHIP
+    assert {t.source for t in FLAGSHIP} <= {"core", "core-floor"}
+    assert rv.FLAGSHIP_INIT in {t.path for t in FLAGSHIP}
+    assert "flagship" not in rv.SOURCE_FILES
+
+
+@pytest.mark.parametrize(
+    "path, what",
+    [
+        (rv.FLAGSHIP_INIT, "__version__"),
+        ("hub/agents/gaia/python/pyproject.toml", "version"),
+        ("hub/agents/gaia/python/gaia-agent.yaml", "version"),
+        ("hub/agents/gaia/python/gaia-agent.yaml", "min_gaia_version"),
+        ("hub/agents/gaia/npm/package.json", "version"),
+        ("hub/agents/gaia/npm/package-lock.json", "root version"),
+    ],
+)
+def test_a_drifted_flagship_field_fails_naming_the_file(tree, path, what):
+    core = rv.read_sources(tree).core_base
+    target = _target(path, what)
+    _set(tree, target, "0.3.2", count=target.count)
+    report = rv.run(tree, stamp=False, targets=FLAGSHIP)
     assert report.drift == [
-        f"hub/agents/gaia/npm/package.json (version): 0.0.7, expected {flagship} "
-        f"(follows {rv.FLAGSHIP_INIT})"
+        f"{path} ({what}): 0.3.2, expected {core} (follows {rv.CORE_PY})"
     ]
 
 
-def test_a_flagship_bump_drifts_only_flagship_fields(tree):
-    _set_source(tree, rv.FLAGSHIP_INIT, rv._PY_VERSION, "0.3.9")
-    report = rv.run(tree, stamp=False)
-    assert {line.split(":")[0] for line in report.drift} == {
-        f"{t.path} ({t.what})"
-        for t in rv.TARGETS
-        if t.source == "flagship" and not t.held
-    }
+def test_a_core_bump_moves_the_lock_but_not_its_tui_lane(tree):
+    _set_source(tree, rv.CORE_PY, rv._PY_VERSION, "0.27.0")
     rv.run(tree, stamp=True)
     lock = _raw(tree / "hub/agents/gaia/npm/binaries.lock.json")
-    assert '"agentVersion": "0.3.9"' in lock
-    assert "/agents/gaia/0.3.9" in lock
-    # The terminal UI lane in the same lock follows terminal-hub, not the agent.
-    assert "/agents/terminal-hub/0.3.9" not in lock
+    assert '"agentVersion": "0.27.0"' in lock
+    assert "/agents/gaia/0.27.0" in lock
+    # The terminal UI lane in the same lock follows terminal-hub's release.
+    assert "/agents/terminal-hub/0.27.0" not in lock
 
 
-def test_the_chat_manifest_follows_chat_not_core_or_flagship(tree):
+def test_the_chat_manifest_follows_chat_not_core(tree):
     _set_source(tree, rv.CHAT_PYPROJECT, rv._TOML_VERSION, "0.2.5")
     report = rv.run(tree, stamp=False)
     assert [line.split(":")[0] for line in report.drift] == [
         "hub/agents/chat/python/gaia-agent.yaml (version)"
     ]
+
+
+# -- Optional doc URLs ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "snippet, what",
+    [
+        ("https://img.shields.io/badge/version-0.3.2-blue", "version badge"),
+        (
+            "https://github.com/amd/gaia/blob/agent-pkg-gaia-v0.3.2/README.md",
+            "pinned doc links",
+        ),
+        ("https://github.com/amd/gaia/blob/v0.3.2/SPEC.md", "pinned doc links"),
+    ],
+)
+def test_a_stale_doc_url_fails_and_stamp_moves_it(tree, snippet, what):
+    core = rv.read_sources(tree).core_base
+    path = tree / "hub/agents/gaia/npm/README.md"
+    _put(path, _raw(path) + f"\n<{snippet}>\n")
+
+    report = rv.run(tree, stamp=False)
+    assert report.drift == [
+        f"hub/agents/gaia/npm/README.md ({what}): 0.3.2, expected {core} "
+        f"(follows {rv.CORE_PY})"
+    ]
+    rv.run(tree, stamp=True)
+    assert snippet.replace("0.3.2", core) in _raw(path)
+
+
+def test_doc_urls_are_optional(tree):
+    assert OPTIONAL
+    for t in OPTIONAL:
+        path = tree / t.path
+        _put(path, t.pattern.sub("", _raw(path)))
+    report = rv.run(tree, stamp=False)
+    assert report.errors == [] and report.drift == []
+
+
+def test_the_changelog_keeps_its_pinned_links(tree):
+    path = tree / "hub/agents/gaia/npm/CHANGELOG.md"
+    shutil.copyfile(REPO_ROOT / "hub/agents/gaia/npm/CHANGELOG.md", path)
+    _put(path, _raw(path) + "\n</amd/gaia/blob/agent-pkg-gaia-v0.3.1/README.md>\n")
+    before = path.read_bytes()
+    assert rv.run(tree, stamp=False).drift == []
+    rv.run(tree, stamp=True)
+    assert path.read_bytes() == before
+
+
+# -- The navbar follows the newest listed release --------------------------------
+
+
+def _list_release(root: Path, version: str) -> None:
+    path = root / rv.DOCS_JSON
+    _put(
+        path,
+        _raw(path).replace(
+            '"releases/index",',
+            f'"releases/index",\n              "releases/v{version}",',
+        ),
+    )
+
+
+def test_main_ahead_of_the_listed_release_passes(tree):
+    released = rv.read_sources(tree).released
+    _set_source(tree, rv.CORE_PY, rv._PY_VERSION, "9.0.0")
+    rv.run(tree, stamp=True)
+    report = rv.run(tree, stamp=False)
+    assert report.errors == [] and report.drift == []
+    assert f'"v{released} \\u00b7 Lemonade' in _raw(tree / rv.DOCS_JSON)
+
+
+def test_listing_the_release_moves_the_navbar_to_it(tree):
+    _set_source(tree, rv.CORE_PY, rv._PY_VERSION, "9.0.0")
+    rv.run(tree, stamp=True)
+    _list_release(tree, "9.0.0")
+    report = rv.run(tree, stamp=False)
+    assert report.drift == [
+        f"docs/docs.json (navbar GAIA version): {rv.read_sources(REPO_ROOT).released}, "
+        f"expected 9.0.0 (follows {rv.DOCS_JSON})"
+    ]
+    rv.run(tree, stamp=True)
+    assert '"v9.0.0 \\u00b7 Lemonade' in _raw(tree / rv.DOCS_JSON)
+
+
+def test_a_listed_release_ahead_of_core_is_an_error(tree):
+    core = rv.read_sources(tree).core_base
+    _list_release(tree, "99.0.0")
+    report = rv.run(tree, stamp=False)
+    assert report.errors == [
+        f"{rv.DOCS_JSON} lists releases/v99.0.0, newer than the {core} "
+        f"{rv.CORE_PY} declares. Set __version__ to the release being cut, or take "
+        "that page out of the Releases tab."
+    ]
+
+
+def test_released_is_the_newest_page_not_the_first(tree):
+    newest = rv.released_version(tree)
+    _list_release(tree, "0.1.0")
+    assert rv.released_version(tree) == newest
+
+
+def test_no_listed_release_is_an_error(tree):
+    path = tree / rv.DOCS_JSON
+    docs = json.loads(_raw(path))
+    for tab in docs["navigation"]["tabs"]:
+        for group in tab.get("groups", []):
+            if group.get("group") == "Release Notes":
+                group["pages"] = ["releases/index"]
+    _put(path, json.dumps(docs))
+    with pytest.raises(rv.VersionError, match="lists no releases/vX.Y.Z page"):
+        rv.released_version(tree)
+
+
+# -- Groups --------------------------------------------------------------------
+
+
+def test_groups_select_by_path():
+    assert {t.path for t in rv.select("agent-ui")} == {
+        "src/gaia/apps/webui/package.json",
+        "src/gaia/apps/webui/package-lock.json",
+    }
+    assert all(t.path.startswith("hub/agents/gaia/") for t in FLAGSHIP)
+    with pytest.raises(rv.VersionError, match="unknown group"):
+        rv.select("chat")
+
+
+def test_only_checks_just_that_group(tree):
+    _set(
+        tree, _target("hub/components/terminal-hub/gaia-agent.yaml", "version"), "0.1.0"
+    )
+    assert rv.main(["--check", "--only", "flagship", "--root", str(tree)]) == 0
+    assert rv.main(["--check", "--root", str(tree)]) == 1
+
+
+def test_cli_released_prints_the_newest_listed_release(tree, capsys):
+    assert rv.main(["--released", "--root", str(tree)]) == 0
+    assert capsys.readouterr().out.strip() == rv.released_version(REPO_ROOT)
 
 
 # -- Unreadable sources and targets ------------------------------------------
@@ -242,7 +394,7 @@ def test_a_missing_target_file_is_an_error_and_stamp_writes_nothing(tree, rel):
     assert rv.print_report(report, stamp=True) == 1
 
 
-@pytest.mark.parametrize("rel", [rv.CORE_PY, rv.FLAGSHIP_INIT, rv.CHAT_PYPROJECT])
+@pytest.mark.parametrize("rel", [rv.CORE_PY, rv.DOCS_JSON, rv.CHAT_PYPROJECT])
 def test_a_missing_source_is_an_error(tree, rel):
     (tree / rel).unlink()
     report = rv.run(tree, stamp=False)
@@ -261,10 +413,10 @@ def test_an_unparseable_core_version_is_an_error(tree, version):
 
 
 @pytest.mark.parametrize("version", ["0.3", "0.3.1rc1", "latest"])
-def test_an_unparseable_agent_version_is_an_error(tree, version):
-    _set_source(tree, rv.FLAGSHIP_INIT, rv._PY_VERSION, version)
+def test_an_unparseable_chat_version_is_an_error(tree, version):
+    _set_source(tree, rv.CHAT_PYPROJECT, rv._TOML_VERSION, version)
     report = rv.run(tree, stamp=False)
-    assert report.errors == [f"{rv.FLAGSHIP_INIT}: version '{version}' is not X.Y.Z"]
+    assert report.errors == [f"{rv.CHAT_PYPROJECT}: version '{version}' is not X.Y.Z"]
 
 
 def test_a_field_that_appears_twice_is_an_error_not_a_guess(tree):
@@ -318,7 +470,8 @@ def test_an_rc_tree_with_a_stale_npm_version_fails(tree):
     [
         ("hub/components/terminal-hub/gaia-agent.yaml", "version"),
         ("hub/agents/gaia/python/gaia-agent.yaml", "min_gaia_version"),
-        ("docs/docs.json", "navbar GAIA version"),
+        ("hub/agents/gaia/python/gaia-agent.yaml", "version"),
+        ("hub/agents/gaia/npm/binaries.lock.json", "agentVersion"),
     ],
 )
 def test_an_rc_suffix_never_leaks_into_a_final_only_field(tree, path, what):
@@ -330,26 +483,59 @@ def test_an_rc_suffix_never_leaks_into_a_final_only_field(tree, path, what):
     ]
 
 
+def test_an_rc_stamp_writes_the_flagship_rc_forms(tree):
+    base = _rc_tree(tree, 3)
+    assert f'__version__ = "{base}rc3"' in _raw(tree / rv.FLAGSHIP_INIT)
+    pyproject = _raw(tree / "hub/agents/gaia/python/pyproject.toml")
+    assert f'version = "{base}rc3"' in pyproject
+    pkg = _raw(tree / "hub/agents/gaia/npm/package.json")
+    assert f'"version": "{base}-rc.3"' in pkg
+    lock = _raw(tree / "hub/agents/gaia/npm/package-lock.json")
+    assert lock.count(f'"version": "{base}-rc.3"') == 2
+    # Hub paths have no pre-release channel yet.
+    manifest = _raw(tree / "hub/agents/gaia/python/gaia-agent.yaml")
+    assert re.search(rf"(?m)^version: {re.escape(base)}\s*$", manifest)
+
+
+def test_an_rc_stamp_refuses_a_flagship_left_behind(tree):
+    base = rv.read_sources(tree).core_base
+    _set(tree, _target(rv.FLAGSHIP_INIT, "__version__"), "0.3.2")
+    with pytest.raises(
+        rv.VersionError, match=r"__init__.py \(__version__\) says 0.3.2"
+    ):
+        rv.stamp_rc(tree, f"v{base}-rc1")
+
+
 def test_rc_stamp_matches_release_tag_stamp_byte_for_byte(tmp_path):
-    """The plan's acceptance check, on v0.26.0-rc1 after a 0.26.0 bump."""
+    """The plan's acceptance check, for the files both write."""
     trees = []
     for name in ("release_tag", "release_versions"):
         root = tmp_path / name
         for rel in _all_paths():
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REPO_ROOT / rel, root / rel)
-        _set_source(root, rv.CORE_PY, rv._PY_VERSION, "0.26.0")
+        _set_source(root, rv.CORE_PY, rv._PY_VERSION, "0.27.0")
         assert rv.print_report(rv.run(root, stamp=True), stamp=True) == 0
         trees.append(root)
     a, b = trees
     assert _snapshot(a) == _snapshot(b)
 
-    release_tag.stamp("v0.26.0-rc1", a)
-    assert rv.stamp_rc(b, "v0.26.0-rc1") == "0.26.0rc1"
+    release_tag.stamp("v0.27.0-rc1", a)
+    assert rv.stamp_rc(b, "v0.27.0-rc1") == "0.27.0rc1"
 
-    assert _snapshot(a) == _snapshot(b)
-    assert 'version__ = "0.26.0rc1"' in _raw(b / rv.CORE_PY)
-    assert _raw(b / "src/gaia/apps/webui/package-lock.json").count("0.26.0-rc.1") == 2
+    shared = [
+        p.as_posix()
+        for p in (
+            release_tag.VERSION_PY,
+            release_tag.WEBUI_PACKAGE,
+            release_tag.WEBUI_LOCK,
+        )
+    ]
+    assert {r: (a / r).read_bytes() for r in shared} == {
+        r: (b / r).read_bytes() for r in shared
+    }
+    assert 'version__ = "0.27.0rc1"' in _raw(b / rv.CORE_PY)
+    assert _raw(b / "src/gaia/apps/webui/package-lock.json").count("0.27.0-rc.1") == 2
 
 
 def test_rc_stamp_is_idempotent(tree):
@@ -406,7 +592,7 @@ def test_navbar_stamp_keeps_the_escaped_separator(tree):
     _set(tree, _target("docs/docs.json", "navbar Lemonade version"), "1.0.0")
     rv.run(tree, stamp=True)
     src = rv.read_sources(tree)
-    assert f'"v{src.core_base} \\u00b7 Lemonade {src.lemonade}"' in _raw(path)
+    assert f'"v{src.released} \\u00b7 Lemonade {src.lemonade}"' in _raw(path)
 
 
 def test_navbar_with_a_literal_separator_is_read_too(tree):
