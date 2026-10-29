@@ -241,6 +241,11 @@ class CodeIndexToolsMixin:
                     except Exception as e:  # noqa: BLE001 — reported to the caller
                         logger.error("Code index build failed: %s", e)
                         build["error"] = str(e)
+                        return  # kept: the next search reports the failure
+                    # The index is on disk; keeping the SDK would pin it in memory.
+                    with _BUILD_LOCK:
+                        if _BUILDS.get(key) is build:
+                            del _BUILDS[key]
 
                 build["thread"] = threading.Thread(
                     target=_run, name="gaia-code-index-build", daemon=True

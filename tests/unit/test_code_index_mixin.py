@@ -566,8 +566,9 @@ class TestBackgroundBuild:
         harness_sdk = _SlowSDK()
         harness = self._harness(tmp_path, harness_sdk)
         self._search()
+        job = _job(harness_sdk)
         harness_sdk.release.set()
-        _job(harness_sdk)["thread"].join(5)
+        job["thread"].join(5)
         out = self._search()
         assert out == []
 
@@ -575,8 +576,9 @@ class TestBackgroundBuild:
         sdk = _SlowSDK(fail=True)
         harness = self._harness(tmp_path, sdk)
         self._search()
+        job = _job(sdk)
         sdk.release.set()
-        _job(sdk)["thread"].join(5)
+        job["thread"].join(5)
         out = self._search()
         assert "embedder unreachable" in out["error"]
         assert "index_codebase" in out["error"]
@@ -616,8 +618,9 @@ class TestBackgroundBuild:
         assert not worker.is_alive()
         assert "cancelled" in outs[0]["error"]
         assert self._search()["index_building"] is True
+        job = _job(sdk)
         sdk.release.set()
-        _job(sdk)["thread"].join(5)
+        job["thread"].join(5)
         assert self._search() == []  # the build it left running landed
         assert sdk.builds == 1
 
@@ -644,8 +647,9 @@ class TestBackgroundBuild:
         sdk = _SlowSDK(fail=True)
         harness = self._harness(tmp_path, sdk)
         assert self._search()["index_building"] is True
+        job = _job(sdk)
         sdk.release.set()
-        _job(sdk)["thread"].join(5)
+        job["thread"].join(5)
         sdk.fail = False
         out = self._tool("index_codebase")
         assert out["status"] == "ok"
@@ -689,8 +693,9 @@ class TestBackgroundBuild:
         sdk = _SlowSDK()
         harness = self._harness(tmp_path, sdk)
         self._search()
+        job = _job(sdk)
         sdk.release.set()
-        _job(sdk)["thread"].join(5)
+        job["thread"].join(5)
         assert self._search() == []  # the built index answers
         sdk.indexed = False  # then it is cleared on disk
         out = self._search()
@@ -802,8 +807,9 @@ class TestBuildSharedAcrossSessions:
         rebuilt, call2 = self._session(tmp_path, second)
         assert rebuilt._code_index_build_running(second) is not None
         assert call2("search_code_index", query="q")["index_building"] is True
+        job = _job(first)
         first.release.set()
-        _job(first)["thread"].join(5)
+        job["thread"].join(5)
         assert rebuilt._code_index_build_running(second) is None
         assert second.builds == 0
 
@@ -812,12 +818,63 @@ class TestBuildSharedAcrossSessions:
         _, call1 = self._session(tmp_path, first)
         _, call2 = self._session(tmp_path, second)
         call1("search_code_index", query="q")
+        job = _job(first)
         first.release.set()
-        _job(first)["thread"].join(5)
+        job["thread"].join(5)
         second.indexed = True  # the build wrote the shared index to disk
         assert call2("search_code_index", query="q") == []
         assert _job(second) is None
         assert second.builds == 0
+
+    def test_a_finished_build_releases_its_index_with_no_further_search(self, tmp_path):
+        """The UI server lives for days; a done build must not pin its SDK."""
+        from gaia.agents.tools import code_index_tools
+
+        first, _ = self._two_sdks(tmp_path)
+        _, call1 = self._session(tmp_path, first)
+        call1("search_code_index", query="q")
+        job = _job(first)
+        first.release.set()
+        job["thread"].join(5)
+        assert not job["thread"].is_alive()
+        assert code_index_tools._BUILDS == {}
+
+    def test_a_build_that_lands_within_the_first_wait_is_not_kept(self, tmp_path):
+        from gaia.agents.tools import code_index_tools
+
+        sdk = _SlowSDK()
+        sdk.release.set()
+        _, call = self._session(tmp_path, sdk)
+        out = call("search_code_index", query="q")
+        assert out["index_built_now"] == {"files_indexed": 3, "chunks_created": 7}
+        assert code_index_tools._BUILDS == {}
+
+    def test_a_failed_build_is_kept_to_report_its_error(self, tmp_path):
+        first, second = _SlowSDK(fail=True), _SlowSDK()
+        first._cache_dir = second._cache_dir = str(tmp_path / "cache")
+        _, call1 = self._session(tmp_path, first)
+        _, call2 = self._session(tmp_path, second)
+        call1("search_code_index", query="q")
+        job = _job(first)
+        first.release.set()
+        job["thread"].join(5)
+        assert _job(first) is job
+        assert "embedder unreachable" in call2("search_code_index", query="q")["error"]
+        assert _job(first) is None
+
+    def test_an_old_builds_end_does_not_drop_a_newer_build(self, tmp_path):
+        """Only the entry still holding *this* build is removed."""
+        from gaia.agents.tools import code_index_tools
+
+        first, second = self._two_sdks(tmp_path)
+        _, call1 = self._session(tmp_path, first)
+        call1("search_code_index", query="q")
+        old = _job(first)
+        newer = dict(old, sdk=second)
+        code_index_tools._BUILDS[code_index_tools._index_key(first)] = newer
+        first.release.set()
+        old["thread"].join(5)
+        assert _job(first) is newer
 
     def test_a_clear_after_the_build_makes_the_next_search_rebuild(self, tmp_path):
         """A finished build's result must not answer for an index cleared since."""
@@ -825,8 +882,9 @@ class TestBuildSharedAcrossSessions:
         _, call1 = self._session(tmp_path, first)
         _, call2 = self._session(tmp_path, second)
         call1("search_code_index", query="q")
+        job = _job(first)
         first.release.set()
-        _job(first)["thread"].join(5)
+        job["thread"].join(5)
         assert call2("clear_code_index")["status"] == "ok"
         second.release.set()
         call2("search_code_index", query="q")
