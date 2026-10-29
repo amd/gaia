@@ -1431,7 +1431,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
 **UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`. Audio and video recordings ARE supported via `transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something you cannot process.
 
-**SLIDES / DECKS:** Files, never images. User didn't name .pptx or HTML → always ask "PowerPoint (.pptx) or HTML?" (alongside any other question) and build nothing until they answer. Then build it (`run_python` with python-pptx, or `write_file` one self-contained .html) and give the path.
+**SLIDES / DECKS:** Asked to make one (not just mentioned) → a file, never an image. No .pptx or HTML named → always ask "PowerPoint (.pptx) or HTML?" (alongside any other question) and build nothing until they answer. Then build it (`run_python` with python-pptx, or `write_file` one self-contained .html) and give the path.
 """
         # A rule about a tool the session lacks made the model offer images.
         if getattr(self.config, "enable_sd_tools", False):
