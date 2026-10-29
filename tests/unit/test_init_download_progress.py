@@ -6,7 +6,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.installer.init_command import _DownloadProgress
-from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+from gaia.llm.lemonade_client import (
+    LemonadeClient,
+    LemonadeClientError,
+    ModelDownloadCancelledError,
+)
 
 
 @pytest.fixture
@@ -330,3 +334,15 @@ def test_the_cli_flag_reaches_init():
         command.return_value.run.return_value = 0
         assert init_command.run_init(profile="gaia", progress_json=True) == 0
     assert command.call_args.kwargs["progress_json"] is True
+
+
+def test_a_cancelled_stream_is_not_converted_to_a_failed_download(client):
+    def stream(*_args, **_kwargs):
+        yield {"event": "progress", "percent": 10}
+        raise ModelDownloadCancelledError("Download stopped at your request.")
+
+    client.pull_model_stream = stream
+    seen = []
+    with pytest.raises(ModelDownloadCancelledError):
+        client.ensure_model_downloaded("m", on_progress=seen.append)
+    assert seen == [{"event": "progress", "percent": 10}]

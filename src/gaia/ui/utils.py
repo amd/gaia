@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Generator, List, Optional, Sequence, Tuple
 
 from fastapi import HTTPException
+from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
 
 from gaia.config import (
     GAIA_HOME_IS_FS_ROOT,
@@ -73,6 +75,7 @@ ALLOWED_EXTENSIONS = frozenset(
         ".csv",
         ".json",
         ".xlsx",
+        ".epub",
         ".html",
         ".htm",
         ".xml",
@@ -390,7 +393,7 @@ def sanitize_document_path(user_path: str) -> Path:
 
         detail = (
             f"{hint} "
-            f"Supported formats: PDF, PPTX, TXT, MD, CSV, JSON, XLSX, "
+            f"Supported formats: PDF, DOCX, PPTX, XLSX, EPUB, TXT, MD, CSV, JSON, "
             f"HTML, XML, YAML, and 30+ code file formats. "
             f"Want support for {category + ' files' if category else 'this file type'}? "
             f"Request it at https://github.com/amd/gaia/issues/new?title=[Feature]%20Support%20{ext}%20file%20indexing"
@@ -514,6 +517,25 @@ def uploads_dir() -> Path:
 
 
 UPLOAD_URL_PREFIX = "/api/files/uploads/"
+
+
+class UploadStaticFiles(StaticFiles):
+    """Serve chat uploads so an uploaded page can never run as the app.
+
+    Uploads include ``.html`` and ``.svg``, and the chat links them on the
+    backend's own origin. ``sandbox`` gives the document an opaque origin with
+    scripts off; PDFs are exempt because Chromium refuses to show a sandboxed
+    PDF, and its viewer never runs on the page's origin anyway.
+    """
+
+    async def get_response(self, path: str, scope) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        if not path.lower().endswith(".pdf"):
+            response.headers["Content-Security-Policy"] = "sandbox"
+        return response
+
+
 _UPLOAD_LINK_RE = re.compile(
     r"(?P<bang>!?)\[(?P<label>[^\]\n]*)\]\("
     + re.escape(UPLOAD_URL_PREFIX)

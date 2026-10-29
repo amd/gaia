@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import threading
+import traceback
 import uuid
 
 import pytest
@@ -186,3 +187,56 @@ def test_an_unsaved_recording_is_reported_before_the_end(built, monkeypatch):
         "type": "status",
         "message": "Undo may not work for this turn: disk full",
     } in events
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, ValueError, OSError, fs.SnapshotError])
+def test_a_failed_turn_keeps_its_error_when_undo_cannot_finish(
+    built, monkeypatch, caplog, failure
+):
+    client, agents = built
+    original = "the original turn failure"
+    finished = []
+
+    class FailingAgent(_WritingAgent):
+        def process_query(self, query, max_steps=None):
+            fs.before_change(self.target, "write_file")
+            self.target.write_bytes(b"changed before failure")
+            raise failure(original)
+
+    def build(**kwargs):
+        agents.append(FailingAgent(**kwargs))
+        return agents[-1]
+
+    def cannot_finish(_self):
+        finished.append(True)
+        # shutil's fast-copy path can suppress the active processing error.
+        raise OSError("undo volume is full") from None
+
+    monkeypatch.setattr(sr, "build_session_agent", build)
+    monkeypatch.setattr(fs.TurnRecorder, "finish", cannot_finish)
+    monkeypatch.setattr(server_mod.logger, "propagate", True)
+    with caplog.at_level("ERROR", logger=server_mod.__name__):
+        response = _query(client, session_id=SESSION, changes_turn_id=fs.new_turn_id())
+
+    assert response.status_code == 200
+    events = _events(response)
+    errors = [event for event in events if event["type"] == "error"]
+    assert len(errors) == 1
+    assert original in errors[0]["detail"]
+    assert "This is a bug" not in errors[0]["detail"]
+    assert events[-1] == errors[0]
+    assert any(
+        event["type"] == "status" and "Undo may not work" in event["message"]
+        for event in events[:-1]
+    )
+    assert finished
+    logged_tracebacks = "".join(
+        "".join(traceback.format_exception(*record.exc_info))
+        for record in caplog.records
+        if record.exc_info
+    )
+    assert original in logged_tracebacks
+    assert "undo volume is full" in logged_tracebacks
+    session = sr.registry.get(SESSION)
+    assert session.run_lock.acquire(timeout=2), "failed turn retained the session lock"
+    session.run_lock.release()

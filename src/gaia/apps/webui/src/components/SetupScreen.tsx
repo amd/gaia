@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertCircle, Check, ChevronRight, Cloud, Cpu, Loader2 } from 'lucide-react';
+import { AlertCircle, Check, ChevronRight, Cloud, Cpu, Info, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
 import { shortModelName, useModelStore } from '../stores/modelStore';
 import { lemonadeKeyRejected } from '../utils/lemonade';
 import { CloudPrices } from './settings/CloudPrices';
 import './settings/CloudSpending.css';
 import { formatGb } from '../utils/modelLabels';
-import { ChatModelChoice, SystemCheck } from './SetupSteps';
+import { ChatModelChoice, deviceKnown, SystemCheck } from './SetupSteps';
 import { StartCards } from './StartCards';
 import { useGatewayNetwork } from '../hooks/useGatewayNetwork';
 import type { LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, ProviderModel, SetupCheck, SetupDownload, SetupPlan, SetupProblem, SetupRunStatus, SetupStep, StartCard } from '../types';
@@ -297,6 +297,8 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     // model that fits (and its size) is shown before anything large downloads.
     const serverFirst = !cloud && !serverReady && !plan?.lemonade.reachable;
     const diskProblem = !cloud && !serverFirst ? plan?.disk_problem ?? null : null;
+    // Read but not complete: the device waits for the model server, or nothing could be read.
+    const checkOpen = !!hardwareError || (!!hardware && !deviceKnown(hardware));
 
     const loadHardware = useCallback(() => {
         setHardwareError(null);
@@ -344,6 +346,11 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
         if (pollRef.current) clearInterval(pollRef.current);
         pollRef.current = null;
     }, []);
+
+    // Setup started the model server, so the device can be read now.
+    useEffect(() => {
+        if (installed) loadHardware();
+    }, [installed, loadHardware]);
 
     useEffect(() => {
         if (!running) return stopPolling;
@@ -445,9 +452,11 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                 </p>
 
                 <ol className="setup-steps">
-                    <li className={`setup-step${hardware || hardwareError ? ' is-done' : ' is-current'}`}>
+                    <li className={`setup-step${checkOpen ? '' : hardware ? ' is-done' : ' is-current'}`}>
                         <div className="setup-step-head">
-                            <span className="setup-step-num">{hardware || hardwareError ? <Check size={14} aria-hidden="true" /> : 1}</span>
+                            <span className="setup-step-num">
+                                {checkOpen ? <Info size={14} aria-hidden="true" /> : hardware ? <Check size={14} aria-hidden="true" /> : 1}
+                            </span>
                             <span className="setup-step-label">Check this PC</span>
                         </div>
                         {!locked && (

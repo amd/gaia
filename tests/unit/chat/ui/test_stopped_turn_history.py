@@ -123,14 +123,17 @@ def test_answered_turns_are_left_alone(db):
     assert helpers.model_context_messages(db, sid) == db.get_context_messages(sid)
 
 
-def test_relayed_sidecar_history_carries_the_withdrawn_reply(db):
+def test_relayed_sidecar_history_carries_the_withdrawn_reply(db, monkeypatch):
+    import gaia.agents.base.history as history
+
+    monkeypatch.setattr(history, "relayed_history_budget", lambda *a, **k: 32768)
     sid = _session(db)
     db.add_message(sid, "user", "Write an 800-word essay.")
     db.add_message(sid, "assistant", "Cancelled.")
 
     pairs = helpers._build_history_pairs(helpers.model_context_messages(db, sid))
 
-    assert helpers._query_context_from_history(pairs) == [
+    assert helpers._relayed_history(pairs, "M-GGUF", "next", None, None) == [
         {"role": "user", "content": "Write an 800-word essay."},
         {"role": "assistant", "content": STOPPED},
     ]

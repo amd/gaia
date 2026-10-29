@@ -72,7 +72,11 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG, plain_risk_note
-from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, SCRATCH_ARG
+from gaia.agents.base.tool_grants import (
+    PATH_ACCESS_PROMPT_TOOL,
+    PATH_TOOLS,
+    SCRATCH_ARG,
+)
 from gaia.ui.event_narration import (
     DEBUG_CHANNEL,
     derive_narration,
@@ -113,6 +117,8 @@ SUMMARY_VIEW_KEYS = (
     # What the tool wrote (``RESULT_PATH_KEYS`` in ``gaia.ui.sse_handler``).
     "file_path",
     "image_path",
+    # A ``search_web`` result's hits, so a relayed turn can cite them.
+    "sources",
 )
 
 #: Which connector an MCP tool call belongs to, carried from ``tool_start``.
@@ -177,8 +183,11 @@ class CanonicalTranslator:
         action_labels: Optional[Dict[str, str]] = None,
         summary_renderer: Optional[Callable[[str, Dict[str, Any]], str]] = None,
         debug: Optional[bool] = None,
+        reasoning: bool = False,
     ) -> None:
         self._run_id = run_id
+        # The client asked for the model's reasoning as ``reasoning`` events.
+        self._reasoning = reasoning
         self._agent_id = agent_id
         self._debug = _debug_enabled_by_env() if debug is None else bool(debug)
         self._render_tool_map = dict(render_tool_map or {})
@@ -378,6 +387,10 @@ class CanonicalTranslator:
         return self._debug_status(msg)
 
     def _on_thinking(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if self._reasoning:
+            # Pieces carry their own spacing, so they go out as they came.
+            delta = str(event.get("content", ""))
+            return [{"type": "reasoning", "delta": delta}] if delta else []
         # Reasoning narration folds to status, NOT token (token is answer text the
         # UI commits to the message). See spec §6.2 / Q1.
         content = str(event.get("content", "")).strip()
@@ -395,6 +408,10 @@ class CanonicalTranslator:
         if not delta:
             return []
         return [{"type": "token", "delta": delta}]
+
+    def _on_commentary(self, _event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        # Its text already went out as tokens; the host's handler re-derives it.
+        return []
 
     def _on_tool_result(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         self._result_seen_since_call = True
@@ -510,11 +527,13 @@ class CanonicalTranslator:
             args = {}
         summary = self._render_args_summary(tool, args)
         # The command, where it runs, then one plain line on what it can do.
-        note = (
-            str(args.get(RISK_NOTE_ARG) or "") or plain_risk_note(event.get("risk"))
-            if tool in COMMAND_SUMMARY_TOOLS
-            else ""
-        )
+        if tool in COMMAND_SUMMARY_TOOLS:
+            note = str(args.get(RISK_NOTE_ARG) or "") or plain_risk_note(
+                event.get("risk")
+            )
+        else:
+            # A file prompt's note says what else a yes grants.
+            note = str(args.get(RISK_NOTE_ARG) or "") if tool in PATH_TOOLS else ""
         if note:
             summary = f"{summary}\n{note}"
         # confirm_url omitted: stateless stop-and-hand-off (D1, spec §5 / Q4).
@@ -560,6 +579,10 @@ class CanonicalTranslator:
             prompt_context["working_directory"] = str(folder)
         if args.get(RISK_NOTE_ARG):
             prompt_context["risk_note"] = str(args[RISK_NOTE_ARG])
+        # Where a relative write really lands; the model's own spelling stays in args.
+        shown_path = args.get("file_path")
+        if isinstance(shown_path, str) and shown_path != call_args.get("file_path"):
+            prompt_context["file_path"] = shown_path
         if prompt_context:
             canonical["prompt_context"] = prompt_context
         return [canonical]
@@ -632,6 +655,7 @@ class CanonicalTranslator:
         "thinking": _on_thinking,
         "plan": _on_plan,
         "chunk": _on_chunk,
+        "commentary": _on_commentary,
         "tool_start": _on_tool_start,
         "tool_result": _on_tool_result,
         "tool_end": _on_tool_end,

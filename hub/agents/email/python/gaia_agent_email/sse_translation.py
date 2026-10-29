@@ -348,6 +348,10 @@ class CanonicalTranslator:
         # retries. Surface as a status line, not an error (spec §6.2).
         return [{"type": "status", "message": str(event.get("message", ""))}]
 
+    def _on_commentary(self, _event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        # Its text already went out as tokens; the host's handler re-derives it.
+        return []
+
     def _on_agent_created(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Registry-refresh signal with no chat-stream meaning — dropped from the
         # /query stream by contract decision (spec §6.2). It belongs on a host
@@ -361,6 +365,7 @@ class CanonicalTranslator:
         "thinking": _on_thinking,
         "plan": _on_plan,
         "chunk": _on_chunk,
+        "commentary": _on_commentary,
         "tool_start": _on_tool_start,
         "tool_result": _on_tool_result,
         "tool_end": _on_tool_end,

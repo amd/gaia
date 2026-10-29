@@ -981,6 +981,13 @@
         "title": "Document Ids",
         "type": "array"
       },
+      "folders": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Folders",
+        "type": "array"
+      },
       "mail_provider": {
         "anyOf": [
           {
@@ -3334,6 +3341,11 @@
         "default": 0,
         "title": "Run Count",
         "type": "integer"
+      },
+      "running": {
+        "default": false,
+        "title": "Running",
+        "type": "boolean"
       },
       "schedule_config": {
         "anyOf": [

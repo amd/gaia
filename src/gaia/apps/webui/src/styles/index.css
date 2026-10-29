@@ -172,7 +172,7 @@
 
     --sidebar-w: 260px;
     --content-w: 760px;
-    /* The desktop app's top band, where the window controls sit (main.cjs TITLE_BAR_HEIGHT). */
+    /* The desktop app's top band, where the window controls sit (TITLE_BAR_HEIGHT in services/window-frame.cjs). */
     --titlebar-h: 48px;
     /* Motion — every animation and transition takes its timing from here
        (enforced by styles/__tests__/motion.test.ts). */
@@ -691,7 +691,8 @@ textarea:focus-visible {
 }
 
 /* ── Desktop app window frame ──────────────────────────────────────
- * The desktop app has no system title bar (main.cjs). An invisible band
+ * On Windows and macOS the desktop app has no system title bar
+ * (services/window-frame.cjs); Linux keeps the system frame. An invisible band
  * across the top drags the window; anything you can click stays clickable,
  * and the top rows make room for the native window controls. */
 :root[data-titlebar] body::before {
@@ -712,7 +713,7 @@ textarea:focus-visible {
     .settings-overlay) {
     -webkit-app-region: no-drag;
 }
-/* Windows and Linux: minimize, maximize and close sit at the top right. */
+/* Windows: minimize, maximize and close sit at the top right. */
 :root[data-titlebar="overlay"] .task-header {
     min-height: var(--titlebar-h);
     padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px);

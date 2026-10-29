@@ -105,9 +105,14 @@ trusting a copy — the headlines only:
 - **Font (Display)**: Antonio — headings, buttons, figures, the wordmark
 - **Font (UI)**: Titillium Web, standing in for AMD's Klavika
 - **Font (Code)**: JetBrains Mono
-- **Background**: `src/scripts/starfield.ts`, a canvas of streaking stars. It
-  holds a still frame under `prefers-reduced-motion` or when a visitor pauses it
-  from the footer.
+- **Background**: `src/scripts/starfield.ts`, a deep Hubble field flown through
+  at warp: streaking stars, and real Hubble galaxies and clusters from the one
+  atlas in `public/space/` (credits in `public/space/CREDITS.md`). It holds a still
+  frame under `prefers-reduced-motion` or when a visitor pauses it from the footer.
+- **Headline**: `src/scripts/scramble.ts` resolves it out of the writing systems in
+  `src/data/scramble-scripts.ts`, on the starfield's warp clock. Their characters
+  come from `public/fonts/gaia-scripts.woff2`, a Noto subset (SIL OFL 1.1). Adding a
+  character means regenerating that subset, or it renders as a missing-glyph box.
 
 ## Deployment
 

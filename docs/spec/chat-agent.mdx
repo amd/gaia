@@ -106,7 +106,7 @@ class ChatAgentConfig:
     model_id: Optional[str] = None  # None = config default_model, else Gemma-4-E4B-it-GGUF
 
     # Execution
-    max_steps: int = 10
+    max_steps: int = field(default_factory=default_max_steps)  # DEFAULT_MAX_STEPS (50)
     streaming: bool = False
 
     # Debug/output

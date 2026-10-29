@@ -16,6 +16,7 @@ patches take effect.
 import asyncio
 import concurrent.futures
 import copy
+import functools
 import importlib.util
 import json
 import logging
@@ -26,7 +27,7 @@ import threading
 import time as _time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, ContextManager, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -60,11 +61,16 @@ from gaia.ui.email_sidecar.profiles import (
     api_version_supported,
     changes_supported,
     confirmations_supported,
+    context_supported,
     documents_supported,
+    internet_supported,
     memory_supported,
     profile_for,
+    reasoning_supported,
     scope_supported,
     surface_supported,
+    turns_supported,
+    working_directory_supported,
 )
 from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.turn_changes import TurnRecording
@@ -76,7 +82,16 @@ from . import permissions as session_permissions
 from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
-from .session_environment import apply_environment
+from .session_environment import (
+    apply_environment,
+    folders_refusal,
+    held_internet_off,
+)
+from .session_environment import load as load_environment
+from .session_environment import (
+    with_folder_note,
+    withheld_refusal,
+)
 from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
 from .utils import attached_upload_paths, managed_documents_dir
@@ -141,6 +156,22 @@ _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
 
 # asyncio keeps only weak references to tasks; this set keeps them alive.
 _background_tasks: set = set()
+
+
+def relayed_turns_in_flight() -> Optional[str]:
+    """Why restarting the daemon now would cut off a chat's agent turn, or None.
+
+    These turns go straight to the agent, so the daemon cannot count them. A
+    chat still starting its turn has no relayed run yet and does not count.
+    """
+    running = sum(
+        1
+        for handler in list(_active_sse_handlers.values())
+        if getattr(handler, "active_relay_run_id", None) is not None
+    )
+    if not running:
+        return None
+    return f"{running} Agent UI chat(s) are still answering"
 
 
 def _spawn_background(coro) -> asyncio.Task:
@@ -1283,6 +1314,7 @@ def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
                 "Agent cache miss (agent_type change) for session %s", session_id[:8]
             )
             return None
+        _agent_cache[session_id] = _agent_cache.pop(session_id)
         return entry["agent"]
 
 
@@ -1293,7 +1325,7 @@ def _store_agent(
     agent,
     agent_type: str = "chat",
 ) -> None:
-    """Cache *agent* for *session_id*.  Evicts the oldest entry if over the limit.
+    """Cache *agent* for *session_id*. Evicts the least-recently-used entry if full.
 
     The agent_type is stored in canonical form so a later lookup with a
     legacy alias still matches (see ``_canonical_agent_type``).
@@ -1580,6 +1612,20 @@ def _unsafe_directory_grant_reason(directory: Path) -> str:
     return ""
 
 
+def _session_working_directory(folders: Optional[list] = None) -> str:
+    """The folder the chat's chip shows, used for bare relative paths.
+
+    A folder the user picked for the chat comes first, so "create notes.txt"
+    lands where the chip and the agent's folder note both say it works.
+    """
+    if folders:
+        return str(Path(folders[0]).expanduser().resolve())
+    cwd = Path.cwd().resolve()
+    if _unsafe_directory_grant_reason(cwd):
+        return str(_managed_documents_dir())
+    return str(cwd)
+
+
 def _compute_allowed_paths(rag_file_paths: list) -> list:
     """Derive a session's filesystem scope from its attached documents.
 
@@ -1725,6 +1771,7 @@ def _session_agent_kwargs(
     library_paths: list,
     allowed: list,
     session_id: str,
+    working_directory: Optional[str] = None,
     dynamic_tools: bool = False,
     memory_incognito: bool = False,
 ) -> dict:
@@ -1753,6 +1800,7 @@ def _session_agent_kwargs(
         "rag_documents": rag_file_paths,
         "library_documents": library_paths,
         "allowed_paths": allowed,
+        "working_directory": working_directory or _session_working_directory(),
         "ui_session_id": session_id,
         "dynamic_tools": dynamic_tools,
         "memory_incognito": memory_incognito,
@@ -1806,31 +1854,168 @@ def _session_mail_provider(session: dict) -> str | None:
 # before the first POST.
 
 
-_RELAY_CONTEXT_PAIRS = 5
-
-# Last history view per in-process chat session, so a model switch that hides
-# more turns is announced too.
+# Last history view per chat session, so a model switch that hides more
+# turns is announced too.
 _history_cuts: dict = {}
+# Messages each relayed chat last showed clipped, so a clip is announced once.
+_relay_clips: dict = {}
+# Each relayed chat's last context measurement, or the reason it has none.
+_relayed_contexts: dict = {}
+_relayed_contexts_lock = threading.Lock()
 
 
-def _query_context_from_history(history_pairs: list) -> list[dict]:
-    """Flatten (user, assistant) history pairs into ``QueryContextItem``-shaped
-    dicts for the sidecar's ``/query`` request body (#2109).
+def record_relayed_context(
+    session_id: str, usage: Optional[dict], reason: Optional[str]
+) -> None:
+    """Keep what a relayed turn measured, or why it has no measurement.
 
-    Mirrors the truncation the in-process chat branches already apply, so an
-    email session's context window stays comparable: last 5 pairs, 2000 chars
-    per turn.
+    A turn with neither (an error, a Stop) keeps the previous measurement.
     """
-    _MAX_CHARS = 2000
-    context: list[dict] = []
-    for user_msg, assistant_msg in history_pairs[-_RELAY_CONTEXT_PAIRS:]:
-        u = user_msg[:_MAX_CHARS]
-        a = assistant_msg[:_MAX_CHARS]
-        if len(assistant_msg) > _MAX_CHARS:
-            a += "... (truncated)"
-        context.append({"role": "user", "content": u})
-        context.append({"role": "assistant", "content": a})
+    with _relayed_contexts_lock:
+        if usage is not None:
+            _relayed_contexts[session_id] = {"usage": usage}
+        elif reason:
+            _relayed_contexts[session_id] = {"reason": reason}
+
+
+def relayed_context_reason(profile, api_version, handler) -> Optional[str]:
+    """Why a relayed turn has no measurement: an old agent, or its own error."""
+    if not context_supported(profile, api_version):
+        return profile.context_upgrade_message
+    return getattr(handler, "relay_context_error", None)
+
+
+def forget_relayed_context(session_id: str) -> None:
+    with _relayed_contexts_lock:
+        _relayed_contexts.pop(session_id, None)
+
+
+def relayed_context(session_id: str) -> Optional[dict]:
+    """``{"usage": ...}`` or ``{"reason": ...}`` for a relayed chat, else None."""
+    with _relayed_contexts_lock:
+        return _relayed_contexts.get(session_id)
+
+
+def _relayed_history(
+    history_pairs: list,
+    model_id: str | None,
+    query: str,
+    sse_handler,
+    session_id: str | None,
+) -> list[dict]:
+    """The chat's earlier turns as ``QueryContextItem`` dicts for ``/query``.
+
+    The in-process policy: whole turns, newest first, within *model_id*'s
+    history budget. A turn larger than the whole budget has its longest
+    messages cut, with a marker saying how much, and anything newly out of the
+    model's view streams a ``history_cut`` status.
+    """
+    from gaia.agents.base.history import (
+        CutReporter,
+        clip_turn,
+        relayed_history_budget,
+        select_history,
+        turn_cost,
+    )
+
+    budget = relayed_history_budget(
+        model_id, query, cloud=bool(model_id) and bool(_ui_cloud_provider(model_id))
+    )
+    turns = []
+    clipped = {}
+    clipped_tokens = {}
+    for pair, (user_msg, assistant_msg) in enumerate(history_pairs):
+        turn = [
+            {"role": "user", "content": user_msg},
+            {"role": "assistant", "content": assistant_msg},
+        ]
+        if budget > 0 and turn_cost(turn) > budget:
+            # To half, where overflow evicts down to, so the next turn keeps it.
+            fitted, clips = clip_turn(turn, budget // 2)
+            for index, cut, total in clips:
+                clipped[(pair, index)] = (cut, total)
+            if clips:
+                clipped_tokens[pair] = turn_cost(turn) - turn_cost(fitted)
+            turn = fitted
+        turns.append(turn)
+
+    cuts = []
+    reporter = (
+        _history_cuts.setdefault(session_id, CutReporter()) if session_id else None
+    )
+    context = select_history(turns, budget, cuts.append, reporter)
+
+    # select_history returns the turns' own message dicts, so identity says
+    # which clipped messages the model still sees.
+    in_view = {id(message) for message in context}
+    shown = {key for key in clipped if id(turns[key[0]][key[1]]) in in_view}
+    seen = _relay_clips.get(session_id, set()) if session_id else set()
+    if session_id:
+        _relay_clips[session_id] = shown
+    new_keys = [key for key in clipped if key in shown and key not in seen]
+    new_clips = [clipped[key] for key in new_keys]
+    notices = [cut.notice for cut in cuts]
+    if new_clips:
+        cut_chars = sum(c[0] for c in new_clips)
+        if len(new_clips) == 1:
+            notices.append(
+                f"An earlier message is too long for the model's context window, so "
+                f"the last {cut_chars:,} of its {new_clips[0][1]:,} characters are "
+                "out of its view."
+            )
+        else:
+            notices.append(
+                f"{len(new_clips)} earlier messages are too long for the model's "
+                f"context window, so {cut_chars:,} of their characters are out of "
+                "its view."
+            )
+    if notices:
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": " ".join(notices),
+                "turns": sum(cut.turns for cut in cuts),
+                "tokens": sum(cut.tokens for cut in cuts)
+                + sum(clipped_tokens[pair] for pair in {key[0] for key in new_keys}),
+            }
+        )
     return context
+
+
+def _relayed_turns(
+    turns: list,
+    model_id: str | None,
+    query: str,
+    sse_handler,
+    session_id: str | None,
+) -> list:
+    """The chat's recorded turns that fit *model_id*'s history budget, kept whole.
+
+    A turn larger than the whole budget is sent shortened (#5864); turns newly
+    out of the model's view stream a ``history_cut`` status.
+    """
+    from gaia.agents.base.history import CutReporter, fit_turns, relayed_history_budget
+
+    budget = relayed_history_budget(
+        model_id, query, cloud=bool(model_id) and bool(_ui_cloud_provider(model_id))
+    )
+    reporter = (
+        _history_cuts.setdefault(session_id, CutReporter()) if session_id else None
+    )
+
+    def on_cut(cut) -> None:
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": cut.notice,
+                "turns": cut.turns,
+                "tokens": cut.tokens,
+            }
+        )
+
+    return fit_turns(turns, budget, on_cut, reporter)
 
 
 #: What a stopped turn's reply is saved as when it wrote no text.
@@ -2072,6 +2257,21 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
         )
 
 
+def _refuse_internet_off(
+    sse_handler: Any, profile: Any, agent_type: str, api_version: Any
+) -> None:
+    """End an internet-off turn for a sidecar too old to be told it is offline."""
+    logger.warning(
+        "%s agent at contract %s can't take internet_off (needs %s)",
+        agent_type,
+        api_version,
+        profile.min_internet_api_version,
+    )
+    sse_handler._emit(
+        {"type": "agent_error", "content": profile.internet_upgrade_message}
+    )
+
+
 def _dispatch_sidecar_query(
     sse_handler,
     request: ChatRequest,
@@ -2081,9 +2281,15 @@ def _dispatch_sidecar_query(
     session_id: str | None = None,
     documents: list | None = None,
     allowed_paths: list | None = None,
+    folders: list | None = None,
+    withheld: list | None = None,
+    working_directory: str | None = None,
     memory: str = "on",
+    internet_off: bool = False,
+    hold_internet_off: Callable[[], ContextManager[bool]] | None = None,
     recording: TurnRecording | None = None,
     max_steps: int | None = None,
+    turns: list | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
 
@@ -2095,9 +2301,20 @@ def _dispatch_sidecar_query(
     gets it with ``GAIA_ALLOWED_PATHS`` already applied — the sidecar process
     need not share this one's environment — so it works where the UI says.
 
+    *folders* are the folders the user added to the chat. They join the scope;
+    a sidecar too old to take a scope stops the turn rather than answer
+    without them. *withheld* are paths the user took away from the chat; an
+    allowed-paths list can't express them, so a chat with any stops the turn
+    rather than hand the sidecar what the user removed.
+
     *memory* is the chat's memory mode (:func:`_memory_mode`). Likewise, a
     private or memory-off turn is stopped rather than sent to a sidecar that
-    keeps memory but is too old to be told not to save.
+    keeps memory but cannot be told not to save.
+
+    *internet_off* is the chat's Internet switch. Likewise, an internet-off turn
+    is stopped rather than sent to a sidecar that could go online because it is
+    too old to be told not to. *hold_internet_off* re-reads it once the turn has
+    started (``relay_query``), so a switch flipped meanwhile still reaches it.
 
     *recording* is the turn's undo recording. A sidecar that takes it records
     its own file changes under a turn of this chat, which is where Changes,
@@ -2109,14 +2326,17 @@ def _dispatch_sidecar_query(
     immediately after calling this — it never falls through to the shared
     agent trunk, which assumes a constructed in-process ``agent`` and calls
     ``agent.process_query``/``_maybe_load_expected_model``. The sidecar owns
-    its own model lifecycle; nothing about Lemonade ctx/model selection
-    happens here.
+    its own model lifecycle; nothing here loads or selects a model. The
+    model's window is only read, to size the earlier turns sent with the query.
 
     Every exception the sidecar manager/proxy can raise is caught HERE and
     turned into a terminal SSE error — never left to reach
     ``_classify_chat_exception``, whose substring matching would misclassify
     a sidecar connection error as a Lemonade error and show the wrong remedy.
     """
+    from gaia.config import GaiaConfigError
+    from gaia.llm.lemonade_client import LemonadeClientError
+    from gaia.llm.model_fit import ModelFitError
     from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.email_sidecar.errors import SidecarError
     from gaia.ui.email_sidecar.relay import relay_query
@@ -2141,6 +2361,13 @@ def _dispatch_sidecar_query(
         )
         return
 
+    from gaia.daemon.client import deferred_restart_notice
+
+    # An update is installed but the daemon waits for other work to finish.
+    notice = deferred_restart_notice()
+    if notice:
+        sse_handler._emit({"type": "status", "status": "info", "message": notice})
+
     if not api_version_supported(profile, handle.api_version):
         sse_handler._emit(
             {"type": "agent_error", "content": profile.version_upgrade_message}
@@ -2162,10 +2389,33 @@ def _dispatch_sidecar_query(
             return
         relayed_documents = [str(Path(p).resolve()) for p in documents]
 
+    if withheld:
+        logger.warning(
+            "%s chat %s has withheld paths a relayed agent can't be held to",
+            agent_type,
+            (session_id or "")[:8],
+        )
+        sse_handler._emit({"type": "agent_error", "content": withheld_refusal()})
+        return
+
+    takes_scope = scope_supported(profile, handle.api_version)
+    if folders and not takes_scope:
+        logger.warning(
+            "%s agent at contract %s can't be given folders (needs %s)",
+            agent_type,
+            handle.api_version,
+            profile.min_scope_api_version,
+        )
+        sse_handler._emit(
+            {"type": "agent_error", "content": folders_refusal(agent_type)}
+        )
+        return
+    query = with_folder_note(request.message, folders or [])
+
     relayed_scope = None
-    if allowed_paths is not None and scope_supported(profile, handle.api_version):
+    if allowed_paths is not None and takes_scope:
         try:
-            relayed_scope = _effective_scope(allowed_paths)
+            relayed_scope = _effective_scope(sorted({*allowed_paths, *(folders or [])}))
         except AllowedPathsEnvError as exc:
             # In process, the agent's validator raises this same error. The
             # sidecar may not see this environment, so say it here instead of
@@ -2173,22 +2423,37 @@ def _dispatch_sidecar_query(
             sse_handler._emit({"type": "agent_error", "content": str(exc)})
             return
 
+    relayed_working_directory = None
+    if working_directory is not None and working_directory_supported(
+        profile, handle.api_version
+    ):
+        relayed_working_directory = working_directory
+
     relayed_memory = None
-    if profile.min_memory_api_version is not None:
-        if memory_supported(profile, handle.api_version):
-            relayed_memory = memory
-        elif memory != "on":
-            logger.warning(
-                "%s agent at contract %s can't take memory=%s (needs %s)",
-                agent_type,
-                handle.api_version,
-                memory,
-                profile.min_memory_api_version,
-            )
-            sse_handler._emit(
-                {"type": "agent_error", "content": profile.memory_upgrade_message}
-            )
+    if memory_supported(profile, handle.api_version):
+        relayed_memory = memory
+    elif memory != "on":
+        logger.warning(
+            "%s agent at contract %s can't take memory=%s",
+            agent_type,
+            handle.api_version,
+            memory,
+        )
+        sse_handler._emit(
+            {"type": "agent_error", "content": profile.memory_upgrade_message}
+        )
+        return
+
+    relayed_internet_off = None
+    if profile.min_internet_api_version is not None:
+        if internet_supported(profile, handle.api_version):
+            relayed_internet_off = internet_off
+        elif internet_off:
+            _refuse_internet_off(sse_handler, profile, agent_type, handle.api_version)
             return
+    ignores_internet = (
+        profile.min_internet_api_version is not None and relayed_internet_off is None
+    )
 
     proxy = handle.proxy()
 
@@ -2197,10 +2462,24 @@ def _dispatch_sidecar_query(
 
     # First-turn-per-session readiness check (#2101 lesson): a 503 from
     # /v1/<agent>/init is contract ("not ready yet"), not a transport failure.
+    import requests
+
     try:
         status_code, init_body = proxy.init()
     except SidecarError as exc:
         sse_handler._emit({"type": "agent_error", "content": str(exc)})
+        return
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+        # The agent stopped answering (crashed, hung or shutting down): not the model server.
+        logger.warning(
+            "chat: %s agent at %s did not answer its readiness check: %s",
+            agent_type,
+            proxy.base_url,
+            exc,
+        )
+        sse_handler._emit(
+            {"type": "agent_error", "content": profile.start_failed_text()}
+        )
         return
     if (
         status_code != 200
@@ -2243,59 +2522,94 @@ def _dispatch_sidecar_query(
     if sse_handler.cancelled.is_set():
         return
 
-    context = _query_context_from_history(history_pairs)
-    if len(history_pairs) == _RELAY_CONTEXT_PAIRS + 1:
-        from gaia.agents.base.turn_metrics import count_tokens
-
-        # The window slides from here on; say so once, when it first does.
+    # A sidecar that takes recorded turns sees earlier tool calls; an older
+    # one gets the text pairs. Both are fitted here, and the sidecar re-fits.
+    relayed_turns = (
+        turns
+        if turns is not None and turns_supported(profile, handle.api_version)
+        else None
+    )
+    context: list = []
+    try:
+        if relayed_turns is None:
+            context = _relayed_history(
+                history_pairs, model_id, query, sse_handler, session_id
+            )
+        else:
+            relayed_turns = _relayed_turns(
+                relayed_turns, model_id, query, sse_handler, session_id
+            )
+    except (LemonadeClientError, ModelFitError, GaiaConfigError) as exc:
         sse_handler._emit(
             {
-                "type": "status",
-                "status": "history_cut",
-                "message": (
-                    "Older messages are now out of the model's view: this agent "
-                    f"sees the last {_RELAY_CONTEXT_PAIRS} exchanges of the chat."
-                ),
-                "turns": 1,
-                "tokens": count_tokens(
-                    json.dumps(list(history_pairs[0]), ensure_ascii=False)
+                "type": "agent_error",
+                "content": (
+                    "Could not size this chat's earlier messages to the model's "
+                    f"context window: {exc}"
                 ),
             }
         )
+        return
+
     from gaia.ui.email_sidecar.profiles import full_access_supported
 
-    relay_query(
-        sse_handler,
-        proxy,
-        query=request.message,
-        context=context,
-        model_id=model_id,
-        # The chat's own mode, read per turn: the in-process path applies it
-        # to its handler, the relayed one to the sidecar session.
-        full_access=(
-            session_permissions.for_session(session_id).mode
-            == session_permissions.MODE_FULL_ACCESS
-            if session_id and full_access_supported(profile, handle.api_version)
-            else None
-        ),
-        profile=profile,
-        session_id=session_id,
-        answers_confirmations=confirmations_supported(profile, handle.api_version),
-        documents=relayed_documents,
-        allowed_paths=relayed_scope,
-        memory=relayed_memory,
-        changes_turn_id=(
-            recording.relay()
-            if recording is not None
-            and session_id
-            and changes_supported(profile, handle.api_version)
-            else None
-        ),
-        surface=(
-            "agent_ui" if surface_supported(profile, handle.api_version) else None
-        ),
-        max_steps=max_steps,
-    )
+    try:
+        if ignores_internet and hold_internet_off is not None:
+            # Read under the switch's lock, so a later flip to off ends this turn.
+            with hold_internet_off() as internet_off_now:
+                if internet_off_now:
+                    _refuse_internet_off(
+                        sse_handler, profile, agent_type, handle.api_version
+                    )
+                    return
+                sse_handler.relay_ignores_internet = True
+        relay_query(
+            sse_handler,
+            proxy,
+            query=query,
+            context=context,
+            model_id=model_id,
+            # The chat's own mode, read per turn: the in-process path applies it
+            # to its handler, the relayed one to the sidecar session.
+            full_access=(
+                session_permissions.for_session(session_id).mode
+                == session_permissions.MODE_FULL_ACCESS
+                if session_id and full_access_supported(profile, handle.api_version)
+                else None
+            ),
+            profile=profile,
+            session_id=session_id,
+            answers_confirmations=confirmations_supported(profile, handle.api_version),
+            documents=relayed_documents,
+            allowed_paths=relayed_scope,
+            working_directory=relayed_working_directory,
+            memory=relayed_memory,
+            internet_off=relayed_internet_off,
+            hold_internet_off=(
+                hold_internet_off if relayed_internet_off is not None else None
+            ),
+            changes_turn_id=(
+                recording.relay()
+                if recording is not None
+                and session_id
+                and changes_supported(profile, handle.api_version)
+                else None
+            ),
+            surface=(
+                "agent_ui" if surface_supported(profile, handle.api_version) else None
+            ),
+            reasoning=reasoning_supported(profile, handle.api_version),
+            max_steps=max_steps,
+            turns=relayed_turns,
+        )
+    finally:
+        sse_handler.relay_ignores_internet = False
+    if session_id and profile.min_context_api_version is not None:
+        record_relayed_context(
+            session_id,
+            getattr(sse_handler, "relay_context", None),
+            relayed_context_reason(profile, handle.api_version, sse_handler),
+        )
 
 
 def _find_last_tool_step(steps: list) -> dict | None:
@@ -2304,6 +2618,18 @@ def _find_last_tool_step(steps: list) -> dict | None:
         if steps[i].get("type") == "tool":
             return steps[i]
     return None
+
+
+def _close_reasoning(steps: list, now_ms: int) -> None:
+    """Record how long the reasoning just before the answer ran, on its last piece."""
+    run = []
+    for step in reversed(steps):
+        if step.get("type") != "thinking":
+            break
+        run.append(step)
+    if run and "latencyMs" not in run[0]:
+        run[0]["latencyMs"] = now_ms - run[-1]["timestamp"]
+        run[0]["active"] = False
 
 
 def _agent_ui_wording(text: str) -> str:
@@ -2552,6 +2878,7 @@ def _empty_answer_outcome(
     has_steps: bool,
     has_card: bool,
     backend_problem: Optional[str] = None,
+    turn_reported_error: bool = False,
 ) -> tuple[str, str, bool]:
     """Classify a chat turn that ended with no answer text, for the shared
     persistence tail's empty-``full_response`` branch.
@@ -2566,6 +2893,10 @@ def _empty_answer_outcome(
         the steps so the card survives a reload.
       * steps but no card → ``(<no-answer copy>, "failed", True)`` — the agent
         ran tools and ended without answering; say so and keep the steps.
+        *has_steps* counts tool steps only, never thinking, plan or error steps.
+      * no tool ran but the turn reported an error → ``("", "failed", True)``
+        — the error step already says what went wrong (e.g. "GAIA couldn't
+        start its agent"); keep it and add no second, contradicting line.
       * nothing, backend at fault → ``(backend_problem, "error", False)`` —
         the only case that names Lemonade (see _empty_answer_backend_problem).
       * nothing, backend fine → ``(<empty-model copy>, "failed", False)`` —
@@ -2577,6 +2908,8 @@ def _empty_answer_outcome(
         return "", "done", True
     if has_steps:
         return _NO_ANSWER_AFTER_TOOLS_MSG, "failed", True
+    if turn_reported_error:
+        return "", "failed", True
     if backend_problem:
         return backend_problem, "error", False
     return _EMPTY_MODEL_ANSWER_MSG, "failed", False
@@ -3164,6 +3497,9 @@ async def _get_chat_response(
         # Reuse what a running warm-up is caching rather than read it twice.
         wait_for_warm_up()
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
+        working_directory = _session_working_directory(
+            load_environment(db, session_id)["folders"]
+        )
 
         if cached_agent is not None:
             from gaia.agents.base.console import SilentConsole
@@ -3174,6 +3510,8 @@ async def _get_chat_response(
             with writing_tool_registry():
                 agent._register_tools()
             _extend_cached_scope(agent, allowed)
+            if hasattr(agent, "config"):
+                agent.config.working_directory = working_directory
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                 new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
                 for fpath in new_paths:
@@ -3259,6 +3597,7 @@ async def _get_chat_response(
                             library_paths=library_paths,
                             allowed=allowed,
                             session_id=session_id,
+                            working_directory=working_directory,
                             dynamic_tools=dynamic_tools,
                             memory_incognito=_memory_off(session, db),
                         ),
@@ -3287,8 +3626,11 @@ async def _get_chat_response(
 
         _apply_memory_state(agent, session, db)
         apply_environment(agent, session_id, db)
+        query = with_folder_note(
+            request.message, load_environment(db, session_id)["folders"]
+        )
 
-        _restore_model_history(agent, db, session_id, request.message)
+        _restore_model_history(agent, db, session_id, query)
 
         # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
         # omitted, the agent's __init__ set model_id via kwargs.setdefault —
@@ -3310,7 +3652,7 @@ async def _get_chat_response(
         try:
             # Never re-run on failure: tools the turn already ran would run
             # again. The error says whether sending it again can help.
-            result = agent.process_query(request.message)
+            result = agent.process_query(query)
         finally:
             agent.console = activity._inner
             warning = recording.close()
@@ -3501,14 +3843,18 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
         # A relayed sidecar only sees the transcript it is sent; in-process
         # agents restore traces below.
-        history_pairs = (
-            _build_history_pairs(model_context_messages(db, request.session_id))
+        relay_messages = (
+            model_context_messages(db, request.session_id)
             if _should_relay_to_sidecar(
                 request.agent_type or session.get("agent_type") or "chat",
                 _agent_registry,
             )
             else []
         )
+        from gaia.agents.base.history import transcript_turns
+
+        history_pairs = _build_history_pairs(relay_messages)
+        relay_turns = transcript_turns(relay_messages)
 
         # Resolve document IDs to file paths.
         # Session-specific docs get auto-indexed; library docs are available
@@ -3605,10 +3951,15 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if sse_handler.cancelled.is_set():
                     return
                 cached_agent = _get_cached_agent(session_id, model_id, agent_type)
+                working_directory = _session_working_directory(
+                    load_environment(db, session_id)["folders"]
+                )
 
                 if cached_agent is not None:
                     # -- Cache hit --
                     agent = cached_agent
+                    if hasattr(agent, "config"):
+                        agent.config.working_directory = working_directory
                     agent.console = sse_handler
                     # A non-streaming turn may have built this agent.
                     agent.streaming = True
@@ -3675,6 +4026,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         library_paths=library_paths,
                         allowed=allowed,
                         session_id=session_id,
+                        working_directory=working_directory,
                         dynamic_tools=dynamic_tools,
                         memory_incognito=_memory_off(session, db),
                     )
@@ -3775,6 +4127,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         agent_type,
                         session_id[:8],
                     )
+                    relayed_env = load_environment(db, session_id)
                     _dispatch_sidecar_query(
                         sse_handler,
                         request,
@@ -3784,8 +4137,19 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         session_id=session_id,
                         documents=_relayed_documents(rag_file_paths, attached),
                         allowed_paths=allowed,
+                        folders=relayed_env["folders"],
+                        withheld=relayed_env["withheld"],
+                        working_directory=working_directory,
                         memory=_memory_mode(session, db),
+                        internet_off=relayed_env["internet_off"],
+                        hold_internet_off=functools.partial(
+                            held_internet_off, db, session_id
+                        ),
                         recording=recording,
+                        turns=relay_turns,
+                    )
+                    result_holder["model_messages"] = getattr(
+                        sse_handler, "relayed_model_messages", None
                     )
                     return
 
@@ -3846,6 +4210,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                     library_paths=library_paths,
                                     allowed=allowed,
                                     session_id=session_id,
+                                    working_directory=working_directory,
                                     dynamic_tools=dynamic_tools,
                                     memory_incognito=_memory_off(session, db),
                                 ),
@@ -3896,6 +4261,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                 _apply_memory_state(agent, session, db)
                 apply_environment(agent, request.session_id, db)
+                query = with_folder_note(
+                    request.message, load_environment(db, session_id)["folders"]
+                )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -3910,9 +4278,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     session_id, agent, _followup_taken
                 )
 
-                _restore_model_history(
-                    agent, db, session_id, request.message, sse_handler
-                )
+                _restore_model_history(agent, db, session_id, query, sse_handler)
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -3948,7 +4314,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # and the next turn's pre-flight reloads an evicted model.
                 t_query = _time.monotonic()
                 result_holder["agent"] = agent
-                result = agent.process_query(request.message)
+                result = agent.process_query(query)
                 logger.info(
                     "PERF process_query session=%s took=%.3fs",
                     session_id[:8],
@@ -4100,6 +4466,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     answer_event = event
                 elif event_type == "chunk":
                     full_response += event.get("content", "")
+                    _close_reasoning(
+                        captured_steps,
+                        int(asyncio.get_running_loop().time() * 1000),
+                    )
+                elif event_type == "commentary":
+                    # Those chunks narrated a tool call; the answer starts after it.
+                    full_response = ""
                 elif event_type == "agent_error" and event.get("fatal"):
                     # A relayed sidecar's terminal error: the turn ends here.
                     fatal_error = event.get("content") or ""
@@ -4117,6 +4490,20 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "label": "Thinking",
                             "detail": event.get("content"),
                             "active": True,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        }
+                    )
+                elif event_type == "commentary":
+                    step_id += 1
+                    for s in captured_steps:
+                        s["active"] = False
+                    captured_steps.append(
+                        {
+                            "id": step_id,
+                            "type": "commentary",
+                            "label": "Commentary",
+                            "detail": event.get("content"),
+                            "active": False,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                         }
                     )
@@ -4299,11 +4686,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # already sent but not yet dispatched arrive immediately.
                 if idle_cycles % 25 == 0:
                     yield ": keepalive " + "x" * 490 + "\n\n"
-                # Every 15s (75 cycles) emit a visible status so the user knows
-                # the model is still processing (prompt prefill is silent).
-                # Use status='working' so active=true; consecutive events merge
-                # into a single updating step on the frontend. A running tool
-                # shows its own timer, so the model is not the one being waited on.
+                # Every 15s (75 cycles) say the model is still processing (prompt
+                # prefill is silent). Stream readers such as the MCP server log it;
+                # the Agent UI drops it and times the wait itself. A running tool
+                # means the model is not the one being waited on.
                 if idle_cycles % 75 == 0 and not sse_handler.tool_running():
                     elapsed = int(_turn_clock() - last_event_at)
                     status_evt = json.dumps(
@@ -4462,18 +4848,22 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     exc,
                 )
             inference_stats = _turn_inference_stats(inference_stats, answer_event)
-            if isinstance(result_holder.get("result"), dict):
+            turn_result = result_holder.get("result")
+            if not isinstance(turn_result, dict):
+                # A relayed turn's timings come back on the sidecar's final event.
+                turn_result = getattr(sse_handler, "relay_performance", None)
+            if isinstance(turn_result, dict):
                 from .turn_insights import summarize_turn
 
                 inference_stats = dict(inference_stats or {})
                 try:
                     inference_stats["performance"] = summarize_turn(
-                        result_holder["result"],
+                        turn_result,
                         wall_seconds=_time.monotonic() - turn_started,
-                        model_id=result_holder.get("model"),
+                        model_id=result_holder.get("model") or model_id,
                         loads=result_holder["model_loads"],
                     )
-                except (KeyError, TypeError, ValueError) as exc:
+                except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
                     # The answer is still saved; the panel shows the turn as unmeasured.
                     logger.warning(
                         "Turn performance for session %s not recorded: %s",
@@ -4568,11 +4958,18 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 backend_problem = await _empty_answer_backend_problem(
                     result_holder.get("model") or model_id
                 )
+            # Thinking, plans and errors are not tools that ran.
+            tool_steps = [
+                s for s in captured_steps if s.get("type") in ("tool", "policy_alert")
+            ]
             content, sse_type, keep_steps = _empty_answer_outcome(
                 turn_cancelled,
-                bool(captured_steps),
+                bool(tool_steps),
                 any(step.get("render") for step in captured_steps),
                 backend_problem,
+                turn_reported_error=any(
+                    s.get("type") == "error" for s in captured_steps
+                ),
             )
             steps_to_persist = (
                 captured_steps if (keep_steps and captured_steps) else None
@@ -4933,8 +5330,10 @@ def _settled_quietly(future) -> None:
 
 
 # Failures retrying can't fix until the file itself changes: RAG's pdf_status
-# values, plus "empty_file" for a 0-byte file of any type.
-PERMANENT_INDEX_FAILURES = frozenset({"corrupted", "encrypted", "empty", "empty_file"})
+# and xlsx_status values, plus "empty_file" for a file with nothing to index.
+PERMANENT_INDEX_FAILURES = frozenset(
+    {"corrupted", "encrypted", "empty", "empty_file", "unsupported_workbook"}
+)
 
 
 class UnreadableDocumentError(RuntimeError):
@@ -5020,7 +5419,9 @@ async def _index_document(filepath: Path, display_name: Optional[str] = None) ->
         if error:
             message = f"RAG indexing failed for {name}: {error}"
             kind = (
-                "empty_file" if result.get("empty_file") else result.get("pdf_status")
+                "empty_file"
+                if result.get("empty_file")
+                else result.get("pdf_status") or result.get("xlsx_status")
             )
             if kind in PERMANENT_INDEX_FAILURES:
                 raise UnreadableDocumentError(message, kind)

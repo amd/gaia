@@ -100,6 +100,7 @@ interface ToolStat {
     total_calls: number;
     success_count: number;
     failure_count: number;
+    denied_count?: number;
     success_rate: number;
     avg_duration_ms: number;
     last_used: string | null;
@@ -1256,7 +1257,7 @@ export function MemoryDashboard() {
                                                 stats?.knowledge?.by_category
                                                     ? Object.entries(stats.knowledge.by_category)
                                                         .slice(0, 3)
-                                                        .map(([k, v]) => `${v} ${k}s`)
+                                                        .map(([k, v]) => `${v} ${k}${v === 1 ? '' : 's'}`)
                                                         .join(', ')
                                                     : 'No entries'
                                             );
@@ -1803,6 +1804,7 @@ export function MemoryDashboard() {
                                                         <th>Tool</th>
                                                         <th>Calls</th>
                                                         <th>Success</th>
+                                                        <th>Denied</th>
                                                         <th>Avg Time</th>
                                                         <th>Last Used</th>
                                                         <th>Last Error</th>
@@ -1824,6 +1826,7 @@ export function MemoryDashboard() {
                                                                     </span>
                                                                 </div>
                                                             </td>
+                                                            <td>{t.denied_count ?? 0}</td>
                                                             <td>{formatDuration(t.avg_duration_ms)}</td>
                                                             <td>
                                                                 <span className="mem-date-cell" title={formatDateFull(t.last_used)}>

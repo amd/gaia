@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from typing import Optional
 
 # Module-level on purpose (matches sidecars/routes.py): this module is itself
@@ -120,6 +121,31 @@ _WATCHER_BUFFER_CAP = 16 << 20
 # Strong refs to fire-and-forget cancel tasks spawned from a cancelled response
 # generator (asyncio only weak-refs pending tasks).
 _background_tasks: "set[asyncio.Task]" = set()
+
+
+class RelayTurns:
+    """How many relayed agent streams are open right now.
+
+    A stream stays open while its turn waits on a tool or an approval, so this
+    is what tells a client the daemon still has a turn in flight.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._open = 0
+
+    @property
+    def count(self) -> int:
+        with self._lock:
+            return self._open
+
+    def opened(self) -> None:
+        with self._lock:
+            self._open += 1
+
+    def closed(self) -> None:
+        with self._lock:
+            self._open -= 1
 
 
 def _spawn_background(coro) -> None:
@@ -264,10 +290,11 @@ class _SSEWatcher:
                 self.terminal_seen = True
 
 
-def build_relay_router(token: str, registry):
+def build_relay_router(token: str, registry, turns: Optional[RelayTurns] = None):
     """Token-guarded APIRouter relaying ``ANY /v1/{agent_id}/*`` to the
     agent's running sidecar (same guard as the ``/daemon/v1/*`` control
-    plane — ``build_require_token`` — so the 401 contract never forks)."""
+    plane — ``build_require_token`` — so the 401 contract never forks).
+    *turns* counts the event streams open through it."""
     from gaia.daemon.app import build_require_token
 
     require_token = build_require_token(token)
@@ -398,6 +425,8 @@ def build_relay_router(token: str, registry):
 
         async def _relay_sse():
             disconnected = False
+            if turns is not None:
+                turns.opened()
             try:
                 try:
                     async for chunk in upstream.aiter_bytes():
@@ -454,6 +483,8 @@ def build_relay_router(token: str, registry):
                                 terminate_partial=watcher.mid_frame,
                             )
             finally:
+                if turns is not None:
+                    turns.closed()
                 if not disconnected:
                     await _finalize("stream finished")
 

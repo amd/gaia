@@ -369,10 +369,10 @@ export interface ChatPerformance {
         tokens_in: number | null;
         tokens_cached: number | null;
         tokens_out: number | null;
-        tool_calls: number;
+        tool_calls: number | null;
         loads: number;
         load_seconds: number | null;
-        usd: number;
+        usd: number | null;
         unpriced_turns: number;
     };
     /** The model as Lemonade reports it now. */
@@ -472,7 +472,7 @@ export interface Document {
     sessions_using: number;
     indexing_status?: 'pending' | 'indexing' | 'complete' | 'failed' | 'cancelled' | 'missing';
     last_error?: string | null;
-    /** Set when retrying can't help until the file is fixed: corrupted, encrypted, empty (no text) or empty_file (0 bytes). */
+    /** Set when retrying can't help until the file is fixed: corrupted, encrypted, empty (no text), empty_file (nothing to index) or unsupported_workbook (.xls or password-protected). */
     error_kind?: string | null;
 }
 
@@ -702,6 +702,8 @@ export interface Schedule {
     description: string;
     /** The last run's error; null when it succeeded. */
     last_error: string | null;
+    /** A run is in flight right now, timed or Run now. */
+    running?: boolean;
 }
 
 /** A single execution result for a scheduled task. */
@@ -770,7 +772,7 @@ export interface RetrievalChunk {
 /** A single step in the agent's execution. */
 export interface AgentStep {
     id: number;
-    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert';
+    type: 'thinking' | 'commentary' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert';
     /** Short label shown in collapsed view. */
     label: string;
     /** Detailed content shown when expanded. */
@@ -838,6 +840,7 @@ export type StreamEventType =
     | 'status'       // Agent state change
     | 'step'         // Step progress
     | 'thinking'     // Agent reasoning
+    | 'commentary'   // A note the agent wrote before a tool call
     | 'plan'         // Agent plan
     | 'tool_start'   // Tool execution started
     | 'tool_end'     // Tool execution completed
@@ -1084,8 +1087,9 @@ export interface SetupPlan {
     disk_problem?: string | null;
 }
 
-/** A task a new chat offers, from an installed skill and what is set up. */
+/** A task a new chat offers, from what is set up on this PC. */
 export interface StartCard {
+    /** The skill that sharpens this task when installed; also the card's id. */
     skill: string;
     title: string;
     note: string;
@@ -1097,7 +1101,8 @@ export interface StartCard {
 /** GET /api/onboarding/start */
 export interface StartScreen {
     cards: StartCard[];
-    working_folder: { path: string; name: string; gaia_folder: boolean };
+    /** choosable: a new chat can be given another folder. */
+    working_folder: { path: string; name: string; gaia_folder: boolean; choosable: boolean };
     /** Why there are no cards: the agent couldn't list its skills. */
     skills_error?: string | null;
 }
@@ -1333,11 +1338,18 @@ export interface SessionPermissions {
 
 // ── Skills (GET /api/skills) ──────────────────────────────────────────────
 
+/** Which discovery root a skill was found in. */
+export type SkillSource = 'agent-bundled' | 'user' | 'claude-import';
+
 export interface SkillInfo {
     name: string;
     description: string;
+    /** Omitted by older Hub sidecars; false means a selectable task skill. */
+    always_on?: boolean;
     version: string | null;
     tier: string | null;
     tools: string[];
     path: string;
+    /** Absent when an older GAIA agent answered the listing. */
+    source?: SkillSource | null;
 }

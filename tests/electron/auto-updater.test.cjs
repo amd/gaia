@@ -9,7 +9,8 @@
  *   - listReleases(): surfaces a structured error on fetch failure
  *   - installVersion(): setFeedURL with generic/tag path, pin persist, checkForUpdates
  *   - pin gating: init() sets autoDownload=false when a pin is present
- *   - clearPin(): restores autoDownload, allowDowngrade=false, github feed
+ *   - clearPin(): autoDownload back to the autoUpdate setting, allowDowngrade=false, forward feed
+ *   - autoUpdate: off by default; Update now downloads; restart asks first
  *   - getState() includes currentVersion and pinnedVersion
  *   - IPC handlers: invoked with bad input, they reject without side effects
  *
@@ -116,6 +117,24 @@ function stubFetch(releases) {
     status: 200,
     json: async () => releases,
   });
+}
+
+// A check that finds a release, the way electron-updater reports one.
+async function offerRelease() {
+  mockAutoUpdaterInstance.emit("update-available", { version: "0.20.0" });
+  return null;
+}
+
+function writeUpdateConfig(cfg) {
+  const dir = path.join(tmpHome, ".gaia");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "update-config.json"), JSON.stringify(cfg));
+}
+
+function readUpdateConfig() {
+  return JSON.parse(
+    fs.readFileSync(path.join(tmpHome, ".gaia", "update-config.json"), "utf8")
+  );
 }
 
 // ── Tests: listReleases ────────────────────────────────────────────────────────
@@ -277,7 +296,7 @@ describe("installVersion()", () => {
 
     const checkSpy = jest
       .spyOn(mockAutoUpdaterInstance, "checkForUpdates")
-      .mockResolvedValue(null);
+      .mockImplementation(offerRelease);
 
     await mod.installVersion("v0.20.0");
 
@@ -293,7 +312,7 @@ describe("installVersion()", () => {
     const win = makeMockWindow();
     mod.init(win, INIT_OPTIONS);
 
-    jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates").mockResolvedValue(null);
+    jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates").mockImplementation(offerRelease);
 
     await mod.installVersion("v0.20.0");
 
@@ -338,8 +357,8 @@ describe("installVersion()", () => {
   });
 
   test("throws a busy error when a check is already in progress", async () => {
-    // A configured feed so checkForUpdates() proceeds far enough to flip the
-    // in-progress guard (an unconfigured updater short-circuits to NO_CHANNEL).
+    // A configured feed so checkForUpdates() reaches electron-updater without
+    // a GitHub lookup.
     process.env.GAIA_UPDATE_FEED_URL = "https://updates.example.com/gaia";
     const mod = loadModule();
     const win = makeMockWindow();
@@ -387,19 +406,251 @@ describe("pin gating", () => {
     expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
   });
 
-  test("init() sets autoDownload=true when no pin exists", () => {
+  test("init() leaves autoDownload off by default (auto-update is opt-in)", () => {
     const mod = loadModule();
-    const win = makeMockWindow();
-    mod.init(win, INIT_OPTIONS);
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
+    expect(mod.getState().autoUpdate).toBe(false);
+  });
+
+  test("init() turns autoDownload on when autoUpdate is saved", () => {
+    writeUpdateConfig({ autoUpdate: true });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
 
     expect(mockAutoUpdaterInstance.autoDownload).toBe(true);
+    expect(mod.getState().autoUpdate).toBe(true);
+  });
+
+  test("a pin keeps autoDownload off even with autoUpdate saved", () => {
+    writeUpdateConfig({ autoUpdate: true, pinnedVersion: "v0.20.0" });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
+  });
+});
+
+// ── Tests: auto-update preference and "Update now" ────────────────────────────
+
+describe("installVersion with auto-update and failures", () => {
+  test("with auto-update on, the exact version downloads once, not twice", async () => {
+    writeUpdateConfig({ autoUpdate: true });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    let autoDownloadDuringCheck;
+    jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates").mockImplementation(async () => {
+      autoDownloadDuringCheck = mockAutoUpdaterInstance.autoDownload;
+      return offerRelease();
+    });
+    const downloadSpy = jest.spyOn(mockAutoUpdaterInstance, "downloadUpdate");
+
+    await mod.installVersion("v0.20.0");
+
+    expect(autoDownloadDuringCheck).toBe(false);
+    expect(downloadSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test("a release with no installer leaves the app unpinned", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates").mockResolvedValue(null);
+
+    await expect(mod.installVersion("v0.20.0")).rejects.toThrow(/no installer.*not paused/s);
+    expect(mod.getState().pinnedVersion).toBeNull();
+    expect(readUpdateConfig().pinnedVersion).toBeNull();
+  });
+
+  test("a failed download keeps the earlier pin, not the new one", async () => {
+    writeUpdateConfig({ pinnedVersion: "v0.19.0" });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates").mockImplementation(offerRelease);
+    jest.spyOn(mockAutoUpdaterInstance, "downloadUpdate").mockRejectedValueOnce(new Error("net down"));
+
+    await expect(mod.installVersion("v0.20.0")).rejects.toThrow(/net down.*Still pinned to v0\.19\.0/s);
+    expect(mod.getState().pinnedVersion).toBe("v0.19.0");
+    expect(readUpdateConfig().pinnedVersion).toBe("v0.19.0");
+    expect(mockAutoUpdaterInstance._feedURL.url).toContain("/download/v0.19.0/");
+  });
+});
+
+describe("setAutoUpdate / downloadUpdate / restart", () => {
+  test("set-auto-update persists the choice and keeps other keys", async () => {
+    writeUpdateConfig({ feedUrl: "https://updates.example.com/gaia" });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    const state = await electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update", true);
+
+    expect(state.autoUpdate).toBe(true);
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(true);
+    expect(readUpdateConfig()).toEqual({
+      feedUrl: "https://updates.example.com/gaia",
+      autoUpdate: true,
+    });
+  });
+
+  test("set-auto-update rejects a non-boolean without writing", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    await expect(
+      electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update", "yes")
+    ).rejects.toThrow(/true or false/);
+    expect(fs.existsSync(pinFilePath())).toBe(false);
+  });
+
+  test("with auto-update off, a found update is offered, not downloaded", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    const downloadSpy = jest.spyOn(mockAutoUpdaterInstance, "downloadUpdate");
+
+    mockAutoUpdaterInstance.emit("update-available", { version: "0.26.0" });
+
+    expect(mod.getState()).toMatchObject({ status: "available", version: "0.26.0" });
+    expect(downloadSpy).not.toHaveBeenCalled();
+  });
+
+  test("download (Update now) downloads the offered update", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    const downloadSpy = jest.spyOn(mockAutoUpdaterInstance, "downloadUpdate");
+    mockAutoUpdaterInstance.emit("update-available", { version: "0.26.0" });
+
+    const state = await electronMock.ipcMain.simulateInvoke("gaia:update:download");
+
+    expect(downloadSpy).toHaveBeenCalledTimes(1);
+    expect(state.status).toBe("downloading");
+  });
+
+  test("download with nothing offered fails loudly", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    await expect(electronMock.ipcMain.simulateInvoke("gaia:update:download")).rejects.toThrow(
+      /No update is waiting/
+    );
+  });
+
+  test("turning auto-update on while an update is offered starts the download", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    const downloadSpy = jest.spyOn(mockAutoUpdaterInstance, "downloadUpdate");
+    mockAutoUpdaterInstance.emit("update-available", { version: "0.26.0" });
+
+    await electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update", true);
+
+    expect(downloadSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test("restart with nothing downloaded fails loudly", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    const quitSpy = jest.spyOn(mockAutoUpdaterInstance, "quitAndInstall");
+
+    await expect(electronMock.ipcMain.simulateInvoke("gaia:update:restart")).rejects.toThrow(
+      /No downloaded update/
+    );
+    expect(quitSpy).not.toHaveBeenCalled();
+  });
+
+  test("restart installs a downloaded update, and asks about running work first", async () => {
+    const confirmRestart = jest.fn().mockResolvedValue(false);
+    const mod = loadModule();
+    mod.init(makeMockWindow(), { confirmRestart });
+    const quitSpy = jest.spyOn(mockAutoUpdaterInstance, "quitAndInstall");
+    // "Later" on the native dialog, so only the chip's restart is exercised.
+    electronMock.dialog.showMessageBox.mockResolvedValueOnce({ response: 1 });
+    mockAutoUpdaterInstance.emit("update-downloaded", { version: "0.26.0" });
+    await new Promise((r) => setImmediate(r));
+    expect(mod.getState().status).toBe("downloaded");
+
+    await electronMock.ipcMain.simulateInvoke("gaia:update:restart");
+    expect(quitSpy).not.toHaveBeenCalled();
+
+    confirmRestart.mockResolvedValue(true);
+    await electronMock.ipcMain.simulateInvoke("gaia:update:restart");
+    expect(quitSpy).toHaveBeenCalledWith(false, true);
+  });
+});
+
+describe("release candidates (setIncludePrereleases)", () => {
+  const rc = { tag: "v0.27.0-rc1", version: "0.27.0-rc1", prerelease: true, platform: process.platform };
+  const final = { tag: "v0.26.0", version: "0.26.0", platform: process.platform };
+
+  test("off by default, and RCs stay out of the version list", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    stubFetch([makeRelease(rc), makeRelease(final)]);
+
+    expect(mod.getState().includePrereleases).toBe(false);
+    expect(mockAutoUpdaterInstance.allowPrerelease).toBe(false);
+    const tags = (await mod.listReleases()).map((r) => r.tag);
+    expect(tags).toEqual(["v0.26.0"]);
+  });
+
+  test("turning it on needs no auto-update, saves it, and lets RCs through", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    stubFetch([makeRelease(rc), makeRelease(final)]);
+
+    const state = await electronMock.ipcMain.simulateInvoke(
+      "gaia:update:set-include-prereleases",
+      true
+    );
+
+    expect(state.includePrereleases).toBe(true);
+    expect(state.autoUpdate).toBe(false);
+    expect(mockAutoUpdaterInstance.allowPrerelease).toBe(true);
+    // A channel, not an install trigger: nothing downloads unasked.
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
+    expect(readUpdateConfig()).toEqual({ includePrereleases: true });
+    const tags = (await mod.listReleases()).map((r) => r.tag);
+    expect(tags).toEqual(["v0.27.0-rc1", "v0.26.0"]);
+  });
+
+  test("turning auto-update off keeps the release-candidate channel", async () => {
+    writeUpdateConfig({ autoUpdate: true, includePrereleases: true });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    expect(mockAutoUpdaterInstance.allowPrerelease).toBe(true);
+
+    await electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update", false);
+
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
+    expect(mockAutoUpdaterInstance.allowPrerelease).toBe(true);
+    expect(readUpdateConfig().includePrereleases).toBe(true);
+  });
+
+  test("a release-candidate build lists candidates without opting in", async () => {
+    jest.spyOn(electronMock.app, "getVersion").mockReturnValue("0.26.1-rc.2");
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    stubFetch([makeRelease(rc), makeRelease(final)]);
+
+    expect(mod.getState().includePrereleases).toBe(false);
+    expect(mockAutoUpdaterInstance.allowPrerelease).toBe(true);
+    const tags = (await mod.listReleases()).map((r) => r.tag);
+    expect(tags).toEqual(["v0.27.0-rc1", "v0.26.0"]);
+  });
+
+  test("a non-boolean is refused without writing", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    await expect(
+      electronMock.ipcMain.simulateInvoke("gaia:update:set-include-prereleases", "yes")
+    ).rejects.toThrow(/expects true or false/);
+    expect(fs.existsSync(pinFilePath())).toBe(false);
   });
 });
 
 // ── Tests: clearPin ────────────────────────────────────────────────────────────
 
 describe("clearPin()", () => {
-  test("sets autoDownload=true, allowDowngrade=false, restores the R2 forward feed, clears pin file", () => {
+  test("returns autoDownload to the auto-update setting (off), allowDowngrade=false, restores the R2 forward feed, clears pin file", () => {
     // A configured R2 forward feed is what resume restores to (#1724).
     process.env.GAIA_UPDATE_FEED_URL = "https://updates.example.com/gaia";
 
@@ -420,7 +671,7 @@ describe("clearPin()", () => {
 
     mod.clearPin();
 
-    expect(mockAutoUpdaterInstance.autoDownload).toBe(true);
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
     expect(mockAutoUpdaterInstance.allowDowngrade).toBe(false);
     // Feed should be restored to the generic R2 forward channel.
     expect(mockAutoUpdaterInstance._feedURL).not.toBeNull();
@@ -470,7 +721,7 @@ describe("getState() extended state", () => {
 // ── Tests: IPC handler registration ───────────────────────────────────────────
 
 describe("IPC handler registration", () => {
-  test("removes all 5 IPC handlers on destroy", () => {
+  test("removes every update IPC handler on destroy", () => {
     const mod = loadModule();
     const win = makeMockWindow();
     mod.init(win, INIT_OPTIONS);
@@ -501,7 +752,7 @@ describe("gaia:update:resume IPC", () => {
 
     const result = await electronMock.ipcMain.simulateInvoke("gaia:update:resume");
     expect(result).toHaveProperty("pinnedVersion", null);
-    expect(mockAutoUpdaterInstance.autoDownload).toBe(true);
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
   });
 });
 
@@ -526,7 +777,7 @@ describe("gaia:update:install-version IPC tag validation", () => {
     mockAutoUpdaterInstance.allowDowngrade = false;
     checkSpy = jest
       .spyOn(mockAutoUpdaterInstance, "checkForUpdates")
-      .mockResolvedValue(null);
+      .mockImplementation(offerRelease);
     setFeedSpy = jest.spyOn(mockAutoUpdaterInstance, "setFeedURL");
   });
 
@@ -587,14 +838,16 @@ describe("gaia:update:install-version IPC tag validation", () => {
 });
 
 describe("gaia:update:check IPC", () => {
-  test("with no feed configured, reports no-channel instead of checking", async () => {
+  test("with no feed configured, says so when no release has an update for this platform", async () => {
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
     const checkSpy = jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates");
+    stubFetch([]);
 
     const state = await invoke("gaia:update:check");
 
     expect(state.status).toBe("no-channel");
+    expect(state.error).toMatch(/download an installer/);
     expect(checkSpy).not.toHaveBeenCalled();
   });
 
@@ -610,5 +863,116 @@ describe("gaia:update:check IPC", () => {
 
     expect(state.status).toBe("error");
     expect(state.error).toMatch(/ERR_NAME_NOT_RESOLVED/);
+  });
+});
+
+describe("update-config.json problems are reported, not hidden", () => {
+  test("an unreadable file is shown as an error and auto-update stays off", () => {
+    const dir = path.join(tmpHome, ".gaia");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "update-config.json"), "{not json");
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
+    expect(mod.getState().autoUpdate).toBe(false);
+    expect(mod.getState().configError).toMatch(/update-config\.json cannot be read/);
+  });
+});
+
+describe("saving a setting never wipes update-config.json", () => {
+  function writeRaw(text) {
+    const dir = path.join(tmpHome, ".gaia");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "update-config.json"), text);
+  }
+
+  test.each([
+    ["broken JSON", '{"feedUrl": "https://r2.example/gaia", "tuiPinnedVersion": "v0.25.0",'],
+    ["a JSON list", "[1, 2]"],
+    ["JSON null", "null"],
+  ])("a file holding %s is refused and left as it was", async (_label, text) => {
+    writeRaw(text);
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    await expect(mod.setAutoUpdate(true)).rejects.toThrow(/cannot be read|does not hold a settings object/);
+    await expect(mod.setIncludePrereleases(true)).rejects.toThrow(/fix the file by hand or delete it/);
+    expect(fs.readFileSync(pinFilePath(), "utf8")).toBe(text);
+    expect(mod.getState().autoUpdate).toBe(false);
+    expect(fs.existsSync(`${pinFilePath()}.tmp`)).toBe(false);
+  });
+
+  test("a rollback is refused before it starts when the file is broken", async () => {
+    writeRaw("{oops");
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    const checkSpy = jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates");
+
+    await expect(mod.installVersion("v0.20.0")).rejects.toThrow(/cannot be read/);
+    expect(checkSpy).not.toHaveBeenCalled();
+    expect(fs.readFileSync(pinFilePath(), "utf8")).toBe("{oops");
+  });
+
+  test("a valid file keeps every key it doesn't own, and is replaced whole", async () => {
+    writeRaw(JSON.stringify({ feedUrl: "https://r2.example/gaia", tuiPinnedVersion: "v0.25.0" }));
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    const renameSpy = jest.spyOn(fs, "renameSync");
+
+    await mod.setIncludePrereleases(true);
+
+    expect(JSON.parse(fs.readFileSync(pinFilePath(), "utf8"))).toEqual({
+      feedUrl: "https://r2.example/gaia",
+      tuiPinnedVersion: "v0.25.0",
+      includePrereleases: true,
+    });
+    expect(renameSpy).toHaveBeenCalledWith(`${pinFilePath()}.tmp`, pinFilePath());
+    expect(fs.existsSync(`${pinFilePath()}.tmp`)).toBe(false);
+    renameSpy.mockRestore();
+  });
+
+  test("a failed write leaves the old file intact", async () => {
+    const original = JSON.stringify({ feedUrl: "https://r2.example/gaia" });
+    writeRaw(original);
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    const renameSpy = jest.spyOn(fs, "renameSync").mockImplementation(() => {
+      throw new Error("EPERM: file in use");
+    });
+
+    await expect(mod.setAutoUpdate(true)).rejects.toThrow(/EPERM/);
+    expect(fs.readFileSync(pinFilePath(), "utf8")).toBe(original);
+    renameSpy.mockRestore();
+  });
+});
+
+describe("listReleases says which way GitHub failed", () => {
+  test("a timeout says GitHub didn't answer", async () => {
+    const mod = loadModule();
+    global.fetch = jest.fn().mockRejectedValue(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }));
+    const result = await mod.listReleases();
+    expect(result.error).toMatch(/GitHub didn't answer within 20 seconds/);
+  });
+
+  test("garbled JSON is not called a connection problem", async () => {
+    const mod = loadModule();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("Unexpected token < in JSON");
+      },
+    });
+    const result = await mod.listReleases();
+    expect(result.error).toMatch(/GitHub sent a response GAIA couldn't read/);
+    expect(result.error).not.toMatch(/connection/);
+  });
+
+  test("an object instead of a list is an error, not a crash", async () => {
+    const mod = loadModule();
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ message: "Not Found" }) });
+    const result = await mod.listReleases();
+    expect(result.error).toMatch(/couldn't read/);
   });
 });

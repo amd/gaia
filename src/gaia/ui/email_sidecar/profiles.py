@@ -153,6 +153,9 @@ class RelayProfile:
     #: so the agent works in the same scope the Agent UI shows. ``None`` means
     #: it never does, and keeps its own default scope.
     min_scope_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes the chat workspace used for
+    #: resolving relative file paths.
+    min_working_directory_api_version: Optional[Tuple[int, int]] = None
     #: Shown in the Skills settings when the installed agent is below
     #: :attr:`min_skills_api_version`.
     skills_upgrade_message: str = ""
@@ -160,14 +163,34 @@ class RelayProfile:
     #: off). ``None`` means the relay never sends it.
     min_memory_api_version: Optional[Tuple[int, int]] = None
     #: Shown instead of running a private or memory-off turn when the installed
-    #: agent is below :attr:`min_memory_api_version` — it would save to memory.
+    #: agent can't take ``memory`` — it is below :attr:`min_memory_api_version`,
+    #: or that floor is ``None`` — so it would save to memory.
     memory_upgrade_message: str = ""
+    #: Contract version from which ``/query`` takes ``internet_off``. ``None``
+    #: means the relay never sends it: the agent keeps its own network rules.
+    min_internet_api_version: Optional[Tuple[int, int]] = None
+    #: Shown instead of running an internet-off turn when the installed agent is
+    #: below :attr:`min_internet_api_version` — it could go online.
+    internet_upgrade_message: str = ""
     #: Contract version from which ``/query`` takes ``changes_turn_id`` and
     #: records the run's file changes for undo. ``None`` means never sent.
     min_changes_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query``'s ``final`` event carries
+    #: ``context``, what fills the model's window. ``None`` means it never does.
+    min_context_api_version: Optional[Tuple[int, int]] = None
+    #: Shown in the Context panel when the installed agent is below
+    #: :attr:`min_context_api_version`.
+    context_upgrade_message: str = ""
     #: Contract version from which ``/query`` takes ``surface``, the front-end
     #: the turn comes from. ``None`` means the relay never sends it.
     min_surface_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes ``turns`` (earlier turns
+    #: with their tool calls) and a ``final`` carries ``model_messages``.
+    #: ``None`` means the relay sends text ``context`` only.
+    min_turns_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes ``reasoning`` and streams the
+    #: model's reasoning as ``reasoning`` events. ``None`` means the relay never asks.
+    min_reasoning_api_version: Optional[Tuple[int, int]] = None
     #: Shown when the agent itself fails to start (it crashed or never got
     #: healthy). Shown through :meth:`start_failed_text`, which adds the log folder.
     start_failed_message: str = ""
@@ -315,6 +338,11 @@ EMAIL_PROFILE = RelayProfile(
     version_upgrade_message=(
         "The email agent is out of date and can't answer chat messages. Update "
         "GAIA and the email agent to the latest version, then try again."
+    ),
+    memory_upgrade_message=(
+        "The email agent does not support private chats or chats with memory "
+        "turned off yet. Your message was not sent to the email agent. Use "
+        "the GAIA agent for this chat instead."
     ),
     tool_labels=MappingProxyType(_EMAIL_TOOL_LABELS),
     mutating_tools=_EMAIL_MUTATING_TOOLS,
@@ -522,6 +550,8 @@ GAIA_PROFILE = RelayProfile(
     min_skills_api_version=(2, 17),
     # 2.18 added /query's allowed_paths field.
     min_scope_api_version=(2, 18),
+    # 2.24 adds the explicit workspace for relative file paths.
+    min_working_directory_api_version=(2, 24),
     skills_upgrade_message=(
         "The installed GAIA agent is too old to list its skills here. Update "
         "GAIA to the latest version, then reopen this page. Its skills still "
@@ -536,8 +566,25 @@ GAIA_PROFILE = RelayProfile(
     ),
     # 2.19 added /query's changes_turn_id field.
     min_changes_api_version=(2, 19),
+    # 2.23 added /query's internet_off field.
+    min_internet_api_version=(2, 23),
+    internet_upgrade_message=(
+        "Internet is off for this chat, but the installed GAIA agent can't be "
+        "told so and could go online. Update GAIA to the latest version, then "
+        "try again, or turn the internet back on for this chat."
+    ),
     # 2.20 added /query's surface field.
     min_surface_api_version=(2, 20),
+    # 2.22 added /query's reasoning field.
+    min_reasoning_api_version=(2, 22),
+    # 2.21 added /query's final.context.
+    min_context_api_version=(2, 21),
+    context_upgrade_message=(
+        "The installed GAIA agent is too old to report what fills its context. "
+        "Update GAIA to the latest version, then send a message."
+    ),
+    # 2.25 added /query's turns field and final.model_messages.
+    min_turns_api_version=(2, 25),
 )
 
 
@@ -607,6 +654,15 @@ def documents_supported(profile: RelayProfile, api_version: Optional[str]) -> bo
     return floor is not None and _meets(api_version, floor)
 
 
+def context_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar's ``final`` event reports what fills its context.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_context_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def skills_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when the sidecar lists its skills on ``GET /v1/<agent>/skills``.
 
@@ -625,12 +681,29 @@ def scope_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     return floor is not None and _meets(api_version, floor)
 
 
+def working_directory_supported(
+    profile: RelayProfile, api_version: Optional[str]
+) -> bool:
+    """True when the sidecar accepts the chat workspace on ``/query``."""
+    floor = profile.min_working_directory_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def memory_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when *api_version* takes ``/query``'s ``memory`` field.
 
     Same evidence rule as :func:`api_version_supported`: no version, no claim.
     """
     floor = profile.min_memory_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def internet_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``internet_off`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_internet_api_version
     return floor is not None and _meets(api_version, floor)
 
 
@@ -649,6 +722,24 @@ def surface_supported(profile: RelayProfile, api_version: Optional[str]) -> bool
     Same evidence rule as :func:`api_version_supported`: no version, no claim.
     """
     floor = profile.min_surface_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def turns_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``turns`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_turns_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def reasoning_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``reasoning`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_reasoning_api_version
     return floor is not None and _meets(api_version, floor)
 
 
@@ -677,6 +768,8 @@ __all__ = [
     "documents_supported",
     "skills_supported",
     "scope_supported",
+    "working_directory_supported",
     "memory_supported",
+    "internet_supported",
     "changes_supported",
 ]

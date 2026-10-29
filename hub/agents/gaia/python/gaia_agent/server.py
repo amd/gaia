@@ -15,7 +15,8 @@ so the two agents cannot drift into private dialects of the same contract.
 Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
 ``/query/{run_id}/cancel``, ``/query/{run_id}/respond``,
 ``/query/{run_id}/followup``, ``/query/{run_id}/tool_decision`` (contract >=
-2.14) and ``/sessions/{session_id}/bypass``. ``needs_input`` is answered over
+2.14), ``/sessions/{session_id}/bypass`` and ``/sessions/{session_id}/internet``
+(contract >= 2.23). ``needs_input`` is answered over
 ``/respond`` on the run's existing stream; ``needs_confirmation`` is answered
 the same way over ``/tool_decision`` — but only when there is a session to
 hold the grant AND the caller declared it can answer (``can_confirm`` in
@@ -61,11 +62,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from starlette.responses import StreamingResponse
 
 from gaia.agents.base import file_snapshots
+from gaia.agents.base.history import fit_pushed_history, pushed_turns
 from gaia.agents.base.readiness import start_advice, version_meets_min
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
+from gaia.ui.turn_insights import turn_record
 from gaia.version import LEMONADE_MIN_VERSION
 
 logger = get_logger(__name__)
@@ -84,7 +87,19 @@ AGENT_ID = "gaia"
 #: 2.18 added ``/query``'s ``allowed_paths`` and ``memory`` fields.
 #: 2.19 added ``/query``'s ``changes_turn_id`` field.
 #: 2.20 added ``/query``'s ``surface`` field.
-API_VERSION = "2.20"
+#: 2.21 added ``context`` to ``/query``'s ``final`` event.
+#: 2.22 added ``/query``'s ``reasoning`` field.
+#: 2.23 added ``/query``'s ``internet_off`` field and ``/sessions/{id}/internet``.
+#: 2.24 added ``working_directory`` to ``/query``.
+#: 2.25 added ``/query``'s ``turns`` field and ``final.model_messages``.
+API_VERSION = "2.25"
+
+#: How long ``final`` waits for the turn's context measurement before going without.
+_CONTEXT_WAIT_SECONDS = 15.0
+
+#: Budget for counting with the model's own tokenizer before the estimate stands in,
+#: so a busy model server never holds up the answer.
+_EXACT_COUNT_SECONDS = 2.0
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -193,10 +208,31 @@ class QueryRequest(_Strict):
             ">= 2.18), so the agent works where the caller's UI says it does. "
             "Absolute paths. Builds a new session with exactly this scope; a "
             "retained session gains any entry it lacks and keeps what the user "
-            "granted. GAIA_ALLOWED_PATHS still narrows it. Omit for the agent's "
-            "default scope."
+            "granted. GAIA_ALLOWED_PATHS still narrows it. This is an access "
+            "allowlist, not a relative-path working directory. Omit for the "
+            "agent's default scope."
         ),
     )
+    working_directory: Optional[str] = Field(
+        default=None,
+        description=(
+            "Absolute chat workspace used to resolve relative file paths on this "
+            "turn (contract >= 2.24). It is separate from allowed_paths: an "
+            "allowlist grants access but does not choose which folder a bare "
+            "file name belongs in."
+        ),
+    )
+
+    @field_validator("working_directory")
+    @classmethod
+    def _working_directory_absolute(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and (not v or not Path(v).is_absolute()):
+            raise ValueError(
+                "working_directory must be an absolute path; the agent's working "
+                "directory is not the caller's, so a relative path would name a "
+                "different folder."
+            )
+        return v
 
     @field_validator("allowed_paths")
     @classmethod
@@ -224,6 +260,18 @@ class QueryRequest(_Strict):
         ),
     )
 
+    internet_off: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether this turn may reach the internet (contract >= 2.23). True "
+            "refuses web search, page fetches, the browser, connector, mailbox "
+            "and Agent Hub tools and commands that contact another host, with a "
+            "plain message the model relays; false allows them. Send it every "
+            "turn: a retained session keeps the last value. Omit it to leave the "
+            "agent as it is."
+        ),
+    )
+
     changes_turn_id: Optional[str] = Field(
         default=None,
         pattern=file_snapshots.TURN_ID_PATTERN,
@@ -246,6 +294,48 @@ class QueryRequest(_Strict):
             "worded for its own settings. Fixed when a session is built; omit "
             "it for a headless caller, whose provider advice then points at "
             "the model server this GAIA host uses."
+        ),
+    )
+
+    turns: Optional[List[List[Dict[str, Any]]]] = Field(
+        default=None,
+        description=(
+            "Earlier turns as the model saw them, oldest first (contract >= "
+            "2.25): each is that turn's `final.model_messages`, tool calls and "
+            "results included, or a user/assistant text pair for a turn that "
+            "recorded none. Replaces `context` when sent, and `[]` means no "
+            "earlier turns and clears a retained session's history; the agent "
+            "keeps the newest whole turns that fit its context window. Sent, "
+            "even as `[]`, it makes `final` carry `model_messages`."
+        ),
+    )
+
+    @field_validator("turns")
+    @classmethod
+    def _turn_roles_known(
+        cls, v: Optional[List[List[Dict[str, Any]]]]
+    ) -> Optional[List[List[Dict[str, Any]]]]:
+        for turn in v or []:
+            for message in turn:
+                if message.get("role") not in {"user", "assistant", "system", "tool"}:
+                    raise ValueError(f"unknown role {message.get('role')!r} in turns")
+        return v
+
+    @model_validator(mode="after")
+    def _turns_replace_context(self) -> "QueryRequest":
+        if self.turns is not None and self.context:
+            raise ValueError(
+                "send `turns` or `context`, not both: with `turns`, `context` "
+                "must be [] (contract >= 2.25)."
+            )
+        return self
+
+    reasoning: bool = Field(
+        default=False,
+        description=(
+            "Stream the model's reasoning as `reasoning` events with a `delta` "
+            "(contract >= 2.22), for a client that shows it apart from status "
+            "lines. Without it, reasoning folds into `status` lines as before."
         ),
     )
 
@@ -405,6 +495,17 @@ class BypassResponse(_Strict):
     enabled: bool
 
 
+class InternetRequest(_Strict):
+    """Body of ``POST /v1/gaia/sessions/{session_id}/internet``."""
+
+    internet_off: bool
+
+
+class InternetResponse(_Strict):
+    session_id: str
+    internet_off: bool
+
+
 class _QueryRun:
     """One in-flight run: the agent, its output handler, and its cancel flag."""
 
@@ -419,6 +520,11 @@ class _QueryRun:
         self.result: Optional[Dict[str, Any]] = None
         #: Records the run's file changes when the caller asked for it.
         self.recorder: Optional[file_snapshots.TurnRecorder] = None
+        #: What the next model call holds, measured once the turn ends.
+        self.context: Optional[Dict[str, Any]] = None
+        #: Why measuring failed, when it did.
+        self.context_error: Optional[str] = None
+        self.context_done = threading.Event()
 
 
 class DuplicateRunError(RuntimeError):
@@ -596,6 +702,73 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
     }
 
 
+def _run_answer(result: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The answer text a finished run returned, or None when it has none."""
+    if not isinstance(result, dict) or result.get("status") == "cancelled":
+        return None
+    if result.get("model_failed"):
+        # The failure notice is not a turn the next push carries.
+        return None
+    for key in ("answer", "response", "result", "output"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _measure_turn_context(
+    agent: Any,
+    pushed: List[Dict[str, Any]],
+    query: str,
+    result: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """What the next model call holds: the pushed history plus this turn.
+
+    None for a turn with no answer (stopped, or the model failed), which adds
+    nothing the caller's next push would carry.
+    """
+    from gaia.ui.turn_insights import panel_context
+
+    answer = _run_answer(result)
+    if answer is None:
+        return None
+    messages = list(pushed) + [
+        {"role": "user", "content": query},
+        {"role": "assistant", "content": answer},
+    ]
+    turns = pushed_turns(messages)
+    model_id = getattr(agent, "model_id", None)
+    box: Dict[str, Any] = {}
+
+    deadline = time.monotonic() + _EXACT_COUNT_SECONDS
+
+    def _exact() -> None:
+        try:
+            box["usage"] = panel_context(agent, turns, model_id, deadline=deadline)
+        except Exception as exc:  # re-raised below, on the run's thread
+            box["error"] = exc
+
+    counter = threading.Thread(target=_exact, name="context-count", daemon=True)
+    counter.start()
+    counter.join(_EXACT_COUNT_SECONDS)
+    if "error" in box:
+        raise box["error"]
+    if "usage" in box:
+        return box["usage"]
+    logger.info(
+        "Tokenizer count took over %ss; sending the estimate", _EXACT_COUNT_SECONDS
+    )
+    return panel_context(
+        agent,
+        turns,
+        model_id,
+        estimate_reason=(
+            f"The model server didn't count tokens within {_EXACT_COUNT_SECONDS:g}s, "
+            "so these are estimates."
+        ),
+    )
+
+
 def _confirmation_refusal(action: str) -> Dict[str, Any]:
     """Terminal refusal for a confirmation-gated tool (the stateless D1 stub)."""
     return {
@@ -685,6 +858,14 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     )
 
 
+def _declare_who_answers(handler: Any, session: Any, request: "QueryRequest") -> None:
+    """Tell *handler* whether a person can answer a confirmation on this turn."""
+    handler.answers_confirmations = (
+        session is not None and request.can_answer_questions is not False
+    )
+    handler.nobody_answers = not handler.answers_confirmations
+
+
 def _apply_memory_mode(agent: Any, mode: Optional[str]) -> None:
     """Turn *agent*'s memory writes off or back on for this turn (>= 2.18).
 
@@ -700,6 +881,12 @@ def _apply_memory_mode(agent: Any, mode: Optional[str]) -> None:
         return
     agent._incognito = True
     agent._incognito_reason = "private" if mode == "private" else "memory_off"
+
+
+def _apply_internet_switch(agent: Any, internet_off: Optional[bool]) -> None:
+    """Turn *agent*'s internet guard on or off for this turn (>= 2.23)."""
+    if internet_off is not None:
+        agent.internet_off = internet_off
 
 
 def build_query_agent(**config_kwargs: Any):
@@ -925,12 +1112,12 @@ async def skills() -> Dict[str, Any]:
     from gaia_agent.agent import ENGINEERING_SKILL, GaiaAgent
 
     from gaia.skills.errors import SkillError
-    from gaia.skills.listing import skills_listing
+    from gaia.skills.listing import skills_listing_for_agent
 
     try:
         # Off the event loop: discovery reads every skill folder.
         return await asyncio.to_thread(
-            skills_listing, GaiaAgent.SKILL_DIRS, (ENGINEERING_SKILL,)
+            skills_listing_for_agent, GaiaAgent, (ENGINEERING_SKILL,)
         )
     except SkillError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -1082,6 +1269,59 @@ def _release_abandoned_turn(checked_out: Optional[Tuple[Any, bool]]) -> None:
         checked_out[0].run_lock.release()
 
 
+#: How long a ``final`` waits for the loop to return its turn record. The
+#: answer is already streamed; only the record for later turns waits on it.
+_TURN_RECORD_WAIT_SECONDS = 15.0
+
+
+def _history_from_turns(
+    agent: Any, turns: List[List[Dict[str, Any]]], query: str, handler: Any
+) -> List[Dict[str, Any]]:
+    """The newest whole *turns* that fit *agent*'s window, as its model reads them."""
+    from gaia.agents.base.history import (
+        history_budget,
+        select_history,
+        text_tool_history,
+    )
+
+    uses_native = getattr(agent, "_uses_native_tool_calls", None)
+    if callable(uses_native) and not uses_native():
+        turns = text_tool_history(turns)
+    return select_history(
+        turns,
+        history_budget(agent, query),
+        lambda cut: handler._emit({"type": "status", "message": cut.notice}),
+    )
+
+
+async def _with_turn_record(
+    event: Dict[str, Any], run: _QueryRun, thread: threading.Thread, wanted: bool
+) -> Dict[str, Any]:
+    """*event* with the turn's ``model_messages`` when it is a ``final``.
+
+    Only a caller that sent ``turns`` (*wanted*) gets it: the record carries
+    every tool result in full, so it can outgrow a reader's frame limit.
+    The answer streams before the loop returns, so this waits for the record.
+    """
+    if not wanted or event.get("type") != "final":
+        return event
+    await asyncio.to_thread(thread.join, _TURN_RECORD_WAIT_SECONDS)
+    if thread.is_alive():
+        logger.warning(
+            "run_id=%s: the run had not finished %.0fs after its answer; this "
+            "turn is sent without its tool record, so later turns see only its text",
+            run.run_id,
+            _TURN_RECORD_WAIT_SECONDS,
+        )
+        return event
+    messages = (
+        run.result.get("model_messages") if isinstance(run.result, dict) else None
+    )
+    if messages is None:
+        return event
+    return {**event, "model_messages": messages}
+
+
 async def _finish_changes(run: _QueryRun) -> List[Dict[str, Any]]:
     """Complete the run's undo recording ahead of its terminal event.
 
@@ -1112,12 +1352,13 @@ _QUERY_SSE_RESPONSES = {
             "action, summary, confirm_id?, always_scope?, risk?, tool_label?, "
             "args?, args_truncated?, prompt_context?} | needs_input {run_id, "
             "request_id, question, options, allow_free_text, sensitive, "
-            "respond_url, timeout_seconds?} | final {answer, usage?, failed?} | "
+            "respond_url, timeout_seconds?} | final {answer, usage?, failed?, model_messages?} | "
             "error {detail, status}. A needs_confirmation's `args` are exactly "
             "the arguments the model sent for the gated call, each value capped "
             "at 64,000 characters (`args_truncated: true` when one was cut); "
             "what the agent adds to its prompt is in `prompt_context` "
-            "{working_directory?, risk_note?}, never in `args`. The stream ends "
+            "{working_directory?, risk_note?, file_path?}, never in `args`. The "
+            "stream ends "
             "with exactly one `final` or `error`. `:`-prefixed heartbeat "
             "comments carry no payload."
         ),
@@ -1196,6 +1437,8 @@ async def query(request: QueryRequest):
             kwargs["model_id"] = request.model
         if request.allowed_paths is not None:
             kwargs["allowed_paths"] = request.allowed_paths
+        if request.working_directory is not None:
+            kwargs["working_directory"] = request.working_directory
         if request.surface is not None:
             kwargs["surface"] = request.surface
         if request.session_id:
@@ -1255,6 +1498,10 @@ async def query(request: QueryRequest):
                     display,
                 )
             agent = session.agent
+            if request.working_directory is not None:
+                config = getattr(agent, "config", None)
+                if config is not None:
+                    config.working_directory = request.working_directory
             if request.allowed_paths:
                 # Built on an earlier turn's scope; this turn's may hold more.
                 validator = getattr(agent, "path_validator", None)
@@ -1299,20 +1546,26 @@ async def query(request: QueryRequest):
         # AND there is a session to hold the grant. ``can_answer_questions`` is
         # the caller's own declaration that a human is watching (spec >= 2.6); a
         # one-shot sets it False precisely so the agent never parks on a prompt.
-        handler.answers_confirmations = (
-            session is not None and request.can_answer_questions is not False
-        )
+        _declare_who_answers(handler, session, request)
         _apply_memory_mode(agent, request.memory)
+        _apply_internet_switch(agent, request.internet_off)
         if request.can_answer_questions is False:
             # Nobody is there to answer. Let the loop know so it resolves
             # ambiguity itself instead of parking on a question forever.
             handler.answers_questions = False
 
         # Pushed context, never pulled (spec §2.4).
-        if request.context and hasattr(agent, "conversation_history"):
+        # Recorded turns are fitted on the run's thread, with the context.
+        pushed = bool(request.turns) or bool(request.context)
+        if (
+            request.context
+            and request.turns is None
+            and hasattr(agent, "conversation_history")
+        ):
             agent.conversation_history = [
                 {"role": c.role, "content": c.content} for c in request.context
             ]
+        if pushed and hasattr(agent, "conversation_history"):
             # The caller chose this text, not the user — so it must not count as
             # the user speaking when the agent decides what it is allowed to
             # learn permanently (Agent.turn_content_provenance).
@@ -1355,12 +1608,39 @@ async def query(request: QueryRequest):
     def _process() -> None:
         if request.documents:
             _index_attached_documents(agent, request.documents, handler)
-        if request.max_steps is not None:
-            run.result = agent.process_query(request.query, max_steps=request.max_steps)
-        else:
-            run.result = agent.process_query(request.query)
+        if request.turns is not None and hasattr(agent, "conversation_history"):
+            # Sizing them can ask the model server for its window: never on the loop.
+            agent.conversation_history = _history_from_turns(
+                agent, request.turns, request.query, handler
+            )
+        elif request.context and hasattr(agent, "conversation_history"):
+            # The caller sized this without our prompt and tools; re-fit it.
+            agent.conversation_history = fit_pushed_history(
+                agent,
+                agent.conversation_history,
+                request.query,
+                lambda cut: handler.print_warning(cut.notice),
+            )
+        pushed = list(getattr(agent, "conversation_history", None) or [])
+        try:
+            if request.max_steps is not None:
+                run.result = agent.process_query(
+                    request.query, max_steps=request.max_steps
+                )
+            else:
+                run.result = agent.process_query(request.query)
+            try:
+                run.context = _measure_turn_context(
+                    agent, pushed, request.query, run.result
+                )
+            except Exception as exc:  # the answer stands; the meter says why it's blank
+                logger.exception("Context measurement failed for run_id=%s", run.run_id)
+                run.context_error = f"GAIA couldn't measure this chat's context: {exc}"
+        finally:
+            run.context_done.set()
 
     def _run_agent() -> None:
+        process_error: Optional[Exception] = None
         try:
             if request.changes_turn_id is None:
                 _process()
@@ -1370,16 +1650,33 @@ async def query(request: QueryRequest):
                     request.session_id, request.changes_turn_id
                 ) as recorder:
                     run.recorder = recorder
-                    _process()
+                    try:
+                        _process()
+                    except Exception as exc:
+                        process_error = exc
+                        raise
         except file_snapshots.SnapshotError as exc:
-            logger.error("Undo history for run_id=%s: %s", run.run_id, exc)
+            logger.exception("Undo history for run_id=%s: %s", run.run_id, exc)
             handler._emit(
                 {"type": "status", "message": f"Undo may not work for this turn: {exc}"}
             )
+            if process_error is not None:
+                logger.error(
+                    "%s /query run failed for run_id=%s",
+                    AGENT_ID,
+                    run.run_id,
+                    exc_info=(
+                        type(process_error),
+                        process_error,
+                        process_error.__traceback__,
+                    ),
+                )
+                handler.print_error(_terminal_error_detail(process_error))
         except Exception as exc:  # surface loudly as a terminal error event
             logger.exception("%s /query run failed for run_id=%s", AGENT_ID, run.run_id)
             handler.print_error(_terminal_error_detail(exc))
         finally:
+            run.context_done.set()
             handler.signal_done()
             # Unwire the follow-up queue the moment the loop stops draining it.
             # Left wired, a follow-up arriving in the window before the run
@@ -1437,8 +1734,34 @@ async def query(request: QueryRequest):
     def _emit(event: Dict[str, Any]) -> str:
         return _sse(_worded(event, _wording_surface(request)))
 
+    async def _with_context(final: Dict[str, Any]) -> Dict[str, Any]:
+        """``final`` carrying the turn's context measurement (contract >= 2.21) and timings."""
+        if final.get("type") != "final":
+            return final
+        # ``final`` is printed inside process_query; the measurement follows it.
+        deadline = time.monotonic() + _CONTEXT_WAIT_SECONDS
+        while not run.context_done.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        performance = turn_record(run.result)
+        if performance is not None:
+            final = {**final, "performance": performance}
+        if not run.context_done.is_set():
+            logger.warning(
+                "run_id=%s: no context measurement within %ss; final goes without it",
+                run.run_id,
+                _CONTEXT_WAIT_SECONDS,
+            )
+            return final
+        if run.context_error is not None:
+            return {**final, "context_error": run.context_error}
+        if run.context is None:
+            return final
+        return {**final, "context": run.context}
+
     async def _stream():
-        translator = CanonicalTranslator(request.run_id, agent_id=AGENT_ID)
+        translator = CanonicalTranslator(
+            request.run_id, agent_id=AGENT_ID, reasoning=request.reasoning
+        )
         terminated = False
         last_write = time.monotonic()
         try:
@@ -1468,6 +1791,11 @@ async def query(request: QueryRequest):
                     if ctype in TERMINAL_TYPES:
                         for warning in await _finish_changes(run):
                             yield _emit(warning)
+                        canonical = await _with_context(
+                            await _with_turn_record(
+                                canonical, run, thread, request.turns is not None
+                            )
+                        )
                     yield _emit(canonical)
                     last_write = time.monotonic()
                     if ctype == "needs_input":
@@ -1502,11 +1830,25 @@ async def query(request: QueryRequest):
                 if canonical.get("type") in TERMINAL_TYPES:
                     for warning in await _finish_changes(run):
                         yield _emit(warning)
+                    canonical = await _with_context(
+                        await _with_turn_record(
+                            canonical, run, thread, request.turns is not None
+                        )
+                    )
                 yield _emit(canonical)
                 if canonical.get("type") in TERMINAL_TYPES:
                     terminated = True
             if not terminated:
-                yield _emit(_terminal_from_run_result(run.result))
+                yield _emit(
+                    await _with_context(
+                        await _with_turn_record(
+                            _terminal_from_run_result(run.result),
+                            run,
+                            thread,
+                            request.turns is not None,
+                        )
+                    )
+                )
         finally:
             # A client that disconnected mid-run should not leave the loop running.
             handler.cancelled.set()
@@ -1677,6 +2019,30 @@ async def set_bypass(session_id: str, body: BypassRequest):
         )
     session.permissions.set_full_access(body.enabled)
     return BypassResponse(session_id=session_id, enabled=body.enabled)
+
+
+@router.post("/sessions/{session_id}/internet", response_model=InternetResponse)
+async def set_internet(session_id: str, body: InternetRequest):
+    """Turn a session's internet on or off from its agent's next tool call.
+
+    ``/query``'s ``internet_off`` covers the turns that start after a change;
+    this reaches a turn already running, so a switch flipped mid-turn stops the
+    next web search rather than the one after the turn ends. An unknown session
+    is a 404, as for bypass.
+    """
+    _require_valid_session_id(session_id)
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No session {session_id!r} exists. Send a query on that "
+                "session first; the internet switch applies to a conversation, "
+                "not to the server."
+            ),
+        )
+    session.agent.internet_off = body.internet_off
+    return InternetResponse(session_id=session_id, internet_off=body.internet_off)
 
 
 def _log_caller_auth_state(auth_config: Any) -> None:

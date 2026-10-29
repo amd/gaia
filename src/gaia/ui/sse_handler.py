@@ -47,7 +47,7 @@ from gaia.ui.event_narration import (
     grant_phrase,
     tool_phrase,
 )
-from gaia.ui.turn_summary import TurnLedger
+from gaia.ui.turn_summary import TurnLedger, search_hits
 from gaia.utils.json_string import (
     JsonStringStreamDecoder,
     extract_json_string_field,
@@ -534,6 +534,18 @@ class SSEOutputHandler(OutputHandler):
     #: permission mode; ``None`` when no relayed run is doing so.
     active_relay_mode_session: Optional[str] = None
 
+    #: Set by a transport that knows no person can answer a confirmation on
+    #: this run (an unattended sidecar query), so nothing offers to ask one.
+    nobody_answers: bool = False
+
+    #: The sidecar session a relayed run keeps in step with the chat's Internet
+    #: switch; ``None`` when no relayed run is doing so.
+    active_relay_internet_session: Optional[str] = None
+
+    #: A relayed run is going whose agent is too old to be told the Internet
+    #: switch, so turning it off has to end the run instead.
+    relay_ignores_internet: bool = False
+
     def __init__(self, background_mode: bool = False):
         self.event_queue: queue.Queue = queue.Queue()
         self.cancelled = threading.Event()
@@ -544,6 +556,8 @@ class SSEOutputHandler(OutputHandler):
         self._last_tool_label = ""
         self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
         self._in_thinking = False  # True while inside a <think>...</think> block
+        # Part of the open <think> block already went out.
+        self._thinking_streamed = False
         self._json_filtered = False  # True after a JSON block was suppressed; used to eat trailing } artifacts
         # Where the brace scan of a still-open envelope stopped, and the head of
         # the buffer it scanned: a long tool call is scanned once, not per token.
@@ -563,6 +577,8 @@ class SSEOutputHandler(OutputHandler):
         self._shown_line_start = True
         # Line-start state of the raw stream, thinking included.
         self._raw_line_start = True
+        # Text streamed since the last tool call; becomes commentary if a call follows.
+        self._text_since_tool = ""
         # Set while streaming the value of a {"answer": "..."} reply.
         self._answer_stream: Optional[JsonStringStreamDecoder] = None
         # Tool confirmation state (blocking until frontend responds)
@@ -611,6 +627,10 @@ class SSEOutputHandler(OutputHandler):
         self._relay_confirm_id = None
         # A relayed needs_input question the sidecar run is parked on.
         self._relay_question_id: Optional[str] = None
+        # What the sidecar measured fills its context, from its ``final`` event.
+        self.relay_context: Optional[Dict[str, Any]] = None
+        self.relay_context_error: Optional[str] = None
+        self.relay_performance: Optional[Dict[str, Any]] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
@@ -624,10 +644,20 @@ class SSEOutputHandler(OutputHandler):
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
-        if event and event.get("type") == "chunk":
+        etype = event.get("type") if event else None
+        if etype == "chunk":
             self._shown_fence, self._shown_line_start = _fence_after(
                 event.get("content") or "", self._shown_fence, self._shown_line_start
             )
+            self._text_since_tool += event.get("content") or ""
+        elif etype == "tool_start":
+            # Text written just before a call narrates the work; it is not the answer.
+            note = self._text_since_tool.strip()
+            if note:
+                self.event_queue.put({"type": "commentary", "content": note})
+            self._text_since_tool = ""
+        elif etype == "answer":
+            self._text_since_tool = ""
         self.event_queue.put(event)
 
     def _fence_at(self, unshown: str) -> "tuple[Optional[str], bool]":
@@ -681,6 +711,9 @@ class SSEOutputHandler(OutputHandler):
         pass
 
     def print_thought(self, thought: str):
+        # Live thinking pieces are joined with no separator; end a whole thought on a newline.
+        if thought and not thought.endswith("\n"):
+            thought += "\n"
         self._emit(
             {
                 "type": "thinking",
@@ -851,6 +884,9 @@ class SSEOutputHandler(OutputHandler):
             for key in RESULT_PATH_KEYS:
                 if isinstance(data.get(key), str):
                     event[key] = data[key]
+        # The summary drops the hits a relayed turn's sources are made of.
+        if self._last_tool_name == "search_web" and isinstance(data, str):
+            event["sources"] = search_hits(data)
 
         if success and (get_tool_metadata(self._last_tool_name) or {}).get(
             "_mcp_server"
@@ -1516,7 +1552,14 @@ class SSEOutputHandler(OutputHandler):
                     # We're inside a thinking block — look for closing tag
                     close_idx = self._stream_buffer.find("</think>")
                     if close_idx >= 0:
-                        thinking_text = self._stream_buffer[:close_idx].strip()
+                        thinking_text = self._stream_buffer[:close_idx]
+                        # A closing piece continues the streamed words; keep its leading space.
+                        thinking_text = (
+                            thinking_text.rstrip()
+                            if self._thinking_streamed
+                            else thinking_text.strip()
+                        )
+                        self._thinking_streamed = False
                         if thinking_text:
                             self._emit({"type": "thinking", "content": thinking_text})
                         self._stream_buffer = self._stream_buffer[
@@ -1526,10 +1569,12 @@ class SSEOutputHandler(OutputHandler):
                         continue  # Check for more <think> blocks
                     else:
                         # Still inside thinking — emit partial and wait
-                        if self._stream_buffer.strip():
-                            self._emit(
-                                {"type": "thinking", "content": self._stream_buffer}
-                            )
+                        piece = self._stream_buffer
+                        if not self._thinking_streamed:
+                            piece = piece.lstrip()
+                        if piece:
+                            self._emit({"type": "thinking", "content": piece})
+                            self._thinking_streamed = True
                         self._stream_buffer = ""
                         return
                 else:
@@ -2034,7 +2079,24 @@ class SSEOutputHandler(OutputHandler):
         if self.cancelled.is_set():
             return
         if not self.turn_slot.come_back(self.cancelled):
-            # Withdrawn from the line: the turn must not use the model.
+            if self.cancelled.is_set():
+                return
+            # Not a Stop: the turn ended (cleanup or shutdown) while it waited in line.
+            logger.warning(
+                "Turn ended while waiting to retake the model after the user "
+                "answered; the approved step did not run"
+            )
+            self._emit(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        "This chat ended while your approved step was waiting "
+                        "for the model, so it didn't run. Send your message "
+                        "again to retry."
+                    ),
+                    "fatal": True,
+                }
+            )
             self.cancelled.set()
         elif not self.cancelled.is_set() and self.on_model_regained is not None:
             try:
@@ -2373,6 +2435,7 @@ class SSEOutputHandler(OutputHandler):
             self._emit({"type": "thinking", "content": self._stream_buffer})
             self._stream_buffer = ""
             self._in_thinking = False
+        self._thinking_streamed = False
 
         # A stopped stream can leave a call open or a tag tail held back.
         if self._markup_close is not None or self._markup_pending:

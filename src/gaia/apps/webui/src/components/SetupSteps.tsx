@@ -19,11 +19,15 @@ function CheckRow({ label, value, ok }: { label: string; value: string; ok: bool
     );
 }
 
+/** Lemonade reports the devices, so before it runs they are not known yet. */
+export function deviceKnown(hw: PreflightReport): boolean {
+    return !!hw.gpu_name || !!hw.npu_detected || hw.lemonade_running;
+}
+
 function deviceText(hw: PreflightReport): { value: string; ok: boolean } {
     const parts = [hw.gpu_name, hw.npu_detected ? 'Ryzen AI NPU' : null].filter(Boolean);
     if (parts.length) return { value: parts.join(' · '), ok: true };
-    // Lemonade reports the devices, so before it runs they are simply not known yet.
-    if (!hw.lemonade_running) return { value: 'Checked once the model server is running', ok: false };
+    if (!deviceKnown(hw)) return { value: 'Checked once the model server is running', ok: false };
     return { value: 'No GPU or NPU reported; models run on the CPU', ok: false };
 }
 
