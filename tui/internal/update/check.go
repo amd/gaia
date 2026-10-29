@@ -19,7 +19,10 @@ type Status struct {
 	Config    Config
 	Latest    Release // zero when GitHub listed no release for this channel
 	Available bool    // Latest is newer than Current
-	Releases  []Release
+	// Unsupported is a newer release on this channel that ships nothing this
+	// machine can install (Windows arm64, an arm64 .deb); zero otherwise.
+	Unsupported Release
+	Releases    []Release
 }
 
 // IsDevBuild reports whether the running binary is an unreleased build.
@@ -56,6 +59,10 @@ func Check(ctx context.Context) (Status, error) {
 		st.Latest = latest
 		st.Available = Newer(latest.Tag, Current)
 	}
+	if newest, ok := Latest(rs, Current, cfg.Prereleases); ok && Newer(newest.Tag, Current) &&
+		(!st.Available || Newer(newest.Tag, st.Latest.Tag)) {
+		st.Unsupported = newest
+	}
 	return st, nil
 }
 
@@ -70,6 +77,9 @@ func (s Status) Summary() string {
 		fmt.Fprintf(&b, " GAIA %s is out, but you pinned %s, so updates are paused.", s.Latest.Tag, s.Config.PinnedVersion)
 	case s.Available:
 		fmt.Fprintf(&b, " GAIA %s is available.", s.Latest.Tag)
+	case s.Unsupported.Tag != "":
+		fmt.Fprintf(&b, " GAIA %s is out, but it has no installer for this machine — see %s.",
+			s.Unsupported.Tag, ReleasesPage)
 	default:
 		b.WriteString(" It is up to date.")
 	}
