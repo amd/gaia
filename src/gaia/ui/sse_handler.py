@@ -2079,9 +2079,9 @@ class SSEOutputHandler(OutputHandler):
         if self.cancelled.is_set():
             return
         if not self.turn_slot.come_back(self.cancelled):
-            # Withdrawn from the line: the turn must not use the model. Emit a
-            # named error so the UI does not misdiagnose an empty relay as a
-            # Lemonade health failure (#6019).
+            if self.cancelled.is_set():
+                return
+            # A non-user withdrawal cannot resume safely, so name the failure.
             self._emit(
                 {
                     "type": "agent_error",

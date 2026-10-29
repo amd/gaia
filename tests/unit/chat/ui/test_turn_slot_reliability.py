@@ -659,8 +659,7 @@ def _answer_relayed(handler, kind):
         assert handler.resolve_relay_input("q-1", "the second")
 
 
-async def test_failed_model_slot_retake_emits_named_error():
-
+async def test_unexpected_model_slot_retake_emits_named_error():
     events = []
     handler = object.__new__(SSEOutputHandler)
     handler.cancelled = threading.Event()
@@ -687,7 +686,6 @@ async def test_failed_model_slot_retake_emits_named_error():
     "kind,expected",
     [("permission", "answer=allow"), ("question", "answer=the second")],
 )
-
 async def test_relayed_turn_waiting_on_the_user_lets_a_new_chat_run(
     runtime, kind, expected
 ):
@@ -786,7 +784,9 @@ async def test_stopping_a_relayed_turn_while_it_waits_on_the_user(runtime):
             await chat.cancel_stream(chat.CancelStreamRequest(session_id=a))
             sidecar.answered.set()
             await asyncio.wait_for(run_a.task, 5)
-        assert _events(run_a)[-1].get("cancelled") is True
+        events = _events(run_a)
+        assert events[-1].get("cancelled") is True
+        assert not [event for event in events if event.get("type") == "agent_error"]
         assert rt.queue.holder == "another-chat", "a stopped turn never retakes it"
         assert rt.queue.waiting() == []
     finally:
