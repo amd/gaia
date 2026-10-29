@@ -241,21 +241,24 @@ class TestActivateColdStartLoadsCatalog:
     imported the catalog.
     """
 
-    def _spawn(self, code: str) -> tuple[int, str, str]:
+    def _spawn(self, code: str, home) -> tuple[int, str, str]:
         import os
         import subprocess
         import sys
 
         env = os.environ.copy()
-        # Isolate ledger writes — otherwise the subprocess would mutate
-        # the developer's real ~/.gaia/ files.
-        env["HOME"] = env.get("PYTEST_CURRENT_HOME", env["HOME"])
+        # Isolate ledger writes, or the subprocess grants the developer's real
+        # chat agent GitHub access. Windows' Path.home() reads USERPROFILE.
+        env["HOME"] = env["USERPROFILE"] = str(home)
+        env["GAIA_HOME"] = str(home / ".gaia")
         proc = subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True,
             text=True,
             env=env,
-            timeout=30,
+            # A cold gaia import takes several seconds alone, far more on a
+            # loaded runner.
+            timeout=180,
         )
         return proc.returncode, proc.stdout, proc.stderr
 
@@ -263,9 +266,8 @@ class TestActivateColdStartLoadsCatalog:
         # Subprocess: bare activate() call against a real catalog id with
         # no prior ``import gaia.connectors.catalog``. Use ``mcp-github``
         # because it's a real ``mcp_server`` entry that ships in the
-        # built-in catalog. Isolate ledger writes via HOME override.
+        # built-in catalog.
         code = (
-            f"import os; os.environ['HOME'] = {str(tmp_path)!r}\n"
             "from gaia.connectors.api import activate\n"
             # If activate() does not load the catalog itself, this raises
             # ConfigurationError('Unknown connector mcp-github') and the
@@ -274,18 +276,18 @@ class TestActivateColdStartLoadsCatalog:
             "scopes_for_grant=['use'])\n"
             "print('OK')\n"
         )
-        rc, out, err = self._spawn(code)
+        rc, out, err = self._spawn(code, tmp_path)
         assert rc == 0, f"activate failed cold: stderr={err!r}"
         assert "OK" in out
+        assert (tmp_path / ".gaia" / "connectors" / "activations.json").exists()
 
     def test_deactivate_works_without_explicit_catalog_import(self, tmp_path):
         code = (
-            f"import os; os.environ['HOME'] = {str(tmp_path)!r}\n"
             "from gaia.connectors.api import deactivate\n"
             "deactivate('mcp-github', 'builtin:chat')\n"
             "print('OK')\n"
         )
-        rc, out, err = self._spawn(code)
+        rc, out, err = self._spawn(code, tmp_path)
         assert rc == 0, f"deactivate failed cold: stderr={err!r}"
         assert "OK" in out
 

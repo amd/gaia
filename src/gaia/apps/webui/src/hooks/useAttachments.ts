@@ -10,7 +10,7 @@ import type { Attachment } from '../types';
 export interface UseAttachments {
     attachments: Attachment[];
     addFiles: (files: File[]) => void;
-    /** Takes pasted images; returns true when it consumed the paste. */
+    /** Takes pasted files of any type; returns true when it consumed the paste. */
     handlePaste: (e: React.ClipboardEvent) => boolean;
     remove: (id: string) => void;
     clear: () => void;
@@ -68,13 +68,14 @@ export function useAttachments(): UseAttachments {
     }, [upload]);
 
     const handlePaste = useCallback((e: React.ClipboardEvent): boolean => {
-        const images = Array.from(e.clipboardData?.items ?? [])
-            .filter((item) => item.type.startsWith('image/'))
+        // Files win over text: apps often put the file's name on the clipboard beside it.
+        const files = Array.from(e.clipboardData?.items ?? [])
+            .filter((item) => item.kind === 'file')
             .map((item) => item.getAsFile())
             .filter((f): f is File => f !== null);
-        if (images.length === 0) return false;
+        if (files.length === 0) return false;
         e.preventDefault();
-        addFiles(images);
+        addFiles(files);
         return true;
     }, [addFiles]);
 

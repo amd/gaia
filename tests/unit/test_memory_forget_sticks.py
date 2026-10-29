@@ -182,7 +182,7 @@ class TestStoreLevel:
         db = MemoryStore(db_path=path)
         try:
             version = db._conn.execute("SELECT version FROM schema_version").fetchone()
-            assert version[0] == 7
+            assert version[0] == 8
             db.forget(db.store(category="fact", content="User has a cat named Miso"))
             assert db.is_forgotten("User has a cat named Miso")
         finally:
