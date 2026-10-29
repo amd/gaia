@@ -231,3 +231,41 @@ async def test_saved_schedules_the_parser_now_rejects_still_load():
     finally:
         await scheduler.shutdown()
         db.close()
+
+
+@pytest.mark.parametrize(
+    "text,time_of_day,days",
+    [
+        ("every morning at 8", "08:00", None),
+        ("every evening at 7", "19:00", None),
+        ("every afternoon at 3", "15:00", None),
+        ("every night at 10", "22:00", None),
+        ("every night at 1", "01:00", None),
+        ("daily at 8 in the morning", "08:00", None),
+        ("every day at 9:30 in the evening", "21:30", None),
+        ("at 10 at night", "22:00", None),
+        ("every weekday morning at 8", "08:00", WEEKDAYS),
+        ("every morning at 8am", "08:00", None),
+        ("every evening at 19:00", "19:00", None),
+    ],
+)
+def test_morning_or_evening_settles_am_or_pm(text, time_of_day, days):
+    """A user who says "morning" has already said which 8 they mean."""
+    config = _parse(text)
+    assert config.interval_seconds > 0, config.description
+    assert config.time_of_day == time_of_day
+    assert config.days_of_week == days
+
+
+@pytest.mark.parametrize(
+    "text,message",
+    [
+        ("every morning at 8pm", "'morning' and '8pm' disagree"),
+        ("every evening at 7am", "'evening' and '7am' disagree"),
+        ("every morning", "Say what time in the morning, like 'every morning at 8'."),
+    ],
+)
+def test_a_time_of_day_word_that_cant_settle_the_time_says_why(text, message):
+    config = _parse(text)
+    assert config.interval_seconds == 0
+    assert message in config.description

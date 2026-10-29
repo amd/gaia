@@ -7,8 +7,9 @@ import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen, Square } fro
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
+import remarkWindowsPaths from '../utils/remarkWindowsPaths';
 import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
-import { AgentActivity } from './AgentActivity';
+import { AgentActivity, WAITING_ON_USER_LABEL } from './AgentActivity';
 import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
@@ -29,8 +30,6 @@ interface MessageBubbleProps {
     agentSteps?: AgentStep[];
     /** Whether agent steps are currently active (streaming). */
     agentStepsActive?: boolean;
-    /** The live turn's agent step count; a saved message reads `message.stats.steps`. */
-    agentStepCount?: number;
     /** Live-streaming cards (issue #2108). `message.cards` wins when set —
      *  this prop carries in-flight cards for the synthetic streaming bubble,
      *  mirroring how `agentSteps` reaches it. */
@@ -122,8 +121,6 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
     );
 }
 
-
-const WAITING_ON_USER_LABEL = 'Waiting for you';
 
 /** A phase shorter than this needs no clock; past it, the count shows GAIA is still working. */
 const PHASE_ELAPSED_MIN_S = 3;
@@ -445,7 +442,7 @@ export function turnEnding(content: string, stopState: Message['stopState']): Tu
     return CUT_OFF_NOTICES.some((notice) => text.endsWith(notice)) ? 'interrupted' : undefined;
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, agentStepCount, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
     useModelNames();
     const echo = useMemo(
         () => (message.role === 'assistant' && !isStreaming && agentSteps
@@ -544,11 +541,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         >
             <div className="msg-inner">
                 <div className="msg-header">
-                    <div className="msg-header-left">
-                        {message.role === 'assistant' && isStreaming && (
-                            <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />
-                        )}
-                    </div>
+                    <div className="msg-header-left" />
                     {!isStreaming && (
                         <div className="msg-actions">
                             {/* Resend button - user messages only */}
@@ -586,13 +579,17 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     )}
                 </div>
                 <div className="msg-body">
-                    {/* Agent activity inside the message bubble */}
-                    {echo.steps && echo.steps.length > 0 && (
+                    {/* The turn as a timeline; the live line sits where the next step will appear */}
+                    {message.role === 'assistant' && ((echo.steps && echo.steps.length > 0) || isStreaming) && (
                         <AgentActivity
-                            steps={echo.steps}
+                            steps={echo.steps ?? []}
                             isActive={agentStepsActive ?? false}
-                            variant={agentStepsActive ? 'inline' : 'summary'}
-                            agentStepCount={agentStepCount ?? message.stats?.steps ?? undefined}
+                            running={!!isStreaming}
+                            awaitingUser={awaitingUser}
+                            answer={isStreaming ? undefined : cleanedContent}
+                            liveLine={isStreaming && (
+                                <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />
+                            )}
                         />
                     )}
                     {isError && (
@@ -829,7 +826,8 @@ const MARKDOWN_COMPONENTS: Components = {
     // <pre><code>, inline in just <code>. We use our `pre`
     // override to render fenced blocks as CodeBlock, so the
     // `code` component only handles inline code.
-    code({ className, children, ...props }) {
+    // `node` is the markdown AST; spread onto <code> it renders as node="[object Object]".
+    code({ className, children, node: _node, ...props }) {
         // If we get here, it's inline code (fenced blocks are
         // handled by the `pre` override below).
         const path = inlineCodePath(children);
@@ -934,7 +932,7 @@ export function RenderedContent({ content, showCursor, isStreaming = false }: { 
         <StreamingContext.Provider value={isStreaming}>
         <div className="md-content">
             <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkSoftBreaks]}
+                remarkPlugins={[remarkGfm, remarkWindowsPaths, remarkSoftBreaks]}
                 disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
                 urlTransform={safeUrlTransform}
                 components={MARKDOWN_COMPONENTS}

@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertCircle, Check, ChevronRight, Cloud, Cpu, Loader2 } from 'lucide-react';
+import { AlertCircle, Check, ChevronRight, Cloud, Cpu, Info, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
 import { shortModelName, useModelStore } from '../stores/modelStore';
 import { lemonadeKeyRejected } from '../utils/lemonade';
 import { CloudPrices } from './settings/CloudPrices';
 import './settings/CloudSpending.css';
 import { formatGb } from '../utils/modelLabels';
-import { ChatModelChoice, SystemCheck } from './SetupSteps';
+import { ChatModelChoice, deviceKnown, SystemCheck } from './SetupSteps';
 import { StartCards } from './StartCards';
 import { useGatewayNetwork } from '../hooks/useGatewayNetwork';
 import type { LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCheck, SetupPlan, SetupProblem, SetupRunStatus, SetupStep, StartCard } from '../types';
@@ -236,7 +236,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const [run, setRun] = useState<SetupRunStatus | null>(null);
     const [startError, setStartError] = useState<string | null>(null);
     const [key, setKey] = useState('');
-    const [keyState, setKeyState] = useState<{ busy: boolean; error: string | null; done: boolean }>({ busy: false, error: null, done: false });
+    const [keyState, setKeyState] = useState<{ busy: boolean; error: string | null; done: boolean; waiting?: string | null }>({ busy: false, error: null, done: false });
     const [showLog, setShowLog] = useState(false);
     const [plan, setPlan] = useState<SetupPlan | null>(null);
     const [planError, setPlanError] = useState<string | null>(null);
@@ -245,6 +245,9 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     // GAIA uses a Lemonade the user runs, so the Connect step changes nothing there.
     const [usersServer, setUsersServer] = useState(false);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    // A connect waiting on an OS prompt stops asking once setup is gone.
+    const mounted = useRef(true);
+    useEffect(() => () => { mounted.current = false; }, []);
     const { network: gateway, recheck: recheckGateway } = useGatewayNetwork();
     const unreachable = (id: ProviderId) => id === 'amd' && gateway?.reachable === false;
 
@@ -258,6 +261,8 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const modelNamed = !!run?.chat_model || (!!plan && !plan.decided_after_server);
     // The run's steps are numbered after: check, where, and (local) model.
     const firstRunStep = cloud ? 3 : 4;
+    // Read but not complete: the device waits for the model server, or nothing could be read.
+    const checkOpen = !!hardwareError || (!!hardware && !deviceKnown(hardware));
 
     const loadHardware = useCallback(() => {
         setHardwareError(null);
@@ -302,6 +307,11 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
         pollRef.current = null;
     }, []);
 
+    // Setup started the model server, so the device can be read now.
+    useEffect(() => {
+        if (installed) loadHardware();
+    }, [installed, loadHardware]);
+
     useEffect(() => {
         if (!running) return stopPolling;
         pollRef.current = setInterval(() => {
@@ -326,7 +336,12 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const connect = useCallback(async () => {
         setKeyState({ busy: true, error: null, done: false });
         try {
-            await api.connectProvider(choice, { api_key: (!usersServer && key) || undefined });
+            await api.connectProviderWaitingForOs(
+                choice,
+                { api_key: (!usersServer && key) || undefined },
+                (waiting) => setKeyState({ busy: true, error: null, done: false, waiting }),
+                () => !mounted.current,
+            );
             const { models } = await api.listProviderModels(choice);
             const pick = models.find((m) => m.rank === 1) ?? models[0];
             if (!pick) throw new Error('Connected, but the provider listed no chat models.');
@@ -373,9 +388,11 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                 </p>
 
                 <ol className="setup-steps">
-                    <li className={`setup-step${hardware || hardwareError ? ' is-done' : ' is-current'}`}>
+                    <li className={`setup-step${checkOpen ? '' : hardware ? ' is-done' : ' is-current'}`}>
                         <div className="setup-step-head">
-                            <span className="setup-step-num">{hardware || hardwareError ? <Check size={14} aria-hidden="true" /> : 1}</span>
+                            <span className="setup-step-num">
+                                {checkOpen ? <Info size={14} aria-hidden="true" /> : hardware ? <Check size={14} aria-hidden="true" /> : 1}
+                            </span>
                             <span className="setup-step-label">Check this PC</span>
                         </div>
                         {!locked && (
@@ -537,6 +554,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                             {keyState.busy && <Loader2 size={13} className="spin" />} Connect
                                         </button>
                                     </div>
+                                    {keyState.busy && keyState.waiting && <p className="setup-hint" role="status">{keyState.waiting}</p>}
                                     {keyState.error && <p className="setup-error" role="alert">{keyState.error}</p>}
                                 </form>
                             )}

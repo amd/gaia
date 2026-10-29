@@ -43,7 +43,7 @@ function model(id: string, over: Partial<ProviderModel> = {}): ProviderModel {
 beforeEach(() => {
     vi.clearAllMocks();
     useModelStore.setState({ active: LOCAL_ACTIVE, error: null, restoreNotice: null });
-    useChatStore.setState({ settingsSection: null, sessions: [SESSION], currentSessionId: SESSION.id });
+    useChatStore.setState({ settingsSection: null, settingsProvider: null, sessions: [SESSION], currentSessionId: SESSION.id });
     mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, FIREWORKS, AMD_UNCONNECTED], active: LOCAL_ACTIVE, lemonade_error: null });
     mockedApi.listProviderModels.mockImplementation(async (id) => ({
         provider: id,
@@ -424,6 +424,16 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
         fireEvent.click(within(dialog).getByRole('button', { name: 'Providers and keys…' }));
         expect(useChatStore.getState().settingsSection).toBe('model');
+    });
+
+    it('"Add your key" opens settings on that provider', async () => {
+        const noKey = { ...FIREWORKS, models_discovered: false };
+        mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, noKey, AMD_UNCONNECTED], active: LOCAL_ACTIVE, lemonade_error: null });
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        fireEvent.click(await within(dialog).findByRole('option', { name: /^Add your key/ }));
+        expect(useChatStore.getState().settingsSection).toBe('model');
+        expect(useChatStore.getState().settingsProvider).toBe('fireworks');
     });
 });
 

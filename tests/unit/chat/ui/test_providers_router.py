@@ -220,6 +220,19 @@ def test_list_when_lemonade_is_unreachable(client, lemonade, keys):
     assert body["active"]["is_default"] is True
 
 
+def test_unreachable_lemonade_gives_this_machines_start_hint(
+    client, lemonade, keys, monkeypatch
+):
+    from gaia.llm import lemonade_launcher
+
+    hint = lemonade_launcher.StartHint(instruction="Run `gaia init` to install it.")
+    monkeypatch.setattr(lemonade_launcher, "describe_start_hint", lambda: hint)
+    lemonade.down = True
+    error = client.get("/api/providers").json()["lemonade_error"]
+    assert error.endswith(hint.instruction)
+    assert "gaia daemon start" not in error
+
+
 def test_list_does_not_repeat_a_provider_when_a_later_lookup_fails(
     client, lemonade, keys, monkeypatch
 ):
@@ -708,6 +721,24 @@ def test_connect_blank_key_replays_the_stored_one(client, lemonade, keys):
     assert resp.status_code == 200
     assert keys["ensure"] == ["fireworks"]
     assert resp.json()["remembered"] is False
+
+
+def test_connect_blank_key_while_a_keychain_prompt_is_open_says_so(
+    client, lemonade, keys, keychain_prompt
+):
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "models_discovered": True}
+    keys["stored"]["fireworks"] = KEY
+
+    started = time.monotonic()
+    resp = client.post("/api/providers/fireworks/connect", json={})
+    assert time.monotonic() - started < 2, "connect hung on the keychain dialog"
+    assert resp.status_code == 409, resp.text
+    assert "Look for a system dialog" in resp.json()["detail"]
+
+    keychain_prompt["answered"].set()
+    _wait_for_reads_to_drain()
+    resp = client.post("/api/providers/fireworks/connect", json={})
+    assert resp.status_code == 200, resp.text
 
 
 def test_connect_blank_key_replay_failure_is_502(client, lemonade, keys):
@@ -1379,11 +1410,12 @@ def test_list_says_a_reachable_gateway_has_a_network(client, lemonade, keys, rea
     assert reach["asked"] == ["https://gw.example.test/v1"]
 
 
-def test_list_marks_an_unreachable_gateway_no_network(client, lemonade, keys, reach):
+def test_list_marks_an_unreachable_gateway_needs_vpn(client, lemonade, keys, reach):
     reach["error"] = _offline()
     amd = _amd(client.get("/api/providers").json())
     assert amd["network"]["reachable"] is False
-    assert "No network available" in amd["network"]["detail"]
+    assert "It needs AMD's network or VPN" in amd["network"]["detail"]
+    assert "No network" not in amd["network"]["detail"]
     assert "llm-api.amd.com" in amd["network"]["detail"]
     fireworks = next(
         p
@@ -1402,14 +1434,14 @@ def test_list_checks_the_gateway_even_when_lemonade_is_down(
     assert amd["network"]["reachable"] is False
 
 
-def test_connecting_an_unreachable_gateway_says_no_network_not_key(
+def test_connecting_an_unreachable_gateway_names_the_vpn_not_key(
     client, lemonade, keys, reach
 ):
     reach["error"] = _offline()
     resp = client.post("/api/providers/amd/connect", json={"api_key": KEY})
     assert resp.status_code == 503, resp.text
     detail = resp.json()["detail"]
-    assert "No network available" in detail
+    assert "It needs AMD's network or VPN. Connect to it" in detail
     assert "key" not in detail.lower()
     # Nothing was registered or sent: the key never left this machine.
     assert lemonade.paths("POST") == []

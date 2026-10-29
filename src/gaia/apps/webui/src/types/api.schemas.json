@@ -352,6 +352,16 @@
         ],
         "title": "Latencyms"
       },
+      "mcpOutput": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/McpOutputResponse"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "mcpServer": {
         "anyOf": [
           {
@@ -362,6 +372,28 @@
           }
         ],
         "title": "Mcpserver"
+      },
+      "mcpServerLabel": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mcpserverlabel"
+      },
+      "mcpTool": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mcptool"
       },
       "narration": {
         "anyOf": [
@@ -949,6 +981,13 @@
         "title": "Document Ids",
         "type": "array"
       },
+      "folders": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Folders",
+        "type": "array"
+      },
       "mail_provider": {
         "anyOf": [
           {
@@ -1150,6 +1189,17 @@
       "chunk_count": {
         "title": "Chunk Count",
         "type": "integer"
+      },
+      "error_kind": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Error Kind"
       },
       "file_size": {
         "title": "File Size",
@@ -1891,6 +1941,11 @@
         "default": 0,
         "title": "Indexed",
         "type": "integer"
+      },
+      "skipped": {
+        "default": 0,
+        "title": "Skipped",
+        "type": "integer"
       }
     },
     "title": "IndexFolderResponse",
@@ -2399,6 +2454,23 @@
       }
     },
     "title": "LoadedModelInfo",
+    "type": "object"
+  },
+  "McpOutputResponse": {
+    "description": "The text an MCP tool returned, capped for the tool row.",
+    "properties": {
+      "text": {
+        "default": "",
+        "title": "Text",
+        "type": "string"
+      },
+      "truncated": {
+        "default": false,
+        "title": "Truncated",
+        "type": "boolean"
+      }
+    },
+    "title": "McpOutputResponse",
     "type": "object"
   },
   "MemorySettingsBody": {
@@ -3210,6 +3282,10 @@
         ],
         "title": "Created At"
       },
+      "description": {
+        "title": "Description",
+        "type": "string"
+      },
       "error_count": {
         "default": 0,
         "title": "Error Count",
@@ -3280,6 +3356,11 @@
         "title": "Run Count",
         "type": "integer"
       },
+      "running": {
+        "default": false,
+        "title": "Running",
+        "type": "boolean"
+      },
       "schedule_config": {
         "anyOf": [
           {
@@ -3312,7 +3393,8 @@
       "name",
       "interval_seconds",
       "prompt",
-      "status"
+      "status",
+      "description"
     ],
     "title": "ScheduleResponse",
     "type": "object"

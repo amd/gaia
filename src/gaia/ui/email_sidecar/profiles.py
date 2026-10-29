@@ -21,6 +21,45 @@ from types import MappingProxyType
 from typing import Dict, FrozenSet, Mapping, Optional, Tuple
 
 from gaia.config import gaia_agents_dir
+from gaia.daemon import paths as daemon_paths
+from gaia.daemon.sidecars.errors import (
+    KIND_CAPACITY,
+    KIND_MODE_CONFLICT,
+    KIND_NOT_INSTALLED,
+    KIND_OUT_OF_DATE,
+    KIND_SERVICE_OUTDATED,
+    KIND_SERVICE_UNREACHABLE,
+)
+
+#: What to tell the user when the agent can't start for a reason of GAIA's own,
+#: not the agent's, keyed by :attr:`SidecarError.kind`. These name GAIA's
+#: service log, because the agent never ran and its own log says nothing.
+_SERVICE_START_FAILED_MESSAGES: Mapping[str, str] = MappingProxyType(
+    {
+        KIND_CAPACITY: (
+            "GAIA is already running as many agents as it can at once, so it "
+            "couldn't start another one. Restart your PC to stop them, then send "
+            "your message again."
+        ),
+        KIND_MODE_CONFLICT: (
+            "GAIA's agent is already running from another copy of GAIA on this "
+            "PC. Close that copy, or restart your PC, then send your message again."
+        ),
+        KIND_NOT_INSTALLED: (
+            "This agent isn't installed with your copy of GAIA. Update GAIA to "
+            "the latest version or reinstall it, then send your message again."
+        ),
+        KIND_SERVICE_UNREACHABLE: (
+            "GAIA's background service isn't responding, so the agent couldn't "
+            "start. Restart GAIA, then send your message again. If it still "
+            "fails, restart your PC."
+        ),
+        KIND_SERVICE_OUTDATED: (
+            "GAIA's background service is from a different version of GAIA than "
+            "this app. Update GAIA to the latest version, then restart your PC."
+        ),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -114,6 +153,9 @@ class RelayProfile:
     #: so the agent works in the same scope the Agent UI shows. ``None`` means
     #: it never does, and keeps its own default scope.
     min_scope_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes the chat workspace used for
+    #: resolving relative file paths.
+    min_working_directory_api_version: Optional[Tuple[int, int]] = None
     #: Shown in the Skills settings when the installed agent is below
     #: :attr:`min_skills_api_version`.
     skills_upgrade_message: str = ""
@@ -121,25 +163,67 @@ class RelayProfile:
     #: off). ``None`` means the relay never sends it.
     min_memory_api_version: Optional[Tuple[int, int]] = None
     #: Shown instead of running a private or memory-off turn when the installed
-    #: agent is below :attr:`min_memory_api_version` — it would save to memory.
+    #: agent can't take ``memory`` — it is below :attr:`min_memory_api_version`,
+    #: or that floor is ``None`` — so it would save to memory.
     memory_upgrade_message: str = ""
+    #: Contract version from which ``/query`` takes ``internet_off``. ``None``
+    #: means the relay never sends it: the agent keeps its own network rules.
+    min_internet_api_version: Optional[Tuple[int, int]] = None
+    #: Shown instead of running an internet-off turn when the installed agent is
+    #: below :attr:`min_internet_api_version` — it could go online.
+    internet_upgrade_message: str = ""
     #: Contract version from which ``/query`` takes ``changes_turn_id`` and
     #: records the run's file changes for undo. ``None`` means never sent.
     min_changes_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query``'s ``final`` event carries
+    #: ``context``, what fills the model's window. ``None`` means it never does.
+    min_context_api_version: Optional[Tuple[int, int]] = None
+    #: Shown in the Context panel when the installed agent is below
+    #: :attr:`min_context_api_version`.
+    context_upgrade_message: str = ""
+    #: Contract version from which ``/query`` takes ``surface``, the front-end
+    #: the turn comes from. ``None`` means the relay never sends it.
+    min_surface_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes ``turns`` (earlier turns
+    #: with their tool calls) and a ``final`` carries ``model_messages``.
+    #: ``None`` means the relay sends text ``context`` only.
+    min_turns_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes ``reasoning`` and streams the
+    #: model's reasoning as ``reasoning`` events. ``None`` means the relay never asks.
+    min_reasoning_api_version: Optional[Tuple[int, int]] = None
+    #: Shown when the agent itself fails to start (it crashed or never got
+    #: healthy). Shown through :meth:`start_failed_text`, which adds the log folder.
+    start_failed_message: str = ""
 
     def stream_ended_text(self) -> str:
-        """:attr:`stream_ended_message`, plus the agent's log folder once it exists.
+        """:attr:`stream_ended_message`, plus the agent's log folder once it exists."""
+        return self._with_log_folder(self.stream_ended_message)
 
-        Resolved per call so it names the real folder under the current GAIA home.
+    def start_failed_text(self, kind: str = "") -> str:
+        """What to tell the user when the agent can't start, for failure *kind*.
+
+        *kind* is a :attr:`SidecarError.kind`. A crash, or a kind with no
+        specific next step, gets :attr:`start_failed_message` and the agent's
+        log folder.
         """
+        if kind == KIND_OUT_OF_DATE:
+            return self.version_upgrade_message
+        message = _SERVICE_START_FAILED_MESSAGES.get(kind)
+        if message is None:
+            return self._with_log_folder(self.start_failed_message)
+        log_path = daemon_paths.log_path()
+        if not log_path.is_file():
+            return message
+        return f"{message} The details are in this log: {log_path}"
+
+    def _with_log_folder(self, message: str) -> str:
+        # Resolved per call so it names the real folder under the current GAIA home.
         if not self.agent_id:
-            return self.stream_ended_message
+            return message
         log_dir = gaia_agents_dir() / self.agent_id / "logs"
         if not log_dir.is_dir():
-            return self.stream_ended_message
-        return (
-            f"{self.stream_ended_message} The details are in this log folder: {log_dir}"
-        )
+            return message
+        return f"{message} The details are in this log folder: {log_dir}"
 
 
 # --- email ------------------------------------------------------------------
@@ -246,9 +330,19 @@ EMAIL_PROFILE = RelayProfile(
         "The email agent stopped unexpectedly while working. Anything it had "
         "already written is kept above. Send your message again."
     ),
+    start_failed_message=(
+        "The email agent couldn't start. Send your message again. If this keeps "
+        "happening, restart GAIA. If it still fails, update GAIA to the latest "
+        "version or reinstall it."
+    ),
     version_upgrade_message=(
         "The email agent is out of date and can't answer chat messages. Update "
         "GAIA and the email agent to the latest version, then try again."
+    ),
+    memory_upgrade_message=(
+        "The email agent does not support private chats or chats with memory "
+        "turned off yet. Your message was not sent to the email agent. Use "
+        "the GAIA agent for this chat instead."
     ),
     tool_labels=MappingProxyType(_EMAIL_TOOL_LABELS),
     mutating_tools=_EMAIL_MUTATING_TOOLS,
@@ -423,6 +517,11 @@ GAIA_PROFILE = RelayProfile(
         "GAIA stopped unexpectedly while answering. Anything it had already "
         "written is kept above. Send your message again."
     ),
+    start_failed_message=(
+        "GAIA couldn't start its agent. Send your message again. If this keeps "
+        "happening, restart GAIA. If it still fails, update GAIA to the latest "
+        "version or reinstall it."
+    ),
     version_upgrade_message=(
         "GAIA's agent is out of date and can't answer here. Update GAIA to the "
         "latest version, then try again."
@@ -451,6 +550,8 @@ GAIA_PROFILE = RelayProfile(
     min_skills_api_version=(2, 17),
     # 2.18 added /query's allowed_paths field.
     min_scope_api_version=(2, 18),
+    # 2.24 adds the explicit workspace for relative file paths.
+    min_working_directory_api_version=(2, 24),
     skills_upgrade_message=(
         "The installed GAIA agent is too old to list its skills here. Update "
         "GAIA to the latest version, then reopen this page. Its skills still "
@@ -465,6 +566,25 @@ GAIA_PROFILE = RelayProfile(
     ),
     # 2.19 added /query's changes_turn_id field.
     min_changes_api_version=(2, 19),
+    # 2.23 added /query's internet_off field.
+    min_internet_api_version=(2, 23),
+    internet_upgrade_message=(
+        "Internet is off for this chat, but the installed GAIA agent can't be "
+        "told so and could go online. Update GAIA to the latest version, then "
+        "try again, or turn the internet back on for this chat."
+    ),
+    # 2.20 added /query's surface field.
+    min_surface_api_version=(2, 20),
+    # 2.22 added /query's reasoning field.
+    min_reasoning_api_version=(2, 22),
+    # 2.21 added /query's final.context.
+    min_context_api_version=(2, 21),
+    context_upgrade_message=(
+        "The installed GAIA agent is too old to report what fills its context. "
+        "Update GAIA to the latest version, then send a message."
+    ),
+    # 2.25 added /query's turns field and final.model_messages.
+    min_turns_api_version=(2, 25),
 )
 
 
@@ -534,6 +654,15 @@ def documents_supported(profile: RelayProfile, api_version: Optional[str]) -> bo
     return floor is not None and _meets(api_version, floor)
 
 
+def context_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar's ``final`` event reports what fills its context.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_context_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def skills_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when the sidecar lists its skills on ``GET /v1/<agent>/skills``.
 
@@ -552,6 +681,14 @@ def scope_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     return floor is not None and _meets(api_version, floor)
 
 
+def working_directory_supported(
+    profile: RelayProfile, api_version: Optional[str]
+) -> bool:
+    """True when the sidecar accepts the chat workspace on ``/query``."""
+    floor = profile.min_working_directory_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def memory_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when *api_version* takes ``/query``'s ``memory`` field.
 
@@ -561,12 +698,48 @@ def memory_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     return floor is not None and _meets(api_version, floor)
 
 
+def internet_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``internet_off`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_internet_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def changes_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when *api_version* takes ``/query``'s ``changes_turn_id`` field.
 
     Same evidence rule as :func:`api_version_supported`: no version, no claim.
     """
     floor = profile.min_changes_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def surface_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``surface`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_surface_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def turns_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``turns`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_turns_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def reasoning_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``reasoning`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_reasoning_api_version
     return floor is not None and _meets(api_version, floor)
 
 
@@ -595,6 +768,8 @@ __all__ = [
     "documents_supported",
     "skills_supported",
     "scope_supported",
+    "working_directory_supported",
     "memory_supported",
+    "internet_supported",
     "changes_supported",
 ]

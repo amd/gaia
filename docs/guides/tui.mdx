@@ -34,7 +34,7 @@ gaia-tui
 
 <Warning>
   This binary boots straight into the flagship, and it does not install, uninstall,
-  search, or vote on agents — that stays the Python CLI's job (`gaia hub install email --trust` for the email agent).
+  search, or vote on agents — that stays the Python CLI's job (`gaia hub install email` for the email agent).
   An earlier version of the TUI opened on an agent browser that did all of that,
   with the flagship listed as "Coming Soon." That screen, and the `list` / `install` /
   `uninstall` / `hub` subcommands that drove it, are gone for good.
@@ -471,7 +471,15 @@ the answer set apart below:
 - **Paths** are shown relative to the folder you started GAIA in, or under `~`;
   a path that is still long keeps its end.
 - **A failed step** keeps its reason under it, remedy included — that row is
-  where a failure lives, so a retried call is one red row, not a separate error.
+  where a failure lives, not a separate error. While the turn is still running
+  it reads `error` in amber, since the agent may fix it and try again. Once a
+  later run of the same file or the same command succeeds, it reads
+  `error, retried` and keeps its one-line error. The same command means every
+  command in a `&&`, `||` or `;` chain, in the same folder, with the same
+  arguments; added switches like `--user` and the right side of a pipe don't
+  count. A step with no file or command
+  to match, such as a web fetch or a query, is never marked retried. A failure
+  nothing recovered turns red and reads `failed` when the turn ends.
 - **A confirmation** asks once, in the prompt pinned above the composer. The step
   it gated then records your answer in a word: `approved`, `denied`, or `always
   allowed '<scope>'`.
@@ -543,6 +551,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
 | `/copy all` | Copy the whole conversation as markdown |
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
+| `/update` | Check for a newer GAIA. `/update now` installs the newest, `/update v0.25.0` installs and pins that exact one, `/update auto on` installs new releases when you quit (off by default), `/update rc on` offers release candidates too. See [Updating GAIA](/guides/install#updating-gaia) |
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
 their own — `/model`, `/setup`, and `/provider` are flagship-only, and `/memory`
@@ -806,7 +815,7 @@ Installing or removing it is the Python CLI's job:
 
 ```bash
 gaia hub list
-gaia hub install email --trust
+gaia hub install email
 gaia hub uninstall email
 ```
 

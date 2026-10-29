@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { formatShortcut, isMacPlatform } from '../platform';
+import { examplePath, formatShortcut, isMacPlatform } from '../platform';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -33,5 +33,13 @@ describe('formatShortcut', () => {
         vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32');
         expect(isMacPlatform()).toBe(false);
         expect(formatShortcut('Mod+B')).toBe('Ctrl+B');
+    });
+});
+
+describe('examplePath', () => {
+    it('shows a path in the form this platform uses', () => {
+        expect(examplePath('MacIntel')).toBe('/Users/you/Documents/manual.pdf');
+        expect(examplePath('Win32')).toBe('C:\\Users\\you\\Documents\\manual.pdf');
+        expect(examplePath('Linux x86_64')).toBe('/home/you/Documents/manual.pdf');
     });
 });

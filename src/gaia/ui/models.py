@@ -392,6 +392,8 @@ class CreateSessionRequest(BaseModel):
     # Mailbox provider for email-backed agents. Gmail by default; "microsoft"
     # routes the email agent to the Outlook backend (see EmailAgentConfig).
     mail_provider: Optional[str] = Field(None, pattern=r"^(google|microsoft)$")
+    # Folders the chat may read and write from its first message.
+    folders: List[str] = Field(default_factory=list)
 
 
 class UpdateSessionRequest(BaseModel):
@@ -519,11 +521,18 @@ class FileListResponse(BaseModel):
         return [{"name": f} if isinstance(f, str) else f for f in files]
 
 
+class McpOutputResponse(BaseModel):
+    """The text an MCP tool returned, capped for the tool row."""
+
+    text: str = ""
+    truncated: bool = False
+
+
 class AgentStepResponse(BaseModel):
     """A single step in the agent's execution (persisted)."""
 
     id: int
-    type: str  # 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert'
+    type: str  # 'thinking' | 'commentary' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert'
     label: str
     detail: Optional[str] = None
     tool: Optional[str] = None
@@ -543,6 +552,9 @@ class AgentStepResponse(BaseModel):
     commandOutput: Optional[CommandOutputResponse] = None
     fileList: Optional[FileListResponse] = None
     mcpServer: Optional[str] = None
+    mcpServerLabel: Optional[str] = None
+    mcpTool: Optional[str] = None
+    mcpOutput: Optional[McpOutputResponse] = None
     latencyMs: Optional[float] = None
     # Render-map card persistence (#2109): populated ONLY when the source
     # tool_result event carried a ``render`` kind (e.g. "email_pre_scan") —
@@ -692,6 +704,10 @@ class DocumentResponse(BaseModel):
         "complete"  # pending | indexing | complete | failed | cancelled | missing
     )
     last_error: Optional[str] = None
+    # Set with last_error when retrying can't help until the file is fixed:
+    # "corrupted", "encrypted", "empty" (no extractable text), "empty_file"
+    # (nothing to index) or "unsupported_workbook" (.xls or password-protected).
+    error_kind: Optional[str] = None
 
 
 class DocumentListResponse(BaseModel):
@@ -761,6 +777,8 @@ class IndexFolderResponse(BaseModel):
 
     indexed: int = 0
     failed: int = 0
+    # Files in the folder that aren't a type GAIA indexes.
+    skipped: int = 0
     documents: List[DocumentResponse] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
 

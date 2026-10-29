@@ -26,14 +26,14 @@ router = APIRouter(tags=["skills"])
 def list_skills() -> Dict[str, Any]:
     """Installed skills, and any folder that failed to parse."""
     from gaia.skills.errors import SkillError
-    from gaia.skills.listing import skills_listing
+    from gaia.skills.listing import skills_listing_for_agent
 
     try:
         from gaia_agent.agent import ENGINEERING_SKILL, GaiaAgent
     except ImportError:
         return _skills_from_agent()
     try:
-        return skills_listing(GaiaAgent.SKILL_DIRS, (ENGINEERING_SKILL,))
+        return skills_listing_for_agent(GaiaAgent, (ENGINEERING_SKILL,))
     except SkillError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 

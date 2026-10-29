@@ -24,6 +24,7 @@ import json
 import os
 import socket
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,7 @@ from urllib.parse import urlparse
 import requests
 
 from gaia.config import GAIA_CONFIG_DIR
+from gaia.daemon.paths import _replace_file
 from gaia.llm.lemonade_client import (
     CLOUD_RECIPE,
     LemonadeClient,
@@ -133,9 +135,7 @@ class GatewayUnreachable(Exception):
     def __init__(self, host: str, reason: str):
         self.host = host
         self.reason = reason
-        super().__init__(
-            f"No network available — can't reach {host} (needs AMD's network or VPN)"
-        )
+        super().__init__(f"Can't reach {host}. It needs AMD's network or VPN")
 
 
 def check_reachable(base_url: Optional[str] = None) -> None:
@@ -215,6 +215,15 @@ class GatewayState:
     # tokens. Nothing advertises it, so it is learned by trying; remembering it
     # means the empty stream is paid once ever rather than once per launch.
     non_streaming_models: List[str] = field(default_factory=list)
+    # Native tool calling, learned by one probe per model when the catalog's
+    # labels don't say: the AMD gateway labels no model ``tool-calling``, yet
+    # most take ``tools=``. Running a capable model on the in-text JSON format
+    # costs it accuracy on every tool call.
+    tool_calling_models: List[str] = field(default_factory=list)
+    no_tool_calling_models: List[str] = field(default_factory=list)
+    # When a model's tool-calling probe last failed, ``{model_id: "<UTC ISO>"}``,
+    # so a down gateway is not re-probed at every start.
+    tool_calling_probe_failures: Dict[str, str] = field(default_factory=dict)
     # Models whose last call came back "not found" (HTTP 404) from the cloud
     # provider, keyed by id: ``{"status": 404, "at": "<UTC ISO time>"}``. A
     # later successful call clears the entry. Nothing switches models on it —
@@ -245,6 +254,12 @@ class GatewayState:
             enabled_models=list(raw.get("enabled_models") or []),
             active_model=raw.get("active_model"),
             non_streaming_models=list(raw.get("non_streaming_models") or []),
+            tool_calling_models=list(raw.get("tool_calling_models") or []),
+            no_tool_calling_models=list(raw.get("no_tool_calling_models") or []),
+            tool_calling_probe_failures={
+                str(k): str(v)
+                for k, v in (raw.get("tool_calling_probe_failures") or {}).items()
+            },
             unavailable_models={
                 str(k): dict(v)
                 for k, v in (raw.get("unavailable_models") or {}).items()
@@ -260,15 +275,33 @@ class GatewayState:
             "enabled_models": self.enabled_models,
             "active_model": self.active_model,
             "non_streaming_models": sorted(self.non_streaming_models),
+            "tool_calling_models": sorted(self.tool_calling_models),
+            "no_tool_calling_models": sorted(self.no_tool_calling_models),
+            "tool_calling_probe_failures": dict(
+                sorted(self.tool_calling_probe_failures.items())
+            ),
             "unavailable_models": dict(sorted(self.unavailable_models.items())),
         }
-        target.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        # Preferences, not secrets — but this sits next to config.json in a
-        # user-private directory, so match its posture.
+        # Another GAIA process reading mid-write must never see half a file.
+        fd, tmp = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
+        )
         try:
-            os.chmod(target, 0o600)
-        except OSError as e:
-            log.debug(f"Could not tighten permissions on {target}: {e}")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(json.dumps(payload, indent=2) + "\n")
+            # Preferences, not secrets, but this sits next to config.json in a
+            # user-private directory, so match its posture.
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError as e:
+                log.debug(f"Could not tighten permissions on {tmp}: {e}")
+            _replace_file(Path(tmp), target)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError as e:
+                log.debug(f"Could not remove {tmp}: {e}")
+            raise
 
 
 def clear_default_model_if(model_id: Optional[str]) -> bool:

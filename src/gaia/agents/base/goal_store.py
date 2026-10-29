@@ -38,6 +38,8 @@ from pathlib import Path
 from typing import Dict, List, Literal, Optional
 from uuid import uuid4
 
+from gaia.utils.sqlite_wal import enable_wal
+
 logger = logging.getLogger(__name__)
 
 
@@ -93,6 +95,14 @@ Risk = Literal["low", "medium", "high", "critical"]
 # ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
+
+
+def _humanize_action(action: str) -> str:
+    """``index_workspace`` -> ``Index workspace``; prose actions pass through."""
+    if " " in action or "_" not in action:
+        return action
+    words = action.replace("_", " ").strip()
+    return words[:1].upper() + words[1:]
 
 
 @dataclass
@@ -250,7 +260,7 @@ class GoalStore:
                 detect_types=sqlite3.PARSE_DECLTYPES,
             )
             self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(self._conn)
             self._conn.execute("PRAGMA foreign_keys=ON")
         return self._conn
 
@@ -565,7 +575,7 @@ class GoalStore:
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     goal_id,
-                    f"Proposal: {proposal.action}",
+                    f"Proposal: {_humanize_action(proposal.action)}",
                     description,
                     status,
                     source_label,

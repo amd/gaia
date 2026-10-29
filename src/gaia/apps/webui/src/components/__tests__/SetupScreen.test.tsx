@@ -67,7 +67,7 @@ const HARDWARE = {
 
 const START: StartScreen = {
     cards: [{ skill: 'check-in', title: 'Check in', note: 'Pick up where you left off', prompt: 'Good morning.', needs_input: false }],
-    working_folder: { path: '/w', name: 'w', gaia_folder: false },
+    working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true },
 };
 
 beforeEach(() => {
@@ -146,7 +146,7 @@ describe('SetupScreen', () => {
     it('asks for the Fireworks key only after the install finishes, then picks the top model', async () => {
         let finish!: (s: SetupRunStatus) => void;
         mockedApi.startSetup.mockImplementation(() => new Promise((r) => { finish = r; }));
-        mockedApi.connectProvider.mockResolvedValue({} as Awaited<ReturnType<typeof api.connectProvider>>);
+        mockedApi.connectProviderWaitingForOs.mockResolvedValue({} as Awaited<ReturnType<typeof api.connectProviderWaitingForOs>>);
         mockedApi.listProviderModels.mockResolvedValue({
             provider: 'fireworks',
             models: [
@@ -179,8 +179,21 @@ describe('SetupScreen', () => {
         fireEvent.click(screen.getByRole('button', { name: /Connect/ }));
 
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('fireworks.m1'));
-        expect(mockedApi.connectProvider).toHaveBeenCalledWith('fireworks', { api_key: 'fw-key' });
+        expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('fireworks', { api_key: 'fw-key' }, expect.any(Function), expect.any(Function));
         expect(await screen.findByRole('button', { name: 'Start chatting' })).toBeInTheDocument();
+    });
+
+    it('says when the OS is asking to release the saved key, instead of a silent wait', async () => {
+        const asking = 'macOS is asking GAIA for keychain access to read your saved Fireworks AI key. Look for a system dialog and click Always Allow; this updates once you answer.';
+        mockedApi.startSetup.mockResolvedValue(READY);
+        mockedApi.connectProviderWaitingForOs.mockImplementation((_p, _b, onWaiting) => {
+            onWaiting(asking);
+            return new Promise(() => {});
+        });
+        await start(/Fireworks AI/);
+        fireEvent.click(await screen.findByRole('button', { name: /Connect/ }));
+        expect(await screen.findByText(/Look for a system dialog/)).toHaveAttribute('role', 'status');
+        expect(screen.getByRole('button', { name: /Connect/ })).toBeDisabled();
     });
 
     it("on the user's own Lemonade, connects with no key and says their server is left alone", async () => {
@@ -188,7 +201,7 @@ describe('SetupScreen', () => {
             ...TARGET, mode: 'external', saved_mode: 'external', source: 'config',
             base_url: FOUND.url, saved_base_url: FOUND.url, offer: false,
         });
-        mockedApi.connectProvider.mockResolvedValue({} as Awaited<ReturnType<typeof api.connectProvider>>);
+        mockedApi.connectProviderWaitingForOs.mockResolvedValue({} as Awaited<ReturnType<typeof api.connectProviderWaitingForOs>>);
         mockedApi.listProviderModels.mockResolvedValue({
             provider: 'amd',
             models: [{ id: 'amd.m1', context_length: null, downloaded: true, labels: [], rank: 1, note: null, evidence: null }],
@@ -202,7 +215,7 @@ describe('SetupScreen', () => {
 
         fireEvent.click(screen.getByRole('button', { name: /Connect/ }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('amd.m1'));
-        expect(mockedApi.connectProvider).toHaveBeenCalledWith('amd', { api_key: undefined });
+        expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('amd', { api_key: undefined }, expect.any(Function), expect.any(Function));
     });
 
     it('still asks for the key when LEMONADE_BASE_URL picks the server', async () => {
@@ -277,6 +290,39 @@ describe('SetupScreen: system check', () => {
         render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
         expect(await screen.findByText('Checked once the model server is running')).toBeInTheDocument();
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    const checkStep = () => screen.getByText('Check this PC').closest('li');
+
+    it('marks the check done only once the device is known', async () => {
+        mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        await screen.findByRole('list', { name: 'This PC' });
+        expect(checkStep()).toHaveClass('is-done');
+    });
+
+    it("doesn't mark the check done while the device waits for the model server", async () => {
+        mockedApi.getOnboardingPreflight.mockResolvedValue({ ...HARDWARE, gpu_name: null, npu_detected: null, lemonade_running: false });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        await screen.findByText('Checked once the model server is running');
+        expect(checkStep()).not.toHaveClass('is-done');
+    });
+
+    it("doesn't mark the check done when the hardware couldn't be read", async () => {
+        mockedApi.getOnboardingPreflight.mockRejectedValue(new Error('timed out'));
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        await screen.findByText(/couldn.t be read \(timed out\)/);
+        expect(checkStep()).not.toHaveClass('is-done');
+    });
+
+    it('reads the device again once setup has started the model server', async () => {
+        mockedApi.getOnboardingPreflight.mockResolvedValue({ ...HARDWARE, gpu_name: null, npu_detected: null, lemonade_running: false });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        await screen.findByText('Checked once the model server is running');
+        mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
+        fireEvent.click(screen.getByRole('button', { name: 'Start setup' }));
+        await waitFor(() => expect(mockedApi.getOnboardingPreflight).toHaveBeenCalledTimes(2));
+        await waitFor(() => expect(checkStep()).toHaveClass('is-done'));
     });
 
     it("doesn't warn about the NPU before a model server can be asked", async () => {
@@ -671,7 +717,7 @@ describe('SetupScreen: download progress', () => {
 });
 
 describe('SetupScreen: an unreachable AMD gateway (#5604)', () => {
-    const NO_NET = "No network available — can't reach llm-api.amd.com (needs AMD's network or VPN)";
+    const NO_NET = "Can't reach llm-api.amd.com. It needs AMD's network or VPN";
     const gateway = (reachable: boolean) => ({
         providers: [{
             id: 'amd' as const, name: 'AMD LLM Gateway', remote: true, privacy_notice: '',
@@ -681,12 +727,12 @@ describe('SetupScreen: an unreachable AMD gateway (#5604)', () => {
         lemonade_error: null,
     });
 
-    it('greys out the gateway choice and says there is no network', async () => {
+    it('greys out the gateway choice and says it needs AMD\'s network', async () => {
         mockedApi.listProviders.mockResolvedValue(gateway(false));
         render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
         const amd = await screen.findByRole('radio', { name: /AMD LLM Gateway/ });
         await waitFor(() => expect(amd).toBeDisabled());
-        expect(amd).toHaveTextContent('No network available');
+        expect(amd).toHaveTextContent("It needs AMD's network or VPN");
         expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toBeEnabled();
     });
 

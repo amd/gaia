@@ -25,16 +25,13 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from gaia.agents.base.call_risk import (
     DESTRUCTIVE,
+    NEEDS_PERSON_ARG,
     RISK_NOTE_ARG,
     shell_command_risk,
 )
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.errors import exit_error
-from gaia.agents.base.file_snapshots import (
-    SnapshotError,
-    before_change,
-    note_untracked,
-)
+from gaia.agents.base.file_snapshots import SnapshotError, before_change, note_untracked
 from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
@@ -52,6 +49,7 @@ from gaia.agents.tools.shell_deletes import (
     split_exact,
 )
 from gaia.agents.tools.shell_session import ShellSession
+from gaia.agents.tools.workspace_paths import _workspace_default
 from gaia.env import child_env
 from gaia.tool_cancellation import tool_cancelled
 
@@ -369,7 +367,7 @@ def _one_time_hard_reason(command: str) -> str:
         if not piece:
             continue
         try:
-            argv = shlex.split(piece)
+            argv = _tokenize(piece)
         except ValueError:
             argv = piece.split()
         if _destroys(argv):
@@ -410,6 +408,12 @@ def _reaches_the_prompt(error: Optional[Dict[str, Any]]) -> bool:
         TIER_CONFIRM,
         TIER_CONFIRM_ONCE,
     )
+
+
+def _call_key(command: Any, working_directory: Any) -> Tuple[Any, Any]:
+    """The identity an approval is bound to: this text, in this folder."""
+    # As run: the tool expands ~ before checking, so the key must too.
+    return command, _expand_home(working_directory) or None
 
 
 # The binaries a developer session needs and a read-only session must not have
@@ -1478,6 +1482,62 @@ def _script_words(body: str, dialect: str) -> list:
     return words
 
 
+def _gh_remote_positions(argv: list) -> set:
+    """Indexes of *argv* that ``gh`` reads as GitHub ids, never as local paths.
+
+    The ``-R``/``--repo`` value (``amd/gaia``) and the ``gh api`` endpoint
+    (``repos/amd/gaia``). Every other ``gh`` operand is still scanned:
+    ``--body-file`` and ``gist create`` do read local files.
+    """
+    if os.path.basename(argv[0]).lower().removesuffix(".exe") != "gh":
+        return set()
+    remote = set()
+    seen_api = False
+    value_next = False
+    for index, token in enumerate(argv[1:], start=1):
+        if value_next:
+            value_next = False
+            continue
+        if token in ("-R", "--repo"):
+            remote.add(index + 1)
+            value_next = True
+        elif token.startswith(("--repo=", "-R")) and token not in ("-R",):
+            # --repo=x, -R=x and pflag's attached -Rx.
+            remote.add(index)
+        elif token == "api" and index == 1:
+            seen_api = True
+        elif seen_api and token in _GH_API_VALUE_FLAGS:
+            value_next = True
+        elif seen_api and not token.startswith("-"):
+            remote.add(index)
+            seen_api = False
+    return remote
+
+
+#: ``gh api`` flags whose next word is their value, not the endpoint.
+_GH_API_VALUE_FLAGS = frozenset(
+    {
+        "-X",
+        "--method",
+        "-H",
+        "--header",
+        "-f",
+        "--raw-field",
+        "-F",
+        "--field",
+        "-q",
+        "--jq",
+        "-t",
+        "--template",
+        "-p",
+        "--preview",
+        "--hostname",
+        "--cache",
+        "--input",
+    }
+)
+
+
 def _path_operands(argv: list) -> list:
     """``(label, operand)`` for every operand of *argv* the path check reads.
 
@@ -1491,7 +1551,10 @@ def _path_operands(argv: list) -> list:
     for start, token in enumerate(argv[:-1] if wrapped else argv[:1]):
         if _interpreter_name(token) == "env":
             operands.extend(_env_wrapper_assignments(argv[start:]))
+    remote = _gh_remote_positions(argv)
     for index, token in enumerate(argv[1:], start=1):
+        if index in remote:
+            continue
         dialect = positions.get(index)
         if dialect is None or dialect.endswith(_MAYBE):
             operands.append(("Argument", token))
@@ -1679,12 +1742,16 @@ def _tokenize(command: str, bypass_gates: bool = False) -> list:
     than being eaten as a space. Inside quotes it is still ordinary data, so
     ``echo "a<newline>b"`` remains one operand.
     """
-    if not bypass_gates:
-        return shlex.split(command)
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=_BYPASS_PUNCTUATION)
+    if bypass_gates:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=_BYPASS_PUNCTUATION)
+        lexer.whitespace = " \t\r"
+    else:
+        lexer = shlex.shlex(command, posix=True)
     lexer.whitespace_split = True
     lexer.commenters = ""  # same as shlex.split: '#' is data, not a comment
-    lexer.whitespace = " \t\r"
+    if _pipe_dialect() == "cmd":
+        # cmd.exe reads '\' as a separator; POSIX escaping hid C:\x from the path check.
+        lexer.escape = ""
     return list(lexer)
 
 
@@ -2085,13 +2152,21 @@ def _take_segment_envs(segments: list) -> tuple:
     return tuple(envs), stripped, None
 
 
+def _expand_home(path: Any) -> Any:
+    """``~/x`` -> the user's ``x``, as a shell would; anything else unchanged."""
+    if isinstance(path, str) and path.startswith("~"):
+        return os.path.expanduser(path)
+    return path
+
+
 def _ambiguous_pipe_refusal(piece: str, exc: ValueError) -> Dict[str, Any]:
     """The shell cuts at a ``|`` the argument quoting says is data."""
+    # The fix comes first: a cut-off error line still says what to do.
     return {
         "status": "error",
         "error": (
-            "Cannot tell where this pipeline's commands begin and end: the "
-            "shell would cut it at a '|' that the quoting puts inside an "
+            "Not run: wrap any argument containing '|' in double quotes. The "
+            "shell would cut this line at a '|' its quoting puts inside an "
             f"argument ({exc} in {piece.strip()!r})."
         ),
         "has_errors": True,
@@ -2735,19 +2810,32 @@ class ShellToolsMixin:
         """
         return self._path_allowed
 
+    def _session_start_cwd(self) -> Optional[str]:
+        """Return a permitted chat workspace, or let the session use cwd."""
+        workspace = _workspace_default(self)
+        if workspace and self._path_allowed(workspace, prompt_user=False):
+            return workspace
+        return None
+
     @property
     def shell_session(self) -> ShellSession:
         """This agent's shell session, created on first use."""
         session = getattr(self, "_shell_session", None)
         if session is None or session.closed:
-            session = ShellSession(cwd_guard=self._session_cwd_guard())
+            session = ShellSession(
+                start_cwd=self._session_start_cwd(),
+                cwd_guard=self._session_cwd_guard(),
+            )
             self._shell_session = session
         return session
 
     def reset_shell_session(self) -> ShellSession:
         """Replace the session with a clean one and return it."""
         previous = getattr(self, "_shell_session", None)
-        self._shell_session = ShellSession(cwd_guard=self._session_cwd_guard())
+        self._shell_session = ShellSession(
+            start_cwd=self._session_start_cwd(),
+            cwd_guard=self._session_cwd_guard(),
+        )
         if previous is not None:
             previous.close()
         return self._shell_session
@@ -2905,7 +2993,8 @@ class ShellToolsMixin:
         ``TIER_CONFIRM`` (``git commit``, ``npm test``) and ``TIER_CONFIRM_ONCE``
         (``git push``, ``python -c``, a path outside the project) fall through
         to the prompt. The exception is a run where only a blanket pre-approval
-        would answer it; see :meth:`_approval_is_blanket_only`.
+        would answer it; see :meth:`_approval_is_blanket_only`. If a person is
+        watching that run (:meth:`_a_person_answers`), the call is put to them.
 
         Duck-typed rather than an override: ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
@@ -2915,6 +3004,8 @@ class ShellToolsMixin:
         # Every shell call starts with no approval on record; only this call's
         # own prompt can write one.
         self._approved_once = None
+        self._needs_person = None
+        self._person_approved = None
         command = (tool_args or {}).get("command")
         if not isinstance(command, str):
             return None
@@ -2935,6 +3026,12 @@ class ShellToolsMixin:
             }
         if _reaches_the_prompt(error):
             if not self._approval_is_blanket_only():
+                return None
+            if tool_name == _POLICY_GATED_SHELL_TOOL and self._a_person_answers():
+                # Pre-approval stands, but this call goes to that person.
+                self._needs_person = _call_key(
+                    command, (tool_args or {}).get("working_directory")
+                )
                 return None
             error = self._blanket_approval_refusal(error, command)
         logger.info(
@@ -2964,6 +3061,30 @@ class ShellToolsMixin:
         from gaia.agents.base import console as console_mod
 
         return console_mod.auto_approve_env_enabled()
+
+    def _a_person_answers(self) -> bool:
+        """True when a pre-approving run can still put a call to a person.
+
+        A watched Full access chat over the sidecar's socket: tools are
+        pre-approved, the shell gates stay on (#3373), and someone is there to
+        answer. A command past the gates is asked about there instead of
+        refused. ``GAIA_AUTO_APPROVE_TOOLS`` marks an unattended run, so it
+        keeps refusing whatever the console says.
+        """
+        console = getattr(self, "console", None)
+        if console is None or getattr(console, "full_access", False) is True:
+            return False
+        if not (
+            getattr(console, "asks_past_preapproval", False) is True
+            and getattr(console, "answers_confirmations", False) is True
+            and getattr(console, "grants_paths", False) is True
+            and not getattr(console, "background_mode", False)
+        ):
+            return False
+        # Deferred: the console module imports the package root.
+        from gaia.agents.base import console as console_mod
+
+        return not console_mod.auto_approve_env_enabled()
 
     def _nothing_could_have_confirmed(self) -> bool:
         """True when this call reached execution without anyone approving it.
@@ -3117,8 +3238,23 @@ class ShellToolsMixin:
         always names its folder and carries ``RISK_NOTE_ARG``: the prompt shows
         the line verbatim with that note, and offers no "always".
 
+        A call the pre-flight left for a person (:meth:`_a_person_answers`)
+        carries ``NEEDS_PERSON_ARG``, so pre-approval does not answer it.
+
         Duck-typed, like :meth:`skill_grant_covers_call`.
         """
+        shown = self._shown_args(tool_name, tool_args)
+        if (
+            tool_name == _POLICY_GATED_SHELL_TOOL
+            and isinstance(tool_args, dict)
+            and getattr(self, "_needs_person", None)
+            == _call_key(tool_args.get("command"), tool_args.get("working_directory"))
+        ):
+            return {**shown, NEEDS_PERSON_ARG: True}
+        return shown
+
+    def _shown_args(self, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
+        """:meth:`confirmation_args_for_call` before any approval marker."""
         if tool_name != _POLICY_GATED_SHELL_TOOL or not isinstance(tool_args, dict):
             return tool_args
         command = tool_args.get("command")
@@ -3152,19 +3288,30 @@ class ShellToolsMixin:
         """
         if tool_name != _POLICY_GATED_SHELL_TOOL or not isinstance(tool_args, dict):
             return
-        self._approved_once = (
-            tool_args.get("command"),
-            tool_args.get("working_directory") or None,
-        )
+        key = _call_key(tool_args.get("command"), tool_args.get("working_directory"))
+        self._approved_once = key
+        # The marked call reached a person, so its approval was theirs.
+        if key == getattr(self, "_needs_person", None):
+            self._person_approved = key
 
     def _take_once_approval(self, command: str, working_directory: Any) -> bool:
         """Consume the approval for exactly this call; False when there is none."""
         approved = getattr(self, "_approved_once", None)
         self._approved_once = None
-        return approved == (command, working_directory or None)
+        return approved == _call_key(command, working_directory)
+
+    def _take_person_approval(self, command: str, working_directory: Any) -> bool:
+        """Consume a person's approval of exactly this call; False when there is none."""
+        approved = getattr(self, "_person_approved", None)
+        self._person_approved = None
+        self._needs_person = None
+        return approved is not None and approved == _call_key(
+            command, working_directory
+        )
 
     def _call_cwd(self, working_directory: Any) -> Optional[Tuple[str, bool]]:
         """``(folder, explicit)`` a call runs in, or None when it names no real one."""
+        working_directory = _expand_home(working_directory)
         if working_directory:
             if not isinstance(working_directory, str) or not os.path.isdir(
                 working_directory
@@ -3475,7 +3622,7 @@ class ShellToolsMixin:
         the allowed paths is collected for the prompt instead of refused.
         """
         try:
-            resolved = str(Path(cwd).joinpath(target).resolve())
+            resolved = str(Path(cwd).joinpath(_expand_home(target)).resolve())
         except (OSError, ValueError) as exc:
             return cwd, {
                 **NOT_EXECUTED,
@@ -3567,6 +3714,13 @@ class ShellToolsMixin:
         if os.name == "nt" and candidate_path.startswith("/"):
             if "/" not in candidate_path[1:]:
                 return None
+        # cmd.exe drops an unquoted '^' that shlex keeps; check its reading too.
+        if _pipe_dialect() == "cmd" and "^" in candidate_path:
+            refusal = self._path_candidate_refusal(
+                label, arg, re.sub(r"\^(.?)", r"\1", candidate_path), cwd, outside
+            )
+            if refusal:
+                return refusal
         # A shell or script may expand '~' and '$HOME'; check both readings.
         expanded = os.path.expandvars(os.path.expanduser(candidate_path))
         looks_like_path = (
@@ -4454,6 +4608,7 @@ class ShellToolsMixin:
                 code), the applied 'timeout' and 'timeout_class'; one killed at
                 the limit carries 'timed_out'.
             """
+            working_directory = _expand_home(working_directory)
             try:
                 bypass = self.full_access_active()
                 try:
@@ -4554,6 +4709,8 @@ class ShellToolsMixin:
                 # Spent by every run, so an approval reaches only the call it
                 # was given for and never a later one.
                 approved_once = self._take_once_approval(command, working_directory)
+                if self._take_person_approval(command, working_directory):
+                    unconfirmed = False
                 error, steps = self._line_verdict(command, working_directory)
                 if error and not _reaches_the_prompt(error):
                     return error

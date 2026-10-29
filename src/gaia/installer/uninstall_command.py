@@ -184,6 +184,8 @@ _USER_DATA_NAMES = (
     "config.json.lock",
     "config.json.lock.d",
     "sessions",
+    # Undo copies of files the agent changed — the user's own file contents.
+    "snapshots",
     "agents",
     "tui",
     "ui",
@@ -214,6 +216,7 @@ def _purge_paths(home: Optional[Path] = None) -> List[Path]:
         gaia / "gaia.log.lock",
         gaia / "electron-install-state.json",
         gaia / "electron-install.log",
+        gaia / "electron-install.log.prev",
         gaia / "electron-main.log",
         gaia / "electron-updater.log",
         gaia / "electron-startup-failures.json",
@@ -951,11 +954,12 @@ def _print_no_flags_help(printer: Callable[[str], None] = print) -> None:
         "Choose a tier:",
         "  gaia uninstall --venv            Remove ~/.gaia/venv/ (Tier 2)",
         "  gaia uninstall --purge           Remove venv + chats + documents +",
-        "                                   memory + sessions + config + agents +",
-        "                                   caches + embedded Lemonade + logs +",
-        "                                   installer binaries + daemon state +",
-        "                                   saved sign-ins and API keys, and the",
-        "                                   installer's PATH edits (Tier 3)",
+        "                                   memory + sessions + undo snapshots +",
+        "                                   config + agents + caches + embedded",
+        "                                   Lemonade + logs + installer binaries +",
+        "                                   daemon state + saved sign-ins and API",
+        "                                   keys, and the installer's PATH edits",
+        "                                   (Tier 3)",
         "",
         "Optional extras (must be combined with --purge):",
         "  --purge-lemonade                 Also uninstall Lemonade Server",
@@ -1385,8 +1389,10 @@ def _resolve_lemonade_python() -> Optional[str]:
 def _remove_lemonade(printer: Callable[[str], None] = print) -> bool:
     """Best-effort Lemonade Server removal.
 
-    Never fails the command — returns True even if Lemonade could not be
-    removed, so the rest of the uninstall flow proceeds.
+    Returns False only when the installation check itself raised, because then
+    "not installed" would be a guess and the caller must not report success. A
+    removal that fails after a good check is still reported as a warning and
+    returns True, so the rest of the uninstall flow proceeds.
     """
     _print("  [lemonade] attempting to uninstall Lemonade Server...", printer=printer)
 
@@ -1397,6 +1403,17 @@ def _remove_lemonade(printer: Callable[[str], None] = print) -> bool:
 
         installer = LemonadeInstaller()
         info = installer.check_installation()
+        if info.check_failed:
+            _print(
+                f"  [lemonade] installation check failed: {info.error}",
+                printer=printer,
+            )
+            _print(
+                "  [lemonade] skipped removal — uninstall Lemonade Server by hand "
+                "if it is present",
+                printer=printer,
+            )
+            return False
         if not info.installed:
             _print(
                 "  [lemonade] not installed — nothing to do",
@@ -1527,7 +1544,8 @@ def execute_plan(
             all_ok = False
 
     if plan.purge_lemonade:
-        _remove_lemonade(printer=printer)
+        if not _remove_lemonade(printer=printer):
+            all_ok = False
 
     if any(label == "--purge" for label, _ in plan.tiered_paths):
         gaia_home = _gaia_home(home).resolve(strict=False)
