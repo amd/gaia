@@ -36,7 +36,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 MANIFEST = "manifest.json"
 MANIFEST_VERSION = 1
@@ -556,13 +556,11 @@ def diff_turn(
             item["binary"] = True
         else:
             name = Path(entry["path"]).name
-            unified = "".join(
-                difflib.unified_diff(
-                    before_text.splitlines(keepends=True),
-                    after_text.splitlines(keepends=True),
-                    fromfile=f"a/{name}" if entry["existed"] else "/dev/null",
-                    tofile=f"b/{name}" if entry.get("after_exists") else "/dev/null",
-                )
+            unified = _unified_diff(
+                before_text,
+                after_text,
+                f"a/{name}" if entry["existed"] else "/dev/null",
+                f"b/{name}" if entry.get("after_exists") else "/dev/null",
             )
             if len(unified) > MAX_DIFF_CHARS:
                 unified = unified[:MAX_DIFF_CHARS]
@@ -653,11 +651,13 @@ def _raise_conflicts(checks: List[tuple], since: str) -> None:
     )
 
 
-def _apply(steps: List[_Step], rollback_dir: Path) -> List[str]:
+def _apply(
+    steps: List[_Step], rollback_dir: Path, extra_dirs: Iterable[str] = ()
+) -> List[str]:
     """Write every step, or none: a failure puts back the files already written.
 
-    Returns the folders a removed file's turn created that could not be
-    removed because something else is in them.
+    Returns the folders a removed file's turn created (plus *extra_dirs*) that
+    could not be removed because something else is in them.
     """
     # Copy what is on disk now, so a failure part-way can be rolled back.
     shutil.rmtree(rollback_dir, ignore_errors=True)
@@ -718,7 +718,7 @@ def _apply(steps: List[_Step], rollback_dir: Path) -> List[str]:
     shutil.rmtree(rollback_dir, ignore_errors=True)
 
     kept_dirs = []
-    created = {d for step in steps for d in step.created_dirs}
+    created = {d for step in steps for d in step.created_dirs} | set(extra_dirs)
     for folder in sorted(created, key=lambda d: len(Path(d).parts), reverse=True):
         path = Path(folder)
         if not path.is_dir():
@@ -817,7 +817,7 @@ class _Span:
         return "created" if after else "unchanged"
 
 
-def _spans(turns: List[_Turn]) -> List[_Span]:
+def _spans(turns: List[_Turn], include_unchanged: bool = False) -> List[_Span]:
     spans: Dict[str, _Span] = {}
     for turn in turns:
         message_id = turn.manifest.get("message_id")
@@ -829,7 +829,36 @@ def _spans(turns: List[_Turn]) -> List[_Span]:
             span.last_turn, span.last = turn, entry
             if message_id is not None and message_id not in span.message_ids:
                 span.message_ids.append(message_id)
+    if include_unchanged:
+        return list(spans.values())
     return [s for s in spans.values() if s.change != "unchanged"]
+
+
+def _newline_lines(text: str) -> list:
+    """*text* split after each ``\\n`` only, keeping the ends, as git splits it.
+
+    ``str.splitlines`` also breaks on form feeds and Unicode line separators,
+    which would put a false "No newline" marker inside the diff.
+    """
+    return re.findall(r"[^\n]*\n|[^\n]+$", text)
+
+
+def _unified_diff(before: str, after: str, fromfile: str, tofile: str) -> str:
+    """A unified diff that marks a last line with no newline, as git does.
+
+    ``difflib`` leaves that line unterminated, so it ran into the next one.
+    """
+    lines = []
+    for line in difflib.unified_diff(
+        _newline_lines(before),
+        _newline_lines(after),
+        fromfile=fromfile,
+        tofile=tofile,
+    ):
+        lines.append(line)
+        if not line.endswith("\n"):
+            lines.append("\n\\ No newline at end of file\n")
+    return "".join(lines)
 
 
 def _count_lines(unified: str) -> tuple:
@@ -869,13 +898,11 @@ def _span_diff(span: _Span) -> Dict[str, Any]:
         item["binary"] = True
         return item
     name = Path(first["path"]).name
-    unified = "".join(
-        difflib.unified_diff(
-            before_text.splitlines(keepends=True),
-            after_text.splitlines(keepends=True),
-            fromfile=f"a/{name}" if first["existed"] else "/dev/null",
-            tofile=f"b/{name}" if last.get("after_exists") else "/dev/null",
-        )
+    unified = _unified_diff(
+        before_text,
+        after_text,
+        f"a/{name}" if first["existed"] else "/dev/null",
+        f"b/{name}" if last.get("after_exists") else "/dev/null",
     )
     item["additions"], item["deletions"] = _count_lines(unified)
     if len(unified) > MAX_DIFF_CHARS:
@@ -942,7 +969,14 @@ def restore_session(
             "this chat last changed them",
         )
     session_dir = turns[0].dir.parent
-    kept_dirs = _apply(steps, session_dir / "rollback")
+    # A file made and then deleted within the chat leaves only its folders.
+    leftover = [
+        d
+        for span in _spans(turns, include_unchanged=True)
+        if span.change == "unchanged" and not span.first["existed"]
+        for d in span.first.get("created_dirs") or []
+    ]
+    kept_dirs = _apply(steps, session_dir / "rollback", extra_dirs=leftover)
 
     restored_at = _now_iso()
     for turn in turns:

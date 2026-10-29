@@ -6,6 +6,241 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### For integrators: contract 2.25
+
+- **The agent remembers its own tool calls across turns** (contract **2.25**,
+  #5701). A caller that pushed history as `context` could send only text, so
+  on the next turn the agent saw its earlier answers but not the commands it
+  ran or their errors, and "why did that fail?" got "I have no record of the
+  tool calls". Send the new `turns` field (`[]` on the first turn) and that
+  turn's `final` carries `model_messages`, the turn as the model saw it, tool
+  calls and results included. Send those back in `turns`, oldest first, and
+  the agent replays them, keeping the newest whole turns that fit its context
+  window. `turns` replaces `context` when sent (a non-empty `context` beside
+  it is a `422`), and `[]` clears a retained session's history. A caller that
+  sends no `turns` gets no `model_messages`, so a `final` stays small for
+  text-only clients. Pre-2.25 binaries refuse the field with `422`, so probe
+  `/version` first.
+
+## [0.3.2]
+
+Released with GAIA 0.25.2, and requires the `gaia`
+Python CLI 0.25.2+ on `PATH`. Integrators: the sidecar contract is now
+**2.24**; clients built for 2.18 keep working, and the new
+`/query` fields are refused with `422` by older binaries, so probe
+`/version` before sending them.
+
+- **Memory downloads its embedding model when it is missing.** On the first
+  start that uses memory, the agent now fetches the required embedding model
+  from Lemonade instead of silently running without memory; the initial
+  download can be about 300 MB.
+- **Unknown or misplaced switches are refused.** `gaia --forse` and
+  `gaia fetch --developer-mode` now exit 2 instead of silently starting the TUI;
+  pass terminal-UI arguments after a bare `--`.
+
+- **The Agent UI's "Under the hood" figures cover GAIA chats.** It said every
+  answer was "not measured", because only the agent saw its own step timings.
+  `final` now carries `performance` with them: the turn's model and tool
+  seconds and each model call's token counts. Older binaries never send it.
+- **`GET /v1/gaia/skills` says where each skill came from.** Each skill now
+  carries a `source` (`agent-bundled`, `user` or `claude-import`; `null` for
+  any other root), so the Agent UI can group the Skills list by origin. An
+  older agent omits it and the UI shows the list flat.
+- **One very long turn no longer vanishes from the conversation.** A turn
+  bigger than the whole history budget, like a pasted log or a long document
+  read, was dropped from what the model saw next, answer included, so "now
+  shorten that" ran with no record of it. It is now kept: long tool results
+  become a short note naming the tool, and its longest messages are cut with
+  a note saying how much.
+- **Internet off also stops the mailbox and Agent Hub tools.** With a chat's
+  Internet switched off, GAIA could still read Gmail or Outlook and search or
+  install skills from the Agent Hub, because those tools carry no URL for the
+  check to see. They are now refused with the same message as a web search.
+
+### For integrators: contract 2.24
+
+- **Relative file paths use the chat workspace.** A new `working_directory` field
+  on `/query` tells the agent where bare file names resolve, separately from
+  `allowed_paths`. New and retained sessions use the same workspace for reads,
+  writes, edits and approval prompts. Send it only after `/version` reports
+  contract 2.24 or later.
+
+### For integrators: contract 2.23
+
+- **`/query` takes `internet_off`** (contract **2.23**, #5883). The Agent UI
+  never told the agent when a chat's Internet switch was off, so the switch
+  stayed locked in every GAIA chat on a standard install. `true` refuses web
+  search, page fetches, the browser, connector, mailbox and Agent Hub tools and
+  commands that contact another host, as it does when the agent runs inside the Agent UI. `false`
+  allows them, and omitting it leaves the agent as it is. A retained session
+  keeps the last value. Older binaries `422` the field.
+- **`POST /v1/gaia/sessions/{session_id}/internet`** (contract **2.23**)
+  reaches a turn already running. Without it, a user who turned the internet
+  off mid-turn watched the agent keep searching until the turn ended. Body
+  `{"internet_off": bool}`; the session's next tool call follows it. An
+  unknown session is a `404`, as for `/bypass`. Post it only once `/query`
+  has answered: until then the turn's own `internet_off` replaces it.
+
+### For integrators: contract 2.22
+
+- **A client can show the model's reasoning.** Over `/query` the reasoning
+  only arrived folded into `status` lines, so the Agent UI showed none of it
+  for an installed GAIA. A request with `reasoning: true` now gets it as
+  `reasoning` events, `{ delta }`, kept apart from the answer. Without the
+  field nothing changes. Older binaries reject it with `422`.
+
+### For integrators: contract 2.21
+
+- **`final` says how full the model's window is** (contract **2.21**,
+  #5738). The Agent UI's Context panel and the meter beside its message box
+  stayed empty for every GAIA chat, because only the agent can measure its
+  own prompt, tools and window. `final` now carries `context` with that
+  measurement for the next call, or `context_error` when measuring failed.
+  A stopped or failed turn carries neither. Older binaries never send it.
+- **A relayed write prompt names where the file lands.** When the model asks to
+  write `shop2.txt`, `needs_confirmation` now carries the absolute path the
+  write resolves to in `prompt_context.file_path`, so a front-end can show
+  `/Users/you/shop2.txt` instead of a bare name. `args` still holds exactly the
+  model's `file_path`.
+- **A web search's results reach the client.** The Agent UI listed no Sources
+  for a GAIA web search, because a `search_web` `tool_result` carried only a
+  300-character summary. Its `data` now also carries `sources`, a list of
+  `{ title, url }` for each hit. Older binaries never send it.
+
+- **Code search no longer hangs on a large repository.** The first
+  `search_code_index` built the whole index inside one call; on a repository
+  the size of GAIA's (about 115,000 chunks, some 20 minutes) the call hit its
+  15-minute limit, saved nothing, and ended the turn with an empty answer —
+  every time. The build now runs in the background and each search reports its
+  progress until it is done, so the agent falls back to text search meanwhile.
+  `index_codebase` and the task-start auto-index report that build instead
+  of embedding the repository a second time alongside it. The build is shared
+  by every chat on the same repository, so a second chat's search reports it
+  too and its clear is refused until the build is done.
+
+- **An old failure in memory no longer stops a request you make now.** A note
+  like "this page returned 503, don't waste tool calls on it" was obeyed as a
+  standing ban, so the agent refused a URL you handed it. Memories now reach
+  the model as dated notes your request outranks, and a passing failure is
+  marked as one. A 429 or 502-504 "try later" failure is no longer saved as
+  an error memory at all.
+- **Text from a file is not saved as your details.** The agent could save a
+  line from a document it read, or call it something you had saved. It now
+  saves text from a file, page or tool result only when you ask it to keep
+  something, and an empty memory search says that file text is not saved.
+
+- **Pushed history that doesn't fit the model's window no longer overflows
+  it.** `/query` used the `context` you pushed as-is, but you size it without
+  seeing the agent's prompt and tools. On a 32K window the two together could
+  exceed the window and fail the turn. The agent now keeps the newest whole
+  turns that fit beside its prompt and streams a `status` event when older
+  ones drop out of view.
+
+- **Homebrew tools are visible to the agent on a Mac.** An app opened from Finder
+  or the Dock starts with only the system folders on its search path, so the
+  agent could not run `gh`, `node` or anything else Homebrew installed, and its
+  prompt said they were "not installed". The agent now starts with the `PATH`
+  your login shell builds (only when opened that way: started from a terminal it
+  keeps the terminal's own `PATH`, so an activated virtualenv still wins), and a
+  tool it still cannot find is reported as not
+  reachable from its shell rather than missing from your machine. If your shell
+  startup is slow or fails, the agent logs a warning and keeps the old path.
+
+### For integrators: contract 2.20
+
+- **A failed model request says which endpoint failed, worded for your
+  front-end** (contract **2.20**, #5295). A headless caller of `/query` whose
+  hosted model returned HTTP 502 was told the "cloud request through Lemonade
+  failed" and to check "the TUI provider settings", though no TUI was
+  involved. The error now names the provider and the `host:port` the request
+  went through. A local model on a base URL you set is reported as "the model
+  server at `host:port`" instead of "Lemonade on this machine", since GAIA
+  can't tell what serves it. The advice follows the `surface` field: a caller
+  that omits it is pointed at the model server the GAIA host uses; `"tui"`,
+  `"agent_ui"` and `"cli"` keep their own settings screens. Older binaries
+  refuse the field with `422`, so probe `/version` before sending it.
+  Version skew: a front-end older than this release never sends `surface`, so
+  against this agent it gets the headless advice (the model server's
+  `LEMONADE_BASE_URL`) instead of its own settings screen. GAIA ships the TUI,
+  the Agent UI and this agent together, so this only shows when one of them is
+  updated without the others, or when the TUI's `/version` probe times out and
+  it can't confirm the agent takes the field.
+- **Answers stream over `/query`.** The HTTP sidecar ran its agent with
+  streaming off, so a relayed turn (the Agent UI, and the TUI's later sessions)
+  showed "Waiting on the model" until the whole answer landed at once, Stop could
+  not cut a model call short, and a stopped turn kept no text. Every `/query`
+  turn now streams its model calls and sends the answer as `token` events before
+  `final`, the same as the stdio transport. A run cancelled mid-answer stops
+  within a token and ends with an empty `final`, as stdio does; text not yet
+  sent when the cancel lands is dropped.
+### Fixed
+
+- **"Save it to my Documents folder" saves to the user's Documents folder.**
+  The system prompt told GAIA that "my documents" meant its own documents
+  folder (`~/.gaia/documents`), so a new file the user asked for in Documents
+  went into GAIA's hidden folder, where they would never find it. Finding an
+  existing file still checks GAIA's folders first.
+- **Secrets stay out of memory and the conversation log.** A bank PIN was saved
+  as a memory, because the filter knew passwords and API keys but not PINs. The
+  conversation log also kept the PIN, a password the agent had refused, a card
+  number and an SSN verbatim, where `search_past_conversations` read them back.
+  PINs, passcodes, card security codes, Luhn-valid card numbers and SSNs are now
+  refused as memories, and every credential-shaped span is replaced with
+  `[secret removed]` before a turn is logged.
+- **"How much free disk space do I have?" gets the right number, first try.**
+  On a Mac, GAIA said a nearly full disk had ~233 GB free: its system-info
+  tool reported only the share the system volume uses, so 97.8% used read as
+  5%. It now reports free space as macOS counts it, and says it answers
+  free-space questions, so GAIA no longer tries a shell command that is refused.
+- **Full access in the Agent UI asks before a gated shell command instead of
+  refusing it.** With `/sessions/{id}/bypass` on, a command such as a delete or
+  `git add` was refused outright, so a Full access chat could not run it at
+  all. On a run someone can answer it now emits `needs_confirmation` and runs
+  only on an allow from `/tool_decision`. The shell gates still stay on over
+  HTTP, commands that need no approval still run unasked, and a run nobody can
+  answer still refuses.
+- **Local models with a large window can write longer replies.** The output
+  cap is a quarter of the loaded window (16K at 64K, between 8K and 32K)
+  instead of a flat 8K, and a reply cut off at the cap is told to write the
+  file in smaller parts.
+- **`search_file_content` searches the workspace.** A relative or default
+  directory resolved against the sidecar's own folder and reported "0 files";
+  it now resolves against the workspace, searches text files of any extension,
+  and says when nothing was searched.
+- **Token counts are exact in the published binary, offline too.** The binary
+  could not load its tokenizer, so every turn trimmed history and sized
+  context from an estimate that overcounts, and logged `Unknown encoding
+  cl100k_base`. The tokenizer and its data now ship inside the binary, so it
+  no longer downloads anything to count tokens.
+
+### For integrators: contract 2.20
+
+- **`/query` takes `surface`** (contract **2.20**): `"agent_ui"`, `"tui"` or
+  `"cli"`. Asked to run something on a schedule from the Agent UI, the agent
+  said it had no scheduler and sent the user to Windows Task Scheduler; with
+  `"agent_ui"` it points them at the **Scheduled tasks** page instead. Older
+  binaries `422` the field, so probe `/version` before sending it.
+- **The agent knows which folders it can work in.** The system prompt now names
+  the session's folders and labels GAIA's documents folder, so "summarize X in
+  my documents folder" looks there first instead of trying `~/Documents` and
+  the home folder.
+
+### For integrators
+
+- **A tool result keeps the tool's own status.** When a tool's result had no
+  structured payload, the `tool_result` event's `data` carried only `summary`
+  and `success`, so a client could not tell a skipped `remember` (a private
+  chat saves nothing) from a saved one, and the Agent UI listed it as saved.
+  `data` now also carries `status` when the tool returned one. Additive, so
+  the contract version is unchanged.
+
+- **An MCP tool call says which connector it used and what came back.** A Git
+  connector call reached a client as a bare `mcp_git_git_log`, and its result
+  as "Tool 'git_log' returned data". `tool_call` gains optional `mcp_server`,
+  `mcp_server_label` ("Git") and `mcp_tool` ("git_log"), and the result's
+  `data` carries the tool's text in `mcp_output` (`{ text, truncated }`, capped
+  at 16,000 characters). Clients that ignore the fields see the same events.
+
 ### For integrators: contract 2.19
 
 - **`/query` can record a turn's file changes for undo** (contract **2.19**).
@@ -15,6 +250,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   changing it into the snapshot store the Agent UI reads, and finishes the
   recording before the terminal event. Older binaries refuse the field with
   `422`, so probe `/version` before sending it.
+- **A confirmation's `args` are only what the model sent.** `needs_confirmation`
+  `args` also carried keys the agent adds to its own prompt — a risk note, a
+  scratch-folder marker, and the folder a shell call runs in — so a policy
+  client auto-approving on `args` matched fields the model never sent. `args`
+  is now exactly the call's arguments; the folder and risk note moved to a new
+  `prompt_context` object.
 - **A tool result names the file it wrote.** When a tool's result carries
   `file_path` or `image_path`, the `tool_result` event's `data` now keeps it, so
   a client can list the files a turn produced.
@@ -25,6 +266,12 @@ Released with GAIA 0.25.1, and requires it. Integrators: the sidecar
 contract is now **2.18**; clients built for 2.17 keep working, and the new
 `/query` fields are refused with `422` by older binaries, so probe
 `/version` before sending them.
+
+### Linux
+
+- **The Linux agent runs on glibc 2.34 or newer.** The `linux-x64` agent is
+  now built against glibc 2.34 (#5545), so it starts on Ubuntu 22.04, Debian 12
+  and RHEL 9. Before, it needed glibc 2.38 and failed at launch on those.
 
 ### For integrators: contract 2.18
 
@@ -949,8 +1196,8 @@ the terminal UI meant building it from source.
   building its own TUI. Each terminal-hub artifact is additionally cross-checked
   against the hub's own server-side SHA-256 before its hash enters the lock.
 - Requires Node.js 18+ (built-in `fetch`), a running Lemonade Server for
-  inference, and the `gaia` Python CLI 0.25.1+ on `PATH` for the daemon the TUI
-  starts. 0.25.1 is the first core that can run the current release; on an
+  inference, and the `gaia` Python CLI 0.25.2+ on `PATH` for the daemon the TUI
+  starts. 0.25.2 is the first core that can run the current release; on an
   earlier core the UI starts with nothing behind it.
 - The sidecar has no arm64 Linux or arm64 Windows build. On those platforms the
   run stops with an error naming the platform and the supported set rather than

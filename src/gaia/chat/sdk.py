@@ -17,7 +17,14 @@ from typing import Any, Callable, Dict, List, Optional
 
 from gaia.chat.prompts import Prompts
 from gaia.llm import create_client
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_NAME,
+    GPU_CTX_SIZE,
+    LemonadeClient,
+    cloud_model_provider,
+    resolve_ctx_size,
+)
+from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
 from gaia.llm.providers.lemonade import NATIVE_TOOL_CALLS_PREFIX
 from gaia.logger import get_logger
 from gaia.utils import perf_trace
@@ -28,6 +35,22 @@ _SIDE_CALLS = threading.local()
 
 class LLMCallCancelled(Exception):
     """The caller cancelled a model call; nothing it produced is returned."""
+
+
+class RAGContextError(RuntimeError):
+    """Document context could not be added, so the question was not sent."""
+
+
+#: Below this many tokens of document context a RAG answer is not grounded.
+_MIN_RAG_CONTEXT_TOKENS = 500
+
+_TROUBLESHOOTING_URL = "https://amd-gaia.ai/docs/reference/troubleshooting"
+
+#: How to get a larger window, by where the window came from.
+_LARGER_WINDOW_HINT = {
+    "local": ", or load the model with a larger window (GAIA_CTX_SIZE)",
+    "pin": ", or raise the client's ctx_size_override",
+}
 
 
 @dataclass
@@ -747,7 +770,9 @@ class AgentSDK:
                 raise ValueError("Message cannot be empty")
 
             # Enhance message with RAG context if enabled
-            enhanced_message, _rag_metadata = self._enhance_with_rag(message.strip())
+            enhanced_message, _rag_metadata = self._enhance_with_rag(
+                message.strip(), no_history=no_history
+            )
 
             if no_history:
                 # Build a prompt using only the current enhanced message
@@ -1187,7 +1212,10 @@ class AgentSDK:
                     indexed_count += 1
                     self.log.info(f"Successfully indexed: {doc_path}")
                 else:
-                    self.log.warning(f"Failed to index document: {doc_path}")
+                    reason = (
+                        result.get("error") if isinstance(result, dict) else None
+                    ) or f"unexpected index result {result!r}"
+                    self.log.warning(f"Failed to index document {doc_path}: {reason}")
 
         if indexed_count == document_count:
             self.log.info(f"RAG enabled with {document_count} documents")
@@ -1338,69 +1366,118 @@ class AgentSDK:
         )
         return truncated
 
-    def _enhance_with_rag(self, message: str) -> tuple:
+    def _context_window(self) -> tuple:
+        """(tokens, source) of the window the answering model runs in.
+
+        *source* is ``"claude"``, ``"cloud"``, ``"pin"`` or ``"local"``.
+        """
+        if self.config.use_claude:
+            return CLAUDE_CTX_SIZE, "claude"
+        model = self.config.model
+        backend = getattr(self.llm_client, "_backend", None)
+        lemonade = isinstance(backend, LemonadeClient)
+        cloud = (
+            backend.cloud_model_provider(model)
+            if lemonade
+            else cloud_model_provider(model)
+        )
+        if cloud:
+            # Remote admission policy, as for the agent's own history budget.
+            return GPU_CTX_SIZE, "cloud"
+        if lemonade:
+            pin = backend.ctx_size_override
+            if isinstance(pin, int) and not isinstance(pin, bool) and pin > 0:
+                return pin, "pin"
+        base_url = backend.current_base_url() if lemonade else self.config.base_url
+        return resolve_ctx_size(model=model, base_url=base_url), "local"
+
+    def _enhance_with_rag(self, message: str, *, no_history: bool = False) -> tuple:
         """
         Enhance user message with relevant document context using RAG.
 
         Args:
             message: Original user message
+            no_history: The turn is sent without stored history, so it takes
+                no room from the document budget
 
         Returns:
             Tuple of (enhanced_message, metadata_dict)
+
+        Raises:
+            RAGContextError: Retrieval failed, or the model's window leaves no
+                room for document context. The question is never sent
+                without the documents it asked about.
         """
         if not self.rag_enabled or not self.rag:
             return message, None
 
         try:
-            # Query RAG for relevant context with metadata
             rag_response = self.rag.query(message, include_metadata=True)
+        except Exception as e:
+            raise RAGContextError(
+                f"Document retrieval failed, so the question was not sent: {e}. "
+                "Fix that cause (if the index is damaged, re-index with "
+                "add_document()), or call disable_rag() to chat without the "
+                f"documents. See {_TROUBLESHOOTING_URL}"
+            ) from e
 
-            if rag_response.chunks:
-                # Build context with source information
-                context_parts = []
-                if rag_response.chunk_metadata:
-                    for i, (chunk, metadata) in enumerate(
-                        zip(rag_response.chunks, rag_response.chunk_metadata)
-                    ):
-                        context_parts.append(
-                            f"Context {i+1} (from {metadata['source_file']}, relevance: {metadata['relevance_score']:.2f}):\n{chunk}"
-                        )
-                else:
-                    context_parts = [
-                        f"Context {i+1}:\n{chunk}"
-                        for i, chunk in enumerate(rag_response.chunks)
-                    ]
+        if not rag_response.chunks:
+            self.log.debug("No relevant document context found")
+            return message, {"rag_used": True, "chunks_retrieved": 0}
 
-                context = "\n\n".join(context_parts)
-
-                # Check token limits
-                message_tokens = self._estimate_tokens(message)
-                template_tokens = 150  # Template text overhead
-                response_tokens = self.config.max_tokens
-                history_tokens = self._estimate_tokens(str(self.chat_history))
-
-                # Conservative context size for models
-                model_context_size = 32768
-                available_for_rag = (
-                    model_context_size
-                    - message_tokens
-                    - template_tokens
-                    - response_tokens
-                    - history_tokens
+        # Build context with source information
+        context_parts = []
+        if rag_response.chunk_metadata:
+            for i, (chunk, metadata) in enumerate(
+                zip(rag_response.chunks, rag_response.chunk_metadata)
+            ):
+                context_parts.append(
+                    f"Context {i+1} (from {metadata['source_file']}, relevance: {metadata['relevance_score']:.2f}):\n{chunk}"
                 )
+        else:
+            context_parts = [
+                f"Context {i+1}:\n{chunk}"
+                for i, chunk in enumerate(rag_response.chunks)
+            ]
 
-                # Ensure minimum RAG context
-                if available_for_rag < 500:
-                    self.log.warning(
-                        f"Limited space for RAG context: {available_for_rag} tokens"
-                    )
-                    available_for_rag = 500
+        context = "\n\n".join(context_parts)
 
-                # Truncate context if needed
-                context = self._truncate_rag_context(context, available_for_rag)
+        # Check token limits
+        context_window, window_source = self._context_window()
+        system_tokens = self._estimate_tokens(self.config.system_prompt or "")
+        message_tokens = self._estimate_tokens(message)
+        template_tokens = 150  # Template text overhead
+        # A cloud reply is written into the provider's own, larger window.
+        response_tokens = 0 if window_source == "cloud" else self.config.max_tokens
+        history_tokens = (
+            0 if no_history else self._estimate_tokens(str(self.chat_history))
+        )
+        available_for_rag = (
+            context_window
+            - system_tokens
+            - message_tokens
+            - template_tokens
+            - response_tokens
+            - history_tokens
+        )
 
-                # Build enhanced message
-                enhanced_message = f"""Based on the provided documents, please answer the following question. Use the context below to inform your response.
+        if available_for_rag < _MIN_RAG_CONTEXT_TOKENS:
+            raise RAGContextError(
+                f"No room for document context: {self.effective_model} is loaded "
+                f"with a {context_window}-token window, and the system prompt "
+                f"(~{system_tokens}), history (~{history_tokens}), question "
+                f"(~{message_tokens}) and reply reserve ({response_tokens}) leave "
+                f"{available_for_rag} tokens, under the {_MIN_RAG_CONTEXT_TOKENS} "
+                "needed. Shorten the system prompt, call clear_history() or lower "
+                f"max_tokens{_LARGER_WINDOW_HINT.get(window_source, '')}. "
+                f"See {_TROUBLESHOOTING_URL}"
+            )
+
+        # Truncate context if needed
+        context = self._truncate_rag_context(context, available_for_rag)
+
+        # Build enhanced message
+        enhanced_message = f"""Based on the provided documents, please answer the following question. Use the context below to inform your response.
 
 Context from documents:
 {context}
@@ -1409,38 +1486,27 @@ User question: {message}
 
 Note: When citing information, please mention which context number it came from."""
 
-                # Prepare metadata for return
-                metadata = {
-                    "rag_used": True,
-                    "chunks_retrieved": len(rag_response.chunks),
-                    "estimated_context_tokens": self._estimate_tokens(context),
-                    "available_tokens": available_for_rag,
-                    "context_truncated": (
-                        len(context) < sum(len(c) for c in rag_response.chunks)
-                        if rag_response.chunks
-                        else False
-                    ),
-                }
+        # Prepare metadata for return
+        metadata = {
+            "rag_used": True,
+            "chunks_retrieved": len(rag_response.chunks),
+            "estimated_context_tokens": self._estimate_tokens(context),
+            "available_tokens": available_for_rag,
+            "context_window": context_window,
+            "context_truncated": len(context)
+            < sum(len(c) for c in rag_response.chunks),
+        }
 
-                # Add query metadata if available
-                if rag_response.query_metadata:
-                    metadata["query_metadata"] = rag_response.query_metadata
+        # Add query metadata if available
+        if rag_response.query_metadata:
+            metadata["query_metadata"] = rag_response.query_metadata
 
-                self.log.debug(
-                    f"Enhanced message with {len(rag_response.chunks)} chunks from "
-                    f"{len(set(rag_response.source_files)) if rag_response.source_files else 0} documents, "
-                    f"~{metadata['estimated_context_tokens']} context tokens"
-                )
-                return enhanced_message, metadata
-            else:
-                self.log.debug("No relevant document context found")
-                return message, {"rag_used": True, "chunks_retrieved": 0}
-
-        except Exception as e:
-            self.log.warning(
-                f"RAG enhancement failed: {e}, falling back to direct query"
-            )
-            return message, {"rag_used": False, "error": str(e)}
+        self.log.debug(
+            f"Enhanced message with {len(rag_response.chunks)} chunks from "
+            f"{len(set(rag_response.source_files)) if rag_response.source_files else 0} documents, "
+            f"~{metadata['estimated_context_tokens']} context tokens"
+        )
+        return enhanced_message, metadata
 
 
 class SimpleChat:

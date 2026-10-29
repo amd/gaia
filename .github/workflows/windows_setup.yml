@@ -234,7 +234,45 @@ jobs:
           fi
 
       - name: Install NSIS
-        run: choco install nsis --no-progress -y
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Find-Nsis {
+            $command = Get-Command makensis.exe -ErrorAction SilentlyContinue
+            if ($command) {
+              return $command.Source
+            }
+
+            @(
+              (Join-Path ${env:ProgramFiles(x86)} "NSIS\makensis.exe"),
+              (Join-Path $env:ProgramFiles "NSIS\makensis.exe")
+            ) |
+              Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+              Select-Object -First 1
+          }
+
+          $nsisPath = Find-Nsis
+          for ($attempt = 1; -not $nsisPath -and $attempt -le 2; $attempt++) {
+            choco install nsis --no-progress -y
+            $chocoExitCode = $LASTEXITCODE
+            $nsisPath = Find-Nsis
+            if (-not $nsisPath -and $attempt -lt 2) {
+              Write-Host "NSIS was not found after Chocolatey attempt $attempt (exit code $chocoExitCode); retrying once."
+              Start-Sleep -Seconds 5
+            }
+          }
+
+          if (-not $nsisPath) {
+            if ($chocoExitCode -ne 0) {
+              throw "Chocolatey failed to install NSIS (exit code $chocoExitCode); makensis.exe was not found. See the Chocolatey output above for the feed error."
+            }
+            throw "Chocolatey reported success, but makensis.exe was not found after two attempts. See the Chocolatey output above (e.g. 'Unable to find package')."
+          }
+
+          $nsisDir = Split-Path -Parent $nsisPath
+          $nsisDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $nsisPath /VERSION
 
       - name: Build the setup
         run: |

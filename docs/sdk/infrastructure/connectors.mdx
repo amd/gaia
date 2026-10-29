@@ -99,6 +99,16 @@ empty. An empty list satisfies the grant check vacuously, so it would hand back
 a full-capability token with the ledger never consulted; naming nothing is
 refused rather than treated as needing nothing.
 
+It raises `ConnectionBusyError` when another GAIA operation (in this process
+or another) is saving the
+connection at that moment. That is transient, not a disconnect: retry shortly,
+and don't prompt the user to reconnect. Over HTTP it is a `503` with
+`{"error": "connection_busy"}` and a `Retry-After` header. Listing connections
+at that moment (`list_connections()`, `get_connection()`, or
+`GET /v1/connections[/{provider}]`) still returns the row, with
+`"error": "busy"` and empty `scopes`. Don't base a scope decision on that row;
+ask again shortly.
+
 ## Forwarded connections (no re-auth)
 
 When a host app has **already** authenticated the user (its own OAuth flow),
@@ -188,6 +198,9 @@ GAIA refuses to persist tokens to an insecure keyring backend (plaintext /
 weak file-backed stores). On such a backend the import fails loudly with an
 actionable error pointing at the system credential-store setup. Forwarded
 secrets are never written to `~/.gaia/` and never echoed in any response.
+If a forward fails partway through saving, GAIA puts back the client and
+connection that were there before, so a failed forward never costs the user
+the connection they already had.
 </Note>
 
 ## SDK use — MCP server

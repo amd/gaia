@@ -1344,3 +1344,21 @@ def test_a_network_path_is_never_looked_at_before_the_prompt(
 def test_ordinary_words_do_not_read_as_scratch(folders, command):
     project, scratch = folders
     assert not command_reaches_folder(command, [str(project)], str(scratch))
+
+
+def test_an_approved_call_with_a_home_relative_folder_runs(repo, monkeypatch):
+    # The approval is noted with ~ as typed; the run expands it (#5700).
+    monkeypatch.setenv("HOME", str(repo.parent))
+    monkeypatch.setenv("USERPROFILE", str(repo.parent))
+    folder = f"~/{repo.name}"
+    python = _python()
+    agent = _agent(SSEOutputHandler())
+    approved = _write_line(python)
+    agent.note_confirmed_call(
+        "run_shell_command", {"command": approved, "working_directory": folder}
+    )
+
+    result = _tool()(command=approved, working_directory=folder)
+
+    assert result["status"] == "success", result
+    assert (repo / "ran.txt").exists()

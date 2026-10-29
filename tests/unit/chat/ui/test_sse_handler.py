@@ -265,8 +265,23 @@ class TestPrintThought:
         assert len(events) == 1
         assert events[0] == {
             "type": "thinking",
-            "content": "I should search for files first",
+            "content": "I should search for files first\n",
         }
+
+    def test_a_thought_already_ending_in_a_newline_is_not_doubled(self, handler):
+        handler.print_thought("Plan step\n")
+        assert _drain(handler)[0]["content"] == "Plan step\n"
+
+    def test_an_empty_thought_stays_empty(self, handler):
+        handler.print_thought("")
+        assert _drain(handler)[0]["content"] == ""
+
+    def test_adjacent_thoughts_do_not_fuse_when_joined(self, handler):
+        handler.print_thought("Executing plan step")
+        handler.print_thought("Start with the README")
+        joined = "".join(e["content"] for e in _drain(handler))
+        assert "stepStart" not in joined
+        assert joined == "Executing plan step\nStart with the README\n"
 
 
 # ===========================================================================
@@ -483,12 +498,16 @@ class TestPrettyPrintJsonArguments:
         assert len(events) == 1
         assert events[0]["type"] == "tool_args"
 
-    def test_non_dict_data_with_arguments_title_emits_tool_result(self, handler):
-        """If data is not a dict, even with title='Arguments', fall through."""
-        handler.pretty_print_json("just a string", title="Arguments")
+    def test_non_dict_arguments_are_still_arguments_not_a_result(self, handler, caplog):
+        """Malformed arguments must not pose as the tool's result before it runs."""
+        handler._last_tool_name = "test_tool"
+        with caplog.at_level("WARNING", logger="gaia.ui.sse_handler"):
+            handler.pretty_print_json("just a string", title="Arguments")
         events = _drain(handler)
         assert len(events) == 1
-        assert events[0]["type"] == "tool_result"
+        assert events[0]["type"] == "tool_args"
+        assert events[0]["args"] == {}
+        assert "test_tool" in caplog.text and "just a string" in caplog.text
 
 
 # ===========================================================================

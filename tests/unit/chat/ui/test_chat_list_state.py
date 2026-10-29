@@ -212,6 +212,45 @@ def test_handler_reports_what_the_turn_waits_on():
     assert h.waiting_on() == "question"
 
 
+def test_a_relayed_question_waits_on_the_user_until_the_run_moves_on():
+    from gaia.ui.email_sidecar.relay import _dispatch_one
+
+    h = SSEOutputHandler()
+    _dispatch_one(
+        h, {"type": "needs_input", "request_id": "q7", "question": "Allow it once?"}
+    )
+    assert h.waiting_on() == "question"
+    assert h.awaiting_user_input()
+    # Any later event means the sidecar stopped waiting on it.
+    _dispatch_one(h, {"type": "status", "message": "Reading file"})
+    assert h.waiting_on() is None
+
+
+def test_answering_a_relayed_question_clears_it():
+    class _Proxy:
+        def respond_query(self, run_id, request_id, value):
+            self.sent = (run_id, request_id, value)
+
+    h = SSEOutputHandler()
+    h.active_relay_proxy, h.active_relay_run_id = _Proxy(), "run-1"
+    h.set_relay_question("q7")
+    assert h.resolve_relay_input("q7", "Don't run it")
+    assert h.active_relay_proxy.sent == ("run-1", "q7", "Don't run it")
+    assert h.waiting_on() is None
+
+
+def test_answering_an_older_question_leaves_a_newer_one_pending():
+    class _Proxy:
+        def respond_query(self, run_id, request_id, value):
+            pass
+
+    h = SSEOutputHandler()
+    h.active_relay_proxy, h.active_relay_run_id = _Proxy(), "run-1"
+    h.set_relay_question("q8")
+    assert h.resolve_relay_input("q7", "late answer")
+    assert h.waiting_on() == "question"
+
+
 class _SlowBackOnTheModel:
     """A turn slot whose way back onto the model waits until released."""
 
