@@ -464,6 +464,23 @@ def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     if relayed:
         return f"{relayed} agent turn(s) are still running on it"
     try:
+        agents = requests.get(
+            f"{inst.base_url}{API_PREFIX}/agents",
+            headers=headers,
+            timeout=5.0,
+        )
+    except requests.exceptions.RequestException as e:
+        return f"GAIA could not check whether it is busy ({e})"
+    owned_sidecars = set()
+    if agents.status_code != 404:
+        if agents.status_code != 200:
+            return f"GAIA could not check whether it is busy ({_error_detail(agents)})"
+        owned_sidecars = {
+            agent["pid"]
+            for agent in agents.json().get("agents") or []
+            if agent.get("state") == "running" and isinstance(agent.get("pid"), int)
+        }
+    try:
         clients = requests.get(
             f"{inst.base_url}{API_PREFIX}/lemonade/clients",
             headers=headers,
@@ -480,7 +497,11 @@ def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     users = [
         c.get("name") or c.get("kind") or "a GAIA app"
         for c in snapshot.get("clients") or []
-        if any(pid_alive(p) for p in c.get("pids") or [] if p not in ours)
+        if any(
+            pid_alive(p)
+            for p in c.get("pids") or []
+            if p not in ours and p not in owned_sidecars
+        )
     ]
     if users:
         return f"{', '.join(users)} is still using it"

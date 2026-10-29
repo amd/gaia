@@ -291,14 +291,13 @@ def daemon_reports(monkeypatch, tmp_path):
 
     answers = {
         "status": _Response(200, {"service": "gaia-daemon", "relayed_turns": 0}),
+        "agents": _Response(200, {"agents": []}),
         "clients": _Response(200, {"clients": [], "seconds_since_request": None}),
     }
     monkeypatch.setattr(
         requests,
         "get",
-        lambda url, **kwargs: answers[
-            "status" if url.endswith("/status") else "clients"
-        ],
+        lambda url, **kwargs: answers[url.rsplit("/", 1)[-1]],
     )
     monkeypatch.setattr(client, "_LOCAL_WORK", [])
     monkeypatch.setattr(client, "pid_alive", lambda pid: pid != 999999)
@@ -359,6 +358,17 @@ def test_another_running_front_end_keeps_the_daemon(daemon_reports):
         200, {"clients": [{"name": "gaia-tui", "pids": [4343]}]}
     )
     assert "gaia-tui is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_supervised_agent_does_not_keep_the_outdated_daemon(daemon_reports):
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [{"name": "gaia agent", "pids": [4343]}]}
+    )
+
+    assert client.outdated_daemon_busy(_inst()) is None
 
 
 def test_this_process_and_exited_front_ends_do_not_keep_it(daemon_reports):
