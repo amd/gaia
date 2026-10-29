@@ -263,8 +263,9 @@ each model call's token counts, when the binary sends it. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Keeping a multi-turn conversation? Send `turns`, not `context`** (contract ≥
-2.25). Store each `final.model_messages` with its reply and send them back,
-oldest first, so the agent sees the tool calls it made and what they returned.
+2.25). Send `turns: []` on the first turn so its `final` carries
+`model_messages`, store that with the reply, and send them back, oldest first,
+so the agent sees the tool calls it made and what they returned.
 Text-only `context` loses them, and the agent can't explain its own last turn.
 Older binaries reject `turns` with `422`.
 

@@ -303,8 +303,10 @@ class QueryRequest(_Strict):
             "Earlier turns as the model saw them, oldest first (contract >= "
             "2.25): each is that turn's `final.model_messages`, tool calls and "
             "results included, or a user/assistant text pair for a turn that "
-            "recorded none. Replaces `context` when sent; the agent keeps the "
-            "newest whole turns that fit its context window."
+            "recorded none. Replaces `context` when sent, and `[]` means no "
+            "earlier turns; the agent keeps the newest whole turns that fit its "
+            "context window. Sent, even as `[]`, it makes `final` carry "
+            "`model_messages`."
         ),
     )
 
