@@ -396,6 +396,69 @@ def test_an_unregistered_model_refuses_sizes_outside_its_range(
     assert "not offered" in resp.json()["detail"]
 
 
+@pytest.mark.parametrize("window", [None, 0, -1, True, "131072", 131072.0])
+def test_an_unregistered_model_with_no_usable_trained_window_keeps_automatic(
+    client, unregistered, window
+):
+    unregistered.models[-1]["max_context_window"] = window
+    body = client.get(
+        "/api/providers/local/context", params={"model": UNREGISTERED}
+    ).json()
+    assert body["options"] == []
+    assert "keeps the automatic size" in body["note"]
+
+
+def test_an_unregistered_model_trained_below_32k_keeps_automatic(client, unregistered):
+    unregistered.models[-1]["max_context_window"] = 16384
+    body = client.get(
+        "/api/providers/local/context", params={"model": UNREGISTERED}
+    ).json()
+    assert body["options"] == []
+
+
+@pytest.mark.parametrize("method", ["get", "put"])
+def test_a_catalog_error_fails_the_context_view_loudly(
+    client, unregistered, monkeypatch, method
+):
+    def failing(m, path, payload=None):
+        if path == "models?show_all=true":
+            return 500, {}
+        return unregistered(m, path, payload)
+
+    monkeypatch.setattr(providers, "_lemonade", failing)
+    if method == "get":
+        resp = client.get(
+            "/api/providers/local/context", params={"model": UNREGISTERED}
+        )
+    else:
+        resp = client.put(
+            "/api/providers/local/context",
+            json={"model": UNREGISTERED, "ctx_size": 65536},
+        )
+    assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    assert "HTTP 500" in detail and UNREGISTERED in detail
+    if config_mod.GAIA_CONFIG_FILE.exists():
+        assert UNREGISTERED not in config_mod.GAIA_CONFIG_FILE.read_text(
+            encoding="utf-8"
+        )
+
+
+def test_a_registered_model_never_reads_the_catalog_for_its_window(
+    client, lemonade, monkeypatch
+):
+    def no_catalog(m, path, payload=None):
+        assert path != "models?show_all=true", "a registered model needs no catalog"
+        return lemonade(m, path, payload)
+
+    monkeypatch.setattr(providers, "_lemonade", no_catalog)
+    resp = client.get(
+        "/api/providers/local/context", params={"model": DEFAULT_MODEL_NAME}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["options"]
+
+
 def test_cloud_models_have_no_context_choice(client, lemonade):
     resp = client.get("/api/providers/local/context", params={"model": "fireworks.glm"})
     assert resp.status_code == 422

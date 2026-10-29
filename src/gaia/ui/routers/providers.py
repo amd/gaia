@@ -1030,7 +1030,12 @@ def _trained_window(model_id: str) -> Optional[int]:
         return None
     status, body = _lemonade("GET", "models?show_all=true")
     if status >= 400:
-        raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
+        raise ProviderError(
+            f"Lemonade answered /models with HTTP {status}, so GAIA can't read "
+            f"the context sizes {model_id} was trained for. Try again once the "
+            "local model server is answering; `gaia diagnostics` bundles its log "
+            "for a bug report."
+        )
     for m in body.get("data") or []:
         if _model_ids_match(str(m.get("id") or ""), model_id):
             # ``context_length`` is the configured window; this is the trained one.
