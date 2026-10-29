@@ -24,6 +24,14 @@ describe('pathAccessQuestion', () => {
         );
     });
 
+    it.each([undefined, {}, { kind: 'file' }])('claims nothing about existence when no path came with the prompt (%o)', (args) => {
+        const question = pathAccessQuestion(args);
+        expect(question).not.toContain("doesn't exist");
+        expect(question).toBe(
+            "GAIA wants to use a file or folder outside this chat. This chat can't reach it yet. Allow it for this chat?"
+        );
+    });
+
     it('reads as a follow-up to the call just allowed', () => {
         expect(pathAccessQuestion({ path: 'C:\\h\\a.txt', kind: 'file' }, true)).toBe(
             "To do what you just allowed, GAIA also needs the file C:\\h\\a.txt. This chat can't reach it yet. Allow it for this chat?"

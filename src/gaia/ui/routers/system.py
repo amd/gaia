@@ -917,9 +917,10 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         )
 
     # Initialized check
-    from gaia.ui.setup_runner import is_initialized
+    from gaia.ui.setup_runner import desktop_setup_error, is_initialized
 
     status.initialized = is_initialized()
+    status.setup_error = desktop_setup_error()
 
     from gaia.device import get_processor_name
 

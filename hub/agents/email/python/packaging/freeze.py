@@ -38,6 +38,10 @@ Design notes / gotchas baked in (see README.md for the why):
   never runs torch in-process, so we EXCLUDE the ML stack to keep the binary lean
   (~90 MB vs ~2 GB). If a future build genuinely needs these, drop them from
   ``EXCLUDES``.
+- tiktoken finds ``cl100k_base`` through a plugin it discovers at runtime and
+  downloads the encoding's data on first use -> hidden-import the plugin and
+  bundle the data (``gaia.utils.tiktoken_bundle``), or every token count in the
+  binary is an estimate.
 """
 
 from __future__ import annotations
@@ -48,6 +52,8 @@ import shutil
 import sys
 import time
 from pathlib import Path
+
+from gaia.utils import tiktoken_bundle
 
 HERE = Path(__file__).resolve().parent
 ENTRY = HERE / "server.py"
@@ -132,6 +138,7 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         for d in (work, dist):
             if d.exists():
                 shutil.rmtree(d, ignore_errors=True)
+    tiktoken_cache = tiktoken_bundle.stage_cache(work / tiktoken_bundle.BUNDLE_DIR)
 
     args = [
         str(ENTRY),
@@ -173,6 +180,11 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         # pydantic v2 ships a compiled core; collect data to be safe.
         "--collect-submodules",
         "pydantic",
+        # tiktoken's cl100k_base: the plugin is found by name, the data is a file.
+        "--hidden-import",
+        tiktoken_bundle.PLUGIN_MODULE,
+        "--add-data",
+        f"{tiktoken_cache}{os.pathsep}{tiktoken_bundle.BUNDLE_DIR}",
     ]
     for source, dest in ADD_DATA:
         if not source.exists():

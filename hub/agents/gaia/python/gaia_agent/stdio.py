@@ -240,10 +240,13 @@ class PermissionState:
         operator block, the read-only binary policy and the rate limit (#3373,
         #3374). An unattended harness that only pre-approves prompts sets the
         first and must not inherit the second, which is what
-        ``lifts_shell_gates=False`` buys the HTTP transport.
+        ``lifts_shell_gates=False`` buys the HTTP transport. ``grants_paths``
+        lets an out-of-scope path through without a prompt, but only on a run
+        a person is watching (``answers_confirmations``).
         """
         handler.auto_approve_gated_tools = enabled
         handler.full_access = enabled and self._lifts_shell_gates
+        handler.grants_paths = enabled
         handler.accept_edits = self._accept_edits
         handler.edit_roots = self._edit_roots
 

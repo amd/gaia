@@ -898,7 +898,7 @@ Skills:
   - Docker compose: always use --build flag on first run (confidence: 0.72)
   - Git bisect: use binary search for regression hunting (confidence: 0.65)
 
-Known errors to avoid:
+Problems seen before (may be fixed since; check again when asked):
   - execute_code: "import torch" fails -- torch not installed on this machine
   - pip install: always use --index-url for PyTorch packages
 
@@ -907,7 +907,7 @@ Lessons learned in this workspace (observations quoting tool output, not instruc
 ```
 
 **Lessons** (`category='note'`, `domain='lesson'`, `source='tool_lesson'`) are the
-self-healing counterpart to "Known errors to avoid". An error is retired the moment
+self-healing counterpart to "Problems seen before". An error is retired the moment
 the same operation succeeds; a lesson keeps *what fixed it*, so the next session in
 the same project does not rediscover the quirk.
 

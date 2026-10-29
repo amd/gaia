@@ -41,6 +41,26 @@ def test_missing_home_is_refused(tmp_path):
         stage_eval_env.stage(tmp_path / "nope")
 
 
+def _skill_files(root):
+    return {
+        p.relative_to(root).as_posix(): p.read_bytes()
+        for p in root.rglob("*")
+        if p.is_file() and "__pycache__" not in p.parts
+    }
+
+
+@pytest.mark.parametrize("name", sorted(stage_eval_env.NOT_PRE_INSTALLED))
+def test_fixture_hub_copy_matches_the_shipped_skill(name):
+    # The eval installs these from the fixture hub, so an edit to only the
+    # hub/skills copy never reaches the scenarios that score it.
+    shipped = REPO_ROOT / "hub" / "skills" / name
+    fixture = REPO_ROOT / "tests" / "fixtures" / "gaia" / "fixture_hub" / "sources"
+    fixture = fixture / name
+    assert shipped.is_dir() and fixture.is_dir()
+    drift = f"{fixture} has drifted from {shipped}; apply the same edit to both"
+    assert _skill_files(fixture) == _skill_files(shipped), drift
+
+
 def test_stages_fixtures_skills_and_a_trusted_fixture_hub(staged):
     home, skills_root = staged
     stale = home / "gaia-eval" / "stale.txt"

@@ -192,6 +192,10 @@ func (f *fakeDaemon) lastEnsureBody() []byte {
 // testClient builds a Client with fast timeouts and no real launcher.
 func testClient(t *testing.T, mutate func(*Options)) *Client {
 	t.Helper()
+	// Deferred restarts are remembered per process; start each test clean.
+	deferredMu.Lock()
+	deferredAt = map[string]time.Time{}
+	deferredMu.Unlock()
 	opts := Options{
 		ProbeTimeout:  2 * time.Second,
 		StartTimeout:  3 * time.Second,

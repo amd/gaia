@@ -169,7 +169,7 @@ class TestRegistry:
         assert "calendar.events" in msg
         assert "calendar.readonly" in msg
         # UI path still named for UI users.
-        assert "Settings -> Connections -> Google" in msg
+        assert "Settings -> Connectors -> Google" in msg
         assert "amd-gaia.ai/docs/connectors/google" in msg
 
     def test_google_loads_from_keyring_without_env(self, monkeypatch):
