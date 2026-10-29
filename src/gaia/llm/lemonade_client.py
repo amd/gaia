@@ -5754,7 +5754,10 @@ class LemonadeClient:
                 with requests.post(
                     f"{self.base_url}/audio/generations",
                     json=payload,
-                    headers={"Content-Type": "application/json", **self._auth_headers()},
+                    headers={
+                        "Content-Type": "application/json",
+                        **self._auth_headers(),
+                    },
                     timeout=(10, timeout),
                     stream=True,
                 ) as response:

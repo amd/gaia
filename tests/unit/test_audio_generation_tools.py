@@ -120,9 +120,7 @@ def test_auth_error_is_not_leaked(tmp_path):
     mixin = _mixin(tmp_path)
     response = _response(status=401)
     response.text = "Authorization: Bearer secret"
-    with patch(
-        "gaia.llm.lemonade_client.requests.post", return_value=response
-    ):
+    with patch("gaia.llm.lemonade_client.requests.post", return_value=response):
         result = mixin._generate_lemonade_audio("music", "ambient", "ACE-Step-Music")
     assert result["status"] == "error"
     assert "secret" not in result["error"]
@@ -177,9 +175,7 @@ def test_model_lease_covers_the_entire_wav_stream(tmp_path):
         patch("gaia.llm.lemonade_client.requests.post", side_effect=post),
         patch("gaia.agents.tools.audio_generation_tools.before_change"),
     ):
-        result = mixin._generate_lemonade_audio(
-            "sfx", "wooden door", "ThinkSound-SFX"
-        )
+        result = mixin._generate_lemonade_audio("sfx", "wooden door", "ThinkSound-SFX")
 
     assert result["status"] == "success", result
     assert events == ["acquired", "request", "first chunk", "last chunk", "released"]
@@ -206,9 +202,7 @@ def test_lease_released_and_temp_removed_on_http_error(tmp_path):
     response = _response(status=503)
     response.text = "Backend temporarily unavailable"
     with patch("gaia.llm.lemonade_client.requests.post", return_value=response):
-        result = mixin._generate_lemonade_audio(
-            "music", "ambient", "ACE-Step-Music"
-        )
+        result = mixin._generate_lemonade_audio("music", "ambient", "ACE-Step-Music")
     assert result["status"] == "error"
     assert "503" in result["error"]
     assert events == ["acquired", "released"]
