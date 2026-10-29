@@ -164,9 +164,11 @@ def unaskable_denial_message(tool_name: str) -> str:
 
 def edit_target(tool_args: Any) -> str:
     """Where a file-writing call lands — the same rule the file tools apply
-    (``gaia.agents.tools.file_io_tools._resolve_target``): a relative
+    (``gaia.agents.tools.workspace_paths._resolve_target``): a relative
     ``file_path`` sits under ``project_dir`` when one is given, else under the
-    process cwd. "" when the call names no file."""
+    process cwd. It does not know a session workspace, so a host that sets one
+    passes args already resolved by the tool's ``target_of``. "" when the call
+    names no file."""
     target = path_argument(tool_args)
     if not target:
         return ""
@@ -371,6 +373,14 @@ class OutputHandler(ABC):
     Set by a transport whose caller declared someone is watching (the relayed
     Agent UI). Without :attr:`full_access`, pre-approval never widens the file
     scope; this lets an out-of-scope path be asked about instead of refused.
+    """
+
+    asks_past_preapproval: bool = False
+    """``confirm_tool_execution`` asks about a call marked ``NEEDS_PERSON_ARG``
+    even while tools are pre-approved, and denies it when nobody can answer.
+
+    A tool marks a call only on a console that declares this, so a console
+    that would pre-approve the marked call never sees one.
     """
 
     _last_denial: Optional[Denial] = None
@@ -1138,6 +1148,9 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                 except Exception:
                     continue
             return "<non-serializable>"
+
+        if title == "Arguments" and not data:
+            return  # a call with no arguments has nothing to show
 
         if self.rich_available:
             # Check if this is a command execution result

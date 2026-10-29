@@ -4,7 +4,7 @@
 
 The relay used to drop ``always_scope`` because an "always" grant would live
 in the sidecar, where the chat could neither list nor revoke it. From contract
-2.19 the sidecar lists and revokes its grants, so the chat offers "always",
+2.26 the sidecar lists and revokes its grants, so the chat offers "always",
 relays it, and keeps those grants in its own permission list. These pin that
 the offer, the decision, the list and the revoke all line up, and that "always"
 is never offered where the user could not see or undo it.
@@ -65,9 +65,9 @@ def _clean_permissions():
 
 @pytest.mark.parametrize(
     "version, expected",
-    [("2.19", True), ("3.0", True), ("2.18", False), (None, False), ("x", False)],
+    [("2.26", True), ("3.0", True), ("2.25", False), (None, False), ("x", False)],
 )
-def test_only_a_flagship_at_2_19_lists_its_grants(version, expected):
+def test_only_a_flagship_at_2_26_lists_its_grants(version, expected):
     assert grants_supported(GAIA_PROFILE, version) is expected
 
 

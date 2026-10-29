@@ -21,7 +21,7 @@ reused here so both providers answer to one implementation.
 from __future__ import annotations
 
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import requests
 
@@ -123,13 +123,19 @@ def forget_key(provider: str) -> bool:
 
 
 def ensure_authenticated(
-    provider: str, client: Optional[LemonadeClient] = None
+    provider: str,
+    client: Optional[LemonadeClient] = None,
+    *,
+    recall: Optional[Callable[[], Optional[str]]] = None,
 ) -> bool:
     """Give Lemonade the kept key if it has the provider but no key.
 
     True when the provider is usable afterwards — models discovered, not merely
     a key held: Lemonade stores a key without checking it, so a revoked one
     reports authenticated and discovers nothing.
+
+    *recall* replaces :func:`recall_key` for reading the kept key, so a caller
+    that must not block on the credential store can bound the read.
     """
     from gaia.llm.lemonade_choice import is_users_server
 
@@ -148,14 +154,14 @@ def ensure_authenticated(
     if provider == GATEWAY_PROVIDER:
         from gaia.llm.gateway import GatewayManager
 
-        return GatewayManager(client).ensure_authenticated()
+        return GatewayManager(client).ensure_authenticated(recall=recall)
 
     entry = _provider_entry(base_url, provider)
     if entry is None:
         return False
     if entry.get("env_var_set") or entry.get("runtime_key_set"):
         return bool(entry.get("models_discovered"))
-    key = recall_key(provider)
+    key = recall() if recall else recall_key(provider)
     if not key:
         return False
     result = _request(

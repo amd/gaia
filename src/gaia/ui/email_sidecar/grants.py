@@ -5,7 +5,7 @@
 An "always" answer to a relayed prompt is held by the sidecar's session, not by
 this backend. The chat lists it beside its own grants
 (:class:`gaia.ui.permissions.SessionPermissions`) and revokes it through the
-sidecar (contract >= 2.19), so what the user sees is what the agent may do:
+sidecar (contract >= 2.26), so what the user sees is what the agent may do:
 
 - after an "always", the list is re-read from the sidecar;
 - before each relayed turn, a grant the chat does not list is revoked (one

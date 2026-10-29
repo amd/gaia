@@ -65,11 +65,10 @@ beforeEach(() => {
     useNotificationStore.setState({ notifications: [], showPanel: false, typeFilter: null });
 });
 
-/** What App does on a chat switch: a new keyed ChatView, then a streaming reset. */
+/** What App does on a chat switch: a new keyed ChatView. The old one resets streaming as it goes. */
 function open(rerender: (ui: React.ReactElement) => void, id: string) {
     act(() => useChatStore.setState({ currentSessionId: id }));
     rerender(<ChatView key={id} sessionId={id} />);
-    act(() => useChatStore.getState().resetStreaming());
 }
 
 describe('a pending permission prompt (#5247)', () => {
@@ -89,7 +88,7 @@ describe('a pending permission prompt (#5247)', () => {
         await waitFor(() => expect(attaches.b).toHaveLength(1));
         expect(useChatStore.getState().isStreaming).toBe(true);
 
-        // Back to "a": the global streaming flag is still b's until App resets it.
+        // Back to "a": the global streaming flag is still b's until b's view unmounts.
         open(rerender, 'a');
         expect(await screen.findByRole('button', { name: /Allow once/ })).toBeInTheDocument();
         expect(screen.getByLabelText('Stop')).toBeInTheDocument();

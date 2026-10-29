@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """``/v1/gaia/sessions/{session_id}/grants`` — listing and revoking "always".
 
-Contract 2.19. An "always" answer over ``/tool_decision`` is held by the
+Contract 2.26. An "always" answer over ``/tool_decision`` is held by the
 session; without these routes a caller could grant one but never show the user
 what it covers or take it back. Driven through the real ``build_app()`` and a
 real ``SSEOutputHandler``, so the grant that is listed is the one the next

@@ -52,11 +52,11 @@ LINUX_DEB_DISTRO_TAG = "debian13"
 # tests/integration/test_lemonade_embeddable_assets.py checks them against the
 # live release.
 INSTALLER_SHA256 = {
-    "v2026.42.1/lemonade.msi": "94ec399d71fe0d3fa4386aca440374f167c27d2dd0479055c8d8b3da869058d4",
-    "v2026.42.1/lemonade-server-minimal.msi": "463e76b01de44d3ffac87bfc29405a933246e149ea435f5eac6aea4b944476f3",
-    "v2026.42.1/lemonade-server_2026.42.1-debian13_amd64.deb": "872729cb257962e3c7746f6ba76301247bd85de98b1f6bca936bc35a7a3af1eb",
-    "v2026.42.1/lemonade-server_2026.42.1-debian13_arm64.deb": "78373174403df63f87bbca9bc5d1a44417b4a104e2446b5f93589d012ae49de9",
-    "v2026.42.1/Lemonade-2026.42.1-Darwin.pkg": "c2d99fb22860e8288f46ce4cb32c3853c287c668b63f2a1e0cf8ebab355e7291",
+    "v2026.44.1/lemonade.msi": "85c97cf2ae3f7f7c1857c01d718e7c59c2784e4a10c14795f107ba44a6f921ec",
+    "v2026.44.1/lemonade-server-minimal.msi": "cfa3f96a452e608ab98275e981824f06d5074373217e52278e0423afae9a5243",
+    "v2026.44.1/lemonade-server_2026.44.1-debian13_amd64.deb": "ddeb64d1673cf3d7a228c5353b1ade3f7cb2f2cf1156f414480f4e08a3ec5a6f",
+    "v2026.44.1/lemonade-server_2026.44.1-debian13_arm64.deb": "8884d060fe961f36096a0fb45778fd77a91e3bb83c30746116ad520368096818",
+    "v2026.44.1/Lemonade-2026.44.1-Darwin.pkg": "5af69a31a7603c5024fbc43ce630b9ddf65233adebf7f6ba263ad50962da3e0d",
 }
 
 # The Windows installers of every older release GAIA supports (back to
@@ -111,6 +111,10 @@ LEGACY_MSI_SHA256 = {
     "v2026.40.0/lemonade.msi": "e10bc07d69e668338bf01e1a599b4f6e684bf7d217f14cb3744668291bd8bbf0",
     "v2026.41.1/lemonade-server-minimal.msi": "b545bb3fe0dcffc91f9635bbdbac7dff049c9bbeae1616da6321382a486782f4",
     "v2026.41.1/lemonade.msi": "cb8753fef41937baedd24dc949ab332d914f537dd597cb62efe54f5448825314",
+    "v2026.42.1/lemonade-server-minimal.msi": "463e76b01de44d3ffac87bfc29405a933246e149ea435f5eac6aea4b944476f3",
+    "v2026.42.1/lemonade.msi": "94ec399d71fe0d3fa4386aca440374f167c27d2dd0479055c8d8b3da869058d4",
+    "v2026.43.3/lemonade-server-minimal.msi": "ae82d13d6f7dc057c57425c959d5746184fb834c569de871c573606ea5a8980a",
+    "v2026.43.3/lemonade.msi": "95227ef9013678ec3f4d0a26c10bfde261373a4fd14cf6ec5fad6a81ed9dd71d",
 }
 
 # platform.machine() varies by OS/libc for the same hardware.
@@ -190,6 +194,9 @@ class LemonadeInfo:
     version: Optional[str] = None
     path: Optional[str] = None
     error: Optional[str] = None
+    #: True when the probe itself raised, so ``installed=False`` is a guess
+    #: rather than a reading; a caller must not report "not installed" for it.
+    check_failed: bool = False
 
     @property
     def version_tuple(self) -> Optional[tuple]:
@@ -420,7 +427,7 @@ class LemonadeInstaller:
             )
 
         except Exception as e:
-            return LemonadeInfo(installed=False, error=str(e))
+            return LemonadeInfo(installed=False, error=str(e), check_failed=True)
 
     def needs_install(self, info: LemonadeInfo) -> bool:
         """

@@ -5,7 +5,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { purgeLegacyAlwaysAllow } from './stores/notificationStore';
-import { applyTheme, resolveTheme } from './utils/theme';
+import { applyTheme, markTitleBar, resolveTheme } from './utils/theme';
 import { applyPalette } from './utils/palette';
 import { useChatStore } from './stores/chatStore';
 import './styles/index.css';
@@ -16,8 +16,7 @@ import './styles/motion.css';
 // persisted so a past tick cannot silently approve tools in this session.
 purgeLegacyAlwaysAllow();
 
-// The desktop app has no system title bar; the top rows stand in for it.
-if (window.gaiaWindow) document.documentElement.dataset.titlebar = window.gaiaWindow.titleBar;
+markTitleBar();
 
 // Paint the saved theme before React mounts; with none saved, follow the OS.
 const savedTheme = localStorage.getItem('gaia-chat-theme');

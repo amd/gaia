@@ -58,6 +58,21 @@ ROOT_CLAUDE_IMPORT = "claude-import"
 #: Environment override for the user root's parent (shared with the rest of GAIA).
 GAIA_CONFIG_DIR_ENV = "GAIA_CONFIG_DIR"
 
+# Invalid third-party imports already warned about; discovery reruns every turn.
+_WARNED_IMPORT_ERRORS: set[tuple[str, str]] = set()
+_WARNED_LOCK = threading.Lock()
+
+
+def _warn_invalid_import_once(entry: Path, message: str) -> None:
+    key = (str(entry), message)
+    with _WARNED_LOCK:
+        first = key not in _WARNED_IMPORT_ERRORS
+        _WARNED_IMPORT_ERRORS.add(key)
+    if first:
+        log.warning("Skipping invalid imported skill at %s: %s", entry, message)
+    else:
+        log.debug("Skipping invalid imported skill at %s: %s", entry, message)
+
 
 @dataclass(frozen=True)
 class SkillRoot:
@@ -127,6 +142,7 @@ class SkillManager:
         self._metadata: Optional[dict[str, Skill]] = None
         self._shadowed: dict[str, list[Skill]] = {}
         self._errors: dict[str, str] = {}
+        self._import_errors: dict[str, str] = {}
         self._watchers: list = []
         self._on_change: Optional[Callable[[], None]] = None
 
@@ -175,6 +191,7 @@ class SkillManager:
             found: dict[str, Skill] = {}
             shadowed: dict[str, list[Skill]] = {}
             errors: dict[str, str] = {}
+            import_errors: dict[str, str] = {}
 
             for root in self.roots:
                 if not root.path.is_dir():
@@ -190,7 +207,11 @@ class SkillManager:
                         )
                     except SkillError as exc:
                         errors[str(entry)] = str(exc)
-                        log.error("Skipping invalid skill at %s: %s", entry, exc)
+                        if root.label == ROOT_CLAUDE_IMPORT:
+                            import_errors[str(entry)] = str(exc)
+                            _warn_invalid_import_once(entry, str(exc))
+                        else:
+                            log.error("Skipping invalid skill at %s: %s", entry, exc)
                         continue
 
                     if skill.name in self._excluded_names:
@@ -210,6 +231,7 @@ class SkillManager:
             self._metadata = found
             self._shadowed = shadowed
             self._errors = errors
+            self._import_errors = import_errors
             log.info(
                 "Discovered %d skill(s) across %d root(s); %d shadowed, %d invalid",
                 len(found),
@@ -231,11 +253,22 @@ class SkillManager:
     def discovery_errors(self) -> dict[str, str]:
         """``{skill_dir: message}`` for directories that failed to parse.
 
-        Surfaced by ``gaia skill list`` (and logged at ERROR) so a malformed
-        skill is visibly broken rather than quietly missing.
+        Surfaced by ``gaia skill list`` (and logged — at ERROR, or once at
+        WARNING for a Claude import) so a malformed skill is visibly broken
+        rather than quietly missing.
         """
         self.discover()
         return dict(self._errors)
+
+    @property
+    def import_discovery_errors(self) -> dict[str, str]:
+        """The subset of :attr:`discovery_errors` from read-only Claude imports.
+
+        Those folders belong to another tool, so ``gaia skill list`` reports
+        them as a warning instead of failing.
+        """
+        self.discover()
+        return dict(self._import_errors)
 
     def shadowed(self, name: Optional[str] = None) -> list[Skill]:
         """Lower-precedence copies that lost to a same-named skill."""

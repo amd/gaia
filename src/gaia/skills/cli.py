@@ -513,7 +513,13 @@ def _handle_list(args: argparse.Namespace) -> int:
     skills = manager.list_skills()
     if args.root:
         skills = [s for s in skills if s.root == args.root]
-    errors = manager.discovery_errors
+    # A broken skill in ~/.claude/skills is another tool's file: warn, don't fail.
+    import_errors = manager.import_discovery_errors
+    errors = {
+        path: message
+        for path, message in manager.discovery_errors.items()
+        if path not in import_errors
+    }
 
     # A damaged lock is reported beside the inventory, not instead of it — the
     # skills are still there, and the user needs the list to act on the error.
@@ -537,6 +543,7 @@ def _handle_list(args: argparse.Namespace) -> int:
             "skills": [_skill_summary(s) for s in skills],
             "shadowed": [_skill_summary(s) for s in manager.shadowed()],
             "errors": errors,
+            "import_errors": import_errors,
             "drift": drift.to_dict() if drift else None,
             "lock_error": lock_error,
         }
@@ -593,6 +600,14 @@ def _handle_list(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
 
+    if import_errors:
+        print(
+            f"\n⚠ {len(import_errors)} imported skill folder(s) were skipped — "
+            "they are read-only Claude Code skills, so fix them there:",
+            file=sys.stderr,
+        )
+        for path, message in import_errors.items():
+            print(f"  {path}: {message}", file=sys.stderr)
     if errors:
         print(f"\n{len(errors)} skill folder(s) failed to load:", file=sys.stderr)
         for path, message in errors.items():

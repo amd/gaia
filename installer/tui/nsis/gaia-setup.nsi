@@ -368,11 +368,23 @@ retry:
   ${IfNot} ${FileExists} "$R7\$R8"
     Return
   ${EndIf}
+  ; A freshly installed executable can be briefly held by antivirus or
+  ; indexing software after the smoke-test's writable check. Give that
+  ; transient lock a short window to clear before reporting a running app.
+  ; A real running process still reaches the refusal below after this wait.
+  StrCpy $R6 20
+  DetailPrint "Waiting for $R8 to be released..."
+wait_for_file:
   ClearErrors
   FileOpen $R9 "$R7\$R8" a
   ${IfNot} ${Errors}
     FileClose $R9
     Return
+  ${EndIf}
+  IntOp $R6 $R6 - 1
+  ${If} $R6 > 0
+    Sleep 500
+    Goto wait_for_file
   ${EndIf}
   DetailPrint "$R8 is running - cannot replace it."
   ; /SD IDCANCEL: a silent install must fail rather than block on an invisible

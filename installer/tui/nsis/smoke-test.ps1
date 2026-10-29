@@ -53,7 +53,56 @@ function Wait-Gone([string]$Path, [int]$Seconds = 90) {
     if (Test-Path $Path) { throw "$Path was still there $Seconds s after the uninstaller ran" }
 }
 
+# A freshly written exe can stay locked for a moment by something outside the
+# setup's process tree (an on-access scan, shell icon extraction), and the setup
+# reads any lock as "GAIA is running". Wait for the same write-open its
+# running-check makes, but fail at once if a GAIA program really is running.
+function Wait-Writable([string]$Path, [int]$Seconds = 60) {
+    if (-not (Test-Path $Path)) { throw "$Path is missing" }
+    # Long, normalised form on both sides: InstallLocation can carry a trailing \ or an 8.3 name.
+    $full = (Get-Item -LiteralPath $Path).FullName
+    # SilentlyContinue: "no process by that name" is the expected case.
+    $running = Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($Path)) -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and (Get-Item -LiteralPath $_.Path).FullName -eq $full }
+    if ($running) { throw "$Path is running (pid $($running.Id -join ', ')) - a silent install must not start it" }
+    $start = Get-Date
+    while ($true) {
+        try {
+            [System.IO.File]::Open($Path, 'Open', 'ReadWrite', 'ReadWrite').Dispose()
+            break
+        } catch {
+            $err = $_.Exception.GetBaseException()
+            if ($err -isnot [System.IO.IOException]) { throw }
+            if (((Get-Date) - $start).TotalSeconds -ge $Seconds) {
+                throw "$Path was still locked $Seconds s after the install, with no GAIA process running: $($err.Message)"
+            }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    $waited = ((Get-Date) - $start).TotalSeconds
+    if ($waited -ge 0.25) { Write-Host ("{0} was locked for {1:N1} s after the install" -f $Path, $waited) }
+}
+
 function Get-UiDir { (Get-ItemProperty -Path $uiKey -Name InstallLocation).InstallLocation }
+
+function Write-LockDiagnostics([string[]]$Paths) {
+    Write-Host 'setup failed; checking GAIA executable locks:'
+    foreach ($path in $Paths) {
+        try {
+            Wait-Writable $path -Seconds 5
+            Write-Host "$path is writable after the failed setup (any lock that tripped setup has since cleared)"
+        } catch {
+            Write-Host "lock diagnostic: $($_.Exception.Message)"
+        }
+    }
+    $processes = Get-Process -Name 'gaia-desktop', 'gaia-tui', 'gaia-agent' -ErrorAction SilentlyContinue
+    if ($processes) {
+        Write-Host (($processes | Select-Object Id, ProcessName, Path | Format-Table -AutoSize | Out-String).TrimEnd())
+    } else {
+        Write-Host 'no GAIA processes were running after the failed setup'
+    }
+}
+
 
 if ((Test-Path $tuiDir) -or (Test-Path $uiKey)) { throw "GAIA is already installed - this runner is not clean" }
 
@@ -187,8 +236,13 @@ if (-not (Get-ItemProperty -Path $runKey -Name 'GAIA' -ErrorAction SilentlyConti
 if ((Get-FileHash "$tuiDir\gaia-tui.exe" -Algorithm SHA256).Hash -ne $before.Hash) { throw "adding the desktop app changed the terminal" }
 
 # ── 5. Plain /S with both installed updates both, and leaves one of each ──
+$bothExecutables = @("$uiDir\gaia-desktop.exe", "$tuiDir\gaia-tui.exe", "$tuiDir\gaia-agent.exe")
+foreach ($exe in $bothExecutables) { Wait-Writable $exe }
 $rc = Invoke-Setup @('/S')
-if ($rc -ne 0) { throw "re-running with both installed exited $rc" }
+if ($rc -ne 0) {
+    Write-LockDiagnostics $bothExecutables
+    throw "re-running with both installed exited $rc"
+}
 $entries = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
     ForEach-Object { Get-ItemProperty $_.PSPath } |
     Where-Object { $_.DisplayName -in @('GAIA', $tuiName, 'GAIA Terminal Hub') }
