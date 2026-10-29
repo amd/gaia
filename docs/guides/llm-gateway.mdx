@@ -132,6 +132,7 @@ Gateway models are namespaced `amd.<model>` and work anywhere a local model does
 ```bash
 gaia chat --model amd.Claude-Opus-5
 gaia llm --model amd.Gemma-4-31B "Explain NPU offload"
+gaia -p "Summarize README.md" --model amd.DeepSeek-V4.1-Flash   # one headless agent run
 ```
 
 GAIA recognises them as gateway-hosted and skips the download, load, and model-slot
