@@ -110,9 +110,12 @@ function hash(text: string): string {
     return (h >>> 0).toString(36);
 }
 
+/** The card numbers and bullets lines itself, so a model's own "Step 2:", "3." or "- " goes. */
+const LIST_MARKER = /^(?:step\s+\d+\s*[:.)-]|\d+[.)]|[-*•])\s+/i;
+
 export function parseGuideDoc(wire: GuideWire): GuideDoc {
     const features = GUIDE_FEATURES[wire.guideType];
-    const lines = (raw: string[]) => raw.map((line) => line.trim()).filter(Boolean);
+    const lines = (raw: string[]) => raw.map((line) => line.trim().replace(LIST_MARKER, '')).filter(Boolean);
     const items = lines(wire.items).map((raw) => ({
         raw,
         parsed: features.units || features.scaling ? parseQuantity(raw) : null,

@@ -208,4 +208,19 @@ describe('guide document', () => {
         expect(formatGuideText(doc, { servings: null, system: 'us', checked: new Set([1]) }))
             .toBe('Packing\n\nItems\n[ ] Passport\n[x] Charger');
     });
+
+    it("drops the model's own numbering and bullets", () => {
+        const doc = parseGuideDoc({
+            kind: 'guide', guideType: 'howto', title: 'Fix a toilet', servings: null,
+            items: ['- Bucket', '* Sponge'],
+            steps: ['Step 1: Turn off the water.', '2. Lift the lid.', '3) Check the flapper.', 'Drain: flush once.'],
+        });
+        expect(doc.items.map((i) => i.raw)).toEqual(['Bucket', 'Sponge']);
+        expect(doc.steps).toEqual([
+            { title: null, body: 'Turn off the water.' },
+            { title: null, body: 'Lift the lid.' },
+            { title: null, body: 'Check the flapper.' },
+            { title: 'Drain', body: 'flush once.' },
+        ]);
+    });
 });
