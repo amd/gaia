@@ -169,3 +169,63 @@ def test_a_ui_database_outside_the_home_fails(tmp_path):
 
     assert result.returncode == 1
     assert "UI database resolves to" in result.stderr
+
+
+def _pin(home: Path, env: dict, *extra) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), "pin-model", "--home", str(home), *extra],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _resolved_chat_model(env: dict) -> str:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from gaia.llm.lemonade_client import resolve_default_chat_model as r;"
+            "print(r())",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def test_pin_model_is_what_every_agent_in_the_home_resolves(tmp_path):
+    from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
+
+    env = _env(tmp_path)
+    result = _pin(tmp_path, env, "--model", LARGE_DEFAULT_MODEL_NAME)
+
+    assert result.returncode == 0, result.stderr
+    assert _resolved_chat_model(env) == LARGE_DEFAULT_MODEL_NAME
+
+
+def test_pin_model_refuses_an_environment_that_would_not_see_it(tmp_path):
+    # The backend reads the config GAIA_CONFIG_FILE names. A pin written into
+    # the home while that points elsewhere would be silently ignored.
+    elsewhere = tmp_path / "elsewhere.json"
+    env = _env(tmp_path, GAIA_CONFIG_FILE=str(elsewhere))
+    result = _pin(tmp_path, env, "--model", "Gemma-4-E4B-it-GGUF")
+
+    assert result.returncode == 1
+    assert "NOT PINNED" in result.stderr
+
+
+def test_pin_model_needs_a_model(tmp_path):
+    result = _pin(tmp_path, _env(tmp_path))
+
+    assert result.returncode != 0
+    assert "--model" in result.stderr
+
+
+def test_a_pinned_home_still_passes_the_isolation_check(tmp_path):
+    env = _env(tmp_path)
+    assert _pin(tmp_path, env, "--model", "Gemma-4-E4B-it-GGUF").returncode == 0
+
+    assert _check(tmp_path, env).returncode == 0

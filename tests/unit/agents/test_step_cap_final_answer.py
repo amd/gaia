@@ -273,7 +273,8 @@ def test_answer_before_the_cap_is_untouched(agent):
     ids=["call-raises", "empty-reply", "asks-for-a-tool", "calls-a-tool-anyway"],
 )
 def test_failed_step_cap_call_returns_the_note_and_why(agent, caplog, reply, reason):
-    _stub_chat(agent, _tool_call(1), _tool_call(2), _tool_call(3), reply)
+    retry = () if isinstance(reply, BaseException) else (reply,)
+    _stub_chat(agent, _tool_call(1), _tool_call(2), _tool_call(3), reply, *retry)
 
     with caplog.at_level(logging.WARNING, logger="gaia.agents.base.agent"):
         result = agent.process_query("summarize issue 42", max_steps=3)
@@ -370,7 +371,7 @@ _FINDINGS = (
 
 
 def test_step_cap_keeps_the_findings_when_a_requested_file_is_missing(agent):
-    """kw-02: the closing reply held the whole recommendation, and the gate
+    """The closing reply held the whole recommendation, and the gate
     replaced it with only "I can't confirm this is done"."""
     agent.tool_result = {"status": "success", "body": "datasheet text"}
     _stub_chat(agent, _tool_call(1), _tool_call(2), _tool_call(3), _FINDINGS)
@@ -472,7 +473,7 @@ def _forced_stops(agent, chat) -> list:
 
 @pytest.mark.usefixtures("clean_registry")
 def test_three_short_plans_do_not_force_a_stop_on_a_large_budget():
-    """kw-06: three plans in ~15 of 50 steps forced "the audit is not done"."""
+    """Three plans in ~15 of 50 steps forced "the audit is not done"."""
     agent = _make_agent(streaming=False, model_id=None)
     agent.tool_result = {"status": "success", "body": "rows"}
     chat = _stub_chat(agent, _plan(1), _plan(2), _plan(3), _plan(4), _answer("Done."))

@@ -623,6 +623,14 @@ failure propagates as a normal connector error (403/502/503).
 Read-only throughout: this endpoint never archives, marks, replies, or
 sends — proven by an id-set diff in the issue's real-world test evidence.
 
+## Transient connection errors — retry, don't reconnect
+
+When another GAIA process or request is mid-save on the mailbox connection, a
+mailbox route answers `502` with a detail saying the connection "is being saved
+by another GAIA operation". The `/v1/email/agent/*` routes answer the same case
+with `503` and a `Retry-After` header. Both are transient, not a broken
+mailbox: retry shortly and don't prompt the user to reconnect.
+
 ---
 
 ## Usage

@@ -166,7 +166,7 @@ export function displayModelName(model: string): string {
 /** The backend's answer to where a session's chat is answered (`inference_remote: null` = unknown). */
 export type InferenceLocation = Pick<
     Session,
-    'inference_remote' | 'inference_provider_name' | 'inference_description'
+    'inference_remote' | 'inference_provider_name' | 'inference_description' | 'effective_model'
 >;
 
 /**
@@ -198,7 +198,11 @@ export function inferencePlace(
     active: ActiveModel | null,
     location: InferenceLocation | undefined,
 ): InferencePlace | null {
-    if (active?.remote) {
+    // The chat names a model this window's pick doesn't (another window or the TUI
+    // changed it): its own location goes with that name, or the chip contradicts itself.
+    const pickIsStale =
+        !!location?.effective_model && !!active?.model && location.effective_model !== active.model;
+    if (active?.remote && !(pickIsStale && location?.inference_remote !== undefined)) {
         return {
             remote: true,
             label: active.provider === 'fireworks' ? 'Fireworks AI' : 'AMD LLM Gateway',
@@ -245,10 +249,37 @@ export function selectChipModel(
     return session?.effective_model || active?.model || null;
 }
 
+/** The model id without its cloud provider prefix ("fireworks." or "amd."). */
+function stripProviderPrefix(model: string): string {
+    return /^(fireworks|amd)\./.test(model) ? model.slice(model.indexOf('.') + 1) : model;
+}
+
 /** The model name without its provider prefix or catalogue path. */
 export function shortModelName(model: string): string {
-    const withoutProvider = /^(fireworks|amd)\./.test(model) ? model.slice(model.indexOf('.') + 1) : model;
+    const withoutProvider = stripProviderPrefix(model);
     return withoutProvider.slice(withoutProvider.lastIndexOf('/') + 1);
+}
+
+/**
+ * A label per model for one list, keyed by id. Names already unique are kept;
+ * models that would share one show as much of their id as tells them apart.
+ */
+export function distinctModelLabels(models: Array<{ id: string; display_name?: string | null }>): Record<string, string> {
+    const labels: Record<string, string> = {};
+    for (const m of models) labels[m.id] = m.display_name || displayModelName(m.id);
+    const byLabel = new Map<string, string[]>();
+    for (const m of models) byLabel.set(labels[m.id], [...(byLabel.get(labels[m.id]) ?? []), m.id]);
+    for (const ids of byLabel.values()) {
+        if (ids.length < 2) continue;
+        const paths = ids.map((id) => stripProviderPrefix(id).split('/'));
+        let tails = ids;
+        for (let n = 1; n <= Math.max(...paths.map((p) => p.length)); n++) {
+            const candidate = paths.map((p) => p.slice(-n).join('/'));
+            if (new Set(candidate).size === candidate.length) { tails = candidate; break; }
+        }
+        ids.forEach((id, i) => { labels[id] = tails[i]; });
+    }
+    return labels;
 }
 
 /** A cloud provider's name as people know it; an unknown id is shown as given. */

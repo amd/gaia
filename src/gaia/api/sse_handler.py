@@ -177,6 +177,8 @@ class SSEOutputHandler(OutputHandler):
 
     def pretty_print_json(self, data: Dict[str, Any], title: str = None):
         """Print JSON data (tool args/results)."""
+        if title == "Arguments" and not data:
+            return  # a call with no arguments has nothing to show
         self._add_event("json", {"data": data, "title": title})
 
     # === Status Messages (Required) ===

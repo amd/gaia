@@ -343,7 +343,7 @@ release.
 
 A Worker request body is capped by the Cloudflare **account plan** — 100 MB on
 Free and Pro, 200 MB Business, 500 MB Enterprise. `POST /publish` therefore
-cannot carry the Agent UI installers (106-135 MiB); they are rejected with a
+cannot carry the flagship agent's sidecar builds (150-215 MiB); they are rejected with a
 `413` by Cloudflare's edge before the Worker executes, so `MAX_ARTIFACT_BYTES`
 is not involved and raising it changes nothing.
 

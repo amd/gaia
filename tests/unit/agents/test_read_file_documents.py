@@ -207,7 +207,7 @@ def test_formulas_without_saved_values_are_flagged_not_silently_blank(
     assert "1 formula cell(s) have no saved value" in result["warning"]
 
 
-@pytest.mark.parametrize("extension", [".pptx", ".doc", ".odt"])
+@pytest.mark.parametrize("extension", [".pptx", ".epub"])
 def test_formats_it_cannot_extract_point_at_index_document(
     read_file, tmp_path, extension
 ):
@@ -216,6 +216,16 @@ def test_formats_it_cannot_extract_point_at_index_document(
     result = read_file(str(path))
     assert result["status"] == "error"
     assert "index_document" in result["error"]
+
+
+@pytest.mark.parametrize("extension", [".doc", ".odt"])
+def test_formats_nothing_can_read_say_to_convert(read_file, tmp_path, extension):
+    path = tmp_path / f"deck{extension}"
+    path.write_bytes(b"PK\x03\x04")
+    result = read_file(str(path))
+    assert result["status"] == "error"
+    assert "index_document" not in result["error"]
+    assert "Re-save it as .docx or PDF" in result["error"]
 
 
 def test_paging_does_not_re_extract_an_unchanged_file(read_file, tmp_path, monkeypatch):
@@ -287,3 +297,23 @@ class TestThePromptRule:
         with chat_agent_build_context(profile) as agent:
             agent._register_tools()
             assert bool(agent.get_document_reading_system_prompt()) is advertises
+
+
+def test_a_tiny_limit_on_a_document_warns_that_it_counts_characters(
+    read_file, tmp_path
+):
+    path = _docx(tmp_path / "a.docx", ["y" * 50] * 200)
+    result = read_file(str(path), limit=300)
+    assert "characters, not lines" in result["warning"]
+    # The part is still marked partial with where to continue.
+    assert result["next_offset"] is not None
+    assert f"offset={result['next_offset']}" in result["note"]
+
+
+def test_a_partial_pdf_read_says_where_the_next_part_starts(read_file, tmp_path):
+    pages = [[f"Page {p} line {i} " + "q" * 40 for i in range(40)] for p in range(6)]
+    path = _pdf(tmp_path / "long.pdf", pages)
+    first = read_file(str(path))
+    assert first["status"] == "success" and first["next_offset"] is not None
+    assert f"offset={first['next_offset']}" in first["note"]
+    assert "Read every part" in first["note"]
