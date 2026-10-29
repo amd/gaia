@@ -5,7 +5,7 @@
 The email agent imports ``get_embedding_model_for_device`` from
 ``gaia.agents.registry``, first released in core v0.22.0. Its guided Outlook
 walkthrough also imports ``gaia.connectors.setup_routes``, first released in
-core v0.23.0. A published package must declare the latter floor so a fresh
+core v0.25.1. A published package must declare that floor so a fresh
 resolver cannot install a core that fails at import time.
 """
 
@@ -16,8 +16,8 @@ from pathlib import Path
 
 EMAIL_ROOT = Path(__file__).resolve().parents[1]
 
-# First core release shipping gaia.connectors.setup_routes.
-REQUIRED_FLOOR = (0, 23, 0)
+# First core release covering the email agent module-level imports.
+REQUIRED_FLOOR = (0, 25, 1)
 
 
 def _floor_tuple(version: str) -> tuple[int, ...]:
@@ -34,16 +34,21 @@ def test_agent_module_imports_and_registry_symbol_exists():
     assert callable(get_embedding_model_for_device)
 
 
-def test_pyproject_floor_covers_setup_routes():
+def test_pyproject_floor_covers_email_runtime_imports():
     pyproject = (EMAIL_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     match = re.search(r'"amd-gaia\[api\]>=([0-9.]+)"', pyproject)
     assert match, "pyproject.toml must declare an amd-gaia[api]>=X.Y.Z floor"
     assert _floor_tuple(match.group(1)) >= REQUIRED_FLOOR, (
         f"amd-gaia floor {match.group(1)} predates "
-        "gaia.connectors.setup_routes (first shipped in 0.23.0); a fresh "
-        "resolver may select a core that ImportErrors during guided Outlook "
+        "the email agent runtime imports (covered by 0.25.1); a fresh resolver "
+        "may select a core that ImportErrors when the agent starts "
         "setup (#4430)"
     )
+
+
+def test_email_query_routes_imports_newest_core_symbols():
+    """The module-level query route imports are covered by the package floor."""
+    import gaia_agent_email.query_routes  # noqa: F401
 
 
 def test_setup_walkthrough_module_imports_and_setup_routes_symbol_exists():

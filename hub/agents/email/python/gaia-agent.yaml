@@ -26,16 +26,16 @@ icon: mail
 tools_count: 67
 
 language: python
-# 0.23.0 is the first released core with gaia.connectors.setup_routes,
-# which the guided Outlook walkthrough imports.
-min_gaia_version: "0.23.0"
+# 0.25.1 is the first released core covering the email agent module-level imports,
+# including the guided Outlook walkthrough.
+min_gaia_version: "0.25.1"
 models: [Gemma-4-E4B-it-GGUF]
 
 python:
   entry_module: gaia_agent_email
   entry_class: EmailTriageAgent
   dependencies:
-    - "amd-gaia>=0.23.0"
+    - "amd-gaia>=0.25.1"
 
 requirements:
   min_memory_gb: 8

@@ -188,17 +188,17 @@ jobs:
           # freeze.py bundles its cl100k_base data and fails the build without it.
           uv pip install --python .venv-freeze -e ".[api]" -e hub/agents/email/python "faiss-cpu>=1.7.0" tiktoken pyinstaller
 
-      # The package declares amd-gaia>=0.23.0 because this module is its
-      # guided Outlook setup import floor. Keep this source-build check as a
-      # release defense: it catches a branch or packaging change that removes
-      # the module before a binary reaches users.
-      - name: Verify resolved core exposes gaia.connectors.setup_routes (#2590)
+      # The package declares amd-gaia>=0.25.1 because its module-level imports
+      # require that released core floor. Keep this source-build check as a
+      # release defense against publishing an incompatible
+      # email agent binary.
+      - name: Verify email agent runtime import chain (#4430)
         shell: bash
         run: |
           set -euo pipefail
           PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
-          "$PY" -c "import gaia.connectors.setup_routes" || {
-            echo "::error::the resolved amd-gaia core does not expose gaia.connectors.setup_routes — the guided Outlook setup (#2590) would ImportError on every setup_mailbox_access call for Microsoft. Do not release gaia-agent-email from a core checkout that lacks this module."
+          "$PY" -c "import gaia_agent_email.query_routes" || {
+            echo "::error::the resolved amd-gaia core cannot import the email agent runtime — a fresh install would fail before the agent starts (#4430). Do not release gaia-agent-email from a core checkout that lacks this module."
             exit 1
           }
 
