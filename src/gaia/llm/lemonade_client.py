@@ -6723,6 +6723,10 @@ class LemonadeClient:
                         on_progress(event)
                         complete = complete or event.get("event") == "complete"
                         reported_error = reported_error or event.get("event") == "error"
+                except ModelDownloadCancelledError:
+                    # Stop is not a failed download: callers need to stop their
+                    # own work instead of treating it as a retryable error.
+                    raise
                 except LemonadeClientError as e:
                     if not reported_error:
                         on_progress({"event": "error", "error": str(e)})
@@ -6747,6 +6751,8 @@ class LemonadeClient:
                 model_name, timeout=timeout, show_progress=show_progress
             )
 
+        except ModelDownloadCancelledError:
+            raise
         except Exception as e:
             self.log.error(f"Failed to ensure model downloaded: {e}")
             return False

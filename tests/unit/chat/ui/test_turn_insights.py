@@ -171,6 +171,238 @@ def test_chat_totals_count_unpriced_turns_apart():
     assert turn_insights.chat_totals([])["wall_seconds"] is None
 
 
+def test_turn_token_totals_that_overflow_are_not_measured(caplog):
+    result = {
+        "timing_summary": {"llm_seconds": 1.0, "tool_seconds": 0.0},
+        "conversation": [
+            _stats(
+                1,
+                {
+                    "prompt_tokens": 1e308,
+                    "cache_tokens": 1e308,
+                    "input_tokens": 1e308,
+                    "output_tokens": 1e308,
+                    "time_to_first_token": 1.0,
+                    "tokens_per_second": 10.0,
+                },
+            ),
+            _stats(
+                2,
+                {
+                    "prompt_tokens": 1e308,
+                    "cache_tokens": 1e308,
+                    "input_tokens": 1e308,
+                    "output_tokens": 1e308,
+                    "time_to_first_token": 1.0,
+                    "tokens_per_second": 10.0,
+                },
+            ),
+        ],
+    }
+
+    with pytest.raises(ValueError, match="Out of range float values"):
+        turn_insights.summarize_turn(result, wall_seconds=1.0, model_id="M-GGUF")
+
+    assert "turn input tokens overflowed" in caplog.text
+
+
+def test_one_step_whose_prompt_size_overflows_is_not_recorded():
+    # No prompt_tokens: the prompt is rebuilt as new + cached, which overflows alone.
+    result = {
+        "timing_summary": {"llm_seconds": 1.0, "tool_seconds": 0.0},
+        "conversation": [
+            _stats(
+                1,
+                {"cache_tokens": 1e308, "input_tokens": 1e308, "output_tokens": 5},
+            )
+        ],
+    }
+
+    with pytest.raises(ValueError, match="Out of range float values"):
+        turn_insights.summarize_turn(result, wall_seconds=1.0, model_id="M-GGUF")
+
+
+def test_huge_token_totals_that_stay_finite_are_still_measured():
+    step = {
+        "prompt_tokens": 1e307,
+        "cache_tokens": 0,
+        "input_tokens": 1e307,
+        "output_tokens": 1e307,
+        "time_to_first_token": 1.0,
+        "tokens_per_second": 10.0,
+    }
+    result = {
+        "timing_summary": {"llm_seconds": 1.0, "tool_seconds": 0.0},
+        "conversation": [_stats(1, step), _stats(2, step)],
+    }
+
+    summary = turn_insights.summarize_turn(result, wall_seconds=1.0, model_id="M-GGUF")
+
+    assert summary["tokens_in"] == 2e307
+    assert summary["tokens_out"] == 2e307
+    json.dumps(summary, allow_nan=False)
+
+
+def test_chat_token_totals_that_overflow_are_not_measured(caplog):
+    turns = [
+        {
+            "time": {"wall_seconds": 1.0, "model_seconds": 1.0, "gaia_seconds": 0.0},
+            "tokens_in": 1e308,
+            "tokens_cached": 1e308,
+            "tokens_out": 10,
+            "cost": {"kind": "unknown", "usd": None},
+        },
+        {
+            "time": {"wall_seconds": 1.0, "model_seconds": 1.0, "gaia_seconds": 0.0},
+            "tokens_in": 1e308,
+            "tokens_cached": 1e308,
+            "tokens_out": 20,
+            "cost": {"kind": "unknown", "usd": None},
+        },
+    ]
+
+    totals = turn_insights.chat_totals(turns)
+
+    assert totals["tokens_in"] is None
+    assert totals["tokens_cached"] is None
+    assert totals["tokens_out"] == 30
+    assert "chat input tokens overflowed" in caplog.text
+
+
+def test_performance_endpoint_serializes_overflowed_token_totals(db, monkeypatch):
+    sid = db.create_session(model="M-GGUF")["id"]
+    db.add_message(
+        sid,
+        "assistant",
+        "hello",
+        inference_stats={
+            "performance": {
+                "time": {
+                    "wall_seconds": 1.0,
+                    "model_seconds": 1.0,
+                    "gaia_seconds": 0.0,
+                },
+                "tokens_in": 1e308,
+                "tokens_cached": 1e308,
+                "tokens_out": 1.0,
+                "cost": {"kind": "unknown", "usd": None},
+            }
+        },
+    )
+    db.add_message(
+        sid,
+        "assistant",
+        "again",
+        inference_stats={
+            "performance": {
+                "time": {
+                    "wall_seconds": 1.0,
+                    "model_seconds": 1.0,
+                    "gaia_seconds": 0.0,
+                },
+                "tokens_in": 1e308,
+                "tokens_cached": 1e308,
+                "tokens_out": 2.0,
+                "cost": {"kind": "unknown", "usd": None},
+            }
+        },
+    )
+    monkeypatch.setattr(turn_insights, "model_now", lambda model: {"model": model})
+
+    result = asyncio.run(chat.get_chat_performance(sid, db))
+
+    assert result["totals"]["tokens_in"] is None
+    assert result["totals"]["tokens_cached"] is None
+    assert result["totals"]["tokens_out"] == 3.0
+    json.dumps(result, allow_nan=False)
+
+
+def _saved_turn(**overrides):
+    record = {
+        "time": {"wall_seconds": 1.0, "model_seconds": 1.0, "gaia_seconds": 0.0},
+        "tokens_in": 10,
+        "tokens_cached": 0,
+        "tokens_out": 5,
+        "tool_calls": 1,
+        "cost": {"kind": "local", "usd": 0.0},
+    }
+    for key, value in overrides.items():
+        if key == "wall_seconds":
+            record["time"]["wall_seconds"] = value
+        else:
+            record[key] = value
+    return record
+
+
+@pytest.mark.parametrize(
+    "bad, field",
+    [
+        ({"tokens_in": float("inf")}, "tokens_in"),
+        ({"wall_seconds": float("nan")}, "time.wall_seconds"),
+        ({"tool_calls": float("inf")}, "tool_calls"),
+        ({"cost": {"kind": "estimate", "usd": float("-inf")}}, "cost.usd"),
+    ],
+)
+def test_a_non_finite_turn_saved_before_the_fix_is_skipped_not_a_500(
+    db, monkeypatch, caplog, bad, field
+):
+    # Rows #5955 wrote: the stored JSON already holds Infinity or NaN.
+    sid = db.create_session(model="M-GGUF")["id"]
+    db.add_message(
+        sid, "assistant", "good", inference_stats={"performance": _saved_turn()}
+    )
+    bad_id = db.add_message(
+        sid, "assistant", "bad", inference_stats={"performance": _saved_turn(**bad)}
+    )
+    monkeypatch.setattr(turn_insights, "model_now", lambda model: {"model": model})
+
+    result = asyncio.run(chat.get_chat_performance(sid, db))
+
+    json.dumps(result, allow_nan=False)
+    assert bad_id not in [t["message_id"] for t in result["turns"]]
+    assert result["totals"]["turns"] == 1
+    assert result["totals"]["tokens_in"] == 10
+    assert f"message {bad_id} in chat {sid}: {field} is not finite" in caplog.text
+
+
+def test_huge_saved_costs_that_overflow_the_chat_total_are_not_measured(
+    db, monkeypatch, caplog
+):
+    sid = db.create_session(model="M-GGUF")["id"]
+    for text in ("one", "two"):
+        db.add_message(
+            sid,
+            "assistant",
+            text,
+            inference_stats={
+                "performance": _saved_turn(
+                    cost={"kind": "estimate", "usd": 1e308}, tool_calls=1e308
+                )
+            },
+        )
+    monkeypatch.setattr(turn_insights, "model_now", lambda model: {"model": model})
+
+    result = asyncio.run(chat.get_chat_performance(sid, db))
+
+    json.dumps(result, allow_nan=False)
+    assert result["totals"]["usd"] is None
+    assert result["totals"]["tool_calls"] is None
+    assert result["totals"]["turns"] == 2
+    assert "chat cost overflowed" in caplog.text
+    assert "chat tool calls overflowed" in caplog.text
+
+
+def test_finite_saved_costs_still_add_up():
+    turns = [_saved_turn(cost={"kind": "estimate", "usd": 0.25}) for _ in range(2)]
+
+    totals = turn_insights.chat_totals(turns)
+
+    assert totals["usd"] == 0.5
+    assert totals["tool_calls"] == 2
+    assert turn_insights.chat_totals([])["usd"] == 0
+    assert turn_insights.chat_totals([])["tool_calls"] == 0
+
+
 # ── Context ────────────────────────────────────────────────────────────────
 
 
