@@ -1,6 +1,6 @@
 ---
 name: slide-decks
-description: Build and check PowerPoint decks (.pptx) - business reviews, executive briefings, pitches, project status, training, research readouts, option comparisons, roadmaps, one-slide frameworks. Use when the user asks for a deck, slides, a presentation, a pitch, a slide or two from their data, or an image (PNG/JPEG) of a slide. Builds native editable charts, tables, KPI tiles and diagrams from a short outline, then checks fit, data, sources and style.
+description: Build and check PowerPoint decks (.pptx) - business reviews, executive briefings, pitches, project status, training, research readouts, option comparisons, roadmaps, one-slide frameworks. Use when the user asks for a deck, slides, a presentation, a pitch, a slide or two with or without their data, or an image (PNG/JPEG) of a slide. Builds native editable charts, tables, KPI tiles and diagrams from a short outline, then checks fit, data, sources and style.
 license: MIT
 version: 1.0.0
 metadata:

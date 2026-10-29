@@ -1089,3 +1089,20 @@ def test_the_option_a_decision_picks_stands_out_in_its_column(tools, tmp_path):
     other = {str(table.cell(i, 1).fill.fore_color.rgb) for i in (1, 2)}
     assert len(picked) == 1 and not picked & other
     assert all(r.font.bold for r in table.cell(1, 2).text_frame.paragraphs[0].runs)
+
+
+def test_a_count_the_user_gave_out_of_a_base_keeps_its_base(tools, tmp_path):
+    """'7 of 14' shown as a bare 7 loses how many were asked."""
+    skill, fns, _r = tools
+    ask = "One slide: 9 of 14 said setup is slow and 7 of 14 want calendar sync."
+    bare = "## Setup is the top pain\n- 9 of 14 say setup is slow\n- 7 want calendar sync\n"
+    kept = bare.replace("- 7 want", "- 7 of 14 want")
+    with bind(_Asking(ask), skill):
+        r1 = fns["build_deck_from_markdown"](
+            markdown=bare, output_path=str(tmp_path / "a.pptx")
+        )
+        r2 = fns["build_deck_from_markdown"](
+            markdown=kept, output_path=str(tmp_path / "b.pptx")
+        )
+    assert r1["status"] == "error" and "7 of 14" in r1["problems"][0]
+    assert r2["status"] == "ok", r2

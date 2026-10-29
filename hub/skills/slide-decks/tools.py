@@ -479,6 +479,46 @@ def _figures_from_user(slides: List[Dict[str, Any]]) -> List[int]:
     return out
 
 
+#: "9 of 14", "9 out of 14", "9/14": a count the reader needs its base for.
+_PART_OF = re.compile(
+    r"(?<![\w.])(\d[\d,]*)\s*(?:of|out of|/)\s*(\d[\d,]*)(?![\w.%])", re.I
+)
+
+#: Only the spelled-out form from the user: "3/4" there may be a date.
+_PART_OF_WORDS = re.compile(
+    r"(?<![\w.])(\d[\d,]*)\s+(?:of|out of)\s+(\d[\d,]*)(?![\w.%])", re.I
+)
+
+
+def _dropped_bases(slides: List[Dict[str, Any]]) -> Optional[str]:
+    """A user's "7 of 14" shown on a slide as a bare 7, so the base is lost."""
+    try:
+        call = current()
+    except SkillContextError:
+        return None
+    if not call.request:
+        return None
+    shown_text = json.dumps(
+        [{k: v for k, v in s.items() if k != "notes"} for s in slides],
+        ensure_ascii=False,
+    )
+    kept = set(_PART_OF.findall(shown_text))
+    bare = {t for t, _v in _numbers_in(shown_text)}
+    lost = []
+    for text in call.user_messages():
+        for a, b in _PART_OF_WORDS.findall(text):
+            if (a, b) not in kept and a in bare and a != b:
+                lost.append(f"{a} of {b}")
+    if not lost:
+        return None
+    lost = list(dict.fromkeys(lost))
+    return (
+        f"The user gave {', '.join(lost)}, but the slides show the count without "
+        f"its base. Write it as the user did (e.g. '{lost[0]}') so the reader "
+        "knows out of how many."
+    )
+
+
 #: Pictographs and flags: many slide viewers and the image export draw them as empty boxes.
 _EMOJI = re.compile("[🀀-🫿☀-➿🇦-🇿️]")
 
@@ -779,7 +819,10 @@ def _build_from(
         slides = data.get("slides") or []
         _NOTES.clear()
         missing = (
-            _missing_axis(slides) or _invented_numbers(slides) or _stray_emoji(slides)
+            _missing_axis(slides)
+            or _invented_numbers(slides)
+            or _dropped_bases(slides)
+            or _stray_emoji(slides)
         )
         if missing:
             raise OutlineError([missing])
