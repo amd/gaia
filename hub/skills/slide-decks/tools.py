@@ -26,7 +26,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from slidedeck import blueprints as _bp
 from slidedeck import markdown as _md
 from slidedeck import style as _style
-from slidedeck.outline import OutlineError, load_outline, normalize_outline
+from slidedeck.outline import (
+    OutlineError,
+    fold_pseudo_slides,
+    load_outline,
+    normalize_outline,
+)
 
 from gaia.agents.base.tools import tool
 from gaia.config import gaia_home
@@ -273,6 +278,12 @@ _LABELLED = re.compile(
 
 #: A number as written: "1,450", "12.4", "-3"; "Q3" and "v2" are labels, not numbers.
 _NUMBER = re.compile(r"(?<![\w.])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
+#: "Phase 2", "Step 3": a position in a sequence, not a figure that needs a source.
+_ORDINAL = re.compile(
+    r"\b(?:phase|step|stage|tier|level|wave|round|sprint|milestone|option|pillar|"
+    r"horizon|gate|track|part|pass)\s+\d{1,2}\b",
+    re.I,
+)
 #: Outline keys that hold layout settings, not words or values shown on the slide.
 _NOT_SHOWN = {
     "notes", "index", "type", "diagram", "layout", "chart_type", "theme", "style",
@@ -299,7 +310,7 @@ def _shown_numbers(node: Any, where: str, out: List[Tuple[str, float, str]]) -> 
     if isinstance(node, (int, float)):
         out.append((format_value(node), abs(float(node)), where))
     elif isinstance(node, str):
-        out += [(t, v, where) for t, v in _numbers_in(node)]
+        out += [(t, v, where) for t, v in _numbers_in(_ORDINAL.sub(" ", node))]
     elif isinstance(node, dict):
         for k, v in node.items():
             if k in _NOT_SHOWN:
@@ -429,6 +440,29 @@ def _invented_numbers(slides: List[Dict[str, Any]]) -> Optional[str]:
     )
 
 
+def _figures_from_user(slides: List[Dict[str, Any]]) -> List[int]:
+    """Slides whose every number is one the user typed or one derived from them.
+
+    Those figures have no file or system to cite, so verify does not ask for a
+    Source line the model would have to make up.
+    """
+    try:
+        call = current()
+    except SkillContextError:
+        return []
+    if not call.request:
+        return []
+    given = [v for text in call.user_messages() for _t, v in _numbers_in(text)]
+    known = given + _derived(given)
+    out = []
+    for i, s in enumerate(slides, 1):
+        shown: List[Tuple[str, float, str]] = []
+        _shown_numbers({k: v for k, v in s.items() if k != "source"}, "body", shown)
+        if shown and all(_grounded(v, t, known) for t, v, _w in shown):
+            out.append(i)
+    return out
+
+
 #: Pictographs and flags: many slide viewers and the image export draw them as empty boxes.
 _EMOJI = re.compile("[🀀-🫿☀-➿🇦-🇿️]")
 
@@ -508,8 +542,11 @@ def _slides_built(data: Dict[str, Any], result: Dict[str, Any]) -> List[str]:
         kind = s.get("type") or "slide"
         if s.get("type") == "diagram" and s.get("layout"):
             kind = f"{kind}: {s['layout']}"
+        line = f"{s.get('title') or '(untitled)'} [{kind}]"
+        if s.get("takeaway"):
+            line += f" Takeaway: {s['takeaway']}"
         for deck_no in deck_nos:
-            built.append((deck_no, f"{s.get('title') or '(untitled)'} [{kind}]"))
+            built.append((deck_no, line))
     return [f"{n}. {text}" for n, text in sorted(built)]
 
 
@@ -688,6 +725,7 @@ def _build_from(
         count = _hold_slide_count(_whole(data.get("expected_slides")))
         if count:
             data["expected_slides"] = count
+        data["slides"] = fold_pseudo_slides(data.get("slides") or [], count)
         if count and count < len(data.get("slides") or []):
             # The outline check only names the gap; say how to close it.
             raise OutlineError(
@@ -704,6 +742,7 @@ def _build_from(
         )
         if missing:
             raise OutlineError([missing])
+        data["figures_from_user"] = _figures_from_user(slides)
         if request:
             data["style"] = _style.merge_prefs(data.get("style") or {}, request)
         if required_items:

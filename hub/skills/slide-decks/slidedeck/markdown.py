@@ -172,6 +172,27 @@ def _unfence_diagrams(lines: List[str]) -> List[str]:
     return out
 
 
+_TAKEAWAY_HEAD = re.compile(
+    r"^(?:key\s+)?(?:takeaways?|insights?|bottom\s+line|so\s+what|decision|ask|"
+    r"recommendation|conclusion|summary)\W*$",
+    re.I,
+)
+
+
+def _box_as_takeaway(col: Dict[str, Any]) -> str:
+    """One short ``###`` box as a takeaway line; empty when it is too long for one."""
+    body = [b["text"] for b in col["bullets"]] or (
+        [col["text"]] if col.get("text") else []
+    )
+    if len(body) > 2:
+        return ""
+    head = col["heading"].strip()
+    said = "; ".join(body)
+    if not said:
+        return head
+    return said if _TAKEAWAY_HEAD.match(head) else f"{head}: {said}"
+
+
 def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
     lines = _unfence_diagrams(lines)
     slide: Dict[str, Any] = {"title": title.strip()}
@@ -321,7 +342,14 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
                 "closed, so nothing after it would show. End it with a ``` line."
             ]
         )
-    if columns and (extra or "columns_table" in slide or "image" in slide):
+    shows_data = bool(extra or "columns_table" in slide or "image" in slide)
+    if shows_data and len(columns) == 1 and not slide.get("takeaway"):
+        # One box beside a chart or table is the slide's point: draw it as the takeaway.
+        point = _box_as_takeaway(columns[0])
+        if point:
+            slide["takeaway"] = point
+            columns = []
+    if columns and shows_data:
         what = (
             "image"
             if "image" in slide

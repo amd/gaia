@@ -921,3 +921,51 @@ def test_the_row_the_takeaway_names_first_is_highlighted(out):
     b = table.cell(2, 0)
     assert all(r.font.bold for r in b.text_frame.paragraphs[0].runs)
     assert _fill(b) not in {_fill(table.cell(1, 0)), _fill(table.cell(3, 0))}
+
+
+def test_titled_sections_left_and_right_become_boxes():
+    from slidedeck.outline import normalize_outline
+
+    side = lambda *names: {  # noqa: E731
+        "type": "sections",
+        "sections": [{"title": n, "items": [f"{n} point"]} for n in names],
+    }
+    out = normalize_outline(
+        {
+            "slides": [
+                {
+                    "type": "content",
+                    "title": "Launch plan",
+                    "content": {
+                        "left": side("Timeline", "Owners"),
+                        "right": side("Risks"),
+                    },
+                }
+            ]
+        }
+    )
+    s = out["slides"][0]
+    assert s["type"] == "diagram"
+    assert [i["title"] for i in s["items"]] == ["Timeline", "Owners", "Risks"]
+
+
+def test_chart_js_data_at_the_slide_level_is_read():
+    from slidedeck.outline import normalize_outline
+
+    out = normalize_outline(
+        {
+            "slides": [
+                {
+                    "type": "chart",
+                    "title": "Revenue by region",
+                    "chart_data": {
+                        "labels": ["West", "East"],
+                        "datasets": [{"label": "Revenue", "data": [5.6, 4.1]}],
+                    },
+                }
+            ]
+        }
+    )
+    chart = out["slides"][0]["chart"]
+    assert chart["categories"] == ["West", "East"]
+    assert chart["series"][0]["values"] == [5.6, 4.1]

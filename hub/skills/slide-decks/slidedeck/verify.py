@@ -1033,6 +1033,7 @@ def verify_deck(
 
     # Outline mapping: outline index -> built slide numbers.
     expected: Dict[int, Dict[str, Any]] = {}
+    user_figures = set((outline or {}).get("figures_from_user") or [])
     if outline is not None:
         o_slides = outline.get("slides", [])
         mapping = (
@@ -1464,7 +1465,8 @@ def verify_deck(
                 "Group them into 3-5 points or split the slide.",
             )
         data_slide = has_chart or has_table_num or has_kpi or bool(pictures_not_chart)
-        if data_slide and not _SOURCE.search(source_text):
+        from_user = (spec or {}).get("index") in user_figures
+        if data_slide and not from_user and not _SOURCE.search(source_text):
             issues.add(
                 idx,
                 "missing_source",

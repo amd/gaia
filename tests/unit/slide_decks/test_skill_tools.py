@@ -11,6 +11,8 @@ GAIA_HOME is redirected so preference writes land under tmp_path.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from gaia.skills import parse_skill_file, validate_skill
@@ -918,3 +920,54 @@ def test_model_shapes_that_used_to_cost_rebuilds_now_build_first_time(tools, tmp
         "2. Three stages",
         "3. Recommendation",
     ]
+
+
+def test_a_chart_of_the_users_own_figures_needs_no_made_up_source(tools, tmp_path):
+    """The user typed the numbers, so there is no file to cite and nothing to invent."""
+    skill, fns, _r = tools
+    md = "## Churn fell every quarter\n```chart line\nQuarter,Churn %\nQ1,3.4\nQ2,2.9\nQ3,2.1\n```\n"
+    with bind(
+        _Asking("One slide: churn was 3.4% in Q1, 2.9% in Q2, 2.1% in Q3."), skill
+    ):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "u.pptx")
+        )
+    assert r["status"] == "ok", r
+    assert not [i for i in r["verify"]["issues"] if i["check"] == "missing_source"]
+
+
+def test_a_chart_of_other_figures_still_needs_a_source(tools, tmp_path):
+    skill, fns, _r = tools
+    md = "## Churn fell every quarter\n```chart line\nQuarter,Churn %\nQ1,3.4\nQ2,2.9\nQ3,2.1\n```\n"
+    with bind(_Host(), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "f.pptx")
+        )
+    assert [i for i in r["verify"]["issues"] if i["check"] == "missing_source"]
+
+
+def test_phase_and_step_labels_are_not_figures(tools, tmp_path):
+    skill, fns, _r = tools
+    md = (
+        "## Rollout plan\n\n### Phase 1\n- Pilot one depot\n\n"
+        "### Phase 2\n- Two regions\n\n### Phase 3\n- Every depot\n"
+    )
+    with bind(_Asking("One slide on the depot rollout plan in phases."), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "p.pptx")
+        )
+    assert r["status"] == "ok", r
+
+
+def test_one_box_beside_a_table_becomes_its_takeaway(tools, tmp_path):
+    skill, fns, _r = tools
+    md = (
+        "## West leads on revenue\n\n| Region | Revenue |\n|---|---|\n"
+        "| West | 4.2 |\n| East | 3.1 |\n\n### Key insight\nKeep funding West\n"
+    )
+    with bind(_Asking("One slide: West 4.2, East 3.1 revenue."), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "t.pptx")
+        )
+    assert r["status"] == "ok", r
+    assert "Keep funding West" in json.dumps(r["slides_built"])

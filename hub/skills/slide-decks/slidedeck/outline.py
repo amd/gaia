@@ -338,6 +338,7 @@ TYPE_FIELDS = {
         "chart_type",
         "chart",
         "data",
+        "chart_data",
         "categories",
         "labels",
         "series",
@@ -674,7 +675,7 @@ def normalize_chart(
     "values", "type", "axis", "points"}], ...}``.
     """
     spec = dict(slide)
-    data = spec.get("data")
+    data = spec.get("data") or spec.get("chart_data")
     if isinstance(data, dict):
         for key, value in data.items():
             spec.setdefault(key, value)
@@ -699,6 +700,13 @@ def normalize_chart(
     categories: List[Any] = list(_as_list(spec.get("categories") or spec.get("labels")))
     series_in = spec.get("series")
     series: List[Dict[str, Any]] = []
+    if series_in is None and isinstance(spec.get("datasets"), list):
+        # The Chart.js shape: {"labels": [...], "datasets": [{"label", "data"}]}.
+        series_in = [
+            {"name": d.get("label") or f"Series {k + 1}", "values": d.get("data")}
+            for k, d in enumerate(spec["datasets"])
+            if isinstance(d, dict)
+        ]
 
     if series_in is None and spec.get("values") is not None:
         series_in = [
@@ -1061,6 +1069,39 @@ def _items(value: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def _sections_as_boxes(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Titled sections, also nested under left/right content, as one slide of boxes."""
+    content = raw.get("content")
+    groups = [raw.get("sections")]
+    if isinstance(content, dict):
+        groups += [content.get("sections")]
+        groups += [content.get(side) for side in ("left", "right")]
+    sections = []
+    for group in groups:
+        if isinstance(group, dict):
+            group = group.get("sections") or [group]
+        for sec in _as_list(group):
+            if (
+                isinstance(sec, dict)
+                and sec.get("title")
+                and (sec.get("items") or sec.get("bullets"))
+            ):
+                sections.append(
+                    {
+                        "title": sec["title"],
+                        "bullets": sec.get("items") or sec["bullets"],
+                    }
+                )
+    if len(sections) < 2 or len(sections) > 6:
+        return raw
+    rest = {
+        k: v
+        for k, v in raw.items()
+        if k not in ("content", "sections", "layout", "type")
+    }
+    return {**rest, "type": "diagram", "diagram": "boxes", "items": sections}
+
+
 def normalize_slide(
     raw: Any, index: int, problems: List[str], base_dir: Optional[Path] = None
 ) -> Dict[str, Any]:
@@ -1072,7 +1113,7 @@ def normalize_slide(
             f"{where}: must be an object, got {type(raw).__name__}. For example: {EXAMPLES['bullets']}"
         )
         return {"type": "bullets", "index": index, "title": "", "paras": []}
-    raw = _plain_fields(_canonical_fields(raw))
+    raw = _sections_as_boxes(_plain_fields(_canonical_fields(raw)))
     before = len(problems)
     s = _normalize_slide(raw, index, problems, base_dir)
     for issue in _unknown_fields(raw, s["type"]):
@@ -1449,9 +1490,49 @@ def _normalize_slide(
     return s
 
 
+_COVER_TYPES = {"title", "cover", "title_slide"}
+_SOURCE_ONLY = {"source", "sources", "footnote", "citation"}
+
+
+def fold_pseudo_slides(raw: List[Any], expected: Any) -> List[Any]:
+    """Shapes models send that are not slides: a source "slide", an extra cover.
+
+    A ``{"type": "source"}`` entry becomes the line under the slide before it,
+    and a leading cover goes when the content slides alone make the count the
+    user asked for, as the Markdown reader does.
+    """
+    out: List[Any] = []
+    for item in raw:
+        kind = str(item.get("type") or "").lower() if isinstance(item, dict) else ""
+        if kind in _SOURCE_ONLY and out and isinstance(out[-1], dict):
+            text = item.get("source") or item.get("text") or item.get("title")
+            prev = dict(out[-1])
+            prev.setdefault(
+                "source",
+                re.sub(r"^\s*sources?\s*:\s*", "", str(text or ""), flags=re.I),
+            )
+            out[-1] = prev
+            continue
+        out.append(item)
+    try:
+        want = int(expected) if expected else 0
+    except (TypeError, ValueError):
+        want = 0
+    first = out[0] if out else None
+    if (
+        want
+        and len(out) == want + 1
+        and isinstance(first, dict)
+        and str(first.get("type") or "").lower() in _COVER_TYPES
+    ):
+        out = out[1:]
+    return out
+
+
 def normalize_outline(outline: Any, base_dir: Optional[Path] = None) -> Dict[str, Any]:
     """Validate *outline* and return it in canonical form. Raises OutlineError."""
-    data = load_outline(outline)
+    data = dict(load_outline(outline))
+    data["slides"] = fold_pseudo_slides(data["slides"], data.get("expected_slides"))
     problems: List[str] = []
     slides = [
         normalize_slide(raw, i, problems, base_dir)
@@ -1491,6 +1572,9 @@ def normalize_outline(outline: Any, base_dir: Optional[Path] = None) -> Dict[str
         "require_notes": bool(data.get("require_notes", False)),
         "style": data.get("style") if isinstance(data.get("style"), dict) else {},
         "required_items": required,
+        "figures_from_user": [
+            int(i) for i in data.get("figures_from_user") or [] if str(i).isdigit()
+        ],
         "slides": slides,
     }
 
