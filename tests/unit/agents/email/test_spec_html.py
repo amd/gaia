@@ -360,7 +360,7 @@ def test_query_status_documents_model_queue_fields():
     html = _html()
 
     assert "<code>status</code> {message, phase?, queue?}" in html
-    assert "<code>phase</code> is <code>model_queue</code>" in html
+    assert "<code>model_queue</code>, <code>queue</code> reports" in html
     assert "queue_length" in html
 
 
