@@ -19,7 +19,7 @@ description: "Fixes for setup and updates, file access, the Agent UI and desktop
 A selection of the user-visible fixes; the full list is in the changelog below.
 
 - **`gaia init` installs the GAIA agent even when Lemonade or model setup fails**, and the Windows installer keeps `%VARS%` in your user PATH. (PRs [#5802](https://github.com/amd/gaia/pull/5802), [#5809](https://github.com/amd/gaia/pull/5809))
-- **An update replaces a running agent and restarts it, and restarts a daemon still running the previous release** once it is idle, so the new app no longer drives old code. A crashed Lemonade check is reported as a failed check. (PRs [#5747](https://github.com/amd/gaia/pull/5747), [#5847](https://github.com/amd/gaia/pull/5847), [#5779](https://github.com/amd/gaia/pull/5779))
+- **An update replaces a running agent and restarts it.** The daemon no longer restarts mid-turn: one left on the previous release keeps running, with a notice, until `gaia daemon restart`. A crashed Lemonade check is reported as a failed check. (PRs [#5747](https://github.com/amd/gaia/pull/5747), [#5847](https://github.com/amd/gaia/pull/5847), [#5779](https://github.com/amd/gaia/pull/5779))
 - **`gaia init` replaces a release candidate's agent build with the published one**, so final-release agent fixes reach people who updated from an RC. (PR [#5831](https://github.com/amd/gaia/pull/5831))
 - **The desktop app waits on "Starting GAIA…" until the backend is listening**, reads the installed version without starting Python, and first-run setup shows the real state of this PC with the right model-server advice. (PRs [#5916](https://github.com/amd/gaia/pull/5916), [#5919](https://github.com/amd/gaia/pull/5919), [#5825](https://github.com/amd/gaia/pull/5825))
 - **AMD LLM Gateway models answer right after GAIA starts Lemonade itself**, and the terminal UI checks a saved gateway default as a cloud model. (PRs [#5959](https://github.com/amd/gaia/pull/5959), [#5992](https://github.com/amd/gaia/pull/5992))
@@ -63,6 +63,7 @@ A selection of the user-visible fixes; the full list is in the changelog below.
 
 ## Known Issues
 
+- **An update doesn't restart the daemon on its own** — run `gaia daemon restart` after updating. Tracked in [#6026](https://github.com/amd/gaia/issues/6026).
 - **Attaching an image on a PC that uses only AMD LLM Gateway models starts a ~5 GB vision-model download inside the turn**, which can take minutes while the screen says "Analyzing image". Run `gaia download --agent vlm` first so the download happens up front. Tracked in [#5990](https://github.com/amd/gaia/issues/5990).
 - **The terminal UI lists a saved gateway default as a ~4 GB download when launched on a local model.** The label is wrong: gateway models run in the cloud and need no download, so skip it. Tracked in [#6016](https://github.com/amd/gaia/issues/6016).
 - **A relayed GAIA turn can lose its final answer after you approve a prompt**, about one time in ten, and end with an error naming Lemonade. Send the message again. Tracked in [#6019](https://github.com/amd/gaia/issues/6019).
