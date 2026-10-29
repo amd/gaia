@@ -2085,7 +2085,24 @@ class SSEOutputHandler(OutputHandler):
         if self.cancelled.is_set():
             return
         if not self.turn_slot.come_back(self.cancelled):
-            # Withdrawn from the line: the turn must not use the model.
+            if self.cancelled.is_set():
+                return
+            # Not a Stop: the turn ended (cleanup or shutdown) while it waited in line.
+            logger.warning(
+                "Turn ended while waiting to retake the model after the user "
+                "answered; the approved step did not run"
+            )
+            self._emit(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        "This chat ended while your approved step was waiting "
+                        "for the model, so it didn't run. Send your message "
+                        "again to retry."
+                    ),
+                    "fatal": True,
+                }
+            )
             self.cancelled.set()
         elif not self.cancelled.is_set() and self.on_model_regained is not None:
             try:
