@@ -2,7 +2,7 @@
 name: transcribe-meeting
 description: Transcribe and summarize a meeting recording — speaker-attributed transcript, corrected mis-hearings, then a brief with decisions and action items. Use whenever the user points at an audio or video file (.mp4, .mkv, .mov, .m4a, .mp3, .wav) or a Teams/Zoom transcript export and asks to transcribe it, summarize it, take notes, write minutes, say what was discussed, who said what, what was decided, or what the action items and follow-ups are.
 license: MIT
-version: 1.1.0
+version: 1.1.1
 metadata:
   gaia:
     security_tier: community
@@ -151,6 +151,10 @@ Shape your brief from `summarize_document`'s output as: what the meeting was for
 and what came out of it (2–3 sentences); key facts stated rather than inferred;
 action items with an owner each, `unknown` when the transcript does not say; and
 anything unresolved or blocked.
+
+Action items include commitments said in passing ("I'll send it over", "let me
+check") and requests someone accepted, not only lines labelled as actions. To
+track items across several meetings, load the `meeting-actions` skill.
 
 This section is the one to change when a reader wants their briefs a different
 way — a different order, a section dropped, a section added. Everything above it
