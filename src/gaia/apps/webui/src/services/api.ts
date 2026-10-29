@@ -1057,6 +1057,11 @@ export async function openFileInApp(path: string): Promise<{ status: string; pat
     return apiFetch('POST', '/files/open', { path, launch: true });
 }
 
+/** Where the chat's audio player streams a generated WAV from (scope-checked server-side). */
+export function audioFileUrl(path: string): string {
+    return `${API_BASE}/files/audio?path=${encodeURIComponent(path)}`;
+}
+
 /** Whether each path still exists and when it last changed (unchecked outside home). */
 export async function getFileStatus(paths: string[]): Promise<{
     files: Array<{ path: string; exists?: boolean | null; mtime?: number | null }>;

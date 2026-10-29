@@ -6,6 +6,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Music and sound effects.** "Make 30 seconds of menu music" or "a door
+  slam" now generates a WAV with Lemonade's ACE-Step or ThinkSound and reports
+  the path. Adds `generate_music`, `generate_sound_effect` and
+  `list_audio_generation_models` (95 tools → 98) plus an `audio_generation`
+  bundle (#6064). Both generators take `save_to` to write into the user's
+  project folder, refusing relative paths, existing files and folders the
+  write policy forbids. A successful result's `tool_result.data` carries
+  `audio_path` and `generated_audio` (`{path, model, kind, format,
+  duration_seconds, duration_requested, prompt}`) so a client can play it.
+  Generating swaps the resident model, so the next reply waits for the chat
+  model to reload. The `music-gen` starter skill covers choosing music or a
+  sound effect, prompts, durations and iterating.
+
 ### For integrators: contract 2.25
 
 - **The agent remembers its own tool calls across turns** (contract **2.25**,

@@ -1441,3 +1441,91 @@ class TestPreviewEdgeCases:
         # min(max(0, 1), 200) = 1
         data = resp.json()
         assert len(data["preview_lines"]) == 1
+
+
+# ── Generated media (images, audio) ─────────────────────────────────────────
+
+
+_WAV = b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x10\x00\x00\x00" + b"\x00" * 16
+_WAV += b"data\x00\x00\x00\x00"
+
+
+class TestServeGeneratedAudio:
+    """The chat's audio card streams a generated WAV through this route only."""
+
+    def test_serves_a_wav_inside_home(self, client, home_tmp_dir):
+        wav = home_tmp_dir / "music_1.wav"
+        wav.write_bytes(_WAV)
+        resp = client.get("/api/files/audio", params={"path": str(wav)})
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "audio/wav"
+        assert resp.content == _WAV
+
+    def test_uppercase_suffix_is_still_a_wav(self, client, home_tmp_dir):
+        wav = home_tmp_dir / "SFX.WAV"
+        wav.write_bytes(_WAV)
+        assert (
+            client.get("/api/files/audio", params={"path": str(wav)}).status_code == 200
+        )
+
+    def test_outside_home_is_refused(self, client, tmp_path_factory):
+        outside = tmp_path_factory.mktemp("outside") / "music.wav"
+        outside.write_bytes(_WAV)
+        resp = client.get("/api/files/audio", params={"path": str(outside)})
+        assert resp.status_code == 403
+
+    def test_traversal_out_of_home_is_refused(self, client, home_tmp_dir):
+        climb = str(home_tmp_dir / ".." / ".." / ".." / "music.wav")
+        assert client.get("/api/files/audio", params={"path": climb}).status_code == 403
+
+    def test_missing_file_is_404(self, client, home_tmp_dir):
+        resp = client.get(
+            "/api/files/audio", params={"path": str(home_tmp_dir / "gone.wav")}
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.parametrize("name", ["notes.txt", "run.exe", "song.mp3", "x.wav.exe"])
+    def test_non_wav_is_refused(self, client, home_tmp_dir, name):
+        target = home_tmp_dir / name
+        target.write_bytes(_WAV)
+        resp = client.get("/api/files/audio", params={"path": str(target)})
+        assert resp.status_code == 400
+        assert "Not an audio file" in resp.json()["detail"]
+
+    def test_a_directory_is_not_a_file(self, client, home_tmp_dir):
+        folder = home_tmp_dir / "album.wav"
+        folder.mkdir()
+        assert (
+            client.get("/api/files/audio", params={"path": str(folder)}).status_code
+            == 404
+        )
+
+    @pytest.mark.parametrize("bad", ["", "C:/x\x00.wav"])
+    def test_empty_or_nul_path_is_refused(self, client, bad):
+        assert client.get("/api/files/audio", params={"path": bad}).status_code == 400
+
+    def test_symlink_is_refused(self, client, home_tmp_dir):
+        wav = home_tmp_dir / "real.wav"
+        wav.write_bytes(_WAV)
+        link = home_tmp_dir / "link.wav"
+        try:
+            link.symlink_to(wav)
+        except OSError:
+            pytest.skip("symlinks need extra privileges here")
+        assert (
+            client.get("/api/files/audio", params={"path": str(link)}).status_code
+            == 400
+        )
+
+    def test_image_route_still_serves_images_and_refuses_audio(
+        self, client, home_tmp_dir
+    ):
+        png = home_tmp_dir / "cat.png"
+        png.write_bytes(b"\x89PNG\r\n\x1a\n")
+        wav = home_tmp_dir / "music.wav"
+        wav.write_bytes(_WAV)
+        ok = client.get("/api/files/image", params={"path": str(png)})
+        assert ok.status_code == 200 and ok.headers["content-type"] == "image/png"
+        refused = client.get("/api/files/image", params={"path": str(wav)})
+        assert refused.status_code == 400
+        assert "Not an image file" in refused.json()["detail"]

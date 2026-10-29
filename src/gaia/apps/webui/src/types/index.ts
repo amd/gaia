@@ -820,8 +820,25 @@ export interface AgentStep {
     mcpTool?: string;
     /** The text an MCP tool returned. */
     mcpOutput?: McpOutput;
+    /** A WAV a music or sound-effect tool generated (for generate_music / generate_sound_effect). */
+    generatedAudio?: GeneratedAudio;
     /** Tool call latency in milliseconds. */
     latencyMs?: number;
+}
+
+/** A generated music track or sound effect, played inline in the chat. */
+export interface GeneratedAudio {
+    /** Absolute path of the WAV on the user's machine. */
+    path: string;
+    /** Lemonade model id, e.g. "ACE-Step-Music" or "ThinkSound-SFX". */
+    model?: string;
+    kind?: 'music' | 'sfx' | string;
+    format?: string;
+    /** Seconds measured from the WAV header. */
+    durationSeconds?: number | null;
+    /** Seconds the agent asked for. */
+    durationRequested?: number | null;
+    prompt?: string | null;
 }
 
 /** The text an MCP tool returned, capped by the server. */
@@ -939,6 +956,16 @@ export interface StreamEvent {
     mcp_tool?: string;
     /** The text an MCP tool returned (for tool_result of MCP tools). */
     mcp_output?: McpOutput;
+    /** A generated WAV the chat plays inline (for tool_result of generate_music / generate_sound_effect). */
+    generated_audio?: {
+        path: string;
+        model?: string;
+        kind?: string;
+        format?: string;
+        duration_seconds?: number | null;
+        duration_requested?: number | null;
+        prompt?: string;
+    };
     /** Tool call latency in milliseconds (for tool_result). */
     latency_ms?: number;
     /** agent_error the agent recovers from by retrying, rather than a turn-ending one. */

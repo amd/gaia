@@ -1,12 +1,13 @@
 ---
 title: "Local Music and Sound Effects"
-description: "Generate original music and sound effects through Lemonade in GAIA."
+description: "Generate original music and sound effects through Lemonade in GAIA, play them in the chat, and save them into your project."
 ---
 
 GAIA can generate WAV music and sound effects locally using Lemonade Server.
 The flagship agent exposes three tools: `list_audio_generation_models`,
 `generate_music`, and `generate_sound_effect`. They use existing Lemonade
-models; GAIA does not install a second audio runtime.
+models; GAIA does not install a second audio runtime. The bundled `music-gen`
+skill teaches the agent how to use them well.
 
 ## Models and server support
 
@@ -25,34 +26,77 @@ and [model registry](https://github.com/lemonade-sdk/lemonade/blob/main/src/cpp/
 
 ## Generate audio
 
-1. Install or download the desired model in Lemonade Server.
-2. Ask the flagship GAIA agent to list the available audio generators.
-3. Ask for instrumental music or a sound effect, specifying the style or sound.
-4. Use the WAV path returned by the tool. For a game, copy it into the project's
-   asset directory before referencing it from scripts.
+1. Download the model in Lemonade Server, for example `lemonade pull ACE-Step-Music`
+   and `lemonade pull ThinkSound-SFX` (the exact client command depends on
+   your install; GAIA's error message names the right one).
+2. Ask the flagship GAIA agent for music or a sound effect, describing the
+   style or the sound, e.g. *"30 seconds of calm lo-fi piano for my menu"* or
+   *"a 3 second heavy wooden door slam"*.
+3. To save straight into a project, say where: *"save it in
+   C:\Users\me\game\audio"*. GAIA passes that folder as `save_to`; otherwise
+   the WAV goes to `~/.gaia/cache/audio/generations/`.
 
 GAIA lists downloaded audio models and refuses unavailable models; it does not
 silently download a large model when a user requests audio. ACE-Step accepts
 lyrics and vocal language; ThinkSound accepts guidance (`cfg`). Unspecified
-options use Lemonade's backend defaults.
+options use Lemonade's backend defaults. Before a long track (over a minute)
+the skill has the agent ask first.
 
 <Warning>
 Loading an audio generator can evict the chat model from GPU memory. GAIA
-should run audio generation only when explicitly requested, and chat may need
-to reload its model afterwards.
+runs audio generation only when explicitly requested, and chat reloads its
+model afterwards. Generation holds the same model-slot lease as chat, so two
+agents never evict each other's model mid-request.
 </Warning>
+
+## What you see
+
+**Agent UI.** While the track is being made, the step reads in plain words,
+such as "Composing 30 s of music: calm lo-fi piano" or "Generating a 3 s
+sound effect", with a timer that keeps counting, since a long track can take
+minutes. When it finishes, a player appears above the answer with:
+
+- play and pause, a seek bar and the length;
+- the kind (Music or Sound effect) and the model (ACE-Step music, ThinkSound SFX);
+- the prompt GAIA used, so you can ask for changes to it;
+- **Open** (your default audio app) and **Show in folder**.
+
+The player stays when you reopen the chat later. If the file was moved or
+deleted, the player says so and offers **Open its folder** instead. The chat
+plays and opens files only inside your home folder, so a track saved elsewhere
+shows its path for you to open from your file manager. The file also appears
+under **Outputs** in the session panel. A failed generation shows the reason
+on its step, such as a model that isn't downloaded together with the command
+to download it.
+
+**Terminal UI.** The work log shows the same plain-language step, and the
+result line names the saved file with its model, length and how long it took,
+for example
+`Music saved · ACE-Step-Music · 30 s · 126.0s · ~\game\audio\menu_theme.wav`.
+The TUI has no player; open the path in your audio app.
+
+## Saving into a project
+
+`save_to` takes an absolute folder (the file gets a generated name) or a new
+`.wav` path. GAIA refuses, before generating anything:
+
+- a relative path, a non-`.wav` file name, or a folder that doesn't exist;
+- a file that already exists (pick a new name instead of overwriting);
+- a location the agent's write policy doesn't allow.
 
 ## Development verification
 
 Run deterministic tests first:
 
 ```bash
-python -m pytest tests/unit/test_audio_generation_tools.py
+python -m pytest tests/unit/test_audio_generation_tools.py tests/unit/chat/ui/test_generated_audio.py
 ```
 
 On a machine with a real Lemonade Server and supported hardware, run the
-opt-in integration test from a fresh model cache (the test will download
-ThinkSound-SFX and generate a WAV). It does not remove existing user models:
+opt-in integration test from a fresh model cache. It pulls ThinkSound-SFX by
+name only (no recipe, as Lemonade requires for a built-in model), lets the
+generation request load it cold, and asserts both requests' exact shape. No CI
+lane runs it. It does not remove existing user models:
 
 ```bash
 GAIA_RUN_AUDIO_GENERATION_LIVE=1 python -m pytest \

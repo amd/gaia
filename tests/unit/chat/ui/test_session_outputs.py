@@ -236,3 +236,37 @@ def test_a_running_turn_has_no_change_kind_yet(client, session_id, tmp_path):
     (item,) = client.get(f"/api/sessions/{session_id}/outputs").json()["items"]
     assert item["name"] == "draft.md"
     assert item["change"] is None
+
+
+def test_generated_audio_is_listed_once_and_can_be_opened(client, session_id, tmp_path):
+    db = client.app.state.db
+    wav = tmp_path / "music_1.wav"
+    with fs.recording_turn(session_id) as rec:
+        # The tool snapshots its WAV like any write; it must still list once.
+        fs.before_change(wav, "generate_music")
+        wav.write_bytes(b"RIFF")
+    mid = _answer(
+        db,
+        session_id,
+        _summary(
+            outputs=[
+                {
+                    "kind": "audio",
+                    "name": wav.name,
+                    "path": str(wav),
+                    "detail": "lo-fi piano",
+                }
+            ]
+        ),
+    )
+    rec.link_message(mid)
+
+    items = client.get(f"/api/sessions/{session_id}/outputs").json()["items"]
+    assert [(i["kind"], i["name"]) for i in items] == [("audio", "music_1.wav")]
+    assert items[0]["openable"] is True and items[0]["revealable"] is True
+    assert items[0]["detail"] == "lo-fi piano"
+
+    wav.unlink()
+    (item,) = client.get(f"/api/sessions/{session_id}/outputs").json()["items"]
+    assert item["state"] == "gone"
+    assert item["openable"] is False and item["revealable"] is False

@@ -229,6 +229,22 @@ a couple of attempts.
   turns `enable_sd_tools` on. Generating evicts the chat model to make room for
   the SD model, so the next reply reloads it; `ChatAgent` keeps the flag off.
 
+### music-gen
+
+Turns "make some menu music" or "a door slam" into a prompt worth generating,
+picks music (ACE-Step) or a sound effect (ThinkSound), sets a sensible length,
+saves the WAV into your project, and iterates on the last track instead of
+starting over. Asks before a long run, and reports a file only when the tool
+says it was made.
+
+- **Demonstrates** — choosing between two tools by intent, and asking before
+  an expensive call.
+- **Consumes** — `list_audio_generation_models`, `generate_music`, `generate_sound_effect`.
+- **Configure** — a house style (genre, tempo range, instruments) so every
+  track sounds like the same soundtrack.
+- **Note** — these tools are registered on the flagship `gaia` agent only.
+  Generating evicts the chat model, so the next reply reloads it.
+
 ## Fork one
 
 This is the part that matters. Copying a skill and editing it is the whole

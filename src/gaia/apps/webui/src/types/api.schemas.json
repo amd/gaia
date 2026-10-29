@@ -333,6 +333,16 @@
           }
         ]
       },
+      "generatedAudio": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/GeneratedAudioResponse"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "id": {
         "title": "Id",
         "type": "integer"
@@ -1816,6 +1826,68 @@
       "refresh_token"
     ],
     "title": "ForwardConnectionRequest",
+    "type": "object"
+  },
+  "GeneratedAudioResponse": {
+    "description": "A WAV a music or sound-effect tool generated, for the chat's audio card.",
+    "properties": {
+      "durationRequested": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Durationrequested"
+      },
+      "durationSeconds": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Durationseconds"
+      },
+      "format": {
+        "default": "wav",
+        "title": "Format",
+        "type": "string"
+      },
+      "kind": {
+        "default": "music",
+        "title": "Kind",
+        "type": "string"
+      },
+      "model": {
+        "default": "",
+        "title": "Model",
+        "type": "string"
+      },
+      "path": {
+        "title": "Path",
+        "type": "string"
+      },
+      "prompt": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Prompt"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "title": "GeneratedAudioResponse",
     "type": "object"
   },
   "GoalCreate": {

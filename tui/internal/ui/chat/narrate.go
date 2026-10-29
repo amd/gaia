@@ -158,6 +158,10 @@ func narrationFor(tool string, args json.RawMessage, narration string) string {
 		return truncateRunes(unclipArg(n, args), narrationMax)
 	}
 
+	if line, ok := audioNarration(tool, args); ok {
+		return truncateRunes(line, narrationMax)
+	}
+
 	// The command is the narration — anything wrapped round it is noise.
 	if shellTools[tool] {
 		if cmd := argValue(args, "command", "cmd"); cmd != "" {
@@ -252,6 +256,12 @@ func resultDetail(e event.CanonicalToolResultEvent) string {
 	// else — the exact colour-only signal renderActivityItem promises never to
 	// rely on.
 	failed := !toolResultSucceeded(e.Data)
+
+	if !failed {
+		if line, ok := generatedAudioDetail(e.Data); ok {
+			return line
+		}
+	}
 
 	if p := clean(e.Preview); p != "" {
 		return markFailed(p, failed)

@@ -63,6 +63,8 @@ _SCHEDULE_ADD_RE = re.compile(
 #: The host the built-in ``search_web`` sends its queries to (``WebClient``).
 _SEARCH_HOST = "duckduckgo.com"
 
+_AUDIO_TOOLS = frozenset({"generate_music", "generate_sound_effect"})
+
 #: File types the rail may hand to the default app: nothing that runs code,
 #: so no scripts or programs, and no HTML, SVG or XML, which can open in a browser.
 OPENABLE_SUFFIXES = frozenset(
@@ -89,6 +91,7 @@ OPENABLE_SUFFIXES = frozenset(
         ".gif",
         ".webp",
         ".bmp",
+        ".wav",
     }
 )
 
@@ -303,6 +306,17 @@ class TurnLedger:
                     out.append(
                         {
                             "kind": "image",
+                            "name": Path(path).name,
+                            "path": path,
+                            "detail": args.get("prompt"),
+                        }
+                    )
+            elif tool in _AUDIO_TOOLS and isinstance(data, dict):
+                path = data.get("audio_path")
+                if isinstance(path, str):
+                    out.append(
+                        {
+                            "kind": "audio",
                             "name": Path(path).name,
                             "path": path,
                             "detail": args.get("prompt"),

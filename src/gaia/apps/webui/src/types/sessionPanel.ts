@@ -27,7 +27,7 @@ export interface SessionEnvironment {
     internet_enforced: boolean;
 }
 
-export type OutputKind = 'file' | 'export' | 'image' | 'document' | 'memory' | 'schedule';
+export type OutputKind = 'file' | 'export' | 'image' | 'audio' | 'document' | 'memory' | 'schedule';
 
 export interface OutputItem {
     id: string;

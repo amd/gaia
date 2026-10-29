@@ -554,6 +554,18 @@ class McpOutputResponse(BaseModel):
     truncated: bool = False
 
 
+class GeneratedAudioResponse(BaseModel):
+    """A WAV a music or sound-effect tool generated, for the chat's audio card."""
+
+    path: str
+    model: str = ""
+    kind: str = "music"  # 'music' | 'sfx'
+    format: str = "wav"
+    durationSeconds: Optional[float] = None
+    durationRequested: Optional[float] = None
+    prompt: Optional[str] = None
+
+
 class AgentStepResponse(BaseModel):
     """A single step in the agent's execution (persisted)."""
 
@@ -581,6 +593,7 @@ class AgentStepResponse(BaseModel):
     mcpServerLabel: Optional[str] = None
     mcpTool: Optional[str] = None
     mcpOutput: Optional[McpOutputResponse] = None
+    generatedAudio: Optional[GeneratedAudioResponse] = None
     latencyMs: Optional[float] = None
     # Render-map card persistence (#2109): populated ONLY when the source
     # tool_result event carried a ``render`` kind (e.g. "email_pre_scan") —
