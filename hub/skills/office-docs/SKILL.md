@@ -86,7 +86,8 @@ summary.append([name, f"=SUMIFS({sales},{region},A{i})"])  # right: a live formu
 summary.append([name, 270])                                 # wrong: a hard-coded value
 ```
 
-For a presentation of several slides, load the `slide-decks` skill instead.
+For a presentation of several slides, load the `slide-decks` skill if it is
+among the installed skills; otherwise read `references/powerpoint.md`.
 
 ## References (paths relative to this skill's folder)
 
