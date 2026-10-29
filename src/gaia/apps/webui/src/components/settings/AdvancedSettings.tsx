@@ -7,18 +7,17 @@ import * as api from '../../services/api';
 import { log } from '../../utils/logger';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
-import { useUpdateStatus } from '../../hooks/useUpdateStatus';
+import { formatGb } from '../../utils/modelLabels';
 import type { SystemStatus, MCPServerStatus } from '../../types';
-import { VersionPicker } from '../VersionPicker';
+import { LemonadeServerSection } from './LemonadeServerSection';
+import { ModelServerPanel } from './ModelServerPanel';
 import '../SettingsModal.css';
 
-/** Model server status, context size, custom model id, beta flags, MCP status, version. */
+/** Model server status and choice, context size, custom model id, beta flags, MCP status, version. */
 export function AdvancedSettings() {
     const [status, setStatus] = useState<SystemStatus | null>(null);
     const [loading, setLoading] = useState(true);
     const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
-    const [showVersionPicker, setShowVersionPicker] = useState(false);
-    const updateStatus = useUpdateStatus();
 
     // Active Model override
     const [customModel, setCustomModel] = useState<string>('');
@@ -134,31 +133,6 @@ export function AdvancedSettings() {
     const modelName = status ? status.default_model_name : DEFAULT_MODEL_NAME;
     const { isLoadingModel, isDownloadingModel, loadModel, downloadModel } = useModelActions(modelName ?? undefined);
 
-    const CTX_PRESETS: Array<{ label: string; value: number }> = [
-        { label: '4K', value: 4096 },
-        { label: '8K', value: 8192 },
-        { label: '16K', value: 16384 },
-        { label: '32K', value: 32768 },
-    ];
-    const currentCtx = status?.model_context_size ?? null;
-    const [ctxInput, setCtxInput] = useState<string>('');
-    useEffect(() => {
-        if (currentCtx != null) setCtxInput(String(currentCtx));
-    }, [currentCtx]);
-
-    const parsedCtxSize = (() => {
-        const n = parseInt(ctxInput, 10);
-        return Number.isFinite(n) && n > 0 ? n : null;
-    })();
-    const ctxDirty = parsedCtxSize != null && parsedCtxSize !== currentCtx;
-    const targetModelForReload = status?.model_loaded ?? modelName;
-
-    const applyCtxSize = useCallback(async () => {
-        if (!parsedCtxSize || !targetModelForReload) return;
-        log.system.info(`Reloading ${targetModelForReload} with ctx_size=${parsedCtxSize}`);
-        await loadModel(targetModelForReload, parsedCtxSize);
-    }, [parsedCtxSize, targetModelForReload, loadModel]);
-
     const version = __APP_VERSION__;
 
     // A cloud model runs off this PC: no device, download, load or context to manage.
@@ -171,6 +145,7 @@ export function AdvancedSettings() {
     return (
         <div className="settings-pane">
             <h2 className="settings-pane-title">Advanced</h2>
+                <ModelServerPanel />
                 <section className="settings-section">
                     <h4>Local model server</h4>
                     {loading ? (
@@ -210,7 +185,7 @@ export function AdvancedSettings() {
                                 )}
                                 <StatusRow label="Embedding Model" value={status.embedding_model_loaded ? 'Available' : 'Not loaded'} ok={status.embedding_model_loaded} />
                                 {status.gpu_name && (
-                                    <StatusRow label="GPU" value={`${status.gpu_name}${status.gpu_vram_gb ? ` (${status.gpu_vram_gb} GB)` : ''}`} ok={true} />
+                                    <StatusRow label="GPU" value={`${status.gpu_name}${status.gpu_vram_gb ? ` (${formatGb(status.gpu_vram_gb)})` : ''}`} ok={true} />
                                 )}
                                 <StatusRow
                                     label="Disk Space"
@@ -304,6 +279,8 @@ export function AdvancedSettings() {
                     )}
                 </section>
 
+                <LemonadeServerSection />
+
                 {/* Active Model */}
                 <section className="settings-section">
                     <h4>Custom model ID</h4>
@@ -360,65 +337,6 @@ export function AdvancedSettings() {
                         </div>
                     )}
                 </section>
-
-                {/* Context Size */}
-                {!cloudModel && (
-                <section className="settings-section">
-                    <h4>Context Size</h4>
-                    <p className="model-override-desc">
-                        Reload the active model with a different context window.
-                        Larger contexts use more memory and slow inference;
-                        going past the model&rsquo;s training length may degrade quality.
-                    </p>
-                    <div className="ctx-preset-row">
-                        {CTX_PRESETS.map((p) => {
-                            const active = parsedCtxSize === p.value;
-                            return (
-                                <button
-                                    key={p.value}
-                                    className={`btn-ctx-preset${active ? ' active' : ''}`}
-                                    onClick={() => setCtxInput(String(p.value))}
-                                    disabled={isLoadingModel}
-                                    type="button"
-                                >
-                                    {p.label}
-                                </button>
-                            );
-                        })}
-                    </div>
-                    <div className="model-input-row">
-                        <input
-                            type="number"
-                            className="model-input"
-                            placeholder={currentCtx != null ? String(currentCtx) : '4096'}
-                            value={ctxInput}
-                            min={512}
-                            step={1024}
-                            onChange={(e) => setCtxInput(e.target.value)}
-                            disabled={isLoadingModel}
-                            aria-label="Context size in tokens"
-                        />
-                        <div className="model-btn-group">
-                            <button
-                                className="btn-model-save"
-                                onClick={() => { void applyCtxSize(); }}
-                                disabled={isLoadingModel || !ctxDirty || !status?.lemonade_running}
-                                aria-label="Reload model with new context size"
-                            >
-                                {isLoadingModel ? (
-                                    <><Loader2 size={13} className="btn-spinner" /> Reloading…</>
-                                ) : (
-                                    'Apply'
-                                )}
-                            </button>
-                        </div>
-                    </div>
-                    <p className="model-status-hint">
-                        Current: <code>{currentCtx != null ? `${currentCtx.toLocaleString()} tokens` : 'unknown'}</code>
-                        {status?.model_loaded && <> on <code>{status.model_loaded}</code></>}.
-                    </p>
-                </section>
-                )}
 
                 {/* Dynamic Tools (Beta) — #1798 */}
                 <section className="settings-section">
@@ -493,38 +411,8 @@ export function AdvancedSettings() {
                     <div className="about-info">
                         <p>GAIA v{version} <span className="beta-badge">BETA</span></p>
                         <p className="about-sub">Privacy-first AI chat for AMD Ryzen AI PCs.</p>
-                        {updateStatus.pinnedVersion && (
-                            <p className="about-pinned-notice">
-                                Auto-update paused (pinned to {updateStatus.pinnedVersion}).{' '}
-                                <button
-                                    type="button"
-                                    className="about-resume-btn"
-                                    onClick={() => {
-                                        const bridge = (window as unknown as { gaiaUpdater?: { resumeUpdates: () => Promise<unknown> } }).gaiaUpdater;
-                                        void bridge?.resumeUpdates().catch((e) => {
-                                            log.system.error('Resume updates failed', e);
-                                        });
-                                    }}
-                                >
-                                    Resume updates
-                                </button>
-                            </p>
-                        )}
-                    </div>
-                    <div className="setting-actions">
-                        <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={() => setShowVersionPicker(true)}
-                        >
-                            Roll back to a previous version
-                        </button>
                     </div>
                 </section>
-
-                {showVersionPicker && (
-                    <VersionPicker onClose={() => setShowVersionPicker(false)} />
-                )}
         </div>
     );
 }

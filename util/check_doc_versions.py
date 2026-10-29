@@ -19,14 +19,13 @@ Exit codes:
 """
 
 import argparse
-import io
 import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Fix Windows console encoding
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+# In place: a new wrapper would drop whatever util/lint.py had buffered.
+sys.stdout.reconfigure(encoding="utf-8")
 
 # Project root (relative to this script's location in util/)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

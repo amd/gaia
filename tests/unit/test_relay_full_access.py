@@ -237,7 +237,6 @@ def client():
     app.include_router(chat_router)
     app.state.db = db
     app.state.session_locks = {}
-    app.state.chat_semaphore = None
     session_id = db.create_session(title="relayed")["id"]
     yield TestClient(app), session_id
     helpers._active_sse_handlers.pop(session_id, None)

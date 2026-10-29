@@ -1,15 +1,17 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// The website, the Agent UI and the TUI are claimed to paint the same copper
-// and the same status hues. Nothing enforced that claim, so the two ambers
-// drifted apart (#e3b341 here vs #E5B567 there) while every contrast test on
-// both sides stayed green — each value clears its floor, they just are not the
-// same colour.
+// The website, the Agent UI and the TUI are claimed to paint the same status
+// hues. Nothing enforced that
+// claim, so the two ambers drifted apart (#e3b341 here vs #E5B567 there) while
+// every contrast test on both sides stayed green — each value clears its floor,
+// they just are not the same colour.
 //
 // This reads the other two surfaces' token files from the repo and compares the
 // literals directly, because "same assistant" is a claim about equality, not
-// about contrast.
+// about contrast. The website's accent is AMD red, not the copper — see "The
+// website" in docs/spec/gaia-design-language.mdx — so only its status hues are
+// paired here.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
@@ -39,26 +41,16 @@ const WEBSITE_ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)));
 const WEBSITE_SRC = resolve(fileURLToPath(new URL('../', import.meta.url)));
 
 /**
- * Website role → the Agent UI role it must equal.
- *
- * The status hues inside the code panel, plus the copper the primary button is
- * painted with. The syntax-only colours (purple, cyan) and the info blue have
- * no Agent UI counterpart by design (the app has no terminal pane to paint
- * info lines in), and the surface/text roles differ on purpose: the panels are
- * near-black but not the same near-black.
+ * Website role → the Agent UI role it must equal: the status hues inside the
+ * code panel. A green "ok" means the same thing in the browser and in the app,
+ * so it is the same green. The syntax-only colours (purple, cyan) and the info
+ * blue have no Agent UI counterpart by design (the app has no terminal pane to
+ * paint info lines in), and the accent differs on purpose (AMD red on the site).
  */
 const SHARED: Record<string, string> = {
-  '--g-code-accent': '--code-accent',
   '--g-code-green': '--code-success',
   '--g-code-amber': '--code-warning',
   '--g-code-danger': '--code-danger',
-  // The primary button. Its resting fill, its hover step and the text on top
-  // are the same three literals on both surfaces — a reader who clicks Download
-  // on the site and Send in the app is looking at one control, not two.
-  '--g-accent': '--accent',
-  '--g-accent-fill': '--accent-fill',
-  '--g-accent-fill2': '--accent-fill-hover',
-  '--g-on-accent': '--accent-fill-text',
 };
 
 /**
@@ -98,11 +90,8 @@ function readGoTokens(source: string): Map<string, string[]> {
   return out;
 }
 
-/** TUI token → the website and Agent UI roles carrying the same literal. */
-const THREE_SURFACE: Array<[string, string, string]> = [
-  ['Accent', '--g-accent', '--accent'],
-  ['AccentFillBG', '--g-accent-fill', '--accent-fill'],
-];
+/** TUI tokens whose literals are pinned below. */
+const TUI_ACCENT = ['Accent', 'AccentFillBG'];
 
 const website = readFileSync(WEBSITE_TOKENS, 'utf8');
 const agentUi = readFileSync(AGENT_UI_TOKENS, 'utf8');
@@ -125,22 +114,16 @@ describe('status hues are one set of literals across both surfaces', () => {
   });
 });
 
-// The TUI is the third surface and the one that cannot import a stylesheet, so
-// its copper is a hand-typed Go literal. A retune that lands on two surfaces and
-// misses the terminal is invisible to every contrast test on all three.
-describe('the copper is one literal on all three surfaces', () => {
+// The Agent UI moved to brass; the TUI keeps copper until a brass exists that
+// survives 256-colour rounding (the light brass lands on the TUI's warning
+// entry). See "The Agent UI's palette" in
+// docs/spec/gaia-design-language.mdx. Until then the accents are deliberately
+// unequal, so this pins the TUI's copper on its own: a retune there must be a
+// decision, not a drift.
+describe('the TUI keeps its copper', () => {
   it('can still parse theme.go', () => {
-    // A rename or a reshaped declaration must fail here, not skip every pair.
-    expect([...tui.keys()]).toEqual(
-      expect.arrayContaining(THREE_SURFACE.map(([goToken]) => goToken)),
-    );
-  });
-
-  it.each(THREE_SURFACE)('%s equals %s equals %s', (goToken, siteToken, appToken) => {
-    // A mode-invariant role is declared once on the web and twice in Go.
-    const expected = [...new Set(tui.get(goToken)!)];
-    expect(readValues(website, siteToken), `${siteToken} drifted from the TUI`).toEqual(expected);
-    expect(readValues(agentUi, appToken), `${appToken} drifted from the TUI`).toEqual(expected);
+    // A rename or a reshaped declaration must fail here, not skip the pin.
+    expect([...tui.keys()]).toEqual(expect.arrayContaining(TUI_ACCENT));
   });
 
   it('is still burnished copper and its dark counterpart', () => {
@@ -213,10 +196,12 @@ describe('the drift guard runs on every tree it reads', () => {
     // A scan that matches nothing would pass every case below vacuously.
     expect(reads, 'the cross-tree scan found nothing — did new URL(…) reads move?').not.toEqual([]);
     expect(reads, 'a new cross-tree read belongs here AND in website-ci.yml paths').toEqual([
+      '.github/workflows/build_tui.yml',
+      '.github/workflows/publish.yml',
+      '.github/workflows/release_components.yml',
       '.github/workflows/website-ci.yml',
       'docs/spec/gaia-design-language.mdx',
-      'hub/agents/gaia/npm/package.json',
-      'hub/agents/gaia/python/gaia-agent.yaml',
+      'installer/tui/artifacts.py',
       'src/gaia/apps/webui/src/styles/index.css',
       'tui/internal/ui/theme/theme.go',
     ]);

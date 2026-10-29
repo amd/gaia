@@ -69,6 +69,8 @@ def collect_one_shot_jobs(db) -> List[MigratableJob]:
                     "kind": row["kind"],
                     "mailbox": row["mailbox"],
                     "payload": row["payload"],
+                    # The daemon re-queues a stuck rerunnable job instead of failing it.
+                    "rerunnable": row["kind"] in schedule_store.RERUNNABLE_KINDS,
                 },
             )
         )

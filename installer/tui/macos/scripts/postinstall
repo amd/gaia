@@ -27,7 +27,7 @@ for binary in gaia-tui gaia-agent; do
     fi
 done
 
-echo "GAIA Terminal Hub installed:"
+echo "GAIA Terminal UI installed:"
 echo "  ${BIN_DIR}/gaia-tui"
 echo "  ${BIN_DIR}/gaia-agent"
 echo "Run \`gaia-tui\` to start."

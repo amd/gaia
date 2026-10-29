@@ -107,6 +107,7 @@ _VERB_FORMS = {
     "remove": "Removing",
     "rename": "Renaming",
     "render": "Rendering",
+    "replace": "Replacing",
     "reply": "Replying",
     "resolve": "Resolving",
     "run": "Running",
@@ -273,6 +274,25 @@ def derive_narration(tool: str, args: Optional[Mapping[str, Any]] = None) -> str
     return f"{base}: {detail}" if detail else base
 
 
+def grant_phrase(tool: str, subject: str) -> Optional[str]:
+    """What an "always allow" grant covers, in narration's verb: "editing notes.txt".
+
+    ``None`` when the tool's name does not open with a known verb — the caller
+    keeps its own label rather than guessing what the tool does.
+    """
+    head = re.split(r"[_.\s-]+", (tool or "").strip(), maxsplit=1)[0]
+    verb = _VERB_FORMS.get(head.lower())
+    if verb is None or not subject:
+        return None
+    return f"{verb.lower()} {subject}"
+
+
+def tool_phrase(tool: str) -> str:
+    """``write_file`` -> "writing file", the tool as a permission question names it."""
+    phrase = derive_narration(tool)
+    return phrase[:1].lower() + phrase[1:]
+
+
 # -- tool_result preview ----------------------------------------------------
 
 
@@ -423,4 +443,11 @@ def derive_preview(
     return " · ".join(parts)
 
 
-__all__ = ["DEBUG_CHANNEL", "derive_narration", "derive_preview", "format_count"]
+__all__ = [
+    "DEBUG_CHANNEL",
+    "derive_narration",
+    "derive_preview",
+    "format_count",
+    "grant_phrase",
+    "tool_phrase",
+]

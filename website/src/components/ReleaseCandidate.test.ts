@@ -40,7 +40,7 @@ describe('ReleaseCandidate.astro', () => {
     expect(html.match(/<details/g)).toHaveLength(1);
     // Collapsed: `open` would put it on equal footing with the stable downloads.
     expect(html).not.toMatch(/<details[^>]*\sopen[\s>=]/);
-    expect(html).toContain('Try the release candidate · v0.25.0-rc1');
+    expect(html).toMatch(/v0\.25\.0-rc1<\/span>\s*<span[^>]*>release candidate<span[^>]*> — try it early<\/span><\/span>/);
 
     expect(html).toContain(`href="${CANDIDATE.downloads[0].url}"`);
     expect(html).toContain(`href="${CANDIDATE.htmlUrl}"`);
@@ -48,10 +48,14 @@ describe('ReleaseCandidate.astro', () => {
     expect(html).toContain('npm i -g @amd-gaia/agent-ui@next');
   });
 
-  it('keeps the summary small and muted, not a label like the stable downloads', async () => {
+  // It sits right under the stable download, so it must read as a line, never
+  // as a second primary button.
+  it('keeps the summary a small orange-edged line, not a button', async () => {
     const summary = (await render(CANDIDATE)).match(/<summary[^>]*>/)?.[0] ?? '';
     expect(summary).toContain('text-g-muted');
-    expect(summary).toContain('text-[12px]');
+    expect(summary).toContain('text-[13px]');
+    expect(summary).toContain('border-g-rc-dim');
+    expect(summary).not.toContain('g-btn');
     expect(summary).not.toContain('g-label');
   });
 

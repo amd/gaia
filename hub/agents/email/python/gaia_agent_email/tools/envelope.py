@@ -13,5 +13,9 @@ def _envelope_ok(data: Any) -> str:
     return json.dumps({"ok": True, "data": data}, default=str)
 
 
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
+def _envelope_err(message: str, data: Any = None) -> str:
+    """``data`` carries what the failed call did produce, e.g. per-item results."""
+    body = {"ok": False, "error": message}
+    if data is not None:
+        body["data"] = data
+    return json.dumps(body, default=str)

@@ -3,6 +3,7 @@ package components
 import (
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -261,15 +262,23 @@ const ConfirmationTimeout = 30 * time.Second
 const DeliverableConfirmationTimeout = 10 * time.Minute
 
 // ConfirmationTimeoutMsg is the client-side auto-deny tick for one
-// confirmation. RunID lets a stale timer — left over from a confirmation that
-// already resolved, or was superseded by a newer one on the same run — be
-// told apart from the one it was started for.
-type ConfirmationTimeoutMsg struct{ RunID string }
+// confirmation. Seq names the prompt it was armed for: one run asks many
+// times, so RunID alone let an earlier prompt's timer deny a later one.
+type ConfirmationTimeoutMsg struct {
+	RunID string
+	Seq   uint64
+}
 
-func startConfirmationTimeoutIn(runID string, after time.Duration) tea.Cmd {
-	return tea.Tick(after, func(time.Time) tea.Msg {
-		return ConfirmationTimeoutMsg{RunID: runID}
-	})
+// confirmationSeq numbers every prompt this process builds; zero is never issued.
+var confirmationSeq atomic.Uint64
+
+// ExpiryMsg is the message this prompt's own timer delivers when it expires.
+func (m ConfirmationModel) ExpiryMsg() ConfirmationTimeoutMsg {
+	return ConfirmationTimeoutMsg{RunID: m.runID, Seq: m.seq}
+}
+
+func startConfirmationTimeoutIn(msg ConfirmationTimeoutMsg, after time.Duration) tea.Cmd {
+	return tea.Tick(after, func(time.Time) tea.Msg { return msg })
 }
 
 // TimeoutCmd arms this confirmation's auto-deny on ITS clock.
@@ -278,7 +287,7 @@ func startConfirmationTimeoutIn(runID string, after time.Duration) tea.Cmd {
 // pick the duration themselves: the modal knows whether its answer can be
 // delivered, and that is what sets the bound.
 func (m ConfirmationModel) TimeoutCmd() tea.Cmd {
-	return startConfirmationTimeoutIn(m.runID, m.timeout())
+	return startConfirmationTimeoutIn(m.ExpiryMsg(), m.timeout())
 }
 
 func (m ConfirmationModel) timeout() time.Duration {
@@ -294,6 +303,9 @@ func (m ConfirmationModel) timeout() time.Duration {
 type ConfirmationDecidedMsg struct {
 	RunID  string
 	Action string
+	// Seq is the prompt this decision resolved (see ConfirmationModel.Seq), so
+	// a decision still in flight cannot close the prompt that replaced it.
+	Seq uint64
 	// ConfirmID identifies the prompt this decision was typed against, so a
 	// late answer cannot resolve the confirmation that replaced it. Empty on
 	// transports that do not mint one.
@@ -340,6 +352,7 @@ type ConfirmationDecidedMsg struct {
 // already documents avoiding for the one-shot surface.
 type ConfirmationModel struct {
 	runID     string
+	seq       uint64
 	action    string
 	summary   string
 	confirmID string
@@ -366,6 +379,7 @@ type ConfirmationModel struct {
 func NewConfirmationModel(runID, action, summary, confirmURL string) ConfirmationModel {
 	return ConfirmationModel{
 		runID:      runID,
+		seq:        confirmationSeq.Add(1),
 		action:     action,
 		summary:    summary,
 		confirmURL: confirmURL,
@@ -405,6 +419,7 @@ func (m *ConfirmationModel) SetModeHint(hint string) { m.modeHint = hint }
 func (m ConfirmationModel) Summary() string { return m.summary }
 
 func (m ConfirmationModel) RunID() string       { return m.runID }
+func (m ConfirmationModel) Seq() uint64         { return m.seq }
 func (m ConfirmationModel) Action() string      { return m.action }
 func (m ConfirmationModel) State() ConfirmState { return m.state }
 func (m ConfirmationModel) Tier() RiskTier      { return m.tier }
@@ -472,13 +487,13 @@ func (m ConfirmationModel) allowAlways() bool {
 }
 
 // ResolveTimeout applies the auto-deny, but only if this confirmation is still
-// pending and msg was started for THIS run — a stale timer for an
-// already-resolved or superseded confirmation must not fire a second decision.
+// pending and msg was armed for THIS prompt — a timer left by an answered or
+// replaced prompt is a no-op, even on the same run.
 //
 // Every confirmation expires; deliverability sets how long, not whether (see
 // TimeoutCmd). A prompt that waited forever was a turn with no way to end.
 func (m ConfirmationModel) ResolveTimeout(msg ConfirmationTimeoutMsg) (ConfirmationModel, tea.Cmd) {
-	if m.state != ConfirmationPending || msg.RunID != m.runID {
+	if m.state != ConfirmationPending || msg.RunID != m.runID || msg.Seq != m.seq {
 		return m, nil
 	}
 	return m.decide(ConfirmationDenied, true)
@@ -493,6 +508,7 @@ func (m ConfirmationModel) decide(state ConfirmState, timedOut bool) (Confirmati
 	decided := ConfirmationDecidedMsg{
 		RunID:       m.runID,
 		Action:      m.action,
+		Seq:         m.seq,
 		ConfirmID:   m.confirmID,
 		ConfirmURL:  m.confirmURL,
 		Approved:    state == ConfirmationApproved || always,

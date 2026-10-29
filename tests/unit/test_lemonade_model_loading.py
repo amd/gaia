@@ -11,6 +11,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
+    ModelDownloadCancelledError,
     _prompt_user_for_delete,
 )
 
@@ -113,7 +114,7 @@ class TestEnsureModelLoaded:
         """
         # Setup
         client = LemonadeClient(host="localhost", port=13305)
-        mock_status.side_effect = Exception("Connection failed")
+        mock_status.side_effect = LemonadeClientError("Connection failed")
         mock_list.return_value = {"data": []}
 
         # Execute - the probe error is swallowed; the load still runs.
@@ -419,6 +420,29 @@ class TestLoadModelCorruptNonInteractive:
     @patch.object(LemonadeClient, "delete_model")
     @patch.object(LemonadeClient, "pull_model_stream")
     @patch.object(LemonadeClient, "_send_request")
+    def test_stop_during_the_repair_never_deletes_the_model(
+        self, mock_send, mock_pull, mock_delete_model, mock_repair, mock_delete_prompt
+    ):
+        """Stop pressed while the resume downloads is the user's choice, not a
+        failed resume: the model must not be deleted and re-downloaded."""
+        from gaia.llm.retry import model_retry_notices
+
+        mock_send.side_effect = [Exception(_CORRUPT_ERROR_MESSAGE)]
+        mock_pull.return_value = iter(
+            [{"event": "progress", "percent": p} for p in (10, 20, 30)]
+        )
+        client = _make_client()
+        with model_retry_notices(lambda _n: None, is_cancelled=lambda: True):
+            with pytest.raises(ModelDownloadCancelledError):
+                client.load_model("Qwen3-0.6B-GGUF", prompt=False)
+        mock_delete_model.assert_not_called()
+        assert mock_pull.call_count == 1
+
+    @patch("gaia.llm.lemonade_client._prompt_user_for_delete")
+    @patch("gaia.llm.lemonade_client._prompt_user_for_repair")
+    @patch.object(LemonadeClient, "delete_model")
+    @patch.object(LemonadeClient, "pull_model_stream")
+    @patch.object(LemonadeClient, "_send_request")
     def test_resume_failure_triggers_single_delete_and_redownload(
         self, mock_send, mock_pull, mock_delete_model, mock_repair, mock_delete_prompt
     ):
@@ -550,3 +574,209 @@ class TestLoadModelCorruptInteractive:
 
         assert result == {"status": "loaded"}
         mock_repair.assert_called_once()
+
+
+def test_an_abandoned_pull_stream_closes_its_response():
+    """Stop closes the pull stream early; its HTTP response must close with it,
+    or the download keeps running on the server."""
+    from unittest.mock import MagicMock
+
+    response = MagicMock()
+    response.status_code = 200
+    response.iter_lines.return_value = iter(
+        [b"event: progress", b'data: {"percent": 10}', b"event: progress"]
+    )
+    client = _make_client()
+    with patch("gaia.llm.lemonade_client.requests.post", return_value=response):
+        stream = client.pull_model_stream("Qwen3-0.6B-GGUF")
+        next(stream)
+        stream.close()
+    response.close.assert_called_once()
+
+
+class TestStopNeverDeletes:
+    """Stop during any download is the user's choice. It must never be read as
+    a failed download, and so must never lead to deleting the model."""
+
+    @patch.object(LemonadeClient, "delete_model")
+    @patch.object(LemonadeClient, "pull_model_stream")
+    @patch.object(LemonadeClient, "_send_request")
+    def test_stop_while_the_resume_is_silent(self, mock_send, mock_pull, mock_delete):
+        """A silent resume ends in a read timeout; Stop pressed meanwhile wins."""
+        from gaia.llm.retry import model_retry_notices
+
+        mock_send.side_effect = [Exception(_CORRUPT_ERROR_MESSAGE)]
+
+        def silent_then_timeout(**_kwargs):
+            raise LemonadeClientError("Failed to install: Read timed out")
+            yield  # pragma: no cover - makes this a generator
+
+        mock_pull.side_effect = silent_then_timeout
+        client = _make_client()
+        with model_retry_notices(lambda _n: None, is_cancelled=lambda: True):
+            with pytest.raises(ModelDownloadCancelledError):
+                client.load_model("Qwen3-0.6B-GGUF", prompt=False)
+        mock_delete.assert_not_called()
+
+    @patch.object(LemonadeClient, "delete_model")
+    @patch.object(LemonadeClient, "pull_model_stream")
+    @patch.object(LemonadeClient, "_send_request")
+    def test_stop_during_the_fresh_download(self, mock_send, mock_pull, mock_delete):
+        """The resume fails on its own; Stop lands during the fresh download.
+        That is a cancellation, not a "failed to repair" error."""
+        from gaia.llm.retry import model_retry_notices
+
+        mock_send.side_effect = [Exception(_CORRUPT_ERROR_MESSAGE)]
+        mock_pull.side_effect = [
+            iter([{"event": "error", "error": "resume broke"}]),
+            iter([{"event": "progress", "percent": p} for p in (10, 20, 30)]),
+        ]
+        client = _make_client()
+        with model_retry_notices(
+            lambda _n: None, is_cancelled=lambda: mock_pull.call_count >= 2
+        ):
+            with pytest.raises(ModelDownloadCancelledError):
+                client.load_model("Qwen3-0.6B-GGUF", prompt=False)
+        assert mock_delete.call_count == 1  # the resume really failed first
+
+
+@pytest.mark.allow_network
+def test_stop_interrupts_a_pull_that_has_gone_silent(monkeypatch):
+    """Lemonade sends one progress event, then nothing (hashing, or stuck).
+    Stop must not wait out the 30-minute idle limit."""
+    import socket
+    import threading
+    import time
+
+    from gaia.llm.retry import model_retry_notices
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    held = []
+
+    def serve():
+        conn, _ = listener.accept()
+        held.append(conn)
+        conn.recv(65536)
+        conn.sendall(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n"
+            b'event: progress\ndata: {"percent": 5}\n\n'
+        )
+
+    threading.Thread(target=serve, daemon=True).start()
+    # A regression fails in seconds instead of waiting out the 30-minute limit.
+    monkeypatch.setattr("gaia.llm.lemonade_client.PULL_IDLE_TIMEOUT_S", 10)
+    client = LemonadeClient(base_url=f"http://127.0.0.1:{port}/api/v1", verbose=False)
+    deadline = time.monotonic() + 1.5
+    started = time.monotonic()
+    try:
+        with model_retry_notices(
+            lambda _n: None, is_cancelled=lambda: time.monotonic() >= deadline
+        ):
+            with pytest.raises(ModelDownloadCancelledError):
+                for _event in client.pull_model_stream(model_name="Qwen3-0.6B-GGUF"):
+                    pass
+        assert time.monotonic() - started < 4
+    finally:
+        for conn in held:
+            conn.close()
+        listener.close()
+
+
+@pytest.mark.allow_network
+def test_stop_interrupts_a_pull_before_lemonade_answers(monkeypatch):
+    """Lemonade accepts the pull and sends nothing, not even headers. Stop
+    must not wait for them, and must not be reported as a failed download."""
+    import socket
+    import threading
+    import time
+
+    from gaia.llm.retry import model_retry_notices
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    held = []
+
+    def serve():
+        conn, _ = listener.accept()
+        held.append(conn)
+        conn.recv(65536)
+
+    threading.Thread(target=serve, daemon=True).start()
+    monkeypatch.setattr("gaia.llm.lemonade_client.PULL_IDLE_TIMEOUT_S", 10)
+    client = LemonadeClient(base_url=f"http://127.0.0.1:{port}/api/v1", verbose=False)
+    deadline = time.monotonic() + 1.5
+    started = time.monotonic()
+    try:
+        with model_retry_notices(
+            lambda _n: None, is_cancelled=lambda: time.monotonic() >= deadline
+        ):
+            with pytest.raises(ModelDownloadCancelledError):
+                for _event in client.pull_model_stream(model_name="Qwen3-0.6B-GGUF"):
+                    pass
+        assert time.monotonic() - started < 4
+    finally:
+        for conn in held:
+            conn.close()
+        listener.close()
+
+
+@patch.object(LemonadeClient, "_model_storage_free_bytes", return_value=(10**13, "/"))
+@patch.object(
+    LemonadeClient,
+    "get_model_info",
+    return_value={"id": "Qwen3-0.6B-GGUF", "downloaded": False, "size_gb": 0.5},
+)
+@patch.object(LemonadeClient, "pull_model_stream")
+@patch.object(LemonadeClient, "_send_request")
+def test_stop_during_an_auto_download_is_a_cancellation(
+    mock_send, mock_pull, _info, _free
+):
+    """The auto-download loop gets Stop from pull_model_stream: it surfaces as
+    a cancellation, never as "Failed to auto-download", and nothing loads."""
+    mock_send.side_effect = [Exception("model not found: Qwen3-0.6B-GGUF")]
+
+    def stopped(**_kwargs):
+        yield {"event": "progress", "percent": 5}
+        raise ModelDownloadCancelledError("Download stopped at your request.")
+
+    mock_pull.side_effect = stopped
+    client = _make_client()
+    with pytest.raises(ModelDownloadCancelledError):
+        client.load_model("Qwen3-0.6B-GGUF", prompt=False, auto_download=True)
+    assert mock_send.call_count == 1
+
+
+def test_a_pull_answered_while_stop_lands_is_still_closed():
+    """The POST answers in the gap between the worker's Stop check and the
+    caller recording Stop: that response must still be closed, or Lemonade
+    keeps downloading after the user was told it stopped."""
+    import time
+    from unittest.mock import MagicMock
+
+    from gaia.llm.retry import model_retry_notices
+
+    response = MagicMock()
+    response.status_code = 200
+
+    def slow_post(*_args, **_kwargs):
+        time.sleep(0.6)
+        return response
+
+    def slow_stop_check():
+        # The first check runs at ~0.5 s and takes 0.3 s: the POST answers
+        # (at ~0.6 s) while it is still deciding.
+        time.sleep(0.3)
+        return True
+
+    client = _make_client()
+    with patch("gaia.llm.lemonade_client.requests.post", side_effect=slow_post):
+        with model_retry_notices(lambda _n: None, is_cancelled=slow_stop_check):
+            with pytest.raises(ModelDownloadCancelledError):
+                for _event in client.pull_model_stream(model_name="Qwen3-0.6B-GGUF"):
+                    pass
+    response.close.assert_called()

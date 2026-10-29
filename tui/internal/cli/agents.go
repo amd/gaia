@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui"
 )
 
@@ -40,7 +41,10 @@ var runCmd = &cobra.Command{
 		"the agent still wrote an answer, so `gaia tui run … && next-step` does not " +
 		"fire over work that never happened\n" +
 		"  exit 3  a confirmation gate held back a destructive action this run has " +
-		"no way to approve: nothing broke, and nothing was done\n\n" +
+		"no way to approve: nothing broke, and nothing was done\n" +
+		"  exit 130  Ctrl+C (or SIGTERM/SIGHUP) stopped the turn. The agent is asked " +
+		"to stop and given 10s to confirm; a second Ctrl+C quits without waiting, and " +
+		"stderr says when the turn may still be running\n\n" +
 		"A tool that reports no outcome at all is named on stderr as unverified " +
 		"rather than counted as a success.\n\n" +
 		"A one-shot checks its preconditions first and refuses in seconds — naming " +
@@ -129,14 +133,17 @@ func printStatus(w io.Writer) error {
 	agents, err := hc.Agents(ctx, false)
 	if err != nil {
 		fmt.Fprintln(w, "Background service:  not reachable")
+		printModelServer(w, "")
 		// Non-zero, so `gaia tui status || <alert>` fires. A status command
 		// that exits 0 while the thing it reports on is down is unusable in a
 		// script.
 		return fmt.Errorf("the GAIA background service is not reachable: %w", err)
 	}
 	inst := hc.Instance()
-	fmt.Fprintf(w, "Background service:  running (pid %d, port %d, api %s)\n\n",
+	fmt.Fprintf(w, "Background service:  running (pid %d, port %d, api %s)\n",
 		inst.PID, inst.Port, inst.APIVersion)
+	printModelServer(w, "")
+	fmt.Fprintln(w)
 
 	fmt.Fprintf(w, "%-14s %-10s %-8s %s\n", "AGENT", "STATE", "PID", "VERSION")
 	for _, a := range agents {
@@ -153,13 +160,25 @@ func printStatus(w io.Writer) error {
 	}
 	fmt.Fprintf(w, "\nInstalled in %s:\n", catalog.InstallRoot())
 	if len(installed.Agents) == 0 {
-		fmt.Fprintln(w, "  (none) — install one with `gaia hub install <id>`")
+		fmt.Fprintf(w, "  (none) — install the GAIA agent with `%s`\n", catalog.InstallCommand(catalog.FlagshipID))
 		return nil
 	}
 	for _, a := range installed.Agents {
 		fmt.Fprintf(w, "  %-14s %s\n", a.ID, orDash(a.InstalledVersion))
 	}
 	return nil
+}
+
+// printModelServer names the Lemonade GAIA uses and what the chat model runs
+// on. A Lemonade that is down is reported, not an error: the background
+// service's state decides the exit code.
+func printModelServer(w io.Writer, base string) {
+	info, err := lemonade.New(base).ServerInfo(context.Background())
+	if err != nil {
+		fmt.Fprintf(w, "Model server:        %s\n", err)
+		return
+	}
+	fmt.Fprintf(w, "Model server:        %s\n", info.StatusLine())
 }
 
 func orDash(s string) string {
@@ -172,7 +191,7 @@ func orDash(s string) string {
 func init() {
 	runCmd.Flags().StringVar(&runQuery, "query", "",
 		"run one query non-interactively: answer on stdout, exit 0 answered / "+
-			"1 failed / 3 needs approval")
+			"1 failed / 3 needs approval / 130 interrupted")
 	runCmd.Flags().StringVar(&runModel, "model", "",
 		"model id override (the agent's default is used when unset)")
 	runCmd.Flags().DurationVar(&runTimeout, "timeout", ui.DefaultOneShotTimeout,

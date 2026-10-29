@@ -1,9 +1,10 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { UnsupportedCard } from './UnsupportedCard';
 import { respondToInput } from '../../services/api';
+import { useChatStore } from '../../stores/chatStore';
 
 /**
  * NeedsInputCard — the answerable `needs_input` surface (#2595).
@@ -22,6 +23,10 @@ import { respondToInput } from '../../services/api';
  * types and the value is NEVER echoed back into the card's own "answered"
  * state — only a placeholder is shown, so a sensitive answer never lands in
  * visible chat history.
+ *
+ * Answerable only while the agent still waits: the question must be in
+ * `chatStore.liveQuestions`. Once its turn ends or its wait runs out the card
+ * says so and drops its buttons, and a click racing that is told plainly.
  */
 
 interface InputOption {
@@ -56,13 +61,38 @@ type SubmitState =
     | { status: 'pending' }
     | { status: 'submitting' }
     | { status: 'answered' }
-    | { status: 'error'; message: string };
+    | { status: 'error'; message: string }
+    | { status: 'expired'; message: string };
+
+export const QUESTION_EXPIRED_NOTE =
+    'This question is no longer waiting for an answer. If you still want to answer it, say so in a new message.';
 
 const SENSITIVE_PLACEHOLDER = '••••••';
+
+/** A 404 `ApiError` from the answer endpoint: the backend no longer waits on this question.
+ *  A 409 is a relay that could not deliver it, which may still succeed. */
+function isGoneError(err: unknown): boolean {
+    return (err as { httpStatus?: unknown } | null)?.httpStatus === 404;
+}
 
 export function NeedsInputCard({ data }: { data: unknown }) {
     const [state, setState] = useState<SubmitState>({ status: 'pending' });
     const [freeText, setFreeText] = useState('');
+    const requestId = isNeedsInputPayload(data) ? data.request_id : '';
+    const live = useChatStore((s) => s.liveQuestions[requestId]);
+    const closeQuestion = useChatStore((s) => s.closeQuestion);
+
+    // The backend stops waiting at its own deadline; close the card then too.
+    useEffect(() => {
+        if (!live || live.expiresAt === null) return;
+        const left = live.expiresAt - Date.now();
+        if (left <= 0) {
+            closeQuestion(requestId);
+            return;
+        }
+        const t = setTimeout(() => closeQuestion(requestId), left);
+        return () => clearTimeout(t);
+    }, [live, requestId, closeQuestion]);
 
     if (!isNeedsInputPayload(data)) {
         return <UnsupportedCard variant="invalid" render="needs_input" data={data} />;
@@ -71,12 +101,18 @@ export function NeedsInputCard({ data }: { data: unknown }) {
     const submitting = state.status === 'submitting';
 
     const submit = async (value: string) => {
-        if (!value.trim() || submitting) return;
+        if (!value.trim() || submitting || !live) return;
         setState({ status: 'submitting' });
         try {
             await respondToInput(data.session_id, data.request_id, value);
             setState({ status: 'answered' });
+            closeQuestion(data.request_id);
         } catch (err) {
+            if (isGoneError(err)) {
+                closeQuestion(data.request_id);
+                setState({ status: 'expired', message: QUESTION_EXPIRED_NOTE });
+                return;
+            }
             setState({
                 status: 'error',
                 message: err instanceof Error ? err.message : 'Failed to send the answer.',
@@ -88,6 +124,21 @@ export function NeedsInputCard({ data }: { data: unknown }) {
         return (
             <div className="render-needs-input render-needs-input--answered">
                 <span className="render-needs-input__answered-note">Answered</span>
+            </div>
+        );
+    }
+
+    if (state.status === 'expired' || (!live && !submitting)) {
+        return (
+            <div className="render-needs-input render-needs-input--expired" aria-disabled="true">
+                <div className="render-needs-input__header">
+                    <span className="render-needs-input__badge">Question</span>
+                </div>
+                {/* Plain text node only — question text can carry tool-derived content. */}
+                <p className="render-needs-input__question">{data.question}</p>
+                <p className="render-needs-input__expired-note" role="status">
+                    {state.status === 'expired' ? state.message : QUESTION_EXPIRED_NOTE}
+                </p>
             </div>
         );
     }

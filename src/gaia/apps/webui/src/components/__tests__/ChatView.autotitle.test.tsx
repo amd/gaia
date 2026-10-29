@@ -1,9 +1,9 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// #2165: explicit renames must PIN the session title (title_is_custom: true)
-// while the client-side first-message auto-title must NOT pin it
-// (title_is_custom: false) so the server-side LLM titler can still improve it.
+// #2165: explicit renames must PIN the session title (title_is_custom: true).
+// A new chat's first-message name comes from the server, which leaves it
+// unpinned so its LLM titler can still improve it; the view only shows it.
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,6 +11,7 @@ import { ChatView } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
 import type { AgentInfo, Session } from '../../types';
 import * as api from '../../services/api';
+import { MAX_SESSION_TITLE_CHARS } from '../../utils/constants';
 import type { StreamEvent } from '../../types';
 
 vi.mock('../../services/api');
@@ -65,7 +66,8 @@ beforeEach(() => {
     capturedCallbacks = null;
 
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
-    mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [] });
+    mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
+    mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({
         documents: [],
@@ -88,7 +90,8 @@ beforeEach(() => {
 });
 
 describe('ChatView title pinning (#2165)', () => {
-    it('client-side auto-title on first message does NOT pin the title', async () => {
+    it('shows the name the server gave a new chat, without writing one itself', async () => {
+        mockedApi.getSession.mockResolvedValue({ ...SESSION, title: 'what is the capital of france' });
         render(<ChatView sessionId={SESSION.id} />);
 
         await act(async () => {
@@ -99,17 +102,54 @@ describe('ChatView title pinning (#2165)', () => {
         });
         expect(capturedCallbacks).not.toBeNull();
 
+        // The first event means the server took the message, and named the chat.
         await act(async () => {
+            capturedCallbacks!.onAgentEvent({ type: 'status', message: 'Connecting to LLM...' } as unknown as StreamEvent);
+            capturedCallbacks!.onChunk({ type: 'chunk', content: 'Par' } as unknown as StreamEvent);
             capturedCallbacks!.onDone({
                 type: 'done',
                 content: 'Paris.',
             } as unknown as StreamEvent);
         });
 
-        expect(mockedApi.updateSession).toHaveBeenCalledWith(SESSION.id, {
-            title: 'what is the capital of france',
-            title_is_custom: false,
+        expect(mockedApi.getSession).toHaveBeenCalledTimes(1);
+        expect(mockedApi.getSession).toHaveBeenCalledWith(SESSION.id);
+        expect(useChatStore.getState().sessions[0].title).toBe('what is the capital of france');
+        // A client-written title would block the server's titler from improving it.
+        expect(mockedApi.updateSession).not.toHaveBeenCalled();
+    });
+
+    it('leaves a named chat alone', async () => {
+        setSession({ ...SESSION, title: 'Capital cities' });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'and of spain?' } });
+            fireEvent.click(screen.getByLabelText('Send'));
         });
+        await act(async () => {
+            capturedCallbacks!.onChunk({ type: 'chunk', content: 'Madrid' } as unknown as StreamEvent);
+        });
+
+        expect(mockedApi.getSession).not.toHaveBeenCalled();
+        expect(mockedApi.updateSession).not.toHaveBeenCalled();
+    });
+
+    it.each(['New Chat', 'Untitled', ''])('refreshes a chat the server still treats as unnamed (%j)', async (title) => {
+        setSession({ ...SESSION, title });
+        mockedApi.getSession.mockResolvedValue({ ...SESSION, title: 'plan a trip' });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'plan a trip' } });
+            fireEvent.click(screen.getByLabelText('Send'));
+        });
+        await act(async () => {
+            capturedCallbacks!.onChunk({ type: 'chunk', content: 'Sure' } as unknown as StreamEvent);
+        });
+
+        expect(mockedApi.getSession).toHaveBeenCalledTimes(1);
+        expect(useChatStore.getState().sessions[0].title).toBe('plan a trip');
     });
 
     it('manual rename pins the title', async () => {
@@ -127,5 +167,36 @@ describe('ChatView title pinning (#2165)', () => {
             title: 'My Research Project',
             title_is_custom: true,
         });
+    });
+
+    it('caps a rename at the backend title limit (#5257)', async () => {
+        setSession({ ...SESSION, title: 'Auto Generated Title' });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Auto Generated Title' }));
+        const input = screen.getByLabelText('Chat title');
+        expect(input).toHaveAttribute('maxLength', String(MAX_SESSION_TITLE_CHARS));
+        await act(async () => {
+            fireEvent.change(input, { target: { value: 'x'.repeat(100_000) } });
+            fireEvent.keyDown(input, { key: 'Enter' });
+        });
+
+        expect(mockedApi.updateSession).toHaveBeenCalledWith(SESSION.id, {
+            title: 'x'.repeat(MAX_SESSION_TITLE_CHARS),
+            title_is_custom: true,
+        });
+    });
+
+    it('leaves an old over-long title alone when the rename is not edited', async () => {
+        const longTitle = 'y'.repeat(MAX_SESSION_TITLE_CHARS + 50);
+        setSession({ ...SESSION, title: longTitle });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        fireEvent.click(screen.getByRole('button', { name: longTitle }));
+        await act(async () => {
+            fireEvent.blur(screen.getByLabelText('Chat title'));
+        });
+
+        expect(mockedApi.updateSession).not.toHaveBeenCalled();
     });
 });

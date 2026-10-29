@@ -40,6 +40,20 @@ describe('linkifyPaths', () => {
         expect(container.textContent).toBe(text);
     });
 
+    it('never reads a URL scheme as a drive letter', () => {
+        const text = '404 Client Error: Not Found for url: https://example.com/x and file:///C:/y';
+        const { container, links } = renderText(text);
+
+        expect(links).toEqual([]);
+        expect(container.textContent).toBe(text);
+    });
+
+    it('links a bare path at the start and a bracketed path', () => {
+        const { links } = renderText('C:\\Users\\a.txt then (C:\\x\\y)');
+
+        expect(links).toEqual(['C:\\Users\\a.txt', 'C:\\x\\y']);
+    });
+
     it('leaves text without paths alone', () => {
         expect(linkifyPaths('no paths here')).toBe('no paths here');
     });

@@ -14,7 +14,7 @@ hub/
 │   │   ├── npm/        # JS/TS client (when the agent ships one)
 │   │   └── cpp/        # C++ agent (compiled binary, when present)
 │   └── README.md
-├── components/        # Front ends that drive agents (Agent UI, terminal hub)
+├── components/        # Front ends that drive agents (Agent UI, Terminal UI)
 │   └── <id>/gaia-agent.yaml
 ├── skills/            # Skills — a capability any agent composes
 │   ├── <name>/SKILL.md

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from gaia.agents.base.file_snapshots import note_untracked
 from gaia.logger import get_logger
 from gaia.skills.binaries import BINARY_POLICIES, BinaryPolicy
 from gaia.skills.binary_setup import (
@@ -256,6 +257,7 @@ class CliSetupToolsMixin:
                 }
 
             logger.info("Installing '%s' with: %s", policy.binary, plan.command)
+            note_untracked("install_cli", str(plan.command))
             try:
                 output = run_install(plan, timeout=_INSTALL_TIMEOUT_S)
             except SetupError as exc:

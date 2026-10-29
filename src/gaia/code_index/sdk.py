@@ -23,9 +23,12 @@ from gaia.logger import get_logger
 from gaia.security import PathValidator
 from gaia.tool_cancellation import raise_if_cancelled
 
-_MISSING_DEPS_MSG = (
-    "code_index dependencies missing. Install with: pip install -e '.[rag]'"
-)
+
+def _missing_deps_msg() -> str:
+    from gaia.agents.install_hints import missing_extra_hint
+
+    return f"code_index dependencies missing. {missing_extra_hint('rag')}"
+
 
 # ---------------------------------------------------------------------------
 # Configuration and response dataclasses
@@ -188,6 +191,8 @@ class CodeIndexSDK:
         self._metadata: Optional[Dict[str, Any]] = None
         self._embedder = None
         self._llm_client = None
+        #: Chunks embedded so far by the running index build, of how many.
+        self.progress: Dict[str, int] = {"embedded": 0, "to_embed": 0}
 
     # ------------------------------------------------------------------
     # Public API
@@ -198,6 +203,7 @@ class CodeIndexSDK:
         Index the repository: discover files, parse, embed, build FAISS index,
         persist atomically.
         """
+        self.progress = {"embedded": 0, "to_embed": 0}
         start = time.time()
 
         self.log.info(f"Indexing repository: {self._repo_root}")
@@ -291,7 +297,7 @@ class CodeIndexSDK:
         try:
             import numpy as np
         except ImportError as e:
-            raise ImportError(_MISSING_DEPS_MSG) from e
+            raise ImportError(_missing_deps_msg()) from e
 
         # Reuse existing embeddings for unchanged chunks. Matching is keyed on
         # (file_path, start_line, content) with each cache row consumed at
@@ -511,7 +517,7 @@ class CodeIndexSDK:
         try:
             import numpy as np
         except ImportError as e:
-            raise ImportError(_MISSING_DEPS_MSG) from e
+            raise ImportError(_missing_deps_msg()) from e
 
         query_vec = query_emb[0:1].astype(np.float32)
 
@@ -954,9 +960,11 @@ class CodeIndexSDK:
 
         valid_chunks = []
         valid_embeddings = []
+        self.progress = {"embedded": 0, "to_embed": len(texts)}
 
         for batch_start in range(0, len(texts), BATCH_SIZE):
             raise_if_cancelled()
+            self.progress["embedded"] = batch_start
             batch_texts = texts[batch_start : batch_start + BATCH_SIZE]
             batch_chunks = chunks[batch_start : batch_start + BATCH_SIZE]
             safe_texts = [t[:MAX_EMBED_CHARS] for t in batch_texts]
@@ -1000,6 +1008,7 @@ class CodeIndexSDK:
                         f"Skipping chunk with no embedding: {getattr(chunk, 'file_path', '?')}"
                     )
 
+        self.progress["embedded"] = len(texts)
         if not valid_embeddings:
             return np.array([], dtype=np.float32), []
 
@@ -1011,7 +1020,7 @@ class CodeIndexSDK:
             import faiss
             import numpy as np
         except ImportError as e:
-            raise ImportError(_MISSING_DEPS_MSG) from e
+            raise ImportError(_missing_deps_msg()) from e
 
         dim = embeddings.shape[1]
         index = faiss.IndexFlatL2(dim)
@@ -1084,7 +1093,7 @@ class CodeIndexSDK:
         try:
             import faiss
         except ImportError as e:
-            raise ImportError(_MISSING_DEPS_MSG) from e
+            raise ImportError(_missing_deps_msg()) from e
 
         try:
             index = faiss.read_index(str(self._index_path))

@@ -14,12 +14,20 @@ on:
     paths:
       - 'hub/agents/email/npm/**'
       - '.github/workflows/test_agent_email_npm.yml'
+      - 'setup.py'
+      - 'pyproject.toml'
+      # The npm tests spawn the Python sidecar this job installs.
+      - 'hub/agents/email/python/**'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'hub/agents/email/npm/**'
       - '.github/workflows/test_agent_email_npm.yml'
+      - 'setup.py'
+      - 'pyproject.toml'
+      # The npm tests spawn the Python sidecar this job installs.
+      - 'hub/agents/email/python/**'
   merge_group:
   workflow_dispatch:
 
@@ -41,9 +49,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v7

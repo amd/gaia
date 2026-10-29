@@ -1,5 +1,5 @@
 {
-  "$help": "Written by the GAIA Terminal Hub setup and removed by its uninstaller. Change the profile from Windows Terminal's settings instead of editing this file: a reinstall rewrites it.",
+  "$help": "Written by the GAIA setup and removed by its uninstaller. Change the profile from Windows Terminal's settings instead of editing this file: a reinstall rewrites it.",
   "profiles": [
     {
       "guid": "{6b5d7d70-4ed6-471b-b773-f1cafc56246f}",

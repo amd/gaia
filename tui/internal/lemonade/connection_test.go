@@ -45,24 +45,24 @@ func writeEmbeddedState(t *testing.T, dir string, port int, key string) {
 func TestEmbeddedConnectionHonorsIsolatedRuntimeAndExplicitOverrides(t *testing.T) {
 	defaultDir := isolatedConnection(t)
 	writeEmbeddedState(t, defaultDir, 63207, "default-instance-key")
-	if ResolveBaseURL("") != "http://localhost:63207/api/v1" || APIKeyFor("") != "default-instance-key" {
+	if ResolveBaseURL("") != "http://localhost:63207/api/v1" || mustKeyFor(t, "") != "default-instance-key" {
 		t.Fatal("default embedded connection was not resolved")
 	}
 	dir := t.TempDir()
 	t.Setenv("GAIA_HOME", dir)
-	if ReadEmbedded() != nil || ResolveBaseURL("") != DefaultBaseURL || APIKeyFor("") != "" {
+	if ReadEmbedded() != nil || ResolveBaseURL("") != DefaultBaseURL || mustKeyFor(t, "") != "" {
 		t.Fatal("empty isolated runtime reused the user's unrelated instance")
 	}
 	writeEmbeddedState(t, dir, 63208, "isolated-instance-key")
-	if ResolveBaseURL("") != "http://localhost:63208/api/v1" || APIKeyFor("") != "isolated-instance-key" {
+	if ResolveBaseURL("") != "http://localhost:63208/api/v1" || mustKeyFor(t, "") != "isolated-instance-key" {
 		t.Fatal("GAIA_HOME was not used for the connection")
 	}
 	t.Setenv("LEMONADE_BASE_URL", "https://router.example/api/v1/")
-	if ResolveBaseURL("") != "https://router.example/api/v1" || APIKeyFor("") != "" {
+	if ResolveBaseURL("") != "https://router.example/api/v1" || mustKeyFor(t, "") != "" {
 		t.Fatal("explicit server did not win, or inherited the embedded key")
 	}
 	t.Setenv("LEMONADE_API_KEY", " explicit-key ")
-	if APIKeyFor("") != "explicit-key" {
+	if mustKeyFor(t, "") != "explicit-key" {
 		t.Fatal("explicit credential did not win")
 	}
 	if ResolveBaseURL("http://localhost:62300/api/v1/") != "http://localhost:62300/api/v1" {
@@ -76,7 +76,7 @@ func TestEmbeddedCredentialOnlyBelongsToRecordedEndpoint(t *testing.T) {
 	for _, base := range []string{
 		"http://localhost:63207/api/v1", "http://127.0.0.1:63207/api/v1", "http://[::1]:63207/api/v1",
 	} {
-		if APIKeyFor(base) != "private-router-key" {
+		if mustKeyFor(t, base) != "private-router-key" {
 			t.Errorf("matching endpoint %q did not receive its key", base)
 		}
 	}
@@ -87,7 +87,7 @@ func TestEmbeddedCredentialOnlyBelongsToRecordedEndpoint(t *testing.T) {
 		"http://localhost:63207/api/v1?key=anything", "http://localhost:63207/api/v1#other",
 		"://invalid",
 	} {
-		if APIKeyFor(base) != "" {
+		if mustKeyFor(t, base) != "" {
 			t.Errorf("unrelated endpoint %q received the embedded key", base)
 		}
 	}
@@ -116,7 +116,7 @@ func TestInvalidEmbeddedStateDoesNotInventConnection(t *testing.T) {
 	dir := isolatedConnection(t)
 	for _, port := range []int{0, -1, 65536} {
 		writeEmbeddedState(t, dir, port, "private-router-key")
-		if ReadEmbedded() != nil || ResolveBaseURL("") != DefaultBaseURL || APIKeyFor("") != "" {
+		if ReadEmbedded() != nil || ResolveBaseURL("") != DefaultBaseURL || mustKeyFor(t, "") != "" {
 			t.Fatalf("invalid port %d supplied a connection", port)
 		}
 	}
@@ -198,7 +198,7 @@ func TestEmbeddedStateFromADeadServerIsIgnored(t *testing.T) {
 		t.Fatalf("run child: %v", err)
 	}
 	writeEmbeddedStateWithPID(t, dir, child.Process.Pid, 63209)
-	if ReadEmbedded() != nil || ResolveBaseURL("") != DefaultBaseURL || APIKeyFor("") != "" {
+	if ReadEmbedded() != nil || ResolveBaseURL("") != DefaultBaseURL || mustKeyFor(t, "") != "" {
 		t.Fatal("a dead embedded server's record was followed")
 	}
 
@@ -206,4 +206,13 @@ func TestEmbeddedStateFromADeadServerIsIgnored(t *testing.T) {
 	if ResolveBaseURL("") != "http://localhost:63209/api/v1" {
 		t.Fatal("a live embedded server's record was ignored")
 	}
+}
+
+func mustKeyFor(t *testing.T, base string) string {
+	t.Helper()
+	key, err := APIKeyFor(context.Background(), base)
+	if err != nil {
+		t.Fatalf("APIKeyFor(%q): %v", base, err)
+	}
+	return key
 }

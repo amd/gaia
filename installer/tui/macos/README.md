@@ -1,4 +1,4 @@
-# macOS installer for the GAIA terminal hub
+# macOS installer for the GAIA Terminal UI
 
 Builds `gaia-<version>-darwin-<arch>.pkg`, which installs two command-line tools:
 

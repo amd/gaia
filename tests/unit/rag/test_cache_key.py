@@ -105,7 +105,8 @@ def test_chunk_cache_and_markdown_share_one_content_key(tmp_path, document):
     names = sorted(os.listdir(sdk.config.cache_dir))
     assert f"{key}_extracted.md" in names
     assert os.path.basename(sdk._get_cache_path(document)) in names
-    assert all(name.startswith(key) for name in names), names
+    # rag-cache.lock is the cross-process lock every entry in the dir shares.
+    assert all(name.startswith(key) for name in names if name != "rag-cache.lock")
 
 
 def test_an_edit_changes_the_content_key(tmp_path, document):

@@ -12,6 +12,7 @@ All tests use in-memory SQLite or temp files — no external dependencies.
 The mixin is tested in isolation via a minimal host class (no real Agent).
 """
 
+import copy
 import inspect
 import json
 import logging
@@ -26,6 +27,10 @@ import pytest
 
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.memory_store import MemoryStore
+from gaia.agents.base.system_context import (
+    collect_system_info as _real_collect_system_info,
+)
+from gaia.llm.lemonade_client import SIDE_SLOT
 from tests.unit.faiss_support import require_faiss
 
 # ---------------------------------------------------------------------------
@@ -113,6 +118,21 @@ def memory_store(tmp_db_path):
     store = MemoryStore(db_path=tmp_db_path)
     yield store
     store.close()
+
+
+_SYSTEM_FACTS_CACHE: dict = {}
+
+
+def _system_facts_once():
+    """The real ``collect_system_info()`` result, collected once per process.
+
+    Host fixtures call it on every test; it spawns PowerShell (about 1 s on a
+    Windows runner) and the machine cannot change mid-run. The collector's own
+    tests below still call it directly.
+    """
+    if "facts" not in _SYSTEM_FACTS_CACHE:
+        _SYSTEM_FACTS_CACHE["facts"] = _real_collect_system_info()
+    return copy.deepcopy(_SYSTEM_FACTS_CACHE["facts"])
 
 
 def _make_mock_embedder():
@@ -233,6 +253,10 @@ def mixin_host(tmp_db_path):
         patch(
             "gaia.agents.base.memory._system_context_is_enabled",
             return_value=True,
+        ),
+        patch(
+            "gaia.agents.base.system_context.collect_system_info",
+            side_effect=_system_facts_once,
         ),
     ):
         host.init_memory(db_path=tmp_db_path, context="global")
@@ -1639,6 +1663,7 @@ class TestToolExecutionLogging:
         rows = mixin_host.memory_store.get_tool_history("write_file")
         assert len(rows) == 1
         assert rows[0]["success"] == 0
+        assert rows[0]["executed"] is False
         assert rows[0]["error"] == error
 
     def test_execute_tool_logs_failure(self, mixin_host):
@@ -1862,6 +1887,21 @@ class TestProcessQueryCacheInvalidation:
             mixin_host.process_query("first query")
             mock_post.assert_called_once()
 
+        assert mixin_host._memory_post_init_pending is False
+
+    def test_post_init_waits_out_a_private_turn(self, mixin_host):
+        """Upkeep reads existing memories with the turn's model, so a private or
+        memory-off turn leaves it pending for the first memory-on turn."""
+        mixin_host._incognito = True
+        with patch.object(mixin_host, "_run_memory_post_init") as mock_post:
+            mixin_host.process_query("private query")
+            mock_post.assert_not_called()
+        assert mixin_host._memory_post_init_pending is True
+
+        mixin_host._incognito = False
+        with patch.object(mixin_host, "_run_memory_post_init") as mock_post:
+            mixin_host.process_query("memory-on query")
+            mock_post.assert_called_once()
         assert mixin_host._memory_post_init_pending is False
 
     def test_post_init_not_called_on_second_query(self, mixin_host):
@@ -2096,21 +2136,22 @@ class TestSystemPromptSizeCap:
         _MARKER = "\n... (memory truncated)"
         assert len(prompt) <= 4000 + len(_MARKER)
 
-    def test_system_prompt_truncation_marker(self, mixin_host):
-        """Truncated system prompt includes '(memory truncated)' marker."""
+    def test_memories_that_do_not_fit_are_counted_not_cut(self, mixin_host):
+        """A memory too long for the cap is left out whole, and the prompt says so."""
         store = mixin_host.memory_store
-        # Force large content: 10 prefs of 2000 chars each will exceed the cap
+        # Distinct words per row: the store merges rows with >80% word overlap.
         for i in range(10):
             store.store(
                 category="preference",
-                content=f"Preference {i}: " + ("very_long_word_to_fill_space " * 80),
+                content=" ".join(f"p{i}word{n}" for n in range(300)),
             )
 
         prompt = mixin_host.get_memory_system_prompt()
-        _MARKER = "\n... (memory truncated)"
-        # The cap is 4000 chars → with 10 * ~2340 char prefs it WILL be truncated
-        assert "memory truncated" in prompt
-        assert len(prompt) <= 4000 + len(_MARKER)
+
+        assert "(10 more stored memories are not listed here" in prompt
+        assert "p0word299" not in prompt
+        assert "memory truncated" not in prompt
+        assert len(prompt) <= 4000
 
     def test_system_prompt_has_instructions_when_no_memory(self, mixin_host):
         """System prompt includes memory instructions even with no user memories."""
@@ -2747,8 +2788,9 @@ class TestEmbedderLoadFailure:
         )
         message = failed_host.memory_unavailable_message()
         assert "would not load" in message
+        assert "llamacpp_backend=cpu" in message
         assert "GGML_VK_DISABLE_COOPMAT=1" in message
-        assert "gaia lemonade embedded stop" in message
+        assert "server log" in message
         assert "unreachable" not in message
 
     def test_reaches_the_user_console(self, failed_host):
@@ -3659,6 +3701,45 @@ class TestRecallToolTemporal:
         contents = [r.get("content", "") for r in result["results"]]
         assert any("Temporal recall beta" in c for c in contents)
 
+    def test_recall_time_to_date_includes_boundary_day(self, mixin_with_tools):
+        """A date-only time_to includes items stored later that day (#3524)."""
+        func_remember = mixin_with_tools._registered_tools["remember"]["function"]
+        with patch(
+            "gaia.agents.base.memory_store._now_iso",
+            return_value="2025-03-31T15:00:00-07:00",
+        ):
+            func_remember(
+                fact="Boundary day recall delta fact",
+                category="fact",
+            )
+
+        func_recall = mixin_with_tools._registered_tools["recall"]["function"]
+        result = func_recall(
+            query="Boundary day recall delta",
+            time_to="2025-03-31",
+        )
+        assert result["status"] == "found"
+        contents = [r.get("content", "") for r in result["results"]]
+        assert any("Boundary day recall delta" in c for c in contents)
+
+    def test_recall_browse_time_to_date_includes_boundary_day(self, mixin_with_tools):
+        """Browse-mode recall also keeps items from the time_to day (#3524)."""
+        func_remember = mixin_with_tools._registered_tools["remember"]["function"]
+        with patch(
+            "gaia.agents.base.memory_store._now_iso",
+            return_value="2025-03-31T15:00:00-07:00",
+        ):
+            func_remember(
+                fact="Boundary day browse epsilon fact",
+                category="fact",
+            )
+
+        func_recall = mixin_with_tools._registered_tools["recall"]["function"]
+        result = func_recall(time_to="2025-03-31")
+        assert result["status"] == "found"
+        contents = [r.get("content", "") for r in result["results"]]
+        assert any("Boundary day browse epsilon" in c for c in contents)
+
     def test_recall_by_time_range_only_finds_items(self, mixin_with_tools):
         """recall(time_from, time_to) without query returns filtered results."""
         func_remember = mixin_with_tools._registered_tools["remember"]["function"]
@@ -3757,6 +3838,31 @@ class TestSearchPastConversationsTemporal:
         assert result["count"] >= 1
         contents = [r.get("content", "") for r in result["results"]]
         assert any("Conversation range beta" in c for c in contents)
+
+    def test_search_conversations_time_to_date_includes_boundary_day(
+        self, mixin_with_tools
+    ):
+        """Conversation search keeps turns from the date-only time_to day (#3524)."""
+        with patch(
+            "gaia.agents.base.memory_store._now_iso",
+            return_value="2025-03-31T15:00:00-07:00",
+        ):
+            mixin_with_tools._memory_store.store_turn(
+                "test-conv-boundary",
+                "user",
+                "Boundary day conversation epsilon message",
+            )
+
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+        result = func(
+            query="Boundary day conversation epsilon",
+            time_to="2025-03-31",
+        )
+        assert result["status"] == "found"
+        contents = [r.get("content", "") for r in result["results"]]
+        assert any("Boundary day conversation epsilon" in c for c in contents)
 
     def test_search_conversations_no_params_returns_error(self, mixin_with_tools):
         """search_past_conversations() with no params returns error."""
@@ -4770,6 +4876,10 @@ def composing_host(tmp_db_path):
             "gaia.agents.base.memory._system_context_is_enabled",
             return_value=True,
         ),
+        patch(
+            "gaia.agents.base.system_context.collect_system_info",
+            side_effect=_system_facts_once,
+        ),
     ):
         host.init_memory(db_path=tmp_db_path, context="global")
     host._embedder = mock_embedder
@@ -5712,6 +5822,165 @@ def test_failed_tool_keeps_original_error_when_memory_unavailable(disabled, capl
 
 
 # ===========================================================================
+# Extraction yields to the user: it never starts while a turn runs
+# ===========================================================================
+
+
+class TestExtractionYieldsToUserTurns:
+    """A queued extraction waits out user turns instead of competing with them."""
+
+    IDLE_S = 0.3
+
+    @pytest.fixture
+    def host(self, tmp_path, monkeypatch):
+        import gaia.agents.base.memory as memory_module
+
+        monkeypatch.setattr(memory_module, "EXTRACTION_IDLE_S", self.IDLE_S)
+
+        class Host(MemoryMixin, FakeAgent):
+            pass
+
+        host = Host()
+        with _mock_v2_init_context():
+            host.init_memory(db_path=tmp_path / "yield.db", context="global")
+        host._embedder = _make_mock_embedder()
+        self.calls = []
+        self.started = threading.Event()
+
+        def _send(*_args, **_kwargs):
+            from gaia.chat import sdk as sdk_module
+
+            self.calls.append(getattr(sdk_module._SIDE_CALLS, "active", False))
+            self.started.set()
+            return MagicMock(text="[]")
+
+        host.chat = MagicMock()
+        host.chat.send_messages.side_effect = _send
+        yield host
+        host.wait_for_memory_extraction(timeout=5)
+        host._memory_store.close()
+
+    @staticmethod
+    def _queue_turn(host):
+        host._after_process_query(
+            "My name is Priya and I always deploy on Fridays from Berlin",
+            "Noted.",
+        )
+
+    def test_extraction_waits_for_the_running_turn_then_the_idle_window(self, host):
+        host._note_user_turn_started()
+        self._queue_turn(host)
+
+        assert not self.started.wait(self.IDLE_S * 3), "ran during a user turn"
+
+        finished_at = time.monotonic()
+        host._note_user_turn_finished()
+        assert self.started.wait(5), "never ran after the turn ended"
+        assert time.monotonic() - finished_at >= self.IDLE_S * 0.9
+
+    def test_a_new_turn_inside_the_idle_window_pushes_extraction_back(self, host):
+        host._note_user_turn_started()
+        self._queue_turn(host)
+        host._note_user_turn_finished()
+        host._note_user_turn_started()
+
+        assert not self.started.wait(self.IDLE_S * 3), "ran during the second turn"
+        host._note_user_turn_finished()
+        assert self.started.wait(5)
+
+    def test_a_full_queue_starts_extraction_instead_of_dropping_a_turn(self, host):
+        import gaia.agents.base.memory as memory_module
+
+        host._note_user_turn_started()
+        for _ in range(memory_module.EXTRACTION_QUEUE_MAX - 1):
+            self._queue_turn(host)
+        assert not self.started.wait(self.IDLE_S * 2), "ran during a user turn"
+
+        self._queue_turn(host)
+        assert self.started.wait(5), "a full queue stayed held"
+        host._note_user_turn_finished()
+        assert host.wait_for_memory_extraction(timeout=10) is True
+        assert len(self.calls) == memory_module.EXTRACTION_QUEUE_MAX
+
+    def test_wait_for_memory_extraction_skips_the_wait(self, host):
+        """A one-shot caller exiting now must not lose the queued memories."""
+        host._note_user_turn_started()
+        self._queue_turn(host)
+
+        assert host.wait_for_memory_extraction(timeout=5) is True
+        assert self.calls, "the flush dropped the queued extraction"
+        host._note_user_turn_finished()
+
+    def test_extraction_call_stays_out_of_the_turn_metrics(self, host):
+        self._queue_turn(host)
+        assert host.wait_for_memory_extraction(timeout=5) is True
+        assert self.calls == [True]
+
+    def test_interpreter_exit_flushes_a_held_extraction(self, host):
+        """A host that shuts down inside the idle window keeps the turn's memories."""
+        import gaia.agents.base.memory as memory_module
+
+        host._note_user_turn_started()
+        self._queue_turn(host)
+        host._note_user_turn_finished()
+        assert not self.started.is_set()
+
+        memory_module._drain_extraction_at_exit()
+        assert self.calls, "exit dropped the held extraction"
+
+    def test_a_timed_out_wait_restores_the_idle_hold(self, host):
+        host._note_user_turn_started()
+        self._queue_turn(host)
+        release = threading.Event()
+        host.chat.send_messages.side_effect = lambda *a, **k: (
+            self.started.set(),
+            release.wait(5),
+            MagicMock(text="[]"),
+        )[-1]
+
+        assert host.wait_for_memory_extraction(timeout=0.2) is False
+        assert host._extraction_flush is False
+        release.set()
+        host._note_user_turn_finished()
+
+
+def test_side_request_keeps_calls_out_of_the_llm_call_sink():
+    from gaia.chat.sdk import AgentSDK
+
+    sdk = AgentSDK.__new__(AgentSDK)
+    sdk.llm_client = MagicMock()
+    sdk.llm_client.get_last_usage.return_value = {}
+    seen = []
+    sdk.llm_call_sink = seen.append
+
+    with AgentSDK.side_request():
+        sdk._report_llm_call(time.perf_counter(), streamed=False, ok=True)
+    assert seen == []
+
+    sdk._report_llm_call(time.perf_counter(), streamed=False, ok=True)
+    assert len(seen) == 1
+
+
+def test_side_request_hides_calls_from_the_turn_recorder_on_its_thread_only():
+    from gaia.chat.sdk import AgentSDK
+
+    sdk = AgentSDK.__new__(AgentSDK)
+    sdk.turn_recorder = recorder = object()
+    seen = {}
+
+    def _other_thread():
+        seen["other"] = sdk._turn_recorder()
+
+    with AgentSDK.side_request():
+        assert sdk._turn_recorder() is None
+        worker = threading.Thread(target=_other_thread)
+        worker.start()
+        worker.join()
+    assert seen["other"] is recorder
+    assert sdk._turn_recorder() is recorder
+
+
+# ===========================================================================
 # Side requests turn a thinking model's reasoning off
 # ===========================================================================
 
@@ -5806,6 +6075,8 @@ class TestSideRequestsDisableThinking:
         assert host.chat.send_messages.called
         for call in host.chat.send_messages.call_args_list:
             assert call.kwargs["chat_template_kwargs"] == _NO_THINKING
+            # Off the conversation's slot, so its prompt cache survives.
+            assert call.kwargs["id_slot"] == SIDE_SLOT
 
     def test_reconciliation_turns_thinking_off(self, host):
         from gaia.agents.base.memory import _embedding_to_blob
@@ -5833,3 +6104,4 @@ class TestSideRequestsDisableThinking:
         assert host.chat.send_messages.called
         kwargs = host.chat.send_messages.call_args.kwargs
         assert kwargs["chat_template_kwargs"] == _NO_THINKING
+        assert kwargs["id_slot"] == SIDE_SLOT

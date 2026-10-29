@@ -71,6 +71,9 @@ type Options struct {
 	ManualProceed bool
 	// Logf receives diagnostics. Never given a token.
 	Logf func(format string, args ...any)
+	// StepsDone carries the first-run steps an earlier gate finished this
+	// session into one the host rebuilt, so step 3 does not restart at 1.
+	StepsDone int
 }
 
 // cancelBox holds the cancel func for whatever background work the screen has
@@ -152,6 +155,11 @@ type Model struct {
 	// autoRow is the row as the check reported it, restored if the start fails
 	// so the user gets its remedy and `f` key back.
 	autoRow Row
+
+	// choosing is true while "where should chat run?" is on screen; choice is
+	// the option under the cursor.
+	choosing bool
+	choice   int
 }
 
 // New builds the gate for an agent the GAIA daemon supervises.
@@ -188,6 +196,7 @@ func newWith(r Runner, cfg Config, opts Options) Model {
 		spin:      s,
 		cancel:    &cancelBox{},
 		autoTried: map[string]bool{},
+		stepsDone: opts.StepsDone,
 	}
 }
 
@@ -224,6 +233,9 @@ func (m Model) FocusKey() string {
 	return m.rep.Rows[m.focus].Key
 }
 
+// StepsDone is how many first-run steps finished this session.
+func (m Model) StepsDone() int { return m.stepsDone }
+
 // AgentID is the agent this gate is guarding.
 func (m Model) AgentID() string { return m.cfg.AgentID }
 
@@ -258,6 +270,8 @@ type fixDoneMsg struct {
 	key  string
 	err  error
 	note string
+	// diag explains err when the runner had something specific to say.
+	diag Diagnosis
 	// auto marks a fix the screen applied on its own (Row.AutoFix); gate is
 	// the screen that started it, so a late answer cannot land on another.
 	auto bool
@@ -299,7 +313,7 @@ func (m Model) quickFixCmd(key string, kind FixKind, timeout time.Duration) tea.
 	r, cfg := m.r, m.cfg
 	return func() tea.Msg {
 		res := r.Fix(ctx, cfg, kind, nil)
-		return fixDoneMsg{key: key, err: res.Err, note: res.Note}
+		return fixDoneMsg{key: key, err: res.Err, note: res.Note, diag: res.Diagnosis}
 	}
 }
 
@@ -489,6 +503,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if started, cmd, ok := m.autoStart(); ok {
 			return started, cmd
 		}
+		// The question is the step, so it opens on its own rather than behind
+		// an enter on a row that only names it.
+		if row, ok := m.focusedRow(); ok && row.Key == KeyChat && row.Fix == FixChooseChat {
+			m = m.openChooser()
+		}
 		// A row the user can fix with one keypress holds the screen even when it
 		// does not block: the mailbox row is exactly that, and handing off past it
 		// would take `f connect a mailbox` away with the screen it was on.
@@ -531,7 +550,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fixApplied = true
 		}
 		if msg.err != nil {
-			d := Ladder{AgentID: m.cfg.AgentID}.Error("apply that fix", msg.err)
+			d := msg.diag
+			if d.Cause == "" {
+				d = Ladder{AgentID: m.cfg.AgentID}.Error("apply that fix", msg.err)
+			}
 			m.note = "Fix failed. " + d.String()
 			m.phase = phaseIdle
 			return m, nil
@@ -622,6 +644,9 @@ func (m Model) autoStartDone(msg fixDoneMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.choosing && msg.String() != "ctrl+c" {
+		return m.handleChooserKey(msg)
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		// Matches the hub and chat: ctrl+c leaves the app, not just the screen.
@@ -691,6 +716,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.applyFix()
+
+	case "g":
+		row, ok := m.focusedRow()
+		if m.Busy() || !ok || row.DeclineFix == FixNone {
+			return m, nil
+		}
+		m.phase = phaseFixing
+		m.note = "Saving your choice…"
+		return m, tea.Batch(m.quickFixCmd(row.Key, row.DeclineFix, startTimeout), m.spin.Tick)
 	}
 	return m, nil
 }
@@ -715,10 +749,21 @@ func (m Model) applyFix() (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.quickFixCmd(KeySidecar, FixRestartSidecar, ensureTimeout), m.spin.Tick)
 	case FixPullModel, FixRunSetup, FixInstallServer:
 		return m.startProvision()
+	case FixUseRunningLemonade:
+		m.phase = phaseFixing
+		m.note = "Switching GAIA to your Lemonade…"
+		return m, tea.Batch(m.quickFixCmd(KeyLemonade, FixUseRunningLemonade, startTimeout), m.spin.Tick)
 	case FixConnectMailbox:
 		agentID, provider := m.cfg.AgentID, row.Provider
 		return m, func() tea.Msg {
 			return ConnectMailboxMsg{AgentID: agentID, Provider: provider}
+		}
+	case FixChooseChat:
+		return m.openChooser(), nil
+	case FixConnectProvider:
+		agentID, provider := m.cfg.AgentID, row.Provider
+		return m, func() tea.Msg {
+			return ConnectProviderMsg{AgentID: agentID, Provider: provider}
 		}
 	default:
 		if cmds := row.Remedy.Commands(); len(cmds) > 0 {

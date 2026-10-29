@@ -19,9 +19,8 @@ import (
 //
 // An agent that answers with a list of pull requests has printed twenty links
 // the reader now has to retype. One click opens the one under the pointer, and
-// a double click copies the whole message it is part of — the two things a
-// reader wants from a transcript they cannot select with the mouse while the
-// app is tracking it (Ctrl+T, selectmode.go, hands that back).
+// a double click copies the whole message it is part of. Both apply only while
+// the app holds the mouse (Ctrl+T, selectmode.go).
 
 // doubleClickWindow is how long after a click a second one on the same row
 // still counts as a double click. Long enough not to demand a fast hand,
@@ -123,19 +122,50 @@ func (m ChatModel) messageAt(y int) int {
 
 // handleTranscriptMouse routes a mouse event that no overlay claimed.
 //
-// The wheel scrolls. A left click opens the link under it. A second left click
-// on the same row within doubleClickWindow copies that message — the source
-// markdown, not the rendered ANSI, same rule as Ctrl+Y.
+// The wheel scrolls. A left drag selects (selection.go) and copies on
+// release. A left click — a press and release on the same cell — opens the
+// link under it, and a second click on the same row within doubleClickWindow
+// copies that message: the source markdown, not the rendered ANSI, same rule
+// as Ctrl+Y. Clicks act on RELEASE so a drag that starts on a link selects
+// instead of opening a browser.
 func (m ChatModel) handleTranscriptMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if isWheelEvent(msg) {
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
-		return m.afterScroll(), cmd
+		m = m.afterScroll()
+		if m.sel.dragging {
+			m.sel.head, _, _ = m.contentPosAt(m.sel.pointerX, m.sel.pointerY)
+			if m.sel.head != m.sel.anchor {
+				m.sel.moved, m.sel.active = true, true
+			}
+		}
+		return m, cmd
 	}
-	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
-		return m, nil
+	switch msg.Action {
+	case tea.MouseActionPress:
+		if msg.Button != tea.MouseButtonLeft {
+			return m, nil
+		}
+		m.pick = messagePicker{}
+		return m.handleSelectionPress(msg), nil
+	case tea.MouseActionMotion:
+		return m.handleSelectionMotion(msg)
+	case tea.MouseActionRelease:
+		if !m.sel.dragging {
+			// No press of ours started this (it landed outside the transcript).
+			return m, nil
+		}
+		next, cmd, selected := m.handleSelectionRelease()
+		if selected {
+			return next, cmd
+		}
+		return next.handleClick(msg)
 	}
+	return m, nil
+}
 
+// handleClick is a left click that did not become a selection.
+func (m ChatModel) handleClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if line, ok := m.viewportLineAt(msg.Y); ok {
 		if u := urlAt(line, msg.X); u != "" {
 			m.lastClickRow, m.lastClickAt = -1, time.Time{}

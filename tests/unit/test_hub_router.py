@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Unit tests for the Agent Hub HTTP router (gaia.ui.routers.hub)."""
 
+import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -48,12 +50,33 @@ def client_no_ui_header(app):
 
 
 @pytest.fixture(autouse=True)
-def _clean():
+def _clean(tmp_path, monkeypatch):
+    # The install endpoint takes a real cross-process slot under this root.
+    monkeypatch.setattr(installer_mod, "default_install_root", lambda: tmp_path)
     installer_mod.clear_progress()
     installer_mod._IN_PROGRESS.clear()  # noqa: SLF001
     yield
     installer_mod.clear_progress()
     installer_mod._IN_PROGRESS.clear()  # noqa: SLF001
+
+
+def _slot_is_free(agent_id: str) -> bool:
+    """Whether *agent_id*'s slot can be claimed right now (and give it back)."""
+    try:
+        installer_mod.claim_install_slot(agent_id).release()
+    except installer_mod.InstallInProgressError:
+        return False
+    return True
+
+
+def _wait_for_worker(agent_id: str) -> None:
+    """Wait for the install worker the endpoint started to give its slot back."""
+    import time
+
+    deadline = time.monotonic() + 30
+    while installer_mod.is_installing(agent_id):
+        assert time.monotonic() < deadline, f"install worker for {agent_id} hung"
+        time.sleep(0.01)
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +108,37 @@ def test_catalog_offline_503_when_no_cache(client, monkeypatch):
     assert resp.status_code == 503
 
 
+def test_catalog_malformed_offline_cache_keeps_local_view(
+    client, app, monkeypatch, tmp_path
+):
+    cache = tmp_path / "catalog-cache.json"
+    cache.write_text("[]", encoding="utf-8")
+    catalog_mod.clear_cache()
+    app.state.agent_registry.list.return_value = [
+        SimpleNamespace(
+            id="local",
+            name="Local",
+            description="",
+            category="general",
+            icon="",
+            language="python",
+            source="builtin",
+            hidden=False,
+        )
+    ]
+    monkeypatch.setattr(catalog_mod, "default_cache_path", lambda: cache)
+
+    def offline(url):
+        raise ConnectionError("offline fixture")
+
+    monkeypatch.setattr(catalog_mod, "fetch_bytes", offline)
+    resp = client.get("/api/agents/catalog?refresh=true")
+
+    assert resp.status_code == 200
+    assert resp.json()["offline"] is True
+    assert [agent["id"] for agent in resp.json()["agents"]] == ["local"]
+
+
 # ---------------------------------------------------------------------------
 # Install + status
 # ---------------------------------------------------------------------------
@@ -108,7 +162,7 @@ def test_install_returns_202_and_schedules(client, monkeypatch):
     )
     assert resp.status_code == 202
     assert resp.json()["status"] == "queued"
-    # BackgroundTasks run after the response in TestClient.
+    _wait_for_worker("demo")
     assert called.get("id") == "demo"
     assert called.get("trusted") is True
 
@@ -150,13 +204,162 @@ def test_install_native_non_verified_allowed_with_trust(client, monkeypatch):
         headers=UI,
     )
     assert resp.status_code == 202
+    _wait_for_worker("native")
     assert called.get("id") == "native"
 
 
 def test_install_duplicate_returns_409(client, monkeypatch):
-    monkeypatch.setattr(installer_mod, "is_installing", lambda _id: True)
+    stopped = []
+    monkeypatch.setattr(hub_router, "_shutdown_email_sidecar", stopped.append)
+    with installer_mod.claim_install_slot("demo"):
+        resp = client.post("/api/agents/install", json={"id": "demo"}, headers=UI)
+    assert resp.status_code == 409
+    assert stopped == []
+
+
+@pytest.fixture
+def slot_held_elsewhere(tmp_path, monkeypatch):
+    """Another GAIA process (`gaia hub install demo`, say) holds demo's slot."""
+    import threading
+
+    from gaia.utils.file_lock import file_lock
+
+    monkeypatch.setattr(installer_mod, "default_install_root", lambda: tmp_path)
+    taken, release = threading.Event(), threading.Event()
+
+    def other_process():
+        with file_lock(tmp_path / ".demo.install"):
+            taken.set()
+            release.wait(30)
+
+    holder = threading.Thread(target=other_process)
+    holder.start()
+    taken.wait(10)
+    yield
+    release.set()
+    holder.join()
+
+
+def test_install_held_by_another_process_returns_409_before_touching_sidecars(
+    client, monkeypatch, slot_held_elsewhere
+):
+    from gaia.ui.routers import hub as hub_router
+
+    stopped = []
+    monkeypatch.setattr(hub_router, "_shutdown_email_sidecar", stopped.append)
+    monkeypatch.setattr(
+        installer_mod.catalog_mod, "fetch_manifest", lambda _id: {"id": "demo"}
+    )
     resp = client.post("/api/agents/install", json={"id": "demo"}, headers=UI)
     assert resp.status_code == 409
+    assert "another GAIA process" in resp.json()["detail"]
+    assert stopped == []
+
+
+def test_the_slot_is_held_from_before_the_sidecar_stops(client, monkeypatch, tmp_path):
+    """No other process may start an install once this one has stopped the agent."""
+    from gaia.utils.file_lock import FileLockTimeout, file_lock
+
+    other_claims = []
+
+    def other_process_tries(_agent_id):
+        try:
+            with file_lock(tmp_path / ".email.install", timeout=0):
+                other_claims.append("took the slot")
+        except FileLockTimeout:
+            other_claims.append("refused")
+
+    def stop_sidecar(agent_id):
+        probe = threading.Thread(target=other_process_tries, args=(agent_id,))
+        probe.start()
+        probe.join()
+
+    monkeypatch.setattr(hub_router, "_shutdown_email_sidecar", stop_sidecar)
+    monkeypatch.setattr(
+        catalog_mod,
+        "fetch_manifest",
+        lambda *a, **k: {"id": "email", "security_tier": "verified"},
+    )
+    monkeypatch.setattr(installer_mod, "install", lambda agent_id, **k: None)
+    resp = client.post("/api/agents/install", json={"id": "email"}, headers=UI)
+    assert resp.status_code == 202
+    _wait_for_worker("email")
+    assert other_claims == ["refused"]
+
+
+def test_the_worker_runs_under_the_endpoints_slot_and_frees_it(client, monkeypatch):
+    seen = {}
+
+    def fake_install(agent_id, **kwargs):
+        seen["slot_held"] = kwargs["slot"].held
+        raise installer_mod.InstallError("download failed")
+
+    monkeypatch.setattr(
+        catalog_mod,
+        "fetch_manifest",
+        lambda *a, **k: {"id": "demo", "security_tier": "verified"},
+    )
+    monkeypatch.setattr(installer_mod, "install", fake_install)
+    resp = client.post("/api/agents/install", json={"id": "demo"}, headers=UI)
+    assert resp.status_code == 202
+    _wait_for_worker("demo")
+    assert seen == {"slot_held": True}
+    assert installer_mod.get_install_status("demo")["status"] == "failed"
+    assert _slot_is_free("demo")
+
+
+def _catalog_down(*a, **k):
+    raise catalog_mod.CatalogError("hub unreachable")
+
+
+def _sidecar_survives(agent_id):
+    raise hub_router.HTTPException(status_code=500, detail="pid 4242 survived")
+
+
+@pytest.mark.parametrize(
+    "patch_target, replacement, status",
+    [
+        ((catalog_mod, "fetch_manifest"), _catalog_down, 502),
+        (
+            (catalog_mod, "fetch_manifest"),
+            lambda *a, **k: {"id": "demo", "security_tier": "community"},
+            403,
+        ),
+        ((hub_router, "_shutdown_email_sidecar"), _sidecar_survives, 500),
+    ],
+)
+def test_a_refused_install_gives_the_slot_back(
+    client, monkeypatch, patch_target, replacement, status
+):
+    monkeypatch.setattr(
+        catalog_mod,
+        "fetch_manifest",
+        lambda *a, **k: {"id": "demo", "security_tier": "verified"},
+    )
+    monkeypatch.setattr(*patch_target, replacement)
+    resp = client.post("/api/agents/install", json={"id": "demo"}, headers=UI)
+    assert resp.status_code == status
+    assert _slot_is_free("demo")
+
+
+class _ThreadThatCannotStart(threading.Thread):
+    def start(self):
+        raise RuntimeError("can't start new thread")
+
+
+def test_a_worker_that_cannot_start_reports_failed(client, monkeypatch):
+    monkeypatch.setattr(
+        catalog_mod,
+        "fetch_manifest",
+        lambda *a, **k: {"id": "demo", "security_tier": "verified"},
+    )
+    monkeypatch.setattr(
+        hub_router, "threading", SimpleNamespace(Thread=_ThreadThatCannotStart)
+    )
+    resp = client.post("/api/agents/install", json={"id": "demo"}, headers=UI)
+    assert resp.status_code == 500
+    assert installer_mod.get_install_status("demo")["status"] == "failed"
+    assert _slot_is_free("demo")
 
 
 def test_install_requires_ui_header(client_no_ui_header):
@@ -202,6 +405,46 @@ def test_uninstall_not_installed_404(client, monkeypatch):
 def test_uninstall_requires_ui_header(client_no_ui_header):
     resp = client_no_ui_header.delete("/api/agents/demo")
     assert resp.status_code == 403
+
+
+def test_uninstall_while_another_process_installs_keeps_the_sidecar(
+    client, monkeypatch, slot_held_elsewhere
+):
+    stopped = []
+    monkeypatch.setattr(hub_router, "_shutdown_email_sidecar", stopped.append)
+    resp = client.delete("/api/agents/demo", headers=UI)
+    assert resp.status_code == 409
+    assert "another GAIA process" in resp.json()["detail"]
+    assert stopped == []
+
+
+def test_uninstall_runs_under_the_endpoints_slot_and_frees_it(client, monkeypatch):
+    seen = {}
+
+    def fake_uninstall(agent_id, **kwargs):
+        seen["slot_held"] = kwargs["slot"].held
+
+    monkeypatch.setattr(installer_mod, "uninstall", fake_uninstall)
+    resp = client.delete("/api/agents/demo", headers=UI)
+    assert resp.status_code == 200
+    assert seen == {"slot_held": True}
+    assert _slot_is_free("demo")
+
+
+def test_a_slot_whose_lock_file_cannot_be_made_is_a_500_naming_it(client, monkeypatch):
+    from pathlib import Path
+
+    from gaia.utils.file_lock import FileLockError
+
+    def unwritable(agent_id, install_root=None):
+        raise FileLockError(
+            "Cannot create the lock file /x/.demo.install.lock", Path("/x")
+        )
+
+    monkeypatch.setattr(installer_mod, "claim_install_slot", unwritable)
+    resp = client.post("/api/agents/install", json={"id": "demo"}, headers=UI)
+    assert resp.status_code == 500
+    assert "Cannot create the lock file" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

@@ -250,6 +250,22 @@ def test_boot_preload_loads_a_downloaded_model(app):
     assert lemonade.load_model.call_args.args[0] == "Gemma-4-E4B-it-GGUF"
 
 
+def test_boot_preload_waits_for_the_first_message_on_a_small_machine(
+    app, monkeypatch, caplog
+):
+    """On a 16 GB PC a startup preload races first-run setup for memory."""
+    from gaia.llm import model_fit
+    from gaia.ui.dispatch import JobStatus
+
+    monkeypatch.setattr(model_fit, "ram_total_gb", lambda: 15.6)
+    with caplog.at_level(logging.INFO, logger="gaia.ui.server"):
+        job, lemonade = _run_boot_model_load(app, downloaded=True)
+
+    assert job.status == JobStatus.DONE
+    lemonade.load_model.assert_not_called()
+    assert any("loads with the first message" in r.getMessage() for r in caplog.records)
+
+
 def test_boot_preload_never_waits_on_the_broker_for_a_cloud_model(app):
     """A sidecar loading a local model holds the broker lease. A cloud
     selection has nothing to load, so waiting behind it held the UI at

@@ -237,7 +237,8 @@ class TestFullAccessMode:
             for e in events_of(events, "status")
             if "Full access" in str(e.get("message"))
         ]
-        assert warnings and "run_shell_command" in warnings[0]["message"]
+        assert warnings and "Running command: pwd" in warnings[0]["message"]
+        assert "run_shell_command" not in warnings[0]["message"]
 
     def test_off_restores_prompting_immediately(self):
         state = PermissionState(full_access=True)
@@ -578,7 +579,7 @@ class TestPromptsSayWhatTheCallDoes:
             drive(PermissionState(), ["deny"], agent=agent), "needs_confirmation"
         )[0]
         assert prompt["risk"] == "execute"
-        assert prompt["always_scope"] == "pytest"
+        assert prompt["always_scope"] == "pytest (runs the test code it finds)"
         assert prompt["summary"].splitlines()[0] == "python -m pytest -q 2>&1"
 
     def test_a_delete_is_destructive_and_offers_no_always(self):

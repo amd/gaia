@@ -264,11 +264,11 @@ class TestMessageToResponse:
         resp = message_to_response(base_message)
         assert resp.agent_steps is None
 
-    def test_agent_steps_missing_required_field_returns_none(self, base_message):
-        """AgentStepResponse requires 'id', 'type', 'label' - missing one = None."""
+    def test_agent_steps_missing_required_field_is_dropped(self, base_message):
+        """AgentStepResponse requires 'id', 'type', 'label' - that step is dropped."""
         base_message["agent_steps"] = json.dumps([{"type": "tool"}])
         resp = message_to_response(base_message)
-        assert resp.agent_steps is None
+        assert resp.agent_steps == []
 
     def test_both_sources_and_steps(self, base_message):
         base_message["rag_sources"] = json.dumps(

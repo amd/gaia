@@ -1,0 +1,29 @@
+---
+// Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// A short loop of one GAIA surface answering a question, recorded from a real
+// session (public/previews/). Under prefers-reduced-motion the still final
+// frame shows instead, so nothing moves for a visitor who asked it not to.
+
+interface Props {
+  surface: 'agent-ui' | 'tui';
+  alt: string;
+  class?: string;
+}
+
+const { surface, alt, class: className } = Astro.props;
+---
+
+<picture class:list={['block overflow-hidden rounded-g-panel border border-g-border bg-g-code-bg', className]}>
+  <source media="(prefers-reduced-motion: reduce)" srcset={`/previews/${surface}.png`} />
+  <img
+    src={`/previews/${surface}.gif`}
+    alt={alt}
+    width="720"
+    height="450"
+    loading="lazy"
+    decoding="async"
+    class="block h-auto w-full"
+  />
+</picture>

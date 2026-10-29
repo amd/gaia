@@ -43,6 +43,11 @@ var subprocessLemonadePorts = []string{"13305", "8000"}
 // detectLemonadeURL resolves configured and embedded endpoints before probing
 // legacy ports. An unrelated local server cannot override the private runtime.
 func detectLemonadeURL() string {
+	// The user's own server: the child reads the saved choice itself, so
+	// pinning a URL here could only point it somewhere else.
+	if lemonade.ExternalModeActive() {
+		return ""
+	}
 	if strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")) != "" || lemonade.ReadEmbedded() != nil {
 		return lemonade.ResolveBaseURL("")
 	}
@@ -321,6 +326,10 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 	}
 	group.prepare(cmd)
 
+	if err := lemonade.ChoiceError(); err != nil {
+		group.close()
+		return turnState{}, err
+	}
 	// Resolve once for the child so provider setup and Python use the same
 	// endpoint, even when a second server answers on a legacy port.
 	if url := detectLemonadeURL(); url != "" {

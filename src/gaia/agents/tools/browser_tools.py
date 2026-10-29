@@ -12,10 +12,230 @@ search the web, and download files for local analysis.
 
 import json
 import logging
+import os
+import threading
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
+
+from gaia.agents.base.file_snapshots import before_change
+from gaia.tool_cancellation import ToolCancelled, tool_cancelled
+
+if TYPE_CHECKING:
+    from gaia.web.client import SearchUnavailableError
 
 logger = logging.getLogger(__name__)
+
+#: Characters of context kept on each side of a ``find`` match.
+FIND_CONTEXT_CHARS = 300
+
+#: Text this short means the page renders its content with JavaScript.
+_NEAR_EMPTY_CHARS = 200
+_NEAR_EMPTY_NOTE = (
+    "\n\n[Almost no text on this page: its content is probably rendered by "
+    "JavaScript, which fetch_page does not run. Open it with a real-browser tool "
+    "if you have one; otherwise try another source, or report the value as not "
+    "found.]"
+)
+
+
+def _download_denied(validator, dest_path: Path) -> str:
+    """Why *dest_path* may not be written, and where a download can go instead."""
+    message = validator.access_denied_message(str(dest_path))
+    if not validator.grant_refusal_reason(str(dest_path)):
+        return message
+    downloads = Path(os.path.realpath(os.path.expanduser("~/Downloads")))
+    if Path(os.path.realpath(dest_path.parent)) == downloads:
+        return f"{message} Save it inside a folder this session already allows."
+    return (
+        f"{message} Save it somewhere else instead, such as save_to='~/Downloads' "
+        "or a folder this session already allows."
+    )
+
+
+#: Consecutive refused searches after which ``search_web`` stops asking the
+#: loop to wait and retry, so the failure breaker can end a dead search loop.
+SEARCH_UNAVAILABLE_STREAK_LIMIT = 3
+
+_TAVILY_CONNECTOR_ID = "mcp-tavily"
+
+#: Parallel ``search_web`` calls share one refusal streak per agent.
+_STREAK_LOCK = threading.Lock()
+
+_NO_BACKUP_SEARCH_NOTE = (
+    "No backup search provider is set up. Tell the user that adding a Tavily "
+    "API key (gaia connectors configure mcp-tavily --set TAVILY_API_KEY=...) "
+    "lets search keep working when DuckDuckGo throttles it."
+)
+
+
+def _search_stop_requested(mixin) -> bool:
+    """True once the user stopped the turn or the agent gave up on the tool."""
+    cancel_event = getattr(mixin, "_cancel_event", None)
+    console_cancelled = getattr(getattr(mixin, "console", None), "cancelled", None)
+    return (
+        (cancel_event is not None and cancel_event.is_set())
+        or (console_cancelled is not None and console_cancelled.is_set())
+        or tool_cancelled()
+    )
+
+
+def _tavily_fallback(
+    query: str, num_results: int
+) -> Tuple[Optional[List[Dict[str, str]]], Optional[str]]:
+    """Results from the Tavily connector when the user configured one.
+
+    Returns ``(results, None)``, ``(None, None)`` when Tavily is not
+    configured, or ``(None, error)`` when it is configured but failed.
+    """
+    from gaia.connectors.mcp_server import is_mcp_server_configured
+
+    try:
+        if not is_mcp_server_configured(_TAVILY_CONNECTOR_ID):
+            return None, None
+        from gaia.web.tavily import TavilyClient
+
+        client = TavilyClient()
+        try:
+            if not client.configured:
+                return None, None
+            response = client.search(query, max_results=num_results)
+        finally:
+            client.close()
+    # Tool boundary: the error is reported to the model, never swallowed.
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.warning("Tavily fallback search failed: %s", e)
+        return None, f"The Tavily connector also failed: {e}"
+    results = [
+        {
+            "title": r.get("title", ""),
+            "url": r.get("url", ""),
+            "snippet": r.get("content", ""),
+        }
+        for r in response.get("results", [])
+        if r.get("url")
+    ]
+    return results, None
+
+
+def _search_unavailable_result(
+    mixin, error: "SearchUnavailableError", fallback_error: Optional[str]
+) -> Dict[str, Any]:
+    """What the model gets when every search route refused the query.
+
+    Marked ``rate_limited`` so the loop waits it out instead of counting it as
+    a repeat or a tool failure; after a streak of refusals the mark is dropped
+    so the failure breaker can stop a search loop that cannot recover.
+    """
+    with _STREAK_LOCK:
+        streak = getattr(mixin, "_search_unavailable_streak", 0) + 1
+        mixin._search_unavailable_streak = streak
+    detail = f" {fallback_error}" if fallback_error else ""
+    backup = "" if fallback_error else f" {_NO_BACKUP_SEARCH_NOTE}"
+    if streak >= SEARCH_UNAVAILABLE_STREAK_LIMIT:
+        return {
+            "status": "error",
+            "error": (
+                f"Web search is temporarily unavailable: {error}{detail} "
+                f"{streak} searches in a row were refused, so stop calling "
+                "search_web for now."
+            ),
+            "retryable": False,
+            "hint": (
+                "Call fetch_page on a URL you already know (an official site, "
+                "documentation page or Wikipedia article), or answer with what "
+                "you have and say web search was unavailable. Do not invent "
+                f"search results.{backup}"
+            ),
+        }
+    return {
+        "status": "error",
+        "error": f"Web search is temporarily unavailable: {error}{detail}",
+        "rate_limited": True,
+        "wait_time_seconds": round(error.retry_after, 1),
+        "retryable": True,
+        "hint": (
+            "Try search_web again shortly, with a narrower query, or call "
+            "fetch_page on a URL you already know. Do not invent search results."
+        ),
+    }
+
+
+def _find_spans(text: str, term: str) -> List[Tuple[int, int]]:
+    """Merged ``(start, end)`` windows around every case-insensitive match of *term*."""
+    spans: List[Tuple[int, int]] = []
+    haystack, needle = text.lower(), term.lower()
+    at = haystack.find(needle)
+    while at != -1:
+        start = max(0, at - FIND_CONTEXT_CHARS)
+        end = min(len(text), at + len(needle) + FIND_CONTEXT_CHARS)
+        if spans and start <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], end)
+        else:
+            spans.append((start, end))
+        at = haystack.find(needle, at + len(needle))
+    return spans
+
+
+def text_window(
+    text: str, url: str, max_length: int, offset: int = 0, find: Optional[str] = None
+) -> str:
+    """The part of *text* the caller asked for, marked when more remains.
+
+    Never cuts silently: a part that stops before the end names the offset of
+    the next one, and a ``find`` that matches nothing says so.
+    """
+    total = len(text)
+    if find and find.strip():
+        term = find.strip()
+        # A passage the offset falls inside resumes there, so paging moves on.
+        spans = [
+            (max(start, offset), end)
+            for start, end in _find_spans(text, term)
+            if end > offset
+        ]
+        if not spans:
+            where = f"after character {offset:,} of" if offset else "in"
+            return (
+                f"[No occurrence of {term!r} {where} the page's {total:,} characters "
+                "of text. Do not infer it; try another word, another page, or "
+                "report it as not found.]"
+            )
+        parts, used = [], 0
+        for number, (start, end) in enumerate(spans):
+            label = f"[at character {start:,}]\n"
+            if parts and used + len(label) + end - start > max_length:
+                return "\n\n".join(parts) + (
+                    f"\n\n[{len(spans) - number} more passage(s) match {term!r}. "
+                    f"Call fetch_page({url!r}, find={term!r}, offset={start}) for "
+                    "the rest.]"
+                )
+            if len(label) + end - start > max_length:
+                cut = start + max(1, max_length - len(label))
+                parts.append(label + text[start:cut])
+                return "\n\n".join(parts) + (
+                    f"\n\n[This passage continues. Call fetch_page({url!r}, "
+                    f"offset={cut}) to read on.]"
+                )
+            parts.append(label + text[start:end])
+            used += len(parts[-1]) + 2
+        return "\n\n".join(parts)
+
+    if offset and offset >= total:
+        return (
+            f"[offset {offset:,} is past the end: the page has {total:,} "
+            "characters of text.]"
+        )
+    end = min(total, offset + max_length)
+    part = text[offset:end]
+    if offset:
+        part = f"[Continuing at character {offset:,} of {total:,}]\n" + part
+    if end < total:
+        part += (
+            f"\n\n[Truncated: showing characters {offset:,}-{end:,} of {total:,}. "
+            f"Call fetch_page({url!r}, offset={end}) for the next part, or pass "
+            "find='<word>' to jump to a detail.]"
+        )
+    return part
 
 
 class BrowserToolsMixin:
@@ -49,18 +269,24 @@ class BrowserToolsMixin:
             url: str,
             extract: Literal["text", "html", "links", "tables"] = "text",
             max_length: int = 5000,
+            offset: int = 0,
+            find: Optional[str] = None,
         ) -> str:
             """Fetch a web page and extract its content.
 
             Retrieves the page at the given URL and returns readable text content.
             Use this to read articles, documentation, reference pages, or any web content.
             Does NOT execute JavaScript — works best with static content, articles, docs.
+            Long text ends with a marker naming the offset of the next part; to
+            get one detail (a price, a spec) pass find instead of paging.
 
             Args:
                 url: The full URL to fetch (must start with http:// or https://)
                 extract: What to extract - 'text' (readable content), 'html' (raw HTML),
                          'links' (all links on page), 'tables' (HTML tables as JSON)
                 max_length: Maximum characters to return (default: 5000, max: 20000)
+                offset: Text mode: character offset to start from, to continue a long page
+                find: Text mode: return only the passages containing this word or phrase
             """
             if not _ensure_web_client():
                 return "Error: Browser tools not initialized. Web browsing is disabled."
@@ -76,6 +302,10 @@ class BrowserToolsMixin:
                     f"Error: Invalid extract mode '{extract}'. "
                     f"Must be one of: {', '.join(sorted(valid_modes))}"
                 )
+            if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+                return "Error: offset must be a character position, 0 or more."
+            if (offset or find) and extract != "text":
+                return "Error: offset and find apply to extract='text' only."
 
             try:
                 response = mixin._web_client.get(url)
@@ -98,12 +328,11 @@ class BrowserToolsMixin:
                     for t in ["application/json", "text/plain", "text/csv", "text/xml"]
                 ):
                     # Text-based content — return directly
-                    text = retain_excerpt(mixin, response.text, max_length)
                     return (
                         f"Content from: {url}\n"
                         f"Type: {content_type}\n"
                         f"Length: {len(response.text):,} chars\n\n"
-                        f"{text}"
+                        + text_window(response.text, url, max_length, offset, find)
                     )
                 else:
                     # Binary content — suggest download
@@ -170,19 +399,16 @@ class BrowserToolsMixin:
 
             else:  # text (default)
                 text = mixin._web_client.extract_text(soup, max_length=None)
-                text = retain_excerpt(mixin, text, max_length)
-                return (
-                    f"Page: {title}\n"
-                    f"URL: {url}\n"
-                    f"Length: {len(text):,} chars\n\n"
-                    f"{text}"
-                )
+                header = f"Page: {title}\nURL: {url}\nLength: {len(text):,} chars\n\n"
+                if len(text.strip()) < _NEAR_EMPTY_CHARS:
+                    return header + text + _NEAR_EMPTY_NOTE
+                return header + text_window(text, url, max_length, offset, find)
 
         @tool(atomic=True)
         def search_web(
             query: str,
             num_results: int = 5,
-        ) -> str:
+        ) -> Union[str, Dict[str, Any]]:
             """Search the web and return results with titles, URLs, and snippets.
 
             Uses DuckDuckGo to find relevant web pages. Returns titles, URLs, and
@@ -195,23 +421,46 @@ class BrowserToolsMixin:
             if not _ensure_web_client():
                 return "Error: Browser tools not initialized. Web search is disabled."
 
+            from gaia.web.client import SearchUnavailableError
+
             # Clamp num_results
             num_results = max(1, min(num_results, 10))
 
+            source_note = None
             try:
                 results = mixin._web_client.search_duckduckgo(
-                    query, num_results=num_results
+                    query,
+                    num_results=num_results,
+                    should_stop=lambda: _search_stop_requested(mixin),
                 )
+            except ToolCancelled as e:
+                return f"Web search stopped: {e}."
             except ImportError as e:
                 return f"Error: {e}"
             except ValueError as e:
                 return f"Error: {e}"
+            except SearchUnavailableError as e:
+                logger.warning("Web search unavailable: %s", e)
+                results, fallback_error = _tavily_fallback(query, num_results)
+                if results is None:
+                    return _search_unavailable_result(mixin, e, fallback_error)
+                logger.warning(
+                    "DuckDuckGo refused the search; answered by the Tavily "
+                    "connector instead (%d results)",
+                    len(results),
+                )
+                source_note = (
+                    "(DuckDuckGo is rate-limiting searches; these results are "
+                    "from the configured Tavily connector.)"
+                )
             except Exception as e:
                 logger.error(f"Error searching web: {e}")
                 return (
                     f"Error performing web search: {e}\n"
                     "Try using fetch_page with a direct URL instead."
                 )
+            with _STREAK_LOCK:
+                mixin._search_unavailable_streak = 0
 
             if not results:
                 return (
@@ -220,6 +469,8 @@ class BrowserToolsMixin:
                 )
 
             lines = [f'Web search results for: "{query}"', ""]
+            if source_note:
+                lines[1:1] = [source_note]
             for i, result in enumerate(results, 1):
                 lines.append(f"{i}. {result['title']}")
                 lines.append(f"   {result['url']}")
@@ -253,39 +504,33 @@ class BrowserToolsMixin:
             if not _ensure_web_client():
                 return "Error: Browser tools not initialized. Download is disabled."
 
-            # Validate save path with PathValidator if available
-            if hasattr(mixin, "_path_validator") and mixin._path_validator:
+            validator = getattr(mixin, "_path_validator", None)
+
+            # Refuse a blocked folder (/etc, ~/.ssh, ...) before any request.
+            if validator:
                 resolved_dir = str(Path(save_to).expanduser().resolve())
-                # Allowlist check — may prompt the user in an interactive TTY;
-                # auto-denies in Agent UI / API server contexts (see #495 S1).
-                if not mixin._path_validator.is_path_allowed(
-                    resolved_dir, prompt_user=True
-                ):
-                    return f"Error: Access denied to directory: {save_to}"
-                # Blocklist check — prevents downloading into /etc, /bin,
-                # ~/.ssh, etc. even if the allowlist somehow let it through.
-                is_blocked, reason = mixin._path_validator.is_write_blocked(
-                    resolved_dir
-                )
+                is_blocked, reason = validator.is_write_blocked(resolved_dir)
                 if is_blocked:
                     return f"Error: {reason}"
 
-            # Screen the *resolved file path* (not just the directory) against
-            # the sensitive-filename guardrail before a single byte is written.
-            # The directory check above catches blocked dirs, but the final
-            # filename (from Content-Disposition or URL) could be something
-            # like `credentials.json` that is_write_blocked would reject for
-            # write_file. WebClient.download calls this before creating the
-            # file, so a blocked download leaves the filesystem untouched.
+            # WebClient calls this with the final file path before creating
+            # anything, so a refusal leaves the filesystem untouched.
             def _screen_destination(dest_path: Path) -> None:
-                validator = getattr(mixin, "_path_validator", None)
-                if not validator:
-                    return
-                is_blocked, reason = validator.is_write_blocked(str(dest_path))
-                if is_blocked:
-                    raise ValueError(
-                        f"Downloaded file blocked by security policy: {reason}"
-                    )
+                if validator:
+                    is_blocked, reason = validator.is_write_blocked(str(dest_path))
+                    if is_blocked:
+                        raise ValueError(
+                            f"Downloaded file blocked by security policy: {reason}"
+                        )
+                    # Ask about the folder when it can be granted whole, so one
+                    # approval covers later downloads; else (e.g. ~) the one file.
+                    # The response stays open while the user answers.
+                    target = dest_path.parent
+                    if validator.grant_refusal_reason(str(target)):
+                        target = dest_path
+                    if not validator.is_path_allowed(str(target), prompt_user=True):
+                        raise ValueError(_download_denied(validator, dest_path))
+                before_change(dest_path, "download_file")
 
             try:
                 result = mixin._web_client.download(

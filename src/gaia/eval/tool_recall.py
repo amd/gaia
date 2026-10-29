@@ -382,8 +382,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     log_path = Path(args.log) if args.log else _discover_log(run_dir)
     if log_path is None or not log_path.is_file():
         raise SystemExit(
-            "no TOOL_LOADER log found. GAIA logs to stdout, so capture stdout "
-            "(`... 2>&1 | tee server.log`, NOT `2> server.log`) and pass it via "
+            "no TOOL_LOADER log found. GAIA logs to stderr, so capture stderr "
+            "(`... 2>&1 | tee server.log`, NOT `> server.log`) and pass it via "
             "--log. The loader emits one `TOOL_LOADER {json}` line per turn."
         )
     log_text = log_path.read_text(encoding="utf-8")

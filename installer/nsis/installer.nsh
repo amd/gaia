@@ -31,8 +31,10 @@
 ; matches the plan's "default ON" intent and mirrors how Slack/Discord
 ; behave. Users who want to disable autostart can:
 ;
-;   1. Use the GAIA Agent UI tray menu → Settings → "Launch at login"
-;      (see services/tray-manager.cjs)
+;   1. Use Settings → General → "Start GAIA when you sign in". That switch
+;      owns this same Run value (WIN_LOGIN_ITEM_NAME in
+;      services/tray-manager.cjs must equal ${PRODUCT_NAME}, args included)
+;      and removes it again at startup if an update wrote it back.
 ;   2. Or disable via Windows Task Manager → Startup tab
 ;   3. Or delete the HKCU Run key manually with regedit
 ;

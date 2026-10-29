@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=GAIA Terminal Hub
+Name=GAIA Terminal UI
 GenericName=AI Assistant
 Comment=Run AMD GAIA's local AI assistant in a terminal
 Exec=gaia-tui

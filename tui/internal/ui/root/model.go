@@ -85,6 +85,8 @@ type FlagshipModel struct {
 	gateChatModel string
 	// launchNotice is shown once in the first chat frame.
 	launchNotice string
+	// updateCheck asks the first chat to check for a newer GAIA release.
+	updateCheck bool
 	// trace records every agent event to a JSONL file (--trace). Nil when off.
 	// Owned by the caller of RunFlagship, which closes it after the event loop.
 	trace *event.TraceWriter
@@ -104,6 +106,11 @@ type FlagshipModel struct {
 	// pfLocal overrides the local runner's options. Tests point it at a
 	// different binary name; a real session leaves it alone.
 	pfLocal *preflight.LocalOptions
+	// chatChoice is where the user said chat runs on the gate's first-run
+	// step; gateSteps is the steps that gate had finished when it was left for
+	// the provider panel, carried into the gate rebuilt after it.
+	chatChoice string
+	gateSteps  int
 
 	// halted is every Outcome the active screen is currently holding on.
 	// FlagshipModel does not render it or intercept keys for it — the screen
@@ -219,6 +226,15 @@ func (m FlagshipModel) chatCommandNames() []string {
 	return m.chat.AvailableCommandNames()
 }
 
+// BeforeExit runs once the event loop has stopped, however it stopped. With
+// an update queued it saves the conversation to reopen afterwards.
+func (m FlagshipModel) BeforeExit() error {
+	if m.chat == nil {
+		return nil
+	}
+	return m.chat.KeepConversationForUpdate()
+}
+
 // Close releases everything the session opened — the agent child in
 // particular. The host calls it once the event loop has stopped.
 //
@@ -297,6 +313,12 @@ func (m FlagshipModel) WithTrace(w *event.TraceWriter) FlagshipModel {
 	return m
 }
 
+// WithUpdateCheck has the first chat check once for a newer GAIA release.
+func (m FlagshipModel) WithUpdateCheck() FlagshipModel {
+	m.updateCheck = true
+	return m
+}
+
 // Init opens the gate immediately. The splash is what is on screen while the
 // first probe runs, not a screen the user has to dismiss.
 func (m FlagshipModel) Init() tea.Cmd { return beginCmd() }
@@ -338,7 +360,7 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// 'p' key was pressed on, which during a switch is the incoming
 			// agent, not the still-live outgoing one m.agent names until the
 			// switch commits.
-			return m.beginPreflight(*m.pending)
+			return m.beginPreflightCarrying(*m.pending, m.gateSteps)
 		default:
 			if size, ok := msg.(tea.WindowSizeMsg); ok {
 				m.width = size.Width
@@ -355,6 +377,7 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// key is only ever meant for whichever agent the gate on screen is for.
 	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "p" && m.activeView == viewPreflight && m.preflight != nil && !m.preflight.Busy() && m.pending != nil && m.pending.ID == catalog.FlagshipID {
 		m.preflight.Cancel()
+		m.gateSteps = m.preflight.StepsDone()
 		panel := providers.New("", m.width, m.height).WithSetupStep(m.preflight.Report().LemonadeStep())
 		m.providerPanel = &panel
 		return m, panel.Init()
@@ -415,6 +438,22 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.cancelFromGate()
+
+	case preflight.ChatChosenMsg:
+		if m.gateIsFor(msg.AgentID) {
+			m.chatChoice = msg.Provider
+		}
+		return m, nil
+
+	case preflight.ConnectProviderMsg:
+		if !m.gateIsFor(msg.AgentID) {
+			return m, nil
+		}
+		m.preflight.Cancel()
+		m.gateSteps = m.preflight.StepsDone()
+		panel := providers.New("", m.width, m.height).WithConnect(msg.Provider)
+		m.providerPanel = &panel
+		return m, panel.Init()
 
 	case preflight.ConnectMailboxMsg:
 		if !m.gateIsFor(msg.AgentID) {
@@ -635,7 +674,7 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	}
 	m.chatClient.set(c)
 
-	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, agent.Version, m.dev, setupVerified).
+	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, m.dev, setupVerified).
 		WithHubClient(m.hub())
 	if len(m.pendingTranscript) > 0 {
 		// Set only on the switch path (switchAgent) — a fresh launch never
@@ -651,6 +690,17 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	if m.launchNotice != "" {
 		chatModel = chatModel.WithNotice(m.launchNotice)
 		m.launchNotice = ""
+	}
+	if m.updateCheck {
+		// Once per launch; an /agents switch must not check again.
+		chatModel = chatModel.WithUpdateCheck()
+		m.updateCheck = false
+		// The conversation an update closed comes back on the launch after it.
+		if resumed, err := chat.TakeResumedConversation(); err != nil {
+			chatModel = chatModel.WithNotice("Could not restore the conversation from before the update: " + err.Error())
+		} else if len(resumed) > 0 {
+			chatModel = chatModel.WithMessages(resumed)
+		}
 	}
 	chatModel = m.withStartupModel(agent, chatModel, m.gateChatModel)
 	m.gateChatModel = ""

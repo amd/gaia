@@ -40,8 +40,8 @@ def use_os_trust_store() -> bool:
 
         truststore.inject_into_ssl()
     except (ImportError, OSError) as exc:
-        # stderr, not the GAIA logger: its console handler writes to stdout,
-        # which is the event/MCP channel for stdio transports.
+        # Printed to stderr, never stdout: stdout is the event/MCP channel
+        # for stdio transports.
         print(
             "WARNING: GAIA could not switch HTTPS verification to the system "
             f"certificate store ({type(exc).__name__}: {exc}). It is using "

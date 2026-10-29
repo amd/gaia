@@ -9,6 +9,114 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The email package no longer installs beside an incompatible GAIA core.**
+  Its declared core floor is now 0.25.1, the first release covering the
+  email agent module-level imports, including its guided Outlook setup route.
+  (#4430)
+- **A note the model writes before a tool call no longer shows as
+  `[unmapped agent event: commentary]`.** The host's output handler now marks
+  that text as `commentary`; the translator drops it, since the words already
+  went out as `token` events.
+- **Memory downloads its embedding model when it is missing.** On the first
+  start that uses memory, the agent now fetches the required embedding model
+  from Lemonade instead of silently running without memory; the initial
+  download can be about 300 MB.
+- **Sensitive credentials stay out of memory and the conversation log.** PINs,
+  card numbers, SSNs and other credential-shaped text are not saved as
+  memories, and logged turns replace matching spans with `[secret removed]`.
+- **Connect prompts name the right Settings tab.** The agent sent users to a
+  "Connections" tab in Settings, which the Agent UI doesn't have; it now says
+  "Settings → Connectors".
+- **A tool decision that reached no prompt is no longer reported as delivered.**
+  `POST /v1/email/agent/confirm-tool` answered `ok` even when nothing was
+  waiting for the decision (already answered, timed out, or never asked). It now
+  answers 409, like the flagship agent's tool decision route. (#4889)
+- **One very long turn no longer vanishes from the conversation.** A pushed
+  turn bigger than the whole history budget was dropped, answer included. It is
+  now kept with its longest messages cut and a note saying how much.
+- **A follow-up about a thread shown last turn now works in the TUI.** Find a
+  thread, then ask who said what in it: the second question used to fail,
+  because the host pushes back only the conversation's words and the thread id
+  never made it into the next turn. The model guessed one, and Gmail rejected
+  `[ID of Northgate migration sync — phase 2 sequencing]` with a 400. A
+  session-scoped agent (a `/v1/email/query` caller that sends `session_id`, as
+  the TUI does) now remembers the last 10 threads `get_thread` and
+  `summarize_thread` showed, and hands them back with the history as
+  `- [thread] <subject> (thread_id <id>)` lines, the subjects fenced as
+  untrusted. It also remembers each thread's mailbox, so the follow-up routes
+  without a `mailbox` argument. The Agent UI relay doesn't send `session_id`
+  yet, so it doesn't get this. Both tools now refuse an id that can't be a
+  thread id before calling the mail API, with `thread_id '<id>' is not a thread
+  id. Call search_messages first and pass the thread_id from its result.`
+  (#2834)
+- **Pushed history that doesn't fit the model's window no longer overflows
+  it.** `/v1/email/query` used the `context` the host pushed as-is, but the
+  host sizes it without seeing this agent's prompt and tools. On a 32K window
+  (an NPU model) the two together could exceed the window and fail the turn.
+  The agent now keeps the newest whole turns that fit beside its prompt and
+  streams a `status` event when older ones drop out of view.
+- **Outlook messages show their real age and the newest one is replied to.**
+  The Outlook backend handed downstream Graph's ISO-8601 `receivedDateTime` in
+  the `internalDate` field, which every consumer reads as epoch milliseconds
+  and turned into 0. Every message looked like it arrived at the epoch, so the
+  needs-you ages were empty, the "newest message in the thread" reply target
+  never fired, and the recency order of the needs-review list was lost. The
+  backend now emits epoch milliseconds, using one timestamp parser shared with
+  the follow-up tools.
+- **A mailbox another GAIA operation is saving is reported as busy, not as
+  missing permissions.** While the daemon, the Agent UI or the CLI is mid-save
+  on a connection, the connection listing returns it marked `"error": "busy"`
+  with no scopes. Mailbox onboarding used to read that as "missing N
+  permissions" and send the user to reconnect; it now reports the `error` state
+  with "being saved by another GAIA operation right now. Retry in a moment."
+  The calendar pick raises `ConnectionBusyError` instead of asking for a
+  calendar grant, and `GET /v1/email/connectors` adds a per-provider `busy`
+  flag so a client knows `can_send: false` is not final. A mailbox route that
+  hits a busy connection used to answer `403`, as if the account needed
+  reconnecting; it now answers `502` with a detail saying the connection is
+  being saved by another GAIA operation, so treat that 502 as transient and
+  retry. The agent routes answer `503` with `Retry-After`. A calendar that was
+  busy when a session started now works once the save finishes, instead of
+  staying unavailable for the whole session. While a higher-ranked calendar
+  account is busy, the agent now waits for it instead of using another
+  account's calendar. A calendar error that needs a reconnect now says so,
+  instead of a generic configuration error.
+
+- **A `/query` run waiting for the model streams that it is waiting.** The run
+  thread runs as the user's turn: `status` events with `phase: "model_queue"`
+  and a `queue` object (see the npm `SPEC.md`), interactive lease priority, and
+  `/query/{run_id}/cancel` ends the wait. The translator keeps `phase` and
+  `queue` on those events only.
+- **A scheduled send or snooze cut off mid-fire no longer stays stuck, and a
+  failed send is listed.** A crash, or a locked database when the result was
+  written, left the job in `firing` forever, never retried and never reported.
+  A claim is now a lease: the scheduler renews it every minute while the job
+  runs, and only the holder can record the outcome (`claim_id`,
+  `superseded_claim` and `claimed_at` are added to `email_scheduled_jobs` on
+  startup). A lease with no renewal for 10 minutes, still unrenewed two minutes
+  later, is recovered. A scheduled send is marked `failed` with the reason and
+  never run a second time, because it may already have gone out. A snooze is
+  re-queued, since putting a message back in the inbox twice is harmless; a
+  snooze moved onto the daemon clock carries `"rerunnable": true` so the daemon
+  re-queues it too.
+  `list_scheduled_jobs` now also returns `failed`: the jobs that failed in the
+  last 7 days, with the error, so the user hears about a send that did not go
+  out. A driver that was alive after all (two schedulers on one database, a
+  laptop waking from sleep) keeps its job, and its own outcome replaces the
+  recovery's guess. The failure names the last heartbeat in local time and
+  tells the user to check the Sent folder before scheduling the mail again.
+
+- **A batch organize that failed for every message is reported as a failure.**
+  `archive_message_batch`, `mark_read_batch`, `mark_unread_batch`,
+  `add_star_batch`, `remove_star_batch`, `label_message_batch` and
+  `move_to_label_batch` returned `ok: true` even when no message was changed,
+  so the agent and the Agent UI read a total failure as done. Every message
+  failing now returns `ok: false` with the per-message results under `data`.
+  When only some fail, the result stays `ok: true` with `partial: true`,
+  `succeeded_count`, `failed_count` and a `summary` naming the failed messages
+  and why. An archive batch where nothing was archived is no longer what a
+  bare "undo that" picks up.
+
 - **A conflict check that could only see the calendar's first page no longer
   reports a busy slot as free (#3610).** `detect_calendar_conflicts` scanned
   the provider's first page (25 events) and said nothing about the rest, so a

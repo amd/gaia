@@ -28,6 +28,8 @@ func TestMain(m *testing.M) {
 	os.Setenv("GAIA_HOME", home)
 	os.Setenv("LEMONADE_BASE_URL", "")
 	os.Setenv("GAIA_LEMONADE_EMBEDDED", "")
+	os.Setenv("GAIA_CONFIG_FILE", "")
+	os.Setenv("GAIA_CONFIG_DIR", "")
 	ensureEmbedded = func(context.Context) error {
 		return errors.New("test: no daemon")
 	}

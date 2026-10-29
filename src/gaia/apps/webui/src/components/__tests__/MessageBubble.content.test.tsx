@@ -209,3 +209,12 @@ describe('the no-op verification line is not shown', () => {
         expect(container.textContent).toContain('Verification: unverified means');
     });
 });
+
+describe('MessageBubble inline code', () => {
+    it('renders inline code without leaking the markdown node as an attribute', () => {
+        const { container } = renderContent('Run `npm test` first.');
+        const code = container.querySelector('code.inline-code');
+        expect(code?.textContent).toBe('npm test');
+        expect(code?.hasAttribute('node')).toBe(false);
+    });
+});

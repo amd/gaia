@@ -183,10 +183,10 @@ class TestInit:
             "gaia", fetcher=_fetcher_for(release_assets, []), core_version=RC_CORE
         )
 
-    def _run(self, source, sentinel):
+    def _run(self, source, sentinel, profile="gaia"):
         from gaia.installer.init_command import InitCommand
 
-        cmd = InitCommand(profile="gaia", yes=True)
+        cmd = InitCommand(profile=profile, yes=True)
         with (
             patch.object(prerelease, "flagship_source", return_value=source),
             patch.object(installer, "read_sentinel", return_value=sentinel),
@@ -201,6 +201,11 @@ class TestInit:
     def test_replaces_an_agent_installed_from_the_hub(self, release_assets):
         stale = SimpleNamespace(version="0.2.0", artifact_sha256="0" * 64)
         install = self._run(self._source(release_assets), stale)
+        install.assert_called_once_with("gaia", trusted=True)
+
+    def test_npu_profile_installs_the_candidates_flagship(self, release_assets):
+        """The NPU profile installs the same flagship as the default one (#2972)."""
+        install = self._run(self._source(release_assets), None, profile="npu")
         install.assert_called_once_with("gaia", trusted=True)
 
     def test_keeps_the_candidates_own_build(self, release_assets):
@@ -220,3 +225,85 @@ class TestInit:
             pytest.raises(prerelease.PrereleaseFlagshipError),
         ):
             cmd._ensure_hub_agent_installed()
+
+
+class TestFinalReleaseReplacesACandidatesBuild:
+    """A final release's flagship carries the same version as its candidates'.
+
+    v0.25.1 kept the rc11 build of agent 0.3.1, because init only asked whether
+    *a* flagship was installed. Only the bytes tell the two apart.
+    """
+
+    def _run(self, sentinel, published=None, published_error=None):
+        from gaia.hub import catalog
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="gaia", yes=True)
+        lookup = (
+            {"side_effect": published_error}
+            if published_error
+            else {"return_value": published}
+        )
+        with (
+            patch.object(prerelease, "flagship_source", return_value=None),
+            patch.object(InitCommand, "_is_hub_agent_available", return_value=True),
+            patch.object(installer, "read_sentinel", return_value=sentinel),
+            patch.object(installer, "published_artifact_sha256", **lookup),
+            patch.object(installer, "install") as install,
+            patch.object(
+                catalog,
+                "load_index",
+                return_value=SimpleNamespace(agents=[{"id": "gaia"}]),
+            ),
+            patch.object(InitCommand, "_restart_replaced_agent") as restart,
+            patch.object(InitCommand, "_print_warning") as warn,
+        ):
+            cmd._ensure_hub_agent_installed()
+        return install, restart, warn
+
+    def test_a_candidates_build_is_replaced_and_restarted(self):
+        rc_build = SimpleNamespace(version=f"0.3.1+{TAG}", artifact_sha256="0" * 64)
+        install, restart, _ = self._run(rc_build, published=SHA)
+        install.assert_called_once_with("gaia", trusted=True)
+        restart.assert_called_once()
+
+    def test_the_published_build_is_kept(self):
+        current = SimpleNamespace(version="0.3.1", artifact_sha256=SHA)
+        install, restart, _ = self._run(current, published=SHA)
+        install.assert_not_called()
+        restart.assert_not_called()
+
+    def test_a_hash_differing_only_in_letter_case_is_the_same_build(self):
+        current = SimpleNamespace(version="0.3.1", artifact_sha256=SHA.upper())
+        install, _, _ = self._run(current, published=SHA.lower())
+        install.assert_not_called()
+
+    def test_an_unreachable_hub_keeps_the_agent_and_says_so(self):
+        from gaia.hub import catalog
+
+        rc_build = SimpleNamespace(version=f"0.3.1+{TAG}", artifact_sha256="0" * 64)
+        install, _, warn = self._run(
+            rc_build, published_error=catalog.CatalogError("hub down")
+        )
+        install.assert_not_called()
+        [message] = [c.args[0] for c in warn.call_args_list]
+        assert "hub down" in message and "keeping it" in message
+
+    def test_an_install_with_no_recorded_hash_is_left_alone(self):
+        install, _, _ = self._run(SimpleNamespace(version="0.3.1", artifact_sha256=""))
+        install.assert_not_called()
+
+
+def test_the_published_hash_is_what_an_install_would_fetch():
+    manifest = {"id": "gaia", "versions": {"0.3.1": {}}}
+    artifact = {"sha256": SHA, "path": "x"}
+    with patch.object(
+        installer, "_resolve_version", return_value=("0.3.1", artifact)
+    ) as resolve:
+        assert (
+            installer.published_artifact_sha256(
+                "gaia", manifest=manifest, platform_key=PLATFORM
+            )
+            == SHA
+        )
+    resolve.assert_called_once_with(manifest, None, platform_key=PLATFORM)

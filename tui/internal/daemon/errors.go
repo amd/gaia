@@ -1,10 +1,42 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 )
+
+// Briefer is an error with a one-line form for a status line: what is wrong and
+// the one thing to do. Error() keeps the full account (route, alternatives, log
+// path) for a details pane.
+type Briefer interface {
+	Brief() string
+}
+
+// briefMax caps the one-line form of an error that has no Brief of its own.
+const briefMax = 200
+
+// Brief is err's one-line form: its Brief when it has one, else the first line
+// of its text, capped at briefMax runes. Empty for a nil error.
+func Brief(err error) string {
+	if err == nil {
+		return ""
+	}
+	var b Briefer
+	if errors.As(err, &b) {
+		return b.Brief()
+	}
+	line, _, _ := strings.Cut(err.Error(), "\n")
+	line = strings.TrimSpace(line)
+	if runes := []rune(line); len(runes) > briefMax {
+		line = string(runes[:briefMax-1]) + "…"
+	}
+	return line
+}
+
+// upgradeCoreBrief is the status-line form of UpgradeCoreHint.
+const upgradeCoreBrief = "GAIA's background service is out of date. Run `pip install --upgrade amd-gaia`."
 
 // NotRunningError means no daemon has registered itself at all — instance.json
 // is absent. Distinct from StaleError so a caller can decide to start one.
@@ -16,6 +48,11 @@ func (e *NotRunningError) Error() string {
 	return fmt.Sprintf(
 		"no GAIA daemon is registered (%s does not exist). "+
 			"Start one with `gaia daemon start`.", e.Path)
+}
+
+// Brief implements Briefer.
+func (e *NotRunningError) Brief() string {
+	return "GAIA's background service is not running. Run `gaia daemon start`."
 }
 
 // StaleKind classifies WHY a recorded instance cannot be trusted, because the
@@ -53,6 +90,11 @@ func (e *StaleError) Error() string {
 			"the daemon log is at %s.", e.Path, e.Reason, logPathForMessage())
 }
 
+// Brief implements Briefer.
+func (e *StaleError) Brief() string {
+	return "GAIA's background service is not responding. Run `gaia daemon restart`."
+}
+
 // VersionError means the running daemon speaks a contract this client cannot
 // use — a MAJOR skew, or a MINOR below the agents/relay floor.
 //
@@ -70,6 +112,9 @@ func (e *VersionError) Error() string {
 		"the running GAIA daemon speaks host API v%s, but this app needs v%s or newer: %s. %s",
 		e.Have, e.Want, e.Reason, UpgradeCoreHint)
 }
+
+// Brief implements Briefer.
+func (e *VersionError) Brief() string { return upgradeCoreBrief }
 
 // UpgradeCoreHint is the remedy for any host-API skew. It says a restart is not
 // the fix, so a user who tries one does not loop on it.
@@ -90,6 +135,11 @@ func (e *StartError) Error() string {
 		e.Reason, logPathForMessage())
 }
 
+// Brief implements Briefer.
+func (e *StartError) Brief() string {
+	return "GAIA's background service would not start. Run `gaia daemon start` to see why."
+}
+
 // RouteMissingError means the running daemon has no such route at all.
 //
 // A bare 404 from /daemon/v1/* is version skew — the daemon is an older build
@@ -99,7 +149,7 @@ func (e *StartError) Error() string {
 // about the daemon. Reporting the first as the second sends the user to check a
 // remote service over a local restart.
 type RouteMissingError struct {
-	// Op is what the caller was trying to do, e.g. "read the Agent Hub catalog".
+	// Op is what the caller was trying to do, e.g. "read the agent catalog".
 	Op string
 	// Path is the route the daemon does not have.
 	Path string
@@ -111,7 +161,7 @@ type RouteMissingError struct {
 func (e *RouteMissingError) Error() string {
 	alternative := ""
 	if e.Alternative != "" {
-		alternative = " " + e.Alternative + "."
+		alternative = " " + strings.TrimSuffix(e.Alternative, ".") + "."
 	}
 	// Diagnosis first, and in the first few words: the hub renders this in a
 	// one-row status bar that truncates at the terminal width, and "it is your
@@ -121,6 +171,9 @@ func (e *RouteMissingError) Error() string {
 			"cannot %s. %s%s The daemon log is at %s.",
 		e.Path, e.Op, UpgradeCoreHint, alternative, logPathForMessage())
 }
+
+// Brief implements Briefer.
+func (e *RouteMissingError) Brief() string { return upgradeCoreBrief }
 
 // IsRouteMissing reports whether a daemon answer describes a route the daemon
 // does not have, rather than one that answered with its own refusal.
@@ -144,10 +197,26 @@ func IsRouteMissing(path string, status int, detail string) bool {
 type RequestError struct {
 	Op     string
 	Detail string
+	// Err is the transport error behind Detail, when there is one.
+	Err error
 }
 
 func (e *RequestError) Error() string {
 	return fmt.Sprintf(
 		"could not %s: %s. Check `gaia daemon status` and the daemon log at %s.",
 		e.Op, e.Detail, logPathForMessage())
+}
+
+func (e *RequestError) Unwrap() error { return e.Err }
+
+// DaemonRestartedError is a call about a run or session that a daemon restart
+// ended: the new daemon starts fresh sidecars, so there is nothing to send it to.
+type DaemonRestartedError struct {
+	Op string
+}
+
+func (e *DaemonRestartedError) Error() string {
+	return fmt.Sprintf(
+		"could not %s: GAIA's daemon restarted, which ended the agent session this belonged to. "+
+			"Nothing was sent; your next message starts a fresh session", e.Op)
 }

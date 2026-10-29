@@ -71,7 +71,10 @@ export function useModelActions(defaultModelName?: string, contextSize?: number)
         const ctx = ctxSize ?? MIN_CONTEXT_SIZE;
         setIsLoadingModel(true);
         try {
-            await api.loadModel(target, ctx);
+            if (!(await api.loadModelAskingFirst(target, ctx))) {
+                setIsLoadingModel(false);
+                return;
+            }
             log.system.info(`Load model triggered: ${target} (ctx=${ctx})`);
             if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
             loadTimerRef.current = setTimeout(() => setIsLoadingModel(false), LOAD_SPINNER_TIMEOUT_MS);

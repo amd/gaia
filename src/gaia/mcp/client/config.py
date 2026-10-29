@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Configuration management for MCP clients (read-only as of #976).
 
-Mutations to ``~/.gaia/mcp_servers.json`` go through the connectors framework
+Mutations to ``<gaia_home>/mcp_servers.json`` go through the connectors framework
 (``gaia.connectors.mcp_server.McpServerHandler.configure`` / ``disconnect``).
 This class is the read path used by ``MCPClient`` and ``ChatAgent``.
 """
@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from gaia.config import mcp_servers_path
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -26,7 +27,7 @@ class MCPConfig:
     - When ``config_file`` is provided: load only that file (no stacking).
     - When ``config_file`` is None (auto-load): stack configs in order of
       increasing priority:
-      1. ``~/.gaia/mcp_servers.json`` (global, loaded first as base)
+      1. ``<gaia_home>/mcp_servers.json`` (global, loaded first as base)
       2. ``./mcp_servers.json``       (local, overlaid on top; wins on conflicts)
       ``self.config_file`` is set to the local path when it exists, otherwise
       to the global path (determines where ``add_server`` / ``remove_server``
@@ -55,7 +56,7 @@ class MCPConfig:
             }
         else:
             # Auto-load with config stacking: global as base, local on top.
-            global_path = Path.home() / ".gaia" / "mcp_servers.json"
+            global_path = mcp_servers_path()
             local_path = self._find_local_config()
 
             # Ensure the global config directory exists.

@@ -506,10 +506,12 @@ FULL_BUNDLES = [
     ),
     ToolBundle(
         name="loop_control",
-        members=frozenset({"set_loop_state", "request_user_input", "sleep"}),
+        members=frozenset(
+            {"set_loop_state", "request_user_input", "sleep", "set_reasoning_effort"}
+        ),
         description=(
-            "Control the autonomous loop, wait before retrying, and ask the "
-            "user questions."
+            "Control the autonomous loop, wait before retrying, set how hard "
+            "the model reasons, and ask the user questions."
         ),
     ),
     ToolBundle(
@@ -581,6 +583,8 @@ FULL_BUNDLES = [
 FULL_OPTIONAL_TOOLS = frozenset(
     {
         "search_documentation",
+        # Registered only on a model that grades its reasoning (gpt-oss).
+        "set_reasoning_effort",
         # Browser-use: registered only when the [browser] extra is installed,
         # so a core install legitimately has none of these.
         "browser_open",

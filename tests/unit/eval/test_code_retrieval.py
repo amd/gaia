@@ -3,12 +3,22 @@
 """The code-retrieval benchmark's pieces that need no embedder: labels, metrics,
 the grep baseline, the gate, and how robustness outcomes are classified."""
 
+import json
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
-from gaia.eval.code_retrieval import gold, lexical, metrics, report, robustness
+from gaia.eval.bench import swebench
+from gaia.eval.code_retrieval import (
+    gold,
+    instances,
+    lexical,
+    metrics,
+    report,
+    robustness,
+)
 from gaia.eval.code_retrieval.runner import suite_parts
 from gaia.eval.code_retrieval.suites import SUITES
 
@@ -381,3 +391,36 @@ def test_gate_treats_every_missing_part_the_same():
         current.pop(part)
         regs = report.compare(_result(), current, 0.05)["regressions"]
         assert f"{part} did not run, so it was not compared" in regs
+
+
+VERIFIED_ROW = (
+    Path(__file__).resolve().parents[2]
+    / "fixtures"
+    / "code_retrieval"
+    / "swebench_verified_row.json"
+)
+
+
+def _verified_fetch(row):
+    def fetch(ids):
+        return {i: row for i in ids if i == row["instance_id"]}
+
+    return fetch
+
+
+def test_verified_queries_carry_the_gold_patch_the_bench_cache_drops(tmp_path):
+    row = json.loads(VERIFIED_ROW.read_text(encoding="utf-8"))
+    for _ in range(2):  # cold cache, then the cache that holds no patch
+        (q,) = instances.verified([row["instance_id"]], tmp_path, _verified_fetch(row))
+        assert q.patch == row["patch"]
+        assert (q.repo, q.base_commit) == (row["repo"], row["base_commit"])
+        assert q.text == row["problem_statement"]
+    cached = swebench.cache_dir(tmp_path) / f"{row['instance_id']}.json"
+    assert "patch" not in json.loads(cached.read_text(encoding="utf-8"))
+
+
+def test_a_verified_row_without_the_patch_is_named():
+    row = json.loads(VERIFIED_ROW.read_text(encoding="utf-8"))
+    del row["patch"]
+    with pytest.raises(swebench.SweBenchError, match=r"lacks \['patch'\]"):
+        swebench.gold_patches([row["instance_id"]], _verified_fetch(row))

@@ -12,6 +12,7 @@ All tests use in-memory SQLite or temp files — no external dependencies.
 """
 
 import json
+import sqlite3
 import threading
 import time
 import uuid
@@ -973,6 +974,47 @@ class TestToolHistory:
         assert stats["last_error"] is not None
         assert "FileNotFoundError" in stats["last_error"]
 
+    def test_denied_calls_are_visible_but_not_counted_as_failures(self, store):
+        """A pre-execution denial is retained without lowering success metrics."""
+        store.log_tool_call(
+            session_id="sess1",
+            tool_name="write_file",
+            args={"path": "/blocked.txt"},
+            result_summary="{'status': 'denied'}",
+            success=False,
+            error="permission denied",
+            executed=False,
+        )
+        store.log_tool_call(
+            session_id="sess1",
+            tool_name="write_file",
+            args={"path": "/ok.txt"},
+            result_summary="ok",
+            success=True,
+        )
+
+        stats = store.get_tool_stats("write_file")
+        assert stats["total_calls"] == 1
+        assert stats["success_rate"] == 1.0
+        assert stats["last_error"] is None
+        assert stats["denied_count"] == 1
+        assert store.get_tool_errors(tool_name="write_file") == []
+
+        overview = store.get_stats()["tools"]
+        assert overview["total_calls"] == 1
+        assert overview["total_errors"] == 0
+        assert overview["denied_calls"] == 1
+        summary = next(
+            row for row in store.get_tool_summary() if row["tool_name"] == "write_file"
+        )
+        assert summary["total_calls"] == 1
+        assert summary["failure_count"] == 0
+        assert summary["denied_count"] == 1
+
+        history = store.get_tool_history("write_file")
+        assert len(history) == 2
+        assert any(row["executed"] is False for row in history)
+
 
 # ===========================================================================
 # 7. Temporal
@@ -1714,12 +1756,12 @@ class TestEdgeCases:
             assert mode == "wal"
 
     def test_schema_version_exists(self, store):
-        """schema_version table exists at the current version (v5, #887)."""
+        """schema_version table exists at the current version (v8, executed tool history)."""
         if hasattr(store, "_conn"):
             cursor = store._conn.execute("SELECT version FROM schema_version")
             row = cursor.fetchone()
             assert row is not None
-            assert row[0] == 5
+            assert row[0] == 8
 
 
 # ===========================================================================
@@ -3269,35 +3311,37 @@ class TestSearchConfidenceBumpRollback:
 
     def test_confidence_bump_commit_failure_rolls_back_all_bumps(self, store):
         """If commit() fails after confidence bumps, all bumps must be rolled back."""
-        kid = store.store(
-            category="fact",
-            content="BumpRollback unique test entry xyz",
-            confidence=0.5,
-        )
+        kids = [
+            store.store(
+                category="fact",
+                content=f"BumpRollback entry {word} xyz",
+                confidence=0.5,
+            )
+            for word in ("alpha", "bravo", "charlie")
+        ]
+        real = store._conn
 
-        original_conf = store._conn.execute(
-            "SELECT confidence FROM knowledge WHERE id = ?", (kid,)
-        ).fetchone()[0]
+        class _FailingCommit:
+            """The real connection, except that commit() fails."""
 
-        # Inject a commit failure ONLY for the bump commit, not the initial store
-        commit_call_count = [0]
-        original_method = (
-            store._conn.commit.__func__
-            if hasattr(store._conn.commit, "__func__")
-            else None
-        )
+            def __getattr__(self, name):
+                return getattr(real, name)
 
-        # We can't monkey-patch sqlite3 commit, so instead we verify the
-        # try/except/rollback pattern is in place via source inspection
-        import inspect
+            def commit(self):
+                raise sqlite3.OperationalError("disk I/O error")
 
-        from gaia.agents.base.memory_store import MemoryStore
+        items = [store.get_item(k) for k in kids]
+        store._conn = _FailingCommit()
+        try:
+            with pytest.raises(sqlite3.OperationalError):
+                store.count_use(items)
+        finally:
+            store._conn = real
 
-        source = inspect.getsource(MemoryStore.search)
-        assert (
-            "rollback" in source
-        ), "search() must have rollback guard for confidence bumps"
-        assert "try" in source, "search() must wrap confidence bumps in try block"
+        rows = real.execute(
+            "SELECT confidence, use_count FROM knowledge WHERE id IN (?, ?, ?)", kids
+        ).fetchall()
+        assert rows == [(0.5, 0)] * 3
 
     def test_successful_confidence_bump_is_committed(self, store):
         """Normal search correctly bumps confidence and commits."""
@@ -3796,14 +3840,14 @@ class TestSchemaV2Migration:
         assert any(r["id"] == kid for r in results)
 
     def test_schema_version_is_current(self, store):
-        """A fresh database is stamped at the current schema version (v5, #887)."""
+        """A fresh database is stamped at the current schema version (v8, executed tool history)."""
         with store._lock:
             cursor = store._conn.execute(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
             )
             row = cursor.fetchone()
         assert row is not None
-        assert row[0] == 5
+        assert row[0] == 8
 
 
 # ===========================================================================
@@ -4898,7 +4942,7 @@ class TestProceduresMigration:
         store = MemoryStore(db_path=db)
         store.close()
 
-        assert _schema_version(db) == 5
+        assert _schema_version(db) == 8
         assert "procedures" in _table_names(db)
         assert "skill_deltas" in _table_names(db)
         assert "synthesis_marks" in _table_names(db)
@@ -4946,7 +4990,7 @@ class TestProceduresMigration:
         # Reopen — triggers the v2→v3 migration.
         store2 = MemoryStore(db_path=db)
         try:
-            assert _schema_version(db) == 5
+            assert _schema_version(db) == 8
             assert "procedures" in _table_names(db)
 
             con = sqlite3.connect(str(db))
@@ -4971,6 +5015,33 @@ class TestProceduresMigration:
         finally:
             store2.close()
 
+    def test_v7_db_adds_executed_tool_history_column(self, tmp_path):
+        """Opening a v7 database adds executed and preserves existing rows."""
+        import sqlite3
+
+        db = tmp_path / "memory.db"
+        store = MemoryStore(db_path=db)
+        store.log_tool_call(
+            "sess1", "write_file", {}, "{'status': 'denied'}", False, error="denied"
+        )
+        store.close()
+
+        con = sqlite3.connect(str(db))
+        con.execute("UPDATE schema_version SET version = 7")
+        con.execute("ALTER TABLE tool_history DROP COLUMN executed")
+        con.commit()
+        con.close()
+
+        store2 = MemoryStore(db_path=db)
+        try:
+            assert _schema_version(db) == 8
+            row = store2.get_tool_history("write_file")[0]
+            assert (
+                row["executed"] is False
+            )  # explicit legacy denial is safely reclassified
+        finally:
+            store2.close()
+
     def test_v1_db_chains_through_v2_to_v3(self, tmp_path):
         """A v1 DB (no embedding column, no procedures) chains v1→v2→v3 on open."""
         import sqlite3
@@ -4989,7 +5060,7 @@ class TestProceduresMigration:
 
         store2 = MemoryStore(db_path=db)
         try:
-            assert _schema_version(db) == 5
+            assert _schema_version(db) == 8
             assert "procedures" in _table_names(db)
             # The v1→v2 ALTERs are re-applied idempotently; the legacy row survives.
             rows = store2.get_by_category("fact")
@@ -5213,6 +5284,26 @@ class TestIterSessions:
         assert s["success_count"] == 3
         assert s["attempt_count"] == 4
         assert "bad" not in s["tools"]
+
+    def test_denied_calls_do_not_count_toward_synthesis_attempts(self, store):
+        """Pre-execution denials do not lower a synthesis success rate."""
+        store.store_turn("sessDenied", "user", "do work")
+        for i in range(3):
+            store.log_tool_call("sessDenied", f"good{i}", {}, "ok", True)
+        store.log_tool_call(
+            "sessDenied",
+            "write_file",
+            {},
+            "{'status': 'denied'}",
+            False,
+            error="permission denied",
+            executed=False,
+        )
+
+        s = store.iter_sessions(min_steps=3)[0]
+        assert s["success_count"] == 3
+        assert s["attempt_count"] == 3
+        assert "write_file" not in s["tools"]
 
     def test_since_watermark_excludes_older_rows(self, store):
         """since= counts only tool calls strictly newer than the watermark."""

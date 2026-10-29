@@ -29,9 +29,13 @@ from ..models import (
     FilePreviewResponse,
     FileSearchResponse,
     FileSearchResult,
+    FileStatusEntry,
+    FileStatusRequest,
+    FileStatusResponse,
     FileUploadResponse,
     OpenFileRequest,
 )
+from ..turn_summary import is_openable
 from ..utils import (
     ALLOWED_EXTENSIONS,
     TEXT_EXTENSIONS,
@@ -170,13 +174,12 @@ async def browse_files(path: Optional[str] = None):
 
     Args:
         path: Directory to browse. Defaults to user home directory.
-              On Windows, pass an empty string or "/" to list drive
-              letters.
+              On Windows, pass "/" to list drive letters.
     """
     quick_links = build_quick_links()
 
-    # On Windows, treat None / empty / "/" as "list drive letters"
-    if platform.system() == "Windows" and (not path or path in ("/", "\\")):
+    # On Windows, "/" lists drive letters; no path opens home like everywhere else.
+    if platform.system() == "Windows" and path in ("/", "\\"):
         entries = list_windows_drives()
         return BrowseResponse(
             current_path="/",
@@ -298,6 +301,8 @@ async def open_file_or_folder(request: OpenFileRequest):
         request.path: Absolute path to the file or folder.
         request.reveal: If true, reveal the file in its parent folder
                        (default: true for files, ignored for folders).
+        request.launch: If true, open the file itself in its default app.
+                       Refused for anything but documents, data and images.
     """
     import subprocess
 
@@ -334,6 +339,9 @@ async def open_file_or_folder(request: OpenFileRequest):
     if not resolved.exists():
         raise HTTPException(status_code=404, detail="Path not found")
 
+    if request.launch:
+        return _launch_file(resolved)
+
     try:
         if platform.system() == "Windows":
             if resolved.is_file() and reveal:
@@ -360,6 +368,71 @@ async def open_file_or_folder(request: OpenFileRequest):
             status_code=500,
             detail="Failed to open file or folder. Check server logs for details.",
         )
+
+
+def _launch_file(resolved: Path) -> dict:
+    """Open *resolved* in its default app, if that cannot run code."""
+    import os
+    import subprocess
+
+    if not resolved.is_file():
+        raise HTTPException(status_code=400, detail="Only a file can be opened")
+    if not is_openable(str(resolved)):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"GAIA does not open {resolved.suffix or 'extensionless'} files "
+                "directly, because the default app could run them. Use Show in "
+                "folder instead."
+            ),
+        )
+    try:
+        if platform.system() == "Windows":
+            os.startfile(str(resolved))  # pylint: disable=no-member
+        elif platform.system() == "Darwin":
+            subprocess.Popen(["open", str(resolved)])
+        else:
+            subprocess.Popen(["xdg-open", str(resolved)])
+    except OSError as e:
+        logger.error("Failed to open file %s: %s", resolved, e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not open {resolved.name}: {e}. Try Show in folder.",
+        ) from e
+    return {"status": "ok", "path": str(resolved)}
+
+
+@router.post("/api/files/status", response_model=FileStatusResponse)
+async def file_status(request: FileStatusRequest):
+    """Whether each path still exists, and its modification time.
+
+    The side rail calls this to show files deleted or changed since the turn
+    that wrote them. Paths outside the home folder are reported unchecked.
+    """
+    home = Path.home()
+    entries = []
+    for raw in request.paths:
+        if not raw or "\x00" in raw:
+            raise HTTPException(status_code=400, detail="Invalid path")
+        resolved = Path(raw).resolve(strict=False)
+        try:
+            resolved.relative_to(home)
+        except ValueError:
+            entries.append(FileStatusEntry(path=raw))
+            continue
+        try:
+            stat = resolved.stat()
+        except FileNotFoundError:
+            entries.append(FileStatusEntry(path=raw, exists=False))
+            continue
+        except OSError as e:
+            raise HTTPException(
+                status_code=500, detail=f"Could not check {resolved.name}: {e}"
+            ) from e
+        entries.append(
+            FileStatusEntry(path=raw, exists=resolved.is_file(), mtime=stat.st_mtime)
+        )
+    return FileStatusResponse(files=entries)
 
 
 # ── File Search ──────────────────────────────────────────────────────────────

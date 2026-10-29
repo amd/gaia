@@ -101,8 +101,9 @@ def _cap(memory_gb, source):
         (_cap(112, "AMD iGPU"), 262144),
         # 64 GB Strix Halo, 32 GB carve-out + 16 GB GTT: still the maximum.
         (_cap(48, "AMD iGPU"), 262144),
-        # 32 GB discrete GPU: 28.8 usable - 25.47 weights = 3.33 GB of KV.
-        (_cap(32, "AMD GPU"), 155648),
+        # 32 GB discrete GPU: 28.8 usable - 25.47 weights - 1.35 embedder
+        # = 1.98 GB of KV.
+        (_cap(32, "AMD GPU"), 90112),
         # 24 GB discrete GPU: the weights alone overflow it; the floor stands.
         (_cap(24, "AMD GPU"), GPU_CTX_SIZE),
     ],
@@ -111,10 +112,10 @@ def test_window_per_machine_class(capacity, expected):
     assert context_for_capacity(SCALED, capacity) == expected
 
 
-def test_co_resident_embedder_is_reserved_on_unified_memory_only():
-    """The embedder runs on the CPU backend, so it shares an iGPU's pool but
-    never a discrete card's VRAM."""
-    assert context_for_capacity(SCALED, _cap(34, "AMD GPU")) == 245760
+def test_co_resident_embedder_is_reserved_in_every_pool():
+    """The embedder loads on the GPU, so it takes from a discrete card's VRAM
+    as well as from an iGPU's or a CPU-only PC's shared pool."""
+    assert context_for_capacity(SCALED, _cap(34, "AMD GPU")) == 180224
     assert context_for_capacity(SCALED, _cap(34, "AMD iGPU")) == 180224
     assert context_for_capacity(SCALED, _cap(34, SYSTEM_RAM)) == 180224
 
@@ -214,7 +215,7 @@ def _load_bodies():
     [
         (DEFAULT_MODEL_NAME, _igpu(96, 16), GPU_CTX_SIZE),
         (SCALED_ID, _igpu(96, 16), 262144),
-        (SCALED_ID, _dgpu(32), 155648),
+        (SCALED_ID, _dgpu(32), 90112),
         ("gemma4-it-e2b-FLM", _igpu(96, 16), NPU_CTX_SIZE),
     ],
 )
@@ -225,7 +226,9 @@ def test_load_request_on_an_npu_profile_machine(
     """The /load body is what Lemonade sizes the KV cache from."""
     _serve_idle_lemonade(system_info)
     LemonadeClient(base_url=BASE, keep_alive=True)._ensure_model_loaded(model)
-    assert _load_bodies() == [{"model_name": model, "ctx_size": expected}]
+    assert _load_bodies() == [
+        {"model_name": model, "ctx_size": expected, "save_options": True}
+    ]
 
 
 @responses.activate
@@ -233,7 +236,9 @@ def test_load_and_resolver_agree_on_one_window():
     _serve_idle_lemonade(_igpu(32, 16))
     resolved = resolve_ctx_size(SCALED_ID, base_url=BASE)
     LemonadeClient(base_url=BASE, keep_alive=True)._ensure_model_loaded(SCALED_ID)
-    assert _load_bodies() == [{"model_name": SCALED_ID, "ctx_size": resolved}]
+    assert _load_bodies() == [
+        {"model_name": SCALED_ID, "ctx_size": resolved, "save_options": True}
+    ]
     assert resolved == context_for_capacity(SCALED, _cap(48, "AMD iGPU"))
     # Read once per server, not once per call.
     reads = [c for c in responses.calls if c.request.url.endswith("/system-info")]

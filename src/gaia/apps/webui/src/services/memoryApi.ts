@@ -24,6 +24,8 @@ async function memFetch<T>(method: string, path: string, body?: unknown): Promis
         try { detail = JSON.parse(text).detail || text; } catch { /* noop */ }
         throw new Error(detail || `Memory API error (HTTP ${res.status})`);
     }
+    // A 204 has no body, whatever its content-type says.
+    if (res.status === 204) return undefined as T;
     const ct = res.headers.get('content-type') || '';
     if (!ct.includes('application/json')) return undefined as T;
     return res.json();
@@ -68,6 +70,8 @@ export interface KnowledgeListParams {
     order?: 'asc' | 'desc';
     offset?: number;
     limit?: number;
+    /** Only entries about the user: no tool lessons, session summaries, errors or system facts. */
+    about_user?: boolean;
 }
 
 export function getKnowledge(params: KnowledgeListParams = {}) {
@@ -254,7 +258,8 @@ export function clearAllMemory() {
 export function reinitializeMemory() {
     return memFetch<{
         cleared: { knowledge: number; tool_history: number; conversations: number };
-        system_context: { stored: number };
+        /** ``error`` is set when memory was cleared but system discovery failed. */
+        system_context: { stored: number; error?: string };
     }>('POST', '/memory/reinitialize');
 }
 

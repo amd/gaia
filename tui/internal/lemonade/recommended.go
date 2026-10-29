@@ -56,6 +56,9 @@ func (r Recommended) Matches(id string) bool {
 type fitConstants struct {
 	MemoryOverheadFactor float64 `json:"memory_overhead_factor"`
 	MemoryOverheadGB     float64 `json:"memory_overhead_gb"`
+	// WindowsIGPUSharedRAMFraction is the share of RAM WDDM lets an
+	// integrated GPU use beyond its carve-out.
+	WindowsIGPUSharedRAMFraction float64 `json:"windows_igpu_shared_ram_fraction"`
 }
 
 //go:embed recommended_models.json
@@ -76,6 +79,9 @@ func init() {
 	}
 	if doc.Fit.MemoryOverheadFactor <= 0 {
 		panic("recommended_models.json: fit.memory_overhead_factor must be positive")
+	}
+	if doc.Fit.WindowsIGPUSharedRAMFraction <= 0 {
+		panic("recommended_models.json: fit.windows_igpu_shared_ram_fraction must be positive")
 	}
 	recommended, fitRule = doc.Models, doc.Fit
 	// The ranked Fireworks list with its Evidence is RecommendedModels in

@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 
 	"github.com/amd/gaia/tui/internal/daemon"
@@ -42,21 +41,21 @@ func StubEnsureEmbeddedForTest(fn func(context.Context) error) (restore func()) 
 	return func() { ensureEmbedded = old }
 }
 
-// configuredURL is the server the user chose with LEMONADE_BASE_URL. Values
-// exported from GAIA's own credentials file (GAIA_LEMONADE_EMBEDDED=1) describe
-// GAIA's restartable server, not a choice — Python's configured_lemonade_url.
+// configuredURL is the server the user chose: LEMONADE_BASE_URL (unless it is
+// GAIA's own export), else the saved external choice. Mirrors Python's
+// configured_lemonade_url.
 func configuredURL() string {
-	if strings.TrimSpace(os.Getenv("GAIA_LEMONADE_EMBEDDED")) == "1" {
-		return ""
+	if u := envURL(); u != "" {
+		return u
 	}
-	return strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL"))
+	return savedExternalURL()
 }
 
 // GAIARunsLemonade reports whether GAIA's own embedded server is the one to
-// use: it is installed and LEMONADE_BASE_URL names no other. Mirrors Python's
+// use: it is installed and the user chose no other. Mirrors Python's
 // gaia_runs_lemonade().
 func GAIARunsLemonade() bool {
-	return configuredURL() == "" && EmbeddedInstalled()
+	return configuredURL() == "" && !ExternalModeActive() && EmbeddedInstalled()
 }
 
 // CredentialBaseURL is where a cloud provider key may be sent, mirroring
@@ -75,6 +74,9 @@ func GAIARunsLemonade() bool {
 // refused: the user picks another server with LEMONADE_BASE_URL.
 func CredentialBaseURL(ctx context.Context, base string) (string, error) {
 	base = strings.TrimSpace(base)
+	if err := ChoiceError(); err != nil {
+		return "", err
+	}
 	if !GAIARunsLemonade() {
 		return ResolveBaseURL(base), nil
 	}

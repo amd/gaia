@@ -200,7 +200,6 @@ def client():
     app.include_router(chat_router)
     app.state.db = db
     app.state.session_locks = {}
-    app.state.chat_semaphore = None
     yield TestClient(app)
     db.close()
 
@@ -408,6 +407,77 @@ def test_an_unanswered_prompt_is_denied_and_a_late_answer_reaches_nothing(
     assert not thread.is_alive()
     assert agents[-1].approved is False
     assert handler.resolve_relay_confirmation(True, confirm_id) is False
+
+
+class _GatedShellAgent(_GatedAgent):
+    """Asks for a shell call only a person may approve, once Full access is on."""
+
+    def process_query(self, query, max_steps=None):
+        from gaia.agents.base.call_risk import NEEDS_PERSON_ARG
+
+        # The relay turns Full access on just after /query creates the session.
+        deadline = time.monotonic() + 10
+        while not self.console.auto_approve_gated_tools:
+            if time.monotonic() > deadline:
+                return {"answer": "full access never arrived"}
+            time.sleep(0.02)
+        self.approved = self.console.confirm_tool_execution(
+            "run_shell_command", {"command": "del notes.txt", NEEDS_PERSON_ARG: True}
+        )
+        return {"answer": f"approved={self.approved}"}
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_full_access_relays_a_gated_shell_prompt_to_the_ui(
+    live_gaia_sidecar, monkeypatch, approved
+):
+    """Full access pre-approves on the sidecar, yet a gated shell call reaches
+    the Agent UI's prompt and runs only on its answer."""
+    from gaia.ui.email_sidecar.proxy import SidecarProxy
+
+    base_url, agents = live_gaia_sidecar
+    from gaia_agent import server as server_mod
+    from gaia_agent import session_registry as sr
+
+    def build(**kw):
+        agents.append(_GatedShellAgent(**kw))
+        return agents[-1]
+
+    monkeypatch.setattr(server_mod, "build_query_agent", build)
+    monkeypatch.setattr(sr, "build_session_agent", build)
+
+    handler = SSEOutputHandler()
+    proxy = SidecarProxy(base_url, agent_id="gaia")
+    thread = threading.Thread(
+        target=relay.relay_query,
+        args=(handler, proxy),
+        kwargs={
+            "query": "delete notes.txt",
+            "context": [],
+            "profile": GAIA_PROFILE,
+            "session_id": f"s-{uuid.uuid4().hex[:8]}",
+            "answers_confirmations": True,
+            "full_access": True,
+            "read_timeout": 30,
+        },
+        daemon=True,
+    )
+    thread.start()
+
+    confirm_id = _wait_for_prompt(handler)
+    [prompt] = [
+        e for e in _drain(handler) if e and e.get("type") == "permission_request"
+    ]
+    assert prompt["tool"] == "run_shell_command"
+    assert "del notes.txt" in prompt["summary"]
+    assert handler.resolve_relay_confirmation(approved, confirm_id) is True
+    thread.join(timeout=15)
+
+    assert not thread.is_alive()
+    agent = agents[-1]
+    assert agent.console.full_access is False  # the shell gates stayed on
+    assert agent.approved is approved
+    assert _answers(handler)[-1]["content"] == f"approved={approved}"
 
 
 def test_a_decision_without_a_confirm_id_is_never_sent():

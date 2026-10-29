@@ -19,7 +19,7 @@ on first launch if the user skipped that step.
 
 | Decision | Choice |
 |---|---|
-| Which Lemonade | **GAIA's embedded Lemonade replaces a system-wide Lemonade entirely.** Every PC runs the version GAIA pins. `LEMONADE_BASE_URL` stays as an explicit override for a remote or hand-managed server; nothing else looks for a system install. |
+| Which Lemonade | **GAIA runs its own embedded Lemonade by default**, at the version GAIA pins. A user who already runs Lemonade can choose theirs instead (`lemonade_mode: external`, offered at first run when a new-enough one answers on the default ports); GAIA then starts no Lemonade at all. `LEMONADE_BASE_URL` stays as an explicit override and wins over the saved choice. |
 | How `npx` leaves a `gaia` command | **It runs the existing installer** (`install.sh` / `install.ps1`, Python `gaia` via uv) and fetches the verified binaries. A Python-free packaged binary is a later option. |
 | Who starts Lemonade | **Any GAIA entry point may start the embedded server** when it's stopped: it is GAIA's own private process on a private port, so starting it can't disturb anything else. This replaces the current rule that only `gaia init` starts Lemonade. |
 | Downloads | Only `gaia init`, the TUI's first-run setup, or an explicit re-download pulls models, and each shows the size first. |

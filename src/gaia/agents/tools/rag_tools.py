@@ -16,19 +16,28 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.errors import require_host_attr
+from gaia.agents.base.file_snapshots import before_change
+from gaia.agents.install_hints import missing_extra_hint
 from gaia.agents.tools.path_access import (
+    missing_file_error,
     read_access_error,
     readable_entry,
     write_access_error,
 )
+from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
+from gaia.rag.sdk import EmbeddingUnavailableError
 from gaia.tool_cancellation import raise_if_cancelled
 
 logger = get_logger(__name__)
 
 _RAG_HINT = "Set self.rag = <RAGSDK instance, or None to disable RAG>."
 _RAG_DOC_ANCHOR = "docs/spec/rag-tools-mixin.mdx#host-agent-contract"
+_SESSION_SAVE_WARNING = (
+    "The document is available in this conversation, but the session was not saved. "
+    "Retry saving the session before exiting to keep its document attachments."
+)
 
 #: Output budget for one summary reply. The RAG client's 1024 default cut a
 #: meeting summary off mid-sentence; a model that always reasons (Gemma 4)
@@ -72,6 +81,8 @@ class _IndexJob:
         self.embed_started: Optional[float] = None
         self.embedded = 0
         self.total: Optional[int] = None
+        #: Seconds the batch now embedding has waited on a busy embedder.
+        self.embedder_wait = 0
         self.result: Optional[Dict[str, Any]] = None
         self.error: Optional[BaseException] = None
         self.done = threading.Event()
@@ -80,6 +91,9 @@ class _IndexJob:
         if self.embed_started is None:
             self.embed_started = time.monotonic()
         self.embedded, self.total = embedded, total
+
+    def waiting(self, seconds: int) -> None:
+        self.embedder_wait = seconds
 
     def seconds_remaining(self) -> Optional[int]:
         if not (self.total and self.embedded and self.embed_started):
@@ -106,10 +120,16 @@ def _index_within_budget(
             jobs[path] = job
 
             def _run():
+                from gaia.daemon.broker_client import detached_from_turn
+
                 try:
-                    job.result = rag.index_document(
-                        path, progress_callback=job.progress
-                    )
+                    # Outlives the turn that started it: not its Stop, not its stream.
+                    with detached_from_turn():
+                        job.result = rag.index_document(
+                            path,
+                            progress_callback=job.progress,
+                            wait_callback=job.waiting,
+                        )
                 except BaseException as e:  # noqa: BLE001 — re-raised by the waiter
                     job.error = e
                 finally:
@@ -150,18 +170,26 @@ def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
         progress = f"{job.embedded:,} of {job.total:,} chunks embedded"
     remaining = job.seconds_remaining()
     eta = f", about {max(1, round(remaining / 60))} min left" if remaining else ""
+    waiting = (
+        f" The embedding model has taken {job.embedder_wait}s on its current "
+        "batch, longer than usual: it is likely sharing the GPU or CPU with "
+        "other work, so indexing is slowed, not stuck."
+        if job.embedder_wait
+        else ""
+    )
     return {
         "status": "in_progress",
         "file_name": name,
         "message": (
             f"{name} is large and is still being indexed in the background "
             f"({progress} after {elapsed}s{eta}). It cannot be searched yet; "
-            "nothing failed."
+            f"nothing failed.{waiting}"
         ),
         "chunks_embedded": job.embedded,
         "total_chunks": job.total,
         "elapsed_seconds": elapsed,
         "estimated_seconds_remaining": remaining,
+        "embedder_wait_seconds": job.embedder_wait,
         "hint": (
             "Tell the user the document is still indexing and how long is left. "
             "To answer now, read the relevant part of the file directly with "
@@ -169,6 +197,89 @@ def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
             f"with the same path waits up to {int(INDEX_FOREGROUND_BUDGET_S)}s "
             "more and returns success once the document is searchable."
         ),
+    }
+
+
+def _rag_not_available() -> str:
+    return f"RAG not available. {missing_extra_hint('rag')}"
+
+
+def _embedding_next_step(unreachable: bool, retry: str, busy: bool = False) -> str:
+    if busy:
+        return (
+            "The embedding model's GPU or CPU is busy with another model or app. "
+            f"Wait for that work to finish, then {retry}."
+        )
+    if unreachable:
+        from gaia.llm.lemonade_launcher import describe_start_hint
+
+        return f"{describe_start_hint().instruction} Then {retry}."
+    return (
+        "Check that the embedding model is installed (run `gaia init "
+        "--profile rag`) and that Lemonade Server's log shows no load "
+        f"error, then {retry}."
+    )
+
+
+def _embedding_error(error: EmbeddingUnavailableError) -> Dict[str, Any]:
+    """The result for a search the embedder could not run — never "no results"."""
+    return {
+        "status": "error",
+        "error_type": "embedding_unavailable",
+        "error": f"Document search did not run. {error}",
+        "next_step": _embedding_next_step(
+            error.unreachable, "retry the search", busy=error.busy
+        ),
+        "instruction": (
+            "Tell the user document search is unavailable, why, and the next "
+            "step. The documents were not searched, so do not say they hold "
+            "no relevant information."
+        ),
+    }
+
+
+def _index_embedding_error(stats: Dict[str, Any]) -> Dict[str, Any]:
+    """The result for a document the embedder could not index."""
+    return {
+        "status": "error",
+        "error_type": "embedding_unavailable",
+        "error": f"Indexing failed: {stats.get('error')}",
+        "next_step": _embedding_next_step(
+            bool(stats.get("lemonade_unreachable")),
+            "index it again",
+            busy=bool(stats.get("embedder_busy")),
+        ),
+    }
+
+
+_CACHE_LOCK_HINTS = {
+    "cache_busy": (
+        "Another process is using the document cache ({cache}). Tell the "
+        "user, and index the document again once it finishes."
+    ),
+    "cache_unwritable": (
+        "The document is fine: GAIA cannot write its document cache folder "
+        "({cache}). Tell the user to fix that folder's permissions; do not "
+        "suggest they check the document."
+    ),
+    "cache_lock_error": (
+        "The document is fine: GAIA could not open the lock file in its "
+        "document cache folder ({cache}). Tell the user the error; do not "
+        "suggest they check the document."
+    ),
+}
+
+
+def _index_cache_error(stats: Dict[str, Any], file_path: str) -> Dict[str, Any]:
+    """The result for a document whose cache lock could not be taken."""
+    error_type = stats["error_type"]
+    return {
+        "status": "error",
+        "error_type": error_type,
+        "error": stats.get("error"),
+        "file_name": stats.get("file_name", Path(file_path).name),
+        "cache_dir": stats.get("cache_dir"),
+        "hint": _CACHE_LOCK_HINTS[error_type].format(cache=stats.get("cache_dir")),
     }
 
 
@@ -221,6 +332,62 @@ def _ambiguous_file_error(requested: str, candidates: list) -> Dict[str, Any]:
         ),
         "candidates": candidates,
     }
+
+
+def _chunks_have_pages(chunks: List[Dict[str, Any]]) -> bool:
+    """True when any chunk carries a page number (PDFs do; markdown and text don't)."""
+    return any("page" in chunk for chunk in chunks)
+
+
+def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
+    """How query_documents asks the model to cite: the full path, plus pages if any."""
+    instruction = (
+        "Use the provided document chunks to answer the user's question.\n\n"
+        "CRITICAL CITATION REQUIREMENT:\n"
+        "When referencing a document, you MUST include its FULL ABSOLUTE FILE PATH "
+        "from the 'source_file' field of each chunk. This allows the user to click "
+        "and open the file directly.\n\n"
+    )
+    if has_pages:
+        instruction += (
+            "Format: 'According to <absolute_path> (page X):'\n"
+            "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
+            "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n\n"
+        )
+        if not all_paged:
+            instruction += (
+                "Some chunks have no 'page' field: their files have no pages, so "
+                "cite those by path alone and don't mention pages for them.\n\n"
+            )
+    else:
+        instruction += (
+            "Format: 'According to <absolute_path>:'\n"
+            "Example: 'According to C:\\Users\\john\\docs\\notes.md:'\n"
+            "These chunks have no page numbers, so cite none and don't mention pages.\n\n"
+        )
+    return instruction + (
+        "IMPORTANT: Always use the full path exactly as given in source_file. "
+        "Do NOT shorten it to just the filename."
+    )
+
+
+def _file_instruction(file_name: str, num_chunks: int, has_pages: bool) -> str:
+    """How query_specific_file asks the model to cite one file, with pages if any."""
+    instruction = (
+        f"Use these chunks from {file_name} to answer the question. Read through ALL "
+        f"{num_chunks} chunks completely before answering.\n\nCRITICAL CITATION REQUIREMENT:\n"
+    )
+    if not has_pages:
+        return instruction + (
+            f"Your answer MUST start with: 'According to {file_name}:'. These chunks have "
+            "no page numbers, so cite none and don't mention pages."
+        )
+    return instruction + (
+        f"Your answer MUST start with: 'According to {file_name}, page X:' where X is the "
+        "page number from the chunk's 'page' field.\n\n"
+        f"Example: If chunk has 'page': 2, say 'According to {file_name}, page 2:'\n"
+        f"If info from multiple pages, say 'According to {file_name}, pages 2 and 5:'"
+    )
 
 
 def extract_page_from_chunk(
@@ -285,6 +452,14 @@ class RAGToolsMixin:
     are provided by FileSearchToolsMixin from gaia.agents.tools.file_tools
     """
 
+    def _no_documents_message(self) -> str:
+        """What an empty index means, as the tools report it to the model.
+
+        A host whose documents are scoped to one conversation overrides this:
+        "nothing is indexed" there reads as an empty library, which it may not be.
+        """
+        return "No documents are currently indexed."
+
     def register_rag_tools(self) -> None:
         """Register RAG-related tools."""
         from gaia.agents.base.tools import tool
@@ -306,11 +481,12 @@ class RAGToolsMixin:
             try:
                 # Check if RAG is initialized and has documents
                 if not rag or not rag.index or len(rag.chunks) == 0:
+                    message = self._no_documents_message()
                     return {
                         "status": "no_documents",
-                        "message": "No documents are currently indexed.",
+                        "message": message,
                         "instruction": (
-                            "No documents are indexed yet. "
+                            f"{message} "
                             "For domain-specific questions (HR policies, PTO, remote work, company procedures, "
                             "financial data, project plans, technical specs): use the SMART DISCOVERY WORKFLOW — "
                             "use search_file to find relevant files, index_document to index them, then query_specific_file to answer. "
@@ -340,6 +516,8 @@ class RAGToolsMixin:
                 )
 
                 # First, use embedding-based retrieval
+                embedding_errors: List[EmbeddingUnavailableError] = []
+                key_failures: List[Exception] = []
                 for search_key in search_keys:
                     try:
                         # Use RAG to retrieve chunks
@@ -402,12 +580,21 @@ class RAGToolsMixin:
                                     f"[DEBUG] Embedding search '{search_key}': found {len(chunks)} chunks (indices: {chunk_global_indices})"
                                 )
                     except Exception as e:
+                        key_failures.append(e)
+                        if isinstance(e, EmbeddingUnavailableError):
+                            embedding_errors.append(e)
                         logger.warning(f"Search key '{search_key}' failed: {e}")
                         if debug_info:
                             debug_info["embedding_retrieval"].append(
                                 {"search_key": search_key, "error": str(e)}
                             )
                         continue
+
+                # Keyword hits alone would pass a half-run search off as a result.
+                if search_keys and len(key_failures) == len(search_keys):
+                    if embedding_errors:
+                        return _embedding_error(embedding_errors[-1])
+                    raise key_failures[-1]
 
                 # HYBRID SEARCH: Boost scores of chunks containing keywords
                 # Instead of creating new text snippets, we boost the scores of existing chunks
@@ -671,17 +858,9 @@ class RAGToolsMixin:
                     "num_chunks": len(top_chunks),
                     "search_keys_used": search_keys,
                     "source_files": matched_source_files,
-                    "instruction": (
-                        "Use the provided document chunks to answer the user's question.\n\n"
-                        "CRITICAL CITATION REQUIREMENT:\n"
-                        "When referencing a document, you MUST include its FULL ABSOLUTE FILE PATH "
-                        "from the 'source_file' field of each chunk. This allows the user to click "
-                        "and open the file directly.\n\n"
-                        "Format: 'According to <absolute_path> (page X):'\n"
-                        "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
-                        "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n\n"
-                        "IMPORTANT: Always use the full path exactly as given in source_file. "
-                        "Do NOT shorten it to just the filename."
+                    "instruction": _documents_instruction(
+                        _chunks_have_pages(formatted_chunks),
+                        all("page" in chunk for chunk in formatted_chunks),
                     ),
                 }
 
@@ -693,21 +872,17 @@ class RAGToolsMixin:
                     )
 
                 return result
+            except EmbeddingUnavailableError as e:
+                return _embedding_error(e)
             except Exception as e:
                 logger.error(f"Error in query_documents: {e}")
-                # Graceful degradation - inform agent to use general knowledge
                 return {
-                    "status": "fallback",
-                    "message": "Document search is temporarily unavailable",
-                    "error": str(e),
+                    "status": "error",
+                    "error": f"Document search failed: {type(e).__name__}: {e}",
                     "instruction": (
-                        "The document search system encountered an error. "
-                        "Please answer the user's question using your general knowledge "
-                        "and inform them that document search is unavailable."
-                    ),
-                    "fallback_response": (
-                        "I apologize, but I'm currently unable to search the indexed documents. "
-                        "Let me try to answer your question based on my general knowledge instead."
+                        "Tell the user document search failed and why. The "
+                        "documents were not searched, so do not say they hold "
+                        "no relevant information."
                     ),
                 }
 
@@ -728,7 +903,7 @@ class RAGToolsMixin:
                 if not rag:
                     return {
                         "status": "error",
-                        "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
+                        "error": _rag_not_available(),
                     }
 
                 # Debug information collection
@@ -748,6 +923,7 @@ class RAGToolsMixin:
                 )
 
                 auto_indexed = False
+                save_warning = ""
                 matching_files = _match_indexed_files(rag.indexed_files, file_path)
 
                 if not matching_files:
@@ -763,7 +939,9 @@ class RAGToolsMixin:
                     if len(matching_files) == 0:
                         # Auto-index the file if it exists on disk instead of failing.
                         # This avoids the slow fail → plan → index → re-query cycle.
-                        disk_path = os.path.expanduser(file_path)
+                        disk_path = str(
+                            _resolve_target(file_path, None, _workspace_default(self))
+                        )
                         denied = read_access_error(self, disk_path)
                         if denied:
                             return denied
@@ -790,9 +968,11 @@ class RAGToolsMixin:
                                             file_path
                                         )
                                         if hasattr(self, "session_manager"):
-                                            self.session_manager.save_session(
+                                            if not self.session_manager.save_session(
                                                 self.current_session
-                                            )
+                                            ):
+                                                save_warning = _SESSION_SAVE_WARNING
+                                                logger.warning(save_warning)
                                 if hasattr(self, "rebuild_system_prompt"):
                                     self.rebuild_system_prompt()
                                 # Re-match after auto-indexing
@@ -802,6 +982,12 @@ class RAGToolsMixin:
                                     rag.indexed_files, resolved, file_path, basename
                                 )
                                 auto_indexed = True
+                            elif (
+                                idx_result.get("error_type") == "embedding_unavailable"
+                            ):
+                                return _index_embedding_error(idx_result)
+                            elif idx_result.get("error_type") in _CACHE_LOCK_HINTS:
+                                return _index_cache_error(idx_result, file_path)
                             else:
                                 return {
                                     "status": "error",
@@ -860,6 +1046,8 @@ class RAGToolsMixin:
                     debug_info["keyword_retrieval"] = []
 
                 # First, do embedding-based retrieval
+                embedding_errors: List[EmbeddingUnavailableError] = []
+                key_failures: List[Exception] = []
                 for search_key in search_keys:
                     try:
                         # Use the new per-file retrieval method
@@ -921,11 +1109,19 @@ class RAGToolsMixin:
                                     }
                                 )
                     except Exception as e:
+                        key_failures.append(e)
+                        if isinstance(e, EmbeddingUnavailableError):
+                            embedding_errors.append(e)
                         logger.warning(f"Search key '{search_key}' failed: {e}")
                         if debug_info:
                             debug_info["embedding_retrieval"].append(
                                 {"search_key": search_key, "error": str(e)}
                             )
+
+                if search_keys and len(key_failures) == len(search_keys):
+                    if embedding_errors:
+                        return _embedding_error(embedding_errors[-1])
+                    raise key_failures[-1]
 
                 # HYBRID SEARCH: Boost scores of chunks containing keywords
                 # Instead of creating new text snippets, we boost the scores of existing chunks
@@ -1131,6 +1327,9 @@ class RAGToolsMixin:
                 # Build chunk entries; omit ``page`` when absent so the
                 # agent can't template ``page null`` into the citation.
                 # See the companion comment in query_documents above.
+                # Every chunk names its file, as in query_documents, so a fact
+                # can be cited and the chunk card can show where it came from.
+                source_path = str(Path(target_file).resolve())
                 formatted_chunks = []
                 for i, (chunk, score) in enumerate(zip(top_chunks, top_scores)):
                     _page = extract_page_from_chunk(
@@ -1141,6 +1340,7 @@ class RAGToolsMixin:
                     )
                     _entry = {
                         "chunk_id": i + 1,
+                        "source_file": source_path,
                         "content": chunk,
                         "relevance_score": float(score),
                         "_debug_chunk_index": (
@@ -1156,9 +1356,17 @@ class RAGToolsMixin:
                     "message": f"Found {len(top_chunks)} relevant chunks in {Path(target_file).name}",
                     "chunks": formatted_chunks,
                     "file": str(target_file),
+                    "source_files": [source_path],
                     "auto_indexed": auto_indexed,
-                    "instruction": f"Use these chunks from {Path(target_file).name} to answer the question. Read through ALL {len(top_chunks)} chunks completely before answering.\n\nCRITICAL CITATION REQUIREMENT:\nYour answer MUST start with: 'According to {Path(target_file).name}, page X:' where X is the page number from the chunk's 'page' field.\n\nExample: If chunk has 'page': 2, say 'According to {Path(target_file).name}, page 2:'\nIf info from multiple pages, say 'According to {Path(target_file).name}, pages 2 and 5:'",
+                    "instruction": _file_instruction(
+                        Path(target_file).name,
+                        len(top_chunks),
+                        _chunks_have_pages(formatted_chunks),
+                    ),
                 }
+                if save_warning:
+                    result["warning"] = save_warning
+                    result["message"] += f". {save_warning}"
 
                 # Add debug info to result if debug mode is enabled
                 if debug_info:
@@ -1166,21 +1374,18 @@ class RAGToolsMixin:
 
                 return result
 
+            except EmbeddingUnavailableError as e:
+                return _embedding_error(e)
             except Exception as e:
                 logger.error(f"Error in query_specific_file: {e}")
-                # Graceful degradation
                 return {
-                    "status": "fallback",
-                    "message": f"Unable to search in {file_path}",
-                    "error": str(e),
-                    "instruction": (
-                        f"Could not search in the specific file '{file_path}'. "
-                        "Inform the user about this issue and offer to help with general knowledge."
+                    "status": "error",
+                    "error": (
+                        f"Searching '{file_path}' failed: {type(e).__name__}: {e}"
                     ),
-                    "fallback_response": (
-                        f"I encountered an error while trying to search in '{file_path}'. "
-                        "The file might not be properly indexed or there was a technical issue. "
-                        "Would you like me to try answering based on general knowledge instead?"
+                    "instruction": (
+                        f"Tell the user '{file_path}' could not be searched and "
+                        "why. Do not say it holds no relevant information."
                     ),
                 }
 
@@ -1198,7 +1403,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
+                        "error": _rag_not_available(),
                     }
 
                 # Debug information collection
@@ -1215,7 +1420,7 @@ class RAGToolsMixin:
                 )
 
                 if not self.rag.chunks:
-                    return {"status": "error", "error": "No documents indexed."}
+                    return {"status": "error", "error": self._no_documents_message()}
 
                 # Search through chunks for pattern
                 matching_chunks = []
@@ -1363,12 +1568,12 @@ class RAGToolsMixin:
         )
         def index_document(file_path: str) -> Dict[str, Any]:
             """Index a document with path validation and detailed statistics."""
-            file_path = os.path.expanduser(file_path)
+            file_path = str(_resolve_target(file_path, None, _workspace_default(self)))
             try:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
+                        "error": _rag_not_available(),
                     }
 
                 # Before the existence probe, as in read_file.
@@ -1377,7 +1582,7 @@ class RAGToolsMixin:
                     return denied
 
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
 
                 # Resolve to real path for consistent validation
                 real_file_path = os.path.realpath(file_path)
@@ -1411,12 +1616,17 @@ class RAGToolsMixin:
 
                 if result.get("success"):
                     self.indexed_files.add(file_path)
+                    save_warning = ""
 
                     # Add to current session
                     if self.current_session:
                         if file_path not in self.current_session.indexed_documents:
                             self.current_session.indexed_documents.append(file_path)
-                            self.session_manager.save_session(self.current_session)
+                            if not self.session_manager.save_session(
+                                self.current_session
+                            ):
+                                save_warning = _SESSION_SAVE_WARNING
+                                logger.warning(save_warning)
 
                     # Update system prompt to include the new document
                     self.rebuild_system_prompt()
@@ -1433,7 +1643,8 @@ class RAGToolsMixin:
                         msg = f"Successfully indexed: {file_name}"
                     return {
                         "status": "success",
-                        "message": msg,
+                        "message": f"{msg}. {save_warning}" if save_warning else msg,
+                        **({"warning": save_warning} if save_warning else {}),
                         "file_name": result.get("file_name"),
                         "file_type": result.get("file_type"),
                         "file_size_mb": result.get("file_size_mb"),
@@ -1446,6 +1657,13 @@ class RAGToolsMixin:
                         "reindexed": result.get("reindexed", False),
                     }
                 else:
+                    if result.get("error_type") == "embedding_unavailable":
+                        return {
+                            **_index_embedding_error(result),
+                            "file_name": result.get("file_name", Path(file_path).name),
+                        }
+                    if result.get("error_type") in _CACHE_LOCK_HINTS:
+                        return _index_cache_error(result, file_path)
                     err = result.get("error", f"Failed to index: {file_path}")
                     hint = (
                         "The file is empty (0 bytes) — tell the user there is no content to read."
@@ -1482,6 +1700,7 @@ class RAGToolsMixin:
                         "count": 0,
                         "total_chunks": 0,
                         "total_size_mb": 0,
+                        "message": self._no_documents_message(),
                     }
                 docs = list(self.rag.indexed_files)
 
@@ -1529,7 +1748,7 @@ class RAGToolsMixin:
                         doc_info["pages"] = num_pages
                     doc_details.append(doc_info)
 
-                return {
+                listing = {
                     "status": "success",
                     "documents": doc_details,
                     "count": len(docs),
@@ -1537,6 +1756,9 @@ class RAGToolsMixin:
                     "total_size_mb": round(total_size_bytes / (1024 * 1024), 2),
                     "document_types": type_counts,
                 }
+                if not docs:
+                    listing["message"] = self._no_documents_message()
+                return listing
             except Exception as e:
                 logger.error(f"Error in list_indexed_documents: {e}")
                 return {
@@ -1555,7 +1777,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
+                        "error": _rag_not_available(),
                     }
                 status = self.rag.get_status()
 
@@ -1609,7 +1831,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
+                        "error": _rag_not_available(),
                     }
 
                 matching_files = _match_indexed_files(self.rag.indexed_files, file_path)
@@ -1927,7 +2149,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
+                        "error": _rag_not_available(),
                     }
 
                 matching_files = _match_indexed_files(self.rag.indexed_files, file_name)
@@ -1986,6 +2208,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
 {full_text}
 """
 
+                before_change(output_path, "dump_document")
                 # Ensure output directory exists
                 os.makedirs(
                     (
@@ -2036,10 +2259,12 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
+                        "error": _rag_not_available(),
                     }
 
-                dir_path = Path(directory_path).expanduser().resolve()
+                dir_path = _resolve_target(
+                    directory_path, None, _workspace_default(self)
+                )
 
                 # Before the existence probe, as in read_file.
                 denied = read_access_error(self, dir_path)
@@ -2080,7 +2305,9 @@ Use the {summary_type} style. Ensure page references from section summaries are 
 
                 indexed_files = []
                 failed_files = []
+                failure_reasons: Dict[str, str] = {}
                 skipped_files = []
+                embedding_failure: Optional[Dict[str, Any]] = None
 
                 # Get files to index
                 if recursive:
@@ -2102,9 +2329,17 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                                 logger.info(f"Indexed: {file_path.name}")
                             else:
                                 failed_files.append(str(file_path))
+                                failure_reasons[file_path.name] = str(
+                                    result.get("error", "unknown error")
+                                )
+                                if result.get("error_type") == "embedding_unavailable":
+                                    # Every remaining file would fail the same way.
+                                    embedding_failure = _index_embedding_error(result)
+                                    break
                         except Exception as e:
                             logger.warning(f"Failed to index {file_path}: {e}")
                             failed_files.append(str(file_path))
+                            failure_reasons[file_path.name] = f"{type(e).__name__}: {e}"
                     else:
                         skipped_files.append(str(file_path))
 
@@ -2112,7 +2347,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                 if indexed_files:
                     self.rebuild_system_prompt()
 
-                return {
+                result = {
                     "status": "success",
                     "indexed_count": len(indexed_files),
                     "failed_count": len(failed_files),
@@ -2121,8 +2356,20 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                     "failed_files": (
                         [Path(f).name for f in failed_files] if failed_files else []
                     ),
+                    "failure_reasons": failure_reasons,
                     "message": f"Indexed {len(indexed_files)} files from {dir_path.name}",
                 }
+                if embedding_failure is not None:
+                    return {**result, **embedding_failure}
+                if failed_files and not indexed_files:
+                    result["status"] = "error"
+                    result["error"] = (
+                        f"None of the {len(failed_files)} files in "
+                        f"{dir_path.name} could be indexed."
+                    )
+                elif failed_files:
+                    result["message"] += f"; {len(failed_files)} failed"
+                return result
 
             except Exception as e:
                 logger.error(f"Error indexing directory: {e}")

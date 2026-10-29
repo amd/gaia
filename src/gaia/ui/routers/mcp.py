@@ -65,10 +65,10 @@ class MCPServerStatus(BaseModel):
 
 
 def _load_config() -> MCPConfig:
-    """Return MCPConfig pointing at the global ~/.gaia/mcp_servers.json."""
-    from pathlib import Path
+    """Return MCPConfig pointing at the global ``<gaia_home>/mcp_servers.json``."""
+    from gaia.config import mcp_servers_path
 
-    global_path = Path.home() / ".gaia" / "mcp_servers.json"
+    global_path = mcp_servers_path()
     global_path.parent.mkdir(parents=True, exist_ok=True)
     return MCPConfig(config_file=str(global_path))
 

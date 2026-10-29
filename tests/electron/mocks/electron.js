@@ -13,7 +13,8 @@ class MockBrowserWindow extends EventEmitter {
     super();
     this.options = options;
     this._isDestroyed = false;
-    
+    this.setOverlayIcon = jest.fn();
+
     this.webContents = {
       send: jest.fn(),
       on: jest.fn(),
@@ -242,7 +243,7 @@ module.exports = {
   
   Menu: {
     setApplicationMenu: jest.fn(),
-    buildFromTemplate: jest.fn(() => ({})),
+    buildFromTemplate: jest.fn((template) => ({ _template: template })),
   },
   
   // A usable fake, not a bare jest.fn(): TrayManager calls setToolTip/
@@ -256,24 +257,49 @@ module.exports = {
     this._handlers = {};
     this.setToolTip = jest.fn(function (text) { this._toolTip = text; });
     this.setContextMenu = jest.fn(function (menu) { this._contextMenu = menu; });
+    this.setImage = jest.fn(function (image) { this._icon = image; });
     this.on = jest.fn(function (event, fn) { this._handlers[event] = fn; });
     this.destroy = jest.fn(function () { this._destroyed = true; });
     this.isDestroyed = jest.fn(function () { return this._destroyed; });
   }),
 
+  // Images carry a square size and an opaque grey bitmap, enough for the
+  // tray to resize, read and redraw them; createEmpty() collects the
+  // representations added to it.
   nativeImage: {
-    createFromPath: jest.fn((p) => ({
-      _path: p,
+    createFromPath: jest.fn(function createFromPath(p, size = 32) {
+      return {
+        _path: p,
+        _isTemplate: false,
+        _size: size,
+        isEmpty: () => false,
+        getSize() {
+          return { width: this._size, height: this._size };
+        },
+        resize({ width }) {
+          return createFromPath(p, width);
+        },
+        toBitmap() {
+          return Buffer.alloc(this._size * this._size * 4, 0x80);
+        },
+        setTemplateImage(flag) {
+          this._isTemplate = flag;
+        },
+      };
+    }),
+    createEmpty: jest.fn(() => ({
+      _path: null,
       _isTemplate: false,
-      isEmpty: () => false,
+      _reps: [],
+      isEmpty() {
+        return this._reps.length === 0;
+      },
+      addRepresentation(rep) {
+        this._reps.push(rep);
+      },
       setTemplateImage(flag) {
         this._isTemplate = flag;
       },
-    })),
-    createEmpty: jest.fn(() => ({
-      _path: null,
-      isEmpty: () => true,
-      setTemplateImage: jest.fn(),
     })),
   },
 

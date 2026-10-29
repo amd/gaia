@@ -13,6 +13,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("src"))
 
+from gaia.messaging import telegram as telegram_module
 from gaia.messaging.telegram import UNAUTHORIZED_REPLY, TelegramAdapter
 
 
@@ -491,3 +492,99 @@ async def test_unsupported_media_type_replies_directly(monkeypatch, media_type):
     reply_text.assert_awaited_once_with(
         "Unsupported media type — I can handle photos and documents."
     )
+
+
+def _text_update(user_id, text, reply):
+    return SimpleNamespace(
+        effective_user=SimpleNamespace(id=user_id),
+        message=SimpleNamespace(
+            text=text,
+            photo=[],
+            document=None,
+            reply_text=AsyncMock(return_value=reply),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_stops_streaming_is_stopped_and_frees_the_bot(monkeypatch):
+    """Updates are handled one at a time, so a wedged reply held every chat."""
+    release = threading.Event()
+    closed = threading.Event()
+
+    class WedgedSession:
+        def send_stream(self, text):
+            try:
+                yield SimpleNamespace(text="Partial")
+                release.wait(10)
+                yield SimpleNamespace(text=" more")
+            finally:
+                closed.set()
+
+    stuck_session = WedgedSession()
+    monkeypatch.setitem(telegram_module._USER_SESSIONS, 1, stuck_session)
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.get_or_create_session",
+        lambda uid: telegram_module._USER_SESSIONS[uid],
+    )
+    adapter = TelegramAdapter(token="t", allowed_users={1}, idle_limit=1.0)
+    reply = AsyncMock()
+    update = _text_update(1, "hello", reply)
+
+    started = time.monotonic()
+    await asyncio.wait_for(adapter._handle_message(update, None), timeout=8)
+    assert time.monotonic() - started < 8
+
+    final = reply.edit_text.await_args_list[-1].args[0]
+    assert final.startswith("Partial\n\n")
+    assert "without progress" in final
+    assert "new conversation" in final
+    # The stuck generation keeps its session; the next message gets a new one.
+    assert 1 not in telegram_module._USER_SESSIONS
+
+    # Once the stream yields again it is closed, not read further.
+    release.set()
+    assert await asyncio.to_thread(closed.wait, 5)
+    assert all(" more" not in c.args[0] for c in reply.edit_text.await_args_list)
+
+
+def test_idle_limit_must_be_positive():
+    with pytest.raises(ValueError, match="idle_limit"):
+        TelegramAdapter(token="t", allowed_users={1}, idle_limit=0)
+
+
+@pytest.mark.asyncio
+async def test_a_turn_stopped_before_its_thread_ran_never_sends_later(monkeypatch):
+    """The executor was busy, so the stopped turn's thread starts late. It must
+    not then send the old question, nor touch the user's session."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    sent = []
+
+    class Session:
+        def send_stream(self, text):
+            sent.append(text)
+            yield SimpleNamespace(text="ok")
+
+    session = Session()
+    monkeypatch.setitem(telegram_module._USER_SESSIONS, 1, session)
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.get_or_create_session",
+        lambda uid: telegram_module._USER_SESSIONS[uid],
+    )
+    loop = asyncio.get_running_loop()
+    pool = ThreadPoolExecutor(1)
+    loop.set_default_executor(pool)
+    gate = threading.Event()
+    loop.run_in_executor(None, gate.wait)  # the one worker is held elsewhere
+
+    adapter = TelegramAdapter(token="t", allowed_users={1}, idle_limit=0.3)
+    old = _text_update(1, "old question", AsyncMock())
+    await adapter._handle_message(old, None)
+    gate.set()
+    await asyncio.sleep(0.3)  # the stale generation gets its thread now
+    await adapter._handle_message(_text_update(1, "new question", AsyncMock()), None)
+    pool.shutdown(wait=True)
+
+    assert sent == ["new question"]
+    assert telegram_module._USER_SESSIONS[1] is session

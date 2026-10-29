@@ -251,7 +251,6 @@ class TestConfirmToolEndpoint:
         # Note: the confirm-tool endpoint uses _chat_helpers._active_sse_handlers
         # (module-level dict), not app.state.
         app.state.session_locks = {}
-        app.state.chat_semaphore = None
         return app
 
     @pytest.fixture

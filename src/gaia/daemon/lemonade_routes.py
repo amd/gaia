@@ -18,7 +18,7 @@ own actionable message — never a 200 that quietly means "no LLM".
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional
 
 # Module-level (like broker_routes.py): this module is imported lazily from
 # create_app, and the endpoint annotations must resolve from module globals
@@ -32,6 +32,16 @@ from gaia.llm.lemonade_supervisor import LemonadeStartError, LemonadeSupervisor
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class RegisterClientRequest(BaseModel):
+    """A front end that is using GAIA's Lemonade; see gaia.daemon.lemonade_clients."""
+
+    kind: str
+    pids: List[int] = Field(min_length=1)
+    name: str = ""
+    # Set when a client repeats its registration (see LemonadeClients.register).
+    client_id: Optional[str] = None
 
 
 class StartRequest(BaseModel):
@@ -70,6 +80,18 @@ def build_lemonade_router(token: str, supervisor: LemonadeSupervisor) -> APIRout
         except LemonadeStartError as e:
             logger.warning("lemonade: start refused: %s", e)
             raise HTTPException(status_code=503, detail=str(e)) from e
+        except Exception as e:  # noqa: BLE001 -- system boundary: never a bare 500
+            logger.exception("lemonade: start failed unexpectedly")
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "The GAIA background service hit an unexpected error starting "
+                    f"the local model server: {type(e).__name__}: {e}\n"
+                    "To fix: report it with the daemon log attached "
+                    "(https://github.com/amd/gaia/issues).\n"
+                    "Where to look: `gaia daemon logs`"
+                ),
+            ) from e
 
         if state.started:
             logger.info(
@@ -93,6 +115,54 @@ def build_lemonade_router(token: str, supervisor: LemonadeSupervisor) -> APIRout
             "pid": supervisor.pid,
             "log_path": str(supervisor.log_path()),
         }
+
+    return router
+
+
+def build_clients_router(token: str, clients, owner) -> APIRouter:
+    """``/daemon/v1/lemonade/clients`` -- front ends register while they use
+    GAIA's Lemonade and release on exit (see
+    :class:`gaia.daemon.lemonade_clients.LemonadeClients`)."""
+    from gaia.daemon.app import build_require_token
+    from gaia.daemon.lemonade_clients import ClientRejected
+
+    require_token = build_require_token(token)
+    router = APIRouter(
+        prefix=f"{API_PREFIX}/lemonade/clients",
+        tags=["lemonade"],
+        dependencies=[Depends(require_token)],
+    )
+
+    @router.post("")
+    def register(body: RegisterClientRequest) -> dict:
+        try:
+            result = clients.register(
+                body.kind, body.pids, body.name, client_id=body.client_id
+            )
+        except ClientRejected as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if result["added"]:
+            # A client wants the server: bring it back if the idle timeout
+            # stopped it.
+            owner.ensure_in_background()
+        return result
+
+    @router.delete("/{client_id}")
+    async def release(client_id: str) -> dict:
+        try:
+            return await run_in_threadpool(clients.release, client_id)
+        except KeyError as e:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No GAIA client {client_id} is registered; it was already "
+                    "released, or the daemon restarted since."
+                ),
+            ) from e
+
+    @router.get("")
+    def list_clients() -> dict:
+        return clients.snapshot()
 
     return router
 

@@ -220,6 +220,10 @@ class TestAuth:
             "enabled_models",
             "active_model",
             "non_streaming_models",
+            "tool_calling_models",
+            "no_tool_calling_models",
+            "tool_calling_probe_failures",
+            "unavailable_models",
         }
 
     def test_empty_token_is_refused_before_any_request(self, manager):
@@ -279,6 +283,27 @@ class TestErrors:
         # that no longer exists on a modern install.
         assert "lemonade-server serve" not in message
         assert "Lemonade" in message
+
+    @pytest.mark.parametrize(
+        "body, shown",
+        [
+            ({"error": "Unauthorized: invalid API key"}, "invalid API key"),
+            ({"error": {"message": "bad provider", "type": "x"}}, "bad provider"),
+            ("plain text", "plain text"),
+            ([], ""),
+        ],
+    )
+    def test_any_error_body_becomes_a_gateway_error(self, manager, body, shown):
+        """Lemonade's 401 (a restarted server holds a new key) says
+        {"error": "<text>"}, not an object; reading it once crashed every cloud
+        turn's key replay with AttributeError."""
+        with patch(
+            "gaia.llm.gateway.requests.request",
+            return_value=_response(status_code=401, body=body),
+        ):
+            with pytest.raises(GatewayError, match="HTTP 401") as excinfo:
+                manager.status()
+        assert shown in str(excinfo.value)
 
     def test_404_on_a_cloud_route_points_at_the_version_requirement(self, manager):
         with patch(
@@ -544,16 +569,18 @@ class TestSelection:
     def test_uninstall_clears_the_global_default_model(self, manager, monkeypatch):
         """`use` writes the choice to two places; removing it cleaned only one,
         leaving `gaia chat` resolving a gateway id that no longer exists."""
+        from gaia.config import GaiaConfig
+
         cleared = {}
 
-        class FakeCfg:
+        class FakeCfg(GaiaConfig):
             def get(self, k):
                 return "amd.Claude-Opus-5"
 
             def set(self, k, v):
                 cleared[k] = v
 
-            def save(self):
+            def save(self, path=None):
                 cleared["saved"] = True
 
         monkeypatch.setattr(
@@ -879,3 +906,56 @@ class TestPreCloudOffloadServerIsRejected:
             assert (
                 manager.install("https://gw.example.com/v1")["models_discovered"] == 0
             )
+
+
+# ── check_reachable (#5604) ────────────────────────────────────────────────
+
+
+def test_check_reachable_dials_the_gateway_host_on_443(monkeypatch):
+    import socket
+
+    from gaia.llm import gateway
+
+    dialed = []
+
+    class _Conn:
+        def close(self):
+            pass
+
+    def fake_connect(addr, timeout):
+        dialed.append((addr, timeout))
+        return _Conn()
+
+    monkeypatch.setattr(socket, "create_connection", fake_connect)
+    gateway.check_reachable("https://llm-api.amd.com/Unified/v1")
+    gateway.check_reachable("http://gw.example.test:8080/v1")
+    assert [a for a, _ in dialed] == [
+        ("llm-api.amd.com", 443),
+        ("gw.example.test", 8080),
+    ]
+    assert all(t == gateway.REACH_TIMEOUT for _, t in dialed)
+
+
+def test_check_reachable_names_the_vpn_for_an_unresolvable_host(monkeypatch):
+    import socket
+
+    from gaia.llm import gateway
+
+    def fail(addr, timeout):
+        raise socket.gaierror(8, "nodename nor servname provided, or not known")
+
+    monkeypatch.setattr(socket, "create_connection", fail)
+    with pytest.raises(gateway.GatewayUnreachable) as exc:
+        gateway.check_reachable(None)
+    assert exc.value.host == "llm-api.amd.com"
+    assert (
+        str(exc.value) == "Can't reach llm-api.amd.com. It needs AMD's network or VPN"
+    )
+    assert "key" not in str(exc.value).lower()
+
+
+def test_check_reachable_refuses_a_url_with_no_host():
+    from gaia.llm import gateway
+
+    with pytest.raises(ValueError):
+        gateway.check_reachable("not a url")

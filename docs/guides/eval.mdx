@@ -172,9 +172,9 @@ Each turn is scored across 7 dimensions. The overall score is a weighted sum:
 | `PASS` | All criteria met |
 | `FAIL` | Score too low or critical failure (hallucination, wrong answer) |
 | `BLOCKED_BY_ARCHITECTURE` | Agent UI architecture prevents success (e.g., history window too small) |
-| `TIMEOUT` | Scenario exceeded time limit |
+| `TIMEOUT` | Scenario exceeded time limit. The runner stops the scenario's running turn before the next scenario starts, and records the turns that finished (unjudged) in `turns` |
 | `BUDGET_EXCEEDED` | Claude API budget cap hit |
-| `INFRA_ERROR` | Agent UI backend unreachable or MCP failure |
+| `INFRA_ERROR` | Agent UI backend unreachable, MCP failure, or a permission prompt the runner could not answer |
 | `SETUP_ERROR` | Document indexing failed (0 chunks) |
 | `SKIPPED_NO_DOCUMENT` | Corpus file not present on disk |
 | `SKIPPED_NO_MODEL` | A model a `requires_asr` / `requires_vlm` tag names is not downloaded (or ffmpeg is missing for ASR) |

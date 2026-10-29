@@ -52,6 +52,20 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+#: What a ``model_queue`` status carries under ``queue`` (the core translator's
+#: ``_QUEUE_FIELDS``; see ``gaia.daemon.broker_client.queue_status_event``).
+_QUEUE_FIELDS = (
+    "event",
+    "scope",
+    "position",
+    "queue_length",
+    "holder",
+    "holder_model",
+    "held_for_s",
+    "waited_s",
+    "model",
+)
+
 # Mirrors ``gaia.ui.sse_handler.SSEOutputHandler._RENDER_TOOL_TO_LANG`` — the
 # tool→card-key map that tells the host which typed ``tool_result.render`` card to
 # draw (spec §4.2, replacing the #1000 fence-injection hack). Duplicated (not
@@ -106,7 +120,7 @@ class CanonicalTranslator:
         etype = event.get("type")
 
         # tool_args merges into the buffered tool_call; every other event first
-        # flushes any pending tool_call (an argument-less tool), then maps.
+        # flushes any pending tool_call (its producer sent no tool_args), then maps.
         if etype == "tool_args":
             return self._on_tool_args(event)
 
@@ -152,7 +166,7 @@ class CanonicalTranslator:
         return {"type": "tool_call", "tool": tool, "args": args}
 
     def _on_tool_start(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
-        # Flush a previous, arg-less pending tool_call before buffering this one.
+        # Flush a previous pending tool_call that never got its tool_args.
         out = self._flush_pending()
         self._pending_tool = {"tool": event.get("tool") or "unknown", "args": {}}
         return out
@@ -173,8 +187,14 @@ class CanonicalTranslator:
 
     def _on_status(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Already the canonical shape; keep only ``message`` (drop the
-        # progress-only status/steps/elapsed sub-fields).
-        return [{"type": "status", "message": str(event.get("message", ""))}]
+        # progress-only status/steps/elapsed sub-fields) — except for a turn
+        # waiting for the model, whose place in line rides along.
+        out = {"type": "status", "message": str(event.get("message", ""))}
+        queue = event.get("queue")
+        if event.get("phase") == "model_queue" and isinstance(queue, dict):
+            out["phase"] = "model_queue"
+            out["queue"] = {k: queue[k] for k in _QUEUE_FIELDS if k in queue}
+        return [out]
 
     def _on_step(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         step = event.get("step")
@@ -233,6 +253,10 @@ class CanonicalTranslator:
         ]
 
     def _on_answer(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if event.get("streamed"):
+            # Mid-turn text; only the printed answer is the final.
+            content = str(event.get("content", "") or "")
+            return [{"type": "token", "delta": content}] if content else []
         usage: Dict[str, Any] = {}
         for src, dst in (
             ("steps", "steps"),
@@ -261,7 +285,9 @@ class CanonicalTranslator:
             # status line, same pattern as ``_on_tool_confirm_denied``, so
             # the user still SEES the failure without the stream (and the
             # still-retrying agent) being cut out from under it (#2515).
-            return [{"type": "status", "message": f"Tool call failed, retrying: {detail}"}]
+            return [
+                {"type": "status", "message": f"Tool call failed, retrying: {detail}"}
+            ]
         return [{"type": "error", "detail": detail, "status": _ERROR_STATUS_AGENT}]
 
     def _on_policy_alert(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -322,6 +348,10 @@ class CanonicalTranslator:
         # retries. Surface as a status line, not an error (spec §6.2).
         return [{"type": "status", "message": str(event.get("message", ""))}]
 
+    def _on_commentary(self, _event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        # Its text already went out as tokens; the host's handler re-derives it.
+        return []
+
     def _on_agent_created(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Registry-refresh signal with no chat-stream meaning — dropped from the
         # /query stream by contract decision (spec §6.2). It belongs on a host
@@ -335,6 +365,7 @@ class CanonicalTranslator:
         "thinking": _on_thinking,
         "plan": _on_plan,
         "chunk": _on_chunk,
+        "commentary": _on_commentary,
         "tool_start": _on_tool_start,
         "tool_result": _on_tool_result,
         "tool_end": _on_tool_end,

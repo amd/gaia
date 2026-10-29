@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -26,8 +27,12 @@ type loadedMsg struct {
 	source    *lemonade.Client
 	providers []lemonade.Provider
 	err       error
+	// restoreErr is why a saved key could not be handed back to Lemonade.
+	restoreErr error
 	// started is when the read was sent, so a slow one cannot undo a newer one.
 	started time.Time
+	// server is the one-line Model server summary; empty when unreadable.
+	server string
 }
 type modelsMsg struct {
 	source   *lemonade.Client
@@ -35,8 +40,10 @@ type modelsMsg struct {
 	capacity string
 	err      error
 	// note is a warning about an otherwise successful connect — the key
-	// works, but could not be kept for the next session.
-	note string
+	// works, but could not be kept for the next session. noteDetail is the
+	// full reason.
+	note       string
+	noteDetail string
 }
 
 // Pull messages carry their download's channel so a cancelled download's late
@@ -54,6 +61,18 @@ type clearedMsg struct {
 	source *lemonade.Client
 	err    error
 }
+
+// gatewayProbedMsg is whether the AMD gateway's host answered. seq orders
+// checks; connect is set when the read that scheduled it may open the key form.
+type gatewayProbedMsg struct {
+	source  *lemonade.Client
+	err     error
+	seq     int
+	connect bool
+}
+
+// probeGateway is a var so tests reach no network.
+var probeGateway = lemonade.ProbeGatewayFrom
 
 type Model struct {
 	spin          spinner.Model
@@ -83,9 +102,31 @@ type Model struct {
 	down bool
 	// readAt is when the provider read now shown was sent.
 	readAt time.Time
+	// read is set once a provider read has landed; until then no row can say
+	// whether a key is saved.
+	read bool
+	// listRead is set once a read returned the provider list. A failed read
+	// proves nothing absent, so registering waits for this, not for read.
+	listRead bool
+	// autoConnect opens the chosen provider's key form once the first
+	// provider read lands (see WithConnect).
+	autoConnect bool
+	// detail is the full account behind note — route, alternatives, log path —
+	// shown by `d` while detailNote is still the note on screen.
+	detail     string
+	detailNote string
+	showDetail bool
+	// server names the Lemonade in use and the backend its chat model runs on.
+	server string
+	// gatewayChecked is set once a reachability check of the AMD gateway has
+	// answered; gatewayErr is what it found (nil: the host answered).
+	gatewayChecked bool
+	gatewayErr     error
+	// gatewaySeq is the newest check sent; an older answer is dropped.
+	gatewaySeq int
 }
 
-var names = []string{"local", "fireworks", "amd"}
+var names = lemonade.ChatProviders
 
 func New(base string, width, height int) Model {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -99,13 +140,35 @@ func (m Model) Init() tea.Cmd {
 	return func() tea.Msg {
 		// Lemonade forgets a pasted key when it restarts; give it back any key
 		// kept from an earlier session before reading which providers have one.
+		var restoreErr error
 		for _, name := range names[1:] {
-			restoreKey(name)
+			err := restoreKey(name)
+			if err != nil && restoreErr == nil {
+				restoreErr = err
+			}
+			// A daemon that would not start fails the same way for every
+			// provider; trying again only doubles the wait.
+			if daemonUnreachable(err) {
+				break
+			}
 		}
 		started := time.Now()
 		p, e := c.Providers(m.ctx)
-		return loadedMsg{source: c, providers: p, err: e, started: started}
+		msg := loadedMsg{source: c, providers: p, err: e, restoreErr: restoreErr, started: started}
+		if e == nil {
+			if info, err := c.ServerInfo(m.ctx); err == nil {
+				msg.server = localServerLine(info)
+			}
+		}
+		return msg
 	}
+}
+
+// localServerLine describes Lemonade under the Local row. A cloud model it
+// is serving belongs to that provider's row, not here.
+func localServerLine(info lemonade.ServerInfo) string {
+	info.Chat = info.LocalChat
+	return info.StatusLine()
 }
 
 // WithSetupStep tells the panel Lemonade is still first-run step n, so its
@@ -123,36 +186,116 @@ func (m Model) WithCurrent(provider string) Model {
 	return m
 }
 
+// WithConnect opens the panel on provider and goes straight to its key form
+// once the provider read lands — for a choice the user already made elsewhere.
+// A provider the panel does not offer leaves it on the list.
+func (m Model) WithConnect(provider string) Model {
+	for i, name := range names {
+		if name == provider && name != "local" {
+			m.selected, m.autoConnect = i, true
+		}
+	}
+	return m
+}
+
 func (m Model) chosen() string { return names[m.selected] }
+
+// checkGateway asks whether the AMD gateway this Lemonade is set up for
+// answers, so the list can say so before anyone picks it. connect lets the
+// answer open the key form.
+func (m Model) checkGateway(connect bool) (Model, tea.Cmd) {
+	m.gatewaySeq++
+	c, ctx, base, seq := m.client, m.ctx, "", m.gatewaySeq
+	for _, p := range m.providers {
+		if p.Name == "amd" {
+			base = p.BaseURL
+		}
+	}
+	return m, func() tea.Msg {
+		return gatewayProbedMsg{source: c, err: probeGateway(ctx, c.BaseURL, base), seq: seq, connect: connect}
+	}
+}
+
+// gatewayDisabled reports whether the AMD gateway was found unreachable.
+func (m Model) gatewayDisabled() bool {
+	var u *lemonade.UnreachableError
+	return m.gatewayChecked && errors.As(m.gatewayErr, &u)
+}
+
+// gatewayNote is what enter on an unreachable gateway says.
+func (m Model) gatewayNote() string {
+	var u *lemonade.UnreachableError
+	if errors.As(m.gatewayErr, &u) {
+		return u.Brief() + ". Connect to it, then press r to check again."
+	}
+	return ""
+}
+
+// openSetup is enter on a cloud provider: its key form, registering the
+// provider with Lemonade first when a read has proved it absent.
+func (m Model) openSetup() (Model, tea.Cmd) {
+	m = m.setup()
+	// Only once a read proves it absent: registering over a provider not yet
+	// read would replace another gateway's settings.
+	if m.listRead && !m.listed(m.chosen()) && m.formProvider().BaseURL != "" {
+		return m, tea.Batch(textinput.Blink, m.register())
+	}
+	return m, textinput.Blink
+}
 
 // waiting is true when Lemonade is absent only because setup has not
 // installed it yet.
 func (m Model) waiting() bool { return m.down && m.setupStep > 0 }
 
 // explain turns a Lemonade error into the note shown under the panel.
-func (m Model) explain(err error) string {
+func (m Model) explain(err error) Model {
 	if m.setupStep > 0 && errors.Is(err, lemonade.ErrUnreachable) {
-		return fmt.Sprintf("Lemonade isn't installed yet — setup step %d installs it. "+
-			"Choose a provider once that step is done: close this panel and press enter to start it.", m.setupStep)
+		return m.withDetail(fmt.Sprintf("Lemonade isn't installed yet — setup step %d installs it. "+
+			"Choose a provider once that step is done: close this panel and press enter to start it.", m.setupStep), "")
 	}
-	return err.Error()
+	return m.withDetail(daemon.Brief(err), err.Error())
 }
 
-// register lists Fireworks with Lemonade — the same fixed settings Connect
-// sends, without a key — because Lemonade reports an environment key only
-// for a provider it has registered, and a kept key can only be restored into
-// one.
+// withDetail shows note and keeps detail behind `d` when it says more.
+func (m Model) withDetail(note, detail string) Model {
+	m.note = note
+	m.showDetail = false
+	m.detail, m.detailNote = "", ""
+	if detail != "" && detail != note {
+		m.detail, m.detailNote = detail, note
+	}
+	return m
+}
+
+// hasDetail reports whether the note on screen has more behind `d`.
+func (m Model) hasDetail() bool { return m.detail != "" && m.note == m.detailNote }
+
+// restoreNote is the status line for a saved key that could not be handed back.
+func restoreNote(err error) (note, detail string) {
+	detail = "Could not check for a saved key: " + strings.TrimSuffix(err.Error(), ".") +
+		". Until it is restored, a provider may show \"key needed\" while one is saved."
+	var b daemon.Briefer
+	if errors.As(err, &b) {
+		return strings.TrimSuffix(b.Brief(), ".") + ", then press r.", detail
+	}
+	return "Could not check for a saved key: " + strings.TrimSuffix(err.Error(), ".") + ". Press r to retry.", detail
+}
+
+// register lists the chosen provider with Lemonade — the settings the form
+// shows, without a key — because Lemonade reports an environment key only for
+// a provider it has registered, and a kept key can only be restored into one.
+// A Lemonade that has never seen the provider otherwise reads "key needed" and
+// a blank connect finds no models, with a key saved.
 func (m Model) register() tea.Cmd {
-	c := m.client
-	p := lemonade.Provider{Name: "fireworks", BaseURL: lemonade.FireworksURL, Header: "Authorization", Prefix: "Bearer "}
+	c, p := m.client, m.formProvider()
 	return func() tea.Msg {
 		if err := c.Configure(m.ctx, p, ""); err != nil {
 			return loadedMsg{source: c, err: err, started: time.Now()}
 		}
-		restoreKey(p.Name)
+		restoreErr := restoreKey(p.Name)
 		started := time.Now()
 		providers, err := c.Providers(m.ctx)
-		return loadedMsg{source: c, providers: providers, err: err, started: started}
+		return loadedMsg{source: c, providers: providers, err: err, restoreErr: restoreErr, started: started}
 	}
 }
 func (m Model) listed(name string) bool {
@@ -323,6 +466,13 @@ func (m Model) setup() Model {
 	m.note = ""
 	return m
 }
+
+// formProvider is the provider the setup form describes, without its key.
+func (m Model) formProvider() lemonade.Provider {
+	return lemonade.Provider{Name: m.chosen(), BaseURL: strings.TrimSpace(m.fields[0].Value()),
+		Header: strings.TrimSpace(m.fields[1].Value()), Prefix: m.fields[2].Value()}
+}
+
 func (m Model) keyPlaceholder() string {
 	if env, runtime := m.keyStatus(); env || runtime {
 		return "A key is already set — Enter connects"
@@ -353,19 +503,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.readAt = v.started
+		m.read = true
+		m.server = v.server
 		// A failed read keeps what is known rather than forgetting every key.
 		if v.err == nil || v.providers != nil {
 			m.providers = v.providers
+			m.listRead = true
 		}
 		wasWaiting := m.waiting()
 		m.down = errors.Is(v.err, lemonade.ErrUnreachable)
-		if v.err != nil {
-			m.note = m.explain(v.err)
-		} else if wasWaiting {
+		switch {
+		case v.err != nil:
+			m = m.explain(v.err)
+		case v.restoreErr != nil:
+			m = m.withDetail(restoreNote(v.restoreErr))
+		case wasWaiting:
 			m.note = ""
 		}
 		if m.stage == "setup" {
 			m.fields[3].Placeholder = m.keyPlaceholder()
+		}
+		ready := m.autoConnect && m.stage == "providers" && v.err == nil
+		var probe tea.Cmd
+		m, probe = m.checkGateway(ready && m.chosen() == "amd")
+		// The gateway's key form waits for its network check.
+		if ready && m.chosen() != "amd" {
+			m.autoConnect = false
+			next, cmd := m.openSetup()
+			return next, tea.Batch(cmd, probe)
+		}
+		return m, probe
+	case gatewayProbedMsg:
+		if (v.source != nil && v.source != m.client) || v.seq != m.gatewaySeq {
+			return m, nil
+		}
+		m.gatewayChecked, m.gatewayErr = true, v.err
+		if v.connect && m.autoConnect && m.stage == "providers" && m.chosen() == "amd" {
+			m.autoConnect = false
+			if m.gatewayDisabled() {
+				m = m.withDetail(m.gatewayNote(), v.err.Error())
+				return m, nil
+			}
+			return m.openSetup()
 		}
 		return m, nil
 	case modelsMsg:
@@ -374,7 +553,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = false
 		if v.err != nil {
-			m.note = m.explain(v.err)
+			m = m.explain(v.err)
 			return m, nil
 		}
 		m.capacity = v.capacity
@@ -404,7 +583,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
-		m.note = v.note
+		m = m.withDetail(v.note, v.noteDetail)
 		return m, m.Init()
 	case pullProgressMsg:
 		if v.ch != m.pullCh || m.stage != "download" {
@@ -435,7 +614,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = false
 		if v.err != nil {
-			m.note = m.explain(v.err)
+			m = m.explain(v.err)
 		} else {
 			m.note = "Key cleared, here and for future sessions. An environment key, if set, remains active."
 			// Reflect the clear immediately rather than waiting on the
@@ -489,10 +668,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.stage {
 		case "providers":
 			switch v.String() {
+			case "d":
+				m.showDetail = m.hasDetail() && !m.showDetail
 			case "up":
-				m.selected = (m.selected + 2) % 3
+				m.selected = (m.selected + len(names) - 1) % len(names)
 			case "down", "tab":
-				m.selected = (m.selected + 1) % 3
+				m.selected = (m.selected + 1) % len(names)
 			case "enter":
 				// Nothing to connect to until setup installs Lemonade.
 				if m.waiting() {
@@ -503,11 +684,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activity = "Loading models"
 					return m, tea.Batch(m.spin.Tick, m.fetchModels())
 				}
-				m = m.setup()
-				if m.chosen() == "fireworks" && !m.listed("fireworks") {
-					return m, tea.Batch(textinput.Blink, m.register())
+				if m.chosen() == "amd" && m.gatewayDisabled() {
+					m = m.withDetail(m.gatewayNote(), m.gatewayErr.Error())
+					return m, nil
 				}
-				return m, textinput.Blink
+				m.autoConnect = false
+				return m.openSetup()
 			case "r":
 				return m, m.Init()
 			}
@@ -580,13 +762,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					// A kept copy would come straight back on the next launch.
 					if err := forgetKey(p); err != nil {
-						return clearedMsg{source: c, err: fmt.Errorf(
-							"Cleared for this session, but the saved copy could not be removed: %w", err)}
+						return clearedMsg{source: c, err: keptCopyError{err}}
 					}
 					return clearedMsg{source: c}
 				})
 			case "enter":
-				p := lemonade.Provider{Name: m.chosen(), BaseURL: strings.TrimSpace(m.fields[0].Value()), Header: strings.TrimSpace(m.fields[1].Value()), Prefix: m.fields[2].Value()}
+				p := m.formProvider()
 				key := strings.TrimSpace(m.fields[3].Value())
 				m.fields[3].SetValue("")
 				m.busy = true
@@ -615,7 +796,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return msg
 					}
 					if err := rememberKey(p.Name, key); err != nil {
-						msg.note = "Connected for this session only — the key could not be kept: " + err.Error()
+						msg.note = "Connected for this session only; the key wasn't saved. " + daemon.Brief(err)
+						msg.noteDetail = "The key could not be kept for the next session: " + err.Error()
 					}
 					return msg
 				})
@@ -643,6 +825,23 @@ func (m Model) filteredEntries() []lemonade.Entry {
 	return out
 }
 
+// gatewayDesc is the AMD row's line: whether its network answers, and only
+// when it does, what its key found.
+func (m Model) gatewayDesc(keyDesc string) string {
+	var u *lemonade.UnreachableError
+	switch {
+	case !m.gatewayChecked:
+		return keyDesc + " · checking the network"
+	case errors.Is(m.gatewayErr, lemonade.ErrCannotCheck):
+		return keyDesc
+	case errors.As(m.gatewayErr, &u):
+		return u.Brief()
+	case m.gatewayErr != nil:
+		return "Via Lemonade · " + m.gatewayErr.Error()
+	}
+	return strings.Replace(keyDesc, "Via Lemonade", "Via Lemonade · network available", 1)
+}
+
 func pullLine(p lemonade.PullProgress) string {
 	parts := []string{}
 	if p.TotalFiles > 1 {
@@ -666,6 +865,8 @@ func (m Model) View() string {
 			desc := "On this machine · models that fit this PC"
 			if m.waiting() {
 				desc = fmt.Sprintf("Available after setup step %d", m.setupStep)
+			} else if name != "local" && !m.read {
+				desc = "Via Lemonade · checking for a saved key"
 			} else if name != "local" {
 				desc = "Via Lemonade · key needed"
 				for _, p := range m.providers {
@@ -677,16 +878,26 @@ func (m Model) View() string {
 						desc = "Via Lemonade · key configured"
 					}
 				}
+				if name == "amd" {
+					desc = m.gatewayDesc(desc)
+				}
 			}
 			marker := "  "
 			if i == m.selected {
 				marker = "› "
 			}
 			label := marker + lemonade.Label(name)
-			if i == m.selected {
+			switch {
+			case name == "amd" && m.gatewayDisabled():
+				label = lipgloss.NewStyle().Foreground(theme.Dim).Render(label)
+			case i == m.selected:
 				label = title.Render(label)
 			}
-			lines = append(lines, label, lipgloss.NewStyle().Foreground(theme.Dim).Render("    "+desc), "")
+			lines = append(lines, label, lipgloss.NewStyle().Foreground(theme.Dim).Render("    "+desc))
+			if name == "local" && m.server != "" {
+				lines = append(lines, lipgloss.NewStyle().Foreground(theme.Dim).Render("    "+ansi.Truncate(m.server, max(1, w-4), "…")))
+			}
+			lines = append(lines, "")
 		}
 	case "setup":
 		lines = append(lines, title.Render(lemonade.Label(m.chosen())))
@@ -796,8 +1007,8 @@ func (m Model) View() string {
 			if name := entryName(selected, m.chosen()); name != selected.Model.ID {
 				details = append(details, selected.Model.ID)
 			}
-			if selected.Model.ContextLength > 0 {
-				details = append(details, fmt.Sprintf("Context: %s tokens", formatTokens(selected.Model.ContextLength)))
+			if window := selected.Model.Window(); window > 0 {
+				details = append(details, fmt.Sprintf("Context: %s tokens", formatTokens(window)))
 			}
 			for _, label := range selected.Model.Labels {
 				switch label {
@@ -825,6 +1036,9 @@ func (m Model) View() string {
 	}
 	if m.note != "" {
 		lines = append(lines, "", m.note)
+	}
+	if m.showDetail && m.hasDetail() {
+		lines = append(lines, "", lipgloss.NewStyle().Foreground(theme.Dim).Render(m.detail))
 	}
 	hint := "↑/↓ choose · enter continue · r refresh · esc close"
 	if m.stage == "models" {
@@ -860,6 +1074,9 @@ func (m Model) View() string {
 	}
 	if m.waiting() && m.stage == "providers" {
 		hint = "r re-check · esc close"
+	}
+	if m.stage == "providers" && m.hasDetail() {
+		hint = "d details · " + hint
 	}
 	if m.busy {
 		hint = m.spin.View() + " " + m.activity + "… · esc cancel"

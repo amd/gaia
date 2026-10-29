@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryDashboard } from '../MemoryDashboard';
 import * as memoryApi from '../../services/memoryApi';
@@ -52,6 +52,8 @@ beforeEach(() => {
 
 async function renderDashboard() {
     render(<MemoryDashboard />);
+    // Stats and the knowledge table live under Advanced.
+    fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
     return await screen.findByRole('button', { name: /Memory is disabled/ });
 }
 
@@ -60,7 +62,7 @@ describe('MemoryDashboard accessibility', () => {
         await renderDashboard();
 
         expect(
-            screen.getByRole('heading', { level: 1, name: /Memory Dashboard/ })
+            screen.getByRole('heading', { level: 1, name: /Memory/ })
         ).toBeInTheDocument();
         expect(screen.queryByRole('heading', { level: 3 })).not.toBeInTheDocument();
     });

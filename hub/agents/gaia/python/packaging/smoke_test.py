@@ -34,6 +34,26 @@ stdio JSONL -- what the TUI spawns as a child process:
      The TUI forwards that flag, and the Anthropic client's import is guarded,
      so a binary built without it boots fine and fails only here.
 
+run_python -- the binary is the only Python a release user has:
+
+  9. ``--gaia-run-python-file <script>`` runs a script that imports the
+     bundled office/data libraries, writes an ``.xlsx``, starts a process
+     pool, and starts ``sys.executable -c`` / ``-m pip`` itself; a failing
+     script's exit code comes back unchanged. Before the fix the script path
+     reached the stdio parser and exited 2 with ``unrecognized arguments``.
+
+Tokenizer -- token counts drive history trimming and context eviction:
+
+ 10. With tiktoken's download host unreachable and no cache folder set, the
+     agent's tokenizer is still ``tiktoken:cl100k_base``: the encoding plugin
+     and its data are in the binary, not fetched at runtime (#5066).
+
+Linux only -- the binary carries its build distro's OpenSSL:
+
+ 11. A ``run_python`` script's default SSL context holds CA certificates, so
+     HTTPS from a script verifies on a distro other than the one it was
+     built on (``rthook_linux_ca.py``).
+
 The handshake deliberately stops short of a real turn: an answer needs a running
 Lemonade Server and a downloaded model, which the release runners do not have.
 It still fails loudly on a broken binary -- the opening event is emitted with
@@ -54,6 +74,7 @@ import queue
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -77,6 +98,53 @@ STDIO_ARGV: list[str] = []
 #: cold one-file binary unpacks itself first. Generous on purpose: a slow
 #: runner must not read as a broken binary.
 STDIO_HANDSHAKE_DEADLINE_S = 300.0
+
+#: ``gaia_agent_chat.python_runner.RUN_PYTHON_FILE_FLAG``, copied because this
+#: harness imports nothing outside the stdlib (a unit test pins the two).
+RUN_PYTHON_FILE_FLAG = "--gaia-run-python-file"
+
+#: What a typical ``run_python`` call does: office files, a table, a
+#: chart, and stdlib modules nothing in GAIA itself imports.
+RUN_PYTHON_SCRIPT = """\
+import sys, statistics, sqlite3, zipfile, xml.etree.ElementTree, csv, decimal
+import subprocess
+from concurrent.futures import ProcessPoolExecutor
+
+import openpyxl, docx, pptx, pandas, numpy, reportlab, pypdf, pymupdf, xlsxwriter
+import matplotlib.pyplot as plt
+
+
+def py(*argv):
+    # A script starting sys.executable -- the binary -- as an interpreter.
+    return subprocess.run([sys.executable, *argv], capture_output=True, text=True)
+
+
+def main():
+    wb = openpyxl.Workbook()
+    wb.active.append(["part", "qty"])
+    wb.active.append(["bolt", 4])
+    wb.save("bom.xlsx")
+    assert openpyxl.load_workbook("bom.xlsx").active["B2"].value == 4
+    docx.Document().save("notes.docx")
+    pptx.Presentation().save("deck.pptx")
+    plt.plot([1, 2, 3])
+    plt.savefig("chart.png")
+    frame = pandas.DataFrame({"qty": [4, 6]})
+    # Workers re-launch the binary. Under spawn (macOS) they re-import this
+    # file as __mp_main__, as CPython does, so the work sits under the guard.
+    with ProcessPoolExecutor(2) as pool:
+        assert list(pool.map(abs, [-1, -2])) == [1, 2]
+    nested = py("-c", "import pypdf, pymupdf, xlsxwriter; print('nested ok')")
+    assert nested.stdout.strip().endswith("nested ok"), (nested.stdout, nested.stderr)
+    pip = py("-m", "pip", "install", "pypdf")
+    assert pip.returncode == 1 and "can't be installed" in pip.stderr, pip.stderr
+    total = int(frame["qty"].sum())
+    print("RUN_PYTHON_OK", sys.argv[1:], total, statistics.mean([1, 3]))
+
+
+if __name__ == "__main__":
+    main()
+"""
 
 
 def log(msg: str) -> None:
@@ -345,6 +413,117 @@ def check_stdio_handshake(
         _kill_tree(proc)
 
 
+def _run_script(binary: Path, workdir: Path, body: str, *args: str, env=None):
+    script = workdir / "snippet.py"
+    script.write_text(body, encoding="utf-8")
+    cmd = [str(binary), RUN_PYTHON_FILE_FLAG, str(script), *args]
+    log(f"command: {' '.join(cmd)}")
+    t0 = time.time()
+    # The tool's own call shape: piped output, closed stdin, script's cwd.
+    result = subprocess.run(
+        cmd,
+        cwd=str(workdir),
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+        check=False,
+        env=env,
+    )
+    log(f"exited {result.returncode} after {time.time() - t0:.1f}s")
+    return result
+
+
+def check_run_python(binary: Path) -> bool:
+    """A script runs on the bundled libraries, and its exit code comes back."""
+    with tempfile.TemporaryDirectory(prefix="gaia-smoke-run-python-") as tmp:
+        workdir = Path(tmp)
+        ok = _run_script(binary, workdir, RUN_PYTHON_SCRIPT, "--rows", "2")
+        if ok.returncode != 0 or "RUN_PYTHON_OK ['--rows', '2'] 10 2" not in ok.stdout:
+            log(
+                "FAIL: the run_python script did not run on the frozen binary. "
+                f"stdout: {ok.stdout[-1500:]!r} stderr: {ok.stderr[-3000:]!r}"
+            )
+            return False
+        missing = [
+            name
+            for name in ("bom.xlsx", "notes.docx", "deck.pptx", "chart.png")
+            if not (workdir / name).is_file()
+        ]
+        if missing:
+            log(f"FAIL: the script ran but did not write {missing}")
+            return False
+
+        failed = _run_script(binary, workdir, "import sys\nsys.exit(3)\n")
+        if failed.returncode != 3:
+            log(
+                f"FAIL: a script exiting 3 came back as {failed.returncode}. "
+                f"stderr: {failed.stderr[-1500:]!r}"
+            )
+            return False
+    log("run_python check PASS -- scripts run on the bundled libraries")
+    return True
+
+
+#: Prints the estimator the agent's token counts use, from inside the binary.
+TOKENIZER_SCRIPT = """import sys
+from gaia.agents.base.turn_metrics import _tokenizer
+name = _tokenizer().name
+print("TOKENIZER", name)
+sys.exit(0 if name == "tiktoken:cl100k_base" else 5)
+"""
+
+#: Every request through a closed port, so a download attempt fails fast.
+_UNREACHABLE_PROXY = "http://127.0.0.1:9"
+
+
+def check_tokenizer(binary: Path) -> bool:
+    """cl100k_base loads from the binary alone, with its download host unreachable."""
+    dropped = {"TIKTOKEN_CACHE_DIR", "DATA_GYM_CACHE_DIR", "NO_PROXY"}
+    env = {k: v for k, v in os.environ.items() if k.upper() not in dropped}
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"):
+        env[name] = env[name.lower()] = _UNREACHABLE_PROXY
+    with tempfile.TemporaryDirectory(prefix="gaia-smoke-tokenizer-") as tmp:
+        # A fresh temp dir, so tiktoken's default cache cannot hold the file.
+        env["TMPDIR"] = env["TEMP"] = env["TMP"] = tmp
+        result = _run_script(binary, Path(tmp), TOKENIZER_SCRIPT, env=env)
+    log(f"tokenizer: {result.stdout.strip()[-300:]}")
+    if result.returncode != 0:
+        log(
+            "FAIL: the agent's token counts are an estimate, not cl100k_base: "
+            "the binary is missing tiktoken's encoding plugin or its data. "
+            f"stderr: {result.stderr[-3000:]!r}"
+        )
+        return False
+    log("tokenizer check PASS -- cl100k_base loads offline from the binary")
+    return True
+
+
+#: Prints how many CA certificates a script's default SSL context loaded.
+TLS_TRUST_SCRIPT = """import ssl, sys
+count = ssl.create_default_context().cert_store_stats()["x509_ca"]
+print("CA_CERTS", count, ssl.get_default_verify_paths())
+sys.exit(0 if count else 4)
+"""
+
+
+def check_tls_trust(binary: Path) -> bool:
+    """A script can verify HTTPS: its default context found the host's CAs."""
+    with tempfile.TemporaryDirectory(prefix="gaia-smoke-tls-") as tmp:
+        result = _run_script(binary, Path(tmp), TLS_TRUST_SCRIPT)
+    log(f"tls: {result.stdout.strip()[-600:]}")
+    if result.returncode != 0:
+        log(
+            "FAIL: a run_python script's default SSL context holds no CA "
+            "certificates, so its HTTPS calls fail verification on this distro. "
+            f"stderr: {result.stderr[-1500:]!r}"
+        )
+        return False
+    log("tls trust check PASS -- scripts find the host's CA certificates")
+    return True
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Smoke-test the frozen GAIA agent binary (both transports)."
@@ -410,8 +589,18 @@ def main(argv=None) -> int:
         binary, ["--use-claude"], env=claude_env, backend="claude"
     )
 
+    log("checking run_python on the frozen binary")
+    results["run_python"] = check_run_python(binary)
+    log("checking the agent's tokenizer offline")
+    results["tokenizer"] = check_tokenizer(binary)
+    expected = 8
+    if sys.platform.startswith("linux"):
+        log("checking a script's TLS trust store")
+        results["tls_trust"] = check_tls_trust(binary)
+        expected += 1
+
     log(f"results: {results}")
-    ok = len(results) == 6 and all(results.values())
+    ok = len(results) == expected and all(results.values())
     log("VERDICT: PASS" if ok else "VERDICT: FAIL")
     return 0 if ok else 1
 

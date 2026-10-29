@@ -21,6 +21,7 @@
  */
 
 const { Notification, ipcMain } = require("electron");
+const { notificationIconPath } = require("./app-icon.cjs");
 const { EventEmitter } = require("events");
 const path = require("path");
 const fs = require("fs");
@@ -283,7 +284,7 @@ class NotificationService extends EventEmitter {
       const osNotif = new Notification({
         title: notif.title,
         body: notif.message,
-        icon: path.join(__dirname, "..", "assets", "icon.png"),
+        icon: notificationIconPath(),
         urgency: notif.type === "security_alert" ? "critical" : "normal",
         // No action buttons — click-to-focus only (S5 fix)
       });
@@ -312,6 +313,55 @@ class NotificationService extends EventEmitter {
     // Note: for permission_request, the notification was already sent to the renderer
     // via _handlePermissionRequest — we just navigate to it here, don't re-send.
     this._sendToRenderer("tray:navigate", `notification:${notif.id}`);
+  }
+
+  // ── Chat alerts ──────────────────────────────────────────────────────
+
+  /**
+   * Show an OS banner for a chat event. Clicking it focuses the window and
+   * opens that chat. Silent: the renderer plays the user's chosen sound.
+   *
+   * @param {{title: string, body: string, sessionId: string}} payload
+   * @returns {boolean} false when the OS has no notification support.
+   */
+  showChatBanner(payload) {
+    if (!payload || typeof payload.title !== "string" || typeof payload.sessionId !== "string") {
+      throw new TypeError("notification:show expects {title, body, sessionId}");
+    }
+    if (!Notification.isSupported()) {
+      console.warn("[notif] OS notifications not supported on this platform");
+      return false;
+    }
+    const osNotif = new Notification({
+      title: payload.title,
+      body: typeof payload.body === "string" ? payload.body : "",
+      icon: notificationIconPath(),
+      silent: true,
+    });
+    osNotif.on("click", () => {
+      if (!this.mainWindow || this.mainWindow.isDestroyed()) return;
+      if (this.mainWindow.isMinimized()) this.mainWindow.restore();
+      this.mainWindow.show();
+      this.mainWindow.focus();
+      this._sendToRenderer("tray:navigate", `session:${payload.sessionId}`);
+    });
+    osNotif.show();
+    return true;
+  }
+
+  /**
+   * Flash the taskbar button until the window is focused. A no-op while
+   * it already has focus.
+   * @returns {boolean} whether it flashed.
+   */
+  flashWindow() {
+    const win = this.mainWindow;
+    if (!win || win.isDestroyed() || win.isFocused()) return false;
+    win.flashFrame(true);
+    win.once("focus", () => {
+      if (!win.isDestroyed()) win.flashFrame(false);
+    });
+    return true;
   }
 
   // ── Private: Tray badge ──────────────────────────────────────────────
@@ -423,6 +473,19 @@ class NotificationService extends EventEmitter {
         this._respondToPermission(notifId, action, remember);
       }
     );
+
+    // Chat alerts (#5226): the renderer decides what fires per the user's
+    // settings; main owns the OS surfaces it can't reach.
+    ipcMain.handle("notification:show", (_event, payload) =>
+      this.showChatBanner(payload)
+    );
+    ipcMain.handle("notification:flash", () => this.flashWindow());
+    ipcMain.handle("notification:attention", (_event, count) => {
+      if (!this.trayManager) {
+        throw new Error("No tray to badge: the tray manager was not created");
+      }
+      this.trayManager.setAttentionCount(count);
+    });
   }
 
   // ── Private: Helpers ─────────────────────────────────────────────────

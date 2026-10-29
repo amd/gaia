@@ -106,6 +106,23 @@ def test_a_prompt_inside_a_tool_does_not_count_against_its_timeout(layout, monke
     assert len(console.asked) == 1
 
 
+def test_an_answered_prompt_still_does_not_count_once_the_tool_carries_on(
+    layout, monkeypatch
+):
+    """The wait for an answer stays off the limit after the prompt closes."""
+    monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "2")
+    agent = _agent(layout, _Console(answer=True, delay=3.0))
+
+    @tool
+    def reads_then_works() -> dict:
+        """Asks for access, then keeps working."""
+        allowed, _reason = agent.path_validator.validate_read(str(layout["notes"]))
+        time.sleep(1.0)  # past the 2 s limit unless the 3 s answer is left out
+        return {"status": "success" if allowed else "error"}
+
+    assert agent._execute_tool("reads_then_works", {}) == {"status": "success"}
+
+
 def test_a_tool_that_hangs_after_the_prompt_is_still_abandoned(layout, monkeypatch):
     monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "0.3")
     agent = _agent(layout, _Console(answer=True, delay=0.2))
@@ -249,3 +266,43 @@ def test_a_document_attached_to_a_running_chat_joins_its_scope(layout):
     assert not agent.path_validator.is_path_allowed(
         str(layout["notes"]), prompt_user=False
     )
+
+
+# ── D: one unanswered prompt per path per turn ────────────────────────────
+
+
+def test_a_declined_folder_is_not_asked_about_again_this_turn(layout):
+    console = _Console(answer=False)
+    agent = _agent(layout, console)
+    docs = layout["pdf"].parent
+
+    first, _ = agent.path_validator.validate_read(str(docs))
+    again, reason = agent.path_validator.validate_read(str(layout["pdf"]))
+
+    assert (first, again) == (False, False)
+    assert console.asked == [("allow_path_access", str(docs.resolve()))]
+    assert reason
+
+
+def test_a_declined_path_does_not_block_an_unrelated_one(layout, tmp_path):
+    console = _Console(answer=False)
+    agent = _agent(layout, console)
+    other = tmp_path / "Other"
+    other.mkdir()
+    (other / "a.txt").write_text("a", "utf-8")
+
+    agent.path_validator.validate_read(str(layout["pdf"]))
+    agent.path_validator.validate_read(str(other / "a.txt"))
+
+    assert len(console.asked) == 2
+
+
+def test_the_next_turn_asks_again(layout):
+    console = _Console(answer=False)
+    agent = _agent(layout, console)
+
+    agent.path_validator.validate_read(str(layout["pdf"]))
+    agent._turn_seq += 1  # what process_query does at the start of a turn
+    agent.path_validator.validate_read(str(layout["pdf"]))
+
+    assert len(console.asked) == 2

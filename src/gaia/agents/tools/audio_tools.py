@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from gaia.agents.base.file_snapshots import SnapshotError, before_change
 from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.logger import get_logger
 
@@ -219,8 +220,9 @@ def _write_timings(destination: Path, transcript, speaker_spans=None) -> None:
         ],
     }
     try:
+        before_change(timings_path_for(destination), "transcribe")
         timings_path_for(destination).write_text(json.dumps(payload), encoding="utf-8")
-    except OSError as e:
+    except (OSError, SnapshotError) as e:
         # The transcript is the artifact; losing timings costs turn quality,
         # not the run.
         logger.warning("Could not write timings for %s: %s", destination, e)
@@ -706,6 +708,7 @@ class AudioToolsMixin:
 
         blocks = [f"{name}: {text}" for name, text in _merge_adjacent(named)]
         speakers = list(dict.fromkeys(name for name, _ in named))
+        before_change(destination, "refine_transcript")
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(
             _render_refined(
@@ -1047,6 +1050,7 @@ class AudioToolsMixin:
     def _write_transcript(self, transcript, source: Path, output_path: Optional[str]):
         """Persist the transcript before any later stage can fail."""
         destination = self._transcript_destination(source, output_path)
+        before_change(destination, "transcribe")
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(transcript.text, encoding="utf-8")
         return destination

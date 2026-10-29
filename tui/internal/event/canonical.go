@@ -64,6 +64,10 @@ type CanonicalStatusEvent struct {
 	LemonadeReachable *bool  `json:"lemonade_reachable,omitempty"`
 	LemonadeVersion   string `json:"lemonade_version,omitempty"`
 	LemonadeBaseURL   string `json:"lemonade_base_url,omitempty"`
+	// AgentVersion/GaiaVersion are what the running agent says it is — the
+	// only version the header may show. Empty from an agent that predates them.
+	AgentVersion string `json:"agent_version,omitempty"`
+	GaiaVersion  string `json:"gaia_version,omitempty"`
 	// Phase names what the model is doing while nothing else is on the wire:
 	// "loading_model", "downloading_model", "reading", "reasoning" or
 	// "tool_call". Empty on narration and on agents that predate it. Words
@@ -303,6 +307,9 @@ type CanonicalErrorEvent struct {
 	Detail string `json:"detail"`
 	Status int    `json:"status,omitempty"`
 	Source string `json:"source,omitempty"`
+	// RawDetail is the wire detail when Detail was reworded for the user, kept
+	// for the log so the cause is not lost.
+	RawDetail string `json:"-"`
 }
 
 // CanonicalUnsupportedEvent — a top-level `type` outside the frozen seven, from a

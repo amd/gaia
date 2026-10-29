@@ -973,6 +973,11 @@ Notable implementation details:
 - `@tool(display_label=...)` sets a user-facing label for UI progress strips, and
   `@tool(timeout=...)` overrides the global per-tool execution limit (seconds).
   Both default to `None` and are stored on the registry entry.
+- `@tool(timeout_arg="timeout")` names the tool's own parameter that sets how
+  long a call may run. The agent then waits at least that long plus 30 seconds
+  before abandoning the call (capped at 3600 seconds), so a call given 15
+  minutes is not cut off at the default. A name that is not a parameter of the
+  tool raises `TypeError`.
 - `@tool(preflight=...)` takes a function of the call's arguments that returns
   the refusal the call has already earned, or `None`. The agent runs it before
   the confirmation prompt, so nobody is asked to approve a call that is going to

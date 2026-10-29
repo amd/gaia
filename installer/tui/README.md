@@ -1,10 +1,10 @@
-# Terminal Hub installers
+# GAIA Terminal UI installers
 
-Native double-click installers for the GAIA terminal hub. Each one puts two
-executables on disk and on `PATH`:
+Native double-click installers for the GAIA Terminal UI (`gaia-tui`). Each one
+puts two executables on disk and on `PATH`:
 
-- **`gaia-tui`** — the hub itself (built from [`tui/`](../../tui))
-- **`gaia-agent`** — the flagship agent the hub spawns as a child process
+- **`gaia-tui`** — the Terminal UI itself (built from [`tui/`](../../tui))
+- **`gaia-agent`** — the flagship agent the Terminal UI spawns as a child process
   (`TransportSubprocess` in `tui/internal/catalog/catalog.go`)
 
 Shipping only the first installs a front end with nothing behind it, which is
@@ -15,9 +15,10 @@ desktop app (Agent UI), the terminal, or both — at least one — and installs 
 desktop app by running the unmodified electron-builder
 `gaia-agent-ui-<version>-x64-setup.exe` it embeds. That setup stays the app's
 owner (files, Installed-apps entry, shortcuts, autostart, uninstaller) because
-electron-updater re-runs exactly that file. The terminal keeps the
-`GAIA Terminal Hub` identity the terminal-only setup used, so either earlier
-installer is upgraded in place. Silent installs take `/S /COMPONENTS=ui,tui`; the
+electron-updater re-runs exactly that file. The terminal shows as
+`GAIA Terminal UI` but keeps the folder and registry ids of the terminal-only
+setup (`GAIA Terminal Hub`, `GAIATerminalHub`), so either earlier installer is
+upgraded in place and its old-named shortcuts are removed. Silent installs take `/S /COMPONENTS=ui,tui`; the
 exit codes are listed in `gaia-setup.nsi` and [Install GAIA](../../docs/guides/install.mdx).
 
 | Platform | Builder | Artifact |
@@ -53,10 +54,13 @@ in the lock is refused outright rather than downgraded to that weaker check. Sam
 contract as `hub/agents/gaia/npm/src/fetch.ts`. There is no unverified path; do
 not add one.
 
-The lock ships `PENDING-replace-with-real-sha256` until a release fills it in, so
-the installer build fails until it is regenerated with
-`hub/agents/gaia/python/packaging/gen_binaries_lock.py`. That is the intended
-state — the same placeholder already blocks `npx @amd-gaia/gaia`.
+The committed lock carries real hashes only once a flagship release fills it in:
+`release_agent_gaia.yml` regenerates it with
+`hub/agents/gaia/python/packaging/gen_binaries_lock.py` and opens a PR
+(`flagship-lock/v<version>`) committing it to main. Until that PR merges,
+the installer build fails — on a placeholder, or on hashes from the previous
+release. That is the intended state; the same placeholder already blocks
+`npx @amd-gaia/gaia`. Merge the PR rather than editing the hashes by hand.
 
 The Windows setup also bundles IBM Plex Mono for its Windows Terminal profile.
 Stage it separately and pass the directory as `--fonts`. Same contract: the

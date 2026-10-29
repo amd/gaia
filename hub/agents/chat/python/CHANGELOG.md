@@ -1,7 +1,86 @@
 # Changelog
 
+## Unreleased
+
+- `gaia chat --index <file>` indexes the named file from any working
+  directory. A file outside the folder `gaia chat` ran in was refused as "not
+  in allowed paths", the error was only logged, and the agent answered without
+  the document. Naming a file grants read access to that file, not its folder.
+- `get_system_info` reports free disk space (`disk_free_gb`) and available
+  memory (`memory_available_gb`), and computes disk use from free space. On a
+  Mac it reported only the share macOS's system volume uses, so a nearly full
+  disk read as 5% used. Its description now says it answers free-space
+  questions, so the model stops trying `df`, which the shell refuses.
+- `/quit` and `/reset` no longer discard the conversation when the session
+  cannot be saved; chat stays open so storage can be fixed and `/save` retried.
+  Ctrl-C still exits without saving. Document tools warn when an indexed
+  document's session attachment could not be saved (#3288).
+- Saving a Word, PowerPoint or Excel document in a watched folder now updates
+  its index. Office owner files (`~$...`) and temporary save files are ignored;
+  a document saved by renaming a temporary file over it is reindexed (#5478).
+- On macOS, a watched document saved by renaming a new copy over it (as Word
+  and most editors do) no longer drops out of the index right after it was
+  reindexed. macOS reports the replaced file as deleted; a file still on disk
+  is now treated as changed, not deleted.
+- A turn whose local model failed on a base URL the user set
+  (`LEMONADE_BASE_URL` or an external Lemonade) now names that server — "The
+  model server at 192.168.1.20:8080" — instead of "Lemonade on this machine",
+  which pointed at a Lemonade install that wasn't involved (#5295). Only the
+  host and port are shown, never credentials or a query string.
+- In an Agent UI chat with no documents attached, the document tools now say
+  no documents are attached to this chat, and that the user can attach them
+  from the Document library, instead of "No documents are currently indexed".
+  The model used to tell users their index was empty while the library held
+  the files they asked about. Overrides `_no_documents_message`, which the
+  next core release's `RAGToolsMixin` calls; with core 0.25.1 the old message
+  stays.
+- A `run_python` snippet or `execute_python_file` script whose code only reads
+  files no longer marks the turn's undo as incomplete, unless files changed in
+  the folders it ran in. The check fails closed: an import it doesn't know,
+  dynamic code, a mode it can't read, a folder scan cut short or a run that
+  fails part-way all still count as a write. A snippet is recorded by its docstring or first
+  comment line instead of its first line of code. Uses `may_write` on
+  `note_untracked`, new in core 0.25.1.
+- On Windows, a watched document that another program holds for exclusive
+  access, or has partly locked, is now retried, including one saved by
+  renaming a temp file onto it. Before, the agent tried it once and never
+  reindexed it. `reindex_file` now raises `PermissionError` for a locked file,
+  so the file watcher retries it 1, 2 and 4 windows later. If it is still
+  locked after those three retries, the watcher gives up and logs one error
+  telling the user to close the program and save the file again. This covers
+  the extensions the watcher watches: `.pdf`, `.txt`, `.md`, `.markdown`,
+  `.rst`, `.log`, `.csv`, `.json`, `.xml`, `.yaml`, `.yml`, `.py`, `.js`,
+  `.ts`, `.java`, `.cpp`, `.c`, `.html` and `.css`.
+- Indexing a locked document directly, in any format, now reports it as locked
+  (`error_type: "file_locked"`). A Word or PowerPoint file used to be reported
+  as corrupted, with advice to re-download it, and an Excel file could fail
+  with "File is not a zip file".
+- Any other reindex failure is still logged: an exception with its traceback,
+  a failed index with RAG's error.
+- Needs core 0.25.1, whose file watcher retries, whose RAG reports a locked
+  read as `error_type: "file_locked"`, and which ships
+  `gaia.utils.file_lock.held_by_another_program`, imported at start;
+  `tests/test_chat_dependency_floor.py` fails the 0.25.1 release until the
+  floor rises.
+- gpt-oss 20B and 120B get `set_reasoning_effort` (low, medium or high), so the
+  agent chooses how hard the model reasons for the rest of a request; each new
+  message starts again at the default. It registers per agent and only on a
+  model that grades its reasoning, so other models' agents never see it, even
+  in a server that ran gpt-oss earlier.
+- Needs core 0.25.1, the first release that ships
+  `gaia.agents.tools.reasoning_tools`, which the agent imports at start; on
+  0.25.0 it fails at import. The `amd-gaia` floor rises to 0.25.1 in that
+  release (a floor above the in-tree core cannot resolve), and
+  `tests/test_chat_dependency_floor.py` fails the release until it does.
+
 ## 0.2.0
 
+- A file copied or saved into a watched folder is reindexed once it has
+  finished being written, instead of at its first change, so search no longer
+  answers from a half-written copy. Reindexing runs off the file watcher's
+  thread, and `stop_watching` now stops it too.
+- When `generate_image` fails, the prompt asks for its error in a sentence or two
+  instead of pointing at an `--sd` flag that does not exist.
 - Requires `amd-gaia>=0.25.0`, the first core release that ships
   `gaia.agents.tools.path_access`, which the agent imports at start. With an
   older core the agent fails at import.
@@ -9,9 +88,45 @@
   stopped-state address `localhost:13305`. Without a configured `base_url` the
   agent takes the port the server actually starts on, so its first turn answers
   instead of failing with "Couldn't reach the local LLM".
+- `run_python` with no project and a working directory outside the allowed
+  paths (the Agent UI server's own folder) runs in the agent's scratch
+  directory instead of being refused, and its result names that directory. A
+  project outside the allowed paths is still refused.
 - `run_python`, `execute_python_file` and the Windows notification fallback start
   their child process without GAIA's internal credentials, as core's shell and
   MCP children already do.
+- `run_python` and `execute_python_file` run inside a frozen (PyInstaller)
+  agent. There `sys.executable` is the agent binary, so they now re-launch it
+  with `--gaia-run-python-file`, which its entry point must hand to
+  `gaia_agent_chat.python_runner.run_python_file` before parsing argv.
+- A Python run that exits non-zero now returns `status: "error"` with an
+  `error` naming the exit code and the last stderr line, instead of
+  `status: "success"`.
+- `run_python` and `execute_python_file` default to a 120 s run (was 60 s) and
+  accept `timeout` up to 1800 s; a larger value is refused, not clamped. The
+  agent waits out the requested time instead of abandoning the call at its
+  180 s default. A run that times out or is stopped kills its whole process
+  tree (a Job Object on Windows, so orphaned grandchildren die too), and its
+  result lists `files_modified` — the files that changed while it ran, with
+  `files_modified_complete: false` when the bounded search stopped early — so
+  a half-written file is checked rather than reported as finished. Nothing is
+  deleted. A script that exits while a process it started still holds its
+  output no longer waits out the timeout: those processes are stopped and the
+  result carries a `note`.
+  `gaia_agent_chat.python_runner.dispatch` before parsing argv. `dispatch`
+  also runs the `python -m/-c/<file>` forms a script uses to start
+  `sys.executable`, and refuses `-m pip` with the bundled-library list. Both
+  tool descriptions name the bundled libraries.
+- The agent reads its MCP server list from `$GAIA_HOME/mcp_servers.json`, not
+  always `~/.gaia/mcp_servers.json`, so a run with its own `GAIA_HOME` no longer
+  starts the user's MCP servers.
+- A Python run that exits non-zero now returns `status: "error"` with an
+  `error` naming the exit code and the last stderr line, instead of
+  `status: "success"`.
+- A script that prints a character outside the Windows console codec (`✓`,
+  CJK, emoji) no longer crashes with `UnicodeEncodeError` when the agent runs
+  from source: both tools ask the child for UTF-8 output, which is what they
+  decode.
 - Every file tool now checks the same allowed-folders rule as `read_file`:
   listing and searching folders (`list_files` included), indexing documents,
   watching folders, and the files `text_to_speech` and the export tools save. A folder you
@@ -60,3 +175,10 @@
   `--use-chatgpt` and `use_chatgpt=True` now fail with migration guidance before
   inference. Configure a local or on-prem model in Lemonade and use its server
   URL and catalog model ID. The OpenAI Python HTTP-client dependency is retained.
+- `list_windows` reports a failed `tasklist`, `wmctrl` or `osascript` as an
+  error naming its exit code, instead of an empty list or a generic message.
+  `notify_desktop`'s Windows fallback waits briefly and reports a PowerShell
+  that exited non-zero, and `open_url` reports when no browser could be opened.
+- Missing-package hints (`psutil`, `pyperclip`, `plyer`) give a working install
+  command, and in a frozen build say the package isn't bundled rather than
+  suggesting `pip install`.

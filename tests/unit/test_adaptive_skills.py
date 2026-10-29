@@ -1553,10 +1553,13 @@ class _TaintProbeAgent:
     the bodies behind them do.
     """
 
+    internet_off = Agent.internet_off
     _execute_tool = Agent._execute_tool
     _resolve_tool_name = Agent._resolve_tool_name
     _policy_refusal = Agent._policy_refusal
     _tool_requires_confirmation = Agent._tool_requires_confirmation
+    _write_target_outside_scope = Agent._write_target_outside_scope
+    _read_validator = Agent._read_validator
     # __dict__ so the classmethod rebinds to this class's MRO rather than
     # staying bound to Agent.
     confirmation_hooks = Agent.__dict__["confirmation_hooks"]
@@ -1566,6 +1569,8 @@ class _TaintProbeAgent:
     _call_tool_bounded = Agent._call_tool_bounded
     _fold_tool_usage = Agent._fold_tool_usage
     _resolve_tool_timeout = Agent._resolve_tool_timeout
+    _requested_tool_timeout = Agent._requested_tool_timeout
+    _bounded_tool_timeout = Agent._bounded_tool_timeout
     _begin_turn_provenance = Agent._begin_turn_provenance
     mark_external_content = Agent.mark_external_content
     turn_content_provenance = Agent.turn_content_provenance

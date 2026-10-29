@@ -10,6 +10,10 @@ export const MIN_CONTEXT_SIZE = 32768;
  *  `DEFAULT_MODEL_NAME` in `gaia.llm.lemonade_client`. */
 export const DEFAULT_MODEL_NAME = 'Gemma-4-E4B-it-GGUF';
 
+/** Longest chat title the backend accepts; longer renames are cut to fit.
+ *  Must match `MAX_SESSION_TITLE_CHARS` in `gaia.ui.models`. */
+export const MAX_SESSION_TITLE_CHARS = 200;
+
 /** Max spinner duration (ms) for model load operations (5 min safety reset). */
 export const LOAD_SPINNER_TIMEOUT_MS = 300_000;
 

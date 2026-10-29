@@ -1,0 +1,271 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.cp-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    justify-content: flex-end;
+    background: var(--bg-modal-overlay);
+    animation: fadeIn var(--duration-fast) var(--ease);
+}
+
+.cp-sheet {
+    display: flex;
+    flex-direction: column;
+    width: 420px;
+    max-width: 100%;
+    height: 100%;
+    background: var(--bg-card);
+    border-left: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+    color: var(--text-primary);
+}
+
+.cp-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.cp-header h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.cp-icon {
+    display: inline-flex;
+    padding: 6px;
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+}
+
+.cp-icon:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.cp-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 16px 24px;
+    font-size: 13px;
+    scrollbar-width: thin;
+}
+
+.cp-body section {
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.cp-body section:last-child {
+    border-bottom: none;
+}
+
+.cp-body h3 {
+    margin: 0 0 10px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.cp-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.cp-section-head h3 {
+    margin: 0;
+}
+
+.cp-lead {
+    margin: 0 0 8px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.cp-lead strong {
+    color: var(--text-primary);
+}
+
+.cp-model {
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+.cp-chip {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    color: var(--text-muted);
+    font-size: 11px;
+    cursor: help;
+}
+
+.cp-stack {
+    display: flex;
+    height: 8px;
+    overflow: hidden;
+    margin: 4px 0 10px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-full);
+}
+
+.cp-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin: 0 0 8px;
+}
+
+.cp-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.cp-row dt {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    color: var(--text-secondary);
+}
+
+.cp-row dd {
+    margin: 0;
+    text-align: right;
+    color: var(--text-primary);
+}
+
+.cp-row.is-quiet dt,
+.cp-row.is-quiet dd {
+    color: var(--text-muted);
+}
+
+.cp-indent {
+    padding-left: 14px;
+}
+
+.cp-pct {
+    display: inline-block;
+    min-width: 3.2em;
+    color: var(--text-muted);
+}
+
+.cp-unknown {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.cp-note {
+    margin: 6px 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.cp-error,
+.cp-warning {
+    margin: 8px 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    line-height: 1.4;
+}
+
+.cp-error {
+    color: var(--text-primary);
+    background: var(--danger-dim);
+}
+
+.cp-warning {
+    color: var(--text-secondary);
+    background: var(--accent-yellow-dim);
+}
+
+.cp-details summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+}
+
+.cp-tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.cp-tools li {
+    padding: 1px 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.cp-full {
+    margin-top: 10px;
+}
+
+.cp-summarized {
+    color: var(--text-secondary);
+}
+
+.cp-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.cp-toggle button {
+    padding: 3px 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.cp-toggle button[aria-pressed='true'] {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+/* Context categories. */
+.cp-cat-system { background: var(--text-muted); }
+.cp-cat-tools { background: var(--accent-purple); }
+.cp-cat-skills { background: var(--accent-yellow); }
+.cp-cat-memory { background: var(--accent); }
+.cp-cat-documents { background: var(--accent-blue); }
+.cp-cat-messages { background: var(--accent-green); }
+.cp-cat-query { background: var(--text-secondary); }
+.cp-cat-free { background: var(--bg-tertiary); border: 1px solid var(--border); }
+
+/* Where the time went. */
+.cp-time-model { background: var(--accent-blue); }
+.cp-time-tools { background: var(--accent-purple); }
+.cp-time-waiting { background: var(--accent-yellow); }
+.cp-time-gaia { background: var(--accent); }
+
+@media (max-width: 480px) {
+    .cp-sheet {
+        width: 100%;
+        border-left: none;
+    }
+}

@@ -9,13 +9,16 @@
 #           touch the agent loop, its tools or the coding skill run these; a
 #           failure there is a regression signal, not noise.
 #   hard  - ten tasks strong Claude agents rarely solve on the leaderboard and
-#           that separated GAIA configurations in measured runs. Nightly.
+#           that separated GAIA configurations in measured runs. On dispatch.
+#           The nightly schedule is off: every run failed with HTTP 404 for the
+#           model. Put it back once a dispatch of `hard` passes the model
+#           preflight below.
 #
 # The model is DeepSeek V4.1 Flash on Fireworks, reached through GAIA's own
 # embedded Lemonade, so no GPU is needed and the Linux runner's Docker grades
-# natively. Lemonade reads LEMONADE_FIREWORKS_API_KEY from its environment; the
-# agent never sees it (the eval harness strips secret-named variables from the
-# agent's environment).
+# natively. The preflight registers Fireworks with that Lemonade, which reads
+# LEMONADE_FIREWORKS_API_KEY from its environment; the agent never sees it (the
+# eval harness strips secret-named variables from the agent's environment).
 #
 # Results are reported in the job summary and uploaded, not gated: no
 # expectations exist yet for this runner, and none are hand-authored. Commit
@@ -23,8 +26,6 @@
 name: SWE-bench (flagship)
 
 on:
-  schedule:
-    - cron: '43 9 * * *'
   workflow_dispatch:
     inputs:
       subset:
@@ -48,6 +49,8 @@ on:
       - 'src/gaia/eval/flagship_tasks.py'
       - 'eval/tasks/swebench_subsets.json'
       - '.github/workflows/eval_swebench.yml'
+      - 'util/swebench_model_preflight.py'
+      - '.github/actions/setup-venv/**'
 
 permissions:
   contents: read
@@ -81,7 +84,7 @@ jobs:
       - name: Require the Fireworks key
         run: |
           if [ -z "$LEMONADE_FIREWORKS_API_KEY" ]; then
-            echo "::error::The FIREWORKS_API_KEY repository secret is not set. Add it under Settings > Secrets and variables > Actions; this workflow cannot reach the model without it."
+            echo "::error title=FIREWORKS_API_KEY is not set::SWE-bench cannot reach its model without it. | WHAT TO DO: gh secret set FIREWORKS_API_KEY --repo $GITHUB_REPOSITORY (a key from https://fireworks.ai/account/api-keys) | WHERE TO LOOK: .github/workflows/eval_swebench.yml. A fork PR never has it; this job is skipped there."
             exit 1
           fi
 
@@ -102,8 +105,18 @@ jobs:
           gaia lemonade embedded start --timeout 180
           gaia lemonade embedded status
 
+      # Connects Fireworks, then one tiny request before ten 40-minute tasks. A
+      # model Fireworks itself will not serve skips a PR run with a warning (no PR
+      # can fix it) and fails a dispatch; a key or routing fault fails both.
+      - name: Require the model to answer
+        id: model
+        run: |
+          . "$HOME/.gaia/lemonade/env.sh"
+          python util/swebench_model_preflight.py
+
       - name: Pick the instances
         id: pick
+        if: steps.model.outputs.ready == 'true'
         run: |
           if [ -n "${{ github.event.inputs.instances }}" ]; then
             ids="${{ github.event.inputs.instances }}"
@@ -114,6 +127,7 @@ jobs:
           echo "Instances: $ids"
 
       - name: Run and grade
+        if: steps.model.outputs.ready == 'true'
         # One task at a time; each image is pulled before its run and removed
         # after, which keeps the hosted runner's disk under its limit.
         run: |
@@ -123,7 +137,7 @@ jobs:
             --no-judge --run-timeout 2400 --out "$OUT"
 
       - name: Summarize
-        if: always()
+        if: always() && steps.model.outputs.ready == 'true'
         run: |
           python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
           import json, os, pathlib
@@ -157,7 +171,7 @@ jobs:
           EOF
 
       - name: Upload results
-        if: always()
+        if: always() && steps.model.outputs.ready == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: swebench-${{ env.SUBSET }}-${{ github.run_id }}

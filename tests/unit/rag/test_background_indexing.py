@@ -65,7 +65,7 @@ def slow_rag():
     rag = MagicMock()
     rag.indexed_files = set()
 
-    def index_document(path, progress_callback=None):
+    def index_document(path, progress_callback=None, wait_callback=None):
         if progress_callback is not None:
             progress_callback(0, 100)
             progress_callback(40, 100)

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { beforeEach, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryDashboard } from '../MemoryDashboard';
 import * as memoryApi from '../../services/memoryApi';
 
@@ -43,6 +43,8 @@ beforeEach(() => {
 
 async function successCard() {
     render(<MemoryDashboard />);
+    // Stats and the knowledge table live under Advanced.
+    fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
     const label = await screen.findByText('Success Rate');
     return label.closest('.mem-stat-card') as HTMLElement;
 }

@@ -35,6 +35,7 @@ from gaia_agent_chat.tool_bundles import (
 )
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
 
 #: Ceiling on bundle size. A pull-in must never be able to exhaust the dynamic
 #: slots on its own (GaiaAgentConfig.dynamic_tools_max=29 minus 16 CORE leaves 13).
@@ -66,7 +67,14 @@ def flagship_registry():
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
         # Opt-in (GAIA_DYNAMIC_TOOLS=1 / the UI toggle), and the bundles must
         # still cover the registry whenever someone turns it on.
-        agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True, dynamic_tools=True))
+        # On gpt-oss, the one model family that also registers set_reasoning_effort.
+        agent = GaiaAgent(
+            config=GaiaAgentConfig(
+                silent_mode=True,
+                dynamic_tools=True,
+                model_id=GPT_OSS_20B_MODEL_NAME,
+            )
+        )
         assert agent.tool_loader is not None, (
             "the flagship builds no tool loader with dynamic_tools=True — 'full' "
             "must be in PROFILE_TOOL_CONFIGS, or load_tools never registers."

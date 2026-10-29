@@ -17,9 +17,10 @@ import re
 import shutil
 import stat
 import tempfile
+import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from gaia.utils.terminal import stdin_is_interactive
 
@@ -222,9 +223,9 @@ def _path_is_within(candidate: Path, parent: Path) -> bool:
     norm_parent = os.path.normpath(_normalize_macos_symlinks(str(parent)))
     if is_windows:
         norm_candidate, norm_parent = norm_candidate.lower(), norm_parent.lower()
-    return norm_candidate == norm_parent or norm_candidate.startswith(
-        norm_parent + os.sep
-    )
+    # A drive root or "/" already ends in a separator.
+    prefix = norm_parent if norm_parent.endswith(os.sep) else norm_parent + os.sep
+    return norm_candidate == norm_parent or norm_candidate.startswith(prefix)
 
 
 def _startup_execution_reason(real_path: Path) -> Optional[str]:
@@ -420,10 +421,40 @@ _NO_WORKAROUND = (
     " Do not copy, move or convert it to another location to get around this."
 )
 
+# Folders a denial of the whole home folder offers instead, when they exist.
+_USER_FOLDER_NAMES = (
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Movies",
+    "Music",
+    "Pictures",
+    "Videos",
+)
+
 
 def _system_temp_roots() -> Set[str]:
     """Shared temp directories, which stay out of every agent's scope."""
     return {tempfile.gettempdir(), "/tmp", "/var/tmp"}
+
+
+def _make_private_dir(path: Path) -> None:
+    """Create *path* private, or confirm the existing one is ours to use.
+
+    Raises:
+        OSError: If *path* exists but is a link, not a directory, or (POSIX)
+            owned by another user, or cannot be created.
+    """
+    path.mkdir(mode=0o700, exist_ok=True)
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise OSError(f"{path} is not a directory")
+    # getuid is POSIX-only; the hasattr guard keeps Windows off this path.
+    if (
+        hasattr(os, "getuid")
+        and info.st_uid != os.getuid()  # pylint: disable=no-member
+    ):
+        raise OSError(f"{path} is owned by another user")
 
 
 def stable_scratch_dir(anchor: str) -> Path:
@@ -435,6 +466,11 @@ def stable_scratch_dir(anchor: str) -> Path:
     under a shared temp dir must not be an invitation: the directory is created
     private, and one that already exists but is not a directory this user owns is
     refused, loudly, in favour of a fresh private one.
+
+    The same path is handed to every agent on *anchor*, so several chats in one
+    long-lived process share it: take it with :func:`acquire_scratch_dir` and
+    give it back with :func:`release_scratch_dir`, which says when it is safe to
+    delete.
     """
     owner = (
         str(os.getuid()) if hasattr(os, "getuid") else os.environ.get("USERNAME", "")
@@ -444,12 +480,7 @@ def stable_scratch_dir(anchor: str) -> Path:
     ).hexdigest()[:12]
     path = Path(tempfile.gettempdir()) / f"gaia-scratch-{digest}"
     try:
-        path.mkdir(mode=0o700, exist_ok=True)
-        info = path.lstat()
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            raise OSError("not a directory")
-        if hasattr(os, "getuid") and info.st_uid != os.getuid():
-            raise OSError("owned by another user")
+        _make_private_dir(path)
     except OSError as exc:
         fallback = Path(tempfile.mkdtemp(prefix="gaia-scratch-"))
         logger.warning(
@@ -460,6 +491,194 @@ def stable_scratch_dir(anchor: str) -> Path:
         )
         return fallback
     return path
+
+
+_scratch_holders: Dict[str, int] = {}
+_scratch_lock = threading.Lock()
+
+
+def _scratch_key(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def acquire_scratch_dir(anchor: str) -> Path:
+    """:func:`stable_scratch_dir` for *anchor*, counted as held by one more agent.
+
+    Every chat in a long-lived sidecar that shares a project shares this path,
+    so one chat's cleanup must not delete it while another is still using it.
+    """
+    path = stable_scratch_dir(anchor)
+    with _scratch_lock:
+        key = _scratch_key(path)
+        _scratch_holders[key] = _scratch_holders.get(key, 0) + 1
+    return path
+
+
+def release_scratch_dir(path: Path) -> bool:
+    """Give back one hold on *path*; True when no agent in this process holds it.
+
+    A path never acquired (or already fully released) answers True, so a
+    caller that set the directory up by hand still cleans it up.
+    """
+    with _scratch_lock:
+        key = _scratch_key(path)
+        held = _scratch_holders.get(key, 0)
+        if held <= 1:
+            _scratch_holders.pop(key, None)
+            return True
+        _scratch_holders[key] = held - 1
+        return False
+
+
+def ensure_scratch_dir(path: Path) -> bool:
+    """Make sure *path* exists before anything runs in it.
+
+    The directory lives in the shared temp folder, so it can vanish under a
+    live agent: another GAIA process on the same project cleaned it up, or a
+    temp cleaner (Storage Sense, ``systemd-tmpfiles``) swept it. Re-creating it
+    is safe — it holds only throwaway files — and keeps the path the system
+    prompt already names.
+
+    Returns:
+        True if it had to be re-created, False if it was already there.
+
+    Raises:
+        OSError: If it cannot be re-created as a private directory this user
+            owns.
+    """
+    path = Path(path)
+    if path.is_dir() and not path.is_symlink():
+        return False
+    _make_private_dir(path)
+    logger.warning("Scratch directory %s had been deleted; re-created it", path)
+    return True
+
+
+#: Narrows every agent's file scope for one run; see :func:`env_allowed_paths`.
+ALLOWED_PATHS_ENV = "GAIA_ALLOWED_PATHS"
+
+_ALLOWED_PATHS_DOCS = "https://amd-gaia.ai/docs/reference/cli#narrowing-file-access"
+
+_warned_scope_entries: Set[Tuple[str, Tuple[str, ...]]] = set()
+
+
+class AllowedPathsEnvError(ValueError):
+    """``GAIA_ALLOWED_PATHS`` holds a value that cannot be used as a scope."""
+
+
+def env_allowed_paths() -> Optional[List[Path]]:
+    """The folders ``GAIA_ALLOWED_PATHS`` confines this process's agents to.
+
+    The variable holds absolute paths separated by ``os.pathsep`` (``;`` on
+    Windows, ``:`` elsewhere). It can only narrow: every ``PathValidator``
+    intersects its own scope with this list, so an entry outside the agent's
+    default scope adds nothing. The agent's scratch directory stays allowed.
+
+    It confines GAIA's file tools and the path checks on shell commands. It
+    does not confine code those tools run — a ``run_python`` script or shell
+    command can still open any file the OS user can read. Isolation from that
+    needs OS-level separation (another user account, a container or a VM).
+
+    Returns:
+        The resolved entries, or None when the variable is unset.
+
+    Raises:
+        AllowedPathsEnvError: When the value is empty, or an entry is empty,
+            relative, or does not exist.
+    """
+    raw = os.environ.get(ALLOWED_PATHS_ENV)
+    if raw is None:
+        return None
+    problems: List[str] = []
+    roots: List[Path] = []
+    for position, entry in enumerate(raw.split(os.pathsep), start=1):
+        entry = entry.strip()
+        if not entry:
+            problems.append(f"entry {position} is empty")
+        elif not Path(entry).is_absolute():
+            problems.append(f"'{entry}' is not an absolute path")
+        elif not os.path.exists(entry):
+            problems.append(f"'{entry}' does not exist")
+        else:
+            roots.append(Path(os.path.realpath(entry)))
+    if problems:
+        raise AllowedPathsEnvError(
+            f"{ALLOWED_PATHS_ENV}={raw!r} cannot be used: {'; '.join(problems)}. "
+            f"Set it to existing absolute folders separated by '{os.pathsep}', or "
+            f"unset it to use the agent's default scope. See {_ALLOWED_PATHS_DOCS}"
+        )
+    return roots
+
+
+def _dedupe_paths(paths: List[Path]) -> List[Path]:
+    seen: Set[str] = set()
+    unique: List[Path] = []
+    for path in paths:
+        key = os.path.normcase(str(path))
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique
+
+
+def _intersect_scopes(
+    scope: Any, ceiling: List[Path], *, warn: bool = True
+) -> List[Path]:
+    """The part of *scope* that also lies inside *ceiling*.
+
+    Each pair keeps the narrower of the two when one contains the other, and
+    nothing when they are disjoint. Ceiling entries that meet no scope entry
+    are logged once: they can never widen what the agent may touch.
+    """
+    granted = [Path(_real_path(p)) for p in scope]
+    kept: List[Path] = []
+    for limit in ceiling:
+        met = False
+        for root in granted:
+            if _path_is_within(root, limit):
+                kept.append(root)
+                met = True
+            elif _path_is_within(limit, root):
+                kept.append(limit)
+                met = True
+        if not met and warn:
+            key = (str(limit), tuple(sorted(str(g) for g in granted)))
+            if key not in _warned_scope_entries:
+                _warned_scope_entries.add(key)
+                logger.warning(
+                    "%s entry '%s' is outside the agent's scope %s and is "
+                    "ignored: the setting can only narrow file access, never widen it.",
+                    ALLOWED_PATHS_ENV,
+                    limit,
+                    [str(g) for g in granted],
+                )
+    return _dedupe_paths(kept)
+
+
+def narrow_allowed_paths(
+    paths: Optional[List[Any]], *, warn: bool = True
+) -> Optional[List[str]]:
+    """*paths* narrowed by ``GAIA_ALLOWED_PATHS``, or unchanged when it is unset.
+
+    ``None`` stands for the validator default, the working directory; once
+    narrowed, the result is an explicit scope, so grants persisted by the
+    interactive CLI are no longer merged in.
+
+    Args:
+        paths: An agent's configured ``allowed_paths``.
+        warn: Log the setting's entries that fall outside *paths*.
+
+    Returns:
+        The narrowed list, or *paths* itself when the variable is unset.
+
+    Raises:
+        AllowedPathsEnvError: When the variable holds an invalid value.
+    """
+    ceiling = env_allowed_paths()
+    if ceiling is None:
+        return paths
+    base = [Path.cwd()] if paths is None else paths
+    return [str(p) for p in _intersect_scopes(base, ceiling, warn=warn)]
 
 
 class PathValidator:
@@ -508,8 +727,19 @@ class PathValidator:
                 yes — a server launched from a terminal has one, but its users
                 are on HTTP. Evaluated per prompt, so a host that swaps the
                 agent's console mid-session is honoured.
+
+        Raises:
+            AllowedPathsEnvError: When ``GAIA_ALLOWED_PATHS`` is set to an
+                invalid value. When it is valid, the scope is intersected with
+                it and every later grant is held to it (see
+                :func:`env_allowed_paths`).
         """
+        self._env_scope: Optional[List[Path]] = env_allowed_paths()
         self.allowed_paths: Set[Path] = set()
+        # Readable but never writable, e.g. a loaded skill's own folder.
+        self.read_only_paths: Set[Path] = set()
+        # Folders the user took away from this chat: refused, never prompted for.
+        self.withheld_paths: Set[Path] = set()
         self.scratch_dir: Optional[Path] = None
 
         # A host-supplied scope must not union with the machine-global grants the
@@ -539,9 +769,61 @@ class PathValidator:
         self._on_prompt_end = on_prompt_end
         self._interactive_check = interactive_check
         self._access_prompt: Optional[Callable[[Path], bool]] = None
+        self._access_declines: Optional[Callable[[Path], bool]] = None
 
         # Load persisted paths
         self._load_persisted_paths()
+
+        if self._env_scope is not None:
+            self.allowed_paths = set(
+                _intersect_scopes(self.allowed_paths, self._env_scope)
+            )
+            logger.info(
+                "%s confines file access to %s",
+                ALLOWED_PATHS_ENV,
+                sorted(str(p) for p in self.allowed_paths),
+            )
+
+    @property
+    def env_scope(self) -> Optional[List[Path]]:
+        """The ``GAIA_ALLOWED_PATHS`` entries, or None when it is unset."""
+        return self._env_scope
+
+    def in_env_scope(self, path: Any) -> bool:
+        """Whether *path* is inside ``GAIA_ALLOWED_PATHS`` or the scratch dir.
+
+        Always True when the variable is unset.
+
+        Args:
+            path: Any path; ``~``, ``..`` and symlinks are resolved first.
+
+        Returns:
+            True when the narrowing setting does not exclude *path*.
+        """
+        if self._env_scope is None:
+            return True
+        real_path = Path(_real_path(path))
+        if self.scratch_dir is not None and _path_is_within(
+            real_path, self.scratch_dir
+        ):
+            return True
+        return any(_path_is_within(real_path, limit) for limit in self._env_scope)
+
+    def confine_roots(self, roots: Any) -> List[Path]:
+        """Search roots cut down to ``GAIA_ALLOWED_PATHS``.
+
+        For tools that walk folders wider than the allowlist on purpose (name
+        searches over Documents, Downloads, ...). Unchanged when unset.
+
+        Args:
+            roots: Folders a tool is about to walk.
+
+        Returns:
+            The roots, each replaced by the part of it the setting allows.
+        """
+        if self._env_scope is None:
+            return [Path(r) for r in roots]
+        return _intersect_scopes(roots, self._env_scope, warn=False)
 
     def _setup_audit_logging(self):
         """Configure audit logging to file for write operations."""
@@ -650,13 +932,95 @@ class PathValidator:
         """
         Add a path to the allowed paths set.
 
+        Under ``GAIA_ALLOWED_PATHS`` only the part of *path* inside it is added.
+
         Args:
             path: Path to add to allowed paths
         """
+        if self._env_scope is not None:
+            kept = _intersect_scopes([path], self._env_scope, warn=False)
+            if not kept:
+                logger.warning(
+                    "Not granting %s: it is outside %s", path, ALLOWED_PATHS_ENV
+                )
+            self.allowed_paths.update(kept)
+            return
         self.allowed_paths.add(Path(path).resolve())
         logger.debug(f"Added allowed path: {path}")
 
-    def set_access_prompt(self, prompt: Optional[Callable[[Path], bool]]) -> None:
+    def add_read_only_path(self, path: str) -> None:
+        """Let reads under *path* through without widening the write scope.
+
+        ``validate_read`` accepts anything inside *path* (secret files are
+        still refused); ``is_path_allowed`` and every write check ignore it.
+
+        Args:
+            path: A directory or file to make readable.
+
+        Raises:
+            ValueError: *path* resolves to a drive root or covers the home folder.
+        """
+        real = Path(_real_path(path))
+        if real == Path(real.anchor) or _path_is_within(Path.home().resolve(), real):
+            raise ValueError(
+                f"Refusing read-only access to '{path}' (resolves to '{real}'): it "
+                "covers the drive or home folder. Grant a narrower folder."
+            )
+        self.read_only_paths.add(real)
+        logger.debug("Added read-only path: %s", path)
+
+    def remove_read_only_path(self, path: str) -> None:
+        """Withdraw a grant made by :meth:`add_read_only_path`.
+
+        Args:
+            path: The path that was granted.
+        """
+        self.read_only_paths.discard(Path(_real_path(path)))
+
+    def withhold_path(self, path: str) -> None:
+        """Refuse everything under *path* until :meth:`release_path`.
+
+        Wins over every grant, including a wider allowed folder, a read-only
+        grant and full access, and is never offered as an approval prompt.
+
+        Args:
+            path: The folder (or file) the user removed.
+        """
+        real = Path(_real_path(path))
+        self.withheld_paths.add(real)
+        self.allowed_paths = {
+            p
+            for p in self.allowed_paths
+            if not _path_is_within(Path(_real_path(p)), real)
+        }
+        logger.info("Withheld path: %s", real)
+
+    def release_path(self, path: str) -> None:
+        """Undo :meth:`withhold_path` for *path*.
+
+        Args:
+            path: The folder (or file) that was withheld.
+        """
+        self.withheld_paths.discard(Path(_real_path(path)))
+
+    def withheld_root(self, path: str) -> Optional[Path]:
+        """The withheld folder *path* is in, or None."""
+        real = Path(_real_path(path))
+        for root in self.withheld_paths:
+            if _path_is_within(real, root):
+                return root
+        return None
+
+    def _in_read_only_scope(self, path: str) -> bool:
+        """Whether *path*, symlinks and ``..`` resolved, is under a read-only grant."""
+        real = Path(_real_path(path))
+        return any(_path_is_within(real, root) for root in self.read_only_paths)
+
+    def set_access_prompt(
+        self,
+        prompt: Optional[Callable[[Path], bool]],
+        declines: Optional[Callable[[Path], bool]] = None,
+    ) -> None:
         """Ask through *prompt* instead of stdin when a path is out of scope.
 
         Hosts whose user is not on this process's stdin (Agent UI, TUI) pass a
@@ -668,8 +1032,11 @@ class PathValidator:
 
         Args:
             prompt: The callable, or None to restore the stdin prompt.
+            declines: Optional check, without asking anyone, that *prompt*
+                would refuse a path; refusal messages never suggest such a path.
         """
         self._access_prompt = prompt
+        self._access_declines = declines if prompt is not None else None
 
     def _unaskable_reason(self, path: Path) -> str:
         """Why *path* stays refused whatever the user answers, or "".
@@ -680,6 +1047,14 @@ class PathValidator:
         Returns:
             A reason when no approval may grant *path*, else "".
         """
+        if not self.in_env_scope(path):
+            return (
+                f"'{path}' is outside {ALLOWED_PATHS_ENV}, which confines this "
+                f"session to {sorted(str(p) for p in self._env_scope)}"
+            )
+        withheld = self.withheld_root(str(path))
+        if withheld is not None:
+            return f"'{path}' is in {withheld}, which the user removed from this chat"
         read_blocked, reason = self.is_read_blocked(str(path))
         if read_blocked:
             return reason
@@ -702,6 +1077,17 @@ class PathValidator:
             if _path_is_within(Path(root), path):
                 return f"'{path}' is too broad a grant: it contains '{root}'"
         return ""
+
+    def grant_refusal_reason(self, path: str) -> str:
+        """Why no approval may grant *path*, or "" when asking could grant it.
+
+        Args:
+            path: The path a caller is about to ask the user about.
+
+        Returns:
+            The reason *path* stays refused whatever the user answers, else "".
+        """
+        return self._unaskable_reason(Path(_real_path(path)))
 
     def _can_prompt(self) -> bool:
         """True when a blocking ``input()`` would actually reach the requester."""
@@ -754,6 +1140,39 @@ class PathValidator:
                 )
         return ""
 
+    def _folders_inside_home_hint(self, path: Path) -> str:
+        """Folders to ask for instead when *path* holds the whole home folder.
+
+        Args:
+            path: A symlink-resolved path refused as too broad.
+
+        Returns:
+            A sentence naming the user folders an approval could grant, or ""
+            when *path* does not hold the home folder or nobody can approve.
+            A folder the host would refuse without asking is never named.
+        """
+        home = Path.home().resolve()
+        if not _path_is_within(home, path):
+            return ""
+        if self._access_prompt is None and not self._can_prompt():
+            return ""
+        declines = self._access_declines
+        askable = []
+        for name in _USER_FOLDER_NAMES:
+            folder = home / name
+            if not folder.is_dir():
+                continue
+            real = Path(_real_path(folder))
+            if self._unaskable_reason(real) or (declines and declines(real)):
+                continue
+            askable.append(f"'{folder}'")
+        if not askable:
+            return ""
+        return (
+            " A folder inside the home folder can still be approved: use the "
+            f"specific folder you need instead, such as {', '.join(askable)}."
+        )
+
     def access_denied_message(self, path: str) -> str:
         """The error for an out-of-scope *path*, with a remedy this host offers.
 
@@ -764,11 +1183,22 @@ class PathValidator:
             ``Access denied: '<path>' is not in allowed paths.`` followed by what
             the user can actually do about it here.
         """
+        withheld = self.withheld_root(path)
+        if withheld is not None:
+            return (
+                f"Access denied: '{path}' is in {withheld}, which the user removed "
+                "from this chat's folders. Don't try another way to reach it; tell "
+                "the user it can be added back under Environment in the session "
+                "panel."
+            )
         message = f"Access denied: '{path}' is not in allowed paths."
         real_path = Path(_real_path(path))
         unaskable = self._unaskable_reason(real_path)
         if unaskable:
-            remedy = f" No approval can grant it: {unaskable.rstrip('.')}."
+            remedy = (
+                f" No approval can grant it: {unaskable.rstrip('.')}."
+                f"{self._folders_inside_home_hint(real_path)}"
+            )
         elif self._access_prompt is not None or self._can_prompt():
             remedy = (
                 " To use it, ask again and approve access when prompted, or "
@@ -799,6 +1229,12 @@ class PathValidator:
             # This prevents TOCTOU attacks by resolving at check time
             real_path = Path(_real_path(path)).resolve()
             real_path_str = str(real_path)
+
+            # Held to the env scope even if something added a wider grant directly.
+            if not self.in_env_scope(real_path):
+                return False
+            if self.withheld_root(real_path_str) is not None:
+                return False
 
             # macOS /var symlink handling: normalize by removing /private prefix.
             # Use the module-level helper so is_write_blocked applies the same
@@ -971,8 +1407,72 @@ class PathValidator:
             # Fail-closed: refuse if we can't determine safety.
             return (True, f"Read blocked: unable to validate path safety: {e}")
 
+    def _missing_instead_of_prompt(self, path: str) -> str:
+        """A "not found" refusal for an out-of-scope *path* that is not there.
+
+        Only for a path the user would otherwise be asked about: asking to
+        approve a file that does not exist is a wait with nothing behind it.
+        A path no answer may grant keeps its usual refusal, missing or not, so
+        protected and secret locations reveal nothing new. Where nobody can be
+        asked, the plain "access denied" is kept for the same reason.
+
+        Args:
+            path: A path outside the allowlist.
+
+        Returns:
+            The refusal, or "" when the path exists, cannot be checked, or
+            would not be offered for approval.
+        """
+        if self._access_prompt is None and not self._can_prompt():
+            return ""
+        real_path = Path(_real_path(path)).resolve()
+        if self._unaskable_reason(real_path):
+            return ""
+        try:
+            real_path.stat()
+            return ""
+        except (FileNotFoundError, NotADirectoryError):
+            pass
+        except OSError:
+            # Unreadable is not missing; let the user decide as before.
+            return ""
+        message = (
+            f"Not found: '{path}' does not exist, so access was not requested. "
+            "Check the name and folder, or ask the user where the file is."
+        )
+        candidates = self._in_scope_files_named(real_path.name)
+        if candidates:
+            listed = ", ".join(f"'{c}'" for c in candidates)
+            message += f" A file with that name is available here: {listed}."
+        return message
+
+    def _in_scope_files_named(self, name: str) -> List[str]:
+        """Readable files already in scope called *name*: grants and their children.
+
+        Args:
+            name: The file name to look for (compared case-insensitively).
+
+        Returns:
+            Sorted paths; one stat per grant, never a directory walk.
+        """
+        wanted = name.lower()
+        found = set()
+        for root in [*self.allowed_paths, *self.read_only_paths]:
+            for candidate in (root, root / name):
+                if candidate.name.lower() != wanted:
+                    continue
+                if not candidate.is_file():
+                    continue
+                if self.is_read_blocked(str(candidate))[0]:
+                    continue
+                found.add(str(candidate))
+        return sorted(found)
+
     def validate_read(self, path: str, prompt_user: bool = True) -> Tuple[bool, str]:
         """Allowlist + sensitive-file check for a read.
+
+        An out-of-scope path that does not exist is refused as not found
+        rather than offered for approval (see :meth:`_missing_instead_of_prompt`).
 
         Args:
             path: File path to validate for reading.
@@ -981,8 +1481,16 @@ class PathValidator:
         Returns:
             Tuple of (is_allowed, reason). If not allowed, reason explains why.
         """
-        if not self.is_path_allowed(path, prompt_user=prompt_user):
+        if self.withheld_root(path) is not None:
             return (False, self.access_denied_message(path))
+        if not self._in_read_only_scope(path) and not self.is_path_allowed(
+            path, prompt_user=False
+        ):
+            missing = self._missing_instead_of_prompt(path) if prompt_user else ""
+            if missing:
+                return (False, missing)
+            if not prompt_user or not self.is_path_allowed(path, prompt_user=True):
+                return (False, self.access_denied_message(path))
 
         is_blocked, reason = self.is_read_blocked(path)
         if is_blocked:

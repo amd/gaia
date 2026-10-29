@@ -118,9 +118,9 @@ export const log = {
 export function logBanner(version: string) {
     console.log(
         '%c GAIA %c v' + version + ' %c Local AI Desktop',
-        // Copper, the same literal as --accent-fill; DevTools has no cascade to
-        // read it from, and the retired brand red does not belong on the name.
-        'background: #9A4930; color: white; font-weight: bold; padding: 4px 8px; border-radius: 4px 0 0 4px;',
+        // Brass, the same literal as the light --accent; DevTools has no cascade
+        // to read it from, and the retired brand red does not belong on the name.
+        'background: #7A5A22; color: white; font-weight: bold; padding: 4px 8px; border-radius: 4px 0 0 4px;',
         'background: #333; color: #fff; padding: 4px 8px;',
         'background: #1a1a1a; color: #888; padding: 4px 8px; border-radius: 0 4px 4px 0;',
     );

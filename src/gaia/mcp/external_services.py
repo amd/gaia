@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from gaia.env import child_env
 from gaia.logger import get_logger
+from gaia.mcp.client.mcp_client import mcp_tool_error
 
 logger = get_logger(__name__)
 
@@ -263,14 +264,13 @@ class Context7Service(ExternalMCPService):
             return cached
 
         # Rate limit check before API call
-        can_proceed, reason = self._rate_limiter.can_make_request()
+        can_proceed, reason = self._rate_limiter.acquire()
         if not can_proceed:
             logger.warning(f"Context7 rate limited: {reason}")
             return None
 
         # Resolve via API
         logger.info(f"Resolving library ID for '{library}' via Context7 API")
-        self._rate_limiter.consume_token()
         resolved_id = self.resolve_library_id(library)
 
         # Record success/failure for circuit breaker
@@ -326,7 +326,7 @@ class Context7Service(ExternalMCPService):
             }
 
         # Rate limit check before API call
-        can_proceed, reason = self._rate_limiter.can_make_request()
+        can_proceed, reason = self._rate_limiter.acquire()
         if not can_proceed:
             logger.warning(f"Context7 rate limited: {reason}")
             return {
@@ -336,22 +336,22 @@ class Context7Service(ExternalMCPService):
             }
 
         # Make API call
-        self._rate_limiter.consume_token()
         arguments = {"topic": query}
         if resolved_id:
             arguments["context7CompatibleLibraryID"] = resolved_id
 
         result = self.call_tool("get-library-docs", arguments)
 
-        if "error" in result:
+        error = mcp_tool_error(result)
+        if error is not None:
             # Check if it's a rate limit error (HTTP 429)
-            is_rate_limit = "429" in str(result.get("error", ""))
+            is_rate_limit = "429" in error
             self._rate_limiter.record_failure(is_rate_limit)
 
-            logger.error(f"Context7 search failed: {result['error']}")
+            logger.error(f"Context7 search failed: {error}")
             return {
                 "success": False,
-                "error": result["error"],
+                "error": error,
                 "documentation": "",
             }
 
@@ -380,8 +380,9 @@ class Context7Service(ExternalMCPService):
         """
         result = self.call_tool("resolve-library-id", {"libraryName": library_name})
 
-        if "error" in result:
-            logger.warning(f"Failed to resolve library ID: {result['error']}")
+        error = mcp_tool_error(result)
+        if error is not None:
+            logger.warning(f"Failed to resolve library ID: {error}")
             return None
 
         # Extract library ID from response
@@ -536,9 +537,10 @@ class PerplexityService(ExternalMCPService):
             "perplexity_ask", {"messages": [{"role": "user", "content": query}]}
         )
 
-        if "error" in result:
-            logger.error(f"Perplexity search failed: {result['error']}")
-            return {"success": False, "error": result["error"], "answer": ""}
+        error = mcp_tool_error(result)
+        if error is not None:
+            logger.error(f"Perplexity search failed: {error}")
+            return {"success": False, "error": error, "answer": ""}
 
         # Extract answer from response
         content = result.get("content", [])

@@ -15,7 +15,7 @@ title: "FileIOToolsMixin"
 
 ## Overview
 
-FileIOToolsMixin provides comprehensive file I/O operations with intelligent file type detection, syntax validation, and security controls. It handles Python files with full AST analysis, markdown with structure extraction, and generic text files with appropriate encoding.
+FileIOToolsMixin provides comprehensive file I/O operations with intelligent file type detection, syntax validation, and security controls. It handles Python files with full AST analysis, markdown, and generic text files with appropriate encoding.
 
 **Key Features:**
 - Read files with automatic type detection and analysis
@@ -121,15 +121,43 @@ see [Read before edit](#read-before-edit).
     "errors": List[str],
     "symbols": [{"name": str, "type": str, "line": int}],
 
-    # Markdown files only
-    "headers": List[str],
-    "code_blocks": [{"language": str, "code": str}],
-    "links": [{"text": str, "url": str}],
-
     # Binary files only
     "is_binary": bool
 }
 ```
+
+**Word, PDF and Excel files** (`.docx`, `.pdf`, `.xlsx`) return their extracted
+text instead of `[Binary file]`, one part at a time. A part is at most the
+model's tool-result budget (`limit` can shrink it) and ends on a line break:
+
+```python
+{
+    "status": "success",
+    "file_path": str,
+    "file_type": "docx" | "pdf" | "xlsx",
+    "content": str,             # PDF text carries [Page N], Excel [Sheet: name]
+    "offset": int,
+    "total_chars": int,
+    "next_offset": int | None,  # None once the end is reached
+    "pages": int,               # PDF only
+    "sheets": int,              # Excel only
+    "warning": str,             # Excel formulas with no saved value, which read as blank
+    "note": str,                # present while more remains: where to continue
+    "hint": str,                # first part of a document over 3 reads: retrieval is cheaper
+}
+```
+
+`start_line`/`end_line` work on the extracted text too. Extraction is cached
+per file while it is unchanged, so paging does not re-parse it. A scanned PDF
+with no text layer, an encrypted one, or a corrupt file is an error naming the
+file; `.pptx` and `.epub` are an error pointing at `index_document`, and `.doc`,
+`.ppt`, `.xls` and the OpenDocument formats are an error saying to re-save the
+file as `.docx` / `.pptx` / `.xlsx` or PDF.
+
+When the agent also has `index_document`, the mixin adds a short
+`READING DOCUMENTS` prompt fragment: to review, compare, reconcile, audit or
+summarise a few documents, read each in full with `read_file`; index and query
+only a large collection or a single fact.
 
 ### 2. write_python_file
 
@@ -581,11 +609,10 @@ computed at import time in `gaia.security`; they are not a constructor argument.
 - Symbol extraction (functions, classes)
 - Error reporting with line numbers
 
-### Markdown Files (.md)
+### Markdown Files (.md, .mdx)
 
-- Header extraction (# patterns)
-- Code block extraction with language tags
-- Link extraction ([text](url) patterns)
+- Returned as content with `file_type: "markdown"`; no extracted headers,
+  code blocks or links, which would repeat the content
 
 ### Binary Files
 

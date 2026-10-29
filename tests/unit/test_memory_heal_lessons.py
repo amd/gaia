@@ -267,7 +267,8 @@ class TestOverflowRecoveryKeepsTheLesson:
         shrunk = session._shrink_messages_for_overflow(self._messages())
         shrunk = session._shrink_messages_for_overflow(shrunk)
 
-        assert "omitted" in shrunk[4]["content"][0]["text"]
+        # Shorter than a stub would be, so it stays as it was.
+        assert shrunk[4]["content"] == "clock not configured"
         assert shrunk[2]["content"] == (
             "fix the failing tests\n\n[GAIA Memory] Learned this turn:\n"
             f"  - {LESSON}"
@@ -415,6 +416,25 @@ class TestOneLessonPerOperation:
         assert len(lessons) == 1
         assert "pytest tests/unit" in lessons[0]["content"]
         assert lessons[0]["confidence"] == pytest.approx(0.5)
+
+    def test_a_refused_replacement_keeps_the_old_lesson(self, session):
+        session.turn([FAIL, FIX])
+        session.turn(
+            [
+                (
+                    SHELL,
+                    {"command": "pytest -q"},
+                    {"status": "error", "error": "boom <|tool_call>call:x{}"},
+                ),
+                (
+                    SHELL,
+                    {"command": "env TOYBOX_CLOCK=frozen pytest tests/unit"},
+                    {"status": "success"},
+                ),
+            ]
+        )
+
+        assert [r["content"] for r in session.lessons()] == [LESSON]
 
     def test_a_different_operation_keeps_its_own_lesson(self, session):
         session.turn([FAIL, FIX])

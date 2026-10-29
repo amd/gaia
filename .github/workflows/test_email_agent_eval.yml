@@ -1,8 +1,8 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# Offline eval for the email-triage agent (#1112) — weekly, on email PRs,
-# on demand, and as a release gate via workflow_call.
+# Offline eval for the email-triage agent (#1112) — on demand, and as a
+# release gate via workflow_call (publish.yml on v* tags, release_agent_email.yml).
 #
 # Drives the email-triage throughput/quality benchmark over the committed
 # SYNTHETIC corpus (tests/fixtures/email/) via FakeGmailBackend — never a live
@@ -76,67 +76,11 @@
 # `lemonade-eval` concurrency group (now on the JOB — see the note there), NOT
 # by a runner label.
 #
-# ── PULL-REQUEST COVERAGE (#2695 fallout) ─────────────────────────────────────
-# Until this trigger existed, a PR could change the email agent's system prompt,
-# tools, or triage behavior and merge with ZERO LLM-behavior evidence: pytest and
-# the non-LLM integration suites went green and nothing ran an eval. #2695
-# (bundled skills, merged as bbf69fd6) is the proof — it injected three Agent
-# Skills into the system prompt by default and re-sized the bulk-triage envelope
-# budget, having already blown the 16,384-token window once at 16,602 tokens
-# during development. It landed at 16,106 — 278 tokens of headroom, established
-# by a single manual run and pinned by nothing in CI.
-#
-# The `pull_request` trigger below closes that. Three things keep it affordable
-# on a scarce, strictly-serial runner pool:
-#
-#   1. PATHS. It fires only on PRs touching the email agent's own code, its
-#      corpus/threshold manifests, the eval machinery that scores it, the skills
-#      runtime that injects text into its system prompt, or this workflow and the
-#      composite actions it runs. Deliberately NOT `src/gaia/agents/base/**` or
-#      `src/gaia/llm/**`: those are cross-agent surfaces already covered by
-#      eval_flagship.yml, and adding them here would roughly double the load on
-#      the single Lemonade slot. For a core-only change that
-#      you suspect moves email behavior, `workflow_dispatch` this workflow against
-#      the branch.
-#   2. SUPERSEDING. PR runs share a per-PR concurrency group with
-#      cancel-in-progress, so rapid pushes never stack up 90-minute jobs.
-#   3. LIMIT. PR runs triage 20 emails, not 50 — same slice the release gate uses.
-#
-# COST TO THE RELEASE PATH, STATED PLAINLY. The `lemonade-eval` group runs one at
-# a time and queues the rest FIFO (`queue: max`), so adding ~1 PR run/day costs
-# release-gate calls WAIT time rather than eviction. FIFO has no priority lane: a release call sits behind every PR eval already queued, plus any
-# in-flight scorecard refresh (up to 14h) or gemma consolidation (up to 7.5h).
-# Even so the cost is bounded and visible, not hidden: per-PR cancel-in-progress
-# collapses repeated pushes to one run. The residual bad outcome is a run that waits out GitHub's 24h job-queue limit and is CANCELLED,
-# leaving it with no eval and no auto-requeue — rarer than the evict-the-pending-
-# run behavior this replaced, but not gone. Re-run the job from the Checks tab if
-# the coverage matters for the change under review. Surfacing that outcome in
-# publish.yml / release_agent_email.yml the way eval_flagship.yml's nightly does
-# (a rolling issue rather than an annotation) is tracked separately.
-#
-# A PR RUN IS ADVISORY, AND THAT IS NOT A TRIGGER-SCOPED CHOICE. Per the enforce
-# state above, no gate blocks anything on any trigger right now, so a PR run is
-# report mode for free. There is deliberately NO "report only on PRs" override
-# here: it would break the single-source rule, and — with every manifest at
-# enforce:false — the only exits it could soften are the fail-loudly ones. To make
-# a gate block a PR, flip its manifest's `"enforce"` to true; it then blocks the
-# release AND the PR together, which is the right coupling.
-#
-# WHAT MAKES THE ADVISORY RESULT VISIBLE. A breached bar under enforce:false is a
-# GREEN step with no annotation — evidence that exists only inside an artifact
-# nobody opens is not coverage. The "Gate verdicts" step near the end of this job
-# therefore parses the gate reports the eval writes to eval-out/ and republishes
-# every gate's pass/fail into the job summary, raising a `::warning::` per breach.
-# That, not the exit code, is the PR-facing signal today.
-#
-# FORKS. The job does not run for fork PRs — pointing a self-hosted runner at
-# unreviewed fork code is not acceptable, and a fork PR carries no judge
-# credential, so it could only ever produce an un-judged result.
-# eval_flagship.yml now triggers on `pull_request` too (a `push` filter re-fired
-# it on every main-merge, gating PRs that touched no
-# Python), so it carries the same fork and draft clauses in its job `if:` —
-# without this workflow's `skip-email-eval` clause. A fork PR touching the email
-# agent needs a maintainer to push the branch into this repo and re-run.
+# ── NO PULL-REQUEST OR SCHEDULED RUNS ────────────────────────────────────────
+# Evals run only on releases: the self-hosted pool is too scarce for per-PR
+# runs. The release path already calls this workflow on every v* tag
+# (publish.yml), so it has no tag trigger of its own. For a change you suspect
+# moves email behavior, `workflow_dispatch` this workflow against the branch.
 
 name: Email Agent Eval (offline, report mode)
 
@@ -146,31 +90,6 @@ on:
   # rather than kept running against a surface being retired. The job below
   # is gated `if: false` for the same reason, which covers every caller
   # (publish.yml, release_agent_email.yml) from one place.
-  # Pre-merge coverage for email-agent behavior changes — see the PULL-REQUEST
-  # COVERAGE block in the header for why these paths and not more. Advisory
-  # (report mode) by default; `ready_for_review` is in `types` so undrafting a PR
-  # triggers the run that the draft state skipped.
-  pull_request:
-    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      # The agent itself — prompts, tools, triage/condense, bundled skills, and
-      # the packaging/eval_*_report.py gate readers this workflow invokes.
-      - 'hub/agents/email/python/**'
-      # The synthetic corpus, ground truth, and every committed threshold
-      # manifest the gates are read from.
-      - 'tests/fixtures/email/**'
-      # The skills runtime injects skill bodies into the agent's system prompt
-      # and charges them against the triage context budget (#2695).
-      - 'src/gaia/skills/**'
-      # The gate machinery this workflow executes: gaia.eval.performance,
-      # draft_quality, action_item_quality, briefing_quality and the threshold
-      # loaders. A change here moves the verdict without touching the agent.
-      - 'src/gaia/eval/**'
-      - '.github/workflows/test_email_agent_eval.yml'
-      - '.github/actions/setup-venv/**'
-      - '.github/actions/install-lemonade/**'
-      - 'installer/scripts/ensure-lemonade-running.ps1'
   # Manual trigger, with a knob for repeat experiments (variance).
   workflow_dispatch:
     inputs:
@@ -323,6 +242,11 @@ jobs:
     # in git history if this suite is ever revived for a narrower surface.
     if: false
     timeout-minutes: 90
+    env:
+      # The venv's interpreter and CLI by full path. A bare `python` resolves
+      # through PATH, which a runner's own setup can put ahead of the venv.
+      VENV_PY: ${{ github.workspace }}\.venv\Scripts\python.exe
+      VENV_GAIA: ${{ github.workspace }}\.venv\Scripts\gaia.exe
     steps:
       - name: Show which Claude account this job uses
         run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
@@ -330,6 +254,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup Python Environment
+        id: venv
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
@@ -347,6 +272,29 @@ jobs:
           # .venv/Lib -> FileNotFoundError on the gate manifests. Editable keeps
           # __file__ in the repo so the manifests resolve.
           install-package: '-e .[dev,eval,api] -e hub/agents/email/python'
+
+      - name: Check the venv interpreter
+        env:
+          SETUP_VENV_PY: ${{ steps.venv.outputs.python-path }}
+        run: |
+          if ($env:SETUP_VENV_PY -ne $env:VENV_PY) {
+            Write-Host "::error::setup-venv built '$env:SETUP_VENV_PY' but this job runs '$env:VENV_PY'. Point VENV_PY/VENV_GAIA in the job env at setup-venv's venv-name."
+            exit 1
+          }
+          foreach ($exe in @($env:VENV_PY, $env:VENV_GAIA)) {
+            if (-not (Test-Path $exe)) {
+              Write-Host "::error::$exe is missing - the venv install did not complete. See the Setup Python Environment step."
+              exit 1
+            }
+          }
+          & $env:VENV_PY -c "import gaia, gaia_agent_email"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::$env:VENV_PY cannot import gaia / gaia_agent_email - the editable installs in the Setup Python Environment step are broken."
+            exit 1
+          }
+          $bare = (Get-Command python -ErrorAction SilentlyContinue).Source
+          Write-Host "Venv interpreter: $env:VENV_PY"
+          Write-Host "Bare 'python' on this runner: $(if ($bare) { $bare } else { 'none' })"
 
       # A subscription token authenticates the `claude` CLI, not the Messages API,
       # so the judge needs the CLI on PATH. The stx pool ships no usable npm —
@@ -380,7 +328,7 @@ jobs:
           # leaving both set would keep using the key's account.
           ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
-          python -m gaia.eval.judge_client --probe
+          & $env:VENV_PY -m gaia.eval.judge_client --probe
           if ($LASTEXITCODE -ne 0) { throw "judge credential probe failed" }
 
       - name: Install Lemonade Server
@@ -411,13 +359,13 @@ jobs:
           New-Item -ItemType Directory -Force eval-out | Out-Null
           # mbox + ground_truth are generated artifacts (not committed) — build
           # them from the committed seed before the eval reads them.
-          python tests/fixtures/email/generate_mbox.py
+          & $env:VENV_PY tests/fixtures/email/generate_mbox.py
           if ($LASTEXITCODE -ne 0) { throw "generate_mbox failed" }
           # Drives EmailTriageAgent over FakeGmailBackend(synthetic_inbox.mbox)
           # — synthetic/sandbox only, never a live mailbox. Writes the scorecard
           # + variance for the artifact; the gate-reader step below recomputes
           # the gates against the committed manifests.
-          gaia eval benchmark `
+          & $env:VENV_GAIA eval benchmark `
             --model "$env:EMAIL_EVAL_MODEL" `
             --limit "$env:EMAIL_EVAL_LIMIT" `
             --experiments "$env:EMAIL_EVAL_EXPERIMENTS" `
@@ -437,7 +385,7 @@ jobs:
           # eval_*_report.py gates (advisory under enforce:false), this one is
           # always blocking -- a run that never invoked the model is not a
           # "breached bar", it is an absent measurement.
-          python hub/agents/email/python/packaging/assert_llm_coverage.py eval-out
+          & $env:VENV_PY hub/agents/email/python/packaging/assert_llm_coverage.py eval-out
           if ($LASTEXITCODE -ne 0) { throw "email triage eval never reached the LLM" }
 
       - name: Evaluate committed gates (report mode — reads the threshold manifests)
@@ -446,7 +394,7 @@ jobs:
           # (single committed thresholds source), runs the gate machinery, logs
           # the result, writes eval-out/gate_report.json, and exits non-zero ONLY
           # if a gate's should_fail is true (enforce:true AND breached).
-          python hub/agents/email/python/packaging/eval_gate_report.py
+          & $env:VENV_PY hub/agents/email/python/packaging/eval_gate_report.py
           if ($LASTEXITCODE -ne 0) { throw "gate report failed" }
 
       # =================================================================
@@ -477,7 +425,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
           ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
-          python hub/agents/email/python/packaging/eval_drafting_report.py
+          & $env:VENV_PY hub/agents/email/python/packaging/eval_drafting_report.py
           if ($LASTEXITCODE -ne 0) { throw "drafting eval failed" }
       # =================================================================
       # END voice-drafting quality eval
@@ -514,7 +462,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
           ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
-          python hub/agents/email/python/packaging/eval_action_item_report.py
+          & $env:VENV_PY hub/agents/email/python/packaging/eval_action_item_report.py
           if ($LASTEXITCODE -ne 0) { throw "action-item eval failed" }
       # =================================================================
       # END action-item extraction eval
@@ -558,7 +506,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
           ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
-          python hub/agents/email/python/packaging/eval_briefing_report.py
+          & $env:VENV_PY hub/agents/email/python/packaging/eval_briefing_report.py
           if ($LASTEXITCODE -ne 0) { throw "briefing eval failed" }
       # =================================================================
       # END daily-briefing summary-quality eval
@@ -596,7 +544,7 @@ jobs:
       - name: Gate verdicts (job summary)
         if: always()
         run: |
-          python hub/agents/email/python/packaging/eval_summary.py eval-out
+          & $env:VENV_PY hub/agents/email/python/packaging/eval_summary.py eval-out
           if ($LASTEXITCODE -ne 0) { throw "eval summary failed" }
 
       - name: Eval summary

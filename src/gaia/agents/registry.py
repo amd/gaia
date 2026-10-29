@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional
 
 import yaml
 
+from gaia.config import gaia_agents_dir, gaia_home
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL as LEMONADE_DEFAULT_EMBEDDING_MODEL,
@@ -65,6 +66,10 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     ),
     "audio": ("gaia.agents.tools.audio_tools", "AudioToolsMixin"),
     "wait": ("gaia.agents.tools.wait_tools", "WaitToolsMixin"),
+    "reasoning_effort": (
+        "gaia.agents.tools.reasoning_tools",
+        "ReasoningEffortToolsMixin",
+    ),
 }
 
 # Manifest-fingerprint keys used to detect a legacy YAML manifest masquerading
@@ -491,7 +496,7 @@ class AgentRegistration:
     # installed agent from claiming a built-in's AGENT_ID to inherit a
     # previously-granted scope. Always non-empty.
     namespaced_agent_id: str = ""
-    # Agent Hub metadata — used by the Agent UI to render rich discovery cards.
+    # Display metadata (category, tags, icon) served by /api/agents.
     # Hardcoded for builtins (lazy-import factories must not instantiate agents);
     # custom agents declare via class attributes (AGENT_CATEGORY, etc.).
     #: True only for the stand-in a binary (frozen-sidecar) install registers.
@@ -621,10 +626,15 @@ class AgentRegistry:
         """Discover and register all agents. Call once at server startup."""
         logger.info("registry: Starting agent discovery")
 
-        # 1. Scan ~/.gaia/agents/
-        agents_dir = Path.home() / ".gaia" / "agents"
+        # 1. Scan <gaia_home>/agents/
+        agents_dir = gaia_agents_dir()
         if agents_dir.exists():
-            subdirs = sorted(d for d in agents_dir.iterdir() if d.is_dir())
+            # Dot-names are never agents: the install backup and lock queues.
+            subdirs = sorted(
+                d
+                for d in agents_dir.iterdir()
+                if d.is_dir() and not d.name.startswith(".")
+            )
             logger.info(
                 "registry: Found %d agent directories: %s",
                 len(subdirs),
@@ -878,8 +888,8 @@ class AgentRegistry:
         raises at call time.
         """
         manifest_locations = [
-            Path.home() / ".gaia" / "agent-manifest.json",
-            Path.home() / ".gaia" / "agents" / "agent-manifest.json",
+            gaia_home() / "agent-manifest.json",
+            gaia_agents_dir() / "agent-manifest.json",
         ]
         manifest_path = None
         for candidate in manifest_locations:
@@ -938,7 +948,7 @@ class AgentRegistry:
                     source="native",
                     conversation_starters=[],
                     factory=self._noop_factory,
-                    agent_dir=Path.home() / ".gaia" / "agents" / agent_id,
+                    agent_dir=gaia_agents_dir() / agent_id,
                     models=[],
                     hidden=False,
                     namespaced_agent_id=f"native:{agent_id}",

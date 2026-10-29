@@ -2,13 +2,18 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Build the Linux .deb and .rpm packages for the GAIA terminal hub.
+# Build the Linux .deb and .rpm packages for the GAIA Terminal UI.
 #
-#   ./build-packages.sh --version <x.y.z> --payload <dir> --out <dir>
+#   ./build-packages.sh --version <x.y.z|x.y.z-rc.N> --payload <dir> --out <dir>
+#   ./build-packages.sh --version <x.y.z|x.y.z-rc.N> --print-package-version
 #
 # Produces BOTH of:
 #   <out>/gaia_<version>_amd64.deb
 #   <out>/gaia-<version>.x86_64.rpm
+#
+# A release candidate's file names keep its -rc.N, but the version INSIDE both
+# packages is X.Y.Z~rc.N: dpkg and rpm sort a tilde before the bare version, so
+# the final installs over its candidates as an upgrade.
 #
 # x86-64 only. Requires fpm and rpmbuild — see README.md for the container.
 #
@@ -24,7 +29,7 @@ readonly HOMEPAGE="https://amd-gaia.ai"
 readonly LICENSE_NAME="MIT"
 readonly DOC_DIR="usr/share/doc/gaia-tui"
 readonly ICON_DIR="usr/share/icons/hicolor/256x256/apps"
-readonly SUMMARY="AMD GAIA terminal hub - local AI assistant"
+readonly SUMMARY="AMD GAIA Terminal UI - local AI assistant"
 # Not `readonly`: bash 3.2 rejects `readonly name=(...)`.
 PAYLOAD_BINARIES=(gaia-tui gaia-agent)
 
@@ -34,14 +39,19 @@ readonly LICENSE_FILE="${REPO_ROOT}/LICENSE.md"
 
 usage() {
     cat >&2 <<'EOF'
-Usage: build-packages.sh --version <x.y.z> --payload <dir> --out <dir>
+Usage: build-packages.sh --version <x.y.z|x.y.z-rc.N> --payload <dir> --out <dir>
+       build-packages.sh --version <x.y.z|x.y.z-rc.N> --print-package-version
 
-  --version   Release version, e.g. 1.4.0. MAJOR.MINOR.PATCH only (see below).
+  --version   Release version: 1.4.0, or 1.4.0-rc.2 for a release candidate.
+              The candidate's packages carry 1.4.0~rc.2, which sorts before 1.4.0.
   --payload   Directory containing exactly the executables gaia-tui and gaia-agent.
   --out       Directory to write the .deb and .rpm into (created if absent).
+  --print-package-version
+              Print the version the packages would carry, and build nothing.
 
-All three arguments are required. Both packages are always built; there is no
-flag to produce only one. See installer/tui/linux/README.md.
+To build, --version, --payload and --out are all required. Both packages are
+always built; there is no flag to produce only one. See
+installer/tui/linux/README.md.
 EOF
 }
 
@@ -59,12 +69,14 @@ die() {
 VERSION=""
 PAYLOAD_DIR=""
 OUT_DIR=""
+PRINT_PACKAGE_VERSION=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --version) [ $# -ge 2 ] || die "--version requires a value." "Example: --version 1.4.0"; VERSION="$2"; shift 2 ;;
         --payload) [ $# -ge 2 ] || die "--payload requires a value." "Example: --payload ./stage/linux-x64"; PAYLOAD_DIR="$2"; shift 2 ;;
         --out)     [ $# -ge 2 ] || die "--out requires a value." "Example: --out ./dist"; OUT_DIR="$2"; shift 2 ;;
+        --print-package-version) PRINT_PACKAGE_VERSION=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *)         usage; die "unknown argument: $1" ;;
     esac
@@ -72,26 +84,33 @@ done
 
 MISSING_ARGS=()
 [ -n "$VERSION" ]     || MISSING_ARGS+=(--version)
-[ -n "$PAYLOAD_DIR" ] || MISSING_ARGS+=(--payload)
-[ -n "$OUT_DIR" ]     || MISSING_ARGS+=(--out)
+if [ "$PRINT_PACKAGE_VERSION" -eq 0 ]; then
+    [ -n "$PAYLOAD_DIR" ] || MISSING_ARGS+=(--payload)
+    [ -n "$OUT_DIR" ]     || MISSING_ARGS+=(--out)
+fi
 
 if [ ${#MISSING_ARGS[@]} -gt 0 ]; then
     usage
     die "missing required argument(s): ${MISSING_ARGS[*]}"
 fi
 
-# RPM forbids '-' in the Version field, so a semver prerelease suffix cannot be
-# passed through unchanged. Reject it here with the reason rather than letting
-# rpmbuild fail three minutes later with a less obvious message.
-if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    EXTRA=()
-    case "$VERSION" in
-        *-*) EXTRA=("RPM does not allow '-' in a version; a prerelease suffix has to become an rpm Release." \
-                    "Pass the release version alone, e.g. --version ${VERSION%%-*}.") ;;
-    esac
+# RPM forbids '-' in the Version field, so only the one prerelease form the
+# release pipeline produces is accepted, and it is respelled for the packages.
+# Anything else stops here rather than inside rpmbuild three minutes later.
+if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    PKG_VERSION="$VERSION"
+elif [[ "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-rc\.([1-9][0-9]*)$ ]]; then
+    PKG_VERSION="${BASH_REMATCH[1]}~rc.${BASH_REMATCH[2]}"
+else
     die "--version '${VERSION}' is not a valid version." \
-        "Expected MAJOR.MINOR.PATCH with digits only, e.g. 1.4.0." \
-        "${EXTRA[@]+"${EXTRA[@]}"}"
+        "Expected MAJOR.MINOR.PATCH with digits only, e.g. 1.4.0, or a release candidate" \
+        "spelled MAJOR.MINOR.PATCH-rc.N, e.g. 1.4.0-rc.2 (util/release_tag.py's npm form)."
+fi
+readonly PKG_VERSION
+
+if [ "$PRINT_PACKAGE_VERSION" -eq 1 ]; then
+    printf '%s\n' "$PKG_VERSION"
+    exit 0
 fi
 
 # ── Inputs ──────────────────────────────────────────────────────────────────
@@ -169,7 +188,7 @@ FPM_COMMON=(
     -s dir
     -C "$STAGE"
     --name "$PKG_NAME"
-    --version "$VERSION"
+    --version "$PKG_VERSION"
     --maintainer "$MAINTAINER"
     --vendor "$VENDOR"
     --url "$HOMEPAGE"

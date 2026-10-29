@@ -264,12 +264,10 @@ Replace ~16 direct agent imports in `cli.py`, `ui/_chat_helpers.py`, `ui/agent_l
 The REST API admits loopback browser origins only and enforces `GAIA_API_KEY` on every route but `/health` when it is set; `--api` on a non-loopback `--host` is refused without one (see [API server authentication](/sdk/infrastructure/api-server#authentication)).
 </Step>
 <Step title="Add CI/CD workflow">
-`.github/workflows/build_agents.yml` matrix-builds the C++ agent binaries;
-`.github/workflows/publish_agents.yml` matrix-builds every Python agent wheel
-(matrix derived from `setup.py`'s `agents` extra via
-`util/list_agent_packages.py`) and publishes it to PyPI on a `v*` tag using
-`pypa/gh-action-pypi-publish` with `skip-existing: true` (PyPI-native version
-immutability). R2 publishing is handled at author time by `gaia agent publish`.
+`.github/workflows/build_agents.yml` matrix-builds the C++ agent binaries.
+Python agent wheels are not published to PyPI; each hub agent ships through its
+own `agent-pkg-<id>-*` release workflow, and R2 publishing is handled at author
+time by `gaia agent publish`.
 </Step>
 <Step title="Relocate tests">
 Move agent-specific tests to `hub/agents/{id}/python/tests/`. Framework tests stay in `tests/`.

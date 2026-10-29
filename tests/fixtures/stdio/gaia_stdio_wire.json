@@ -27,7 +27,9 @@
         "model_remote",
         "lemonade_reachable",
         "lemonade_version",
-        "lemonade_base_url"
+        "lemonade_base_url",
+        "agent_version",
+        "gaia_version"
       ],
       "phase_extension": ["phase", "words", "chars"],
       "history_cut_extension": ["history_cut"]

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
 )
 
@@ -86,6 +87,18 @@ func (l Ladder) agentCommand(verb, fallback string) string {
 	return verb + " " + l.AgentID
 }
 
+// unregisteredAgentRemedy answers a background service that has no agent by
+// this id. It reads its agent list from the installed GAIA once, when it
+// starts, so an install made outside it is invisible until it restarts.
+func unregisteredAgentRemedy(agentID string) Remedy {
+	return Remedy{
+		Action: fmt.Sprintf("Install it with `%s` if you have not, then restart the background "+
+			"service — it reads its agent list only when it starts.", catalog.InstallCommand(agentID)),
+		Command: "gaia daemon restart",
+		Where:   daemonLog(),
+	}
+}
+
 // daemonLog is the daemon's own log path, resolved for embedding in a remedy.
 func daemonLog() string {
 	p, err := daemon.LogPath()
@@ -126,6 +139,17 @@ func (l Ladder) Error(op string, err error) Diagnosis {
 			// the same one; saying so stops the user looping on it.
 			Remedy: "Upgrade the installed GAIA core so it matches this app, or re-run " +
 				"the installer from https://amd-gaia.ai. A restart brings the same version back.",
+			Command: "pip install --upgrade amd-gaia",
+			Where:   daemonLog(),
+		}
+	}
+	// Without this an absent route read as "<op> failed: <the whole skew
+	// paragraph>" with a "check the service" remedy that cannot fix it.
+	var missing *daemon.RouteMissingError
+	if errors.As(err, &missing) {
+		return Diagnosis{
+			Cause:   "GAIA's background service is out of date.",
+			Remedy:  "Upgrade the installed GAIA core, then press r. A restart brings the same version back.",
 			Command: "pip install --upgrade amd-gaia",
 			Where:   daemonLog(),
 		}
@@ -232,13 +256,18 @@ func (l Ladder) Status(op string, status int, body string) Diagnosis {
 			Where:   daemonLog(),
 		}
 	case http.StatusNotFound:
-		return Diagnosis{
-			Cause: fmt.Sprintf("The background service does not know the agent %q.", l.agent()),
-			Remedy: "Install it, then check it is registered. " +
-				detailSuffix(trimmed),
-			Command: l.agentCommand("gaia hub install", "gaia daemon agents"),
-			Where:   daemonLog(),
+		cause := fmt.Sprintf("The background service does not know the agent %q.", l.agent())
+		if l.AgentID == "" {
+			return Diagnosis{
+				Cause:   cause,
+				Remedy:  "Check which agents it has registered. " + detailSuffix(trimmed),
+				Command: "gaia daemon agents",
+				Where:   daemonLog(),
+			}
 		}
+		d := withRemedy(cause, unregisteredAgentRemedy(l.AgentID))
+		d.Remedy = strings.TrimSpace(d.Remedy + " " + detailSuffix(trimmed))
+		return d
 	case http.StatusServiceUnavailable:
 		// The sidecar's own not-ready answer. Its hint is the best remedy there
 		// is, so run the text ladder over it rather than inventing wording.

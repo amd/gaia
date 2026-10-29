@@ -81,7 +81,7 @@ def load_lock(lock_path: Optional[Path] = None) -> BinaryLock:
             f"cannot read the sidecar binary lock at {path}: {e}. This file is "
             "only present in a source checkout (it ships in the agent's npm "
             "package, not the installed Python wheel), so an installed GAIA "
-            "resolves the binary from an Agent Hub install instead — reinstalling "
+            "resolves the binary from an installed agent instead — reinstalling "
             "the Python wheel will not create this file."
         ) from e
     try:

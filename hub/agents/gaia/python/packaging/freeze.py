@@ -34,16 +34,23 @@ Design notes / gotchas baked in (mirrors the email sidecar's freeze):
   the ML stack (torch, transformers, ...). All inference is Lemonade over HTTP
   and never runs in-process, so the ML stack is EXCLUDED to keep the binary lean.
   ``faiss`` stays collected: the memory/RAG working-context index needs it.
+- tiktoken finds ``cl100k_base`` through a plugin it discovers at runtime and
+  downloads the encoding's data on first use -> hidden-import the plugin and
+  bundle the data (``gaia.utils.tiktoken_bundle``), or every token count in the
+  binary is an estimate.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import sys
 import time
 from pathlib import Path
+
+from gaia.utils import tiktoken_bundle
 
 HERE = Path(__file__).resolve().parent
 ENTRY = HERE / "server.py"
@@ -61,6 +68,9 @@ PATHEX = [
 
 MANIFEST_SRC = PKG_ROOT / "gaia-agent.yaml"
 SKILLS_SRC = PKG_ROOT / "gaia_agent" / "skills"
+# Linux only: the bundled OpenSSL looks for CA certs where the BUILD distro keeps
+# them, so point it at the host's bundle (see the hook's docstring).
+LINUX_CA_HOOK = HERE / "rthook_linux_ca.py"
 
 # Modules PyInstaller must pull in wholesale, and the distributions whose
 # metadata must travel with them. Declared once so the preflight guard below
@@ -89,22 +99,64 @@ COLLECT_SUBMODULES = [
 # collect-all because the wheel carries native .dll/.pyd payloads that static
 # analysis cannot see. ~29 MB, Apache-2.0 (its vendored onnxruntime is MIT).
 COLLECT_ALL = ["faiss", "sherpa_onnx"]
+# Package data the analyzer can't see. pymupdf 2.x imports its layout module on
+# import, which loads ONNX model configs from pymupdf/layout/resources at runtime;
+# without them every ``import pymupdf`` in a run_python script fails.
+COLLECT_DATA = ["pymupdf"]
 # Imported behind an ``except ImportError`` guard, so PyInstaller bundles them
 # only when they are installed and the binary otherwise boots without them.
 # anthropic: ``--use-claude`` and ``/model``, which the TUI forwards to the binary.
 REQUIRED_IMPORTS = ["anthropic"]
+# Modules only ever imported by name at runtime.
+HIDDEN_IMPORTS = [tiktoken_bundle.PLUGIN_MODULE]
 # importlib.metadata version probes + entry-point agent discovery.
 COPY_METADATA = ["keyring", "amd-gaia", "gaia-agent-gaia", "gaia-agent-chat"]
 
+# What a ``run_python`` script may import. The frozen binary is the only Python
+# a user of the release has, and nothing in GAIA imports most of these, so the
+# import analyzer would leave them out. Office output (.xlsx, .docx, .pptx,
+# .pdf), tables and charts are what users' document and analysis tasks ask for.
+SCRIPT_LIBRARIES = [
+    "openpyxl",
+    "xlsxwriter",
+    "docx",
+    "pptx",
+    "reportlab",
+    "pypdf",
+    "pymupdf",
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "PIL",
+]
+# A script may import any stdlib module, not only the ones GAIA's graph reaches.
+# These are GUI toolkits, dev tooling, and CPython's own test suite.
+STDLIB_EXCLUDED = {
+    "test",
+    "idlelib",
+    "tkinter",
+    "turtle",
+    "turtledemo",
+    "lib2to3",
+    "ensurepip",
+    "venv",
+    "pydoc_data",
+    "antigravity",
+    "this",
+}
+# Script-library submodules that pull in a GUI toolkit or a test suite.
+_UNWANTED_SUBMODULE = re.compile(
+    r"\.(?:tests?|conftest)(?:\.|$)"
+    r"|^matplotlib\.backends\.(?:.*(?:tk|qt|gtk|wx|cairo|macosx|webagg|nbagg)"
+    r"|qt_editor|web_backend)",
+    re.IGNORECASE,
+)
+
 # Heavy ML stack reached only through the lazily-imported chat/SDK graph. All
 # inference goes to Lemonade over HTTP, so excluding these keeps the binary at
-# ~100 MB instead of ~2 GB. numpy stays (memory.py imports it at module level).
-#
-# ``pandas`` is excluded, same as the email sidecar: the scratchpad tool group
-# is SQLite-backed (``gaia.scratchpad.service`` -> ``DatabaseMixin``) and no
-# module under ``src/gaia/`` or either agent package imports pandas. Verified by
-# grep before excluding -- the only repo hits are string literals in unrelated
-# agents' keyword lists.
+# ~170 MB instead of ~2 GB. pandas and matplotlib are NOT here: they are
+# SCRIPT_LIBRARIES. tkinter is: no GAIA module uses it, and a bundled Tk would
+# make matplotlib open windows from a headless agent.
 EXCLUDES = [
     "torch",
     "transformers",
@@ -114,9 +166,8 @@ EXCLUDES = [
     "torchvision",
     "torchaudio",
     "scipy",
-    "matplotlib",
     "sympy",
-    "pandas",
+    "tkinter",
 ]
 
 
@@ -136,7 +187,11 @@ def _verify_collect_targets() -> None:
 
     missing = [
         mod
-        for mod in COLLECT_SUBMODULES + COLLECT_ALL + REQUIRED_IMPORTS
+        for mod in COLLECT_SUBMODULES
+        + COLLECT_ALL
+        + COLLECT_DATA
+        + REQUIRED_IMPORTS
+        + SCRIPT_LIBRARIES
         if importlib.util.find_spec(mod) is None
     ]
     if missing:
@@ -148,6 +203,42 @@ def _verify_collect_targets() -> None:
             'the "Install deps + PyInstaller" step of '
             ".github/workflows/release_agent_gaia.yml does, and re-run."
         )
+
+
+def _wanted_submodule(name: str) -> bool:
+    return not _UNWANTED_SUBMODULE.search(name)
+
+
+def _stdlib_top_level() -> list[str]:
+    """Public stdlib modules this interpreter has, minus :data:`STDLIB_EXCLUDED`."""
+    import importlib.util
+
+    return sorted(
+        name
+        for name in sys.stdlib_module_names
+        if not name.startswith("_")
+        and name not in STDLIB_EXCLUDED
+        and importlib.util.find_spec(name) is not None
+    )
+
+
+def script_hidden_imports() -> list[str]:
+    """Every module a ``run_python`` script may import, as hidden imports.
+
+    Whole packages, not just their ``__init__``: ``import matplotlib`` does not
+    import ``matplotlib.pyplot``, and ``import xml`` does not import
+    ``xml.etree``, so a top-level hidden import would still miss them.
+    """
+    import importlib.util
+
+    from PyInstaller.utils.hooks import collect_submodules
+
+    names: set[str] = set()
+    for name in _stdlib_top_level() + SCRIPT_LIBRARIES:
+        names.add(name)
+        if importlib.util.find_spec(name).submodule_search_locations is not None:
+            names.update(collect_submodules(name, filter=_wanted_submodule))
+    return sorted(n for n in names if _wanted_submodule(n))
 
 
 def _resolve_add_data() -> list[tuple[Path, str]]:
@@ -208,6 +299,8 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         for d in (work, dist):
             if d.exists():
                 shutil.rmtree(d, ignore_errors=True)
+    tiktoken_cache = tiktoken_bundle.stage_cache(work / tiktoken_bundle.BUNDLE_DIR)
+    add_data.append((tiktoken_cache, tiktoken_bundle.BUNDLE_DIR))
 
     args = [
         str(ENTRY),
@@ -229,12 +322,18 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         args += ["--collect-submodules", mod]
     for mod in COLLECT_ALL:
         args += ["--collect-all", mod]
+    for mod in COLLECT_DATA:
+        args += ["--collect-data", mod]
+    for mod in HIDDEN_IMPORTS + script_hidden_imports():
+        args += ["--hidden-import", mod]
     for distribution in COPY_METADATA:
         args += ["--copy-metadata", distribution]
     for source, dest in add_data:
         args += ["--add-data", f"{source}{os.pathsep}{dest}"]
     for mod in EXCLUDES:
         args += ["--exclude-module", mod]
+    if sys.platform.startswith("linux"):
+        args += ["--runtime-hook", str(LINUX_CA_HOOK)]
     args.append("--onefile" if onefile else "--onedir")
 
     t0 = time.time()

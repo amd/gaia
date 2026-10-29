@@ -18,13 +18,32 @@ they serve a byte-for-byte identical ``/v1/gaia/*`` contract.
 
     GET /health   -> {"status": "ok", "service": "gaia-agent-gaia"}
     GET /version  -> {"apiVersion": <wire contract>, "agentVersion": <package>}
+
+A frozen build has no Python interpreter, so ``run_python`` re-launches this
+binary with ``--gaia-run-python-file <script>``. That argv runs the
+script and exits before the agent stack is imported or argv is parsed. So do
+the ``python`` forms a script uses to start ``sys.executable`` itself (``-m``,
+``-c``, a file); ``-m pip`` explains that nothing can be installed. A
+script's ``multiprocessing`` workers start the same way and are handed off by
+``freeze_support``; on Windows they cannot import functions defined in the
+script itself, so such a pool fails rather than runs.
 """
 
 from __future__ import annotations
 
+import multiprocessing
 import sys
 
-from gaia_agent.server import (  # noqa: F401  (re-exported for the freeze/daemon)
+from gaia_agent_chat.python_runner import dispatch as python_dispatch
+
+if __name__ == "__main__":
+    # A script's multiprocessing workers re-launch this binary too.
+    multiprocessing.freeze_support()
+    _python_exit = python_dispatch(sys.argv[1:])
+    if _python_exit is not None:
+        sys.exit(_python_exit)
+
+from gaia_agent.server import (  # noqa: E402,F401  (re-exported for the freeze/daemon)
     DEFAULT_HOST,
     DEFAULT_PORT,
     app,

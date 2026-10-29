@@ -168,3 +168,33 @@ def test_install_is_reentrant_without_force(tmp_path):
     stamp = manager.daemon_path.stat().st_mtime_ns
     assert manager.install() == first
     assert manager.daemon_path.stat().st_mtime_ns == stamp, "re-downloaded needlessly"
+
+
+def test_unload_is_a_request_lemond_accepts(running_instance):
+    """The bodiless POST /unload GAIA sends when the last app closes.
+
+    A mocked transport would pass whatever body GAIA sent; this proves the real
+    server takes it as "unload everything", even with nothing loaded.
+    """
+    assert running_instance.unload_models() is True
+
+
+def test_the_identity_check_recognises_the_real_server(running_instance):
+    """What `stop` kills is decided by this; a real lemond must pass it."""
+    from gaia.llm.lemonade_embedded import OWN
+
+    status = running_instance.status()
+    assert (
+        running_instance._identify(
+            status.pid, status.port, running_instance.current_api_key()
+        )
+        == OWN
+    )
+
+
+def test_a_restart_comes_back_on_the_same_port(running_instance):
+    """Stable port: a stopped server restarts where it was."""
+    first = running_instance.status().port
+    running_instance.stop()
+    again = running_instance.start(timeout=120.0)
+    assert again.port == first

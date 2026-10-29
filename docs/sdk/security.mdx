@@ -48,7 +48,11 @@ checks through `gaia.agents.tools.path_access` rather than adding their own.
 Three things are wider on purpose:
 
 - A name search (`search_file`, `find_files` with a named scope) can return paths
-  under the common document folders. Opening one is still checked.
+  under the common document folders. Opening one is still checked. On macOS an
+  undirected search skips Desktop, Documents, Downloads, iCloud Drive, Music, the
+  TV app's library and the Photos library unless the user named the folder or allowed it, because
+  macOS blocks the first read of them behind a permission prompt; the result says
+  which it skipped.
 - Output a tool writes to GAIA's own folders (`~/.gaia/screenshots`,
   `~/.gaia/transcripts`, `~/.gaia/tts`) is not the user's files and is not checked.
 - `capture_skill` may copy a local skill folder from anywhere, because every
@@ -64,6 +68,43 @@ it gets none.
   machine-global grants in `~/.gaia/cache/allowed_paths.json`. A host that computes a
   per-session scope gets exactly that scope — one user's one-off `[a]lways` approval in
   the CLI must not become standing access for every later Agent UI session.
+</Warning>
+
+### Narrowing the scope for a run
+
+`GAIA_ALLOWED_PATHS` (absolute paths joined with `os.pathsep`) narrows every
+`PathValidator` the process builds, whatever scope its host computed. An
+evaluation harness uses it so the agent cannot read answer keys stored outside
+the task folder.
+
+```python
+import os
+
+from gaia.security import PathValidator
+
+os.environ["GAIA_ALLOWED_PATHS"] = "/home/user/evals/task-17"
+
+v = PathValidator(allowed_paths=["/home/user"])
+v.allowed_paths                       # {PosixPath('/home/user/evals/task-17')}
+v.is_path_allowed("/home/user/evals/answers.json")   # False, and never prompts
+```
+
+- The scope becomes the overlap of the host's scope and the list. An entry
+  outside the host's scope is logged and ignored; it never widens.
+- Later grants are held to it too: `add_allowed_path`, approval prompts (including
+  an approve-everything harness or full access), and persisted CLI grants.
+- The scratch directory set by `set_scratch_dir` stays allowed even when it sits
+  outside the list, so `run_python` helper scripts keep working.
+- `ChatAgent` (and so `GaiaAgent`) narrows its `allowed_paths` once at
+  construction, so its validator, the RAG SDK and the code-index ceilings agree.
+- An empty value, an empty entry, a relative path or a missing folder raises
+  `AllowedPathsEnvError` (a `ValueError`) when the validator is built. The Agent UI
+  server and the flagship sidecar check it before they start serving.
+
+<Warning>
+  This confines GAIA's tools, not code they run. A `run_python` script or shell
+  command can still open any file the OS user can read. Real isolation needs OS-level
+  separation: a separate user account, a container, or a VM.
 </Warning>
 
 ---

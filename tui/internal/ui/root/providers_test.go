@@ -100,3 +100,61 @@ func TestClosingProviderSetupRechecksWithoutChangingStartupModel(t *testing.T) {
 		t.Fatal("cancel bypassed readiness or failed to restart the probe")
 	}
 }
+
+// The gate asks where chat runs only for the flagship, and only when nothing
+// already says: a choice made on the gate, or a saved one, skips the question.
+func TestTheGateAsksWhereChatRunsOnlyWhenNothingSaysSo(t *testing.T) {
+	agent := catalog.Agent{ID: catalog.FlagshipID, Name: "GAIA"}
+	m := NewFlagshipModel(agent, false)
+	if opts := m.localOptions(agent); !opts.AskWhereChatRuns || opts.ChatProvider != "" {
+		t.Errorf("new flagship launch: %+v, want the question asked", opts)
+	}
+	if opts := m.localOptions(catalog.Agent{ID: "other", Name: "Other"}); opts.AskWhereChatRuns {
+		t.Error("an agent that cannot switch providers was asked where chat runs")
+	}
+
+	saved := m.WithSavedModel(preflight.LastModel{Provider: "amd", Model: "amd.gpt-4.1"})
+	if opts := saved.localOptions(agent); opts.ChatProvider != "amd" || opts.Model != "amd.gpt-4.1" {
+		t.Errorf("saved choice was not passed on: %+v", opts)
+	}
+
+	m.preflight = &preflight.Model{}
+	m.pending = &agent
+	m.activeView = viewPreflight
+	next, _ := m.Update(preflight.ChatChosenMsg{AgentID: catalog.FlagshipID, Provider: "fireworks"})
+	m = next.(FlagshipModel)
+	if opts := m.localOptions(agent); opts.ChatProvider != "fireworks" {
+		t.Errorf("the gate's choice was not kept: %+v", opts)
+	}
+	next, _ = m.Update(preflight.ChatChosenMsg{AgentID: "other", Provider: "local"})
+	if next.(FlagshipModel).chatChoice != "fireworks" {
+		t.Error("a choice from another agent's gate was taken")
+	}
+}
+
+// The connect step opens the provider panel on that provider; the gate rebuilt
+// after the pick keeps counting from the step it was on.
+func TestTheConnectStepOpensTheProviderPanelAndKeepsTheCount(t *testing.T) {
+	m := providerBlockedRoot(t)
+	next, cmd := m.Update(preflight.ConnectProviderMsg{AgentID: catalog.FlagshipID, Provider: "fireworks"})
+	m = next.(FlagshipModel)
+	if m.providerPanel == nil || cmd == nil {
+		t.Fatal("the connect step did not open the provider panel")
+	}
+	m.gateSteps = 2
+	next, _ = m.Update(providers.SelectedMsg{ID: "fireworks.deepseek-v4p1-flash"})
+	m = next.(FlagshipModel)
+	defer m.preflight.Cancel()
+	if m.providerPanel != nil || m.model != "fireworks.deepseek-v4p1-flash" {
+		t.Fatal("the pick did not reach the launch")
+	}
+	if m.preflight.StepsDone() != 2 || m.gateSteps != 0 {
+		t.Errorf("rebuilt gate StepsDone = %d (carry %d), want 2 carried once",
+			m.preflight.StepsDone(), m.gateSteps)
+	}
+
+	next, _ = m.Update(preflight.ConnectProviderMsg{AgentID: "other", Provider: "fireworks"})
+	if next.(FlagshipModel).providerPanel != nil {
+		t.Error("a connect request from another agent's gate opened the panel")
+	}
+}

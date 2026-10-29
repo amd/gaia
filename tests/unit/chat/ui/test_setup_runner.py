@@ -8,6 +8,7 @@ replaced with fakes that assert the argv the runner would have used.
 """
 
 import io
+import json
 import subprocess
 import sys
 import threading
@@ -17,14 +18,22 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from gaia.llm import lemonade_choice, lemonade_client, lemonade_launcher
 from gaia.ui import setup_runner as sr
 from gaia.ui.routers import setup as setup_router
+
+_REAL_SERVER_PROBLEM = sr.server_problem
 
 
 @pytest.fixture(autouse=True)
 def gaia_home(tmp_path, monkeypatch):
     home = tmp_path / "gaia-home"
     monkeypatch.setenv("GAIA_HOME", str(home))
+    # GAIA's own Lemonade unless a test says the user chose theirs.
+    monkeypatch.setattr(sr, "users_lemonade_url", lambda: None)
+    monkeypatch.setattr(setup_router, "users_lemonade_url", lambda: None)
+    # No real server is probed when a run fails; tests that need one set it.
+    monkeypatch.setattr(sr, "server_problem", lambda: None)
     return home
 
 
@@ -53,6 +62,12 @@ def test_run_args_never_prompt_or_rebuild_the_running_ui():
 def test_run_command_is_what_a_person_would_type():
     assert sr.run_command(False) == "gaia init --profile gaia"
     assert sr.run_command(True) == "gaia init --profile gaia --skip-chat-model"
+    assert sr.run_command(False, True) == "gaia init --profile gaia --gaia-lemonade"
+
+
+def test_run_args_switch_to_gaias_own_server():
+    assert sr.run_args(False, gaia_lemonade=True)[-1] == "--gaia-lemonade"
+    assert "--gaia-lemonade" not in sr.run_args(False)
 
 
 # ── parse_status ───────────────────────────────────────────────────────────
@@ -143,6 +158,42 @@ def test_check_timeout_is_an_error(monkeypatch):
 # ── marker ─────────────────────────────────────────────────────────────────
 
 
+def _desktop_state(gaia_home, text):
+    gaia_home.mkdir(parents=True, exist_ok=True)
+    (gaia_home / sr.DESKTOP_INSTALL_STATE).write_text(text, encoding="utf-8")
+
+
+def test_desktop_setup_error_is_none_without_a_desktop_install(gaia_home):
+    assert sr.desktop_setup_error() is None
+
+
+@pytest.mark.parametrize("init", ["done", "skipped", None])
+def test_desktop_setup_error_is_none_when_init_did_not_fail(gaia_home, init):
+    _desktop_state(gaia_home, json.dumps({"state": "ready", "init": init}))
+    assert sr.desktop_setup_error() is None
+
+
+def test_desktop_setup_error_is_the_reason_init_gave(gaia_home):
+    reason = "Gemma-4-E4B-it-GGUF - Not enough free memory to load it."
+    _desktop_state(
+        gaia_home,
+        json.dumps({"state": "ready", "init": "failed", "initError": reason}),
+    )
+    assert sr.desktop_setup_error() == reason
+
+
+def test_desktop_setup_error_without_a_reason_points_at_the_log(gaia_home):
+    _desktop_state(gaia_home, json.dumps({"state": "ready", "init": "failed"}))
+    error = sr.desktop_setup_error()
+    assert "gaia init --profile gaia" in error
+    assert "electron-install.log" in error
+
+
+def test_an_unreadable_desktop_setup_record_is_reported(gaia_home):
+    _desktop_state(gaia_home, "{not json")
+    assert sr.DESKTOP_INSTALL_STATE in sr.desktop_setup_error()
+
+
 def test_marker_lives_under_gaia_home(gaia_home):
     assert not sr.is_initialized()
     sr.mark_initialized()
@@ -224,6 +275,36 @@ def test_describe_progress_bar_and_failure():
     assert failed.text == "user.embeddinggemma-300m-GGUF - Request failed"
 
 
+@pytest.mark.parametrize(
+    "line,size",
+    [
+        # The model pull's bar (AgentConsole.print_download_progress).
+        (
+            "   [━━━━━━─────] 45%  1.20 GB / 2.50 GB @ 30 MB/s",
+            "1.20 GB of 2.50 GB",
+        ),
+        # The server download's bar (InitCommand._download_progress).
+        ("   [========------------] 42% (2.1 MB/5.1 MB)", "2.1 MB of 5.1 MB"),
+        ("   [====] 7%", None),
+    ],
+)
+def test_describe_reads_the_download_size(line, size):
+    progress = sr.describe(line)
+    assert progress is not None and progress.size == size
+
+
+def test_describe_reads_the_chat_model_setup_chose():
+    progress = sr.describe(
+        "   Chat model: Qwen3.6-35B-A3B-GGUF — this PC has 32 GB for models (AMD iGPU)"
+    )
+    assert progress is not None and progress.chat_model == "Qwen3.6-35B-A3B-GGUF"
+    assert progress.phase is None and not progress.text
+    mine = sr.describe(
+        "   Chat model: Gemma-4-E4B-it-GGUF (default_model in ~/.gaia/config.json)"
+    )
+    assert mine is not None and mine.chat_model == "Gemma-4-E4B-it-GGUF"
+
+
 # ── SetupRun.view ──────────────────────────────────────────────────────────
 
 
@@ -263,6 +344,26 @@ def test_view_carries_the_command_and_a_bounded_log():
     assert view["command"] == "gaia init --profile gaia --skip-chat-model"
     assert view["log_tail"] == [str(i) for i in range(60, 100)]
     assert "under 1 GB" in view["steps"][1]["detail"]
+
+
+def test_steps_never_promise_a_download_size_setup_has_not_chosen():
+    steps = sr.step_labels(False)
+    assert "6 GB" not in steps[1]["detail"]
+    assert "fits this PC" in steps[1]["detail"]
+
+
+def test_view_names_the_chat_model_once_setup_picks_it():
+    run = sr.SetupRun(False, phase=sr.PHASE_MODELS, chat_model="Qwen3.6-35B-A3B-GGUF")
+    view = run.view()
+    assert view["chat_model"] == "Qwen3.6-35B-A3B-GGUF"
+    assert "Qwen3.6-35B-A3B-GGUF" in view["steps"][1]["detail"]
+
+
+def test_use_mine_replaces_the_install_step():
+    steps = sr.step_labels(False, users_server="http://localhost:13305/api/v1")
+    assert steps[0]["label"] == "Use your Lemonade Server"
+    assert steps[0]["detail"] == "http://localhost:13305/api/v1"
+    assert all("Install" not in s["label"] for s in steps)
 
 
 # ── SetupRunner ────────────────────────────────────────────────────────────
@@ -347,6 +448,25 @@ def test_a_clean_run_is_verified_then_ready(monkeypatch):
     assert "[====] 100% (5 MB/5 MB)" in view["log_tail"]
 
 
+def test_a_run_follows_the_chat_model_and_the_users_server(monkeypatch):
+    output = (
+        "Step 1/5: Starting Lemonade Server...\n"
+        "   Chat model: Qwen3.6-35B-A3B-GGUF — this PC has 32 GB for models\n"
+        "Step 2/5: Downloading models for 'gaia' profile...\n"
+    ).encode()
+    _popen(monkeypatch, _FakeProc(io.BytesIO(output)))
+    monkeypatch.setattr(sr, "check", lambda *_a, **_k: {"ready": True})
+    monkeypatch.setattr(
+        sr, "users_lemonade_url", lambda: "http://localhost:13305/api/v1"
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False)
+    view = _wait_done(runner)
+    assert view["chat_model"] == "Qwen3.6-35B-A3B-GGUF"
+    assert view["steps"][0]["label"] == "Use your Lemonade Server"
+    assert "Qwen3.6-35B-A3B-GGUF" in view["steps"][1]["detail"]
+
+
 def test_init_error_lines_are_not_wrapped_at_80_columns(monkeypatch):
     """The failure reason is the last ❌ line; Rich would wrap it in a pipe."""
     from rich.console import Console
@@ -380,8 +500,8 @@ def test_progress_follows_the_output(monkeypatch):
         time.sleep(0.02)
     assert view["text"] == "Downloading user.embeddinggemma-300m-GGUF"
     assert [s["status"] for s in view["steps"]] == ["done", "active", "pending"]
-    # A phase line resets the percentage of the previous download.
-    assert view["percent"] is None
+    # A phase line resets the percentage and size of the previous download.
+    assert view["percent"] is None and view["size"] is None
     assert runner.cancel() is True
     _wait_done(runner)
 
@@ -410,6 +530,106 @@ def test_a_failed_run_without_an_error_line_names_the_last_output(monkeypatch):
     view = _wait_done(runner)
     assert view["state"] == "failed"
     assert view["error"].endswith("boom")
+
+
+_UNREACHABLE = {
+    "kind": "server_unreachable",
+    "message": "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
+    "start": "Start Lemonade Server from the Lemonade tray icon.",
+    "use_gaia": True,
+    "switch_hint": None,
+}
+_RAW_ERROR = (
+    "Lemonade Server at http://127.0.0.1:9/api/v1 is not reachable: Request "
+    "failed: HTTPConnectionPool(host='127.0.0.1', port=9): Max retries exceeded"
+)
+
+
+def test_an_unanswering_server_fails_in_plain_words(monkeypatch):
+    out = f"Step 1/5: Starting Lemonade Server...\n   ❌ {_RAW_ERROR}\n".encode()
+    _popen(monkeypatch, _FakeProc(io.BytesIO(out), returncode=1))
+    monkeypatch.setattr(sr, "server_problem", lambda: _UNREACHABLE)
+    runner = sr.SetupRunner()
+    runner.start(False)
+    view = _wait_done(runner)
+    assert view["state"] == "failed"
+    assert view["error"] == _UNREACHABLE["message"]
+    assert view["problem"] == _UNREACHABLE
+    # The exception text stays behind "Details".
+    assert any("HTTPConnectionPool" in line for line in view["log_tail"])
+    assert [s["status"] for s in view["steps"]] == ["failed", "pending", "pending"]
+
+
+def test_a_later_failure_is_not_blamed_on_the_server(monkeypatch):
+    out = _OUTPUT + "   ❌ user.embeddinggemma-300m-GGUF - failed\n".encode()
+    _popen(monkeypatch, _FakeProc(io.BytesIO(out), returncode=1))
+    monkeypatch.setattr(
+        sr, "server_problem", lambda: pytest.fail("the server step passed")
+    )
+    runner = sr.SetupRunner()
+    runner.start(False)
+    view = _wait_done(runner)
+    assert view["problem"] is None
+    assert "embeddinggemma" in view["error"]
+
+
+def test_use_gaias_own_runs_init_with_the_switch(monkeypatch):
+    calls, forgot = [], []
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)), calls)
+    monkeypatch.setattr(sr, "check", lambda *_a, **_k: {"ready": True})
+    monkeypatch.setattr(sr, "_forget_previous_server", lambda: forgot.append(1))
+    monkeypatch.setattr(sr, "users_lemonade_url", lambda: "http://127.0.0.1:9/api/v1")
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    runner = sr.SetupRunner()
+    first = runner.start(False, gaia_lemonade=True)
+    # Setup now installs GAIA's own, not the user's server it was set to.
+    assert first["steps"][0]["label"] == "Install the local model server"
+    assert first["command"] == "gaia init --profile gaia --gaia-lemonade"
+    view = _wait_done(runner)
+    assert view["state"] == "ready" and view["gaia_lemonade"] is True
+    assert calls[0][0][-1] == "--gaia-lemonade"
+    assert forgot == [1]
+
+
+def test_a_failed_switch_to_gaias_own_keeps_its_own_error(monkeypatch):
+    """The user's server is still down, but it isn't what failed this time."""
+    out = b"Step 1/5: Starting Lemonade Server...\n   \xe2\x9d\x8c Could not download\n"
+    _popen(monkeypatch, _FakeProc(io.BytesIO(out), returncode=1))
+    monkeypatch.setattr(sr, "server_problem", lambda: pytest.fail("not the cause"))
+    monkeypatch.setattr(
+        sr, "_forget_previous_server", lambda: pytest.fail("nothing was switched")
+    )
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    runner = sr.SetupRunner()
+    runner.start(False, gaia_lemonade=True)
+    view = _wait_done(runner)
+    assert view["problem"] is None
+    assert "Could not download" in view["error"]
+    assert view["command"].endswith("--gaia-lemonade")
+
+
+def test_a_switch_is_applied_even_when_the_check_then_fails(monkeypatch):
+    forgot = []
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    monkeypatch.setattr(sr, "check", lambda *_a, **_k: {"ready": False})
+    monkeypatch.setattr(sr, "_forget_previous_server", lambda: forgot.append(1))
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    runner = sr.SetupRunner()
+    runner.start(False, gaia_lemonade=True)
+    assert _wait_done(runner)["state"] == "failed"
+    assert forgot == [1]
+
+
+def test_use_gaias_own_is_refused_while_lemonade_base_url_picks_the_server(
+    monkeypatch,
+):
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
+    monkeypatch.setattr(
+        sr.subprocess, "Popen", lambda *_a, **_k: pytest.fail("nothing starts")
+    )
+    with pytest.raises(sr.SetupError, match="Unset it and restart GAIA"):
+        sr.SetupRunner().start(False, gaia_lemonade=True)
 
 
 def test_verify_not_ready_fails_with_the_reasons(monkeypatch):
@@ -488,6 +708,103 @@ def test_a_command_that_cannot_start_is_an_error(monkeypatch):
     assert runner.status() is None
 
 
+# ── server_problem ─────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def users_server(monkeypatch):
+    """GAIA set to the user's server at *url*, chosen by *source*; probes recorded."""
+    probed = []
+
+    def use(url, source, status=lemonade_choice.UNREACHABLE, installed=True):
+        monkeypatch.setattr(lemonade_client, "configured_lemonade_url", lambda: url)
+        monkeypatch.setattr(lemonade_choice, "configured_source", lambda: source)
+
+        def probe(base, api_key=None, **_kw):
+            probed.append(base)
+            return lemonade_choice.ProbeResult(base, status)
+
+        monkeypatch.setattr(lemonade_choice, "probe", probe)
+        monkeypatch.setattr(
+            lemonade_launcher,
+            "resolve_lemonade",
+            lambda: type("Tooling", (), {"found": installed})(),
+        )
+        monkeypatch.setattr(
+            lemonade_launcher,
+            "describe_start_hint",
+            lambda: lemonade_launcher.StartHint(instruction="Start it from the tray."),
+        )
+        return probed
+
+    return use
+
+
+def test_an_env_server_that_does_not_answer_says_so_plainly(users_server):
+    probed = users_server("http://127.0.0.1:9", "env")
+    problem = _REAL_SERVER_PROBLEM()
+    assert probed == ["http://127.0.0.1:9/api/v1"]
+    assert problem["message"] == "Your Lemonade Server at 127.0.0.1:9 isn't answering."
+    assert problem["start"] == "Start it from the tray."
+    # LEMONADE_BASE_URL outranks the saved choice: switching here can't work.
+    assert problem["use_gaia"] is False
+    assert "unset it and restart GAIA" in problem["switch_hint"]
+    assert "lemonade-server serve" not in str(problem)
+
+
+def test_a_saved_server_that_does_not_answer_offers_gaias_own(users_server):
+    users_server("http://localhost:13305/api/v1", "config")
+    problem = _REAL_SERVER_PROBLEM()
+    assert problem["use_gaia"] is True
+    assert problem["switch_hint"] is None
+
+
+def test_no_start_hint_when_this_pc_has_no_lemonade_to_start(users_server):
+    users_server("http://localhost:13305", "config", installed=False)
+    assert _REAL_SERVER_PROBLEM()["start"] is None
+
+
+def test_a_remote_server_is_started_where_it_runs(users_server):
+    users_server("http://192.168.1.20:13305", "env")
+    problem = _REAL_SERVER_PROBLEM()
+    assert (
+        problem["start"] == "Start it on the computer at 192.168.1.20, then try again."
+    )
+
+
+@pytest.mark.parametrize("url", ["http://0.0.0.0:13305", "http://[::]:13305"])
+def test_a_wildcard_bind_address_is_this_pc(users_server, url):
+    users_server(url, "env")
+    assert _REAL_SERVER_PROBLEM()["start"] == "Start it from the tray."
+
+
+def test_a_start_hint_that_cannot_be_worked_out_still_names_the_problem(
+    users_server, monkeypatch, caplog
+):
+    users_server("http://127.0.0.1:9", "config")
+
+    def unreadable():
+        raise PermissionError("install dir")
+
+    monkeypatch.setattr(lemonade_launcher, "resolve_lemonade", unreadable)
+    problem = _REAL_SERVER_PROBLEM()
+    assert problem["message"] == "Your Lemonade Server at 127.0.0.1:9 isn't answering."
+    assert problem["start"] is None
+    assert "install dir" in caplog.text
+
+
+@pytest.mark.parametrize("status", [lemonade_choice.OK, lemonade_choice.NEEDS_KEY])
+def test_a_server_that_answers_is_not_the_problem(users_server, status):
+    users_server("http://127.0.0.1:9", "env", status=status)
+    assert _REAL_SERVER_PROBLEM() is None
+
+
+def test_gaias_own_server_is_never_probed(users_server):
+    probed = users_server(None, None)
+    assert _REAL_SERVER_PROBLEM() is None
+    assert probed == []
+
+
 # ── Routes ─────────────────────────────────────────────────────────────────
 
 
@@ -543,6 +860,17 @@ def test_check_route_needs_the_ui_header(client, monkeypatch):
     assert called == []
 
 
+def test_check_route_steps_follow_use_mine(client, monkeypatch):
+    test_client, _ = client
+    monkeypatch.setattr(setup_router, "check", lambda **_k: {"ready": False})
+    monkeypatch.setattr(
+        setup_router, "users_lemonade_url", lambda: "http://localhost:13305/api/v1"
+    )
+    body = test_client.get("/api/setup/check").json()
+    assert body["steps"][0]["label"] == "Use your Lemonade Server"
+    assert body["cloud_steps"][0]["label"] == "Use your Lemonade Server"
+
+
 def test_check_route_unanswered_is_503(client, monkeypatch):
     test_client, _ = client
 
@@ -572,3 +900,14 @@ def test_run_status_and_cancel_routes(client, monkeypatch):
     assert test_client.get("/api/setup/status").json()["state"] == "running"
     assert test_client.post("/api/setup/cancel").json() == {"cancelled": True}
     assert test_client.post("/api/setup/cancel").json() == {"cancelled": False}
+
+
+def test_run_route_passes_the_switch_to_gaias_own(client, monkeypatch):
+    test_client, runner = client
+    seen = []
+    monkeypatch.setattr(
+        runner, "start", lambda skip, gaia: seen.append((skip, gaia)) or {}
+    )
+    test_client.post("/api/setup/run", json={"gaia_lemonade": True})
+    test_client.post("/api/setup/run", json={})
+    assert seen == [(False, True), (False, False)]

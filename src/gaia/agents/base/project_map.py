@@ -461,14 +461,14 @@ def is_agent_own_source(root: os.PathLike | str) -> bool:
     return checkout is not None and (path == checkout or checkout in path.parents)
 
 
-def working_directory_line() -> str:
+def working_directory_line(workspace: Optional[str] = None) -> str:
     """Where relative paths resolve, for a session that is not in a project.
 
     Told only "read the working directory", a model asked about docs/report.pdf
     searched the whole home folder and read a same-named copy elsewhere. Empty
     for GAIA's own source, where a daemon-launched sidecar runs.
     """
-    cwd = os.getcwd()
+    cwd = workspace or os.getcwd()
     if is_agent_own_source(cwd):
         return ""
     return (
@@ -596,7 +596,11 @@ def render_project_map(
     # they must survive the sub-cap even when the longer lists do not.
     commands: List[str] = []
     if pm.tools_absent:
-        commands.append(f"NOT installed, do not invoke: {', '.join(pm.tools_absent)}")
+        commands.append(
+            "Not on the agent's PATH, do not invoke (they may still be installed; "
+            "say they are not reachable from the agent's shell, never that the "
+            f"user lacks them): {', '.join(pm.tools_absent)}"
+        )
     if has_shell_tool:
         allowed = set(pm.shell_commands)
         if pm.shell_commands:
@@ -607,7 +611,7 @@ def render_project_map(
         needs_approval = [t for t in pm.tools_present if t not in allowed]
         if needs_approval:
             commands.append(
-                "Also installed; run_shell_command runs them once the user "
+                "Also on the PATH; run_shell_command runs them once the user "
                 f"approves: {', '.join(needs_approval)}"
             )
     elif pm.tools_present:
@@ -728,7 +732,18 @@ class ProjectMapMixin:
         """
         if not hasattr(self, "_project_map_root_cache"):
             explicit = getattr(getattr(self, "config", None), "project_root", None)
-            self._project_map_root_cache = resolve_project_root(explicit)
+            root = resolve_project_root(explicit)
+            in_scope = getattr(
+                getattr(self, "path_validator", None), "in_env_scope", None
+            )
+            # The map reads the tree into the prompt, so it obeys GAIA_ALLOWED_PATHS.
+            if root and in_scope is not None and not in_scope(root):
+                logger.warning(
+                    "[project-map] %s is outside GAIA_ALLOWED_PATHS; not mapping it",
+                    root,
+                )
+                root = None
+            self._project_map_root_cache = root
         return self._project_map_root_cache
 
     def materialize_project_map(self) -> Optional[ProjectMap]:
@@ -740,7 +755,9 @@ class ProjectMapMixin:
         """Auto-discovered by ``Agent._get_mixin_prompts``."""
         pm = self.materialize_project_map()
         if pm is None:
-            return working_directory_line()
+            from gaia.agents.tools.workspace_paths import _workspace_default
+
+            return working_directory_line(_workspace_default(self))
         return render_project_map(
             pm,
             index_status=self._code_index_status(pm),
@@ -811,7 +828,7 @@ class ProjectMapMixin:
         if indexed:
             return "built — use search_code_index before grepping"
         state = getattr(self, "_project_map_index_state", _IDLE)
-        if state == _RUNNING:
+        if state == _RUNNING or self._code_index_is_building():
             return "building now in the background; grep until it lands"
         if state == _FAILED:
             return "build FAILED — grep instead, or call index_codebase to see why"
@@ -835,6 +852,14 @@ class ProjectMapMixin:
         # Presence check, not get_status(): this runs on every prompt
         # composition and get_status parses every indexed chunk.
         return bool(sdk.is_indexed())
+
+    def _code_index_is_building(self) -> bool:
+        """Is a build a search started still running in the background?"""
+        running = getattr(self, "_code_index_build_running", None)
+        if running is None:
+            return False
+        sdk = self._get_code_index_sdk()
+        return sdk is not None and running(sdk) is not None
 
     def _auto_index_enabled(self) -> bool:
         override = auto_index_env_override()

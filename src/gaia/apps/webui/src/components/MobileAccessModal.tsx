@@ -6,6 +6,7 @@ import { X, Smartphone, Copy, Check } from 'lucide-react';
 import type { TunnelStatus } from '../types';
 import * as api from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { log } from '../utils/logger';
 import './MobileAccessModal.css';
 
@@ -26,6 +27,8 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
     const [qrError, setQrError] = useState<string | null>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     useEscapeToClose(isOpen, onClose);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useFocusTrap(dialogRef, isOpen);
 
     // Fetch current tunnel status using centralized API client
     const fetchStatus = useCallback(async () => {
@@ -135,12 +138,12 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
         : '';
 
     return (
-        <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Mobile Access">
+        <div ref={dialogRef} className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Mobile access">
             <div className="modal-panel mobile-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
                     <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <Smartphone size={18} />
-                        Mobile Access
+                        Mobile access
                     </h3>
                     <button className="btn-icon" onClick={onClose} aria-label="Close">
                         <X size={18} />
@@ -159,7 +162,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                             {status?.active
                                 ? 'Tunnel active'
                                 : error
-                                    ? 'Connection failed'
+                                    ? "Couldn't start mobile access"
                                     : 'Starting tunnel...'}
                         </span>
                         {!status?.active && !error && <span className="tunnel-spinner" />}
@@ -172,25 +175,23 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                         </div>
                     )}
 
-                    {/* QR Code */}
-                    <div className="qr-code-area">
-                        {status?.active ? (
-                            <>
-                                {/* Stays mounted while errored so a later retry still has its ref. */}
-                                <canvas ref={canvasRef} hidden={!!qrError} />
-                                {qrError && <div className="qr-placeholder error">{qrError}</div>}
-                            </>
-                        ) : error ? (
-                            <div className="qr-placeholder error">
-                                Failed to connect
-                            </div>
-                        ) : (
-                            <div className="qr-placeholder">
-                                <div className="placeholder-spinner" />
-                                <span>Connecting...</span>
-                            </div>
-                        )}
-                    </div>
+                    {/* QR Code: nothing to scan, and no steps to follow, once it failed. */}
+                    {!error && (
+                        <div className="qr-code-area">
+                            {status?.active ? (
+                                <>
+                                    {/* Stays mounted while errored so a later retry still has its ref. */}
+                                    <canvas ref={canvasRef} hidden={!!qrError} />
+                                    {qrError && <div className="qr-placeholder error">{qrError}</div>}
+                                </>
+                            ) : (
+                                <div className="qr-placeholder">
+                                    <div className="placeholder-spinner" />
+                                    <span>Connecting...</span>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {/* URL display */}
                     {status?.active && mobileUrl && (
@@ -214,7 +215,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                     {status?.active && status?.publicIp && status?.url &&
                      !status.url.includes('ngrok-free.app') && (
                         <div className="tunnel-password-hint">
-                            <label>Tunnel Password</label>
+                            <label>Tunnel password</label>
                             <div className="tunnel-password-value">{status.publicIp}</div>
                             <span className="tunnel-password-note">
                                 Enter this when the tunnel page asks for a password
@@ -223,20 +224,22 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                     )}
 
                     {/* Instructions */}
-                    <div className="mobile-instructions">
-                        <ol>
-                            <li>
-                                {qrError
-                                    ? 'Open the mobile URL above on your phone'
-                                    : "Scan the QR code with your phone's camera"}
-                            </li>
-                            {status?.url && !status.url.includes('ngrok-free.app') && (
-                                <li>Enter the tunnel password shown above when prompted</li>
-                            )}
-                            <li>Chat with GAIA from your mobile device</li>
-                            <li>Your data stays secure via encrypted tunnel</li>
-                        </ol>
-                    </div>
+                    {!error && (
+                        <div className="mobile-instructions">
+                            <ol>
+                                <li>
+                                    {qrError
+                                        ? 'Open the mobile URL above on your phone'
+                                        : "Scan the QR code with your phone's camera"}
+                                </li>
+                                {status?.url && !status.url.includes('ngrok-free.app') && (
+                                    <li>Enter the tunnel password shown above when prompted</li>
+                                )}
+                                <li>Chat with GAIA from your mobile device</li>
+                                <li>Your data stays secure via encrypted tunnel</li>
+                            </ol>
+                        </div>
+                    )}
 
                     {/* Actions */}
                     <div className="mobile-access-actions">
@@ -246,7 +249,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                                 onClick={onStop}
                                 title="Close the tunnel and revoke the mobile URL"
                             >
-                                Stop Tunnel
+                                Stop tunnel
                             </button>
                         )}
                         <button className="btn-secondary" onClick={onClose}>Close</button>

@@ -45,6 +45,8 @@ export interface Env {
   REINDEX_TOKEN?: string;
   /** Max artifact size in bytes (string in wrangler vars). */
   MAX_ARTIFACT_BYTES?: string;
+  /** Max size of an artifact published by reference (straight to R2), in bytes. */
+  MAX_REFERENCED_ARTIFACT_BYTES?: string;
 }
 
 /** A publisher resolved from a bearer token. */

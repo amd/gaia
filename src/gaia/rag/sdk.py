@@ -6,6 +6,7 @@
 GAIA RAG SDK - Simple PDF document retrieval and Q&A
 """
 
+import codecs
 import errno
 import hashlib
 import hmac
@@ -42,6 +43,7 @@ except Exception:  # pylint: disable=broad-except
 
 from gaia import config as gaia_config
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MODEL_NAME,
@@ -50,6 +52,48 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.logger import get_logger
 from gaia.security import PathValidator
+from gaia.utils.document_formats import (
+    UNSUPPORTED_DOCUMENTS,
+    unsupported_document_message,
+)
+from gaia.utils.file_lock import (
+    FileLockError,
+    FileLockTimeout,
+    file_lock,
+    held_by_another_program,
+    lock_dir_unwritable,
+    write_bytes_atomic,
+    write_text_atomic,
+)
+
+_TEXT_BOM_ENCODINGS = (
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+_TEXT_FALLBACK_ENCODINGS = ("utf-8", "cp1252", "latin-1")
+_TEXT_TRIED_ENCODINGS = ", ".join(
+    dict.fromkeys([e for _, e in _TEXT_BOM_ENCODINGS] + list(_TEXT_FALLBACK_ENCODINGS))
+)
+
+
+def _decode_text_bytes(data: bytes) -> str:
+    """Decode text bytes without letting latin-1 hide Windows encodings."""
+    for bom, encoding in _TEXT_BOM_ENCODINGS:
+        if data.startswith(bom):
+            return data.decode(encoding)
+
+    for encoding in _TEXT_FALLBACK_ENCODINGS:
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    # latin-1 never fails; only a corrupt BOM-tagged file raises (above).
+    raise UnicodeDecodeError("text", data, 0, len(data), "unsupported encoding")
+
 
 # --- PDF extraction errors ---------------------------------------------------
 # These inherit from ValueError so existing `except ValueError` blocks in
@@ -87,6 +131,162 @@ class EmptyPDFError(PDFExtractionError):
     status = "empty"
 
 
+class SpreadsheetReadError(ValueError):
+    """An Excel workbook that can't be read; ``status`` is its error kind."""
+
+    def __init__(self, message: str, status: str):
+        super().__init__(message)
+        self.status = status
+
+
+# Legacy .xls and password-protected .xlsx are both OLE2 compound files.
+_OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def _missing_package_hint(*packages: str) -> str:
+    from gaia.agents.install_hints import (  # pylint: disable=import-outside-toplevel
+        missing_package_hint,
+    )
+
+    return missing_package_hint(*packages)
+
+
+def _is_connection_failure(exc: BaseException) -> bool:
+    """Whether *exc*, or anything it was raised from, is a failed connection."""
+    import requests  # pylint: disable=import-outside-toplevel
+
+    from gaia.llm.providers.lemonade import (  # pylint: disable=import-outside-toplevel
+        CONNECTION_FAILURE_RE,
+    )
+
+    seen = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(
+            current,
+            (ConnectionError, requests.exceptions.ConnectionError),
+        ) or CONNECTION_FAILURE_RE.search(str(current)):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+class IndexingStopped(Exception):
+    """Raised from an ``index_document`` callback to stop indexing.
+
+    It leaves ``index_document`` as raised: the document is not indexed, and
+    any cache it had is kept.
+    """
+
+
+def _stop_behind(error: BaseException) -> Optional[Exception]:
+    """The stop *error* was raised from, if any.
+
+    A stop (:class:`IndexingStopped`, or :class:`LeaseWaitCancelled` from a
+    cancelled model-slot wait) can be wrapped by the client on the way out.
+    """
+    seen = set()
+    current: Optional[BaseException] = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, (IndexingStopped, LeaseWaitCancelled)):
+            return current
+        seen.add(id(current))
+        current = _next_in_chain(current)
+    return None
+
+
+def _next_in_chain(error: BaseException) -> Optional[BaseException]:
+    """The exception Python's traceback shows *error* as raised from or during."""
+    if error.__cause__ is not None:
+        return error.__cause__
+    if error.__suppress_context__:
+        return None
+    return error.__context__
+
+
+def name_file_for_user(text: str, file_path: str, display_name: str) -> str:
+    """Replace every spelling of *file_path* in *text* with *display_name*.
+
+    Indexing often runs on a private copy of the user's file; this keeps the
+    copy's path and name out of messages the user reads.
+    """
+    path = Path(file_path)
+    spellings = {str(file_path), str(path), path.as_posix(), os.path.realpath(path)}
+    for spelling in sorted(spellings, key=len, reverse=True):
+        text = text.replace(spelling, display_name)
+    # Any other spelling of the copy's folder (8.3 names, a symlinked temp dir).
+    return re.sub(
+        r"(?:[^\s'\"()]*[\\/])?" + re.escape(path.name), lambda _m: display_name, text
+    )
+
+
+# The running index_document's ``heartbeat`` on this thread, called once per
+# extracted page, so a long extraction shows progress and can be stopped.
+_HEARTBEAT = threading.local()
+
+
+def _beat() -> None:
+    heartbeat = getattr(_HEARTBEAT, "fn", None)
+    if heartbeat is not None:
+        heartbeat()
+
+
+def _is_read_timeout(exc: BaseException) -> bool:
+    """Whether *exc*, or anything it was raised from, is a read timeout."""
+    import requests  # pylint: disable=import-outside-toplevel
+
+    seen = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, requests.exceptions.ReadTimeout):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+class _EmbedderWarmingUp(Exception):
+    """The embedder answered with no vectors: it is still loading."""
+
+
+class EmbeddingUnavailableError(RuntimeError):
+    """The embedding model could not run, so nothing was embedded or searched.
+
+    ``unreachable`` is True when Lemonade Server itself could not be reached,
+    as opposed to the server answering with an error. ``busy`` is True when
+    the server was reached but did not answer in time — the hardware it runs
+    on is shared with other work.
+    """
+
+    def __init__(self, model: str, cause: BaseException):
+        self.model = model
+        self.unreachable = _is_connection_failure(cause)
+        self.busy = not self.unreachable and _is_read_timeout(cause)
+        if self.unreachable:
+            what = (
+                f"Lemonade Server is not reachable, so the embedding model "
+                f"{model} could not run"
+            )
+        elif self.busy:
+            what = (
+                f"The embedding model {model} did not answer within "
+                f"{EMBED_BATCH_TIMEOUT_S}s; the GPU or CPU it runs on is likely "
+                "busy with another model or app"
+            )
+        else:
+            what = f"The embedding model {model} failed"
+        super().__init__(f"{what}: {cause}")
+
+
+_CACHE_LOCK_NAME = "rag-cache"
+
+
+def _cache_lock_target(cache_path: str) -> Path:
+    """Every chunk cache in one directory shares one lock (``rag-cache.lock``)."""
+    return Path(cache_path).parent / _CACHE_LOCK_NAME
+
+
 # Files the RAG cache writes: signed chunk caches, their sidecar signatures,
 # and extracted-text markdown. clear_cache() deletes nothing else.
 _CACHE_OWNED_FILE = re.compile(
@@ -108,6 +308,17 @@ EMBED_MAX_CHARS = int(
 
 #: Chunks embedded between two progress reports during indexing.
 PROGRESS_SLICE_CHUNKS = 250
+
+#: Chunks sent in one ``/embeddings`` request.
+EMBED_BATCH_SIZE = 25
+#: How long one batch may wait for the embedder. It is sent once: resending a
+#: timed-out batch queues the same work again on hardware too busy to finish it.
+EMBED_BATCH_TIMEOUT_S = 300
+#: Seconds between "still waiting" reports while a batch is outstanding.
+EMBED_WAIT_REPORT_S = 15
+#: Tries for a batch the embedder answers with no vectors (still loading).
+EMBED_WARMUP_ATTEMPTS = 3
+EMBED_WARMUP_PAUSE_S = 2
 
 
 def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
@@ -190,6 +401,40 @@ class RAGResponse:
     source_files: Optional[List[str]] = None  # List of source files for each chunk
     chunk_metadata: Optional[List[Dict[str, Any]]] = None  # Detailed metadata per chunk
     query_metadata: Optional[Dict[str, Any]] = None  # Query-level metadata
+
+
+def _same_file(a: str, b: str) -> bool:
+    """Whether *a* and *b* name one file, however spelled.
+
+    Case, 8.3 short names, UNC and extended-length paths all name the same file.
+    A file that no longer exists is compared by its normalised real path.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(
+            os.path.realpath(b)
+        )
+
+
+def _locked_cause(
+    error: Optional[BaseException], file_path: str
+) -> Optional[PermissionError]:
+    """The lock on *file_path* in *error*'s chain, if any.
+
+    Parsers wrap the OS error they hit, so the chain is walked the way Python
+    prints it. A lock that names another file (a temp or cache file) is not
+    this document's; a read error carries no filename, an open names the file.
+    """
+    seen = set()
+    while error is not None and id(error) not in seen:
+        if isinstance(error, PermissionError) and held_by_another_program(error):
+            name = error.filename
+            if name is None or _same_file(os.fsdecode(name), file_path):
+                return error
+        seen.add(id(error))
+        error = _next_in_chain(error)
+    return None
 
 
 class RAGSDK:
@@ -300,12 +545,13 @@ class RAGSDK:
             missing.append("faiss-cpu")
 
         if missing:
+            from gaia.agents.install_hints import (  # pylint: disable=import-outside-toplevel
+                missing_extra_hint,
+            )
+
             error_msg = (
                 f"\n❌ Error: Missing required RAG dependencies: {', '.join(missing)}\n\n"
-                f"Please install the RAG dependencies:\n"
-                f'  uv pip install -e ".[rag]"\n\n'
-                f"Or install packages directly:\n"
-                f"  uv pip install {' '.join(missing)}\n"
+                f"{missing_extra_hint('rag')}\n"
             )
             # A package that is installed but failed to import (broken native
             # deps) needs a different fix than a missing one — name the cause.
@@ -334,6 +580,19 @@ class RAGSDK:
                     + "\n"
                 )
             raise ImportError(error_msg)
+
+    def _log_read_failure(
+        self, error: BaseException, file_path: str, message: str
+    ) -> None:
+        """A warning for a lock, which the caller may retry; *message* otherwise."""
+        locked = _locked_cause(error, file_path)
+        if locked is not None:
+            self.log.warning(
+                f"Could not read {file_path}: another program may have it locked, "
+                f"or it is not readable: {locked}"
+            )
+        else:
+            self.log.error(message)
 
     def _safe_open(self, file_path: str, mode="rb"):
         """
@@ -380,7 +639,10 @@ class RAGSDK:
         except OSError as e:
             if e.errno == errno.ELOOP:  # too many symbolic links
                 raise PermissionError(f"Symlinks not allowed: {file_path}")
-            raise IOError(f"Cannot open file {file_path}: {e}")
+            # Keep the errno: it is how a caller tells a locked file apart.
+            raise OSError(
+                e.errno, f"Cannot open file: {e.strerror}", str(file_path)
+            ) from e
 
         # Verify it's a regular file (not directory or special file)
         try:
@@ -397,7 +659,7 @@ class RAGSDK:
 
             return os.fdopen(fd, mode_str)
 
-        except Exception as _e:
+        except Exception:
             os.close(fd)
             raise
 
@@ -405,7 +667,7 @@ class RAGSDK:
         """
         Get or create HMAC key for cache integrity verification.
 
-        The key is stored per-installation in ~/.gaia/cache/hmac.key
+        The key is stored per-installation in <gaia_home>/cache/hmac.key
         and is used to sign cache files to prevent tampering. Cached in
         memory after first load to avoid repeated disk reads.
 
@@ -415,20 +677,18 @@ class RAGSDK:
         if self._hmac_key is not None:
             return self._hmac_key
 
-        key_dir = Path.home() / ".gaia" / "cache"
+        key_dir = gaia_config.gaia_home() / "cache"
         key_path = key_dir / "hmac.key"
 
-        if key_path.exists():
-            self._hmac_key = key_path.read_bytes()
-            return self._hmac_key
+        # Locked so two first-run processes cannot each mint a key and leave
+        # every cache the other signed failing verification.
+        with file_lock(key_path):
+            if key_path.exists():
+                self._hmac_key = key_path.read_bytes()
+                return self._hmac_key
 
-        key_dir.mkdir(parents=True, exist_ok=True)
-        key = secrets.token_bytes(32)
-        key_path.write_bytes(key)
-        try:
-            key_path.chmod(0o600)
-        except (OSError, AttributeError):
-            pass
+            key = secrets.token_bytes(32)
+            write_bytes_atomic(key_path, key, mode=0o600)
         self.log.info("Generated new HMAC key for cache integrity verification")
         self._hmac_key = key
         return self._hmac_key
@@ -449,10 +709,10 @@ class RAGSDK:
         key = self._get_hmac_key()
         signature = hmac.new(key, json_bytes, hashlib.sha256).hexdigest()
 
-        with open(cache_path, "wb") as f:
-            f.write(json_bytes)
-        with open(cache_path + ".sig", "w", encoding="utf-8") as f:
-            f.write(signature)
+        # One lock over both files, so a reader never pairs new JSON with an old .sig.
+        with file_lock(_cache_lock_target(cache_path)):
+            write_bytes_atomic(cache_path, json_bytes)
+            write_bytes_atomic(cache_path + ".sig", signature.encode("utf-8"))
 
         self.log.debug(f"Saved signed cache: {cache_path}")
 
@@ -475,14 +735,17 @@ class RAGSDK:
         """
         sig_path = cache_path + ".sig"
 
-        if not os.path.exists(sig_path):
-            raise ValueError("Cache signature file missing — cannot verify integrity")
+        with file_lock(_cache_lock_target(cache_path)):
+            if not os.path.exists(sig_path):
+                raise ValueError(
+                    "Cache signature file missing — cannot verify integrity"
+                )
 
-        with open(cache_path, "rb") as f:
-            json_bytes = f.read()
+            with open(cache_path, "rb") as f:
+                json_bytes = f.read()
 
-        with open(sig_path, "r", encoding="utf-8") as f:
-            stored_sig = f.read().strip()
+            with open(sig_path, "r", encoding="utf-8") as f:
+                stored_sig = f.read().strip()
 
         key = self._get_hmac_key()
         expected_sig = hmac.new(key, json_bytes, hashlib.sha256).hexdigest()
@@ -514,13 +777,18 @@ class RAGSDK:
         )
         return hashlib.sha256(spec.encode("utf-8")).hexdigest()[:8]
 
-    def _content_key(self, file_path: str) -> str:
+    def _content_key(self, file_path: str, raise_locked: bool = False) -> str:
         """``<path hash>_<content hash>``: the shared stem of a document's cache files.
 
         The content hash (not mtime/size) makes same-size edits and sub-second
         rewrites invalidate; the path hash keeps identical files apart. An
         unreadable file gets a path-only ``<hash>_notfound`` key, and indexing
         then fails at extraction.
+
+        Raises:
+            PermissionError: With ``raise_locked``, when the read is refused as
+                :func:`held_by_another_program`. Hashing reads every byte, so
+                this sees a lock in any format before a parser misreports it.
         """
         path = Path(file_path).absolute()
         try:
@@ -530,6 +798,8 @@ class RAGSDK:
                 while chunk := f.read(8192):
                     hasher.update(chunk)
         except OSError as e:
+            if raise_locked and held_by_another_program(e):
+                raise
             self.log.warning(f"Cannot read file for cache key: {e}")
             return f"{hashlib.sha256(str(path).encode()).hexdigest()}_notfound"
         path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
@@ -562,80 +832,100 @@ class RAGSDK:
         evict the co-resident chat model and trigger a ~100s cold reload.
         """
         if self.embedder is None:
-            self.log.info(
-                f"Loading embedding model via Lemonade: {self.config.embedding_model}"
-            )
+            try:
+                self._start_embedder()
+            except EmbeddingUnavailableError:
+                raise
+            except Exception as e:
+                stop = _stop_behind(e)
+                if stop is not None:
+                    raise stop from e
+                raise EmbeddingUnavailableError(self.config.embedding_model, e) from e
 
-            from gaia.llm.lemonade_client import MODELS, LemonadeClient
+    def _start_embedder(self):
+        """Register, download and load the embedder; ``_load_embedder`` wraps it."""
+        self.log.info(
+            f"Loading embedding model via Lemonade: {self.config.embedding_model}"
+        )
 
-            if not hasattr(self, "llm_client") or self.llm_client is None:
-                self.llm_client = LemonadeClient()
+        from gaia.llm.lemonade_client import MODELS, LemonadeClient
 
-            # Register + download the embedder before loading. Custom
-            # (``user.``) embedders aren't Lemonade built-ins — they need
-            # checkpoint + recipe + the embedding label on first pull. Fail
-            # loudly if registration fails (no silent fall-back to another model).
-            mr = next(
-                (
-                    m
-                    for m in MODELS.values()
-                    if m.model_id == self.config.embedding_model
-                ),
-                None,
-            )
-            if mr and self.config.embedding_model.startswith("user."):
-                if not self.llm_client.ensure_model_downloaded(
-                    self.config.embedding_model,
-                    checkpoint=mr.checkpoint,
-                    recipe=mr.recipe,
-                    embedding=mr.embedding,
-                ):
-                    raise RuntimeError(
-                        f"Failed to register/download embedding model "
-                        f"{self.config.embedding_model!r}. Ensure Lemonade Server "
-                        f"is running and reachable, then retry "
-                        f"(or run `gaia init --profile rag`)."
-                    )
+        if not hasattr(self, "llm_client") or self.llm_client is None:
+            self.llm_client = LemonadeClient()
 
-            # Serialize the whole unload→load swap through the broker (#2248).
-            # Not an eviction guard — per #1544 the embedder is co-resident in
-            # its own slot, so a chat load will not evict it. It is a guard on
-            # the *load* itself: concurrent loads contend for GPU memory and
-            # backend startup, which is what the broker arbitrates. Background
-            # priority so a warm-up never makes an interactive turn wait.
-            from gaia.daemon.broker_client import model_lease
+        # Register + download the embedder before loading. Custom
+        # (``user.``) embedders aren't Lemonade built-ins — they need
+        # checkpoint + recipe + the embedding label on first pull. Fail
+        # loudly if registration fails (no silent fall-back to another model).
+        mr = next(
+            (m for m in MODELS.values() if m.model_id == self.config.embedding_model),
+            None,
+        )
+        if mr and self.config.embedding_model.startswith("user."):
+            if not self.llm_client.ensure_model_downloaded(
+                self.config.embedding_model,
+                checkpoint=mr.checkpoint,
+                recipe=mr.recipe,
+                embedding=mr.embedding,
+            ):
+                raise RuntimeError(
+                    f"Failed to register/download embedding model "
+                    f"{self.config.embedding_model!r}. Ensure Lemonade Server "
+                    f"is running and reachable, then retry "
+                    f"(or run `gaia init --profile rag`)."
+                )
 
-            with model_lease(self.config.embedding_model, priority="background"):
-                # Scoped unload of the embedder ONLY — a global /unload would evict
-                # the co-resident chat model and trigger a ~100s cold reload (#1544).
-                # ignore_if_not_loaded: on a cold start the embedder slot is empty
-                # and Lemonade 404s "Model not loaded" — a benign no-op here, since
-                # we reload it on the next line anyway.
+        # Serialize the whole unload→load swap through the broker (#2248).
+        # Not an eviction guard — per #1544 the embedder is co-resident in
+        # its own slot, so a chat load will not evict it. It is a guard on
+        # the *load* itself: concurrent loads contend for GPU memory and
+        # backend startup, which is what the broker arbitrates. Background
+        # priority so a warm-up never makes an interactive turn wait.
+        from gaia.daemon.broker_client import model_lease
+
+        with model_lease(self.config.embedding_model, priority="background"):
+            # Scoped unload of the embedder ONLY — a global /unload would evict
+            # the co-resident chat model and trigger a ~100s cold reload (#1544).
+            # ignore_if_not_loaded: on a cold start the embedder slot is empty
+            # and Lemonade 404s "Model not loaded" — a benign no-op here, since
+            # we reload it on the next line anyway.
+            if not self.llm_client.is_users_server():
                 self.llm_client.unload_model(
                     self.config.embedding_model, ignore_if_not_loaded=True
                 )
-                self.llm_client.load_model(
-                    self.config.embedding_model,
-                    llamacpp_args=EMBEDDER_LLAMACPP_ARGS,
-                )
-
-            self.embedder = self.llm_client
-            self.use_lemonade_embeddings = True
-
-            self.log.info(
-                f"Loaded embedding model (ubatch-size={EMBEDDER_UBATCH_TOKENS}); "
-                "chat model left resident"
+            self.llm_client.load_model(
+                self.config.embedding_model,
+                llamacpp_args=EMBEDDER_LLAMACPP_ARGS,
             )
 
+        self.embedder = self.llm_client
+        self.use_lemonade_embeddings = True
+
+        self.log.info(
+            f"Loaded embedding model (ubatch-size={EMBEDDER_UBATCH_TOKENS}); "
+            "chat model left resident"
+        )
+
     def _encode_texts(
-        self, texts: List[str], show_progress: bool = False
+        self,
+        texts: List[str],
+        show_progress: bool = False,
+        wait_callback: Optional[Callable[[int], None]] = None,
     ) -> "np.ndarray":
         """
         Encode texts to embeddings using Lemonade server with batching and timing.
 
+        Each batch is sent once and waits up to ``EMBED_BATCH_TIMEOUT_S``. Only
+        two failures are tried again, both logged: an embedder still loading
+        (no vectors back, up to ``EMBED_WARMUP_ATTEMPTS`` tries) and one
+        reloaded with too small a batch (reloaded once). Everything else raises
+        ``EmbeddingUnavailableError`` at once.
+
         Args:
             texts: List of text strings to encode
             show_progress: Whether to show progress
+            wait_callback: Called every ``EMBED_WAIT_REPORT_S`` with the seconds
+                the current batch has waited, and with 0 once it answers.
 
         Returns:
             numpy array of embeddings with shape (num_texts, embedding_dim)
@@ -650,18 +940,17 @@ class RAGSDK:
                 f"{EMBED_MAX_CHARS}-char input limit (longest: {max(oversized)} "
                 "chars). Split them with gaia.rag.sdk.split_for_embedding first."
             )
-        safe_texts = list(texts)
+        # No-break spaces in extracted tables can exceed one token per character.
+        safe_texts = [text.replace("\u00a0", " ") for text in texts]
 
-        # Batch embedding requests to avoid timeouts
-        BATCH_SIZE = 25  # Smaller batches for reliability (25 chunks ~= 12KB text)
         all_embeddings = []
 
-        total_batches = (len(safe_texts) + BATCH_SIZE - 1) // BATCH_SIZE
+        total_batches = (len(safe_texts) + EMBED_BATCH_SIZE - 1) // EMBED_BATCH_SIZE
         total_start = time.time()
 
-        for batch_idx in range(0, len(safe_texts), BATCH_SIZE):
-            batch_texts = safe_texts[batch_idx : batch_idx + BATCH_SIZE]
-            batch_num = (batch_idx // BATCH_SIZE) + 1
+        for batch_idx in range(0, len(safe_texts), EMBED_BATCH_SIZE):
+            batch_texts = safe_texts[batch_idx : batch_idx + EMBED_BATCH_SIZE]
+            batch_num = (batch_idx // EMBED_BATCH_SIZE) + 1
 
             batch_start = time.time()
 
@@ -670,71 +959,10 @@ class RAGSDK:
                     f"   📦 Embedding batch {batch_num}/{total_batches} ({len(batch_texts)} chunks)..."
                 )
 
-            # Call Lemonade embeddings API for this batch with retry
-            max_retries = 2
-            for attempt in range(max_retries + 1):
-                try:
-                    # Use longer timeout for embedding batches (180s = 3 minutes per batch)
-                    response = self.embedder.embeddings(
-                        batch_texts, model=self.config.embedding_model, timeout=180
-                    )
-                    batch_embeddings = []
-                    data = response.get("data", [])
-                    if any("index" in item for item in data):
-                        indices = [item.get("index") for item in data]
-                        if any(
-                            not isinstance(i, int) or isinstance(i, bool)
-                            for i in indices
-                        ) or sorted(indices) != list(range(len(batch_texts))):
-                            raise RuntimeError(
-                                "Embedding response has missing or duplicate indices; verify the backend and retry indexing."
-                            )
-                        data = sorted(data, key=lambda item: item["index"])
-                    for item in data:
-                        embedding = item.get("embedding", [])
-                        batch_embeddings.append(embedding)
-
-                    if len(batch_embeddings) != len(batch_texts):
-                        raise RuntimeError(
-                            f"Embedding backend returned {len(batch_embeddings)}/{len(batch_texts)} "
-                            f"vectors for batch {batch_num} using {self.config.embedding_model!r}. "
-                            "Verify Lemonade Server is reachable and the embedding model is "
-                            "fully loaded, or lower chunk_size if inputs exceed the model token limit. "
-                            "Then retry indexing. No partial batch was accepted."
-                        )
-                    expected_dim = len(all_embeddings[0]) if all_embeddings else None
-                    for embedding in batch_embeddings:
-                        if not embedding or (
-                            expected_dim is not None and len(embedding) != expected_dim
-                        ):
-                            raise RuntimeError(
-                                f"Embedding backend returned an empty or inconsistent vector "
-                                f"in batch {batch_num} using {self.config.embedding_model!r}. "
-                                "Verify the embedding model is fully loaded or lower chunk_size if "
-                                "inputs exceed its token limit, then retry indexing."
-                            )
-                        expected_dim = len(embedding)
-
-                    break  # Success, exit retry loop
-                except Exception as e:
-                    if attempt < max_retries:
-                        self.log.warning(
-                            f"   ⚠️  Batch {batch_num} attempt {attempt + 1} failed, retrying: {e}"
-                        )
-                        if "physical batch size" in str(e):
-                            self.log.warning(
-                                "   The embedder was reloaded with a smaller batch "
-                                "than RAG chunks need; reloading it with "
-                                f"{EMBEDDER_LLAMACPP_ARGS} before retrying."
-                            )
-                            self.embedder = None
-                            self._load_embedder()
-                        time.sleep(2)  # Wait before retry
-                    else:
-                        self.log.error(
-                            f"   ❌ Batch {batch_num} failed after {max_retries + 1} attempts"
-                        )
-                        raise
+            expected_dim = len(all_embeddings[0]) if all_embeddings else None
+            batch_embeddings = self._embed_batch(
+                batch_texts, batch_num, expected_dim, wait_callback
+            )
 
             batch_duration = time.time() - batch_start
 
@@ -749,7 +977,7 @@ class RAGSDK:
                 )
 
         total_duration = time.time() - total_start
-        if len(safe_texts) > BATCH_SIZE:
+        if len(safe_texts) > EMBED_BATCH_SIZE:
             overall_rate = len(safe_texts) / total_duration if total_duration > 0 else 0
             self.log.info(
                 f"   🎯 Total embedding time: {total_duration:.2f}s ({overall_rate:.1f} chunks/sec, {total_batches} batches)"
@@ -757,6 +985,161 @@ class RAGSDK:
 
         # Convert to numpy array
         return np.array(all_embeddings, dtype=np.float32)
+
+    def _embed_batch(
+        self,
+        batch_texts: List[str],
+        batch_num: int,
+        expected_dim: Optional[int],
+        wait_callback: Optional[Callable[[int], None]],
+    ) -> List[List[float]]:
+        """One batch's vectors, in input order, under the policy in ``_encode_texts``."""
+        warmup_attempt = 1
+        reloaded = False
+        while True:
+            try:
+                response = self._request_embeddings(batch_texts, wait_callback)
+            except Exception as e:  # noqa: BLE001 — classified, then re-raised
+                stop = _stop_behind(e)
+                if stop is not None:
+                    raise stop from e
+                if "physical batch size" in str(e) and not reloaded:
+                    self.log.warning(
+                        f"   ⚠️  Batch {batch_num}: the embedder was reloaded with a "
+                        "smaller batch than RAG chunks need; reloading it with "
+                        f"{EMBEDDER_LLAMACPP_ARGS} and sending the batch once more."
+                    )
+                    reloaded = True
+                    self.embedder = None
+                    self._load_embedder()
+                    continue
+                self.log.error(f"   ❌ Batch {batch_num} failed: {e}")
+                raise EmbeddingUnavailableError(self.config.embedding_model, e) from e
+
+            try:
+                return self._vectors_from_response(
+                    response, batch_texts, batch_num, expected_dim
+                )
+            except _EmbedderWarmingUp as e:
+                if warmup_attempt >= EMBED_WARMUP_ATTEMPTS:
+                    raise EmbeddingUnavailableError(
+                        self.config.embedding_model,
+                        RuntimeError(
+                            f"it is still loading: batch {batch_num} came back with "
+                            f"no vectors {EMBED_WARMUP_ATTEMPTS} times. Check "
+                            "Lemonade Server's log for a load error, then retry."
+                        ),
+                    ) from e
+                self.log.warning(
+                    f"   ⏳ Batch {batch_num}: the embedding model is still loading "
+                    f"(no vectors back); try {warmup_attempt + 1}/"
+                    f"{EMBED_WARMUP_ATTEMPTS} in {EMBED_WARMUP_PAUSE_S}s."
+                )
+                warmup_attempt += 1
+                time.sleep(EMBED_WARMUP_PAUSE_S)
+            except RuntimeError as e:
+                self.log.error(f"   ❌ Batch {batch_num} failed: {e}")
+                raise EmbeddingUnavailableError(self.config.embedding_model, e) from e
+
+    def _request_embeddings(
+        self,
+        batch_texts: List[str],
+        wait_callback: Optional[Callable[[int], None]],
+    ) -> Dict[str, Any]:
+        """Send one batch, reporting how long it has waited while it is out."""
+        if wait_callback is None:
+            return self.embedder.embeddings(
+                batch_texts,
+                model=self.config.embedding_model,
+                timeout=EMBED_BATCH_TIMEOUT_S,
+            )
+
+        answered = threading.Event()
+        started = time.monotonic()
+
+        def _report_waiting():
+            while not answered.wait(EMBED_WAIT_REPORT_S):
+                wait_callback(max(1, int(time.monotonic() - started)))
+
+        reporter = threading.Thread(
+            target=_report_waiting, name="rag-embed-wait", daemon=True
+        )
+        reporter.start()
+        try:
+            response = self.embedder.embeddings(
+                batch_texts,
+                model=self.config.embedding_model,
+                timeout=EMBED_BATCH_TIMEOUT_S,
+            )
+        finally:
+            answered.set()
+            reporter.join()
+        # Cleared only on success so a raising callback can't mask the real error.
+        wait_callback(0)
+        return response
+
+    @staticmethod
+    def _vectors_from_response(
+        response: Dict[str, Any],
+        batch_texts: List[str],
+        batch_num: int,
+        expected_dim: Optional[int],
+    ) -> List[List[float]]:
+        """The batch's vectors in input order, or why the response is unusable.
+
+        Raises:
+            _EmbedderWarmingUp: no vectors at all — the model is still loading.
+            RuntimeError: a malformed response; sending it again won't help.
+        """
+        if not isinstance(response, dict) or "data" not in response:
+            detail = response.get("error") if isinstance(response, dict) else None
+            raise RuntimeError(
+                f"Embedding backend sent no 'data' for batch {batch_num}"
+                f"{f': {detail}' if detail else ''}. Check Lemonade Server's log, "
+                "then retry indexing."
+            )
+        data = response["data"]
+        if not isinstance(data, list) or not all(
+            isinstance(item, dict) and isinstance(item.get("embedding", []), list)
+            for item in data
+        ):
+            raise RuntimeError(
+                f"Embedding backend sent a malformed reply for batch {batch_num}; "
+                "verify the backend and retry indexing."
+            )
+        if not any(item.get("embedding") for item in data):
+            raise _EmbedderWarmingUp()
+        if any("index" in item for item in data):
+            indices = [item.get("index") for item in data]
+            if any(
+                not isinstance(i, int) or isinstance(i, bool) for i in indices
+            ) or sorted(indices) != list(range(len(batch_texts))):
+                raise RuntimeError(
+                    "Embedding response has missing or duplicate indices; verify the backend and retry indexing."
+                )
+            data = sorted(data, key=lambda item: item["index"])
+        batch_embeddings = [item.get("embedding", []) for item in data]
+
+        if len(batch_embeddings) != len(batch_texts):
+            raise RuntimeError(
+                f"Embedding backend returned {len(batch_embeddings)}/{len(batch_texts)} "
+                f"vectors for batch {batch_num}. "
+                "Verify Lemonade Server is reachable and the embedding model is "
+                "fully loaded, or lower chunk_size if inputs exceed the model token limit. "
+                "Then retry indexing. No partial batch was accepted."
+            )
+        for embedding in batch_embeddings:
+            if not embedding or (
+                expected_dim is not None and len(embedding) != expected_dim
+            ):
+                raise RuntimeError(
+                    f"Embedding backend returned an empty or inconsistent vector "
+                    f"in batch {batch_num}. "
+                    "Verify the embedding model is fully loaded or lower chunk_size if "
+                    "inputs exceed its token limit, then retry indexing."
+                )
+            expected_dim = len(embedding)
+        return batch_embeddings
 
     def _get_embedding_cache(self):
         """Lazy-init the content-keyed embedding cache (per-instance)."""
@@ -924,6 +1307,7 @@ class RAGSDK:
             page_warnings = {}
 
             for i, page in enumerate(reader.pages, 1):
+                _beat()
                 page_start = time_module.time()
 
                 # Step 1: Extract text with pypdf
@@ -960,6 +1344,8 @@ class RAGSDK:
                             if image_texts:
                                 vlm_pages_count += 1
                                 total_images_processed += len(image_texts)
+                    except LeaseWaitCancelled:
+                        raise
                     except Exception as img_error:
                         page_warning = (
                             f"image extraction failed on page {i}: {img_error}"
@@ -1083,9 +1469,9 @@ class RAGSDK:
                 )
 
             return full_text, total_pages, metadata
-        except PDFExtractionError:
-            # Already a well-formed extraction error with actionable guidance —
-            # re-raise without wrapping or re-logging (callers will log).
+        except (PDFExtractionError, IndexingStopped):
+            # Already a well-formed extraction error with actionable guidance,
+            # or a stop — re-raise without wrapping or re-logging.
             raise
         except Exception as e:
             self.log.error(f"Error reading PDF {pdf_path}: {e}")
@@ -1119,7 +1505,7 @@ class RAGSDK:
         except ImportError:
             raise ImportError(
                 "python-pptx is required for PowerPoint processing. "
-                "Install it with: uv pip install python-pptx"
+                + _missing_package_hint("python-pptx")
             )
 
         # Guard against zip bombs: .pptx is a ZIP container. Check that
@@ -1153,11 +1539,16 @@ class RAGSDK:
                 "  2. Try opening the file in PowerPoint to confirm it is readable\n"
                 "  3. Save as PDF and index the PDF instead"
             )
-            self.log.error(f"Corrupted PPTX (bad zip): {pptx_path}: {e}")
+            self._log_read_failure(
+                e, pptx_path, f"Corrupted PPTX (bad zip): {pptx_path}: {e}"
+            )
             raise ValueError(msg) from e
 
         try:
-            prs = Presentation(pptx_path)
+            # A stream, not the path: given a path, python-pptx's is_zipfile
+            # check swallows a lock and reports the file as not a package.
+            with open(pptx_path, "rb") as stream:
+                prs = Presentation(stream)
         except Exception as e:
             msg = (
                 f"Could not read PowerPoint file: {file_name}\n"
@@ -1168,7 +1559,7 @@ class RAGSDK:
                 "  2. Try opening the file in PowerPoint to confirm it is readable\n"
                 "  3. Save as PDF and index the PDF instead"
             )
-            self.log.error(f"Corrupted PPTX {pptx_path}: {e}")
+            self._log_read_failure(e, pptx_path, f"Corrupted PPTX {pptx_path}: {e}")
             raise ValueError(msg) from e
 
         try:
@@ -1236,6 +1627,8 @@ class RAGSDK:
                         f"📝 Extracted {len(pdf_text):,} characters via PDF conversion in {extract_duration:.2f}s"
                     )
                     return pdf_text, pdf_pages, metadata
+                except IndexingStopped:
+                    raise
                 except Exception as pdf_err:
                     self.log.warning(
                         "PDF extraction from converted PPTX failed, falling back: %s",
@@ -1302,6 +1695,7 @@ class RAGSDK:
             total_images_processed = 0
 
             for i, slide in enumerate(prs.slides, 1):
+                _beat()
                 page_start = time_module.time()
 
                 # Step 1: Extract native text from shapes / tables
@@ -1339,6 +1733,8 @@ class RAGSDK:
                             if image_texts:
                                 vlm_slides_count += 1
                                 total_images_processed += len(image_texts)
+                    except LeaseWaitCancelled:
+                        raise
                     except Exception as img_error:
                         self.log.warning(
                             f"Image extraction failed on slide {i}: {img_error}"
@@ -1436,7 +1832,7 @@ class RAGSDK:
             }
 
             return full_text, total_slides, metadata
-        except ValueError:
+        except (ValueError, IndexingStopped):
             raise
         except Exception as e:
             self.log.error(f"Error reading PPTX {pptx_path}: {e}")
@@ -1616,27 +2012,20 @@ These positions indicate where to split the text."""
     def _extract_text_from_text_file(self, file_path: str) -> str:
         """Extract text from text-based file (txt, md, etc.)."""
         try:
-            encodings = ["utf-8", "utf-8-sig", "latin-1", "cp1252"]
-            text = None
+            with self._safe_open(file_path, "rb") as f:
+                data = f.read()
 
-            for encoding in encodings:
-                try:
-                    # Use _safe_open with binary mode, then decode
-                    with self._safe_open(file_path, "rb") as f:
-                        text = f.read().decode(encoding)
-                    break
-                except (UnicodeDecodeError, AttributeError):
-                    continue
-
-            if text is None:
+            try:
+                text = _decode_text_bytes(data)
+            except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode file: {file_path}\n"
-                    f"Tried encodings: {', '.join(encodings)}\n"
+                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Convert the file to UTF-8 encoding\n"
                     "  2. Check if the file is corrupted\n"
                     "  3. Ensure the file is a text file (not binary)"
-                )
+                ) from exc
 
             if self.config.show_stats:
                 print(f"  ✅ Loaded text file ({len(text):,} characters)")
@@ -1644,7 +2033,9 @@ These positions indicate where to split the text."""
             self.log.info(f"📝 Extracted {len(text):,} characters from text file")
             return text.strip()
         except Exception as e:
-            self.log.error(f"Error reading text file {file_path}: {e}")
+            self._log_read_failure(
+                e, file_path, f"Error reading text file {file_path}: {e}"
+            )
             raise
 
     def _extract_text_from_csv(self, csv_path: str) -> str:
@@ -1653,59 +2044,54 @@ These positions indicate where to split the text."""
             import csv
 
             text_parts = []
-            encodings = ["utf-8", "utf-8-sig", "latin-1", "cp1252"]
 
-            for encoding in encodings:
-                try:
-                    # Use _safe_open with binary mode, then decode for csv.reader
-                    from io import StringIO
+            from io import StringIO
 
-                    with self._safe_open(csv_path, "rb") as f:
-                        text = f.read().decode(encoding)
-                        reader = csv.reader(StringIO(text))
-                        rows = list(reader)
+            with self._safe_open(csv_path, "rb") as f:
+                data = f.read()
 
-                        if not rows:
-                            raise ValueError("CSV file is empty")
+            try:
+                decoded = _decode_text_bytes(data)
+            except UnicodeDecodeError as exc:
+                raise ValueError(
+                    f"Failed to decode CSV file: {csv_path}\n"
+                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
+                    "Suggestions:\n"
+                    "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
+                    "  2. Check if the file is a valid CSV (not corrupted)\n"
+                    "  3. Try opening and re-saving in a text editor"
+                ) from exc
 
-                        # Include header as context
-                        if rows:
-                            header = rows[0]
-                            text_parts.append(f"Columns: {', '.join(header)}\n")
+            reader = csv.reader(StringIO(decoded))
+            rows = list(reader)
 
-                        # Convert rows to readable text
-                        for row in rows[1:]:
-                            # Create a readable row format
-                            row_text = []
-                            for i, cell in enumerate(row):
-                                if i < len(header):
-                                    row_text.append(f"{header[i]}: {cell}")
-                                else:
-                                    row_text.append(cell)
-                            text_parts.append(" | ".join(row_text))
+            if not rows:
+                raise ValueError("CSV file is empty")
 
-                        text = "\n".join(text_parts)
+            # Include header as context
+            header = rows[0]
+            text_parts.append(f"Columns: {', '.join(header)}\n")
 
-                        if self.config.show_stats:
-                            print(
-                                f"  ✅ Loaded CSV file ({len(rows)} rows, {len(header)} columns)"
-                            )
+            # Convert rows to readable text
+            for row in rows[1:]:
+                # Create a readable row format
+                row_text = []
+                for i, cell in enumerate(row):
+                    if i < len(header):
+                        row_text.append(f"{header[i]}: {cell}")
+                    else:
+                        row_text.append(cell)
+                text_parts.append(" | ".join(row_text))
 
-                        self.log.info(f"📊 Extracted {len(rows)} rows from CSV")
-                        return text
-                except UnicodeDecodeError:
-                    continue
+            text = "\n".join(text_parts)
 
-            raise ValueError(
-                f"Failed to decode CSV file: {csv_path}\n"
-                f"Tried encodings: {', '.join(encodings)}\n"
-                "Suggestions:\n"
-                "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
-                "  2. Check if the file is a valid CSV (not corrupted)\n"
-                "  3. Try opening and re-saving in a text editor"
-            )
+            if self.config.show_stats:
+                print(f"  ✅ Loaded CSV file ({len(rows)} rows, {len(header)} columns)")
+
+            self.log.info(f"📊 Extracted {len(rows)} rows from CSV")
+            return text
         except Exception as e:
-            self.log.error(f"Error reading CSV {csv_path}: {e}")
+            self._log_read_failure(e, csv_path, f"Error reading CSV {csv_path}: {e}")
             raise
 
     def _extract_text_from_json(self, json_path: str) -> str:
@@ -1748,38 +2134,110 @@ These positions indicate where to split the text."""
             self.log.info(f"📝 Extracted {len(text):,} characters from JSON")
             return text
         except Exception as e:
-            self.log.error(f"Error reading JSON {json_path}: {e}")
+            self._log_read_failure(e, json_path, f"Error reading JSON {json_path}: {e}")
             raise
 
     def _extract_text_from_xlsx(self, xlsx_path: str) -> str:
-        """Extract text from Excel (.xlsx / .xls) files using openpyxl."""
-        try:
-            import openpyxl
+        """Extract text from an Excel .xlsx workbook using openpyxl.
 
-            wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+        Raises:
+            SpreadsheetReadError: The file is not a readable .xlsx workbook
+                (``corrupted``), is a legacy .xls or password-protected one
+                (``unsupported_workbook``), or has no cell values (``empty_file``).
+            ImportError: openpyxl is not installed.
+        """
+        try:
+            import openpyxl  # pylint: disable=import-outside-toplevel
+        except ImportError as e:
+            raise ImportError(
+                "openpyxl is required to read Excel files. "
+                + _missing_package_hint("openpyxl")
+            ) from e
+        from openpyxl.utils.exceptions import (  # pylint: disable=import-outside-toplevel
+            InvalidFileException,
+        )
+
+        name = Path(xlsx_path).name
+        legacy = SpreadsheetReadError(
+            f"Could not read {name}: it is not in the .xlsx format (a legacy .xls "
+            "workbook, or one protected with a password). Open it in Excel, save "
+            "a copy as .xlsx without a password, then index that copy.",
+            "unsupported_workbook",
+        )
+        try:
+            with open(xlsx_path, "rb") as f:
+                magic = f.read(len(_OLE2_MAGIC))
+            if magic == _OLE2_MAGIC or Path(xlsx_path).suffix.lower() == ".xls":
+                raise legacy
+            try:
+                wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+            except InvalidFileException as e:
+                raise legacy from e
+            # KeyError: the zip lacks a part every workbook has (xl/workbook.xml).
+            except (zipfile.BadZipFile, KeyError) as e:
+                self.log.warning(f"openpyxl could not open {xlsx_path}: {e!r}")
+                raise SpreadsheetReadError(
+                    f"Could not read {name}: it is not a valid .xlsx workbook. "
+                    "Open it in Excel and save it again as .xlsx, or re-download "
+                    "it, then index the new copy.",
+                    "corrupted",
+                ) from e
             parts = []
+            has_values = False
+
+            def _numeric(cell: str) -> bool:
+                return cell.strip().replace(".", "").replace("-", "").isdigit()
 
             for sheet in wb.worksheets:
                 parts.append(f"Sheet: {sheet.title}")
 
                 # Collect rows, skipping entirely blank rows
                 rows = []
-                for row in sheet.iter_rows(values_only=True):
+                row_numbers = []
+                for number, row in enumerate(sheet.iter_rows(values_only=True), 1):
                     cells = [str(c) if c is not None else "" for c in row]
                     if any(c.strip() for c in cells):
                         rows.append(cells)
+                        row_numbers.append(number)
+                merged_starts = {
+                    (r.min_row, r.min_col)
+                    for r in sheet.merged_cells.ranges
+                    if r.max_col > r.min_col
+                }
 
                 if not rows:
                     continue
+                has_values = True
+
+                # Single-cell rows above the header are titles when merged
+                # across the table, or when a row of labels then numbers follows.
+                first_wide = next(
+                    (
+                        i
+                        for i, r in enumerate(rows)
+                        if sum(1 for c in r if c.strip()) > 1
+                    ),
+                    0,
+                )
+                merged_titles = all(
+                    (row_numbers[i], next(j for j, c in enumerate(r) if c.strip()) + 1)
+                    in merged_starts
+                    for i, r in enumerate(rows[:first_wide])
+                )
+                labels_then_numbers = (
+                    first_wide + 1 < len(rows)
+                    and not any(_numeric(c) for c in rows[first_wide])
+                    and any(_numeric(c) for c in rows[first_wide + 1])
+                )
+                if first_wide and (merged_titles or labels_then_numbers):
+                    for row in rows[:first_wide]:
+                        parts.append(" ".join(c for c in row if c.strip()))
+                    rows = rows[first_wide:]
 
                 # Use first non-empty row as header if it looks like one
                 # (contains at least one non-numeric string cell)
                 header = rows[0]
-                has_header = any(
-                    c.strip()
-                    and not c.strip().replace(".", "").replace("-", "").isdigit()
-                    for c in header
-                )
+                has_header = any(c.strip() and not _numeric(c) for c in header)
 
                 if has_header and len(rows) > 1:
                     parts.append(
@@ -1788,7 +2246,9 @@ These positions indicate where to split the text."""
                     for row in rows[1:]:
                         row_parts = []
                         for i, cell in enumerate(row):
-                            col_name = header[i] if i < len(header) else f"Col{i+1}"
+                            col_name = (
+                                header[i].strip() if i < len(header) else ""
+                            ) or f"Col{i+1}"
                             if cell.strip():
                                 row_parts.append(f"{col_name}: {cell}")
                         if row_parts:
@@ -1797,6 +2257,12 @@ These positions indicate where to split the text."""
                     for row in rows:
                         parts.append(" | ".join(c for c in row if c.strip()))
 
+            if not has_values:
+                raise SpreadsheetReadError(
+                    f"{name} has no cell values to index. Add data to the "
+                    "workbook, save it, then index it again.",
+                    "empty_file",
+                )
             text = "\n".join(parts)
 
             if self.config.show_stats:
@@ -1808,190 +2274,57 @@ These positions indicate where to split the text."""
             )
             return text
         except Exception as e:
-            self.log.error(f"Error reading Excel file {xlsx_path}: {e}")
+            self._log_read_failure(
+                e, xlsx_path, f"Error reading Excel file {xlsx_path}: {e}"
+            )
             raise
 
     def _extract_text_from_docx(self, docx_path: str) -> str:
         """Extract text from a Word (.docx) document using python-docx.
 
-        Walks the document body in order so paragraphs and tables stay
-        interleaved. Paragraph text is collected by walking the inline tree,
-        so runs nested in hyperlinks, **content controls** (``w:sdt`` — the
-        fields used by form/template documents), and textboxes are captured —
-        not just the direct runs that ``Paragraph.text`` exposes. Tabs and
-        line/page breaks become whitespace so adjacent words don't glue
-        together, and the ``mc:Fallback`` (VML) twin of a DrawingML textbox is
-        skipped so shape text isn't emitted twice. Table cells (including
-        tables nested in a cell, and rows/cells wrapped in repeating-section
-        content controls) and block-level content controls are recursed into.
-
-        Corrupt / non-.docx files and a missing ``python-docx`` install raise
-        actionable errors, mirroring :meth:`_extract_text_from_pptx` (.docx is
-        a ZIP container like .pptx).
-
-        Known omissions: header/footer text (separate XML parts, usually
-        repeated boilerplate) and embedded images (TODO #1072: VLM extraction
-        for images embedded in .docx files).
+        See :func:`gaia.rag.docx_utils.extract_docx_text` for what is walked
+        and what is omitted. Corrupt / non-.docx files and a missing
+        ``python-docx`` install raise actionable errors, mirroring
+        :meth:`_extract_text_from_pptx` (.docx is a ZIP container like .pptx).
 
         Returns:
             The extracted text as a single string.
         """
-        file_name = Path(docx_path).name
+        from gaia.rag.docx_utils import (  # pylint: disable=import-outside-toplevel
+            extract_docx_text,
+        )
 
         try:
-            from docx import Document  # pylint: disable=import-outside-toplevel
-            from docx.oxml.ns import qn  # pylint: disable=import-outside-toplevel
-        except ImportError as e:
-            raise ImportError(
-                "python-docx is required for Word document processing. "
-                "Install it with: uv pip install python-docx"
-            ) from e
-
-        # Guard against zip bombs: .docx is a ZIP container. Check the total
-        # uncompressed size is sane before handing it to python-docx.
-        try:
-            with zipfile.ZipFile(docx_path, "r") as zf:
-                total_uncompressed = sum(info.file_size for info in zf.infolist())
-                max_uncompressed = 500 * 1024 * 1024  # 500 MB
-                if total_uncompressed > max_uncompressed:
-                    msg = (
-                        f"Word file too large after decompression: {file_name}\n"
-                        f"Uncompressed size: {total_uncompressed / (1024*1024):.0f} MB "
-                        f"(limit: {max_uncompressed / (1024*1024):.0f} MB)\n"
-                        "The file may be a zip bomb or contain very large embedded media.\n"
-                        "Suggestions:\n"
-                        "  1. Remove unnecessary images/media to reduce file size\n"
-                        "  2. Save as PDF and index the PDF instead"
-                    )
-                    self.log.error(
-                        f"DOCX zip bomb guard: {docx_path} "
-                        f"({total_uncompressed} bytes uncompressed)"
-                    )
-                    raise ValueError(msg)
-        except zipfile.BadZipFile as e:
-            msg = (
-                f"Could not read Word file: {file_name}\n"
-                f"Reason: {e}\n"
-                "The file appears to be corrupted or not a valid .docx file.\n"
-                "Suggestions:\n"
-                "  1. Re-download or re-export the document\n"
-                "  2. Try opening the file in Word to confirm it is readable\n"
-                "  3. Save as PDF and index the PDF instead"
+            text = extract_docx_text(docx_path)
+        except (ImportError, ValueError) as e:
+            self._log_read_failure(
+                e, docx_path, f"Error reading Word file {docx_path}: {e}"
             )
-            self.log.error(f"Corrupted DOCX (bad zip): {docx_path}: {e}")
-            raise ValueError(msg) from e
-        except OSError as e:
-            # Missing file, a directory, or an unreadable path — surface an
-            # actionable error instead of a raw OSError traceback.
-            msg = (
-                f"Could not read Word file: {file_name}\n"
-                f"Reason: {e}\n"
-                "Check that the path exists and points to a readable .docx file."
-            )
-            self.log.error(f"Cannot open DOCX {docx_path}: {e}")
-            raise ValueError(msg) from e
-
-        try:
-            doc = Document(docx_path)
-        except Exception as e:
-            msg = (
-                f"Could not read Word file: {file_name}\n"
-                f"Reason: {e}\n"
-                "The file appears to be corrupted or not a valid .docx file.\n"
-                "Suggestions:\n"
-                "  1. Re-download or re-export the document\n"
-                "  2. Try opening the file in Word to confirm it is readable\n"
-                "  3. Save as PDF and index the PDF instead"
-            )
-            self.log.error(f"Corrupted DOCX {docx_path}: {e}")
-            raise ValueError(msg) from e
-
-        try:
-            w_p, w_tbl, w_sdt = qn("w:p"), qn("w:tbl"), qn("w:sdt")
-            w_sdt_content = qn("w:sdtContent")
-            w_tr, w_tc = qn("w:tr"), qn("w:tc")
-            w_t, w_tab = qn("w:t"), qn("w:tab")
-            w_br, w_cr = qn("w:br"), qn("w:cr")
-            # ``mc`` (markup-compatibility) isn't in python-docx's prefix map,
-            # so qn() can't resolve it — use the namespace URI directly.
-            mc_fallback = (
-                "{http://schemas.openxmlformats.org/markup-compatibility/2006}"
-                "Fallback"
-            )
-
-            def _para_runs(elem, out):
-                # Walk a paragraph's inline tree in document order, translating
-                # leaf elements to text. Descends through runs, hyperlinks,
-                # inline content controls (w:sdt), and textbox content so their
-                # text is captured — but skips ``mc:Fallback`` (the VML twin of
-                # a DrawingML textbox) so shape text is not emitted twice.
-                for child in elem:
-                    tag = child.tag
-                    if tag == w_t:
-                        out.append(child.text or "")
-                    elif tag == w_tab:
-                        out.append("\t")
-                    elif tag in (w_br, w_cr):
-                        out.append("\n")
-                    elif tag == mc_fallback:
-                        continue
-                    else:
-                        _para_runs(child, out)
-
-            def _paragraph_text(p_elem):
-                out = []
-                _para_runs(p_elem, out)
-                return "".join(out).strip()
-
-            def _iter_children(elem, wanted):
-                # Yield direct ``wanted`` children, transparently descending
-                # through w:sdt wrappers (repeating-section / row / cell content
-                # controls keep their rows and cells inside w:sdtContent).
-                for child in elem:
-                    if child.tag == wanted:
-                        yield child
-                    elif child.tag == w_sdt:
-                        content = child.find(w_sdt_content)
-                        if content is not None:
-                            yield from _iter_children(content, wanted)
-
-            def _emit(elem, parts):
-                # Recursively walk a block element in document order, appending
-                # text fragments. Unknown tags (section props, etc.) are skipped.
-                if elem.tag == w_p:
-                    para_text = _paragraph_text(elem)
-                    if para_text:
-                        parts.append(para_text)
-                elif elem.tag == w_tbl:
-                    for row in _iter_children(elem, w_tr):
-                        cells = []
-                        for cell in _iter_children(row, w_tc):
-                            cell_parts = []
-                            for cell_child in cell:
-                                _emit(cell_child, cell_parts)
-                            cells.append(" ".join(cell_parts).strip())
-                        if any(cells):
-                            parts.append(" | ".join(cells))
-                elif elem.tag == w_sdt:
-                    # Block-level content control — descend into its content.
-                    content = elem.find(w_sdt_content)
-                    if content is not None:
-                        for sdt_child in content:
-                            _emit(sdt_child, parts)
-
-            parts = []
-            for child in doc.element.body:
-                _emit(child, parts)
-
-            text = "\n".join(parts)
-
-            if self.config.show_stats:
-                print(f"  ✅ Loaded Word file ({len(text):,} chars)")
-            self.log.info(f"📄 Extracted {len(text):,} characters from Word file")
-            return text
-        except Exception as e:
-            self.log.error(f"Error reading Word file {docx_path}: {e}")
             raise
+
+        if self.config.show_stats:
+            print(f"  ✅ Loaded Word file ({len(text):,} chars)")
+        self.log.info(f"📄 Extracted {len(text):,} characters from Word file")
+        return text
+
+    def _extract_text_from_epub(self, epub_path: str) -> tuple:
+        """Extract an EPUB book's text; returns ``(text, num_chapters)``."""
+        from gaia.rag.epub_utils import (  # pylint: disable=import-outside-toplevel
+            extract_epub_text,
+        )
+
+        try:
+            text, num_chapters = extract_epub_text(epub_path)
+        except ValueError as e:
+            self.log.error(f"Error reading EPUB file {epub_path}: {e}")
+            raise
+
+        if self.config.show_stats:
+            print(f"  ✅ Loaded EPUB ({num_chapters} chapters, {len(text):,} chars)")
+        self.log.info(
+            f"📖 Extracted {len(text):,} characters from EPUB ({num_chapters} chapters)"
+        )
+        return text, num_chapters
 
     def _extract_text_from_file(self, file_path: str) -> tuple:
         """
@@ -2029,7 +2362,7 @@ These positions indicate where to split the text."""
             return text, metadata
 
         # Text-based files
-        elif file_type in [".txt", ".md", ".markdown", ".rst", ".log"]:
+        elif file_type in [".txt", ".md", ".mdx", ".markdown", ".rst", ".log"]:
             return self._extract_text_from_text_file(file_path), metadata
 
         # CSV files
@@ -2041,12 +2374,21 @@ These positions indicate where to split the text."""
             return self._extract_text_from_json(file_path), metadata
 
         # Excel files
-        elif file_type in [".xlsx", ".xls"]:
+        elif file_type == ".xlsx":
             return self._extract_text_from_xlsx(file_path), metadata
 
         # Word files
         elif file_type == ".docx":
             return self._extract_text_from_docx(file_path), metadata
+
+        # E-books
+        elif file_type == ".epub":
+            text, num_chapters = self._extract_text_from_epub(file_path)
+            metadata["num_chapters"] = num_chapters
+            return text, metadata
+
+        elif file_type in UNSUPPORTED_DOCUMENTS:
+            raise ValueError(unsupported_document_message(file_path, file_type))
 
         # Code files (treat as text for Q&A purposes)
         elif file_type in [
@@ -2124,10 +2466,35 @@ These positions indicate where to split the text."""
 
         # Unknown file type - try as text
         else:
+            self._refuse_binary(file_path, file_type)
             self.log.warning(
                 f"Unknown file type {file_type}, attempting to read as text"
             )
             return self._extract_text_from_text_file(file_path), metadata
+
+    def _refuse_binary(self, file_path: str, file_type: str) -> None:
+        """Raise when *file_path* holds binary data; latin-1 would "decode" it as garbage."""
+        with self._safe_open(file_path, "rb") as f:
+            head = f.read(8192)
+        has_nul = b"\x00" in head
+        for bom, encoding in _TEXT_BOM_ENCODINGS:
+            if head.startswith(bom):
+                # UTF-16/32 text is full of NUL bytes; judge its decoded form.
+                decoder = codecs.getincrementaldecoder(encoding)()
+                try:
+                    has_nul = "\x00" in decoder.decode(head, final=False)
+                except UnicodeDecodeError:
+                    return  # the text decoder reports the bad encoding
+                break
+        if has_nul:
+            raise ValueError(
+                f"Cannot index {Path(file_path).name}: it is a binary file, not "
+                f"text, and GAIA has no reader for {file_type} files.\n"
+                "Supported: PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), "
+                "EPUB, plain text, Markdown, CSV, JSON, HTML and source code. "
+                "Convert the file to one of these (PDF works for most documents) "
+                "and index that copy."
+            )
 
     def _split_text_into_chunks(self, text: str) -> List[str]:
         """
@@ -2172,10 +2539,14 @@ These positions indicate where to split the text."""
         protected_text = text
         for i, match in enumerate(re.finditer(vlm_pattern, text, re.DOTALL)):
             placeholder = f"<<<VLM_BLOCK_{i}>>>"
-            vlm_blocks.append(
-                {"placeholder": placeholder, "content": match.group(0).strip()}
+            block = match.group(0)
+            content = block.rstrip()
+            vlm_blocks.append({"placeholder": placeholder, "content": content})
+            # Keep the whitespace after the block, or restoring it fuses its last
+            # word to the next image or page marker.
+            protected_text = protected_text.replace(
+                block, placeholder + block[len(content) :], 1
             )
-            protected_text = protected_text.replace(match.group(0), placeholder, 1)
 
         # STEP 2: Identify natural document boundaries
         # Look for markdown headers, section breaks, or significant whitespace
@@ -2237,7 +2608,11 @@ These positions indicate where to split the text."""
         vlm_paragraphs = set()
         for idx, para in enumerate(paragraphs):
             # Check if this paragraph contains VLM markers
-            if "### 🖼️ IMAGE" in para or "**Content Extracted from Images:**" in para:
+            if (
+                "### 🖼️ IMAGE" in para
+                or "**Content Extracted from Images:**" in para
+                or any(block["placeholder"] in para for block in vlm_blocks)
+            ):
                 vlm_paragraphs.add(idx)
                 self.log.debug(
                     f"Paragraph {idx} marked as VLM content (will keep atomic)"
@@ -2426,11 +2801,13 @@ These positions indicate where to split the text."""
         chunks: List[str],
         return_embeddings: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
     ) -> tuple:
         """Create FAISS vector index from chunks with progress reporting.
 
         ``progress_callback(done, total)`` is called before the first chunk is
         embedded and after every ``PROGRESS_SLICE_CHUNKS`` chunks.
+        ``wait_callback`` is passed to ``_encode_texts``.
         """
         import time as time_module  # pylint: disable=reimported
 
@@ -2449,7 +2826,9 @@ These positions indicate where to split the text."""
         embed_start = time_module.time()
         if progress_callback is None or not chunks:
             embeddings = self._encode_texts(
-                chunks, show_progress=self.config.show_stats
+                chunks,
+                show_progress=self.config.show_stats,
+                wait_callback=wait_callback,
             )
         else:
             progress_callback(0, len(chunks))
@@ -2457,7 +2836,11 @@ These positions indicate where to split the text."""
             for start in range(0, len(chunks), PROGRESS_SLICE_CHUNKS):
                 part = chunks[start : start + PROGRESS_SLICE_CHUNKS]
                 parts.append(
-                    self._encode_texts(part, show_progress=self.config.show_stats)
+                    self._encode_texts(
+                        part,
+                        show_progress=self.config.show_stats,
+                        wait_callback=wait_callback,
+                    )
                 )
                 progress_callback(start + len(part), len(chunks))
             embeddings = np.concatenate(parts)
@@ -2779,6 +3162,41 @@ These positions indicate where to split the text."""
         self,
         file_path: str,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
+        heartbeat: Optional[Callable[[], None]] = None,
+        display_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Index a document for retrieval; see :meth:`_index_document`.
+
+        ``heartbeat`` is called once per extracted PDF page. Raising
+        :class:`IndexingStopped` from it, or from ``progress_callback``,
+        stops the index and keeps any cache the document had.
+
+        ``display_name`` is the name the user knows the file by, when
+        ``file_path`` is a copy. The returned ``file_name`` and ``error`` use
+        it in place of the copy's path.
+        """
+        if display_name:
+            self.log.info(f"Indexing {display_name} (copy at {file_path})")
+        previous = getattr(_HEARTBEAT, "fn", None)
+        _HEARTBEAT.fn = heartbeat
+        try:
+            stats = self._index_document(file_path, progress_callback, wait_callback)
+        finally:
+            _HEARTBEAT.fn = previous
+        if display_name:
+            stats["file_name"] = display_name
+            if stats.get("error"):
+                stats["error"] = name_file_for_user(
+                    str(stats["error"]), file_path, display_name
+                )
+        return stats
+
+    def _index_document(
+        self,
+        file_path: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
     ) -> Dict[str, Any]:
         """
         Index a document for retrieval.
@@ -2798,6 +3216,9 @@ These positions indicate where to split the text."""
             file_path: Path to document or code file
             progress_callback: Optional ``(chunks_embedded, total_chunks)``
                 callback, called as embedding starts and while it runs.
+            wait_callback: Optional ``(seconds_waited)`` callback, called every
+                ``EMBED_WAIT_REPORT_S`` while a batch waits on a busy embedder
+                and with 0 once it answers.
 
         Returns:
             Dict with indexing results and statistics:
@@ -2810,7 +3231,11 @@ These positions indicate where to split the text."""
                 "num_chunks": int,
                 "total_indexed_files": int,
                 "total_chunks": int,
-                "error": str (if failed)
+                "error": str (if failed),
+                "error_type": str (some failures: "file_locked",
+                    "cache_busy" or "embedding_unavailable"),
+                "xlsx_status": str (an unreadable workbook: "corrupted",
+                    "unsupported_workbook" or "empty_file")
             }
 
         Raises:
@@ -2856,6 +3281,7 @@ These positions indicate where to split the text."""
                 print(f"❌ File is empty: {file_path}")
                 print("   The file has no content to index")
             stats["error"] = "File is empty"
+            stats["empty_file"] = True
             return stats
 
         # Enforce maximum file size limit (prevent OOM)
@@ -2921,7 +3347,10 @@ These positions indicate where to split the text."""
                 return stats
 
         # Check cache - the cache key is based on file content hash
-        content_key = self._content_key(file_path)
+        try:
+            content_key = self._content_key(file_path, raise_locked=True)
+        except PermissionError as e:
+            return self._document_locked(stats, file_path, e)
         cache_path = self._get_cache_path(file_path, content_key)
         md_cache_path = self._extracted_markdown_path(content_key)
 
@@ -2961,6 +3390,7 @@ These positions indicate where to split the text."""
                     list(cached_chunks),
                     return_embeddings=True,
                     progress_callback=progress_callback,
+                    wait_callback=wait_callback,
                 )
 
                 with self._state_lock:
@@ -3062,20 +3492,24 @@ These positions indicate where to split the text."""
                 if not limits_ok:
                     stats["memory_limit_warning"] = True
                 return stats
+            except (IndexingStopped, LeaseWaitCancelled):
+                raise
+            except EmbeddingUnavailableError as e:
+                # The cache is fine; the embedder is not. Keep the cache.
+                return self._embedding_failed(stats, file_path, e)
+            except FileLockError as e:
+                # Not corrupt: re-extracting would redo another process's work,
+                # or fail the same way saving into an unwritable cache.
+                return self._cache_lock_failed(stats, file_path, e)
             except Exception as e:
+                # A miss, not a delete: re-indexing replaces the entry atomically,
+                # and deleting here could destroy a fresh cache another process
+                # just wrote, or leave none at all if re-indexing then fails.
                 self.log.warning(f"Cache load failed: {e}, reindexing")
                 if self.config.show_stats:
                     print(
                         "  ⚠️  Cache outdated or corrupted, will reindex from scratch"
                     )
-                try:
-                    os.remove(cache_path)
-                except OSError:
-                    pass
-                try:
-                    os.remove(md_cache_path)
-                except OSError:
-                    pass
 
         # Extract and process document
         if self.config.show_stats:
@@ -3084,7 +3518,17 @@ These positions indicate where to split the text."""
 
         try:
             # Extract text based on file type
-            text, file_metadata = self._extract_text_from_file(file_path)
+            try:
+                text, file_metadata = self._extract_text_from_file(file_path)
+            except Exception as e:
+                stop = _stop_behind(e)
+                if stop is not None:
+                    raise stop from e
+                # Only the document's own read: a cache write can fail with EACCES too.
+                locked = _locked_cause(e, file_path)
+                if locked is not None:
+                    return self._document_locked(stats, file_path, locked)
+                raise
 
             # Store metadata in stats if available (for PDFs)
             if file_metadata.get("num_pages"):
@@ -3114,6 +3558,7 @@ These positions indicate where to split the text."""
                 list(new_chunks),
                 return_embeddings=True,
                 progress_callback=progress_callback,
+                wait_callback=wait_callback,
             )
 
             with self._state_lock:
@@ -3264,15 +3709,95 @@ These positions indicate where to split the text."""
             stats["error"] = str(e)
             stats["pdf_status"] = e.status
             return stats
-        except Exception as e:
+        except SpreadsheetReadError as e:
             if self.config.show_stats:
                 print(f"❌ Failed to index {Path(file_path).name}: {e}")
-            self.log.error(
-                f"Failed to index {file_path}: {type(e).__name__}: {e}",
-                exc_info=True,
-            )
+            self.log.error(f"Excel extraction failed for {file_path}: {e.status}")
             stats["error"] = str(e)
+            stats["xlsx_status"] = e.status
             return stats
+        except (IndexingStopped, LeaseWaitCancelled):
+            raise
+        except EmbeddingUnavailableError as e:
+            return self._embedding_failed(stats, file_path, e)
+        except FileLockError as e:
+            return self._cache_lock_failed(stats, file_path, e)
+        except Exception as e:
+            return self._index_failed(stats, file_path, e)
+
+    def _document_locked(
+        self, stats: Dict[str, Any], file_path: str, error: PermissionError
+    ) -> Dict[str, Any]:
+        """Index stats for a document Windows would not let us read."""
+        message = (
+            f"Could not read {Path(file_path).name}: another program may have it "
+            "open, or you may not have permission to read it. Close any program "
+            "using it and index the document again."
+        )
+        if self.config.show_stats:
+            print(f"❌ {message}")
+        # A warning: the caller gets error_type and decides whether to retry.
+        self.log.warning(f"{message} ({error})")
+        stats["error"] = message
+        stats["error_type"] = "file_locked"
+        return stats
+
+    def _index_failed(
+        self, stats: Dict[str, Any], file_path: str, e: Exception
+    ) -> Dict[str, Any]:
+        """Index stats for a document that failed for any other reason."""
+        if self.config.show_stats:
+            print(f"❌ Failed to index {Path(file_path).name}: {e}")
+        self.log.error(
+            f"Failed to index {file_path}: {type(e).__name__}: {e}",
+            exc_info=True,
+        )
+        stats["error"] = str(e)
+        return stats
+
+    def _cache_lock_failed(
+        self, stats: Dict[str, Any], file_path: str, error: FileLockError
+    ) -> Dict[str, Any]:
+        """Index stats for a document whose cache lock could not be taken.
+
+        ``error_type`` is ``cache_busy`` when another process held the lock,
+        ``cache_unwritable`` when this user cannot create files in the cache
+        folder, and ``cache_lock_error`` when the lock file itself is unusable.
+        """
+        folder = error.lock_path.parent
+        name = Path(file_path).name
+        if isinstance(error, FileLockTimeout):
+            error_type = "cache_busy"
+            message = f"Could not use the cached index for {name} in {folder}: {error}"
+        elif lock_dir_unwritable(error):
+            error_type = "cache_unwritable"
+            message = (
+                f"Cannot use the RAG cache folder {folder} for {name}: {error} "
+                "The document itself is fine."
+            )
+        else:
+            error_type = "cache_lock_error"
+            message = f"Cannot open the RAG cache lock in {folder} for {name}: {error}"
+        if self.config.show_stats:
+            print(f"❌ {message}")
+        self.log.error(message)
+        stats["error"] = message
+        stats["error_type"] = error_type
+        stats["cache_dir"] = str(folder)
+        return stats
+
+    def _embedding_failed(
+        self, stats: Dict[str, Any], file_path: str, error: EmbeddingUnavailableError
+    ) -> Dict[str, Any]:
+        """Index stats for a document that could not be embedded."""
+        if self.config.show_stats:
+            print(f"❌ Failed to index {Path(file_path).name}: {error}")
+        self.log.error(f"Failed to index {file_path}: {error}")
+        stats["error"] = str(error)
+        stats["error_type"] = "embedding_unavailable"
+        stats["lemonade_unreachable"] = error.unreachable
+        stats["embedder_busy"] = error.busy
+        return stats
 
     def _retrieve_chunks_from_file(self, query: str, file_path: str) -> tuple:
         """
@@ -3564,8 +4089,7 @@ Answer:"""
 """
 
             # Write markdown file
-            with open(md_path, "w", encoding="utf-8") as f:
-                f.write(markdown_content)
+            write_text_atomic(md_path, markdown_content, mode=0o644)
 
             self.log.debug(f"Saved extracted markdown to {md_path}")
 
@@ -3598,7 +4122,7 @@ Answer:"""
                 f"{default_rag_cache_dir()})."
             )
 
-        with self._state_lock:
+        with self._state_lock, file_lock(cache_dir / _CACHE_LOCK_NAME):
             removed = 0
             if cache_dir.is_dir():
                 for entry in cache_dir.iterdir():
