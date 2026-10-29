@@ -310,7 +310,9 @@ for (;;) {
 Other endpoints: `POST /cancel`, `DELETE /session/{id}`, `GET /session/{id}/history`,
 and the runtime memory toggle `POST /memory` + `GET /memory/{id}` (enabling memory that
 was never initialized returns **409**, never a silent no-op). One turn at a time per
-session — an overlapping `/query` returns **409**. See `SPEC.md` for the full table.
+session — an overlapping `/query` returns **409**. A `/confirm-tool` decision with no
+prompt pending (already answered, timed out, or never asked) also returns **409**, so
+check the status instead of assuming the run resumed. See `SPEC.md` for the full table.
 
 ### Full autonomy (`/v1/email/agent/autonomy/*`)
 
