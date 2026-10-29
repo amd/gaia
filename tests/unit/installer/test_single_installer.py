@@ -147,6 +147,17 @@ def test_terminal_profile_runs_only_with_the_terminal():
     assert "${SecMain}" in sync.group(1)
 
 
+def test_smoke_test_reports_locks_after_an_unexpected_both_components_rerun():
+    smoke = SMOKE.read_text(encoding="utf-8")
+    assert "function Write-LockDiagnostics([string[]]$Paths)" in smoke
+    assert "Wait-Writable $path -Seconds 5" in smoke
+    assert "no GAIA processes were running after the failed setup" in smoke
+    step = re.search(r"# ── 5\..*?(?=# ── 6\.)", smoke, re.M | re.S)
+    assert step, "smoke-test.ps1 no longer covers rerunning both components"
+    assert "$bothExecutables = @(" in step.group(0)
+    assert "Write-LockDiagnostics $bothExecutables" in step.group(0)
+
+
 def test_exit_codes_are_distinct_and_the_smoke_test_checks_them():
     codes = {
         name: int(value)
