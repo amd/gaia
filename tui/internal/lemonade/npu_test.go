@@ -166,3 +166,18 @@ func TestDownloadedOmniNPUModelIsALocalChatModel(t *testing.T) {
 		t.Fatalf("local chat models = %v", ids)
 	}
 }
+
+func TestNPUModelPullsByNameOnly(t *testing.T) {
+	// Lemonade lists *-FLM models from `flm list` as built-ins: a recipe or
+	// checkpoint turns the pull into a registration that 400s (#1655).
+	for _, r := range RecommendedFor("local") {
+		if r.Device != "npu" {
+			continue
+		}
+		r := r
+		body := PullRequest(Entry{Model: Model{ID: r.ID, Recipe: "flm"}, Recommended: &r})
+		if len(body) != 2 || body["model_name"] != r.ID || body["stream"] != true {
+			t.Fatalf("%s: pull must go by name only, got %v", r.ID, body)
+		}
+	}
+}

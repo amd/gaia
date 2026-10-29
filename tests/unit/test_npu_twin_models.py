@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
+import responses
 
 from gaia.config import GaiaConfig
 from gaia.installer.init_command import (
@@ -95,6 +96,42 @@ class TestRegistry:
         # Qwen3.6's FLM build was too slow per agent turn to ship.
         assert lc.NPU_MODEL_LADDER == (lc.NPU_DEFAULT_MODEL_NAME,)
         assert lc.LARGE_DEFAULT_MODEL_NAME not in lc.NPU_TWINS
+
+
+_FLM_MODELS = sorted(
+    mr.model_id for mr in lc.MODELS.values() if lc.runs_on_npu(mr.model_id)
+)
+
+
+class TestFreshPullRequestShape:
+    """The /pull body a fresh NPU download sends. Lemonade lists ``*-FLM`` models
+    from ``flm list`` as built-ins, so the body must be the name alone: a
+    ``recipe`` or ``checkpoint`` turns it into a user-model registration that
+    400s (#1655)."""
+
+    def test_the_npu_twin_is_among_the_checked_models(self):
+        assert lc.NPU_DEFAULT_MODEL_NAME in _FLM_MODELS
+
+    @pytest.mark.parametrize("model_id", _FLM_MODELS)
+    def test_flm_models_pull_by_name_only(self, model_id):
+        client = lc.LemonadeClient(host="localhost", port=13305)
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                f"{client.base_url}/pull",
+                body=b"event: complete\ndata: {}\n\n",
+                content_type="text/event-stream",
+                stream=True,
+            )
+            list(client.pull_model_stream(model_id))
+            body = json.loads(rsps.calls[0].request.body)
+        assert body == {"model_name": model_id, "stream": True}
+
+    def test_an_flm_model_never_carries_registration(self):
+        for model_id in _FLM_MODELS:
+            mr = lc.find_model_requirement(model_id)
+            assert not mr.model_id.startswith("user."), model_id
+            assert mr.pull_kwargs() == {}, model_id
 
 
 class TestNpuCapacity:
