@@ -927,8 +927,10 @@ describe("saving a setting never wipes update-config.json", () => {
       tuiPinnedVersion: "v0.25.0",
       includePrereleases: true,
     });
-    expect(renameSpy).toHaveBeenCalledWith(`${pinFilePath()}.tmp`, pinFilePath());
-    expect(fs.existsSync(`${pinFilePath()}.tmp`)).toBe(false);
+    const tmp = `${pinFilePath()}.${process.pid}.tmp`;
+    expect(renameSpy).toHaveBeenCalledWith(tmp, pinFilePath());
+    expect(fs.existsSync(tmp)).toBe(false);
+    expect(fs.existsSync(`${pinFilePath()}.lock`)).toBe(false);
     renameSpy.mockRestore();
   });
 

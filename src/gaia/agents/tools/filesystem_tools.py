@@ -35,6 +35,7 @@ from gaia.agents.tools.search_scope import (
     root_depth,
     search_roots,
 )
+from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.filesystem.name_match import (
     fold_glob_match,
     fold_words_match,
@@ -97,7 +98,7 @@ def _scope_roots(scope: str, host: Any = None) -> list:
     if scope == "home":
         raw = Path.home()
     else:
-        raw = Path(scope)
+        raw = _resolve_target(scope, None, _workspace_default(host))
     return [raw.expanduser().resolve()]
 
 
@@ -246,7 +247,7 @@ class FileSystemToolsMixin:
 
     def _validate_path(self, path: str) -> Path:
         """Validate and resolve a path. Raises ValueError if blocked."""
-        resolved = Path(path).expanduser().resolve()
+        resolved = _resolve_target(path, None, _workspace_default(self))
         denied = read_access_error(self, resolved)
         if denied:
             raise ValueError(f"Access denied: {denied['error']}")
@@ -308,7 +309,7 @@ class FileSystemToolsMixin:
 
         @tool(atomic=True)
         def browse_directory(
-            path: str = "~",
+            path: str = ".",
             show_hidden: bool = False,
             sort_by: str = "name",
             filter_type: str = None,
@@ -317,16 +318,20 @@ class FileSystemToolsMixin:
             """Browse a directory and list its contents with metadata.
 
             Returns files and subdirectories with size, modification date, and type info.
-            Use this to explore what's inside a folder. Default path is user's home directory.
+            Use this to explore what's inside a folder. A bare path is relative to the chat workspace; without one, the default opens the home directory.
 
             Args:
-                path: Directory to browse (default: home directory ~)
+                path: Directory to browse (default: chat workspace, otherwise home directory)
                 show_hidden: Include hidden files/directories (default: False)
                 sort_by: Sort order - name, size, modified, or type (default: name)
                 filter_type: Filter by extension without dot, e.g. 'pdf', 'py' (default: all)
                 max_items: Maximum items to return (default: 50)
             """
             try:
+                workspace = _workspace_default(mixin)
+                if not workspace and path == ".":
+                    path = "~"
+                path = str(_resolve_target(path, None, workspace))
                 resolved = mixin._validate_path(path)
 
                 if not resolved.is_dir():
@@ -1518,8 +1523,9 @@ class FileSystemToolsMixin:
                         roots.append(str(p))
                 return roots
             else:
-                # Treat as a specific path
-                return [scope]
+                # Treat as a specific path, using the same workspace base as
+                # the validation and indexed-result paths above.
+                return [str(_resolve_target(scope, None, _workspace_default(self)))]
 
         def _listed(results, path):
             # Search roots overlap (cwd sits under home), so a file can be met twice.

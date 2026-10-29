@@ -731,6 +731,21 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     **Response:** `SessionListResponse`
   </Accordion>
 
+  <Accordion title="GET /api/sessions/search">
+    Find chats whose title or message text contains `q`, ignoring case and
+    accents (`resume` matches `Résumé`). Private chats are included. Results are
+    newest first; each names where its first hit was (`message` or `title`) and
+    carries a `snippet` split into `before`, `match` and `after`. Eval and
+    scheduled chats are left out, as the sidebar leaves them out, unless
+    `include_automated` is true. `truncated` is true when more chats matched
+    than `limit`.
+
+    **Query params:** `q` (required, 1–200 chars), `limit` (default 20, max 50),
+    `include_automated` (default false)
+
+    **Response:** `SessionSearchResponse`
+  </Accordion>
+
   <Accordion title="GET /api/sessions/{session_id}">
     Get session details including message count and attached document IDs.
 
@@ -2242,6 +2257,11 @@ Recurring prompts run on a cron-like interval — see [`gaia schedule`](/referen
 
   <Accordion title="PUT /api/schedules/{name}">
     Pause, resume, or cancel a scheduled task via `{"status": ...}`.
+  </Accordion>
+
+  <Accordion title="POST /api/schedules/{name}/run">
+    Run a scheduled task once now; its next scheduled time stays as it was. Returns the task with
+    `running: true` and runs in the background. `409` while a run of it is already in flight.
   </Accordion>
 
   <Accordion title="DELETE /api/schedules/{name}">
