@@ -58,7 +58,9 @@ PREFERRED_QUANTS = (
     "Q8_0",
 )
 
-_REPO_RE = re.compile(r"^[A-Za-z0-9][\w.-]*/[\w.-]+$")
+#: Hugging Face repo names are ASCII; fullmatch so a trailing newline is no repo.
+_REPO_RE = re.compile(r"[A-Za-z0-9][\w.-]*/[\w.-]+", re.ASCII)
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 #: First path segments on huggingface.co that are not a model owner.
 _NOT_OWNERS = {
     "blog",
@@ -114,15 +116,27 @@ def parse_link(text: str) -> HFLink:
     raw = (text or "").strip()
     if not raw:
         raise CustomModelError("Paste a Hugging Face link to a GGUF model.")
+    # The link is saved and shown in the TUI, so a control character is refused.
+    if _CONTROL_RE.search(raw) or _CONTROL_RE.search(unquote(raw)):
+        raise CustomModelError(
+            "That link contains control characters. Copy the model's page link "
+            "from https://huggingface.co again and paste it."
+        )
     if "://" not in raw and not raw.lower().startswith(HF_HOSTS):
         repo, _, variant = raw.partition(":")
-        if _REPO_RE.match(repo) and repo.split("/")[1] not in (".", ".."):
+        if _REPO_RE.fullmatch(repo) and repo.split("/")[1] not in (".", ".."):
             return HFLink(repo, variant or None)
         raise CustomModelError(
             f"'{raw}' is not a Hugging Face link. Paste one like "
             "https://huggingface.co/unsloth/Qwen3-4B-GGUF, or owner/repo."
         )
     url = urlparse(raw if "://" in raw else f"https://{raw}")
+    if url.scheme.lower() not in ("http", "https"):
+        raise CustomModelError(
+            f"Only https:// Hugging Face links can be added, not {url.scheme}://. "
+            "Paste the model's page link, such as "
+            "https://huggingface.co/unsloth/Qwen3-4B-GGUF."
+        )
     host = (url.hostname or "").lower()
     if host.startswith("www."):
         host = host[4:]
@@ -141,7 +155,7 @@ def parse_link(text: str) -> HFLink:
             "such as https://huggingface.co/unsloth/Qwen3-4B-GGUF."
         )
     repo = f"{parts[0]}/{parts[1]}"
-    if not _REPO_RE.match(repo) or parts[1] in (".", ".."):
+    if not _REPO_RE.fullmatch(repo) or parts[1] in (".", ".."):
         raise CustomModelError(f"'{repo}' is not a Hugging Face repository name.")
     variant = None
     # /blob/<rev>/<path> and /resolve/<rev>/<path> name one file.

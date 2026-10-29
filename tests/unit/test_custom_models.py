@@ -473,3 +473,84 @@ def test_malformed_saved_list_fails_loudly(config_file):
     config_file.write_text(json.dumps({cm.CONFIG_KEY: [{"id": "no-namespace"}]}))
     with pytest.raises(config_mod.GaiaConfigError, match="custom_models"):
         cm.list_custom_models()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "https://huggingface.co/owner/repo%0A",
+        "https://huggingface.co/owner/repo%0D%0Ax",
+        "owner/repo\n:Q4_K_M",
+        "https://huggingface.co/owner/repo?x=%1B]8;;evil%07",
+        "https://huggingface.co/owner/repo\x1b[31m",
+    ],
+)
+def test_control_characters_are_refused(text):
+    with pytest.raises(cm.CustomModelError, match="control characters"):
+        cm.parse_link(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "https://huggingface.co/own%C3%A9r/r%C3%A9po",
+        "ownér/répo",
+        "https://huggingface.co/owner/a%2F..%2Fx",
+        "https://huggingface.co/owner/a%2Fb",
+    ],
+)
+def test_non_ascii_and_encoded_slashes_are_not_a_repo(text):
+    with pytest.raises(cm.CustomModelError, match="repository name|not a Hugging Face"):
+        cm.parse_link(text)
+
+
+@pytest.mark.parametrize(
+    "text, says",
+    [
+        ("file://huggingface.co/a/b", "https://"),
+        ("ftp://huggingface.co/a/b", "https://"),
+        ("https://huggingface.co@evil.com/a/b", "points at evil.com"),
+        ("https://huggingface.co%2F@evil.com/a/b", "points at evil.com"),
+        ("https://huggingface.co.evil.com/a/b", "points at huggingface.co.evil.com"),
+        ("huggingface.com/a/b", "points at huggingface.com"),
+    ],
+)
+def test_only_huggingface_web_links_are_read(text, says):
+    with pytest.raises(cm.CustomModelError, match=says):
+        cm.parse_link(text)
+
+
+def test_only_the_repo_name_reaches_huggingface(web, config_file):
+    # The pasted host, port and credentials are never fetched; only the repo is.
+    _inspect("https://user:pw@huggingface.co:8443/unsloth/Tiny-GGUF/tree/main")
+    hf = [u for u in web["urls"] if "huggingface.co" in u]
+    assert hf == ["https://huggingface.co/api/models/unsloth/Tiny-GGUF?blobs=true"]
+
+
+def test_first_pull_registers_the_added_model_under_its_user_name(
+    web, config_file, monkeypatch
+):
+    """A fresh pull sends the full registration Lemonade needs for a user. model."""
+    import responses
+
+    from gaia.llm.lemonade_client import LemonadeClient
+
+    cm.add_custom_model(_inspect())
+    client = LemonadeClient(host="127.0.0.1", port=13305)
+    monkeypatch.setattr(client, "cloud_model_provider", lambda name: None)
+    with responses.RequestsMock() as rsps:
+        rsps.add(
+            responses.POST,
+            f"{client.base_url}/pull",
+            body=b"event: complete\ndata: {}\n\n",
+            content_type="text/event-stream",
+        )
+        # Asked for by the name Lemonade lists it under, without user.
+        next(client.pull_model_stream("Tiny-Q4_K_M-GGUF"))
+        body = json.loads(rsps.calls[0].request.body)
+    assert body["model_name"] == "user.Tiny-Q4_K_M-GGUF"
+    assert body["checkpoint"] == "unsloth/Tiny-GGUF:Tiny-Q4_K_M.gguf"
+    assert body["recipe"] == "llamacpp"
+    assert body["mmproj"] == "mmproj-F16.gguf"
+    assert body["vision"] is True and body["reasoning"] is True
+    assert "embedding" not in body
