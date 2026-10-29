@@ -788,6 +788,7 @@ class TrayManager {
     // A dev build's exe is electron itself; never touch the installed app's entry.
     if (!app.isPackaged) return;
     const osOn = this._loginItemOn();
+    if (osOn) this._repointLinuxAutostart();
     const wanted = this.config.tray.startOnLogin;
     if (osOn === wanted) return;
     if (this.config.choices.startOnLogin && !wanted) {
@@ -864,11 +865,29 @@ class TrayManager {
     return path.join(configHome, "autostart", LINUX_AUTOSTART_FILE);
   }
 
+  /** An update can rename the executable; point an existing Linux entry at this one. */
+  _repointLinuxAutostart() {
+    if (process.platform !== "linux") return;
+    const exec = `Exec=${desktopExecArg(this._linuxAutostartExe())}`;
+    try {
+      const entry = fs.readFileSync(this._linuxAutostartFile(), "utf8");
+      if (entry.split("\n").includes(exec)) return;
+      this._applyLinuxAutostart(true);
+      console.log(`[tray] Pointed the autostart entry at ${this._linuxAutostartExe()}`);
+    } catch (err) {
+      console.error(`[tray] Could not update the autostart entry to this executable: ${err.message}`);
+    }
+  }
+
+  _linuxAutostartExe() {
+    // An AppImage's exe is a temporary mount; APPIMAGE is the file the user runs.
+    return process.env.APPIMAGE || app.getPath("exe");
+  }
+
   /** Electron has no login items on Linux; desktops read XDG autostart entries. */
   _applyLinuxAutostart(enabled) {
     const file = this._linuxAutostartFile();
-    // An AppImage's exe is a temporary mount; APPIMAGE is the file the user runs.
-    const exe = process.env.APPIMAGE || app.getPath("exe");
+    const exe = this._linuxAutostartExe();
     try {
       if (enabled) {
         fs.mkdirSync(path.dirname(file), { recursive: true });

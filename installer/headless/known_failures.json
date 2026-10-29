@@ -13,7 +13,7 @@
       "rows": ["ubuntu22-agent-ui-deb", "ubuntu24-agent-ui-deb"],
       "phase": "install",
       "kind": "finding",
-      "signature": "`gaia-desktop` is not on PATH"
+      "signature": "`gaia-ui` is not on PATH"
     },
     {
       "issue": 5531,

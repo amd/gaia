@@ -12,14 +12,12 @@
 
 appId: ai.amd.gaia
 productName: GAIA                   # User-facing display name (Applications folder, Start Menu, dock, title bar)
-executableName: gaia-desktop       # Actual binary name — must NOT collide with the Python
-                                   # CLI `gaia` (console_scripts entry in setup.py). Using
-                                   # `gaia-desktop` avoids a recursive-launch risk on Linux
-                                   # where findGaiaBin()'s commandExists("gaia") fallback
-                                   # could find /usr/bin/gaia-desktop instead of the venv's
-                                   # Python gaia binary.
-                                   # Affects: .app/Contents/MacOS/gaia-desktop, gaia-desktop.exe,
-                                   # /usr/bin/gaia-desktop, deb package name, AppImage binary name
+executableName: gaia-ui            # Actual binary name — must NOT collide with the Python
+                                   # CLI `gaia` (console_scripts entry in setup.py), or
+                                   # findGaiaBin()'s commandExists("gaia") fallback could
+                                   # find the desktop app instead of the venv's Python gaia.
+                                   # Affects: .app/Contents/MacOS/gaia-ui, gaia-ui.exe,
+                                   # the Windows install folder, AppImage binary name.
 copyright: Copyright © 2026 Advanced Micro Devices, Inc.
 
 directories:
@@ -215,7 +213,7 @@ linux:
   #
   # This is scoped at the `linux:` level (not `appImage:`) so the DEB's
   # .desktop entry also gets --no-sandbox. DEB CLI launches of the bare
-  # /opt/GAIA/gaia-desktop binary on hardened kernels still need explicit
+  # /opt/GAIA/gaia-ui binary on hardened kernels still need explicit
   # --no-sandbox; see docs/reference/troubleshooting.mdx.
   executableArgs:
     - --no-sandbox
@@ -232,9 +230,9 @@ linux:
       Categories: Development;Utility;
       # StartupWMClass must match the X11 WM_CLASS the app reports at
       # runtime. Electron derives WM_CLASS from the executable basename
-      # by default, so with executableName: gaia-desktop this becomes
-      # "gaia-desktop". Getting this wrong breaks taskbar icon grouping.
-      StartupWMClass: gaia-desktop
+      # by default, so with executableName: gaia-ui this becomes
+      # "gaia-ui". Getting this wrong breaks taskbar icon grouping.
+      StartupWMClass: gaia-ui
 
 deb:
   depends:

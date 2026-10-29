@@ -188,7 +188,7 @@ preflight_no_lemonade() {
 # The install phase records the executable it installed, so launch and quit use
 # what is really on disk rather than a path this script assumes.
 agent_ui_cmd() { cat "${WORK}/app.cmd"; }
-APP_PATTERN='gaia-desktop'
+APP_PATTERN='gaia-ui'
 
 launch_agent_ui() {
   local cmd
@@ -272,7 +272,7 @@ assert_gone() { for p in "$@"; do [ ! -e "${p}" ] || die "left behind: ${p}"; do
 
 no_gaia_processes() {
   local left
-  left="$(pgrep -fl 'gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/gaia' || true)"
+  left="$(pgrep -fl 'gaia-ui|gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/gaia' || true)"
   [ -z "${left}" ] || die "still running after uninstall: ${left}"
 }
 
@@ -332,7 +332,7 @@ install)
       echo "${exe}" >"${WORK}/app.cmd"
       # What docs/guides/install.mdx and docs/deployment/ui.mdx promise.
       [ "${pkg}" = "gaia-desktop" ] || finding "the desktop app's .deb is named '${pkg}', but the docs say \`sudo apt remove gaia-desktop\`; and the terminal's .deb is also named 'gaia', so installing one replaces the other"
-      command -v gaia-desktop >/dev/null || finding "\`gaia-desktop\` is not on PATH after installing the .deb, but the docs say to run it from a terminal"
+      command -v gaia-ui >/dev/null || finding "\`gaia-ui\` is not on PATH after installing the .deb, but the docs say to run it from a terminal"
       ;;
     appimage)
       mkdir -p "${HOME}/Applications"
@@ -454,7 +454,7 @@ leftovers)
       [ -z "${agents}" ] || die "launch agents left behind: ${agents}"
       ;;
     agent-ui-deb)
-      assert_gone /usr/bin/gaia-desktop "$(cat "${WORK}/app.cmd")" "$(dirname "$(cat "${WORK}/app.cmd")")"
+      assert_gone /usr/bin/gaia-ui "$(cat "${WORK}/app.cmd")" "$(dirname "$(cat "${WORK}/app.cmd")")"
       menu="$(find /usr/share/applications -iname '*gaia*desktop*' 2>/dev/null || true)"
       [ -z "${menu}" ] || die "menu entries left behind: ${menu}"
       ! dpkg -s "$(cat "${WORK}/deb.package")" 2>/dev/null | grep -q '^Status: install' || die "dpkg still lists the package as installed"

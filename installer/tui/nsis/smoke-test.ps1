@@ -25,7 +25,7 @@ $uiGuid    = '071ff68a-44b8-5d94-b099-f93e99d1c3f3'
 $uiKey     = "HKCU:\Software\$uiGuid"
 $uiArp     = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$uiGuid"
 # Where the desktop app's per-user setup installs (electron-builder's own choice).
-$uiDefault = "$env:LOCALAPPDATA\Programs\gaia-desktop"
+$uiDefault = "$env:LOCALAPPDATA\Programs\gaia-ui"
 $desktop   = [Environment]::GetFolderPath('Desktop')
 $startMenu = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
 $runKey    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
@@ -209,7 +209,7 @@ $rc = Invoke-Setup @('/S', '/COMPONENTS=ui')
 if ($rc -ne 0) { throw "desktop app install exited $rc" }
 $uiDir = Get-UiDir
 Write-Host "desktop app installed to $uiDir"
-if (-not (Test-Path "$uiDir\gaia-desktop.exe")) { throw "gaia-desktop.exe did not land in $uiDir" }
+if (-not (Test-Path "$uiDir\gaia-ui.exe")) { throw "gaia-ui.exe did not land in $uiDir" }
 if (-not (Test-Path $uiArp)) { throw "no Installed-apps entry for the desktop app" }
 if (-not (Test-Path "$desktop\GAIA.lnk")) { throw "no desktop shortcut for the desktop app" }
 if (-not (Test-Path "$startMenu\GAIA.lnk")) { throw "no Start menu shortcut for the desktop app" }
@@ -217,7 +217,7 @@ if (-not (Get-ItemProperty -Path $runKey -Name 'GAIA' -ErrorAction SilentlyConti
 if ((Get-FileHash "$tuiDir\gaia-tui.exe" -Algorithm SHA256).Hash -ne $before.Hash) { throw "adding the desktop app changed the terminal" }
 
 # ── 5. Plain /S with both installed updates both, and leaves one of each ──
-foreach ($exe in "$uiDir\gaia-desktop.exe", "$tuiDir\gaia-tui.exe", "$tuiDir\gaia-agent.exe") { Wait-Writable $exe }
+foreach ($exe in "$uiDir\gaia-ui.exe", "$tuiDir\gaia-tui.exe", "$tuiDir\gaia-agent.exe") { Wait-Writable $exe }
 $rc = Invoke-Setup @('/S')
 if ($rc -ne 0) { throw "re-running with both installed exited $rc" }
 $entries = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
@@ -227,15 +227,15 @@ $names = ($entries | ForEach-Object DisplayName | Sort-Object) -join ', '
 if ($names -ne "GAIA, $tuiName") { throw "expected one entry per component, found: $names" }
 
 # ── 6. Refuse while the desktop app is in use ──────────────────────────────
-$uiBefore = Get-FileHash "$uiDir\gaia-desktop.exe" -Algorithm SHA256
-$held = [System.IO.File]::Open("$uiDir\gaia-desktop.exe", 'Open', 'Read', 'Read')
+$uiBefore = Get-FileHash "$uiDir\gaia-ui.exe" -Algorithm SHA256
+$held = [System.IO.File]::Open("$uiDir\gaia-ui.exe", 'Open', 'Read', 'Read')
 try {
     $rc = Invoke-Setup @('/S', '/COMPONENTS=ui')
-    if ($rc -ne 2) { throw "re-install over an in-use gaia-desktop should exit 2 (running), got $rc" }
+    if ($rc -ne 2) { throw "re-install over an in-use gaia-ui should exit 2 (running), got $rc" }
 } finally {
     $held.Dispose()
 }
-if ((Get-FileHash "$uiDir\gaia-desktop.exe" -Algorithm SHA256).Hash -ne $uiBefore.Hash) { throw "the refused install still rewrote gaia-desktop.exe" }
+if ((Get-FileHash "$uiDir\gaia-ui.exe" -Algorithm SHA256).Hash -ne $uiBefore.Hash) { throw "the refused install still rewrote gaia-ui.exe" }
 
 # ── 7. Uninstall each component on its own ─────────────────────────────────
 New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.gaia" | Out-Null
@@ -255,14 +255,14 @@ foreach ($f in $lock.fonts) {
     }
 }
 if (Test-Path $fragment) { throw "the Windows Terminal fragment survived the uninstall" }
-if (-not (Test-Path "$uiDir\gaia-desktop.exe")) { throw "uninstalling the terminal removed the desktop app" }
+if (-not (Test-Path "$uiDir\gaia-ui.exe")) { throw "uninstalling the terminal removed the desktop app" }
 
 $quiet = (Get-ItemProperty -Path $uiArp -Name QuietUninstallString).QuietUninstallString
 Write-Host "desktop app quiet uninstall: $quiet"
 $u = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', $quiet -PassThru -Wait
 if ($u.ExitCode -ne 0) { throw "the desktop app's uninstaller exited $($u.ExitCode)" }
 Wait-Gone $uiArp
-Wait-Gone "$uiDir\gaia-desktop.exe"
+Wait-Gone "$uiDir\gaia-ui.exe"
 if (Test-Path "$desktop\GAIA.lnk") { throw "the desktop app's shortcut survived its uninstall" }
 
 if (-not (Test-Path "$env:USERPROFILE\.gaia\smoke-marker")) {
@@ -272,7 +272,7 @@ if (-not (Test-Path "$env:USERPROFILE\.gaia\smoke-marker")) {
 # ── 8. Desktop app only, on a machine with nothing installed ───────────────
 $rc = Invoke-Setup @('/S', '/COMPONENTS=ui')
 if ($rc -ne 0) { throw "desktop-app-only install exited $rc" }
-if (-not (Test-Path "$(Get-UiDir)\gaia-desktop.exe")) { throw "desktop-app-only install did not install the app" }
+if (-not (Test-Path "$(Get-UiDir)\gaia-ui.exe")) { throw "desktop-app-only install did not install the app" }
 if (Test-Path $tuiDir) { throw "a desktop-app-only install created $tuiDir" }
 if (Test-Path $tuiArp) { throw "a desktop-app-only install registered the terminal" }
 $quiet = (Get-ItemProperty -Path $uiArp -Name QuietUninstallString).QuietUninstallString
@@ -284,7 +284,7 @@ Wait-Gone $uiArp
 $rc = Invoke-Setup @('/S')
 if ($rc -ne 0) { throw "plain /S on a clean machine exited $rc" }
 if (-not (Test-Path "$tuiDir\gaia-tui.exe")) { throw "plain /S on a clean machine did not install the terminal" }
-if (-not (Test-Path "$(Get-UiDir)\gaia-desktop.exe")) { throw "plain /S on a clean machine did not install the desktop app" }
+if (-not (Test-Path "$(Get-UiDir)\gaia-ui.exe")) { throw "plain /S on a clean machine did not install the desktop app" }
 $u = Start-Process -FilePath "$tuiDir\Uninstall.exe" -ArgumentList '/S' -PassThru -Wait
 if ($u.ExitCode -ne 0) { throw "the terminal's uninstaller exited $($u.ExitCode)" }
 Wait-Gone $tuiDir
