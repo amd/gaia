@@ -217,9 +217,9 @@ function, declared in `metadata.gaia.tools` and registered as
 ### image-gen
 
 Turns "draw me a red bicycle" into a prompt worth generating, runs it through
-local Stable Diffusion, and iterates on the previous image instead of starting
-over. Written around the fact that generation is slow enough that you only get
-a couple of attempts.
+a downloaded Lemonade image model (Stable Diffusion or TheNoise), and iterates
+on the previous image instead of starting over. Written around the fact that
+generation is slow enough that you only get a couple of attempts.
 
 - **Demonstrates** — a local non-text model in a skill, and iterating from
   session history rather than regenerating from scratch.

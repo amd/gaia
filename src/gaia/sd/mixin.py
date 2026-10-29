@@ -279,6 +279,8 @@ class SDToolsMixin:
                 "error": f"Invalid size '{size}'. Expected WIDTHxHEIGHT.",
             }
 
+        steps_label = f"{steps} steps" if steps is not None else "default steps"
+
         # Use console for user-facing messages if available
         console = getattr(self, "console", None)
 
@@ -331,10 +333,10 @@ class SDToolsMixin:
                 _sp_params = inspect.signature(console.start_progress).parameters
                 if "show_timer" in _sp_params:
                     console.start_progress(
-                        f"Generating image ({steps} steps)...", show_timer=True
+                        f"Generating image ({steps_label})...", show_timer=True
                     )
                 else:
-                    console.start_progress(f"Generating image ({steps} steps)...")
+                    console.start_progress(f"Generating image ({steps_label})...")
 
             start_time = time.time()
 
@@ -395,7 +397,7 @@ class SDToolsMixin:
             if console and hasattr(console, "print_image"):
                 console.print_image(
                     str(image_path),
-                    caption=f"{model} • {size} • {steps} steps",
+                    caption=f"{model} • {size or 'default size'} • {steps_label}",
                     prompt_to_open=False,  # Don't prompt yet
                 )
 
