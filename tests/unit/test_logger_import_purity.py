@@ -191,3 +191,132 @@ def test_flagship_sidecar_writes_gaia_log(monkeypatch, tmp_path):
             handler.close()
         root.handlers.extend(saved_handlers)
         root.setLevel(saved_level)
+
+
+# Every process GAIA spawns, or documents running with ``python -m``, must
+# install logging itself now that importing gaia no longer does.
+_ENTRY_POINTS_HELP = [
+    ("gaia.cli", "main", None),
+    ("gaia.mcp.mcp_bridge", "main", None),
+    ("gaia.ui.server", "main", None),
+    ("gaia.mcp.servers.agent_ui_mcp", "main", None),
+    ("gaia.mcp.servers.tui_mcp", "main", None),
+    ("gaia.mcp.servers.engineering_mcp", "main", ["--help"]),
+    ("gaia.connectors.cli", "main", ["--help"]),
+    ("gaia_agent_chat.app", "main", None),
+    ("gaia_agent_email.server", "main", ["--help"]),
+    ("gaia_agent_email.mcp_server", "main", None),
+]
+
+
+@pytest.fixture
+def unconfigured(monkeypatch, tmp_path):
+    """Start with no GAIA logging installed; restore the root logger after."""
+    monkeypatch.setenv(gaia_logger.LOG_FILE_ENV, str(tmp_path / "gaia.log"))
+    monkeypatch.setattr(gaia_logger, "log_manager", None)
+    root = logging.getLogger()
+    saved_handlers, saved_level = list(root.handlers), root.level
+    yield
+    for handler in list(root.handlers):
+        if handler not in saved_handlers:
+            root.removeHandler(handler)
+            handler.close()
+    root.setLevel(saved_level)
+
+
+@pytest.mark.parametrize(
+    "module_name,func_name,argv",
+    _ENTRY_POINTS_HELP,
+    ids=[f"{m}:{f}" for m, f, _ in _ENTRY_POINTS_HELP],
+)
+def test_entry_point_configures_logging(
+    unconfigured, monkeypatch, module_name, func_name, argv
+):
+    module = pytest.importorskip(module_name)
+    assert gaia_logger.log_manager is None, "importing must not configure"
+    monkeypatch.setattr(sys, "argv", [module_name, "--help"])
+    with pytest.raises(SystemExit):
+        if argv is None:
+            getattr(module, func_name)()
+        else:
+            getattr(module, func_name)(argv)
+    assert gaia_logger.log_manager is not None, (
+        f"{module_name}:{func_name} must call gaia.logger.configure()"
+    )
+
+
+def test_eval_bench_child_configures_logging(unconfigured):
+    from gaia.eval.bench import gaia_child
+
+    assert gaia_child.main([]) == 2
+    assert gaia_logger.log_manager is not None
+
+
+def _calls_configure(node):
+    return any(
+        isinstance(n, ast.Call)
+        and (
+            (isinstance(n.func, ast.Name) and n.func.id == "configure")
+            or (isinstance(n.func, ast.Attribute) and n.func.attr == "configure")
+        )
+        for n in ast.walk(node)
+    )
+
+
+# Entry points that start a server or parse argv before configuring, so they
+# are checked statically instead of by running them.
+_ENTRY_POINTS_STATIC = [
+    ("src/gaia/daemon/server.py", "run"),
+    ("src/gaia/api/app.py", "main"),
+    ("src/gaia/chat/app.py", "main"),
+    ("src/gaia/apps/llm/app.py", "cli_main"),
+]
+
+
+@pytest.mark.parametrize("rel_path,func_name", _ENTRY_POINTS_STATIC)
+def test_server_entry_point_calls_configure(rel_path, func_name):
+    tree = ast.parse((REPO_ROOT / rel_path).read_text(encoding="utf-8"))
+    funcs = [
+        n
+        for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and n.name == func_name
+    ]
+    assert len(funcs) == 1, f"{rel_path}:{func_name} not found"
+    assert _calls_configure(funcs[0]), f"{rel_path}:{func_name} skips configure()"
+
+
+@pytest.mark.parametrize("agent", ["gaia", "email"])
+def test_sidecar_packaging_entry_configures_at_module_level(agent):
+    """The frozen binary and daemon dev mode (``uvicorn server:app``) load this
+    module without calling any main(), so configure() must be top-level."""
+    path = REPO_ROOT / "hub" / "agents" / agent / "python" / "packaging" / "server.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    top_level = [n for n in tree.body if isinstance(n, ast.Expr)]
+    assert any(_calls_configure(n) for n in top_level), f"{path} skips configure()"
+
+
+def test_flagship_frozen_entry_dispatches_scripts_before_configure():
+    """``run_python`` scripts must start before GAIA (and its logging) loads."""
+    path = REPO_ROOT / "hub" / "agents" / "gaia" / "python" / "packaging" / "server.py"
+    source = path.read_text(encoding="utf-8")
+    assert source.index("python_dispatch(sys.argv[1:])") < source.index(
+        "\nconfigure()"
+    )
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        "gaia.mcp.servers.agent_ui_mcp",
+        "gaia.mcp.servers.tui_mcp",
+        "gaia.connectors.cli",
+        "gaia.eval.bench.gaia_child",
+    ],
+)
+def test_entry_modules_do_not_configure_on_import(tmp_path, module_name):
+    result = _run_child(
+        _IMPORT_AND_PROBE_ROOT.format(imports=f"import {module_name}"), tmp_path
+    )
+    unchanged, pre = _child_unchanged(result)
+    assert unchanged, f"{module_name} changed the root logger on import ({pre})"

@@ -988,6 +988,9 @@ def interactive_mode(agent: ChatAgent):
 
 def main():
     """Main entry point."""
+    from gaia.logger import configure
+
+    configure()
     args = parse_args()
 
     try:
