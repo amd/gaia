@@ -1726,17 +1726,23 @@ class FileSearchToolsMixin:
             else:
                 return dt.strftime("%Y-%m-%d")
 
-        def _read_tabular_file(file_path: str) -> tuple:
+        def _read_tabular_file(file_path: str, sheet: Optional[str] = None) -> tuple:
             """
             Read a tabular data file (CSV, TSV, or Excel) into a list of dicts.
 
+            Args:
+                file_path: The file to read.
+                sheet: For a workbook, the sheet to read (default: the active one).
+
             Returns:
-                Tuple of (rows: List[Dict], columns: List[str], error: str or None)
+                Tuple of (rows: List[Dict], columns: List[str], error: str or None,
+                sheets: workbook sheet names and the one read, or None for CSV/TSV)
             """
             ext = Path(file_path).suffix.lower()
             rows: List[Dict[str, Any]] = []
             columns: List[str] = []
             error = None
+            sheets = None
 
             if ext in (".xlsx", ".xls"):
                 try:
@@ -1745,11 +1751,28 @@ class FileSearchToolsMixin:
                     wb = openpyxl.load_workbook(
                         file_path, read_only=True, data_only=True
                     )
-                    ws = wb.active
+                    names = list(wb.sheetnames)
+                    if sheet is None:
+                        ws = wb.active
+                    else:
+                        wanted = sheet.strip().lower()
+                        match = next(
+                            (n for n in names if n.strip().lower() == wanted), None
+                        )
+                        if match is None:
+                            wb.close()
+                            return (
+                                [],
+                                [],
+                                f"No sheet named {sheet!r}. Sheets: {', '.join(names)}",
+                                {"sheets": names},
+                            )
+                        ws = wb[match]
+                    sheets = {"sheet": ws.title, "sheets": names}
                     ws_rows = list(ws.iter_rows(values_only=True))
                     wb.close()
                     if not ws_rows:
-                        return [], [], None
+                        return [], [], None, sheets
                     header = _header_row_index(ws_rows)
                     columns = [
                         str(c) if c is not None else f"Column_{i}"
@@ -1785,7 +1808,7 @@ class FileSearchToolsMixin:
                         continue
                 if content is None:
                     error = "Could not decode file with any supported encoding (utf-8, latin-1, cp1252)"
-                    return [], [], error
+                    return [], [], error, None
 
                 try:
                     # Use csv.Sniffer to detect delimiter if possible
@@ -1803,7 +1826,7 @@ class FileSearchToolsMixin:
                 except Exception as e:
                     error = f"Error parsing CSV/TSV file: {e}"
 
-            return rows, columns, error
+            return rows, columns, error, sheets
 
         def _infer_column_type(values: list) -> str:
             """Infer the data type of a column from its values."""
@@ -2407,12 +2430,15 @@ class FileSearchToolsMixin:
             columns: str = None,
             group_by: str = None,
             date_range: str = None,
+            sheet: str = None,
         ) -> Dict[str, Any]:
             """
             Parse and analyze tabular data files with multiple analysis modes.
 
             Supports CSV, TSV, XLSX, and XLS files. Provides summary statistics,
             spending categorization, and trend analysis for financial data.
+            A workbook is read one sheet at a time; the result's ``sheets``
+            lists them all, so check it before saying data is not in the file.
 
             Args:
                 file_path: Path to the data file
@@ -2423,6 +2449,8 @@ class FileSearchToolsMixin:
                 date_range: Keep only rows dated in this period (optional).
                     A quarter ('2025-Q1', "Q1'25"), year, month ('2025-03'),
                     day, or range ('2025-01 to 2025-06'). Else an error.
+                sheet: Workbook sheet to analyze (optional; default the sheet
+                    the workbook opens on). Ignored for CSV/TSV.
 
             Returns:
                 Dictionary with analysis results based on the requested type
@@ -2510,7 +2538,20 @@ class FileSearchToolsMixin:
                     }
 
                 # Read the file (use resolved fp path in case of fallback)
-                rows, all_columns, read_error = _read_tabular_file(str(fp))
+                rows, all_columns, read_error, sheet_info = _read_tabular_file(
+                    str(fp), sheet
+                )
+                sheet_fields = {}
+                if sheet_info and "sheet" in sheet_info:
+                    read, names = sheet_info["sheet"], sheet_info["sheets"]
+                    sheet_fields = {"sheet": read, "sheets": names}
+                    others = [n for n in names if n != read]
+                    if others:
+                        sheet_fields["other_sheets_note"] = (
+                            f"This covers sheet {read!r} only. The workbook also "
+                            f"has {', '.join(repr(n) for n in others)}; pass "
+                            "sheet=<name> to analyze one."
+                        )
 
                 if read_error:
                     return {
@@ -2526,6 +2567,7 @@ class FileSearchToolsMixin:
                         "file": fp.name,
                         "row_count": 0,
                         "columns": all_columns,
+                        **sheet_fields,
                         "message": "File is empty or contains only headers.",
                     }
 
@@ -2632,6 +2674,7 @@ class FileSearchToolsMixin:
                     "status": "success",
                     "file": fp.name,
                     "file_path": str(fp.resolve()),
+                    **sheet_fields,
                     "row_count": len(rows),
                     "columns": all_columns,
                     "column_count": len(all_columns),
