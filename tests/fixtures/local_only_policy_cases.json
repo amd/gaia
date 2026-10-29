@@ -1,0 +1,170 @@
+{
+  "_comment": "Policy files Python (gaia.llm.local_only) and Go (tui/internal/lemonade) must read the same way. local_only=true means every cloud AI model is blocked. content is base64; null means no file.",
+  "cases": [
+    {
+      "name": "missing file",
+      "content": null,
+      "local_only": false
+    },
+    {
+      "name": "cloud_allowed",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6ImNsb3VkX2FsbG93ZWQifQ==",
+      "local_only": false
+    },
+    {
+      "name": "cloud_allowed with surrounding whitespace",
+      "content": "ICB7Im5ldHdvcmtfcG9saWN5IjogImNsb3VkX2FsbG93ZWQifQo=",
+      "local_only": false
+    },
+    {
+      "name": "empty object",
+      "content": "e30=",
+      "local_only": false
+    },
+    {
+      "name": "other keys only",
+      "content": "eyJvdGhlcl9rZXkiOjF9",
+      "local_only": false
+    },
+    {
+      "name": "key differs only in case",
+      "content": "eyJOZXR3b3JrX1BvbGljeSI6ImxvY2FsX2FpX29ubHkifQ==",
+      "local_only": false
+    },
+    {
+      "name": "escaped key and value",
+      "content": "eyJuZXR3b3JrXHUwMDVmcG9saWN5IjoiY2xvdWRcdTAwNWZhbGxvd2VkIn0=",
+      "local_only": false
+    },
+    {
+      "name": "duplicate key, last is cloud_allowed",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6ImxvY2FsX2FpX29ubHkiLCJuZXR3b3JrX3BvbGljeSI6ImNsb3VkX2FsbG93ZWQifQ==",
+      "local_only": false
+    },
+    {
+      "name": "duplicate key, last is local_ai_only",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6ImNsb3VkX2FsbG93ZWQiLCJuZXR3b3JrX3BvbGljeSI6ImxvY2FsX2FpX29ubHkifQ==",
+      "local_only": true
+    },
+    {
+      "name": "local_ai_only",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6ImxvY2FsX2FpX29ubHkifQ==",
+      "local_only": true
+    },
+    {
+      "name": "offline",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6Im9mZmxpbmUifQ==",
+      "local_only": true
+    },
+    {
+      "name": "unknown level",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6InNvbWV0aW1lcyJ9",
+      "local_only": true
+    },
+    {
+      "name": "level in the wrong case",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6IkNsb3VkX0FsbG93ZWQifQ==",
+      "local_only": true
+    },
+    {
+      "name": "level with padding",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6IiBjbG91ZF9hbGxvd2VkIn0=",
+      "local_only": true
+    },
+    {
+      "name": "level is null",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6bnVsbH0=",
+      "local_only": true
+    },
+    {
+      "name": "level is a number",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6MX0=",
+      "local_only": true
+    },
+    {
+      "name": "level is a bool",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6dHJ1ZX0=",
+      "local_only": true
+    },
+    {
+      "name": "level is a list",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6WyJjbG91ZF9hbGxvd2VkIl19",
+      "local_only": true
+    },
+    {
+      "name": "level is an object",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6eyJ2IjoiY2xvdWRfYWxsb3dlZCJ9fQ==",
+      "local_only": true
+    },
+    {
+      "name": "level is NaN",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6TmFOfQ==",
+      "local_only": true
+    },
+    {
+      "name": "top-level null",
+      "content": "bnVsbA==",
+      "local_only": true
+    },
+    {
+      "name": "top-level list",
+      "content": "W10=",
+      "local_only": true
+    },
+    {
+      "name": "top-level number",
+      "content": "MQ==",
+      "local_only": true
+    },
+    {
+      "name": "top-level bool",
+      "content": "dHJ1ZQ==",
+      "local_only": true
+    },
+    {
+      "name": "top-level string",
+      "content": "ImNsb3VkX2FsbG93ZWQi",
+      "local_only": true
+    },
+    {
+      "name": "empty file",
+      "content": "",
+      "local_only": true
+    },
+    {
+      "name": "whitespace only",
+      "content": "IAoJ",
+      "local_only": true
+    },
+    {
+      "name": "not JSON",
+      "content": "e25vdCBqc29u",
+      "local_only": true
+    },
+    {
+      "name": "trailing garbage",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6ImNsb3VkX2FsbG93ZWQifSB4",
+      "local_only": true
+    },
+    {
+      "name": "UTF-8 BOM",
+      "content": "77u/eyJuZXR3b3JrX3BvbGljeSI6ImNsb3VkX2FsbG93ZWQifQ==",
+      "local_only": true
+    },
+    {
+      "name": "UTF-16",
+      "content": "//57ACIAbgBlAHQAdwBvAHIAawBfAHAAbwBsAGkAYwB5ACIAOgAiAGMAbABvAHUAZABfAGEAbABsAG8AdwBlAGQAIgB9AA==",
+      "local_only": true
+    },
+    {
+      "name": "binary",
+      "content": "AAEC",
+      "local_only": true
+    },
+    {
+      "name": "invalid UTF-8 inside a string",
+      "content": "eyJuZXR3b3JrX3BvbGljeSI6ImNsb3VkX2FsbG93ZWQiLCJub3RlIjoi/yJ9",
+      "local_only": true
+    }
+  ]
+}

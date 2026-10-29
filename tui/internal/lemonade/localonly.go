@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // LocalOnlyHint is how to turn Local only off; the same words Python uses.
@@ -53,11 +54,13 @@ func expandUser(path string, homeDir func() (string, error)) string {
 }
 
 // LocalOnlyAt reports whether the policy file at path blocks every cloud AI
-// model. A missing file means cloud is allowed; an unreadable or invalid
-// one counts as Local only, as in Python.
+// model. A missing file means cloud is allowed; anything Python's reader
+// can't parse as a JSON object counts as Local only. tests/fixtures/
+// local_only_policy_cases.json holds the cases both readers must agree on.
 func LocalOnlyAt(path string) bool {
 	if path == "" {
-		return false
+		// No home directory: the user's policy can't be read, so fail closed.
+		return true
 	}
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -66,8 +69,14 @@ func LocalOnlyAt(path string) bool {
 	if err != nil {
 		return true
 	}
+	// Python decodes the file as strict UTF-8; Go's decoder would quietly
+	// substitute bad bytes and accept it.
+	if !utf8.Valid(raw) {
+		return true
+	}
 	var policy map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &policy); err != nil {
+	// `null` unmarshals into a nil map without error; Python refuses it.
+	if err := json.Unmarshal(raw, &policy); err != nil || policy == nil {
 		return true
 	}
 	value, present := policy["network_policy"]

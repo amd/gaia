@@ -5,6 +5,8 @@ package lemonade
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -58,12 +60,57 @@ func TestLocalOnlyReadsTheFileAndFailsClosed(t *testing.T) {
 		`{"network_policy":null}`:            true,
 		`{"network_policy":1}`:               true,
 		`[]`:                                 true,
+		`null`:                               true,
 	}
 	for content, want := range cases {
 		setPolicy(t, content)
 		if got := LocalOnly(); got != want {
 			t.Errorf("policy %q: LocalOnly() = %v, want %v", content, got, want)
 		}
+	}
+}
+
+// The table Python's reader runs too (tests/unit/test_local_only.py): the
+// two front ends must agree on every file, or one hands out a cloud key the
+// other refuses.
+func TestLocalOnlyMatchesPythonOnTheSharedTable(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "local_only_policy_cases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table struct {
+		Cases []struct {
+			Name      string  `json:"name"`
+			Content   *string `json:"content"`
+			LocalOnly bool    `json:"local_only"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &table); err != nil {
+		t.Fatal(err)
+	}
+	if len(table.Cases) == 0 {
+		t.Fatal("the shared policy table has no cases")
+	}
+	for _, c := range table.Cases {
+		path := filepath.Join(t.TempDir(), "policy.json")
+		if c.Content != nil {
+			data, err := base64.StdEncoding.DecodeString(*c.Content)
+			if err != nil {
+				t.Fatalf("%s: %v", c.Name, err)
+			}
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := LocalOnlyAt(path); got != c.LocalOnly {
+			t.Errorf("%s: LocalOnlyAt = %v, Python reads %v", c.Name, got, c.LocalOnly)
+		}
+	}
+}
+
+func TestLocalOnlyWithNoResolvablePolicyPathFailsClosed(t *testing.T) {
+	if !LocalOnlyAt("") {
+		t.Error(`LocalOnlyAt("") = false: with no home directory the user's policy can't be read, so Local only can't be confirmed off`)
 	}
 }
 

@@ -3,8 +3,10 @@
 ## Unreleased
 
 - With Local only on (`gaia config set network_policy local_ai_only`), the
-  `search_web` tool is not registered: it answers through Perplexity's cloud
-  AI. A cached agent that still has it refuses with the same reason.
+  Perplexity-backed `search_web` tool is not registered, because it answers
+  through Perplexity's cloud AI. A cached agent that still has it refuses with
+  the same reason. The DuckDuckGo `search_web` from the browser tools still
+  registers: it runs no AI model.
 - `get_system_info` reports free disk space (`disk_free_gb`) and available
   memory (`memory_available_gb`), and computes disk use from free space. On a
   Mac it reported only the share macOS's system volume uses, so a nearly full

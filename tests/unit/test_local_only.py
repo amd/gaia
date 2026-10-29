@@ -11,6 +11,7 @@ that happens *after* the request would still fail the test.
 """
 
 import ast
+import base64
 import json
 import re
 from pathlib import Path
@@ -141,6 +142,23 @@ def test_set_policy_round_trips_and_keeps_other_keys(policy_file):
 def test_unreadable_policy_fails_closed(policy_file, content):
     policy_file.write_text(content, encoding="utf-8")
     assert local_only.effective_policy() is NetworkPolicy.LOCAL_AI_ONLY
+
+
+# The TUI's Go reader runs the same table (tui/internal/lemonade/localonly_test.go).
+_SHARED_CASES = json.loads(
+    (
+        Path(__file__).resolve().parents[1]
+        / "fixtures"
+        / "local_only_policy_cases.json"
+    ).read_text(encoding="utf-8")
+)["cases"]
+
+
+@pytest.mark.parametrize("case", _SHARED_CASES, ids=[c["name"] for c in _SHARED_CASES])
+def test_policy_file_reads_as_the_shared_table_says(policy_file, case):
+    if case["content"] is not None:
+        policy_file.write_bytes(base64.b64decode(case["content"]))
+    assert local_only.cloud_blocked() is case["local_only"]
 
 
 def test_offline_and_unknown_levels_are_refused(policy_file):
