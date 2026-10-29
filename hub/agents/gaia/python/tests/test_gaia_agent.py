@@ -88,6 +88,31 @@ def manifest():
     return yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
 
 
+def test_re_registering_tools_keeps_the_repo_selected_for_code_index(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / "workspace"
+    selected_repo = workspace / "selected-repo"
+    selected_repo.mkdir(parents=True)
+
+    with _isolated_registry():
+        monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+        agent = GaiaAgent(
+            config=GaiaAgentConfig(silent_mode=True, allowed_paths=[str(workspace)])
+        )
+        agent._repo_path = str(selected_repo)
+        indexed_sdk = object()
+        agent._code_index_sdk = indexed_sdk
+
+        # Cached Agent UI turns re-register the flagship tool surface.  That
+        # refresh must retain the repo selected by index_codebase.
+        agent._register_tools()
+
+    assert agent._repo_path == str(selected_repo)
+    assert agent._code_index_sdk is indexed_sdk
+    assert agent._code_index_ceilings == (str(workspace),)
+
+
 # --------------------------------------------------------------------------
 # Capability breadth — the reason this agent exists
 # --------------------------------------------------------------------------
