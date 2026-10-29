@@ -30,14 +30,13 @@
 # crash (CLAUDE.md fail-loudly — report mode softens "measured and worse",
 # never "didn't measure").
 #
-# REGRESSION GATE. Committed per-category baselines are expected under
-# $BASELINE_DIR (tests/fixtures/eval_baselines/gaia-gemma-4-e4b). NONE EXIST
-# YET — they are captured by the first full `workflow_dispatch` on this runner
-# (the dev boxes must never start Lemonade). Until then the compare step prints
-# a loud "first adoption — no baseline" notice per category and skips the diff;
-# once a baseline is committed, `gaia eval agent --compare` exit 2 surfaces as
-# a ::warning:: in report mode and fails the build under `enforce: true` (the
-# dispatch input).
+# REGRESSION GATE. Each category compares against the flagship baseline in
+# $BASELINE_DIR (tests/fixtures/eval_baselines/gaia-flagship): the same agent,
+# model, Claude judge and Strix Halo pool, copied from a real nightly
+# (eval_flagship.yml reads the same directory). `gaia eval agent --compare`
+# exit 2 surfaces as a ::warning:: in report mode and fails the build under
+# `enforce: true` (the dispatch input). A category with no scorecard there
+# prints a loud notice and skips the diff.
 #
 # MEMORY IS ON — a deliberate deviation from every other eval workflow (they
 # set GAIA_MEMORY_DISABLED=1). Persistent memory is core to the flagship
@@ -71,8 +70,7 @@
 name: GAIA Agent Eval (judged scenarios, report mode)
 
 on:
-  # Manual trigger — the FULL run (all 16 categories, all tiers). This is also
-  # how the first Gemma baselines get captured on the runner.
+  # Manual trigger — the FULL run (all 16 categories, all tiers).
   workflow_dispatch:
     inputs:
       categories:
@@ -157,7 +155,7 @@ env:
   # The checkout is outside this runner's home, so without this every
   # `setup.index_documents` scenario 403s (#3585). Declares the corpus only.
   GAIA_DOCUMENT_ROOTS: ${{ github.workspace }}\eval\corpus
-  BASELINE_DIR: tests/fixtures/eval_baselines/gaia-gemma-4-e4b
+  BASELINE_DIR: tests/fixtures/eval_baselines/gaia-flagship
   # Fixture server port — the corpus hardcodes http://127.0.0.1:8765
   # (tests/fixtures/gaia/README.md; never 4001/4200/8141/13305).
   FIXTURE_PORT: '8765'
@@ -666,7 +664,7 @@ jobs:
           & $env:VENV_PY hub/agents/gaia/python/packaging/eval_perf_report.py
           if ($LASTEXITCODE -ne 0) { throw "perf gate report failed" }
 
-      - name: Compare each category against its committed Gemma baseline
+      - name: Compare each category against the flagship baseline
         if: ${{ !cancelled() }}
         run: |
           $regressed = @()
@@ -675,10 +673,8 @@ jobs:
             $category = $file.Directory.Name
             $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
             if (-not (Test-Path $baseline)) {
-              # No baselines exist until the first full workflow_dispatch on
-              # this runner commits them (dev boxes must never start
-              # Lemonade). Loud, per-category, never silent.
-              Write-Host "::notice::${category}: no committed baseline at $baseline - first adoption, comparison skipped. Capture baselines via a full workflow_dispatch run (--save-baseline) and commit them."
+              # Loud, per-category, never silent.
+              Write-Host "::notice::${category}: no baseline at $baseline - comparison skipped. Add it by copying that category's scorecard, unedited, from a nightly eval_flagship.yml run."
               continue
             }
             Write-Host "=================================================================="
@@ -706,7 +702,7 @@ jobs:
             exit 1
           }
           if ($regressed.Count -gt 0 -and $env:ENFORCE -eq "true") {
-            Write-Host "::error::Regressions in: $($regressed -join ' '). enforce=true - failing the build. Fix the prompt/tooling, or regenerate the baseline with --save-baseline and call it out in the PR."
+            Write-Host "::error::Regressions in: $($regressed -join ' '). enforce=true - failing the build. Fix the prompt/tooling, or, if the regression is intended, call it out in the PR and replace that scorecard from the next nightly eval_flagship.yml run."
             exit 1
           }
           # GitHub appends an exit-$LASTEXITCODE trailer to PowerShell steps;

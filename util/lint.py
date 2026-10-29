@@ -848,7 +848,7 @@ def check_doc_versions() -> CheckResult:
 
 
 def check_release_versions() -> CheckResult:
-    """Fail when a version field drifts from src/gaia/version.py or its agent's."""
+    """Fail when a version field drifts from its source (util/release_versions.py)."""
     print("\nChecking release version fields...")
     print("-" * 40)
 

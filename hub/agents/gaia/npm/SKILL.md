@@ -79,7 +79,8 @@ Two things follow from that, and both bite if you assume otherwise:
 
 - **The two components version independently.** `lock.agentVersion` is this
   package's version; `components.tui.componentVersion` is the terminal-hub release
-  it consumes. They will not match.
+  it consumes. From 0.26.0 both usually equal the GAIA release, but read each
+  from its own lane: nothing guarantees they match.
 - **The TUI's artifact names use `win-x64` / `win-arm64`, not `win32-*`.** Platform
   *keys* stay in Node's namespace (`process.platform` says `win32`); only the
   `filename` crosses over. Never build a TUI URL by interpolating a platform key —
@@ -665,7 +666,7 @@ There is no silent null.
   temp dir) is dropped, and a **shared** bin directory is moved to the end
   instead of removed, so the `python3` / `lemonade-server` / real `gaia` beside
   it stay reachable. If the Python CLI isn't installed anywhere, the daemon never
-  comes up. It must also be **0.25.2+**: an older core's daemon starts fine but
+  comes up. It must also be **0.26.0+**: an older core's daemon starts fine but
   cannot run this agent, which reads as a UI with a dead agent rather than as
   a version problem.
 - **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact

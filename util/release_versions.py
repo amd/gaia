@@ -3,28 +3,36 @@
 # SPDX-License-Identifier: MIT
 """Check or stamp every version field GAIA keeps in step with a source of truth.
 
-Three sources of truth, each edited by hand and nowhere else:
+Three sources of truth:
 
-    core      src/gaia/version.py  (__version__, LEMONADE_VERSION)
-    flagship  hub/agents/gaia/python/gaia_agent/__init__.py  (__version__)
+    core      src/gaia/version.py  (__version__, LEMONADE_VERSION), edited by hand
+    released  the newest ``releases/vX.Y.Z`` page in docs/docs.json's Release
+              Notes group: the latest release the docs describe
     chat      hub/agents/chat/python/pyproject.toml  ([project] version)
 
-Every other field in ``TARGETS`` follows one of them. The flagship and chat
-agents keep their own versions until they join core's (#5172).
+Every other field in ``TARGETS`` follows one of them. The flagship agent ships
+at core's version (#5172). The chat agent keeps its own until Phase 8 of the
+release train removes it.
+
+The docs.json navbar follows ``released``, not core, so ``main`` can declare the
+next version while the site still names the release users can install.
 
 Usage::
 
     python util/release_versions.py --check             # fail on any drift (lint)
     python util/release_versions.py --stamp             # write every field from its source
     python util/release_versions.py --stamp v0.26.0-rc1 # write an RC's versions (build time)
+    python util/release_versions.py --check --only flagship  # one group's fields
+    python util/release_versions.py --released          # print the newest listed release
 
-``--stamp <rc tag>`` writes the same files, with the same bytes, as
-``util/release_tag.py stamp``.
+``--stamp <rc tag>`` writes the files ``util/release_tag.py stamp`` writes with
+the same bytes, and the flagship's Python and npm versions too.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from dataclasses import dataclass, field
@@ -41,15 +49,22 @@ from release_tag import parse_tag  # noqa: E402  pylint: disable=wrong-import-po
 FIX_CMD = "python util/release_versions.py --stamp"
 
 CORE_PY = "src/gaia/version.py"
+DOCS_JSON = "docs/docs.json"
 FLAGSHIP_INIT = "hub/agents/gaia/python/gaia_agent/__init__.py"
 CHAT_PYPROJECT = "hub/agents/chat/python/pyproject.toml"
 
-# The flagship 0.3.1 binary is frozen from hub/agents/{gaia,chat}/python, and its
-# publish reads the npm lock, so these stay as shipped until v0.25.1 final (#5172).
-_HELD = "left as shipped until v0.25.1 final and flagship 0.3.1 publish (#5172)"
+_CHAT_HELD = "the chat agent is removed in Phase 8 of the release train (#5172)"
+
+# What `--only` selects. The stamp_version.py and bump-ui-version.mjs wrappers
+# each check or stamp one group.
+GROUPS = {
+    "flagship": "hub/agents/gaia/",
+    "agent-ui": "src/gaia/apps/webui/",
+}
 
 _CORE_RE = re.compile(r"^(?P<base>\d+\.\d+\.\d+)(?:rc(?P<rc>[1-9]\d*))?$")
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
+RELEASE_PAGE = re.compile(r"^releases/v(\d+(?:\.\d+){2,3})$")
 
 _PY_VERSION = re.compile(r'(?m)^(__version__\s*=\s*")([^"\r\n]*)(")')
 _LEMONADE = re.compile(r'(?m)^(LEMONADE_VERSION\s*=\s*")([^"\r\n]*)(")')
@@ -78,9 +93,10 @@ class Target:
     path: str
     what: str
     pattern: re.Pattern[str]
-    # core | core-floor | lemonade | flagship | chat
+    # core | core-floor | lemonade | released | chat
     source: str
-    count: int = 1
+    # None: optional; every match, however many (zero included), must agree.
+    count: int | None = 1
     # Spelling an RC tag stamps: "pep440" (PyPI) or "npm"; None = not stamped.
     rc: str | None = None
     # Non-empty: drift is reported but does not fail, and --stamp leaves it.
@@ -108,8 +124,8 @@ TARGETS: tuple[Target, ...] = (
     Target(
         "hub/components/terminal-hub/gaia-agent.yaml", "version", _YAML_VERSION, "core"
     ),
-    Target("docs/docs.json", "navbar GAIA version", _NAV_GAIA, "core"),
-    Target("docs/docs.json", "navbar Lemonade version", _NAV_LEMONADE, "lemonade"),
+    Target(DOCS_JSON, "navbar GAIA version", _NAV_GAIA, "released"),
+    Target(DOCS_JSON, "navbar Lemonade version", _NAV_LEMONADE, "lemonade"),
     # Core floors: the first-party agents require the core they ship with.
     Target(
         "hub/agents/gaia/python/pyproject.toml",
@@ -156,41 +172,68 @@ TARGETS: tuple[Target, ...] = (
         _GAIA_FLOOR,
         "core-floor",
     ),
-    # Flagship agent: follows gaia_agent/__init__.py.
+    # Flagship agent: ships at core's version. The hub manifest, the lock and the
+    # doc links name hub paths, which have no pre-release channel until Phase 4,
+    # so an RC stamp leaves them at X.Y.Z.
+    Target(FLAGSHIP_INIT, "__version__", _PY_VERSION, "core", rc="pep440"),
     Target(
-        "hub/agents/gaia/python/pyproject.toml", "version", _TOML_VERSION, "flagship"
+        "hub/agents/gaia/python/pyproject.toml",
+        "version",
+        _TOML_VERSION,
+        "core",
+        rc="pep440",
     ),
+    Target("hub/agents/gaia/python/gaia-agent.yaml", "version", _YAML_VERSION, "core"),
     Target(
-        "hub/agents/gaia/python/gaia-agent.yaml", "version", _YAML_VERSION, "flagship"
-    ),
-    Target(
-        "hub/agents/gaia/npm/package.json", "version", _JSON_TOP_VERSION, "flagship"
+        "hub/agents/gaia/npm/package.json",
+        "version",
+        _JSON_TOP_VERSION,
+        "core",
+        rc="npm",
     ),
     Target(
         "hub/agents/gaia/npm/package-lock.json",
         "root version",
         _lock_root("@amd-gaia/gaia"),
-        "flagship",
+        "core",
         count=2,
-        held=_HELD,
+        rc="npm",
     ),
+    # A bump leaves this lock's hashes stale until the agent release's pin-lock
+    # PR replaces them. Phase 7 stops committing the lock.
     Target(
         "hub/agents/gaia/npm/binaries.lock.json",
         "agentVersion",
         re.compile(r'("agentVersion":\s*")([^"]+)(")'),
-        "flagship",
+        "core",
     ),
     Target(
         "hub/agents/gaia/npm/binaries.lock.json",
         "sidecar componentVersion",
         re.compile(r'("sidecar"\s*:\s*\{\s*"componentVersion":\s*")([^"]+)(")'),
-        "flagship",
+        "core",
     ),
     Target(
         "hub/agents/gaia/npm/binaries.lock.json",
         "sidecar baseUrl",
         re.compile(r'("baseUrl":\s*"https?://[^"]*?/agents/gaia/)([^"/]+)(/?")'),
-        "flagship",
+        "core",
+    ),
+    # Optional doc URLs: a version badge, and links pinned to a release tag's
+    # copy of a doc. The CHANGELOG is left out, so past entries keep theirs.
+    *(
+        Target(f"hub/agents/gaia/npm/{name}", what, pattern, "core", count=None)
+        for name in ("README.md", "SPEC.md", "SKILL.md")
+        for what, pattern in (
+            (
+                "version badge",
+                re.compile(r"(img\.shields\.io/badge/version-)([^-]+)(-)"),
+            ),
+            (
+                "pinned doc links",
+                re.compile(r"(/amd/gaia/blob/(?:agent-pkg-gaia-)?v)([^\"/\s)]+)(/)"),
+            ),
+        )
     ),
     # Chat agent: follows its pyproject.toml.
     Target("hub/agents/chat/python/gaia-agent.yaml", "version", _YAML_VERSION, "chat"),
@@ -199,7 +242,7 @@ TARGETS: tuple[Target, ...] = (
         "__version__",
         _PY_VERSION,
         "chat",
-        held=_HELD,
+        held=_CHAT_HELD,
     ),
 )
 
@@ -207,7 +250,7 @@ SOURCE_FILES = {
     "core": CORE_PY,
     "core-floor": CORE_PY,
     "lemonade": CORE_PY,
-    "flagship": FLAGSHIP_INIT,
+    "released": DOCS_JSON,
     "chat": CHAT_PYPROJECT,
 }
 
@@ -216,12 +259,21 @@ class VersionError(Exception):
     """A source or target can't be read: missing, unparseable, or ambiguous."""
 
 
+def select(group: str) -> tuple[Target, ...]:
+    """The targets one of ``GROUPS`` names."""
+    if group not in GROUPS:
+        raise VersionError(
+            f"unknown group '{group}'; expected one of {', '.join(sorted(GROUPS))}"
+        )
+    return tuple(t for t in TARGETS if t.path.startswith(GROUPS[group]))
+
+
 @dataclass(frozen=True)
 class Sources:
     core_base: str
     core_rc: int | None
     lemonade: str
-    flagship: str
+    released: str
     chat: str
 
     @property
@@ -243,7 +295,7 @@ class Sources:
             return self.core_base
         return {
             "lemonade": self.lemonade,
-            "flagship": self.flagship,
+            "released": self.released,
             "chat": self.chat,
         }[target.source]
 
@@ -278,6 +330,37 @@ def _single(root: Path, rel: str, pattern: re.Pattern[str], what: str) -> str:
     return matches[0][1]
 
 
+def version_key(version: str) -> tuple[int, ...]:
+    return tuple(int(p) for p in version.split("."))
+
+
+def released_version(root: Path) -> str:
+    """The newest ``releases/vX.Y.Z`` page docs.json's Release Notes group lists.
+
+    The release PR adds its page there, so this is the release being cut or,
+    once it ships, the latest one. A next-version notes stub is not listed.
+    """
+    try:
+        docs = json.loads(_read(root, DOCS_JSON))
+    except ValueError as e:
+        raise VersionError(f"{DOCS_JSON}: not valid JSON: {e}") from e
+    pages = [
+        page
+        for tab in docs.get("navigation", {}).get("tabs", [])
+        if tab.get("tab") == "Releases"
+        for group in tab.get("groups", [])
+        if group.get("group") == "Release Notes"
+        for page in group.get("pages", [])
+    ]
+    versions = [m.group(1) for m in map(RELEASE_PAGE.match, pages) if m]
+    if not versions:
+        raise VersionError(
+            f"{DOCS_JSON}: the Releases tab's 'Release Notes' group lists no "
+            "releases/vX.Y.Z page"
+        )
+    return max(versions, key=version_key)
+
+
 def read_sources(root: Path) -> Sources:
     core = _single(root, CORE_PY, _PY_VERSION, "__version__")
     m = _CORE_RE.match(core)
@@ -286,16 +369,21 @@ def read_sources(root: Path) -> Sources:
             f"{CORE_PY}: __version__ '{core}' is not X.Y.Z or X.Y.ZrcN (N >= 1)"
         )
     lemonade = _single(root, CORE_PY, _LEMONADE, "LEMONADE_VERSION")
-    flagship = _single(root, FLAGSHIP_INIT, _PY_VERSION, "__version__")
+    released = released_version(root)
+    if version_key(released) > version_key(m.group("base")):
+        raise VersionError(
+            f"{DOCS_JSON} lists releases/v{released}, newer than the "
+            f"{m.group('base')} {CORE_PY} declares. Set __version__ to the release "
+            "being cut, or take that page out of the Releases tab."
+        )
     chat = _single(root, CHAT_PYPROJECT, _TOML_VERSION, "[project] version")
-    for rel, value in ((FLAGSHIP_INIT, flagship), (CHAT_PYPROJECT, chat)):
-        if not _SEMVER_RE.match(value):
-            raise VersionError(f"{rel}: version '{value}' is not X.Y.Z")
+    if not _SEMVER_RE.match(chat):
+        raise VersionError(f"{CHAT_PYPROJECT}: version '{chat}' is not X.Y.Z")
     return Sources(
         core_base=m.group("base"),
         core_rc=int(m.group("rc")) if m.group("rc") else None,
         lemonade=lemonade,
-        flagship=flagship,
+        released=released,
         chat=chat,
     )
 
@@ -306,7 +394,7 @@ def _label(t: Target) -> str:
 
 def _values(text: str, t: Target) -> list[str]:
     values = [m.group(2) for m in t.pattern.finditer(text)]
-    if len(values) != t.count:
+    if t.count is not None and len(values) != t.count:
         raise VersionError(
             f"{_label(t)}: expected {t.count} match(es), found {len(values)}. "
             "The field moved or the format changed; update TARGETS in "
@@ -456,14 +544,34 @@ def main(argv: list[str] | None = None) -> int:
         const="",
         metavar="RC_TAG",
         help="write every field from its source; with vX.Y.Z-rcN, write that RC's "
-        "versions into version.py and the Agent UI package files",
+        "versions into version.py, the Agent UI package files, and the flagship's "
+        "Python and npm versions",
+    )
+    mode.add_argument(
+        "--released",
+        action="store_true",
+        help="print the newest release docs/docs.json lists (what the navbar names)",
+    )
+    ap.add_argument(
+        "--only",
+        choices=sorted(GROUPS),
+        help="check or stamp only this group's fields",
     )
     ap.add_argument("--root", type=Path, default=REPO_ROOT, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
+    if args.released:
+        try:
+            print(released_version(args.root))
+        except VersionError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    targets = select(args.only) if args.only else TARGETS
     if args.stamp:
         try:
-            version = stamp_rc(args.root, args.stamp)
+            version = stamp_rc(args.root, args.stamp, targets)
         except VersionError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return 1
@@ -471,7 +579,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     stamp = args.stamp is not None
-    report = run(args.root, stamp=stamp)
+    report = run(args.root, stamp=stamp, targets=targets)
     return print_report(report, stamp=stamp)
 
 
