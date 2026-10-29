@@ -26,7 +26,10 @@ fetches, and :class:`~gaia.skills.lock.SkillLock` for provenance.
 
 from __future__ import annotations
 
+import shlex
 import shutil
+import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -668,6 +671,13 @@ def code_is_deferred(skill: Skill) -> bool:
     return False
 
 
+def _shell_path(path: Path) -> str:
+    """*path* quoted for pasting into this platform's shell."""
+    if sys.platform == "win32":
+        return subprocess.list2cmdline([str(path)])
+    return shlex.quote(str(path))
+
+
 def deferred_remedy(skill: Skill) -> str:
     """The terminal command(s) that lift :func:`code_is_deferred`, backticked.
 
@@ -680,7 +690,9 @@ def deferred_remedy(skill: Skill) -> str:
     promote = f"`gaia skill promote {skill.name}`"
     if skill.root == ROOT_CLAUDE_PROJECT:
         flag = " --allow-experimental" if skill.gaia.tools else ""
-        return f"`gaia skill import {skill.directory}{flag}`, then {promote}"
+        return (
+            f"`gaia skill import {_shell_path(skill.directory)}{flag}`, then {promote}"
+        )
     return promote
 
 

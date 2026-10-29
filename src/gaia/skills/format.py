@@ -23,6 +23,7 @@ mechanism. See ``docs/plans/skill-format.mdx``.
 from __future__ import annotations
 
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -650,6 +651,10 @@ def parse_skill_file(
 
 _NON_NAME_CHARS = re.compile(r"[^a-z0-9]+")
 
+# Fallback parses already warned about; discovery and load_skill reparse often.
+_WARNED_PROJECT_FALLBACKS: set[tuple[str, str]] = set()
+_WARNED_PROJECT_FALLBACKS_LOCK = threading.Lock()
+
 
 def _project_skill_name(raw: str) -> str:
     """``My_Skill`` -> ``my-skill``: the loadable spelling of a Claude Code name."""
@@ -748,7 +753,11 @@ def parse_project_skill_file(
     skill.path = skill_file
     skill.root = root
     skill.read_only = read_only
-    log.warning(
+    key = (source, str(reason))
+    with _WARNED_PROJECT_FALLBACKS_LOCK:
+        first = key not in _WARNED_PROJECT_FALLBACKS
+        _WARNED_PROJECT_FALLBACKS.add(key)
+    (log.warning if first else log.debug)(
         "%s is not a valid GAIA skill (%s); loaded as Claude Code skill %r.",
         source,
         reason,

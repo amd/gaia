@@ -270,3 +270,142 @@ def test_the_deferral_names_a_command_that_works_for_its_root(
         name="evil", root=root, gaia=SimpleNamespace(tools=tools), directory=directory
     )
     assert deferred_remedy(skill) == expected.format(d=directory)
+
+
+# ── the CLI and the Agent UI list what the agent loads ───────────────────
+
+
+@pytest.fixture
+def in_project(dirs, monkeypatch):
+    """cwd is a subfolder of a git project holding a Claude-Code-only skill."""
+    project, home = dirs
+    (project / ".git").mkdir()
+    _skill(project, "Deploy_Helper", "name: Deploy_Helper\n", "Deploys the app.\n")
+    sub = project / "src" / "pkg"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(sub)
+    monkeypatch.delenv("GAIA_PROJECT_ROOT", raising=False)
+    monkeypatch.setenv("GAIA_HOME", str(home / "gaia-home"))
+    return project, home
+
+
+def test_the_cli_labels_a_project_skill_as_the_agent_does(in_project):
+    from gaia.skills.cli import _manager
+
+    skills = _manager().discover()
+    assert skills["deploy-helper"].root == ROOT_CLAUDE_PROJECT
+
+
+def test_gaia_skill_list_root_claude_project_finds_it(in_project, capsys):
+    import argparse
+
+    from gaia.skills import cli as skill_cli
+
+    parser = argparse.ArgumentParser()
+    skill_cli.add_subparser(parser.add_subparsers(dest="command"))
+    args = parser.parse_args(["skill", "list", "--root", ROOT_CLAUDE_PROJECT])
+    assert skill_cli.handle(args) == 0
+    out = capsys.readouterr().out
+    assert "deploy-helper" in out
+    assert "Deploy_Helper" not in out  # not reported as skipped/invalid
+
+
+def test_the_ui_listing_groups_a_project_skill_and_reports_it_valid(in_project):
+    from gaia.skills.listing import skills_listing
+
+    listing = skills_listing([])
+    rows = {s["name"]: s for s in listing["skills"]}
+    assert rows["deploy-helper"]["source"] == ROOT_CLAUDE_PROJECT
+    assert not any("Deploy_Helper" in path for path in listing["invalid"])
+
+
+def test_outside_a_project_the_cli_keeps_the_unlisted_import(dirs, monkeypatch):
+    project, home = dirs
+    _skill(project, "loose", "name: loose\ndescription: Loose.\n")
+    monkeypatch.chdir(project)  # no .git, no manifest: not a project
+    monkeypatch.delenv("GAIA_PROJECT_ROOT", raising=False)
+    from gaia.skills.cli import _manager
+
+    assert _manager().discover()["loose"].root == ROOT_CLAUDE_IMPORT
+
+
+def test_a_bad_project_root_override_fails_loudly(dirs, monkeypatch, tmp_path):
+    monkeypatch.setenv("GAIA_PROJECT_ROOT", str(tmp_path / "missing"))
+    from gaia.skills.cli import _manager
+
+    with pytest.raises(ValueError, match="GAIA_PROJECT_ROOT"):
+        _manager()
+
+
+# ── warnings are not repeated every turn ─────────────────────────────────
+
+
+def test_the_lenient_parse_warns_once_per_file(dirs, caplog):
+    project, home = dirs
+    path = _skill(project, "Once_Only", "name: Once_Only\n", "Does a thing.\n")
+    with caplog.at_level(logging.DEBUG, logger="gaia.skills.format"):
+        for _ in range(3):
+            parse_project_skill_file(path, root=ROOT_CLAUDE_PROJECT)
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "Once_Only" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+
+
+def test_a_changed_reason_warns_again(dirs, caplog):
+    project, home = dirs
+    path = _skill(project, "Twice", "name: Twice\n", "Does a thing.\n")
+    with caplog.at_level(logging.WARNING, logger="gaia.skills.format"):
+        parse_project_skill_file(path, root=ROOT_CLAUDE_PROJECT)
+        (path / "SKILL.md").write_text(
+            "---\nname: Twice\ndescription: Does a thing.\n---\n\nBody.\n",
+            encoding="utf-8",
+        )
+        parse_project_skill_file(path, root=ROOT_CLAUDE_PROJECT)
+    assert len([r for r in caplog.records if "Twice" in r.getMessage()]) == 2
+
+
+def test_an_unusable_project_skill_is_warned_once_not_logged_as_error(dirs, caplog):
+    project, home = dirs
+    _skill(project, "empty", "name: empty\n", "")
+    manager = _manager(project, home)
+    with caplog.at_level(logging.DEBUG, logger="gaia.skills.manager"):
+        manager.reload()
+        manager.reload()
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+    assert any("empty" in p for p in manager.discovery_errors)
+
+
+# ── the remedy is a command that pastes ──────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "folder", ["My Repo", "it's here", "a;b & c", "$HOME", "plain"]
+)
+def test_the_import_remedy_survives_a_path_with_shell_characters(tmp_path, folder):
+    import shlex
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+
+    from gaia.skills.capture import deferred_remedy
+
+    directory = tmp_path / folder / ".claude" / "skills" / "evil"
+    skill = SimpleNamespace(
+        name="evil",
+        root=ROOT_CLAUDE_PROJECT,
+        gaia=SimpleNamespace(tools=[]),
+        directory=directory,
+    )
+    command = deferred_remedy(skill).split("`")[1]
+    if sys.platform == "win32":
+        assert command == "gaia skill import " + subprocess.list2cmdline(
+            [str(directory)]
+        )
+        if " " in str(directory):
+            assert f'"{directory}"' in command
+    else:
+        assert shlex.split(command) == ["gaia", "skill", "import", str(directory)]

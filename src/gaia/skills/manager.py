@@ -105,6 +105,14 @@ def _parse(entry: Path, root: SkillRoot) -> Skill:
     return parse_skill_metadata(entry, root=root.label, read_only=root.read_only)
 
 
+def default_project_dir() -> Optional[Path]:
+    """The project an agent started here would map, so tools list its skills alike."""
+    from gaia.agents.base.project_map import resolve_project_root
+
+    root = resolve_project_root()
+    return Path(root) if root else None
+
+
 def claude_skills_dirs(project_dir: Optional[Path] = None) -> list[Path]:
     """Return the read-only Claude Code import roots (project, then user)."""
     project = Path(project_dir) if project_dir is not None else Path.cwd()
@@ -227,7 +235,7 @@ class SkillManager:
                         skill.body = ""
                     except SkillError as exc:
                         errors[str(entry)] = str(exc)
-                        if root.label == ROOT_CLAUDE_IMPORT:
+                        if root.label in CLAUDE_ROOTS:
                             import_errors[str(entry)] = str(exc)
                             _warn_invalid_import_once(entry, str(exc))
                         else:

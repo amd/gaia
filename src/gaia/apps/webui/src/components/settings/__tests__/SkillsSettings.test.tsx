@@ -87,6 +87,22 @@ describe('SkillsSettings', () => {
         expect(within(imported).queryByText('web-research')).not.toBeInTheDocument();
     });
 
+    it("shows the project's own skills apart from other Claude Code skills", async () => {
+        mockedApi.listSkills.mockResolvedValue({
+            skills: [
+                skill('deploy-helper', 'Deploys the app', null, 'claude-project'),
+                skill('old-helper', 'Imported', null, 'claude-import'),
+            ],
+            invalid: {},
+        });
+        render(<SkillsSettings onUseSkill={vi.fn()} />);
+        const project = await screen.findByRole('region', { name: 'From this project' });
+        expect(within(project).getByText('deploy-helper')).toBeInTheDocument();
+        expect(within(project).queryByText('old-helper')).not.toBeInTheDocument();
+        const imported = screen.getByRole('region', { name: 'From Claude Code' });
+        expect(within(imported).queryByText('deploy-helper')).not.toBeInTheDocument();
+    });
+
     it('says how to add your own skills when there are none', async () => {
         mockedApi.listSkills.mockResolvedValue({ skills: [skill('web-research', 'Research', null, 'agent-bundled')], invalid: {} });
         render(<SkillsSettings onUseSkill={vi.fn()} />);

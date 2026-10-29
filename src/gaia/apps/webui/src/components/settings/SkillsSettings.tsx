@@ -15,6 +15,11 @@ const GROUPS: Array<{ source: SkillSource; title: string; note: string; empty?: 
         empty: 'None yet. Add a folder with a SKILL.md file to ~/.gaia/skills and reopen this page.',
     },
     {
+        source: 'claude-project',
+        title: 'From this project',
+        note: "In the .claude/skills folder of the project GAIA is working in. Their instructions load; any tools or commands they ask for stay off until you import them.",
+    },
+    {
         source: 'claude-import',
         title: 'From Claude Code',
         note: 'Found in your Claude Code skill folders. GAIA reads them in place and does not change them.',
