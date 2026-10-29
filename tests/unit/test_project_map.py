@@ -522,6 +522,44 @@ def test_prompt_says_building_while_a_search_started_build_runs(repo):
     assert "not built" not in text
 
 
+def test_every_session_on_one_index_says_building_while_one_builds(
+    repo, tmp_path, monkeypatch
+):
+    """Two chats on one repo: the one that did not start the build must not
+    read "not built" and be told to start another."""
+    from gaia.agents.tools import code_index_tools
+    from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+
+    class _Agent(_FakeAgent, CodeIndexToolsMixin):
+        pass
+
+    class _SlowIndex(_FakeSDK):
+        def __init__(self):
+            super().__init__(indexed=False)
+            self._cache_dir = str(tmp_path / "shared-cache")
+            self.release = threading.Event()
+            self.progress = {"embedded": 0, "to_embed": 0}
+
+        def index_repository(self):
+            self.release.wait(5)
+
+    monkeypatch.setattr(code_index_tools, "_FIRST_BUILD_WAIT_SECONDS", 0.01)
+    agents = [_Agent(repo, indexed=False, auto_index=False) for _ in range(2)]
+    for agent in agents:
+        agent.sdk = _SlowIndex()
+        agent._repo_path = str(repo)
+    try:
+        agents[0]._code_index_build(agents[0].sdk)
+        for agent in agents:
+            text = agent.get_project_map_system_prompt()
+            assert "building now in the background" in text
+            assert "not built" not in text
+    finally:
+        for agent in agents:
+            agent.sdk.release.set()
+        code_index_tools._BUILDS.clear()
+
+
 def test_prompt_says_not_built_when_no_build_runs(repo):
     agent = _FakeAgent(repo, indexed=False, auto_index=False)
     agent._code_index_build_running = lambda sdk: None

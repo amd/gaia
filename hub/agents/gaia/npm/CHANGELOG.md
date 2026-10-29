@@ -97,8 +97,10 @@ Python CLI 0.25.2+ on `PATH`. Integrators: the sidecar contract is now
   15-minute limit, saved nothing, and ended the turn with an empty answer —
   every time. The build now runs in the background and each search reports its
   progress until it is done, so the agent falls back to text search meanwhile.
-  `index_codebase` and the task-start auto-index wait for that build instead
-  of embedding the repository a second time alongside it.
+  `index_codebase` and the task-start auto-index report that build instead
+  of embedding the repository a second time alongside it. The build is shared
+  by every chat on the same repository, so a second chat's search reports it
+  too and its clear is refused until the build is done.
 
 - **An old failure in memory no longer stops a request you make now.** A note
   like "this page returned 503, don't waste tool calls on it" was obeyed as a

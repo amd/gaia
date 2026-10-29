@@ -46,12 +46,17 @@ _FIRST_BUILD_WAIT_SECONDS = 60
 _BUILD_LOCK = threading.Lock()
 
 
-def _same_index(a: Any, b: Any) -> bool:
-    """Do two SDKs build the same on-disk index (a fresh SDK for one repo does)?"""
-    if a is b:
-        return True
-    cache_a = getattr(a, "_cache_dir", None)
-    return cache_a is not None and cache_a == getattr(b, "_cache_dir", None)
+#: One build per on-disk index, shared by every agent instance in the process:
+#: each chat session, and each rebuild after a model change, has its own mixin.
+_BUILDS: Dict[Any, Dict[str, Any]] = {}
+
+
+def _index_key(sdk: Any) -> Any:
+    """The key two SDKs share when they build the same on-disk index."""
+    cache_dir = getattr(sdk, "_cache_dir", None)
+    if isinstance(cache_dir, (str, os.PathLike)):
+        return ("cache_dir", os.path.normcase(os.path.abspath(cache_dir)))
+    return ("sdk", sdk)
 
 
 def _missing_deps_msg() -> str:
@@ -185,10 +190,9 @@ class CodeIndexToolsMixin:
 
     def _code_index_build_running(self, sdk: Any) -> Optional[str]:
         """The "still building" reply if a build of *sdk*'s index is running."""
-        build = getattr(self, "_code_index_job", None)
+        with _BUILD_LOCK:
+            build = _BUILDS.get(_index_key(sdk))
         if build is None or not build["thread"].is_alive():
-            return None
-        if not _same_index(build["sdk"], sdk):
             return None
         progress = getattr(build["sdk"], "progress", None) or {}
         total = progress.get("to_embed", 0)
@@ -221,13 +225,14 @@ class CodeIndexToolsMixin:
         ``result`` is the ``IndexResult`` of a finished build; otherwise
         ``refusal`` says how far it has got, or why it failed.
         """
+        key = _index_key(sdk)
         with _BUILD_LOCK:
-            build = getattr(self, "_code_index_job", None)
+            build = _BUILDS.get(key)
             started = False
             # An explicit index_codebase refreshes; it never replays an old outcome.
             if build is not None and until_done and not build["thread"].is_alive():
                 build = None
-            if build is None or not _same_index(build["sdk"], sdk):
+            if build is None:
                 build = {"sdk": sdk, "error": None, "result": None}
 
                 def _run() -> None:
@@ -240,7 +245,7 @@ class CodeIndexToolsMixin:
                 build["thread"] = threading.Thread(
                     target=_run, name="gaia-code-index-build", daemon=True
                 )
-                self._code_index_job = build
+                _BUILDS[key] = build
                 build["thread"].start()
                 started = True
         if until_done and started:
@@ -255,8 +260,8 @@ class CodeIndexToolsMixin:
             return running, None
         with _BUILD_LOCK:
             # Finished: the next call with no index starts a fresh build.
-            if getattr(self, "_code_index_job", None) is build:
-                self._code_index_job = None
+            if _BUILDS.get(key) is build:
+                del _BUILDS[key]
         if build["error"] is not None:
             return (
                 json.dumps(
@@ -272,12 +277,13 @@ class CodeIndexToolsMixin:
             )
         return None, build["result"]
 
-    def _drop_finished_code_index_build(self) -> None:
+    def _drop_finished_code_index_build(self, sdk: Any) -> None:
         """Forget a finished build once its index is on disk and in use."""
+        key = _index_key(sdk)
         with _BUILD_LOCK:
-            build = getattr(self, "_code_index_job", None)
+            build = _BUILDS.get(key)
             if build is not None and not build["thread"].is_alive():
-                self._code_index_job = None
+                del _BUILDS[key]
 
     def register_code_index_tools(self) -> None:
         """Register code-index tools with the agent's tool registry."""
@@ -417,7 +423,7 @@ class CodeIndexToolsMixin:
                     if refusal is not None:
                         return refusal
                 else:
-                    self._drop_finished_code_index_build()
+                    self._drop_finished_code_index_build(sdk)
                 results = sdk.search(query, scope=scope, top_k=top_k)
                 output = []
                 for r in results:
@@ -494,6 +500,7 @@ class CodeIndexToolsMixin:
 
             try:
                 sdk.clear_index()
+                self._drop_finished_code_index_build(sdk)
                 self._code_index_sdk = None
                 return json.dumps({"status": "ok", "message": "Index cleared"})
             except Exception as e:
