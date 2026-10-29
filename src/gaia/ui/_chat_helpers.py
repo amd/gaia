@@ -4975,7 +4975,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 captured_steps if (keep_steps and captured_steps) else None
             )
             if sse_type == "error":
-                db.add_message(request.session_id, "assistant", content, ends_turn=True)
+                msg_id = db.add_message(
+                    request.session_id, "assistant", content, ends_turn=True
+                )
+                link_warning = (
+                    turn_box["recording"].link_message(msg_id)
+                    if "recording" in turn_box
+                    else None
+                )
+                if link_warning:
+                    yield _undo_link_warning_event(link_warning)
                 yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
             else:
                 failed = sse_type == "failed"
@@ -5018,7 +5027,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         else:
             error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
         try:
-            db.add_message(request.session_id, "assistant", error_msg, ends_turn=True)
+            msg_id = db.add_message(
+                request.session_id, "assistant", error_msg, ends_turn=True
+            )
+            link_warning = (
+                turn_box["recording"].link_message(msg_id)
+                if "recording" in turn_box
+                else None
+            )
+            if link_warning:
+                logger.warning("Could not link undo recording: %s", link_warning)
         except Exception as exc:
             logger.error("Could not persist chat error: %s", exc)
         error_data = json.dumps({"type": "error", "content": error_msg})

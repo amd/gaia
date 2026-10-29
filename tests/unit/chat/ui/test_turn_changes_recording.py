@@ -190,3 +190,47 @@ def test_an_older_sidecar_is_not_asked_to_record(relayed, monkeypatch):
     _run_relayed_turn(db, session)
     assert sent == [None]
     assert fs.list_turns(session["id"]) == []
+
+
+class _EmptyEditingAgent(_EditingAgent):
+    def process_query(self, _message, **_kwargs):
+        fs.before_change(self.target, "edit_file")
+        self.target.write_bytes(b"edited before an empty reply")
+        return ""
+
+
+def _error_turn(db, session, target, monkeypatch, backend_problem):
+    agent = _EmptyEditingAgent("M-GGUF", target)
+    helpers._store_agent(session["id"], "M-GGUF", [], agent, "chat")
+    monkeypatch.setattr(helpers, "_empty_answer_backend_problem", backend_problem)
+    request = ChatRequest(session_id=session["id"], message="edit it", stream=True)
+
+    async def drain():
+        run = types.SimpleNamespace(handler=None)
+        async for _ in helpers._stream_chat_impl(run, db, session, request):
+            pass
+
+    asyncio.run(drain())
+    (turn,) = fs.list_turns(session["id"])
+    assistant = [m for m in db.get_messages(session["id"]) if m["role"] == "assistant"]
+    assert assistant
+    assert turn["message_id"] == assistant[-1]["id"]
+    assert turn["files"][0]["path"] == str(target)
+
+
+def test_empty_backend_error_turn_links_file_changes_for_undo(setup, monkeypatch):
+    db, session, target = setup
+
+    async def backend_problem(*_args):
+        return "backend failed"
+
+    _error_turn(db, session, target, monkeypatch, backend_problem)
+
+
+def test_unexpected_error_turn_links_file_changes_for_undo(setup, monkeypatch):
+    db, session, target = setup
+
+    async def backend_problem(*_args):
+        raise RuntimeError("health check failed")
+
+    _error_turn(db, session, target, monkeypatch, backend_problem)
