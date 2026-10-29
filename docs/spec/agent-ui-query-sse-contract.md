@@ -83,6 +83,8 @@ net-new agent instrumentation.
 | `session_id` | string, `^[A-Za-z0-9_-]{1,128}$` | no | Opaque conversation id, host-minted once per conversation and reused across turns (#2829). **Send only to a peer at contract ≥ 2.12** — an older sidecar 422s the unknown field (see §7). Omitted ⇒ today's stateless behaviour: a throwaway agent per call. Present ⇒ the run resolves the SAME agent every other turn on this id used, so a reference to something an earlier turn surfaced (e.g. "reply to number 1") can resolve. See §2.4. |
 | `reasoning` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.22** — an older sidecar 422s the unknown field (see §7). `true` streams the model's reasoning as `reasoning` events (§4) instead of folding it into `status` lines, for a client that shows reasoning on its own. Omitted ⇒ `false`, today's behaviour. |
 | `documents` | array of strings (absolute file paths) | no | **Flagship (`gaia`) only, contract ≥ 2.16** (#4166) — the email agent and an older flagship 422 the unknown field (see §7). The files the user attached to this conversation. Send the whole set on every turn; the agent indexes the ones it has not indexed yet before the turn runs, so a file attached mid-conversation is read on the next turn. Each path is granted as that exact file — never its folder — and a relative path is a 422. A file that is missing, a folder, or a secret the path policy refuses is named as not indexed in the turn's `index_documents` step, and the turn still runs. See §2.5. |
+| `allowed_paths` | array of absolute path strings | no | **Flagship (`gaia`) only, contract ≥ 2.18** — caller-computed conversation scope. A retained session gains newly supplied entries; `GAIA_ALLOWED_PATHS` can only narrow it. Send absolute paths only; this is an access allowlist, not the chat working directory. |
+| `memory` | `"on"` \| `"private"` \| `"off"` | no | **Flagship (`gaia`) only, contract ≥ 2.18** — controls whether this turn may write memory. `private` and `off` suppress all writes, including errors and lessons. Send it every turn when the caller owns the setting; omit it to retain the agent's current mode. |
 
 ```jsonc
 // JSON Schema (draft 2020-12) — request body
@@ -112,6 +114,8 @@ net-new agent instrumentation.
     "can_answer_questions": { "type": "boolean", "default": false },
     "session_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$" },
     "documents": { "type": "array", "items": { "type": "string" } },
+    "allowed_paths": { "type": "array", "items": { "type": "string" } },
+    "memory": { "enum": ["on", "private", "off"] },
     "reasoning": { "type": "boolean", "default": false }
   }
 }
