@@ -6,6 +6,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.2]
+
+Released with GAIA 0.25.2, and requires the `gaia`
+Python CLI 0.25.2+ on `PATH`. Integrators: the sidecar contract is now
+**2.24**; clients built for 2.18 keep working, and the new
+`/query` fields are refused with `422` by older binaries, so probe
+`/version` before sending them.
+
+- **Memory downloads its embedding model when it is missing.** On the first
+  start that uses memory, the agent now fetches the required embedding model
+  from Lemonade instead of silently running without memory; the initial
+  download can be about 300 MB.
+- **Unknown or misplaced switches are refused.** `gaia --forse` and
+  `gaia fetch --developer-mode` now exit 2 instead of silently starting the TUI;
+  pass terminal-UI arguments after a bare `--`.
+
 - **The Agent UI's "Under the hood" figures cover GAIA chats.** It said every
   answer was "not measured", because only the agent saw its own step timings.
   `final` now carries `performance` with them: the turn's model and tool

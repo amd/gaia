@@ -1360,14 +1360,30 @@ def test_a_validation_error_never_echoes_a_secret_from_the_tool_schema(
     assert secret not in text
 
 
-def test_a_reused_pid_is_never_taken_for_the_server():
-    """Only a process created after this launch can be the server we track."""
-    t = StdioTransport(sys.executable, args=["-c", "pass"])
-    t._started_at = time.time()
-    # This test's own process existed long before the "launch".
-    assert t._own_process(os.getpid()) is None
-    t._started_at = 0.0
-    assert t._own_process(os.getpid()) is not None
+def test_the_popen_returned_by_launch_is_tracked_despite_a_coarse_timestamp(
+    tmp_path, monkeypatch
+):
+    """A launch must not be rejected when psutil reports an old create time."""
+    real_process = stdio_module.psutil.Process
+
+    class _CoarseTimestampProcess:
+        def __init__(self, pid=None):
+            # Keep the fixture's no-argument Process() call working while
+            # making the launched-process timestamp deliberately coarse.
+            self._process = real_process() if pid is None else real_process(pid)
+
+        def __getattr__(self, name):
+            return getattr(self._process, name)
+
+        def create_time(self):
+            return 0.0  # Any create time must not reject the launched process.
+
+    monkeypatch.setattr(stdio_module.psutil, "Process", _CoarseTimestampProcess)
+    transport = _transport(_stub(tmp_path, "time.sleep(3600)"))
+    try:
+        assert transport._ps_server is not None
+    finally:
+        transport.disconnect()
 
 
 @pytest.mark.parametrize(

@@ -696,7 +696,15 @@ async def confirm_tool(request: ToolConfirmRequest) -> Dict[str, Any]:
         raise HTTPException(
             status_code=404, detail="No active run awaiting confirmation."
         )
-    session.handler.resolve_tool_confirmation(request.approved)
+    delivered = session.handler.resolve_tool_confirmation(request.approved)
+    if not delivered:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "No tool confirmation is pending on this run"
+                " — it was already answered, timed out, or never asked."
+            ),
+        )
     return {"status": "ok", "approved": request.approved}
 
 
