@@ -30,7 +30,15 @@ runs:
         set -euo pipefail
         python -m pip install --upgrade build
         rm -rf "${{ inputs.path }}/dist"
-        python -m build --outdir "${{ inputs.path }}/dist" "${{ inputs.path }}"
+        if [ "${{ inputs.dist }}" = "gaia-agent-gaia" ]; then
+          # The starter pack lives at hub/skills, outside the package root.
+          # Stage it only for the build and remove it in a finally block so
+          # editable checkouts never gain untracked copies of the pack.
+          python "${{ inputs.path }}/packaging/stage_starter_skills.py" \
+            --build "${{ inputs.path }}/dist"
+        else
+          python -m build --outdir "${{ inputs.path }}/dist" "${{ inputs.path }}"
+        fi
 
     - name: Verify metadata declares the amd-gaia framework dependency
       shell: bash
@@ -56,6 +64,14 @@ runs:
             )
         print(f"{dist_name}: amd-gaia dependency present")
         PYEOF
+
+    - name: Verify flagship starter skills are in the wheel
+      if: inputs.dist == 'gaia-agent-gaia'
+      shell: bash
+      run: |
+        set -euo pipefail
+        python "${{ inputs.path }}/packaging/check_wheel_starter_skills.py" \
+          "${{ inputs.path }}/dist"/*.whl
 
     - name: Check with twine
       shell: bash
