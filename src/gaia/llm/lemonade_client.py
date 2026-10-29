@@ -9,6 +9,7 @@ OpenAI-compatible API and additional functionality.
 """
 
 import atexit
+import contextvars
 import json
 import logging
 import os
@@ -24,6 +25,7 @@ import time
 import weakref
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from threading import Event, Thread
@@ -69,6 +71,7 @@ from gaia.llm.retry import (
     current_retry_listener,
     hosted_reply_timeout,
     http_body_text,
+    model_retry_notices,
     retry_state_of,
     sleep_unless_cancelled,
     tag_http_failure,
@@ -2157,6 +2160,265 @@ _CLOUD_NON_STREAMING: set = set()
 
 _NON_STREAMING_LOADED = False
 
+# Native tool-calling support learned by probe, ``{model_id: bool}``. Consulted
+# only when the catalog's labels don't advertise ``tool-calling``.
+_CLOUD_TOOL_CALLING: Dict[str, bool] = {}
+# When each model's probe last failed, as epoch seconds.
+_CLOUD_PROBE_FAILURES: Dict[str, float] = {}
+_TOOL_CALLING_LOADED = False
+
+
+def _parse_utc(value: str) -> Optional[float]:
+    try:
+        return (
+            datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+            .replace(tzinfo=timezone.utc)
+            .timestamp()
+        )
+    except (TypeError, ValueError):
+        log.warning(
+            f"Ignoring an unreadable probe-failure time in gateway.json: {value!r}"
+        )
+        return None
+
+
+def _load_tool_calling() -> None:
+    """Seed the learned tool-calling map from ``gateway.json``, once per process."""
+    global _TOOL_CALLING_LOADED
+    if _TOOL_CALLING_LOADED:
+        return
+    try:
+        from gaia.llm.gateway import GatewayState
+
+        state = GatewayState.load()
+    except Exception as e:  # noqa: BLE001 - a learned preference, never fatal
+        log.warning(f"Could not read learned tool-calling support: {e}")
+        _TOOL_CALLING_LOADED = True  # an unreadable file is not retried per call
+        return
+    with _CLOUD_LOCK:
+        # Probed answers from this process win over the file's older ones.
+        loaded = {m: True for m in state.tool_calling_models}
+        loaded.update({m: False for m in state.no_tool_calling_models})
+        loaded.update(_CLOUD_TOOL_CALLING)
+        _CLOUD_TOOL_CALLING.update(loaded)
+        for model, at in state.tool_calling_probe_failures.items():
+            when = _parse_utc(at)
+            if when is not None and model not in _CLOUD_PROBE_FAILURES:
+                _CLOUD_PROBE_FAILURES[model] = when
+        # Marked only once filled, so a concurrent reader never sees it empty.
+        _TOOL_CALLING_LOADED = True
+
+
+def learned_tool_calling(model_id: Optional[str]) -> Optional[bool]:
+    """What a probe found about *model_id*'s native tool calling, or None."""
+    if not model_id:
+        return None
+    _load_tool_calling()
+    return _CLOUD_TOOL_CALLING.get(model_id)
+
+
+def record_tool_calling(model_id: str, supported: bool) -> None:
+    """Remember a probe result, in memory and in ``gateway.json``."""
+    _load_tool_calling()
+    with _CLOUD_LOCK:
+        _CLOUD_TOOL_CALLING[model_id] = supported
+        _CLOUD_PROBE_FAILURES.pop(model_id, None)
+        yes = sorted(m for m, ok in _CLOUD_TOOL_CALLING.items() if ok)
+        no = sorted(m for m, ok in _CLOUD_TOOL_CALLING.items() if not ok)
+    try:
+        from gaia.llm.gateway import GatewayState
+
+        state = GatewayState.load()
+        state.tool_calling_models, state.no_tool_calling_models = yes, no
+        state.tool_calling_probe_failures.pop(model_id, None)
+        state.save()
+    except Exception as e:  # noqa: BLE001 - the in-memory map still holds
+        log.warning(f"Could not persist tool-calling support for {model_id}: {e}")
+
+
+_PROBE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "report_ready",
+        "description": "Report that you are ready.",
+        "parameters": {
+            "type": "object",
+            "properties": {"ready": {"type": "boolean"}},
+            "required": ["ready"],
+        },
+    },
+}
+
+
+#: The probe runs while a caller waits on readiness; it must not hang it.
+#: One attempt may take ``PROBE_TIMEOUT_S``, and no retry starts after that
+#: much time has passed, so the whole probe ends within twice that.
+PROBE_TIMEOUT_S = 15
+
+#: A failed or inconclusive probe is not repeated for this long, so a down
+#: gateway costs one slow start, not one per launch.
+PROBE_RETRY_AFTER_S = 60 * 60
+
+
+def _probe_failure_age(model_id: str) -> Optional[float]:
+    """Seconds since *model_id*'s tool-calling probe last failed, or None."""
+    _load_tool_calling()
+    with _CLOUD_LOCK:
+        at = _CLOUD_PROBE_FAILURES.get(model_id)
+    return None if at is None else max(0.0, time.time() - at)
+
+
+def probe_recently_failed(model_id: Optional[str]) -> bool:
+    """Whether *model_id*'s probe failed within ``PROBE_RETRY_AFTER_S``."""
+    if not model_id:
+        return False
+    age = _probe_failure_age(model_id)
+    return age is not None and age < PROBE_RETRY_AFTER_S
+
+
+def record_probe_failure(model_id: str) -> None:
+    """Remember that *model_id*'s probe failed, in memory and in ``gateway.json``."""
+    _load_tool_calling()
+    now = time.time()
+    with _CLOUD_LOCK:
+        _CLOUD_PROBE_FAILURES[model_id] = now
+    try:
+        from gaia.llm.gateway import GatewayState
+
+        state = GatewayState.load()
+        state.tool_calling_probe_failures[model_id] = datetime.fromtimestamp(
+            now, timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        state.save()
+    except Exception as e:  # noqa: BLE001 - the in-memory record still holds
+        log.warning(f"Could not persist the failed probe of {model_id}: {e}")
+
+
+#: Monotonic clock for the probe's retry cut-off; tests replace it.
+_probe_clock = time.monotonic
+
+#: Hard limit on the whole probe: an attempt started just before the retry
+#: cut-off still gets its own ``PROBE_TIMEOUT_S``.
+PROBE_DEADLINE_S = 2 * PROBE_TIMEOUT_S
+_PROBE_POLL_S = 0.25
+
+# Set while the probe runs: a stall there is the probe's to report, not a
+# turn the user must resend.
+_QUIET_STALL: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "gaia_quiet_stall", default=False
+)
+
+
+def probe_cloud_tool_calling(client: "LemonadeClient", model_id: str) -> Optional[bool]:
+    """Ask *model_id* to call a trivial tool once; record and return whether it did.
+
+    ``None`` when the reply proves nothing (cut off at the token limit, or
+    empty, as a reasoning model can be): no answer is recorded. Raises
+    ``LemonadeClientError`` when the request itself fails, so a network error
+    is never recorded as "no tool calling".
+
+    The whole probe ends within ``PROBE_DEADLINE_S``, however the gateway
+    behaves: no retry starts after ``PROBE_TIMEOUT_S``, and a request still
+    open at the deadline is abandoned.
+    """
+    started = _probe_clock()
+    outer_cancel = current_cancel_check()
+    abandoned = threading.Event()
+
+    def stopped() -> bool:
+        return outer_cancel is not None and bool(outer_cancel())
+
+    def out_of_time() -> bool:
+        return (
+            abandoned.is_set()
+            or stopped()
+            or _probe_clock() - started >= PROBE_TIMEOUT_S
+        )
+
+    listener = current_retry_listener() or (lambda _notice: None)
+    outcome: Dict[str, Any] = {}
+    done = threading.Event()
+
+    def run() -> None:
+        _QUIET_STALL.set(True)
+        try:
+            with model_retry_notices(listener, is_cancelled=out_of_time):
+                outcome["response"] = client.chat_completions(
+                    model=model_id,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": "Call the report_ready tool with ready=true.",
+                        }
+                    ],
+                    tools=[_PROBE_TOOL],
+                    max_tokens=1024,
+                    stream=False,
+                    auto_download=False,
+                    timeout=PROBE_TIMEOUT_S,
+                )
+        except BaseException as e:  # pylint: disable=broad-except
+            outcome["error"] = e  # re-raised on the caller's thread below
+        finally:
+            done.set()
+
+    context = contextvars.copy_context()
+    threading.Thread(
+        target=context.run, args=(run,), name="gaia-tool-calling-probe", daemon=True
+    ).start()
+    deadline = time.monotonic() + PROBE_DEADLINE_S
+    while not done.wait(_PROBE_POLL_S):
+        if stopped() or time.monotonic() >= deadline:
+            abandoned.set()  # the worker starts no further attempt
+            if stopped():
+                raise ToolCallingProbeStopped(
+                    f"Native tool-calling probe for {model_id} was stopped"
+                )
+            raise LemonadeClientError(
+                f"Native tool-calling probe for {model_id} got no answer within "
+                f"{PROBE_DEADLINE_S} s"
+            )
+
+    error = outcome.get("error")
+    if error is not None:
+        if stopped():
+            raise ToolCallingProbeStopped(
+                f"Native tool-calling probe for {model_id} was stopped"
+            ) from error
+        stall = error if isinstance(error, StreamStalledError) else error.__cause__
+        if isinstance(stall, StreamStalledError):
+            raise LemonadeClientError(
+                f"Native tool-calling probe for {model_id} got no answer within "
+                f"{PROBE_TIMEOUT_S} s"
+            ) from error
+        if isinstance(error, LemonadeClientError):
+            raise error
+        if isinstance(
+            error, (requests.exceptions.RequestException, StreamCancelledError)
+        ):
+            raise LemonadeClientError(
+                f"Native tool-calling probe for {model_id} failed after "
+                f"{_probe_clock() - started:.0f}s: {error}"
+            ) from error
+        raise error
+    response = outcome["response"]
+    choice = (response.get("choices") or [{}])[0]
+    message = choice.get("message") or {}
+    calls = message.get("tool_calls") or []
+    if any((c.get("function") or {}).get("name") == "report_ready" for c in calls):
+        supported = True
+    elif choice.get("finish_reason") == "stop" and (message.get("content") or calls):
+        supported = False  # answered, cleanly and fully, without calling it
+    else:
+        log.info(
+            f"Native tool-calling probe for {model_id} was inconclusive "
+            f"(finish_reason={choice.get('finish_reason')!r}); not recorded"
+        )
+        return None
+    record_tool_calling(model_id, supported)
+    log.info(f"Native tool calling for {model_id}: {supported} (probed)")
+    return supported
+
 
 def _load_non_streaming() -> None:
     """Seed the learned set from ``~/.gaia/gateway.json``, once per process.
@@ -2333,8 +2595,10 @@ def is_tool_calling_model(model_id: Optional[str]) -> bool:
             return mr.tool_calling
     cloud = _CLOUD_MODELS.get(model_id)
     if cloud is not None:
-        # Gateways advertise this per model; trust them over the GGUF default.
-        return bool(cloud["tool_calling"])
+        # A label is authoritative; without one, what a probe learned decides.
+        if cloud["tool_calling"]:
+            return True
+        return bool(learned_tool_calling(model_id))
     return True  # Unknown GGUF: optimistic default per Tier 0 findings
 
 
@@ -2466,6 +2730,10 @@ def _chosen_backend_hint(backend: Optional[str]) -> str:
 
 class LemonadeClientError(Exception):
     """Base exception for Lemonade client errors."""
+
+
+class ToolCallingProbeStopped(LemonadeClientError):
+    """The user pressed Stop during the probe: it proved nothing about the model."""
 
 
 class LemonadeAuthError(LemonadeClientError):
@@ -3672,19 +3940,22 @@ class LemonadeClient:
         )
         self._replay_cloud_key(model)
 
-    def _replay_cloud_key(self, model: Optional[str]) -> None:
+    def _replay_cloud_key(self, model: Optional[str]) -> bool:
         """Give a restarted server the kept key for *model*'s cloud provider.
 
         Lemonade holds cloud keys in memory only, so without this every cloud
         model 404s until the user relaunches. A failed replay is logged and the
         turn goes ahead: its own error then names the unavailable model.
+
+        Returns whether the provider is usable afterwards (True when *model*
+        needs no kept key).
         """
         from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, ensure_authenticated
         from gaia.llm.gateway import GatewayError
 
         provider = self.cloud_model_provider(model or self.model or "")
         if provider not in PROVIDERS:
-            return
+            return True
         try:
             usable = ensure_authenticated(provider, client=self)
         except (CloudKeyError, GatewayError, requests.RequestException) as e:
@@ -3692,13 +3963,14 @@ class LemonadeClient:
                 f"Could not give the restarted Lemonade Server the kept {provider} "
                 f"key: {e}"
             )
-            return
+            return False
         if not usable:
             self.log.warning(
                 f"The restarted Lemonade Server still lists no {provider} models; "
                 f"reconnect {provider} in the TUI's /provider panel or the Agent "
                 "UI's Settings > Model."
             )
+        return bool(usable)
 
     def launch_server(self, log_level="info", background="none", ctx_size=None):
         """
@@ -4998,7 +5270,7 @@ class LemonadeClient:
             except StreamStalledError as e:
                 state = retry_state_of(e)
                 message = e.describe(state.attempts if state else 1)
-                self.log.error(message)
+                (self.log.debug if _QUIET_STALL.get() else self.log.error)(message)
                 if state is None:
                     raise LemonadeClientError(message) from e
                 raise attach_retry_state(LemonadeClientError(message), state) from e
@@ -6620,6 +6892,10 @@ class LemonadeClient:
                         on_progress(event)
                         complete = complete or event.get("event") == "complete"
                         reported_error = reported_error or event.get("event") == "error"
+                except ModelDownloadCancelledError:
+                    # Stop is not a failed download: callers need to stop their
+                    # own work instead of treating it as a retryable error.
+                    raise
                 except LemonadeClientError as e:
                     if not reported_error:
                         on_progress({"event": "error", "error": str(e)})
@@ -6644,6 +6920,8 @@ class LemonadeClient:
                 model_name, timeout=timeout, show_progress=show_progress
             )
 
+        except ModelDownloadCancelledError:
+            raise
         except Exception as e:
             self.log.error(f"Failed to ensure model downloaded: {e}")
             return False

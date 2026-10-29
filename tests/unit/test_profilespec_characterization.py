@@ -16,10 +16,10 @@ never hand-typed. If a golden is wrong, this whole contract is corrupted; do
 not "fix" a failing comparison by editing the JSON unless you have re-verified
 the new golden is itself a real harness capture.
 
-The two ``test_*_is_not_yet_declarative`` smoke tests are EXPECTED TO FAIL on
-current main (the if/elif chain is still there) — that failure is the point.
-They flip to green once the ProfileSpec table (Increment 2) lands. Do not
-weaken them to a softer check to make them pass early.
+The two structural smoke tests verify that the current ProfileSpec implementation
+stays declarative rather than regressing to profile-specific branching. They are
+expected to pass in the installed chat package lane; keep them strict so a future
+regression is visible.
 """
 
 from __future__ import annotations
@@ -297,38 +297,26 @@ def test_profile_prompt_and_tools_match_golden(row_id, kwargs, tmp_path):
     )
 
 
-# ── Structural smoke tests — MUST currently fail (#2323 Increment 2 target) ─
+# ── Structural smoke tests — keep the ProfileSpec implementation declarative ─
 
 
-def test_get_system_prompt_is_not_yet_declarative():
-    """Pins the CURRENT if/elif profile-branching state of `_get_system_prompt`.
-
-    Expected to FAIL on current main — the ProfileSpec table hasn't landed
-    yet. It flips to passing once Increment 2 replaces the chain; at that
-    point this test documents the refactor succeeded (or becomes a permanent
-    "don't regress back to if/elif" guard — reviewer's call which).
-    """
+def test_get_system_prompt_uses_declarative_profile_spec():
+    """Keep system-prompt assembly declarative and table-driven."""
     from gaia_agent_chat.agent import ChatAgent
 
     source = inspect.getsource(ChatAgent._get_system_prompt)
     assert "if profile ==" not in source, (
-        "ChatAgent._get_system_prompt still branches on `if profile ==` — "
-        "expected on pre-refactor main. This is not a bug to fix in this "
-        "commit; it documents the state Increment 2 must change."
+        "ChatAgent._get_system_prompt regressed to profile-specific branching; "
+        "keep prompt assembly driven by the ProfileSpec table."
     )
 
 
-def test_register_tools_is_not_yet_declarative():
-    """Pins the CURRENT if/elif profile-branching state of `_register_tools`.
-
-    See `test_get_system_prompt_is_not_yet_declarative` — same contract, the
-    tool-registration chain instead of the prompt-assembly chain.
-    """
+def test_register_tools_uses_declarative_profile_spec():
+    """Keep tool registration declarative and table-driven."""
     from gaia_agent_chat.agent import ChatAgent
 
     source = inspect.getsource(ChatAgent._register_tools)
     assert "if profile ==" not in source, (
-        "ChatAgent._register_tools still branches on `if profile ==` — "
-        "expected on pre-refactor main. This is not a bug to fix in this "
-        "commit; it documents the state Increment 2 must change."
+        "ChatAgent._register_tools regressed to profile-specific branching; "
+        "keep tool registration driven by the ProfileSpec table."
     )
