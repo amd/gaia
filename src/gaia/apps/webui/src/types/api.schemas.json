@@ -1043,6 +1043,31 @@
     "title": "CreateSessionRequest",
     "type": "object"
   },
+  "CustomModelRequest": {
+    "description": "``quant`` picks a quantization; None lets GAIA choose one that fits.",
+    "properties": {
+      "quant": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Quant"
+      },
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "title": "CustomModelRequest",
+    "type": "object"
+  },
   "DiscoveryCommit": {
     "properties": {
       "items": {
@@ -3331,6 +3356,11 @@
         "title": "Run Count",
         "type": "integer"
       },
+      "running": {
+        "default": false,
+        "title": "Running",
+        "type": "boolean"
+      },
       "schedule_config": {
         "anyOf": [
           {
@@ -3402,6 +3432,30 @@
       }
     },
     "title": "ScriptedUserRequest",
+    "type": "object"
+  },
+  "SearchSnippet": {
+    "description": "Text around a search hit, split so the UI can highlight ``match``.",
+    "properties": {
+      "after": {
+        "title": "After",
+        "type": "string"
+      },
+      "before": {
+        "title": "Before",
+        "type": "string"
+      },
+      "match": {
+        "title": "Match",
+        "type": "string"
+      }
+    },
+    "required": [
+      "before",
+      "match",
+      "after"
+    ],
+    "title": "SearchSnippet",
     "type": "object"
   },
   "SelectModelRequest": {
@@ -3620,6 +3674,65 @@
       "model"
     ],
     "title": "SessionResponse",
+    "type": "object"
+  },
+  "SessionSearchResponse": {
+    "description": "Chats matching a search query, newest first, at most ``limit``.",
+    "properties": {
+      "query": {
+        "title": "Query",
+        "type": "string"
+      },
+      "results": {
+        "items": {
+          "$ref": "#/components/schemas/SessionSearchResult"
+        },
+        "title": "Results",
+        "type": "array"
+      },
+      "truncated": {
+        "default": false,
+        "title": "Truncated",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "query",
+      "results"
+    ],
+    "title": "SessionSearchResponse",
+    "type": "object"
+  },
+  "SessionSearchResult": {
+    "description": "One chat that matches a search, with where the first hit was.",
+    "properties": {
+      "field": {
+        "enum": [
+          "title",
+          "message"
+        ],
+        "title": "Field",
+        "type": "string"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "snippet": {
+        "$ref": "#/components/schemas/SearchSnippet"
+      },
+      "title": {
+        "title": "Title",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "title",
+      "field",
+      "snippet"
+    ],
+    "title": "SessionSearchResult",
     "type": "object"
   },
   "SettingsResponse": {

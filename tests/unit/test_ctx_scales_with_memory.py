@@ -226,7 +226,9 @@ def test_load_request_on_an_npu_profile_machine(
     """The /load body is what Lemonade sizes the KV cache from."""
     _serve_idle_lemonade(system_info)
     LemonadeClient(base_url=BASE, keep_alive=True)._ensure_model_loaded(model)
-    assert _load_bodies() == [{"model_name": model, "ctx_size": expected}]
+    assert _load_bodies() == [
+        {"model_name": model, "ctx_size": expected, "save_options": True}
+    ]
 
 
 @responses.activate
@@ -234,7 +236,9 @@ def test_load_and_resolver_agree_on_one_window():
     _serve_idle_lemonade(_igpu(32, 16))
     resolved = resolve_ctx_size(SCALED_ID, base_url=BASE)
     LemonadeClient(base_url=BASE, keep_alive=True)._ensure_model_loaded(SCALED_ID)
-    assert _load_bodies() == [{"model_name": SCALED_ID, "ctx_size": resolved}]
+    assert _load_bodies() == [
+        {"model_name": SCALED_ID, "ctx_size": resolved, "save_options": True}
+    ]
     assert resolved == context_for_capacity(SCALED, _cap(48, "AMD iGPU"))
     # Read once per server, not once per call.
     reads = [c for c in responses.calls if c.request.url.endswith("/system-info")]
