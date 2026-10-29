@@ -62,7 +62,12 @@ beforeEach(() => {
     mocked.listDocuments.mockImplementation(whenUp({ documents: [] } as never));
     mocked.getActiveRuns.mockImplementation(whenUp({ session_ids: [], queued: [], awaiting_user: {} }));
     mocked.getTunnelStatus.mockImplementation(whenUp({ active: false } as never));
-    mocked.streamGreeting.mockResolvedValue(undefined);
+    // As the real stream does: a backend that isn't listening yet is an error event, not a rejection.
+    mocked.streamGreeting.mockImplementation(async (onEvent) => {
+        onEvent(backendUp
+            ? { type: 'done', text: 'Hello. What should we work on?' }
+            : { type: 'error', message: "Can't reach GAIA's backend, so the agent can't say hello yet." });
+    });
 
     useModelStore.setState({ active: null, error: null, restoreNotice: null });
     useChatStore.setState({
@@ -119,6 +124,9 @@ describe('startup before the backend listens', () => {
         await advance(1_500);
         expect(text()).not.toContain('Starting GAIA');
         expect(text()).toContain('Trip planning');
+        // A greeting asked for while the backend was down must not stay failed once it's up.
+        expect(text()).toContain('Hello. What should we work on?');
+        expect(text()).not.toContain("can't say hello");
     });
 
     it('still shows the setup banner when the backend answers with an HTTP error', async () => {
