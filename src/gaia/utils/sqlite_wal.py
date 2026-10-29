@@ -53,6 +53,7 @@ def enable_wal(conn: sqlite3.Connection) -> None:
             mode = "unknown (locked)"
         finally:
             conn.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
+            conn.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
         if mode == "wal":
             return
         if time.monotonic() >= deadline:

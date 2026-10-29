@@ -137,6 +137,11 @@ def test_a_zero_busy_timeout_tries_once(clock):
     assert conn.switches() == 1
 
 
+def test_a_zero_busy_timeout_still_sees_an_opener_that_already_switched():
+    conn = _Conn("database is locked", ["wal"], busy_ms=0)
+    enable_wal(conn)
+    assert conn.switches() == 1
+
 @pytest.mark.parametrize("error", ["disk I/O error", "unable to open database file"])
 def test_other_failures_are_raised_unchanged(error, clock):
     conn = _Conn(error, ["wal"])
