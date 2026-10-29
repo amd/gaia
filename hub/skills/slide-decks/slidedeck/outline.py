@@ -340,7 +340,7 @@ TYPE_FIELDS = {
     "title": {"author", "presenter", "date", "organization"},
     "section": {"number"},
     "agenda": {"items", "bullets", "highlight", "current"},
-    "bullets": {"text", "bullets", "points", "items", "content"},
+    "bullets": {"text", "bullets", "points", "items", "content", "pull_quote"},
     "two_column": {"left", "right", "columns"},
     "chart": {
         "chart_type",
@@ -1220,6 +1220,7 @@ def _normalize_slide(
             raw.get("bullets") or raw.get("points") or raw.get("items")
         )
         s["paras"] = paras
+        s["pull_quote"] = _text(raw.get("pull_quote")).strip(' "“”')
         if not paras:
             problems.append(f"{where}: no 'bullets' or 'text'.")
     elif stype == "two_column":

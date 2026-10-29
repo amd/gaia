@@ -477,13 +477,23 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
     if not bullets and not text and not quote:
         slide["type"] = "section"
         return slide
+    if not bullets and not quote and len(text) == 1 and len(text[0].split()) <= 14:
+        # A headline and one line is a statement; as body text it leaves a bare slide.
+        slide["type"] = "section"
+        slide["subtitle"] = slide.get("subtitle") or text[0]
+        return slide
     slide["type"] = "bullets"
     if text:
         slide["text"] = text
     if bullets:
         slide["bullets"] = bullets
     if quote:
-        slide.setdefault("text", []).append("“" + " ".join(quote) + "”")
+        # The model often quotes inside the '>' already ('> *"..."*'): quote once.
+        said = " ".join(quote).strip(' "“”*_')
+        if bullets:
+            slide["pull_quote"] = said
+        else:
+            slide.setdefault("text", []).append("“" + said + "”")
     return slide
 
 

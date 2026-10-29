@@ -1154,3 +1154,32 @@ def test_a_rebuild_replaces_its_own_deck_even_after_the_skill_reloads(tools, tmp
         again = reloaded["build_deck_from_markdown"](markdown=md)
     assert first["path"] != theirs["path"]
     assert again["path"] == first["path"], (first["path"], again["path"])
+
+
+def test_a_quote_beside_points_is_a_panel_quoted_once_and_a_lone_line_is_a_statement(
+    tools, tmp_path
+):
+    from pptx import Presentation
+
+    skill, fns, _r = tools
+    md = (
+        "# Interviews\n\n## Big shift ahead\nLess clicking, more deciding.\n\n"
+        "## Setup is the top pain\n- Setup is slow\n- Calendar wanted\n- Privacy worries\n"
+        '\n> *"I gave up on day two"*\n'
+    )
+    with bind(_Asking("A 2-slide summary of the interviews."), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "q.pptx"), expected_slides=2
+        )
+    assert r["status"] == "ok", r
+    assert "[section]" in r["slides_built"][0]
+    shapes = {s.name: s for s in Presentation(r["path"]).slides[1].shapes}
+    assert shapes["Pull quote"].text_frame.text == "“I gave up on day two”"
+    body = next(
+        s
+        for n, s in shapes.items()
+        if "Pull quote" not in n
+        and s.has_text_frame
+        and "Setup is slow" in s.text_frame.text
+    )
+    assert body.top > 0 and body.left + body.width <= shapes["Quote panel"].left

@@ -1331,7 +1331,8 @@ class DeckBuilder:
             for ps in entries
         )
         h = min(box.h, int(Pt(need / FIT_SLACK)) + 2 * iy + Inches(0.15))
-        y = box.y + (box.h - h) // 2
+        # Under the title, as a reader scans; centred cards float mid-slide.
+        y = box.y + min((box.h - h) // 2, int(Inches(0.2)))
         group = []
         for k, ps in enumerate(entries):
             x = box.x + k * (w + gap)
@@ -1366,9 +1367,42 @@ class DeckBuilder:
         )
         self._finish(slide)
 
+    def _pull_quote(self, slide, quote: str, area: Box) -> None:
+        """The user's quote in a panel beside the points, as a reader's eye lands on it."""
+        qx, qw = self.grid(8, 4, area)
+        panel = Box(qx, area.y, qw, min(area.h, int(Inches(2.6))))
+        self.shape(slide, MSO_SHAPE.RECTANGLE, panel, "Quote panel", self.theme.panel)
+        self.shape(
+            slide,
+            MSO_SHAPE.RECTANGLE,
+            Box(panel.x, panel.y, int(Inches(0.06)), panel.h),
+            "Quote rule",
+            self.theme.primary,
+        )
+        qf = FontSpec(self.hfont.family)
+        paras = [Para(f"“{quote}”", level=-1, font=qf)]
+        size, ok, _n, _a = self.fit(
+            paras, panel.w - int(Inches(0.4)), panel.h, 22, self.body_min, font=qf
+        )
+        if not ok:
+            self.warn("the quote beside the points does not fit; trim it.")
+        pad = int(Inches(0.2))
+        tb = self.textbox(
+            slide,
+            Box(panel.x + pad, panel.y, panel.w - 2 * pad, panel.h),
+            "Pull quote",
+        )
+        self.write(
+            tb, paras, size, colors=[self.theme.text], anchor=MSO_ANCHOR.MIDDLE, font=qf
+        )
+
     def _slide_bullets(self, s, paras_in=None, title=None):
         items = paras_in if paras_in is not None else s["paras"]
-        cards = self._as_cards(items) if paras_in is None else None
+        cards = (
+            self._as_cards(items)
+            if paras_in is None and not s.get("pull_quote")
+            else None
+        )
         if cards:
             self._slide_cards(s, cards)
             return
@@ -1390,6 +1424,12 @@ class DeckBuilder:
         else:
             shp = self.textbox(slide, self.content_box(bottom), "Body")
             placeholder = False
+        if s.get("pull_quote") and paras_in is None:
+            area = Box(int(shp.left), int(shp.top), int(shp.width), int(shp.height))
+            bx, bw = self.grid(0, 8, area)
+            # A placeholder given only some coordinates resets the rest to 0.
+            shp.left, shp.top, shp.width, shp.height = bx, area.y, bw, area.h
+            self._pull_quote(slide, s["pull_quote"], area)
         paras = self.paras(items, placeholder=placeholder)
         size, ok, need, avail = self.fit(
             paras, int(shp.width), int(shp.height), SIZES["body_max"], self.body_min
