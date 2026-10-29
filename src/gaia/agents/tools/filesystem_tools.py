@@ -98,7 +98,7 @@ def _scope_roots(scope: str, host: Any = None) -> list:
     if scope == "home":
         raw = Path.home()
     else:
-        raw = Path(scope)
+        raw = _resolve_target(scope, None, _workspace_default(host))
     return [raw.expanduser().resolve()]
 
 
@@ -1523,8 +1523,9 @@ class FileSystemToolsMixin:
                         roots.append(str(p))
                 return roots
             else:
-                # Treat as a specific path
-                return [scope]
+                # Treat as a specific path, using the same workspace base as
+                # the validation and indexed-result paths above.
+                return [str(_resolve_target(scope, None, _workspace_default(self)))]
 
         def _listed(results, path):
             # Search roots overlap (cwd sits under home), so a file can be met twice.

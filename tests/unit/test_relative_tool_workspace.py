@@ -264,3 +264,97 @@ def test_shell_uses_workspace_only_when_it_is_allowed(tmp_path, monkeypatch):
     host.close_shell_session()
     host.path_validator = Validator(workspace)
     assert Path(host.shell_session.cwd) == workspace.resolve()
+
+
+def test_find_files_resolves_explicit_scope_against_chat_workspace(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / "chat"
+    sidecar = tmp_path / "sidecar"
+    (workspace / "src").mkdir(parents=True)
+    (sidecar / "src").mkdir(parents=True)
+    (workspace / "src" / "chathelper.py").write_text("chat\n", encoding="utf-8")
+    (sidecar / "src" / "decoyhelper.py").write_text("decoy\n", encoding="utf-8")
+    monkeypatch.chdir(sidecar)
+
+    class Host(FileSystemToolsMixin):
+        pass
+
+    host = Host()
+    host.config = _Config(workspace)
+    host._fs_index = None
+    registered = _register_tools(host, FileSystemToolsMixin.register_filesystem_tools)
+
+    result = registered["find_files"]("helper", scope="src")
+
+    assert "chathelper.py" in result
+    assert "decoyhelper.py" not in result
+
+
+def test_find_files_filters_indexed_scope_against_chat_workspace(tmp_path, monkeypatch):
+    workspace = tmp_path / "chat"
+    sidecar = tmp_path / "sidecar"
+    (workspace / "src").mkdir(parents=True)
+    (sidecar / "src").mkdir(parents=True)
+    chat_file = workspace / "src" / "chathelper.py"
+    decoy_file = sidecar / "src" / "decoyhelper.py"
+    chat_file.write_text("chat\n", encoding="utf-8")
+    decoy_file.write_text("decoy\n", encoding="utf-8")
+    monkeypatch.chdir(sidecar)
+
+    class Index:
+        def query_files(self, **_kwargs):
+            return [
+                {"path": str(decoy_file), "size": 1, "modified_at": "now"},
+                {"path": str(chat_file), "size": 1, "modified_at": "now"},
+            ]
+
+    class Host(FileSystemToolsMixin):
+        pass
+
+    host = Host()
+    host.config = _Config(workspace)
+    host._fs_index = Index()
+    registered = _register_tools(host, FileSystemToolsMixin.register_filesystem_tools)
+
+    result = registered["find_files"]("helper", scope="src")
+
+    assert "chathelper.py" in result
+    assert "decoyhelper.py" not in result
+
+
+def test_chat_agent_inline_file_tools_use_chat_workspace(tmp_path, monkeypatch):
+    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+
+    workspace = tmp_path / "chat"
+    sidecar = tmp_path / "sidecar"
+    workspace.mkdir()
+    sidecar.mkdir()
+    (workspace / "helper.py").write_text(
+        "import os\nprint('chat', os.getcwd())\n", encoding="utf-8"
+    )
+    (sidecar / "helper.py").write_text("sidecar\n", encoding="utf-8")
+    monkeypatch.chdir(sidecar)
+
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        config = ChatAgentConfig(
+            silent_mode=True,
+            allowed_paths=[str(workspace)],
+            working_directory=str(workspace),
+        )
+        agent = ChatAgent(config)
+        list_files = _TOOL_REGISTRY["list_files"]["function"]
+        execute_python_file = _TOOL_REGISTRY["execute_python_file"]["function"]
+
+        listing = list_files(".")
+        result = execute_python_file("helper.py")
+
+        assert str(workspace.resolve()) == listing["path"]
+        assert result["status"] == "success", result
+        assert "chat" in result["stdout"]
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
