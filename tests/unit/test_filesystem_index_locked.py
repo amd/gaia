@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -53,9 +54,9 @@ class _FailsOnce:
         return getattr(self._conn, name)
 
 
-def _fail_first(monkeypatch, prefix, error):
+def _fail_first(monkeypatch, prefix, error, times=1):
     real_init = FileSystemIndexService.init_db
-    pending = [error]
+    pending = [error] * times
 
     def init_db(self, path=":memory:", **kwargs):
         real_init(self, path, **kwargs)
@@ -97,6 +98,33 @@ def test_a_lock_error_closes_the_connection_before_raising(
     with pytest.raises(sqlite3.OperationalError):
         FileSystemIndexService(db_path=str(index_with_bookmark))
 
+    assert closed == [True]
+
+
+def test_a_lock_that_never_clears_closes_the_connection_and_names_the_file(
+    monkeypatch, index_with_bookmark
+):
+    # The switch and the mode read both stay locked until the busy timeout ends.
+    clock = [0.0]
+    fake = SimpleNamespace(
+        monotonic=lambda: clock[0],
+        sleep=lambda seconds: clock.__setitem__(0, clock[0] + 1),
+    )
+    monkeypatch.setattr("gaia.utils.sqlite_wal.time", fake)
+    locked = sqlite3.OperationalError("database is locked")
+    _fail_first(monkeypatch, "PRAGMA journal_mode", locked, times=1000)
+    closed = []
+    real_close = FileSystemIndexService.close_db
+    monkeypatch.setattr(
+        FileSystemIndexService,
+        "close_db",
+        lambda self: (closed.append(True), real_close(self)),
+    )
+
+    with pytest.raises(sqlite3.OperationalError, match="file_index.db") as caught:
+        FileSystemIndexService(db_path=str(index_with_bookmark))
+
+    assert "still in unknown (locked) mode" in str(caught.value)
     assert closed == [True]
 
 

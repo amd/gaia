@@ -10,6 +10,7 @@ import textwrap
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -33,21 +34,33 @@ class _Conn:
     after *switch_fails* locked attempts the switch itself succeeds.
     """
 
-    def __init__(self, error, modes, switch_fails=10**9, busy_ms=200):
+    def __init__(self, error, modes, switch_fails=10**9, busy_ms=200, wait=None):
         self.error, self.modes = error, list(modes)
         self.switch_fails, self.busy_ms, self.statements = switch_fails, busy_ms, []
+        self.wait = wait  # called with the seconds a locked statement blocks
+
+    def _blocked(self):
+        if self.wait:
+            self.wait(self.busy_ms / 1000)
 
     def execute(self, sql):
         self.statements.append(sql)
         if sql == "PRAGMA busy_timeout":
             return _Row((self.busy_ms,))
+        if sql.startswith("PRAGMA busy_timeout="):
+            self.busy_ms = int(sql.split("=")[1])
+            return _Row((self.busy_ms,))
+        if sql == "PRAGMA database_list":
+            return _Row((0, "main", "/data/m.db"))
         if sql == "PRAGMA journal_mode=WAL":
             if self.switch_fails > 0:
                 self.switch_fails -= 1
+                self._blocked()
                 raise sqlite3.OperationalError(self.error)
             return _Row(("wal",))
         mode = self.modes.pop(0) if len(self.modes) > 1 else self.modes[0]
         if isinstance(mode, Exception):
+            self._blocked()
             raise mode
         return _Row((mode,))
 
@@ -95,10 +108,22 @@ def test_a_switch_locked_on_a_database_not_in_wal_raises_naming_the_mode(mode):
         enable_wal(_Conn("database is locked", [mode], busy_ms=50))
 
 
+class _FakeClock:
+    """Replaces the helper's clock so a blocked statement costs no real time."""
+
+    def __init__(self, monkeypatch):
+        self.now = 1000.0
+        fake = SimpleNamespace(monotonic=lambda: self.now, sleep=self.advance)
+        monkeypatch.setattr("gaia.utils.sqlite_wal.time", fake)
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
 def test_the_retry_stops_at_the_busy_timeout():
     conn = _Conn("database is locked", ["delete"], busy_ms=150)
     t0 = time.monotonic()
-    with pytest.raises(sqlite3.OperationalError, match=r"within 0\.15 s"):
+    with pytest.raises(sqlite3.OperationalError, match=r"after \d\.\d s"):
         enable_wal(conn)
     assert 0.15 <= time.monotonic() - t0 < 2
     assert conn.switches() > 1
@@ -106,9 +131,39 @@ def test_the_retry_stops_at_the_busy_timeout():
 
 def test_a_zero_busy_timeout_tries_once():
     conn = _Conn("database is locked", ["delete"], busy_ms=0)
-    with pytest.raises(sqlite3.OperationalError, match="1 attempts"):
+    with pytest.raises(sqlite3.OperationalError, match=r"\(1 attempt\)"):
         enable_wal(conn)
     assert conn.switches() == 1
+
+
+def test_a_blocked_switch_and_mode_read_wait_the_busy_timeout_once(monkeypatch):
+    clock = _FakeClock(monkeypatch)
+    locked = sqlite3.OperationalError("database is locked")
+    conn = _Conn("database is locked", [locked], busy_ms=5000, wait=clock.advance)
+    with pytest.raises(sqlite3.OperationalError, match="after 5.0 s") as caught:
+        enable_wal(conn)
+    assert clock.now - 1000.0 == 5.0
+    assert "unknown (locked) mode" in str(caught.value)
+
+
+def test_the_error_names_the_database_file_and_counts_attempts(monkeypatch):
+    clock = _FakeClock(monkeypatch)
+    conn = _Conn("database is locked", ["delete"], busy_ms=1000, wait=clock.advance)
+    with pytest.raises(sqlite3.OperationalError) as caught:
+        enable_wal(conn)
+    assert "could not switch /data/m.db to WAL mode" in str(caught.value)
+    assert "(1 attempt)" in str(caught.value)
+
+
+def test_the_busy_timeout_is_restored_after_a_failure_and_a_success():
+    failing = _Conn("database is locked", ["delete"], busy_ms=50)
+    with pytest.raises(sqlite3.OperationalError):
+        enable_wal(failing)
+    assert failing.busy_ms == 50
+
+    working = _Conn("database is locked", ["wal"], busy_ms=50)
+    enable_wal(working)
+    assert working.busy_ms == 50
 
 
 @pytest.mark.parametrize("error", ["disk I/O error", "unable to open database file"])
@@ -136,6 +191,7 @@ def test_a_locked_database_not_in_wal_mode_still_fails_and_says_why(tmp_path):
         assert time.monotonic() - t0 < 5
         assert "locked" in str(caught.value)
         assert "still in delete mode" in str(caught.value)
+        assert str(db) in str(caught.value)
     finally:
         holder.execute("ROLLBACK")
 
