@@ -141,8 +141,9 @@ when adding a probe.
 
 ## Adding a model
 
-1. Confirm the gateway can reach it: `gaia eval tasks run --suite everyday
-   --tasks 21-qa --model <id> --no-judge`.
+1. Confirm the gateway can reach it: `gaia -p "Reply with exactly: pong"
+   --model <id>` prints `pong` and exits 0; then `gaia eval tasks
+   run --suite everyday --tasks 21-qa --model <id> --no-judge`.
 2. Add its published card to `metering.py::RATES`, keyed by the bare model
    name, or meter it with `--meter fireworks`.
 3. Run it alongside at least one model you already have numbers for, so a
