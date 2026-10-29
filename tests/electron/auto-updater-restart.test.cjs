@@ -246,3 +246,82 @@ describe("a settings folder that refuses the lock file", () => {
     }
   });
 });
+
+describe("a crashed app's lock that cannot be moved aside", () => {
+  function staleLock() {
+    const dir = path.join(tmpHome, ".gaia");
+    fs.mkdirSync(dir, { recursive: true });
+    const lock = path.join(dir, "update-config.json.lock");
+    fs.writeFileSync(lock, "");
+    const hourAgo = new Date(Date.now() - 3600 * 1000);
+    fs.utimesSync(lock, hourAgo, hourAgo);
+    return lock;
+  }
+
+  // Throws `code` for the lock's rename; after 2,000 tries a non-retryable
+  // error breaks a loop that would otherwise spin forever.
+  function failRename(code, onCall) {
+    const realRename = fs.renameSync;
+    let calls = 0;
+    const spy = jest.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (!String(from).endsWith(".lock")) return realRename(from, to);
+      if (++calls > 2000) {
+        const loop = new Error("rename retried without end");
+        loop.code = "ELOOPED";
+        throw loop;
+      }
+      if (onCall) onCall(from);
+      const err = new Error(`${code}: operation not permitted, rename '${from}'`);
+      err.code = code;
+      throw err;
+    });
+    return { spy, calls: () => calls };
+  }
+
+  for (const code of ["EACCES", "EPERM"]) {
+    test(`gives up within the wait and names permissions (${code})`, async () => {
+      const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+      const lock = staleLock();
+      const { spy } = failRename(code);
+      try {
+        const start = Date.now();
+        const err = await m.setAutoUpdate(true).catch((e) => e);
+        expect(err.message).toMatch(/Cannot remove .*update-config\.json\.lock/);
+        expect(err.message).toMatch(/permissions/);
+        expect(err.message).not.toMatch(/busy|retried without end/);
+        expect(Date.now() - start).toBeLessThan(2000);
+        expect(fs.existsSync(lock)).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  }
+
+  test("a lock another app already moved aside is not an error", async () => {
+    const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+    staleLock();
+    const { spy } = failRename("ENOENT", (from) => fs.rmSync(from, { force: true }));
+    try {
+      await m.setAutoUpdate(false);
+    } finally {
+      spy.mockRestore();
+    }
+    const saved = JSON.parse(
+      fs.readFileSync(path.join(tmpHome, ".gaia", "update-config.json"), "utf8")
+    );
+    expect(saved.autoUpdate).toBe(false);
+  });
+
+  test("an unexpected rename error surfaces at once", async () => {
+    const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+    staleLock();
+    const { spy, calls } = failRename("EIO");
+    try {
+      const err = await m.setAutoUpdate(true).catch((e) => e);
+      expect(err.message).toMatch(/EIO/);
+      expect(calls()).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

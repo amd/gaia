@@ -386,6 +386,7 @@ function _withConfigLock(fn) {
           `(${openErr.message}) — fix its permissions.`
       );
     }
+    let staleErr = null;
     if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
       // Left by a crashed app. Two takers racing on the same stale lock can
       // both get in; rare enough to accept for a settings file.
@@ -393,12 +394,20 @@ function _withConfigLock(fn) {
       try {
         fs.renameSync(lock, aside);
         fs.rmSync(aside, { force: true });
+        continue;
       } catch (err) {
-        if (!["ENOENT", "EPERM", "EACCES"].includes(err.code)) throw err;
+        if (err.code === "ENOENT") continue;
+        if (!["EPERM", "EACCES"].includes(err.code)) throw err;
+        staleErr = err;
       }
-      continue;
     }
     if (Date.now() > deadline) {
+      if (staleErr) {
+        throw new Error(
+          `Cannot remove ${lock}, left by a GAIA app that stopped (${staleErr.message}) — fix the ` +
+            `permissions of ${path.dirname(UPDATE_CONFIG_PATH)} or delete the lock file by hand.`
+        );
+      }
       if (!stat) {
         throw new Error(
           `Cannot lock ${UPDATE_CONFIG_PATH} (${openErr.message}) — check the permissions of ` +

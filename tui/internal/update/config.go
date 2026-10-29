@@ -153,6 +153,9 @@ const (
 	lockStale = 10 * time.Second
 )
 
+// renameLock is swapped in tests to simulate a lock that cannot be moved aside.
+var renameLock = os.Rename
+
 func withConfigLock(path string, readOnly bool, fn func() error) error {
 	lock := path + ".lock"
 	deadline := time.Now().Add(lockWait)
@@ -180,16 +183,25 @@ func withConfigLock(path string, readOnly bool, fn func() error) error {
 			}
 			return fmt.Errorf("cannot save update settings: %s does not allow new files (%v) — fix its permissions", filepath.Dir(path), err)
 		}
+		var staleErr error
 		if serr == nil && time.Since(info.ModTime()) > lockStale {
 			// Left by a crashed app. Two takers racing on the same stale lock
 			// can both get in; rare enough to accept for a settings file.
 			aside := fmt.Sprintf("%s.%d.stale", lock, os.Getpid())
-			if os.Rename(lock, aside) == nil {
+			rerr := renameLock(lock, aside)
+			if rerr == nil || errors.Is(rerr, fs.ErrNotExist) {
 				os.Remove(aside)
+				continue
 			}
-			continue
+			if readOnly && errors.Is(rerr, fs.ErrPermission) && runtime.GOOS != "windows" {
+				return fn() // the folder refuses changes, so no writer can race the read
+			}
+			staleErr = rerr
 		}
 		if time.Now().After(deadline) {
+			if staleErr != nil {
+				return fmt.Errorf("cannot remove %s, left by a GAIA app that stopped (%v) — fix the permissions of %s or delete the lock file by hand", lock, staleErr, filepath.Dir(path))
+			}
 			if serr == nil {
 				return fmt.Errorf("%s is busy (another GAIA app holds %s) — try again in a moment", path, lock)
 			}
