@@ -499,6 +499,7 @@ gaia daemon start                  # Starts and supervises the LLM backend
 gaia llm "Hello"                   # Test LLM (starts the backend on its own)
 gaia chat                          # Interactive chat
 gaia chat --ui                     # Agent UI (browser-based)
+gaia -p "Hello" --model <id>       # One-shot headless run (like claude -p)
 ```
 
 **Never tell anyone to run `lemonade-server serve`** — Lemonade 10.7/10.8 removed that
@@ -717,6 +718,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia chat` - Interactive chat with RAG
 - `gaia chat --ui` - Launch Agent UI (browser-based, requires `[ui]` extras)
 - `gaia chat --ui --ui-port 8080` - Agent UI on custom port
+- `gaia -p "<prompt>"` - One headless agent run: answer (or `--output-format json`) on stdout, exit 0/1; gated tools denied without `--dangerously-skip-permissions`
 - `gaia talk` - Voice interaction
 - `gaia prompt "<text>"` - Single prompt to LLM (with system-prompt support)
 - `gaia llm "<text>"` - Simple LLM queries
