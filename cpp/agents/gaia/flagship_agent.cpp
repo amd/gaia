@@ -76,7 +76,7 @@ const char* const kToolRules = R"(
 
 **FILE SEARCH:** Start with a quick search (no `deep_search`). Use `deep_search=true` only if the user asks again after a quick search returns nothing. Multiple matches → show a numbered list and let the user pick.
 
-**READ THE QUESTION:** When a follow-up such as "those" or "it" could point to more than one earlier item, answer the reading that fits best and give the other in one line with its own number.
+**READ THE QUESTION:** When a follow-up such as "those" or "it" could point to more than one earlier item, answer the reading that fits best and always give the other in one line with its own number. Example: after "how many orders?" and "what did March bring in?", "how many of those shipped late?" → "12 of March's orders; 57 of all 900."
 
 **NEVER FAKE TOOL OUTPUT:** Don't write JSON blocks in your reply text simulating tool results. If you need data, call the tool. Saying "I already retrieved X" without prior-turn evidence is confabulation.
 )";
