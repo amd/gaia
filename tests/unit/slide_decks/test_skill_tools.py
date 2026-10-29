@@ -1027,3 +1027,37 @@ def test_several_points_beside_a_table_become_a_side_panel(tools, tmp_path):
             markdown=md, output_path=str(tmp_path / "d.pptx")
         )
     assert r["status"] == "ok", r
+
+
+@pytest.mark.parametrize(
+    "request_text, count",
+    [
+        ("Generate an image of a slide that shows our values", 1),
+        ("I need a single slide on churn", 1),
+        ("Make a slide deck on Q3", 0),
+        ("Add a slide about risks", 0),
+        ("Make a 5-slide deck, end with a slide on the ask", 5),
+    ],
+)
+def test_a_slide_means_one_slide_but_a_slide_deck_does_not(tools, request_text, count):
+    import tools as skill_tools
+
+    assert skill_tools._asked_count(request_text)[0] == count
+
+
+def test_italic_markers_do_not_show_on_the_slide(tools, tmp_path):
+    skill, fns, _r = tools
+    md = '## What we heard\n\n- *"I gave up on day two"*\n- **Setup** is _slow_\n'
+    with bind(_Asking("one slide on what we heard"), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md, output_path=str(tmp_path / "i.pptx")
+        )
+    assert r["status"] == "ok", r
+    from pptx import Presentation
+
+    text = " ".join(
+        sh.text_frame.text
+        for sh in Presentation(r["path"]).slides[0].shapes
+        if sh.has_text_frame
+    )
+    assert '"I gave up on day two"' in text and "*" not in text and "_slow_" not in text

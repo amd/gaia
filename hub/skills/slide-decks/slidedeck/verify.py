@@ -686,14 +686,31 @@ def render_check(
                     for t in toks
                     if left - 3 <= (t[0] + t[2]) / 2 <= right + 3 and t[1] >= top - 6
                 ]
-                last = seq[-3:]
+                first = seq[:3]
+                words_in_col = [c[4] for c in col]
+                # The shape's text starts at its first opening words in the
+                # column and is read word by word from there; a later copy of
+                # the same words further down is another shape's.
+                start = next(
+                    (
+                        k
+                        for k in range(len(col) - len(first) + 1)
+                        if words_in_col[k : k + len(first)] == first
+                    ),
+                    None,
+                )
                 found_y = None
-                for k in range(len(col) - len(last) + 1):
-                    if [c[4] for c in col[k : k + len(last)]] == last:
-                        y1 = max(c[3] for c in col[k : k + len(last)])
-                        # The shape's closing words: the last occurrence in its column.
-                        if found_y is None or y1 > found_y:
-                            found_y = y1
+                if start is not None:
+                    j = 0
+                    for c in col[start:]:
+                        if c[4] == seq[j]:
+                            found_y = c[3]
+                            j += 1
+                            if j == len(seq):
+                                break
+                    if j < len(seq):
+                        # Words the renderer split or hyphenated: no reliable end.
+                        found_y = None
                 if found_y is None:
                     continue
                 if found_y > bottom + 4:

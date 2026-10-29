@@ -122,6 +122,15 @@ _COUNT_PHRASE = re.compile(
 )
 
 
+#: "a slide about X", "an image of a slide": one slide. Not "a slide deck",
+#: and not "add a slide", which grows a deck rather than sizing it.
+_ONE_SLIDE = re.compile(
+    r"(?<!\badd )(?<!\binsert )(?<!\bappend )\b(?:a|an|single)\s+"
+    r"(?:single\s+)?slide\b(?![\s-]*(?:deck|show|presentation|s\b))",
+    re.I,
+)
+
+
 def _asked_count(request: str) -> tuple:
     """The slide count the user's message names, with the phrase; (0, "") if none or mixed."""
     found = {}
@@ -130,6 +139,9 @@ def _asked_count(request: str) -> tuple:
         n = int(word) if word.isdigit() else _NUMBER_WORDS[word]
         if n > 0:
             found.setdefault(n, m.group(0))
+    if not found:
+        m = _ONE_SLIDE.search(request or "")
+        return (1, m.group(0)) if m else (0, "")
     if len(found) != 1:
         return 0, ""
     return next(iter(found.items()))

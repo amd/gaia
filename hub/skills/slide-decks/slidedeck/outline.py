@@ -222,8 +222,16 @@ _LATEX_MATH_RE = re.compile(r"\$([^$\n]{1,80})\$")
 _LATEX_TEXT_RE = re.compile(r"\\text\{([^{}]*)\}")
 
 
+#: *italic* or _italic_ around words; a slide shows the words. **bold** is kept.
+_ITALIC_RE = re.compile(
+    r"(?<![*\w])\*(?![*\s])([^*\n]+?)(?<!\s)\*(?![*\w])"
+    r"|(?<![_\w])_(?![_\s])([^_\n]+?)(?<!\s)_(?![_\w])"
+)
+
+
 def _plain(text: str) -> str:
     """Models write arrows as LaTeX (``$\\rightarrow$``); a slide shows the symbol."""
+    text = _ITALIC_RE.sub(lambda m: m.group(1) or m.group(2), text)
     if "\\" not in text:
         return text
 

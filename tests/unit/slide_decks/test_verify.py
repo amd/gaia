@@ -376,6 +376,17 @@ def test_render_confirms_overflow_on_the_page(out, renderer):
     assert {"text_overflow", "render_overflow"} <= checks(rep), rep["issues"]
 
 
+def test_a_title_repeated_lower_on_the_slide_is_not_overflow(out, renderer):
+    """The card below says the title's words again; that is not the title spilling."""
+
+    def make(s, prs, i):
+        titled(s, "Cut setup to under 5 minutes")
+        box(s, 0.6, 3.5, 6, 0.8, "Cut setup to under 5 minutes")
+
+    rep = verify_deck(deck(make, path=out(), layout=5), renderer=renderer)
+    assert "render_overflow" not in checks(rep), rep["issues"]
+
+
 def test_without_a_renderer_the_report_says_so(out):
     r = build_deck({"slides": GOOD}, out())
     rep = verify_deck(r["path"], render=True, renderer=None)
