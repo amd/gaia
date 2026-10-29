@@ -134,8 +134,32 @@ def test_background_runs_do_not_push_a_real_chat_past_the_limit(client, db):
 def test_newest_chat_first(client, db):
     old = _chat(db, "Old", "orchid")
     new = _chat(db, "New", "orchid")
-    db.add_message(old, "user", "bump")  # now the most recently updated
+    with db._transaction():
+        db._conn.execute(
+            "UPDATE sessions SET updated_at = ? WHERE id = ?",
+            ("2026-01-02T00:00:00+00:00", old),
+        )
+        db._conn.execute(
+            "UPDATE sessions SET updated_at = ? WHERE id = ?",
+            ("2026-01-01T00:00:00+00:00", new),
+        )
     assert [h["session_id"] for h in _search(client, "orchid")] == [old, new]
+
+
+def test_timestamp_ties_keep_newer_chats_first_in_search_and_sidebar(client, db):
+    old = _chat(db, "Old", "orchid")
+    new = _chat(db, "New", "orchid")
+    with db._transaction():
+        db._conn.executemany(
+            "UPDATE sessions SET updated_at = ? WHERE id = ?",
+            [
+                ("2026-01-01T00:00:00+00:00", old),
+                ("2026-01-01T00:00:00+00:00", new),
+            ],
+        )
+
+    assert [h["session_id"] for h in _search(client, "orchid")] == [new, old]
+    assert [session["id"] for session in db.list_sessions()] == [new, old]
 
 
 def test_private_chats_are_searchable(client, db):
