@@ -62,6 +62,10 @@ class _Conn:
         self.statements.append(sql)
         if sql == "PRAGMA busy_timeout":
             return _Row((self.busy_ms,))
+        if sql == "PRAGMA database_list":
+            return _Row((0, "main", "/tmp/test.db"))
+        if sql.startswith("PRAGMA busy_timeout = "):
+            return _Row((self.busy_ms,))
         if sql == "PRAGMA journal_mode=WAL":
             if self.switch_fails > 0:
                 self.switch_fails -= 1
@@ -118,8 +122,9 @@ def test_a_switch_locked_on_a_database_not_in_wal_raises_naming_the_mode(mode, c
 
 def test_the_retry_stops_at_the_busy_timeout(clock):
     conn = _Conn("database is locked", ["delete"], busy_ms=150)
-    with pytest.raises(sqlite3.OperationalError, match=r"within 0\.15 s"):
+    with pytest.raises(sqlite3.OperationalError, match=r"after 0\.15 s") as caught:
         enable_wal(conn)
+    assert "/tmp/test.db" in str(caught.value)
     # The last sleep can start just before the deadline, and is at most 25 ms.
     assert 0.15 <= clock.now < 0.175
     assert conn.switches() > 1
@@ -127,7 +132,7 @@ def test_the_retry_stops_at_the_busy_timeout(clock):
 
 def test_a_zero_busy_timeout_tries_once(clock):
     conn = _Conn("database is locked", ["delete"], busy_ms=0)
-    with pytest.raises(sqlite3.OperationalError, match="1 attempts"):
+    with pytest.raises(sqlite3.OperationalError, match=r"1 attempt\)"):
         enable_wal(conn)
     assert conn.switches() == 1
 
@@ -154,7 +159,9 @@ def test_a_locked_database_not_in_wal_mode_still_fails_and_says_why(tmp_path):
         t0 = time.monotonic()
         with pytest.raises(sqlite3.OperationalError) as caught:
             enable_wal(conn)
-        assert time.monotonic() - t0 < 5
+        elapsed_s = time.monotonic() - t0
+        assert 0.2 <= elapsed_s < 0.8
+        assert str(db) in str(caught.value)
         assert "locked" in str(caught.value)
         assert "still in delete mode" in str(caught.value)
     finally:
