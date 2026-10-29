@@ -1284,13 +1284,15 @@ def _history_from_turns(
 
 
 async def _with_turn_record(
-    event: Dict[str, Any], run: _QueryRun, thread: threading.Thread
+    event: Dict[str, Any], run: _QueryRun, thread: threading.Thread, wanted: bool
 ) -> Dict[str, Any]:
     """*event* with the turn's ``model_messages`` when it is a ``final``.
 
+    Only a caller that sent ``turns`` (*wanted*) gets it: the record carries
+    every tool result in full, so it can outgrow a reader's frame limit.
     The answer streams before the loop returns, so this waits for the record.
     """
-    if event.get("type") != "final":
+    if not wanted or event.get("type") != "final":
         return event
     await asyncio.to_thread(thread.join, _TURN_RECORD_WAIT_SECONDS)
     if thread.is_alive():
@@ -1542,12 +1544,13 @@ async def query(request: QueryRequest):
             handler.answers_questions = False
 
         # Pushed context, never pulled (spec §2.4).
+        # Recorded turns are fitted on the run's thread, with the context.
         pushed = bool(request.turns) or bool(request.context)
-        if request.turns and hasattr(agent, "conversation_history"):
-            agent.conversation_history = _history_from_turns(
-                agent, request.turns, request.query, handler
-            )
-        elif request.context and hasattr(agent, "conversation_history"):
+        if (
+            request.context
+            and request.turns is None
+            and hasattr(agent, "conversation_history")
+        ):
             agent.conversation_history = [
                 {"role": c.role, "content": c.content} for c in request.context
             ]
@@ -1594,7 +1597,12 @@ async def query(request: QueryRequest):
     def _process() -> None:
         if request.documents:
             _index_attached_documents(agent, request.documents, handler)
-        if request.context and hasattr(agent, "conversation_history"):
+        if request.turns is not None and hasattr(agent, "conversation_history"):
+            # Sizing them can ask the model server for its window: never on the loop.
+            agent.conversation_history = _history_from_turns(
+                agent, request.turns, request.query, handler
+            )
+        elif request.context and hasattr(agent, "conversation_history"):
             # The caller sized this without our prompt and tools; re-fit it.
             agent.conversation_history = fit_pushed_history(
                 agent,
@@ -1773,7 +1781,9 @@ async def query(request: QueryRequest):
                         for warning in await _finish_changes(run):
                             yield _emit(warning)
                         canonical = await _with_context(
-                            await _with_turn_record(canonical, run, thread)
+                            await _with_turn_record(
+                                canonical, run, thread, request.turns is not None
+                            )
                         )
                     yield _emit(canonical)
                     last_write = time.monotonic()
@@ -1810,7 +1820,9 @@ async def query(request: QueryRequest):
                     for warning in await _finish_changes(run):
                         yield _emit(warning)
                     canonical = await _with_context(
-                        await _with_turn_record(canonical, run, thread)
+                        await _with_turn_record(
+                            canonical, run, thread, request.turns is not None
+                        )
                     )
                 yield _emit(canonical)
                 if canonical.get("type") in TERMINAL_TYPES:
@@ -1819,7 +1831,10 @@ async def query(request: QueryRequest):
                 yield _emit(
                     await _with_context(
                         await _with_turn_record(
-                            _terminal_from_run_result(run.result), run, thread
+                            _terminal_from_run_result(run.result),
+                            run,
+                            thread,
+                            request.turns is not None,
                         )
                     )
                 )

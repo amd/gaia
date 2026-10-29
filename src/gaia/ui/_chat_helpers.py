@@ -1983,6 +1983,41 @@ def _relayed_history(
     return context
 
 
+def _relayed_turns(
+    turns: list,
+    model_id: str | None,
+    query: str,
+    sse_handler,
+    session_id: str | None,
+) -> list:
+    """The chat's recorded turns that fit *model_id*'s history budget, kept whole.
+
+    A turn larger than the whole budget is sent shortened (#5864); turns newly
+    out of the model's view stream a ``history_cut`` status.
+    """
+    from gaia.agents.base.history import CutReporter, fit_turns, relayed_history_budget
+
+    budget = relayed_history_budget(
+        model_id, query, cloud=bool(model_id) and bool(_ui_cloud_provider(model_id))
+    )
+    reporter = (
+        _history_cuts.setdefault(session_id, CutReporter()) if session_id else None
+    )
+
+    def on_cut(cut) -> None:
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": cut.notice,
+                "turns": cut.turns,
+                "tokens": cut.tokens,
+            }
+        )
+
+    return fit_turns(turns, budget, on_cut, reporter)
+
+
 #: What a stopped turn's reply is saved as when it wrote no text.
 _CANCELLED_REPLY = "Cancelled."
 
@@ -2487,30 +2522,34 @@ def _dispatch_sidecar_query(
     if sse_handler.cancelled.is_set():
         return
 
-    # A sidecar that takes recorded turns sees earlier tool calls, and cuts
-    # them to its own window; an older one gets the text pairs, fitted here.
+    # A sidecar that takes recorded turns sees earlier tool calls; an older
+    # one gets the text pairs. Both are fitted here, and the sidecar re-fits.
     relayed_turns = (
         turns
         if turns is not None and turns_supported(profile, handle.api_version)
         else None
     )
     context: list = []
-    if relayed_turns is None:
-        try:
+    try:
+        if relayed_turns is None:
             context = _relayed_history(
                 history_pairs, model_id, query, sse_handler, session_id
             )
-        except (LemonadeClientError, ModelFitError, GaiaConfigError) as exc:
-            sse_handler._emit(
-                {
-                    "type": "agent_error",
-                    "content": (
-                        "Could not size this chat's earlier messages to the model's "
-                        f"context window: {exc}"
-                    ),
-                }
+        else:
+            relayed_turns = _relayed_turns(
+                relayed_turns, model_id, query, sse_handler, session_id
             )
-            return
+    except (LemonadeClientError, ModelFitError, GaiaConfigError) as exc:
+        sse_handler._emit(
+            {
+                "type": "agent_error",
+                "content": (
+                    "Could not size this chat's earlier messages to the model's "
+                    f"context window: {exc}"
+                ),
+            }
+        )
+        return
 
     from gaia.ui.email_sidecar.profiles import full_access_supported
 

@@ -73,8 +73,29 @@ class _ToolAgent:
         pass
 
 
+class _BigToolAgent(_ToolAgent):
+    """Every turn reads a long file, so a few turns outgrow a small window."""
+
+    def process_query(self, query, max_steps=None):
+        self.seen.append([dict(m) for m in self.conversation_history])
+        call = {**_CALL, "id": f"call_{len(self.seen)}"}
+        answer = f"read it ({query})"
+        trace = [
+            {"role": "user", "content": query},
+            {"role": "assistant", "content": "", "tool_calls": [call]},
+            {
+                "role": "tool",
+                "tool_call_id": call["id"],
+                "name": "read_file",
+                "content": f"{query}: " + "lorem ipsum " * 400,
+            },
+            {"role": "assistant", "content": answer},
+        ]
+        return {"answer": answer, "model_messages": trace}
+
+
 @pytest.fixture
-def live_sidecar(monkeypatch):
+def live_sidecar(monkeypatch, request):
     uvicorn = pytest.importorskip("uvicorn")
     pytest.importorskip("gaia_agent")
     import requests
@@ -89,8 +110,10 @@ def live_sidecar(monkeypatch):
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
     agents: list = []
 
+    agent_class = getattr(request, "param", _ToolAgent)
+
     def build(**kw):
-        agents.append(_ToolAgent(**kw))
+        agents.append(agent_class(**kw))
         return agents[-1]
 
     monkeypatch.setattr(server_mod, "build_query_agent", build)
@@ -225,3 +248,122 @@ def test_an_older_flagship_still_gets_text_context(monkeypatch, live_sidecar, ch
         {"role": "user", "content": "list the PRs"},
         {"role": "assistant", "content": "The command was refused."},
     ]
+
+
+def _turn_questions(history):
+    return [m["content"] for m in history if m.get("role") == "user"]
+
+
+@pytest.mark.parametrize("live_sidecar", [_BigToolAgent], indirect=True)
+def test_turns_are_fitted_to_the_window_and_the_cut_is_shown(
+    monkeypatch, live_sidecar, chat
+):
+    base_url, agents, api_version = live_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    import gaia.agents.base.history as history
+
+    monkeypatch.setattr(history, "relayed_history_budget", lambda *a, **k: 300)
+
+    events = [chat.send(f"q{i}") for i in range(5)]
+
+    [agent] = agents
+    last = agent.seen[-1]
+    # Whole turns only, oldest dropped first: each kept question has its answer.
+    questions = _turn_questions(last)
+    assert questions and "q0" not in questions
+    assert questions == [f"q{i}" for i in range(4)][-len(questions) :]
+    for q in questions:
+        assert {"role": "assistant", "content": f"read it ({q})"} in last
+    # A call is never sent without its result.
+    assert len([m for m in last if m.get("tool_calls")]) == len(
+        [m for m in last if m.get("role") == "tool"]
+    )
+    # The long results went as #5864 stubs, not in full.
+    assert all(
+        m["content"].startswith("[Left out of the") and len(m["content"]) < 500
+        for m in last
+        if m.get("role") == "tool"
+    )
+    cuts = [e for turn in events for e in turn if e.get("status") == "history_cut"]
+    assert cuts and cuts[0]["turns"] >= 1
+
+
+def test_a_window_with_room_sends_every_turn_whole(monkeypatch, live_sidecar, chat):
+    base_url, agents, api_version = live_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+
+    chat.send("list the PRs")
+    events = chat.send("why did that fail?")
+
+    [agent] = agents
+    assert agent.seen[1][2] == {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": _REFUSAL,
+    }
+    assert not [e for e in events if e.get("status") == "history_cut"]
+
+
+def test_turns_are_sized_off_the_event_loop(monkeypatch, live_sidecar, chat):
+    base_url, agents, api_version = live_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    import gaia.agents.base.history as history
+
+    real = history.history_budget
+    on_loop: list = []
+
+    def spy(agent, query):
+        if isinstance(agent, _ToolAgent):
+            try:
+                asyncio.get_running_loop()
+                on_loop.append(True)
+            except RuntimeError:
+                on_loop.append(False)
+        return real(agent, query)
+
+    monkeypatch.setattr(history, "history_budget", spy)
+
+    chat.send("list the PRs")
+    chat.send("why did that fail?")
+
+    assert on_loop and not any(on_loop)
+
+
+def _final(base_url, body):
+    import uuid
+
+    import requests
+
+    body = {"run_id": uuid.uuid4().hex, "context": [], **body}
+    with requests.post(
+        f"{base_url}/v1/gaia/query", json=body, stream=True, timeout=30
+    ) as resp:
+        assert resp.status_code == 200, resp.text
+        events = [
+            json.loads(line[len("data: ") :])
+            for line in resp.iter_lines(decode_unicode=True)
+            if line and line.startswith("data: ")
+        ]
+    [final] = [e for e in events if e.get("type") == "final"]
+    return final
+
+
+def test_only_a_caller_that_sends_turns_gets_the_record(live_sidecar):
+    base_url, _agents, _ = live_sidecar
+
+    # A text-only caller (the TUI) never asked for it, and a turn's full tool
+    # results can outgrow its SSE frame limit.
+    assert "model_messages" not in _final(base_url, {"query": "list the PRs"})
+    record = _final(base_url, {"query": "list the PRs", "turns": []})
+    assert record["model_messages"][1]["tool_calls"] == [_CALL]
+
+
+def test_empty_turns_replace_a_retained_sessions_history(live_sidecar):
+    base_url, agents, _ = live_sidecar
+    body = {"query": "q", "session_id": "s1"}
+
+    _final(base_url, {**body, "context": [{"role": "user", "content": "stale"}]})
+    _final(base_url, {**body, "turns": []})
+
+    [agent] = agents
+    assert agent.seen[1] == []
