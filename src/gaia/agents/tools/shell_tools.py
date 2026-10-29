@@ -31,11 +31,7 @@ from gaia.agents.base.call_risk import (
 )
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.errors import exit_error
-from gaia.agents.base.file_snapshots import (
-    SnapshotError,
-    before_change,
-    note_untracked,
-)
+from gaia.agents.base.file_snapshots import SnapshotError, before_change, note_untracked
 from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
@@ -53,6 +49,7 @@ from gaia.agents.tools.shell_deletes import (
     split_exact,
 )
 from gaia.agents.tools.shell_session import ShellSession
+from gaia.agents.tools.workspace_paths import _workspace_default
 from gaia.env import child_env
 from gaia.tool_cancellation import tool_cancelled
 
@@ -2813,19 +2810,32 @@ class ShellToolsMixin:
         """
         return self._path_allowed
 
+    def _session_start_cwd(self) -> Optional[str]:
+        """Return a permitted chat workspace, or let the session use cwd."""
+        workspace = _workspace_default(self)
+        if workspace and self._path_allowed(workspace, prompt_user=False):
+            return workspace
+        return None
+
     @property
     def shell_session(self) -> ShellSession:
         """This agent's shell session, created on first use."""
         session = getattr(self, "_shell_session", None)
         if session is None or session.closed:
-            session = ShellSession(cwd_guard=self._session_cwd_guard())
+            session = ShellSession(
+                start_cwd=self._session_start_cwd(),
+                cwd_guard=self._session_cwd_guard(),
+            )
             self._shell_session = session
         return session
 
     def reset_shell_session(self) -> ShellSession:
         """Replace the session with a clean one and return it."""
         previous = getattr(self, "_shell_session", None)
-        self._shell_session = ShellSession(cwd_guard=self._session_cwd_guard())
+        self._shell_session = ShellSession(
+            start_cwd=self._session_start_cwd(),
+            cwd_guard=self._session_cwd_guard(),
+        )
         if previous is not None:
             previous.close()
         return self._shell_session
@@ -2951,8 +2961,9 @@ class ShellToolsMixin:
         """Whether this session is running under full access (#3373).
 
         One source of truth, read live: the session's output handler carries
-        ``full_access``, set only by the sidecar's ``PermissionState``
-        from ``--full-access`` or the TUI's ``/full-access``. Every gate reads
+        ``full_access``, set only by a named opt-in: the sidecar's
+        ``PermissionState`` from ``--full-access`` or the TUI's ``/full-access``,
+        or ``gaia -p --full-access``. Every gate reads
         this — ``_validate_shell_command``, ``skill_grant_covers_call``, the
         executor — so they cannot hold different opinions about whether a
         command is legal.
@@ -3038,7 +3049,8 @@ class ShellToolsMixin:
         pre-approve for unattended runs. They were granted when commands outside
         the no-prompt list could not be approved at all, so neither widens what
         such a run executes. Only the console's ``full_access`` (the TUI's
-        ``/full-access``, on screen for the whole session) runs them unasked.
+        ``/full-access``, on screen for the whole session, or ``gaia -p
+        --full-access``, announced on stderr) runs them unasked.
         """
         console = getattr(self, "console", None)
         if getattr(console, "full_access", False) is True:

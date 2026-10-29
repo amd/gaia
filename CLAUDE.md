@@ -499,6 +499,7 @@ gaia daemon start                  # Starts and supervises the LLM backend
 gaia llm "Hello"                   # Test LLM (starts the backend on its own)
 gaia chat                          # Interactive chat
 gaia chat --ui                     # Agent UI (browser-based)
+gaia -p "Hello" --model <id>       # One-shot headless run (like claude -p)
 ```
 
 **Never tell anyone to run `lemonade-server serve`** — Lemonade 10.7/10.8 removed that
@@ -667,6 +668,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `skills` | `gaia.agents.tools.skill_library_tools.SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
 | `skill_learning` | `gaia.agents.tools.skill_learning_tools.SkillLearningToolsMixin` | Persist lessons learned while running a skill |
 | `audio` | `gaia.agents.tools.audio_tools.AudioToolsMixin` | Transcribe audio/video via Lemonade, then label speakers |
+| `audio_generation` | `gaia.agents.tools.audio_generation_tools.AudioGenerationToolsMixin` | Generate WAV music and sound effects via Lemonade |
 | `wait` | `gaia.agents.tools.wait_tools.WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
 | `reasoning_effort` | `gaia.agents.tools.reasoning_tools.ReasoningEffortToolsMixin` | `set_reasoning_effort` low/medium/high per step, on models that grade reasoning (gpt-oss) |
 
@@ -717,6 +719,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia chat` - Interactive chat with RAG
 - `gaia chat --ui` - Launch Agent UI (browser-based, requires `[ui]` extras)
 - `gaia chat --ui --ui-port 8080` - Agent UI on custom port
+- `gaia -p "<prompt>"` - One headless agent run: answer (or `--output-format json`) on stdout, exit 0/1; gated tools denied without `--dangerously-skip-permissions`
 - `gaia talk` - Voice interaction
 - `gaia prompt "<text>"` - Single prompt to LLM (with system-prompt support)
 - `gaia llm "<text>"` - Simple LLM queries

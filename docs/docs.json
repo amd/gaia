@@ -93,7 +93,8 @@
                       "guides/browser-use",
                       "guides/harness-engineering",
                       "guides/talk",
-                      "guides/transcription"
+                      "guides/transcription",
+                      "guides/audio-generation"
                     ]
                   },
                   {
@@ -521,7 +522,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.25.2 \u00b7 Lemonade 2026.43.3",
+        "label": "v0.25.2 \u00b7 Lemonade 2026.44.1",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

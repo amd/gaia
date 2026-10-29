@@ -369,10 +369,10 @@ export interface ChatPerformance {
         tokens_in: number | null;
         tokens_cached: number | null;
         tokens_out: number | null;
-        tool_calls: number;
+        tool_calls: number | null;
         loads: number;
         load_seconds: number | null;
-        usd: number;
+        usd: number | null;
         unpriced_turns: number;
     };
     /** The model as Lemonade reports it now. */
@@ -700,6 +700,8 @@ export interface Schedule {
     description: string;
     /** The last run's error; null when it succeeded. */
     last_error: string | null;
+    /** A run is in flight right now, timed or Run now. */
+    running?: boolean;
 }
 
 /** A single execution result for a scheduled task. */
@@ -1185,6 +1187,50 @@ export interface ProviderModel {
     download_progress?: DownloadProgress | null;
     /** List price per million tokens; null when unknown (never shown as $0). Cloud models only. */
     price?: ModelPrice | null;
+    /** Added by the user from a Hugging Face link, so it can be removed. */
+    custom?: boolean;
+    /** The link it was added from. */
+    source_url?: string | null;
+}
+
+/** One check run on a pasted Hugging Face link. */
+export interface CustomModelCheck {
+    id: 'link' | 'repo' | 'gguf' | 'chat' | 'architecture' | 'fit' | 'new';
+    label: string;
+    ok: boolean;
+    detail: string;
+}
+
+/** POST /api/providers/local/custom/check — what a pasted link would add. */
+export interface CustomModelReport {
+    ok: boolean;
+    url: string;
+    checks: CustomModelCheck[];
+    error: string | null;
+    warnings: string[];
+    /** Every quantization, by its first file (two can share a quant name). */
+    variants: { quant: string; file: string; size_gb: number; fits: boolean; reason: string | null }[];
+    repo?: string;
+    model_id?: string;
+    display_name?: string;
+    quant?: string;
+    /** The chosen quantization's first file. */
+    file?: string;
+    checkpoint?: string;
+    size_gb?: number;
+    architecture?: string | null;
+    context_length?: number | null;
+    vision?: boolean;
+    tool_calling?: boolean;
+    llamacpp_version?: string;
+}
+
+/** DELETE /api/providers/local/custom/{id}. */
+export interface CustomModelRemoved {
+    removed: string;
+    display_name: string;
+    /** Config keys that named the model and were cleared: default_model, last_model. */
+    cleared: string[];
 }
 
 export type LocalModelState = 'loaded' | 'downloaded' | 'not_downloaded';

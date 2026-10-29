@@ -492,7 +492,14 @@ FULL_BUNDLES = [
         members=frozenset(
             {"generate_image", "list_sd_models", "get_generation_history"}
         ),
-        description="Generate images from a text prompt (Stable Diffusion).",
+        description="Generate images from a text prompt (Lemonade).",
+    ),
+    ToolBundle(
+        name="audio_generation",
+        members=frozenset(
+            {"generate_music", "generate_sound_effect", "list_audio_generation_models"}
+        ),
+        description="Generate local music and sound effects using Lemonade.",
     ),
     ToolBundle(
         name="memory",
@@ -626,6 +633,9 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "generate_image",
         "list_sd_models",
         "get_generation_history",
+        "generate_music",
+        "generate_sound_effect",
+        "list_audio_generation_models",
     }
 )
 

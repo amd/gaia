@@ -120,7 +120,7 @@ from gaia.agents.base.tool_grants import (
 from gaia.agents.base.tool_markup import (
     MalformedToolMarkup,
     has_tool_markup,
-    parse_deepseek_tool_calls,
+    parse_text_tool_calls,
     strip_tool_markup,
 )
 from gaia.agents.base.tool_outcome import (
@@ -1276,6 +1276,36 @@ _TOOL_CALL_MARKUP_PATTERN = re.compile(
     r"<invoke\s+name\s*=|<parameter\s+name\s*=|\{\s*\"tool\"\s*:"
 )
 _ENVELOPE_KEYS = ("thought", "goal", "tool", "tool_args", "plan")
+
+
+def _holds_complete_text_call(response: str) -> bool:
+    """Whether *response* carries at least one complete, parseable text tool call."""
+    try:
+        return parse_text_tool_calls(response) is not None
+    except MalformedToolMarkup:
+        return False
+
+
+def _typed_markup_args(
+    args: Dict[str, Any], declared: Dict[str, Any]
+) -> Dict[str, Any]:
+    """XML markup carries every value as text; type the non-string parameters.
+
+    A value that is not valid JSON for its declared type stays text, so the
+    tool's own validation reports it rather than this guessing.
+    """
+    typed = {}
+    for name, value in args.items():
+        kind = (declared.get(name) or {}).get("type")
+        if isinstance(value, str) and kind and kind != "string":
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                pass  # left as text; the tool rejects it with its own message
+        typed[name] = value
+    return typed
+
+
 # Broken tool-call markup gets one retry; after that the turn says so, never shows it.
 _MAX_MARKUP_RETRIES = 1
 _TOOL_MARKUP_FAILURE_ANSWER = (
@@ -2493,10 +2523,14 @@ Do NOT wrap conversational replies in JSON.
 
             if cloud_model_provider(model_id):
                 # The local manager preloads a chat model even on an idle server.
+                probe_client = LemonadeClient(base_url=base_url, verbose=False)
                 try:
-                    LemonadeClient(base_url=base_url, verbose=False).health_check()
+                    probe_client.health_check()
                 except LemonadeUnresponsiveError:
                     LemonadeManager.report_busy(base_url, quiet=silent_mode)
+                else:
+                    # Before the prompt is composed: it decides the tool format.
+                    LemonadeManager.learn_tool_calling(probe_client, model_id)
             else:
                 # Unpinned, the manager checks the device profile's floor. This
                 # model's own (possibly memory-sized) window is applied when it
@@ -2987,6 +3021,18 @@ Do NOT wrap conversational replies in JSON.
         return bool(getattr(self, "_use_claude", False)) or is_tool_calling_model(
             getattr(self, "model_id", None)
         )
+
+    def _hosted_native_tool_caller(self) -> bool:
+        """True for Claude, or a cloud-routed model that takes ``tools=``."""
+        if getattr(self, "_use_claude", False):
+            return True
+        from gaia.llm.lemonade_client import cloud_model_info, cloud_model_provider
+
+        model_id = getattr(self, "model_id", None)
+        hosted = bool(cloud_model_provider(model_id)) or (
+            cloud_model_info(model_id) is not None
+        )
+        return hosted and self._uses_native_tool_calls()
 
     @property
     def system_prompt(self) -> str:
@@ -4772,12 +4818,12 @@ Do NOT wrap conversational replies in JSON.
         )
 
     def _parse_markup_tool_calls(self, response: str) -> Optional[Dict[str, Any]]:
-        """Tool calls the model wrote as DeepSeek markup, in parsed-response shape.
+        """Tool calls the model wrote as text markup, in parsed-response shape.
 
         Raises ``MalformedToolMarkup`` (a ``ValueError``) for markup that is
         there but cannot run, so the loop retries it instead of answering with it.
         """
-        markup = parse_deepseek_tool_calls(response)
+        markup = parse_text_tool_calls(response)
         if markup is None:
             return None
         calls = []
@@ -4785,6 +4831,8 @@ Do NOT wrap conversational replies in JSON.
         for call in markup.calls:
             declared = (self._tools_registry.get(call.name) or {}).get("parameters")
             args = dict(call.args)
+            if call.raw_strings:
+                args = _typed_markup_args(args, declared or {})
             # Models mixing in the JSON format add envelope keys as parameters.
             for key in _ENVELOPE_KEYS:
                 if key in args and (declared is None or key not in declared):
@@ -5054,7 +5102,8 @@ Do NOT wrap conversational replies in JSON.
         # Python-call syntax detector (#2521) before giving up.
         return self._extract_function_call_tool_syntax(response)
 
-    _FUNC_CALL_NAME_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+    # No space before "(": a call is ``remember(fact=...)``; "tree (v2)" is prose.
+    _FUNC_CALL_NAME_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\(")
 
     def _extract_function_call_tool_syntax(
         self, response: str
@@ -5086,7 +5135,9 @@ Do NOT wrap conversational replies in JSON.
                 list that could not be parsed as Python literals.
         """
         registry = self._tools_registry
-        if not registry:
+        # A hosted native tool-caller's text is prose. Local tool-calling
+        # models (Gemma, Qwen) still write ``remember(...)`` in text.
+        if not registry or self._hosted_native_tool_caller():
             return None
 
         for match in self._FUNC_CALL_NAME_RE.finditer(response):
@@ -8775,6 +8826,38 @@ Do NOT wrap conversational replies in JSON.
                 before=before,
                 executed=record["ran"],
             )
+            if record["ran"] and not record["failed"]:
+                self._verify_whole_write(evidence, tool_name, record["args"])
+
+    #: Above this a written file is left for the model to check in parts.
+    _MAX_FRAMEWORK_READBACK = 4 * 1024 * 1024
+
+    def _verify_whole_write(self, evidence: Any, tool_name: str, args: dict) -> None:
+        """Read back a whole-file write; if it matches, the model need not.
+
+        The model already holds exactly what it wrote, so re-reading it only
+        spends a turn. Anything that differs (encoding, a hook, a partial write)
+        is left unverified and the model is still asked to check it.
+        """
+        content, path = args.get("content"), args.get("file_path")
+        if tool_name != "write_file" or not isinstance(content, str):
+            return
+        if not isinstance(path, str) or not path or "\x00" in path:
+            return
+        # The same resolution the ledger keys the write by (project_dir included).
+        key = evidence.key(path, args.get("project_dir"))
+        if key.startswith(("\\\\", "//")):
+            return  # a network share: no round trip from the agent loop
+        target = Path(key)
+        try:
+            if target.stat().st_size > self._MAX_FRAMEWORK_READBACK:
+                return
+            on_disk = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            logger.debug("No framework read-back of %s: %s", target, e)
+            return
+        if on_disk.replace("\r\n", "\n") == content.replace("\r\n", "\n"):
+            evidence.read_by_framework(key)
 
     def _verification_project_root(self) -> Optional[str]:
         """The project this turn works in, from the shared project-root resolver."""
@@ -10410,8 +10493,12 @@ Do NOT wrap conversational replies in JSON.
 
             # A reply the output-token limit cut off is unfinished whatever it
             # says; parsing it would turn half a thought into the answer.
-            if response_finish_reason == "length" and not response.startswith(
-                '{"__tool_calls__":'
+            if (
+                response_finish_reason == "length"
+                and not response.startswith('{"__tool_calls__":')
+                # Some gateways report "length" when a model stops on its own
+                # text tool call; a complete call is not cut off.
+                and not _holds_complete_text_call(response)
             ):
                 self.error_history.append(
                     {
