@@ -159,9 +159,11 @@ def unaskable_denial_message(tool_name: str) -> str:
 
 def edit_target(tool_args: Any) -> str:
     """Where a file-writing call lands — the same rule the file tools apply
-    (``gaia.agents.tools.file_io_tools._resolve_target``): a relative
+    (``gaia.agents.tools.workspace_paths._resolve_target``): a relative
     ``file_path`` sits under ``project_dir`` when one is given, else under the
-    process cwd. "" when the call names no file."""
+    process cwd. It does not know a session workspace, so a host that sets one
+    passes args already resolved by the tool's ``target_of``. "" when the call
+    names no file."""
     target = path_argument(tool_args)
     if not target:
         return ""
@@ -328,9 +330,11 @@ class OutputHandler(ABC):
     """A person turned on full access for this session, and can see that it is on.
 
     Strictly narrower in origin than ``auto_approve_gated_tools`` and wider in
-    effect. Only ``PermissionState`` sets it, from the TUI's ``/full-access``
-    (or the retired ``--bypass-permissions`` spelling) — an unattended harness
-    that merely pre-approves prompts must not also get an unguarded shell. In
+    effect. Only an explicit opt-in a person names sets it — the TUI's
+    ``/full-access`` via ``PermissionState`` (or the retired
+    ``--bypass-permissions`` spelling), or ``gaia -p --full-access`` — never
+    pre-approval: an unattended harness that merely pre-approves prompts must
+    not also get an unguarded shell. In
     exchange it lifts the shell guardrails too: the operator block, the
     read-only binary policy (replaced by ``DEVELOPER_COMMANDS``) and the rate
     limit, and it runs commands outside ``run_shell_command``'s no-prompt list
@@ -366,6 +370,14 @@ class OutputHandler(ABC):
     Set by a transport whose caller declared someone is watching (the relayed
     Agent UI). Without :attr:`full_access`, pre-approval never widens the file
     scope; this lets an out-of-scope path be asked about instead of refused.
+    """
+
+    asks_past_preapproval: bool = False
+    """``confirm_tool_execution`` asks about a call marked ``NEEDS_PERSON_ARG``
+    even while tools are pre-approved, and denies it when nobody can answer.
+
+    A tool marks a call only on a console that declares this, so a console
+    that would pre-approve the marked call never sees one.
     """
 
     _last_denial: Optional[Denial] = None
@@ -506,6 +518,10 @@ class OutputHandler(ABC):
         wall clock, which includes tool time and agent overhead.
         """
         ...
+
+    def mark_turn_failed(self) -> None:
+        """The next :meth:`print_final_answer` ends a turn a model failure cut
+        short, so a console can report the turn as failed. Optional — no-op."""
 
     def print_turn_metrics(  # pylint: disable=unused-argument
         self, record: Dict[str, Any]
@@ -1115,6 +1131,9 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                 except Exception:
                     continue
             return "<non-serializable>"
+
+        if title == "Arguments" and not data:
+            return  # a call with no arguments has nothing to show
 
         if self.rich_available:
             # Check if this is a command execution result

@@ -6,6 +6,7 @@ import { X, Smartphone, Copy, Check } from 'lucide-react';
 import type { TunnelStatus } from '../types';
 import * as api from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { log } from '../utils/logger';
 import './MobileAccessModal.css';
 
@@ -26,6 +27,8 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
     const [qrError, setQrError] = useState<string | null>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     useEscapeToClose(isOpen, onClose);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useFocusTrap(dialogRef, isOpen);
 
     // Fetch current tunnel status using centralized API client
     const fetchStatus = useCallback(async () => {
@@ -135,7 +138,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
         : '';
 
     return (
-        <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Mobile access">
+        <div ref={dialogRef} className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Mobile access">
             <div className="modal-panel mobile-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
                     <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

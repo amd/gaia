@@ -63,6 +63,14 @@ describe('ModelStatusPill', () => {
         expect(screen.getByRole('button', { name: 'Local · Gemma 4 E4B, model stopped' })).toBeInTheDocument();
     });
 
+    it('shows the place and the model on separate lines and keeps the full name in the tooltip', () => {
+        render(<ModelStatusPill />);
+        const pill = screen.getByRole('button', { name: /Local · Gemma 4 E4B/ });
+        expect(pill.querySelector('.sb-location-place')).toHaveTextContent('Local');
+        expect(pill.querySelector('.sb-location-name')).toHaveTextContent('Gemma 4 E4B');
+        expect(pill.title).toMatch(/^Local · Gemma 4 E4B\./);
+    });
+
     it('opens the live status instead of Settings', async () => {
         mockedApi.getLocalModelStatus.mockResolvedValue(LOADED);
         render(<ModelStatusPill />);

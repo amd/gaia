@@ -629,7 +629,12 @@ class AgentRegistry:
         # 1. Scan <gaia_home>/agents/
         agents_dir = gaia_agents_dir()
         if agents_dir.exists():
-            subdirs = sorted(d for d in agents_dir.iterdir() if d.is_dir())
+            # Dot-names are never agents: the install backup and lock queues.
+            subdirs = sorted(
+                d
+                for d in agents_dir.iterdir()
+                if d.is_dir() and not d.name.startswith(".")
+            )
             logger.info(
                 "registry: Found %d agent directories: %s",
                 len(subdirs),

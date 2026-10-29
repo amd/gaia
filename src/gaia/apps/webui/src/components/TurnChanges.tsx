@@ -6,22 +6,12 @@ import { AlertTriangle, FileDiff as FileDiffIcon, Undo2 } from 'lucide-react';
 import * as api from '../services/api';
 import { useTurnChanges } from '../hooks/useTurnChanges';
 import { announceUndo } from '../utils/undoEvents';
-import type { UntrackedWork } from '../types/changes';
+import { groupUntracked, untrackedWarning } from '../utils/untrackedWork';
 import { ChangesReview } from './ChangesReview';
 import './TurnChanges.css';
 
 function plural(n: number, one: string, many = `${one}s`): string {
     return `${n} ${n === 1 ? one : many}`;
-}
-
-function untrackedLabel(u: UntrackedWork): string {
-    switch (u.kind) {
-        case 'shell': return `Command: ${u.detail}`;
-        case 'run_python': return 'A Python snippet';
-        case 'execute_python_file': return `Python script: ${u.detail}`;
-        case 'mcp': return `Connected tool: ${u.detail}`;
-        default: return `${u.kind}: ${u.detail}`;
-    }
 }
 
 type Phase = 'idle' | 'confirm' | 'working' | 'conflict' | 'done';
@@ -69,45 +59,66 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
 
     const count = turn.files.length;
     const undone = Boolean(turn.restored_at);
+    const groups = groupUntracked(turn.untracked);
 
     return (
         <div className="turn-changes" aria-label="File changes from this turn">
-            <div className="turn-changes-row">
-                <span className="turn-changes-summary">
-                    {count > 0 ? `Changed ${plural(count, 'file')}` : 'Ran commands that may have changed files'}
-                    {undone && ' · undone'}
-                </span>
-                {count > 0 && (
+            {count > 0 && (
+                <div className="turn-changes-row">
+                    <span className="turn-changes-summary">
+                        Changed {plural(count, 'file')}
+                        {undone && ' · undone'}
+                    </span>
                     <button type="button" className="turn-changes-btn" onClick={() => setReviewing(true)}>
                         <FileDiffIcon size={12} aria-hidden="true" /> Review changes
                     </button>
-                )}
-                {count > 0 && !undone && phase !== 'confirm' && phase !== 'conflict' && (
-                    <button
-                        type="button"
-                        className="turn-changes-btn"
-                        onClick={() => setPhase('confirm')}
-                        disabled={phase === 'working'}
-                    >
-                        <Undo2 size={12} aria-hidden="true" /> {phase === 'working' ? 'Undoing…' : 'Undo this turn'}
-                    </button>
-                )}
-                {phase === 'confirm' && (
-                    <span className="turn-changes-confirm" role="group" aria-label="Confirm undo">
-                        Put {plural(count, 'file')} back the way {count === 1 ? 'it was' : 'they were'} before this turn?
-                        <button type="button" className="turn-changes-btn is-primary" onClick={() => void undo(false)}>Undo</button>
-                        <button type="button" className="turn-changes-btn" onClick={() => setPhase('idle')}>Cancel</button>
-                    </span>
-                )}
-            </div>
+                    {!undone && phase !== 'confirm' && phase !== 'conflict' && (
+                        <button
+                            type="button"
+                            className="turn-changes-btn"
+                            onClick={() => setPhase('confirm')}
+                            disabled={phase === 'working'}
+                        >
+                            <Undo2 size={12} aria-hidden="true" /> {phase === 'working' ? 'Undoing…' : 'Undo this turn'}
+                        </button>
+                    )}
+                    {phase === 'confirm' && (
+                        <span className="turn-changes-confirm" role="group" aria-label="Confirm undo">
+                            Put {plural(count, 'file')} back the way {count === 1 ? 'it was' : 'they were'} before this turn?
+                            <button type="button" className="turn-changes-btn is-primary" onClick={() => void undo(false)}>Undo</button>
+                            <button type="button" className="turn-changes-btn" onClick={() => setPhase('idle')}>Cancel</button>
+                        </span>
+                    )}
+                </div>
+            )}
             {turn.incomplete && (
                 <div className="turn-changes-warning" role="note">
                     <AlertTriangle size={12} aria-hidden="true" />
                     <span>
-                        Undo may be incomplete: GAIA can't see or undo what these did.
-                        <ul>
-                            {turn.untracked.map((u, i) => <li key={i}>{untrackedLabel(u)}</li>)}
-                        </ul>
+                        {untrackedWarning(turn.untracked, { also: count > 0 })}
+                        {groups.length > 0 && (
+                            <ul>
+                                {groups.map((g) => (
+                                    <li key={g.kind}>
+                                        {g.entries.length === 1 ? (
+                                            <span title={g.entries[0].detail || undefined}>{g.title}</span>
+                                        ) : (
+                                            <details>
+                                                <summary>{g.title}</summary>
+                                                <ul>
+                                                    {g.entries.map((e) => (
+                                                        <li key={e.detail} title={e.detail || undefined}>
+                                                            {e.label || 'No description'}
+                                                            {e.count > 1 && ` ×${e.count}`}
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </details>
+                                        )}
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
                     </span>
                 </div>
             )}

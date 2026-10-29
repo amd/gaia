@@ -193,7 +193,7 @@ def test_discovered_custom_cloud_avoids_local_load(client):
         (429, "Wait before retrying"),
         (402, "spending limit"),
         (412, "spending limit"),
-        (500, "Check the provider"),
+        (500, "provider connection and selected model"),
     ],
 )
 @responses.activate
@@ -433,7 +433,7 @@ def test_model_availability_does_not_hide_programming_errors(client, monkeypatch
         (429, "Wait before retrying"),
         (402, "spending limit"),
         (412, "spending limit"),
-        (500, "Check the provider"),
+        (500, "provider connection and selected model"),
     ],
 )
 def test_cloud_sse_backend_error_uses_status_without_reflecting_body(

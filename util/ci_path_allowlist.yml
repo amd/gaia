@@ -1,0 +1,34 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Declared exceptions for util/check_ci_path_coverage.py.
+#
+# That check fails when a workflow's `paths:` filter would not fire on a file
+# the workflow runs, imports, installs or reads. An entry here says "this lane
+# depends on that file on paper, and here is why skipping it is safe". The
+# reason is the point: a reviewer has to be able to judge it.
+#
+# `dependencies:` maps a workflow file name (or `*` for every workflow) to path
+# globs it may leave out. `orphans:` lists tracked files that may trigger no
+# pull_request workflow at all.
+
+dependencies:
+  "*":
+    src/gaia/__init__.py: >-
+      `import gaia` runs the package init in every lane. Breaking it breaks
+      every import, which test_unit.yml's unit and import-every-module jobs
+      catch; they trigger on all of src/**.
+
+  test_gaia_agent.yml:
+    docs/guides/talk.mdx: >-
+      tests/unit/test_flagship_ci.py names it as the docs page that must NOT
+      trigger this lane; it is a probe string, not a file the test reads.
+
+  build-installers.yml:
+    src/gaia/apps/webui/**: >-
+      The installer build compiles the Agent UI, but its source is already
+      compiled and tested by test_electron.yml (tsc + vitest) and built by
+      pypi.yml. This lane triggers on the files that change packaging:
+      electron-builder.yml, package.json, main.cjs, bin/ and services/.
+
+orphans: {}

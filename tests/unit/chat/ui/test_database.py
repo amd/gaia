@@ -4,6 +4,7 @@
 """Unit tests for GAIA Agent UI database layer."""
 
 import sqlite3
+import threading
 import time
 
 import pytest
@@ -943,3 +944,37 @@ def test_a_failed_migration_stops_startup(tmp_path):
 
     with pytest.raises(RuntimeError, match=r"sessions\.private"):
         ChatDatabase(path)
+
+
+class TestCloseWhileInUse:
+    """The server closes the database at shutdown while boot jobs may still read it."""
+
+    def test_close_waits_for_a_query_on_another_thread(self, tmp_path):
+        database = ChatDatabase(str(tmp_path / "chat.db"))
+        database.set_setting("custom_model", "m")
+        reading = threading.Event()
+        finish = threading.Event()
+        seen = []
+
+        def slow_reader():
+            with database._lock:
+                reading.set()
+                finish.wait(5)
+                seen.append(
+                    database._conn.execute(
+                        "SELECT value FROM settings WHERE key = 'custom_model'"
+                    ).fetchone()[0]
+                )
+
+        reader = threading.Thread(target=slow_reader)
+        reader.start()
+        assert reading.wait(5)
+        closer = threading.Thread(target=database.close)
+        closer.start()
+        closer.join(0.2)
+        assert closer.is_alive(), "close() ran while a query held the connection"
+        finish.set()
+        reader.join(5)
+        closer.join(5)
+        assert seen == ["m"]
+        assert database._conn is None

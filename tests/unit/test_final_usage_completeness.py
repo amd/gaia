@@ -131,3 +131,12 @@ def test_an_answer_pulled_from_the_stream_does_not_end_the_turn():
     )
 
     assert out == [{"type": "token", "delta": "2"}]
+
+
+def test_a_failed_turn_keeps_its_failed_mark_on_the_final():
+    """A host records the run from this event; dropping the mark records a
+    turn the model never finished as done."""
+    final = translate({**FULL_ANSWER, "content": "The model stopped.", "failed": True})
+    assert final["failed"] is True
+    assert final["answer"] == "The model stopped."
+    assert "failed" not in translate(FULL_ANSWER)

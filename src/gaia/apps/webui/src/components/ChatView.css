@@ -43,6 +43,11 @@
 
 .task-header-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .task-header-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.task-header-right .task-header-private[data-private="true"] {
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
+}
+.task-header-right .task-header-private[data-private="true"]:hover { background: var(--accent-fill-hover); }
 
 .task-title {
     display: inline-flex;
@@ -64,7 +69,6 @@
     overflow: hidden;
     white-space: nowrap;
     padding-right: 24px;
-    margin-right: -24px;
     -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
     mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
 }
