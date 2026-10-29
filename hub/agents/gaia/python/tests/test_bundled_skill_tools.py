@@ -71,9 +71,7 @@ def _bundled_only(roots, tmp_path: Path) -> SkillManager:
 # --------------------------------------------------------------------------
 
 
-def test_a_bundled_skill_tool_registers_on_load_and_goes_on_unload(
-    flagship, tmp_path
-):
+def test_a_bundled_skill_tool_registers_on_load_and_goes_on_unload(flagship, tmp_path):
     """rss-digest ships fetch_rss in its tools.py; loading it must offer the tool."""
     from gaia.agents.base.tools import _TOOL_REGISTRY
 
@@ -91,9 +89,7 @@ def test_a_bundled_skill_tool_registers_on_load_and_goes_on_unload(
         # Only the skill's own tools were added: tool counts and capability
         # docs describe the agent without skills, and stay true until a load.
         assert set(flagship._tools_registry) - before == {"rss-digest/fetch_rss"}
-        offered = {
-            s["function"]["name"] for s in flagship._build_openai_tool_schemas()
-        }
+        offered = {s["function"]["name"] for s in flagship._build_openai_tool_schemas()}
         assert "rss-digest/fetch_rss" in offered
     finally:
         assert flagship.unload_skill("rss-digest")
@@ -169,9 +165,7 @@ def test_the_description_lint_covers_bundled_skill_tools():
 
     agent = build_full_agent_skeleton()
     before = dict(agent._instance_tools)
-    names = {
-        s["function"]["name"] for s in check.bundled_skill_tool_schemas(agent)
-    }
+    names = {s["function"]["name"] for s in check.bundled_skill_tool_schemas(agent)}
 
     assert "rss-digest/fetch_rss" in names
     assert agent._instance_tools == before, "the lint left skill tools behind"
@@ -233,3 +227,82 @@ def test_the_freeze_refuses_a_skill_name_in_both_roots(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="dup"):
         freeze._resolve_add_data()
 
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "try:\n    import gaia_no_such_module_xyz\nexcept ImportError:\n    pass\n",
+        "try:\n    import gaia_no_such_module_xyz\n"
+        "except ModuleNotFoundError:\n    pass\n",
+        "try:\n    import gaia_no_such_module_xyz\n"
+        "except (OSError, ImportError):\n    pass\n",
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n    import gaia_no_such_module_xyz\n",
+        "import typing\nif typing.TYPE_CHECKING:\n"
+        "    from gaia_no_such_module_xyz import thing\n",
+    ],
+    ids=["except-import", "except-mnf", "except-tuple", "type-checking", "typing-dot"],
+)
+def test_the_freeze_skips_an_import_the_skill_guards(tmp_path, source):
+    """An optional or type-only import cannot fail the build."""
+    skill_dir = tmp_path / "guards"
+    skill_dir.mkdir()
+    (skill_dir / "tools.py").write_text(source)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(freeze, "REPO_ROOT", tmp_path)
+        hidden = freeze.skill_code_hidden_imports([skill_dir])
+
+    assert "gaia_no_such_module_xyz" not in hidden
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # A handler that does not catch ImportError leaves the import required.
+        "try:\n    import gaia_no_such_module_xyz\nexcept KeyError:\n    pass\n",
+        # The import in the handler or else branch is not guarded by it.
+        "try:\n    pass\nexcept ImportError:\n    import gaia_no_such_module_xyz\n",
+        "try:\n    pass\nexcept ImportError:\n    pass\n"
+        "else:\n    import gaia_no_such_module_xyz\n",
+        # The else branch of `if TYPE_CHECKING` runs.
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    pass\n"
+        "else:\n    import gaia_no_such_module_xyz\n",
+        # Any other condition is not a type-only guard.
+        "import os\nif os.name == 'nt':\n    import gaia_no_such_module_xyz\n",
+        # Inside a function is still a runtime import.
+        "def f():\n    import gaia_no_such_module_xyz\n",
+    ],
+    ids=[
+        "except-other",
+        "in-handler",
+        "in-else",
+        "type-checking-else",
+        "other-if",
+        "nested-def",
+    ],
+)
+def test_the_freeze_still_refuses_an_unguarded_import(tmp_path, source):
+    skill_dir = tmp_path / "unguarded"
+    skill_dir.mkdir()
+    (skill_dir / "tools.py").write_text(source)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(freeze, "REPO_ROOT", tmp_path)
+        with pytest.raises(SystemExit, match="gaia_no_such_module_xyz"):
+            freeze.skill_code_hidden_imports([skill_dir])
+
+
+def test_the_freeze_still_bundles_a_guarded_import_that_is_installed(tmp_path):
+    """Optional is not excluded: an installed optional module must ship too."""
+    skill_dir = tmp_path / "optional"
+    skill_dir.mkdir()
+    (skill_dir / "tools.py").write_text(
+        "try:\n    import gaia.web.client\nexcept ImportError:\n    pass\n"
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(freeze, "REPO_ROOT", tmp_path)
+        hidden = freeze.skill_code_hidden_imports([skill_dir])
+
+    assert "gaia.web.client" in hidden

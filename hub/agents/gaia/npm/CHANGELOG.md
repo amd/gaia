@@ -22,6 +22,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   text-only clients. Pre-2.25 binaries refuse the field with `422`, so probe
   `/version` first.
 
+### Fixed
+
+- **The binary carries the starter skills and their tools.** The release build
+  shipped none of `hub/skills`, so a skill like `rss-digest` loaded in a
+  checkout but its tools were missing from the binary. The pack is now
+  bundled with every module its code imports. A skill tool named like a
+  confirmation-gated core tool (`write_file`, `run_python`) always asks first,
+  and a skill's `write_*` / `edit_*` tool counts as a file change.
+
 ## [0.3.2]
 
 Released with GAIA 0.25.2, and requires the `gaia`

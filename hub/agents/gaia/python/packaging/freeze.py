@@ -295,6 +295,44 @@ def _find_spec(name: str):
         return None
 
 
+_IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError"}
+
+
+def _catches_import_error(handler: ast.ExceptHandler) -> bool:
+    kinds = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return any(
+        (isinstance(k, ast.Name) and k.id in _IMPORT_ERRORS)
+        or (isinstance(k, ast.Attribute) and k.attr in _IMPORT_ERRORS)
+        for k in kinds
+    )
+
+
+def _is_type_checking(test: ast.expr) -> bool:
+    return (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
+        isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+    )
+
+
+def _imports(node: ast.AST, optional: bool = False):
+    """``(import node, optional)`` for every import in *node* and below it.
+
+    An import in the body of a ``try`` that catches ``ImportError``, or of an
+    ``if TYPE_CHECKING:``, is optional: the skill already runs without it.
+    """
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        yield node, optional
+        return
+    guarded: list[ast.stmt] = []
+    if isinstance(node, ast.Try) and any(
+        _catches_import_error(h) for h in node.handlers
+    ):
+        guarded = node.body
+    elif isinstance(node, ast.If) and _is_type_checking(node.test):
+        guarded = node.body
+    for child in ast.iter_child_nodes(node):
+        yield from _imports(child, optional or child in guarded)
+
+
 def skill_code_hidden_imports(skill_dirs: list[Path] | None = None) -> list[str]:
     """Modules the bundled skills' code imports, as hidden imports.
 
@@ -308,7 +346,7 @@ def skill_code_hidden_imports(skill_dirs: list[Path] | None = None) -> list[str]
     for skill_dir in bundled_skill_dirs() if skill_dirs is None else skill_dirs:
         for source in _skill_code_files(skill_dir):
             tree = ast.parse(source.read_text(encoding="utf-8"), str(source))
-            for node in ast.walk(tree):
+            for node, optional in _imports(tree):
                 if isinstance(node, ast.Import):
                     found = [alias.name for alias in node.names]
                     submodules: list[str] = []
@@ -323,7 +361,8 @@ def skill_code_hidden_imports(skill_dirs: list[Path] | None = None) -> list[str]
                     if _is_local_module(name, skill_dir, source):
                         continue
                     if _find_spec(name) is None:
-                        missing.append(f"{name} ({source.relative_to(REPO_ROOT)})")
+                        if not optional:
+                            missing.append(f"{name} ({source.relative_to(REPO_ROOT)})")
                         continue
                     names.add(name)
                     names.update(m for m in submodules if _find_spec(m) is not None)
