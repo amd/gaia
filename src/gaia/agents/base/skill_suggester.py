@@ -193,8 +193,9 @@ class SkillSuggester:
             scored = self.scores(query, skills)
         except Exception as exc:  # noqa: BLE001 — a suggestion is optional
             self._disabled_until = time.monotonic() + self.RETRY_COOLDOWN_SECONDS
-            log.debug(
-                "Skill suggestions paused for %.0fs: embedding failed: %s",
+            log.warning(
+                "Skill suggestions paused for %.0fs (the catalogue still lists "
+                "every skill): embedding failed: %s",
                 self.RETRY_COOLDOWN_SECONDS,
                 exc,
             )

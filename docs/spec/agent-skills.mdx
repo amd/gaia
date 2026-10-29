@@ -511,8 +511,9 @@ suggestion costs one line the model can ignore.
 - **Cost.** Each description is embedded once and cached by content. A turn
   costs one query embedding.
 - **No embedder.** The turn gets no suggestion and selection pauses for a
-  minute; the reason is logged at debug level. It is never an error, because
-  the catalogue still lists every skill. The same applies with memory off.
+  minute, with one warning per pause naming the reason. It is never an error,
+  because the catalogue still lists every skill. With memory off there is no
+  suggestion either; that is configuration, so it logs at debug level.
 
 Tunable: `GAIA_SKILL_SUGGEST` (`0` turns it off, `1` forces it on) or
 `GaiaAgentConfig(skill_suggestions=False)`; `skill_suggestion_threshold` sets

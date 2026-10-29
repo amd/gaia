@@ -208,11 +208,14 @@ def test_embedder_failure_means_no_suggestion_and_a_cooldown(caplog):
     with caplog.at_level(logging.DEBUG, logger="gaia.agents.base.skill_suggester"):
         assert s.suggest("draw me a cat", skills) == []
     assert s.cooling_down
-    assert "embedder down" in caplog.text
-    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and "embedder down" in warnings[0].getMessage()
     tried = len(calls)
-    assert s.suggest("draw me a cat", skills) == []
+    with caplog.at_level(logging.DEBUG, logger="gaia.agents.base.skill_suggester"):
+        assert s.suggest("draw me a cat", skills) == []
     assert len(calls) == tried  # no retry while cooling down
+    # One warning per outage, not one per turn.
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
 
 
 def test_a_short_batch_is_treated_as_a_failure():
