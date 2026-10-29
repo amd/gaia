@@ -47,10 +47,11 @@ def _scan_paths():
     yield from _SRC.rglob("*")
     for name in _EXTRA_SCAN_PATHS:
         path = _SRC.parents[1] / name
+        assert path.exists(), f"URL scan path {path} is gone; update _EXTRA_SCAN_PATHS"
         yield from path.rglob("*") if path.is_dir() else [path]
 
 
-def test_amd_gaia_urls_in_src_use_docs_prefix():
+def test_amd_gaia_urls_use_docs_prefix():
     offenders: list[str] = []
     for path in _scan_paths():
         if not path.is_file() or path.suffix not in _SCAN_EXTENSIONS:
@@ -68,8 +69,7 @@ def test_amd_gaia_urls_in_src_use_docs_prefix():
             line_num = text.count("\n", 0, match.start()) + 1
             rel = path.relative_to(_SRC.parents[1])
             offenders.append(f"{rel}:{line_num}: {url}")
-    assert (
-        not offenders
-    ), "amd-gaia.ai URLs missing /docs/ prefix (see issue #1058):\n  " + "\n  ".join(
-        offenders
+    assert not offenders, (
+        "amd-gaia.ai URLs missing /docs/ prefix (see issues #1058, #4433):\n  "
+        + "\n  ".join(offenders)
     )

@@ -210,8 +210,8 @@ Mintlify docs tab serves under `/docs/` and bare paths 404. This is enforced by
 `tests/unit/test_amd_gaia_urls.py` (issue #1058), which scans every `amd-gaia.ai`
 URL literal in `src/gaia/`, plus `scripts/`, `installer/`, `.github/` and this
 file; dropping `/docs/` from a runtime string is a CI failure,
-not a cleanup. Only the site root and install scripts (`/install.ps1`, `/install.sh`)
-are allowlisted without the prefix.
+not a cleanup. Only the site root, `/#install`, `/docs`, and the install scripts
+(`/install.ps1`, `/install.sh`) are allowlisted without the prefix.
 
 #### IMPORTANT: A functional change must update EVERY doc that describes it — not just one
 
