@@ -217,8 +217,12 @@ def test_the_next_turn_sees_the_refused_tool_call(monkeypatch, live_sidecar, cha
     base_url, agents, api_version = live_sidecar
     _point_ui_at(monkeypatch, base_url, api_version)
 
-    assert _answer(chat.send("list the PRs")) == "The command was refused."
+    first_events = chat.send("list the PRs")
+    assert _answer(first_events) == "The command was refused."
     assert _answer(chat.send("why did that fail?")) == "second"
+    # The record is the model's, kept server-side: the browser never gets it.
+    assert _REFUSAL not in json.dumps(first_events)
+    assert _REFUSAL not in json.dumps(chat.db.get_messages(chat.session_id))
 
     [agent] = agents
     first, second = agent.seen
