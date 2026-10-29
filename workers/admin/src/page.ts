@@ -105,6 +105,7 @@ details.tv{border-top:1px solid var(--line)}details.tv summary{cursor:pointer;co
 table{border-collapse:collapse;width:100%;font-size:12.5px}
 td,th{padding:6px 10px;border-bottom:1px solid var(--line2);text-align:left;white-space:nowrap}
 th{font-family:"JetBrains Mono",monospace;color:var(--mute);font-weight:500;font-size:10px;letter-spacing:.1em;text-transform:uppercase;position:sticky;top:0;background:var(--bg)}
+th.sortable{cursor:pointer;user-select:none}th.sortable:hover,th.sortable:focus-visible{color:var(--ink2)}th[aria-sort=ascending]::after{content:" ▲"}th[aria-sort=descending]::after{content:" ▼"}
 .n{text-align:right;font-variant-numeric:tabular-nums}
 .trunc{max-width:340px;overflow:hidden;text-overflow:ellipsis}
 td.trunc.clipped{cursor:zoom-in}td.trunc.clipped:hover{color:var(--accent)}
@@ -203,7 +204,28 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){pinned=null
 function markClipped(root){(root||document).querySelectorAll('td.trunc').forEach(function(td){if(td.classList.contains('wide'))return;td.classList.toggle('clipped',td.scrollWidth>td.clientWidth+1);if(td.classList.contains('clipped')&&!td.title)td.title=td.textContent;});}
 document.addEventListener('click',function(e){var td=e.target.closest&&e.target.closest('td.trunc');if(!td||e.target.closest('a'))return;if(!td.classList.contains('clipped')&&!td.classList.contains('wide'))return;
   var col=td.cellIndex,on=!td.classList.contains('wide');td.closest('table').querySelectorAll('tr').forEach(function(tr){var c=tr.cells[col];if(c&&c.classList.contains('trunc'))c.classList.toggle('wide',on);});e.stopPropagation();markClipped(td.closest('table'));});
-new MutationObserver(function(){clearTimeout(markClipped.t);markClipped.t=setTimeout(function(){markClipped();},60);}).observe(document.querySelector('main'),{childList:true,subtree:true});
+/* Every table sorts by any column: first click ascending, second descending, third back to the original order. */
+var SORT={},UNIT={s:1,min:60,h:3600,d:86400,day:86400,days:86400,w:604800,week:604800,weeks:604800,k:1e3,M:1e6};
+/* A cell's sort value: numbers (with units: 54s < 5 min < 1.2 h < 3 days), else lower-case text; null for an empty cell. */
+function cellKey(td){if(!td)return null;var v=td.getAttribute('data-v'),t=(v!=null?v:td.textContent).trim();if(!t||t==='—'||t==='-')return null;
+  if(v!=null&&v!==''&&!isNaN(+v))return +v;
+  var m=/^\d{4}-\d\d-\d\d/.test(t)?null:t.replace(/,/g,'').match(/^([+\-−]?)\$?(\d*\.?\d+)\s*(%|×|min|s|h|days?|d|weeks?|w|k|M|pts)?(?![A-Za-z])/);
+  if(m)return parseFloat(m[2])*(m[1]&&m[1]!=='+'?-1:1)*(UNIT[m[3]]||1);
+  return t.toLowerCase();}
+function sortRows(t,ci,d){var rows=[].slice.call(t.rows).filter(function(r){return r._i!=null;});
+  rows.sort(function(a,b){if(!d)return a._i-b._i;var x=cellKey(a.cells[ci]),y=cellKey(b.cells[ci]);
+    if(x===null||y===null)return x===y?a._i-b._i:x===null?1:-1;
+    var c=typeof x===typeof y?(x<y?-1:x>y?1:0):(typeof x==='number'?-1:1);return c*d||a._i-b._i;});
+  rows.forEach(function(r){r.parentNode.appendChild(r);});
+  [].forEach.call(t.rows[0].cells,function(th,i){th.setAttribute('aria-sort',i===ci&&d?(d>0?'ascending':'descending'):'none');});}
+function sortable(root){(root||document).querySelectorAll('table').forEach(function(t){if(t._s)return;t._s=1;var head=t.rows[0];
+  if(!head||!head.querySelector('th'))return;var body=[].slice.call(t.rows,1);if(body.length<2)return;body.forEach(function(r,i){r._i=i;});
+  var c=t.closest('[id]'),key=(c?c.id:'')+'|'+[].map.call(head.cells,function(th){return th.textContent;}).join('|');
+  [].forEach.call(head.cells,function(th,ci){th.tabIndex=0;th.classList.add('sortable');th.setAttribute('aria-sort','none');
+    var go=function(e){if(e&&e.target!==th&&e.target.closest('a,button,input'))return;var s=SORT[key]||{c:-1,d:0},d=s.c===ci?(s.d>0?-1:s.d<0?0:1):1;SORT[key]={c:ci,d:d};sortRows(t,ci,d);};
+    th.addEventListener('click',go);th.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();go();}});});
+  var s=SORT[key];if(s&&s.d)sortRows(t,s.c,s.d);});}
+new MutationObserver(function(){sortable();clearTimeout(markClipped.t);markClipped.t=setTimeout(function(){markClipped();},60);}).observe(document.querySelector('main'),{childList:true,subtree:true});
 document.addEventListener('toggle',function(){markClipped();},true);
 function tableView(head,rows){return '<details class="tv"><summary>Table view</summary><div class="scroll"><table><tr>'+head.map(function(h,i){return '<th'+(i?' class="n"':'')+'>'+esc(h)+'</th>';}).join('')+'</tr>'+rows.map(function(r){return '<tr>'+r.map(function(c,i){return '<td'+(i?' class="n"':'')+'>'+c+'</td>';}).join('')+'</tr>';}).join('')+'</table></div></details>';}
 /* Place value labels without overlap: largest values first, skip any that would collide. */
