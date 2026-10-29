@@ -356,6 +356,14 @@ def test_send_section_derived_from_route_models():
 # ---------------------------------------------------------------------------
 
 
+def test_query_status_documents_model_queue_fields():
+    html = _html()
+
+    assert "<code>status</code> {message, phase?, queue?}" in html
+    assert "<code>phase</code> is <code>model_queue</code>" in html
+    assert "queue_length" in html
+
+
 def test_write_and_open_spec_writes_file_and_returns_path(tmp_path, monkeypatch):
     import gaia_agent_email.spec_html as spec_mod
 

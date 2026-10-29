@@ -792,7 +792,10 @@ def render_endpoint_spec_html() -> str:
     stays stateless).</p>
   <p class="desc">Each SSE frame is <code>data: {json}</code> discriminated on
     <code>type</code>, one of the <b>eight canonical event types</b>:
-    <code>status</code> {message} &middot; <code>token</code> {delta} &middot;
+    <code>status</code> {message, phase?, queue?} &middot; <code>token</code> {delta} &middot;
+    When <code>phase</code> is <code>model_queue</code>, <code>queue</code>
+    reports <code>event</code>, <code>position</code>, <code>queue_length</code>,
+    <code>holder</code>, <code>holder_model</code>, and <code>waited_s</code>.
     <code>tool_call</code> {tool, args} &middot; <code>tool_result</code>
     {tool, render?, data} &middot; <code>needs_confirmation</code>
     {run_id, action, summary} &middot; <code>needs_input</code>
