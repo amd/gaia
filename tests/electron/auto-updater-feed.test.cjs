@@ -307,6 +307,30 @@ describe("GitHub releases as the default feed", () => {
     expect(checkSpy).not.toHaveBeenCalled();
   });
 
+  test("arm64 Linux is not pointed at a release that ships only the x86_64 AppImage", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    const arch = Object.getOwnPropertyDescriptor(process, "arch");
+    Object.defineProperty(process, "platform", { value: "linux" });
+    Object.defineProperty(process, "arch", { value: "arm64" });
+    try {
+      const mod = start("0.25.0");
+      serveReleases([
+        {
+          tag_name: "v0.25.1",
+          prerelease: false,
+          draft: false,
+          assets: [{ name: "gaia-agent-ui-0.25.1-x86_64.AppImage" }, { name: "latest-linux.yml" }],
+        },
+      ]);
+      await mod.checkForUpdates();
+      expect(mod.getState().status).toBe(mod.STATES.NO_CHANNEL);
+      expect(checkSpy).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+      Object.defineProperty(process, "arch", arch);
+    }
+  });
+
   test("a rate-limited GitHub is an error that says what to do", async () => {
     const mod = start("0.25.0");
     global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({}) });
