@@ -1837,7 +1837,7 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			return m, nil
 		}
-		panel := providers.New(m.lemonadeBaseURL, m.width, m.height).WithCurrent(providerOfBackend(m.modelBackend))
+		panel := providers.New(m.lemonadeBaseURL, m.width, m.height).WithCurrent(providerOfBackend(m.modelBackend)).WithCurrentModel(m.modelID)
 		m.providerPanel = &panel
 		m.palette.open = false
 		return m, panel.Init()
