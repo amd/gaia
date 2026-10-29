@@ -526,13 +526,26 @@ def _daemon_env(drop: tuple = ()) -> dict:
     a stale ``GAIA_HOST_CUSTODY_URL`` would reach its sidecars without a secret.
     ``GAIA_CHILD_ENV_DENY`` is not applied: the daemon is GAIA itself.
     """
-    return {
+    env = {
         name: value
         for name, value in os.environ.items()
         if not is_internal_secret(name)
         and name != CUSTODY_URL_ENV_VAR
         and name not in drop
     }
+    # The daemon runs from its host dir, so a relative path must not follow it.
+    for name in ("GAIA_HOME", "GAIA_CONFIG_DIR"):
+        raw = env.get(name, "").strip()
+        if raw:
+            env[name] = os.path.abspath(os.path.expandvars(os.path.expanduser(raw)))
+    if env.get(paths.HOME_ENV_VAR):
+        env[paths.HOME_ENV_VAR] = os.path.abspath(env[paths.HOME_ENV_VAR])
+    if env.get("PYTHONPATH"):
+        env["PYTHONPATH"] = os.pathsep.join(
+            os.path.abspath(entry) if entry else entry
+            for entry in env["PYTHONPATH"].split(os.pathsep)
+        )
+    return env
 
 
 def _is_spawned_daemon(registered_pid: int, spawned_pid: int) -> bool:
