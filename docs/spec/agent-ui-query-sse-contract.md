@@ -728,6 +728,8 @@ turns are hidden than in the last reported view (the newest turn moved the cut,
 or a smaller model or longer prompt shrank the budget), so a stable cut is
 reported once.
 
-Over stdio the agent never sends `tool_result.render`,
-`needs_confirmation.confirm_url` or `error.source`. The TUI decodes them for
-other transports, and it sets `source` itself on an error it synthesizes.
+Over stdio the agent never sends `needs_confirmation.confirm_url` or
+`error.source`. The TUI decodes them for other transports, and it sets `source`
+itself on an error it synthesizes. It does send `tool_result.render` for the
+card tools (`guide`, `calculator`); the TUI has no renderer for those keys yet
+and draws its unknown-card fallback.

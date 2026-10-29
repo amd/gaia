@@ -20,10 +20,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### For integrators
 
-- **`tool_result.render` now reaches HTTP clients.** The sidecar's `/query`
-  stream never set `render`, so a card tool's result arrived as plain data and
-  no card was drawn. It now carries the card type (`guide` or `calculator` for
-  the tools above). The stdio transport still never sends it.
+- **`tool_result.render` now reaches HTTP and stdio clients.** The sidecar's
+  `/query` stream and the stdio transport never set `render`, so a card tool's
+  result arrived as plain data and no card was drawn. Both now carry the card
+  type (`guide` or `calculator` for the tools above). A client that has no
+  renderer for a key should draw its unknown-card fallback.
 
 ### For integrators: contract 2.25
 
