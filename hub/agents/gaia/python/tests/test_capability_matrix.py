@@ -65,9 +65,9 @@ _spec.loader.exec_module(capability_matrix)
 # the eight live-browser tools. 95 since per-turn tool selection went off by
 # default: `load_tools` registers only while it is on. `set_reasoning_effort`
 # is in the loop_control bundle but registers on gpt-oss only, so not counted.
-# 99 with the four guide-card tools (show_recipe, show_workout, show_how_to,
-# show_checklist). 102 with show_itinerary and the two calculator-card tools.
-_EXPECTED_TOOLS_TOTAL = 102
+# 98 with the three audio_generation tools (music, sound effects, model list).
+# 105 with the five guide-card tools and the two calculator-card tools.
+_EXPECTED_TOOLS_TOTAL = 105
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
 # 16 with `sleep`, which joins the core set rather than a bundle: waiting out a
@@ -76,8 +76,8 @@ _EXPECTED_CORE_COUNT = 16
 # 25: the `cli_setup` bundle, `shell_session` (get_shell_state,
 # reset_shell_session), plus `browser_nav` and `browser_use` — the browser
 # tools arrive as two bundles so one pull-in cannot exhaust the dynamic slots.
-# 26 with the `guide` bundle, 27 with `calculator`.
-_EXPECTED_BUNDLE_COUNT = 27
+# 26 with `audio_generation`, 28 with `guide` and `calculator`.
+_EXPECTED_BUNDLE_COUNT = 28
 
 _EXPECTED_SKILL_LIBRARY_TOOLS = frozenset(
     {

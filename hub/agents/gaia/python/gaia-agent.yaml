@@ -26,12 +26,13 @@ icon: sparkles
 # + 8 live-browser tools, which register only with the `browser` extra
 #   installed (gaia.agents.tools.browser_use_tools)
 # + remember_skill_lesson
+# + 3 audio-generation tools (enabled on the flagship, disabled in fast mode)
 # + 5 guide-card tools (gaia.agents.tools.guide_tools)
 # + 2 calculator-card tools (gaia.agents.tools.calculator_tools). The
 # load_tools escape hatch is not counted: it registers only when
 # GAIA_DYNAMIC_TOOLS=1 turns per-turn selection on.
 # This is the REGISTERED size — what the agent can do.
-tools_count: 102
+tools_count: 105
 
 language: python
 # The chat agent this one subclasses imports gaia.agents.tools.reasoning_tools;

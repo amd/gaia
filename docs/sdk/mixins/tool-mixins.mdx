@@ -50,6 +50,7 @@ mixin and calling its `register_*_tools()` method. Each row is the exact
 | `skills` | `from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
 | `skill_learning` | `from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin` | Persist lessons learned while running a skill |
 | `audio` | `from gaia.agents.tools.audio_tools import AudioToolsMixin` | Transcribe audio/video via Lemonade, then label speakers |
+| `audio_generation` | `from gaia.agents.tools.audio_generation_tools import AudioGenerationToolsMixin` | Generate WAV music and sound effects via Lemonade (`init_audio_generation`) |
 | `wait` | `from gaia.agents.tools.wait_tools import WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
 | `guide` | `from gaia.agents.tools.guide_tools import GuideToolsMixin` | `show_recipe`, `show_workout`, `show_how_to`, `show_checklist`, `show_itinerary`: draw the answer as a `guide` card in the Agent UI |
 | `calculator` | `from gaia.agents.tools.calculator_tools import CalculatorToolsMixin` | `show_tip_calculator`, `show_loan_calculator`: a `calculator` card that does the math, so the model only supplies starting numbers |
