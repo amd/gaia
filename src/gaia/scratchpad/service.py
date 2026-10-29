@@ -129,7 +129,7 @@ class ScratchpadService(DatabaseMixin):
             log.error("Failed to delete corrupt scratchpad DB: %s", exc)
         self.init_db(db_path)
         # Fresh DB — these now succeed.
-        self._db.execute("PRAGMA journal_mode=WAL")
+        enable_wal(self._db)
         return False
 
     def create_table(self, name: str, columns: str) -> str:

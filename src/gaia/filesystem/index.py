@@ -258,7 +258,7 @@ class FileSystemIndexService(DatabaseMixin):
             logger.debug("close_db during rebuild raised (%s); continuing", exc)
         self.rebuilt_from = _move_aside(db_path)
         self.init_db(db_path)
-        self._db.execute("PRAGMA journal_mode=WAL")
+        enable_wal(self._db)
 
     # ------------------------------------------------------------------
     # Schema management
@@ -314,7 +314,7 @@ class FileSystemIndexService(DatabaseMixin):
         self.rebuilt_from = _move_aside(db_path)
 
         self.init_db(db_path)
-        self._db.execute("PRAGMA journal_mode=WAL")
+        enable_wal(self._db)
         self.execute(_SCHEMA_SQL)
         self.insert(
             "schema_version",
