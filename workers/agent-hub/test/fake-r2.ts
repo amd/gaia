@@ -190,9 +190,11 @@ export function publishByRefRequest(opts: {
   contentType?: string;
   readme?: string;
   changelog?: string;
+  channel?: string;
 }): Request {
   const form = new FormData();
   form.set("manifest", opts.manifestYaml);
+  if (opts.channel !== undefined) form.set("channel", opts.channel);
   if (opts.readme !== undefined) form.set("readme", opts.readme);
   if (opts.changelog !== undefined) form.set("changelog", opts.changelog);
   form.set("artifact_ref_filename", opts.filename);
@@ -226,9 +228,11 @@ export function publishRequest(opts: {
   evalScorecard?: string;
   capabilityMatrix?: string;
   packageFiles?: string;
+  channel?: string;
 }): Request {
   const form = new FormData();
   form.set("manifest", opts.manifestYaml);
+  if (opts.channel !== undefined) form.set("channel", opts.channel);
   if (opts.readme !== undefined) form.set("readme", opts.readme);
   if (opts.changelog !== undefined) form.set("changelog", opts.changelog);
   if (opts.spec !== undefined) form.set("spec", opts.spec);
