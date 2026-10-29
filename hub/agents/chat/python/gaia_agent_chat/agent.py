@@ -108,6 +108,7 @@ from gaia.security import (
 )
 from gaia.utils.file_lock import held_by_another_program
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
+from gaia.utils.user_folders import documents_dir
 from gaia.vlm.mixin import VLMToolsMixin
 
 # Sentinel for not-yet-built lazy attributes (``rag``, ``session_manager`` —
@@ -1516,7 +1517,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             if has_gaia_docs:
                 line += (
                     " To save a new file to the user's Documents folder, use "
-                    f"{Path.home() / 'Documents'}: GAIA's documents folder is "
+                    f"{documents_dir()}: GAIA's documents folder is "
                     "GAIA's own."
                 )
             line += "\n"

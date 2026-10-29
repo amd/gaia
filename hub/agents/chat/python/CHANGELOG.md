@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Resolves the user's real Documents folder for the session guidance, including
+  Windows Known Folder Move/OneDrive and Linux `XDG_DOCUMENTS_DIR`, instead of
+  assuming it is always `~/Documents` (#5885).
 - `get_system_info` reports free disk space (`disk_free_gb`) and available
   memory (`memory_available_gb`), and computes disk use from free space. On a
   Mac it reported only the share macOS's system volume uses, so a nearly full

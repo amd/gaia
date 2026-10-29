@@ -62,6 +62,7 @@ from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_defaul
 from gaia.filesystem.name_match import fold_name, strip_accents
 from gaia.logger import get_logger
 from gaia.security import BackupError
+from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
 
@@ -781,7 +782,7 @@ class FileSearchToolsMixin:
                     common_locations = confine_roots(
                         self,
                         [
-                            home / "Documents",
+                            documents_dir(home),
                             home / "Downloads",
                             home / "Desktop",
                             home / "OneDrive",
@@ -3154,11 +3155,11 @@ class FileSearchToolsMixin:
 
                 # Determine directories to scan
                 location_map = {
-                    "documents": [home / "Documents"],
+                    "documents": [documents_dir(home)],
                     "downloads": [home / "Downloads"],
                     "desktop": [home / "Desktop"],
                     "all": [
-                        home / "Documents",
+                        documents_dir(home),
                         home / "Downloads",
                         home / "Desktop",
                         home / "OneDrive",
