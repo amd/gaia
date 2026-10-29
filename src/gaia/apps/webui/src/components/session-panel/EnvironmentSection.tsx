@@ -14,13 +14,13 @@ import { expectShape } from '../../utils/responseShape';
 import { log } from '../../utils/logger';
 import { useInferencePlace, useModelStore, selectChipModel, displayModelName, UNKNOWN_PLACE_TITLE } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
+import { useFolderPicker } from '../../hooks/useFolderPicker';
 import { useSessionEnvironment } from '../../hooks/useSessionEnvironment';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
 import { announcePermissionMode, usePermissionModeEvents } from '../../utils/permissionModeEvents';
 import { requestMobileAccess, useMobileAccessState } from '../../utils/mobileAccessEvents';
 import { MODES } from '../PermissionModeChip';
 import { PanelSection } from './PanelSection';
-import { FolderPicker } from './FolderPicker';
 import { Switch } from './Switch';
 import type { LocalModelStatus, PermissionMode, TunnelStatus } from '../../types';
 import type { ScopeEntry, ScopeSource } from '../../types/sessionPanel';
@@ -136,7 +136,6 @@ function Folders({ sessionId }: { sessionId: string }) {
     const { env, error: loadError, change } = useSessionEnvironment(sessionId);
     // Only the flagship's own default scope (your user folder) is known here.
     const flagship = useChatStore((s) => s.sessions.find((x) => x.id === sessionId)?.agent_type === 'gaia');
-    const [picking, setPicking] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [busyPath, setBusyPath] = useState<string | null>(null);
     const [showAllFiles, setShowAllFiles] = useState(false);
@@ -156,9 +155,9 @@ function Folders({ sessionId }: { sessionId: string }) {
     const remove = (entry: ScopeEntry) =>
         run(entry.path, () => change(() => api.removeEnvironmentFolder(sessionId, entry.path)));
     const add = (path: string) => {
-        setPicking(false);
         void run(path, () => change(() => api.addEnvironmentFolder(sessionId, path)));
     };
+    const { open: pickFolder, picker, error: pickError } = useFolderPicker(add);
 
     const folders = env?.folders.filter((f) => f.kind === 'folder') ?? [];
     const files = env?.folders.filter((f) => f.kind === 'file') ?? [];
@@ -195,7 +194,7 @@ function Folders({ sessionId }: { sessionId: string }) {
             {env && !env.enforced && (
                 <span className="sp-meta">
                     {flagship
-                        ? 'These folders are where GAIA starts, not a limit: it can also reach the rest of your user folder. In Ask mode it asks before it changes anything.'
+                        ? 'These folders are where GAIA starts, not a limit: it can also open folders inside your user folder, one at a time, but never the whole user folder at once. In Ask mode it asks before it opens a new folder or changes anything.'
                         : "These folders are where this chat's agent starts; it applies its own limits."}
                 </span>
             )}
@@ -214,7 +213,7 @@ function Folders({ sessionId }: { sessionId: string }) {
                     )}
                     {!env.enforced && (
                         <span className="sp-meta">
-                            This chat's agent runs as its own process, so these settings can't be changed from here.
+                            This chat's agent runs as its own process, so its folders can't be changed from here.
                         </span>
                     )}
                     {env.removed.length > 0 && (
@@ -223,20 +222,20 @@ function Folders({ sessionId }: { sessionId: string }) {
                         </span>
                     )}
                     {!locked && (
-                        <button type="button" className="sp-action" onClick={() => setPicking(true)} disabled={busyPath !== null}>
+                        <button type="button" className="sp-action" onClick={() => pickFolder()} disabled={busyPath !== null}>
                             <FolderPlus size={12} aria-hidden="true" /> Add folder
                         </button>
                     )}
                 </>
             )}
-            {error && <span className="sp-error" role="alert">{error}</span>}
-            {picking && <FolderPicker onPick={add} onClose={() => setPicking(false)} />}
+            {(error ?? pickError) && <span className="sp-error" role="alert">{error ?? pickError}</span>}
+            {picker}
         </Row>
     );
 }
 
 function Internet({ sessionId }: { sessionId: string }) {
-    const { env, change } = useSessionEnvironment(sessionId);
+    const { env, change, refresh } = useSessionEnvironment(sessionId);
     const [error, setError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     if (!env) return null;
@@ -247,11 +246,13 @@ function Internet({ sessionId }: { sessionId: string }) {
             await change(() => api.setInternet(sessionId, on));
         } catch (err) {
             setError(errorText(err));
+            // Saved even when the running turn couldn't be told, so show what was saved.
+            void refresh();
         } finally {
             setSaving(false);
         }
     };
-    if (!env.enforced) {
+    if (!env.internet_enforced) {
         return (
             <Row label="Internet">
                 <span className="sp-state-text">{env.internet ? 'On' : 'Off'}</span>

@@ -16,6 +16,7 @@ always on changes nothing downstream.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -303,7 +304,9 @@ def _num(value: Any) -> Optional[float]:
 def _step_stats(conversation: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out = []
     for entry in conversation or []:
-        content = entry.get("content") if isinstance(entry, dict) else None
+        if not isinstance(entry, dict):
+            continue
+        content = entry.get("content")
         if (
             entry.get("role") == "system"
             and isinstance(content, dict)
@@ -313,12 +316,16 @@ def _step_stats(conversation: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
-def _sum(values: Iterable[Optional[float]]) -> Optional[float]:
-    """The total, or None unless every call reported it: a partial sum would undercount."""
+def _sum(values: Iterable[Optional[float]], *, what: str) -> Optional[float]:
+    """The total, or None unless every call reported it or the total stays finite."""
     values = list(values)
     if not values or any(v is None for v in values):
         return None
-    return sum(values)
+    total = sum(values)
+    if not math.isfinite(total):
+        logger.warning("%s overflowed; reporting it as not measured", what)
+        return None
+    return total
 
 
 def _call(stats: Dict[str, Any]) -> Dict[str, Optional[float]]:
@@ -359,6 +366,54 @@ def _cost(model_id: Optional[str], tokens_in, cached, tokens_out) -> Dict[str, A
     if usd is None:
         return {"kind": "unknown", "usd": None}
     return {"kind": "estimate", "usd": round(usd, 6)}
+
+
+def turn_record(result: Any) -> Optional[Dict[str, Any]]:
+    """The part of an agent's result :func:`summarize_turn` reads, or None if it timed nothing.
+
+    Small enough for the sidecar to send on ``/query``'s ``final`` event, so a
+    relayed turn is measured the same way as an in-process one.
+    """
+    if not isinstance(result, dict):
+        return None
+    timing = result.get("timing_summary") or {}
+    steps = _step_stats(result.get("conversation"))
+    if not (timing or steps):
+        return None
+    return {
+        "timing_summary": timing,
+        "conversation": [{"role": "system", "content": stats} for stats in steps],
+    }
+
+
+#: A relayed record above this is refused; a long real turn is a few hundred KB.
+MAX_TURN_RECORD_BYTES = 1_000_000
+
+
+def turn_record_problem(value: Any) -> Optional[str]:
+    """Why ``value`` can't be summarized as a :func:`turn_record`, or ``None`` if it can."""
+    if not isinstance(value, dict) or not isinstance(value.get("timing_summary"), dict):
+        return "it is not a record with a timing_summary"
+    try:
+        # Refuses NaN/Infinity, which json.loads accepts and int() can't take.
+        size = len(json.dumps(value, allow_nan=False))
+    except (TypeError, ValueError) as exc:
+        return f"it holds a value JSON can't carry ({exc})"
+    if size > MAX_TURN_RECORD_BYTES:
+        return f"it is {size:,} bytes, over the {MAX_TURN_RECORD_BYTES:,}-byte limit"
+    conversation = value.get("conversation")
+    if not isinstance(conversation, list):
+        return "its conversation is not a list"
+    for entry in conversation:
+        content = entry.get("content") if isinstance(entry, dict) else None
+        if not isinstance(content, dict):
+            return "a conversation entry has no stats object"
+        tools = content.get("tools") or []
+        if not isinstance(content.get("performance_stats") or {}, dict):
+            return "a step's performance_stats is not an object"
+        if not isinstance(tools, list) or not all(isinstance(t, dict) for t in tools):
+            return "a step's tools is not a list of objects"
+    return None
 
 
 def summarize_turn(
@@ -411,9 +466,9 @@ def summarize_turn(
         )
 
     speeds = _speeds(steps, calls)
-    tokens_in = _sum(c["prompt"] for c in calls)
-    cached = _sum(c["cached"] for c in calls)
-    tokens_out = _sum(c["output"] for c in calls)
+    tokens_in = _sum((c["prompt"] for c in calls), what="turn input tokens")
+    cached = _sum((c["cached"] for c in calls), what="turn cached tokens")
+    tokens_out = _sum((c["output"] for c in calls), what="turn output tokens")
     listed = [{"name": t.get("name"), "seconds": _num(t.get("seconds"))} for t in tools]
     # Tool time the step timer measured outside any recorded step: shown, never dropped.
     unlisted = round(tool_s - sum(t["seconds"] or 0.0 for t in listed), _ROUND)
@@ -426,13 +481,13 @@ def summarize_turn(
         )
     if tokens_in is None or tokens_out is None:
         unknown["tokens"] = "Not every model call reported its token counts."
-    return {
+    summary = {
         "model": model_id,
         "time": split,
         **speeds,
         "model_calls": int(timing.get("llm_calls") or len(calls)),
         "tokens_in": tokens_in,
-        "tokens_new": _sum(c["new"] for c in calls),
+        "tokens_new": _sum((c["new"] for c in calls), what="turn new tokens"),
         "tokens_cached": cached,
         "tokens_out": tokens_out,
         # The whole templated prompt of the turn's last request, as the server counted it.
@@ -444,6 +499,9 @@ def summarize_turn(
         "cost": _cost(model_id, tokens_in, cached, tokens_out),
         "unknown": unknown,
     }
+    # Derived speeds or prompt size can still overflow: reject the record, not the panel.
+    json.dumps(summary, allow_nan=False)
+    return summary
 
 
 def _weighted_rate(pairs: List[Tuple[float, float]]) -> Optional[float]:
@@ -521,29 +579,56 @@ def _speeds(steps: List[Dict[str, Any]], calls: List[Dict[str, Any]]) -> Dict[st
     }
 
 
+def _finite_sum(values: Iterable[float], *, what: str) -> Optional[float]:
+    """The sum, or None with a warning when many huge values overflow it."""
+    total = sum(values)
+    if not math.isfinite(total):
+        logger.warning("%s overflowed; reporting it as not measured", what)
+        return None
+    return total
+
+
 def chat_totals(turns: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Sums over a chat's measured turns; a total of nothing measured is None."""
 
-    def total(get: Callable[[Dict[str, Any]], Any]) -> Optional[float]:
+    def total(get: Callable[[Dict[str, Any]], Any], *, what: str) -> Optional[float]:
         values = [_num(get(t)) for t in turns]
         known = [v for v in values if v is not None]
-        return round(sum(known), _ROUND) if known else None
+        if not known:
+            return None
+        total = sum(known)
+        if not math.isfinite(total):
+            logger.warning("%s overflowed; reporting it as not measured", what)
+            return None
+        return round(total, _ROUND)
 
     costs = [t.get("cost") or {} for t in turns]
+    usd = _finite_sum((c.get("usd") or 0.0 for c in costs), what="chat cost")
     return {
         "turns": len(turns),
-        "wall_seconds": total(lambda t: t["time"]["wall_seconds"]),
-        "model_seconds": total(lambda t: t["time"]["model_seconds"]),
-        "gaia_seconds": total(lambda t: t["time"]["gaia_seconds"]),
-        "tokens_in": total(lambda t: t.get("tokens_in")),
-        "tokens_cached": total(lambda t: t.get("tokens_cached")),
-        "tokens_out": total(lambda t: t.get("tokens_out")),
-        "tool_calls": sum(t.get("tool_calls") or 0 for t in turns),
+        "wall_seconds": total(
+            lambda t: t["time"]["wall_seconds"], what="chat wall time"
+        ),
+        "model_seconds": total(
+            lambda t: t["time"]["model_seconds"], what="chat model time"
+        ),
+        "gaia_seconds": total(
+            lambda t: t["time"]["gaia_seconds"], what="chat GAIA time"
+        ),
+        "tokens_in": total(lambda t: t.get("tokens_in"), what="chat input tokens"),
+        "tokens_cached": total(
+            lambda t: t.get("tokens_cached"), what="chat cached tokens"
+        ),
+        "tokens_out": total(lambda t: t.get("tokens_out"), what="chat output tokens"),
+        "tool_calls": _finite_sum(
+            (t.get("tool_calls") or 0 for t in turns), what="chat tool calls"
+        ),
         "loads": sum(len(t.get("loads") or []) for t in turns),
         "load_seconds": total(
-            lambda t: sum(e["seconds"] for e in t.get("loads") or []) or None
+            lambda t: sum(e["seconds"] for e in t.get("loads") or []) or None,
+            what="chat model-load time",
         ),
-        "usd": round(sum(c.get("usd") or 0.0 for c in costs), 6),
+        "usd": None if usd is None else round(usd, 6),
         "unpriced_turns": sum(1 for c in costs if c.get("kind") == "unknown"),
     }
 
