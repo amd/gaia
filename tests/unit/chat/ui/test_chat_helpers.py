@@ -658,6 +658,7 @@ class TestSessionAgentKwargsShape:
             "rag_documents",
             "library_documents",
             "allowed_paths",
+            "working_directory",
             "ui_session_id",
             "dynamic_tools",
             "memory_incognito",
