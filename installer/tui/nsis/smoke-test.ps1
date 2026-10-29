@@ -90,7 +90,7 @@ function Write-LockDiagnostics([string[]]$Paths) {
     foreach ($path in $Paths) {
         try {
             Wait-Writable $path -Seconds 5
-            Write-Host "$path is writable after the failed setup"
+            Write-Host "$path is writable after the failed setup (any lock that tripped setup has since cleared)"
         } catch {
             Write-Host "lock diagnostic: $($_.Exception.Message)"
         }
