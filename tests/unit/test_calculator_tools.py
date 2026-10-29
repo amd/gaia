@@ -47,7 +47,7 @@ def _call(tools, name, **kwargs):
     return tools[name]["function"](**kwargs)
 
 
-_LOAN = {"amount": 250000, "annual_rate_percent": 6, "years": 30}
+_LOAN = {"price": 250000, "annual_rate_percent": 6, "years": 30}
 
 
 # --- valid payloads ---------------------------------------------------------
@@ -63,6 +63,7 @@ def test_tip_card_carries_the_starting_numbers(tools):
             "kind": "calculator",
             "calculator": "tip",
             "title": "",
+            "currency": "USD",
             "inputs": {"bill": 84.5, "tipPercent": 18, "people": 3},
         },
     }
@@ -88,6 +89,7 @@ def test_loan_card_carries_the_starting_numbers(tools):
         "kind": "calculator",
         "calculator": "loan",
         "title": "Elm St",
+        "currency": "USD",
         "inputs": {
             "amount": 250000,
             "annualRatePercent": 6,
@@ -106,7 +108,7 @@ def test_limits_are_inclusive_where_the_range_is_closed(tools):
     assert _call(tools, "show_tip_calculator", bill=1, tip_percent=0)["ok"]
     assert _call(tools, "show_tip_calculator", bill=1, tip_percent=100, people=50)["ok"]
     assert _call(
-        tools, "show_loan_calculator", amount=1, annual_rate_percent=0, years=50
+        tools, "show_loan_calculator", price=1, annual_rate_percent=0, years=50
     )["ok"]
     assert _call(tools, "show_loan_calculator", **{**_LOAN, "annual_rate_percent": 50})[
         "ok"
@@ -145,13 +147,13 @@ def test_tip_errors_name_what_failed(tools, overrides, expected):
 @pytest.mark.parametrize(
     "overrides, expected",
     [
-        ({"amount": 0}, "amount as a number above 0"),
+        ({"price": 0}, "price as a number above 0"),
         ({"annual_rate_percent": -0.5}, "annual_rate_percent as a number from 0 to 50"),
         ({"annual_rate_percent": 51}, "got 51"),
         ({"years": 0}, "years as a number above 0 to 50"),
         ({"years": 51}, "got 51"),
         ({"down_payment": -1}, "down_payment as a number from 0"),
-        ({"down_payment": 250000}, "down_payment less than amount (250000)"),
+        ({"down_payment": 250000}, "down_payment less than price (250000)"),
     ],
 )
 def test_loan_errors_name_what_failed(tools, overrides, expected):
@@ -247,3 +249,24 @@ def test_a_failed_card_reaches_the_wire_without_a_card(tools):
     assert event["type"] == "tool_result"
     assert event["success"] is False
     assert "result_data" not in event
+
+
+def test_the_card_carries_the_currency_the_user_named(tools):
+    data = _call(
+        tools,
+        "show_loan_calculator",
+        price=300000,
+        annual_rate_percent=4,
+        years=25,
+        currency="eur",
+    )["data"]
+
+    assert data["currency"] == "EUR"
+
+
+@pytest.mark.parametrize("currency", ["euro", "", None, "US"])
+def test_a_currency_that_is_not_an_iso_code_names_the_fix(tools, currency):
+    result = _call(tools, "show_tip_calculator", bill=40, currency=currency)
+
+    assert result["ok"] is False
+    assert "3-letter ISO code" in result["error"]

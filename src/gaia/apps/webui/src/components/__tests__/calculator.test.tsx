@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { RenderCard } from '../render/RenderCard';
 import {
-    currencyFor,
     formatCalculatorText,
     formatValue,
     isCalculatorWire,
@@ -18,6 +17,7 @@ const loan = {
     kind: 'calculator',
     calculator: 'loan',
     title: '',
+    currency: 'USD',
     inputs: { amount: 250000, annualRatePercent: 6, years: 30, downPayment: 50000 },
 };
 
@@ -25,6 +25,7 @@ const tip = {
     kind: 'calculator',
     calculator: 'tip',
     title: 'Dinner',
+    currency: 'USD',
     inputs: { bill: 84.5, tipPercent: 18, people: 3 },
 };
 
@@ -61,15 +62,16 @@ describe('calculator math', () => {
     });
 
     it('formats money in the locale\'s own currency', () => {
-        expect(formatValue(1199.1, 'currency', 'en-US')).toBe('$1,199.10');
-        expect(currencyFor('de-DE')).toBe('EUR');
-        expect(currencyFor('en-GB')).toBe('GBP');
-        expect(formatValue(6.5, 'percent', 'en-US')).toBe('6.5%');
-        expect(formatValue(1, 'years', 'en-US')).toBe('1 year');
+        const usd = { locale: 'en-US', currency: 'USD' };
+        expect(formatValue(1199.1, 'currency', usd)).toBe('$1,199.10');
+        expect(formatValue(1199.1, 'currency', { locale: 'en-US', currency: 'EUR' })).toBe('€1,199.10');
+        expect(formatValue(1199.1, 'currency', { locale: 'de-DE', currency: 'EUR' })).toBe('1.199,10\u00a0€');
+        expect(formatValue(6.5, 'percent', usd)).toBe('6.5%');
+        expect(formatValue(1, 'years', usd)).toBe('1 year');
     });
 
     it('formats one plain text for copy', () => {
-        expect(formatCalculatorText('Dinner', specFor('tip'), tip.inputs, 'en-US')).toBe([
+        expect(formatCalculatorText('Dinner', specFor('tip'), tip.inputs, { locale: 'en-US', currency: 'USD' })).toBe([
             'Dinner',
             'Bill: $84.50',
             'Tip: 18%',
@@ -96,6 +98,9 @@ describe('calculator wire', () => {
         ['a down payment at the price', { ...loan, inputs: { ...loan.inputs, downPayment: 250000 } }, false],
         ['a zero term', { ...loan, inputs: { ...loan.inputs, years: 0 } }, false],
         ['a three-month term', { ...loan, inputs: { ...loan.inputs, years: 0.25 } }, true],
+        ['a euro loan', { ...loan, currency: 'EUR' }, true],
+        ['no currency', { ...loan, currency: undefined }, false],
+        ['a made-up currency', { ...loan, currency: 'usd' }, false],
     ])('%s', (_name, payload, ok) => {
         expect(isCalculatorWire(payload)).toBe(ok);
     });

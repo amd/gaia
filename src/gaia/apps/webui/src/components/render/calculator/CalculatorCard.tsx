@@ -13,7 +13,7 @@ import {
     specFor,
     userLocale,
 } from './calculatorDoc';
-import type { CalculatorWire, FieldSpec } from './calculatorDoc';
+import type { CalculatorWire, FieldSpec, Money } from './calculatorDoc';
 import '../guide/guide.css';
 import './calculator.css';
 
@@ -26,7 +26,7 @@ export function CalculatorCard({ data }: { data: unknown }) {
 
 function Calculator({ wire }: { wire: CalculatorWire }) {
     const spec = specFor(wire.calculator);
-    const locale = useMemo(userLocale, []);
+    const money = useMemo(() => ({ locale: userLocale(), currency: wire.currency }), [wire.currency]);
     const [values, setValues] = useState<Record<string, number>>(() => ({ ...wire.inputs }));
     const [notice, setNotice] = useState<string | null>(null);
     const title = wire.title?.trim() || spec.defaultTitle;
@@ -39,7 +39,7 @@ function Calculator({ wire }: { wire: CalculatorWire }) {
     }, [notice]);
 
     const onCopy = () => {
-        copyGuide(formatCalculatorText(title, spec, values, locale)).then(
+        copyGuide(formatCalculatorText(title, spec, values, money)).then(
             () => setNotice('Copied'),
             (err: unknown) => setNotice(`Couldn't copy: ${err instanceof Error ? err.message : String(err)}`),
         );
@@ -61,7 +61,7 @@ function Calculator({ wire }: { wire: CalculatorWire }) {
                         key={key}
                         field={field}
                         value={values[key]}
-                        locale={locale}
+                        money={money}
                         onChange={(n) => setValues((prev) => ({ ...prev, [key]: n }))}
                     />
                 ))}
@@ -71,7 +71,7 @@ function Calculator({ wire }: { wire: CalculatorWire }) {
                 {results.map((line) => (
                     <div key={line.label} className={`render-calc__result${line.primary ? ' is-primary' : ''}`}>
                         <dt>{line.label}</dt>
-                        <dd>{formatValue(line.value, line.format, locale)}</dd>
+                        <dd>{formatValue(line.value, line.format, money)}</dd>
                     </div>
                 ))}
             </dl>
@@ -82,15 +82,15 @@ function Calculator({ wire }: { wire: CalculatorWire }) {
 interface NumberFieldProps {
     field: FieldSpec;
     value: number;
-    locale: string;
+    money: Money;
     onChange: (value: number) => void;
 }
 
 /** A typed box and a slider on one value. The box keeps what is typed until it reads as a number in range. */
-function NumberField({ field, value, locale, onChange }: NumberFieldProps) {
+function NumberField({ field, value, money, onChange }: NumberFieldProps) {
     const [draft, setDraft] = useState<string | null>(null);
     const sliderMax = Math.min(field.max, Math.max(field.sliderMax ?? field.max, value));
-    const prefix = field.format === 'currency' ? currencySymbol(locale) : '';
+    const prefix = field.format === 'currency' ? currencySymbol(money) : '';
     const suffix = field.format === 'percent' ? '%' : field.format === 'years' ? 'yrs' : '';
 
     const onType = (text: string) => {
@@ -129,7 +129,7 @@ function NumberField({ field, value, locale, onChange }: NumberFieldProps) {
                 step={field.step}
                 value={value}
                 aria-label={`${field.label} slider`}
-                aria-valuetext={formatValue(value, field.format, locale)}
+                aria-valuetext={formatValue(value, field.format, money)}
                 onChange={(e) => {
                     setDraft(null);
                     onChange(Number(e.target.value));

@@ -8,6 +8,7 @@ UI. The model only supplies the starting numbers, which the person can change.
 """
 
 import math
+import re
 from typing import Any, Dict, Literal, NamedTuple, Optional
 
 CalculatorType = Literal["tip", "loan"]
@@ -42,7 +43,7 @@ _FIELDS: Dict[str, Dict[str, _Field]] = {
         "people": _Field("people", 1, 50, "2", whole=True),
     },
     "show_loan_calculator": {
-        "amount": _Field("amount", 0, 1e10, "350000", low_open=True),
+        "price": _Field("amount", 0, 1e10, "350000", low_open=True),
         "annual_rate_percent": _Field("annualRatePercent", 0, 50, "6.5"),
         "years": _Field("years", 0, 50, "30", low_open=True),
         "down_payment": _Field("downPayment", 0, 1e10, "0"),
@@ -77,9 +78,18 @@ def _check_field(tool: str, arg: str, field: _Field, value: Any) -> Optional[str
 
 
 def _calculator_card(
-    calculator: CalculatorType, tool: str, title: Any, args: Dict[str, Any]
+    calculator: CalculatorType,
+    tool: str,
+    title: Any,
+    currency: Any,
+    args: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Validate one calculator's starting numbers and wrap them as a card."""
+    if not isinstance(currency, str) or not re.fullmatch(r"[A-Za-z]{3}", currency):
+        return _error(
+            f"{tool}: currency must be a 3-letter ISO code; got {currency!r}. "
+            'Send e.g. currency="USD", "EUR" or "GBP".'
+        )
     if not isinstance(title, str) or len(title) > MAX_TITLE_CHARS:
         got = f"{len(title)} characters" if isinstance(title, str) else repr(title)
         return _error(
@@ -95,8 +105,8 @@ def _calculator_card(
         inputs[field.wire] = int(value) if field.whole else value
     if calculator == "loan" and inputs["downPayment"] >= inputs["amount"]:
         return _error(
-            f"{tool} needs down_payment less than amount ({inputs['amount']:g}); "
-            f"got {inputs['downPayment']:g}. Send the price as amount and the "
+            f"{tool} needs down_payment less than price ({inputs['amount']:g}); "
+            f"got {inputs['downPayment']:g}. Send the full price as price and the "
             "part paid up front as down_payment, or down_payment=0."
         )
     return {
@@ -108,6 +118,7 @@ def _calculator_card(
             "kind": "calculator",
             "calculator": calculator,
             "title": title,
+            "currency": currency.upper(),
             "inputs": inputs,
         },
     }
@@ -135,6 +146,7 @@ class CalculatorToolsMixin:
             bill: float,
             tip_percent: float = 18,
             people: int = 1,
+            currency: str = "USD",
             title: str = "",
         ) -> Dict[str, Any]:
             """Show a tip calculator when the user asks how much to tip, or to split the bill.
@@ -145,21 +157,24 @@ class CalculatorToolsMixin:
                 bill: The bill before tip, e.g. 84.50.
                 tip_percent: Tip percentage, 0 to 100, e.g. 20.
                 people: How many people split it, 1 to 50, e.g. 3.
+                currency: ISO code of the money in THIS request: "$" is "USD", "€" is "EUR", "£" is "GBP".
                 title: Optional name, e.g. "Dinner at Nopa".
             """
             return _calculator_card(
                 "tip",
                 "show_tip_calculator",
                 title,
+                currency,
                 {"bill": bill, "tip_percent": tip_percent, "people": people},
             )
 
         @tool(display_label="Showing loan calculator")
         def show_loan_calculator(
-            amount: float,
+            price: float,
             annual_rate_percent: float,
             years: float,
             down_payment: float = 0,
+            currency: str = "USD",
             title: str = "",
         ) -> Dict[str, Any]:
             """Show a loan calculator when the user asks about a mortgage, car loan, monthly payment or loan interest.
@@ -167,18 +182,20 @@ class CalculatorToolsMixin:
             The card does the math. After calling, reply with one or two short sentences. Do not do the math in text.
 
             Args:
-                amount: The price or loan amount before any down payment, e.g. 350000.
+                price: The full price as the user said it, e.g. 300000. Never subtract the down payment.
                 annual_rate_percent: Yearly interest rate in percent, 0 to 50, e.g. 6.5.
                 years: Loan term in years, up to 50, e.g. 30.
-                down_payment: Optional amount paid up front, less than amount, e.g. 70000.
+                down_payment: Optional amount paid up front, less than price, e.g. 60000.
+                currency: ISO code of the money in THIS request: "$" is "USD", "€" is "EUR", "£" is "GBP".
                 title: Optional name, e.g. "House on Elm Street".
             """
             return _calculator_card(
                 "loan",
                 "show_loan_calculator",
                 title,
+                currency,
                 {
-                    "amount": amount,
+                    "price": price,
                     "annual_rate_percent": annual_rate_percent,
                     "years": years,
                     "down_payment": down_payment,

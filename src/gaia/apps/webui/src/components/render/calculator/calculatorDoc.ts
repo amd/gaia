@@ -24,8 +24,8 @@ export interface LoanInputs {
 }
 
 export type CalculatorWire =
-    | { kind: 'calculator'; calculator: 'tip'; title: string; inputs: TipInputs }
-    | { kind: 'calculator'; calculator: 'loan'; title: string; inputs: LoanInputs };
+    | { kind: 'calculator'; calculator: 'tip'; title: string; currency: string; inputs: TipInputs }
+    | { kind: 'calculator'; calculator: 'loan'; title: string; currency: string; inputs: LoanInputs };
 
 export interface FieldSpec {
     label: string;
@@ -127,6 +127,7 @@ export function isCalculatorWire(value: unknown): value is CalculatorWire {
     const v = value as Record<string, unknown>;
     if (v.kind !== 'calculator' || (v.calculator !== 'tip' && v.calculator !== 'loan')) return false;
     if (v.title !== undefined && v.title !== null && typeof v.title !== 'string') return false;
+    if (typeof v.currency !== 'string' || !isCurrency(v.currency)) return false;
     if (!v.inputs || typeof v.inputs !== 'object') return false;
     const inputs = v.inputs as Record<string, unknown>;
     const spec = specFor(v.calculator);
@@ -139,31 +140,31 @@ export function isCalculatorWire(value: unknown): value is CalculatorWire {
     return spec.validWire(inputs as Record<string, number>);
 }
 
-/** The currency for the person's region, so a price reads in their own money. */
-const REGION_CURRENCY: Readonly<Record<string, string>> = {
-    US: 'USD', CA: 'CAD', MX: 'MXN', BR: 'BRL', GB: 'GBP', IE: 'EUR', FR: 'EUR', DE: 'EUR',
-    ES: 'EUR', IT: 'EUR', NL: 'EUR', BE: 'EUR', AT: 'EUR', PT: 'EUR', FI: 'EUR', GR: 'EUR',
-    CH: 'CHF', SE: 'SEK', NO: 'NOK', DK: 'DKK', PL: 'PLN', IN: 'INR', JP: 'JPY', CN: 'CNY',
-    KR: 'KRW', TW: 'TWD', SG: 'SGD', AU: 'AUD', NZ: 'NZD', ZA: 'ZAR',
-};
-
-export function currencyFor(locale: string): string {
+/** An ISO code Intl can format, e.g. "EUR". */
+function isCurrency(code: string): boolean {
+    if (!/^[A-Z]{3}$/.test(code)) return false;
     try {
-        const region = new Intl.Locale(locale).maximize().region;
-        return (region && REGION_CURRENCY[region]) || 'USD';
+        new Intl.NumberFormat('en', { style: 'currency', currency: code });
+        return true;
     } catch {
-        return 'USD';
+        return false;
     }
+}
+
+/** How money and numbers read for this viewer: their locale, the card's currency. */
+export interface Money {
+    locale: string;
+    currency: string;
 }
 
 export function userLocale(): string {
     return (typeof navigator !== 'undefined' && navigator.language) || 'en-US';
 }
 
-export function formatValue(value: number, format: ValueFormat, locale: string): string {
+export function formatValue(value: number, format: ValueFormat, { locale, currency }: Money): string {
     switch (format) {
         case 'currency':
-            return new Intl.NumberFormat(locale, { style: 'currency', currency: currencyFor(locale) }).format(value);
+            return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(value);
         case 'percent':
             return new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 2 }).format(value / 100);
         case 'years': {
@@ -175,8 +176,8 @@ export function formatValue(value: number, format: ValueFormat, locale: string):
     }
 }
 
-export function currencySymbol(locale: string): string {
-    const parts = new Intl.NumberFormat(locale, { style: 'currency', currency: currencyFor(locale) }).formatToParts(0);
+export function currencySymbol({ locale, currency }: Money): string {
+    const parts = new Intl.NumberFormat(locale, { style: 'currency', currency }).formatToParts(0);
     return parts.find((p) => p.type === 'currency')?.value ?? '';
 }
 
@@ -185,13 +186,13 @@ export function formatCalculatorText(
     title: string,
     spec: AnySpec,
     inputs: Record<string, number>,
-    locale: string,
+    money: Money,
 ): string {
     const out = [title];
     for (const [key, field] of Object.entries(spec.fields)) {
-        out.push(`${field.label}: ${formatValue(inputs[key], field.format, locale)}`);
+        out.push(`${field.label}: ${formatValue(inputs[key], field.format, money)}`);
     }
     out.push('');
-    for (const line of spec.results(inputs)) out.push(`${line.label}: ${formatValue(line.value, line.format, locale)}`);
+    for (const line of spec.results(inputs)) out.push(`${line.label}: ${formatValue(line.value, line.format, money)}`);
     return out.join('\n');
 }
