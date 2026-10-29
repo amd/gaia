@@ -63,7 +63,8 @@ gaia --cli      # Launch interactive CLI chat instead
 | `--ui-port <port>` | Port for the Agent UI server (default: 4200) |
 | `--ui-dist <path>` | Serve an alternative prebuilt Agent UI bundle (e.g., a PR preview) instead of the one shipped in the installed package |
 | `--cli` | Launch interactive CLI chat |
-| `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:13305/api/v1`). Also accepted by the subcommands that talk to Lemonade: `chat`, `prompt`, `talk`, `llm`, `api`, `stats`, and `mcp start`. |
+| `-p`, `--print [prompt]` | Run the GAIA agent once on the prompt, print the answer and exit — see [One-shot headless run](#one-shot-headless-run-gaia-p) |
+| `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:13305/api/v1`). Also accepted by `-p` and by the subcommands that talk to Lemonade: `chat`, `prompt`, `talk`, `llm`, `api`, `stats`, and `mcp start`. |
 
 **Examples:**
 
@@ -87,6 +88,93 @@ gaia --ui --base-url https://your-server:13305/api/v1
 
 <Note>
   `gaia chat --ui` continues to work as an alias. The Agent UI does not gate on your processor model — the Settings panel reports your processor, memory and model status for information only.
+</Note>
+
+### One-shot headless run (`gaia -p`)
+
+`gaia -p` runs the flagship GAIA agent on one prompt, prints the answer, and
+exits — the scriptable counterpart of `claude -p`. stdout carries only the
+answer, so it can be piped or captured; progress, warnings and logs go to
+stderr. GAIA starts Lemonade Server through the daemon if it is not running, so
+there is nothing to launch first.
+
+```bash
+gaia -p "Summarize README.md in three bullets"
+gaia -p "Reply with exactly: pong" --model amd.DeepSeek-V4.1-Flash
+echo "List the Python files here" | gaia -p --output-format json
+```
+
+| Flag | Description |
+|------|-------------|
+| `-p`, `--print [prompt]` | The prompt. With no text after it, the prompt is read from stdin; an empty stdin or an interactive terminal is an error |
+| `--model <id>` | Model to run (local or cloud, e.g. `amd.DeepSeek-V4.1-Flash`). Default: `default_model` from `gaia config`, else the agent's own default |
+| `--output-format text\|json` | `text` (default) prints the answer alone; `json` prints one JSON object (below) |
+| `--verbose` | With `--output-format json`: add the turn's full `conversation` (every model message and tool call) |
+| `--max-steps <n>` | Cap on agent steps for this run, at least 1. Default: the agent's own limit ([Agent step limit](#agent-step-limit)) |
+| `--dangerously-skip-permissions` | Run confirmation-gated tools (shell commands, file writes) without asking |
+| `--full-access` | Full access, as the TUI's `/full-access`: lifts the shell guardrails, so test runners, build tools and other commands outside the no-prompt list run, and grants paths outside the current folder without asking. Implies `--dangerously-skip-permissions` |
+| `--base-url <url>` | Use a remote Lemonade server instead of the local one |
+
+`-p` takes no subcommand: `gaia -p "hi" chat` is a usage error. The flags above
+apply only to `-p`; given before a subcommand without it (`gaia --model X chat`)
+they are a usage error rather than being silently dropped — put them after the
+subcommand instead.
+
+**JSON output.** `--output-format json` prints exactly one line:
+
+```json
+{"type": "result", "is_error": false, "status": "success", "result": "pong",
+ "model": "amd.DeepSeek-V4.1-Flash", "num_steps": 1, "num_tool_calls": 0,
+ "input_tokens": 5120, "cached_tokens": 0, "output_tokens": 4, "duration_s": 1.87,
+ "error_count": 0}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `type` | Always `"result"` |
+| `is_error` | `true` when `status` is anything but `"success"` |
+| `status` | The agent's turn status (`"success"` on a completed answer) |
+| `result` | The answer text (`""` when there is none) |
+| `model` | The model the agent ran |
+| `num_steps` | Agent steps taken |
+| `num_tool_calls` | Tool calls made during the turn |
+| `input_tokens`, `output_tokens` | Tokens summed across the turn's model calls |
+| `cached_tokens` | Input tokens the backend served from its prompt cache |
+| `duration_s` | Wall-clock seconds for the turn, excluding server start-up |
+| `error_count` | Errors the agent recorded during the turn |
+| `error` | Only when `is_error`: why the turn failed |
+| `conversation` | Only with `--verbose`: the turn's messages and tool calls |
+
+**Exit codes.** `0` when the turn succeeded; `1` when it did not (any status other
+than `success`), when the model server could not be started, or when no prompt was
+given; `130` when interrupted; `2` for a usage error such as an unknown flag, a
+launcher flag (`--ui`, `--cli`) combined with `-p`, or `--verbose` without
+`--output-format json`. On any failure the reason
+goes to stderr; in json mode stdout still carries one object, with `is_error: true`
+and an `error` field, so a script never has to parse a traceback. A failure
+before the turn starts (no prompt, server down) prints only `type`, `is_error`,
+`status` and `error`.
+
+**Permissions and file access.** With nobody at the terminal to approve them,
+confirmation-gated tools are **denied** unless you pass
+`--dangerously-skip-permissions` (or the launching environment sets
+`GAIA_AUTO_APPROVE_TOOLS=1` — see [Confirming dangerous tools](#confirming-dangerous-tools)).
+When stdin and stdout are both an interactive terminal, GAIA asks you instead,
+as `gaia chat` does; piping either one in or out means nobody can answer, so the
+call is denied.
+Skipping permissions answers the prompts but does not widen the shell: a command
+outside `run_shell_command`'s no-prompt list (`pytest`, `go test`, `npm run …`) is
+still refused, and file tools stay in the current directory. `--full-access`
+lifts both: commands outside the list run, and paths outside the current folder
+are granted without asking (secrets and other never-grantable paths stay
+refused). It is announced on stderr and logged. Ask for it only for a run you
+would trust with an unguarded shell. `GAIA_ALLOWED_PATHS` narrows the file scope
+in either mode.
+
+<Note>
+  A prompt that is a single flag-like word, such as `gaia -p "--help"`, is read
+  by the parser as that flag. Write `gaia --print="--help"` or pipe it on stdin
+  instead. Prompts containing a space (`gaia -p "--help me"`) are unaffected.
 </Note>
 
 ### Agent step limit
@@ -1651,6 +1739,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `Qwen3.6-35B-A3B-GGUF` on a PC with the memory for it and never overwrites a value you set. `user.Qwen3.8-Flash-Next-GGUF` is available on a 128 GB Strix Halo; choose it here, `gaia init` never does |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) for commands that load without naming a model. A model always runs on the device it was built for |
 | `context_sizes` | _(empty)_ | Context window per local model, set in the Agent UI under **Settings → Model** (`gaia config set` refuses it). A model not listed gets GAIA's automatic size; `GAIA_CTX_SIZE` overrides it |
+| `custom_models` | _(empty)_ | Local models you added from a Hugging Face link, managed with [`gaia model`](#model-command), the Agent UI or the TUI (`gaia config set` refuses it) |
 | `profile` | `chat` | Last `gaia init` profile |
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
 | `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, `rocm`, `metal`, `cpu`, or `auto` to let Lemonade choose. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
@@ -1848,6 +1937,33 @@ pull one model, use the client that ships with your Lemonade install — on a
 current Lemonade that is `lemonade pull MODEL_NAME`. When a GAIA command finds a
 model missing, its error names the exact command for your machine, so you never
 have to guess which client you have.
+
+### Model Command
+
+Add a GGUF chat model from a Hugging Face link to the local model list, shared
+with the Agent UI and the TUI. See
+[Add a model from Hugging Face](/guides/ai-providers#add-a-model-from-hugging-face)
+for what is checked.
+
+```bash
+gaia model check https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF
+gaia model add https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF --quant Q8_0
+gaia model list
+gaia model remove user.Qwen3-4B-Instruct-2507-Q8_0-GGUF
+```
+
+| Subcommand | What it does |
+|------------|--------------|
+| `check <link>` | Run the checks and show the model it would add; nothing is saved |
+| `add <link>` | Run the checks and, when they pass, add the model. It downloads the first time you pick it |
+| `remove <id>` | Delete the model's download from Lemonade, forget it, and clear `default_model` / `last_model` if either named it |
+| `list` | The models you added, with the link each came from |
+
+`<link>` is any page of a model repo, a `.gguf` file link, or `owner/repo[:QUANT]`.
+`--quant` picks a quantization or one of its file names (default: a 4-bit one
+such as Q4_K_M, else the largest that fits).
+`--json` prints one JSON object. Exit codes: `0` done, `1` refused (the reason is
+printed), `2` the model server or config could not be read.
 
 ---
 
@@ -3900,7 +4016,7 @@ API keys and tokens in GAIA's state files (`lemonade/state.json`, `host/instance
 Most commands support these options. They come from a shared parent parser, so
 despite the name they are **not** accepted by `gaia agent`, `gaia cache`,
 `gaia config`, `gaia connectors`, `gaia daemon`, `gaia diagnostics`, `gaia engineering`,
-`gaia gateway`, `gaia hub`, `gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory` or
+`gaia gateway`, `gaia hub`, `gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory`, `gaia model` or
 `gaia skill` — passing one there fails with `unrecognized arguments`.
 
 | Option | Type | Default | Description |
