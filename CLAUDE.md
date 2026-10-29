@@ -9,8 +9,8 @@ GAIA (Generative AI Is Awesome) is AMD's open-source framework for running gener
 **Key Documentation:**
 - External site: https://amd-gaia.ai
 - Development setup: [`docs/reference/dev.mdx`](docs/reference/dev.mdx)
-- SDK Reference: https://amd-gaia.ai/sdk
-- Guides: https://amd-gaia.ai/guides
+- SDK Reference: https://amd-gaia.ai/docs/sdk
+- Guides: https://amd-gaia.ai/docs/guides
 
 ## How You Communicate
 
@@ -205,10 +205,11 @@ This self-review step is mandatory - never skip verification of your output.
 ```
 
 **`amd-gaia.ai` links in `src/gaia/` MUST keep the `/docs/` path prefix.** Use
-`https://amd-gaia.ai/docs/guides/...`, never `https://amd-gaia.ai/guides/...` — the
+`https://amd-gaia.ai/docs/guides/...`, never `amd-gaia.ai/guides/...` — the
 Mintlify docs tab serves under `/docs/` and bare paths 404. This is enforced by
 `tests/unit/test_amd_gaia_urls.py` (issue #1058), which scans every `amd-gaia.ai`
-URL literal in `src/gaia/`; dropping `/docs/` from a runtime string is a CI failure,
+URL literal in `src/gaia/`, plus `scripts/`, `installer/`, `.github/` and this
+file; dropping `/docs/` from a runtime string is a CI failure,
 not a cleanup. Only the site root and install scripts (`/install.ps1`, `/install.sh`)
 are allowlisted without the prefix.
 
@@ -777,7 +778,7 @@ navigation — consult it rather than a hand-maintained copy here. Where things 
 
 ## Roadmap & Plans
 
-The roadmap is at [`docs/roadmap.mdx`](docs/roadmap.mdx) ([live site](https://amd-gaia.ai/roadmap)).
+The roadmap is at [`docs/roadmap.mdx`](docs/roadmap.mdx) ([live site](https://amd-gaia.ai/docs/roadmap)).
 Plan documents live in [`docs/plans/`](docs/plans/) (run `ls docs/plans/` for the full
 set — security-model, messaging, autonomy-engine, daemon-convergence, skill-format,
 adaptive memory/skills/recovery, desktop-installer, browser-use, eval-hillclimbing, and more).
