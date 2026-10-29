@@ -305,7 +305,10 @@ runs that set; Windows and macOS run the part of it that touches the OS
 (processes, paths, locks, permissions). Every push to main runs the full suite on
 Linux, and the nightly run covers all three operating systems. A change to a
 `conftest.py`, packaging or pytest config, or a deleted or renamed file runs
-everything. The coverage map has one known blind spot: code behind a cache or a
+everything. Where the map has no record, such as a test or source file added
+since the nightly run or a map more than three days old, imports inside functions
+are followed too, so more tests run, never fewer. The coverage map has one known
+blind spot: code behind a cache or a
 shared fixture is credited only to the first test that ran it, so a test that only
 reaches it second can be left out until the nightly run.
 See what your branch will run with

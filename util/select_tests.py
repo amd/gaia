@@ -27,7 +27,10 @@ everything for nearly any change.
   eagerly, and following that would make every test depend on everything.
 
 Without a map, imports inside functions are followed too: more tests, never
-fewer, and the summary says so.
+fewer, and the summary says so. Where a map exists but can't speak for a file,
+the same wider rule applies to that file: a changed source file the map never
+saw, a test file it never saw (added since the nightly run), and every file once
+the map is older than ``MAX_MAP_AGE``.
 
 Some changes run the whole suite, because their reach can't be read at all: a
 top-level ``conftest.py``, packaging or pytest config, a deleted or renamed
@@ -133,6 +136,9 @@ class Graph:
     # Modules a test runs in a child process (`python -m gaia.cli`): coverage
     # can't see inside it, so their function-level imports always count.
     subprocess_targets: Dict[str, Set[str]] = field(default_factory=_edges)
+    # Modules shipped code runs in a child process (`-m gaia.daemon`): the
+    # tests that run the spawning file depend on them, and coverage can't tell.
+    spawn_deps: Dict[str, Set[str]] = field(default_factory=_edges)
     imported_modules: Dict[str, Set[str]] = field(default_factory=_edges)
     sources: Dict[str, str] = field(default_factory=dict)
 
@@ -342,7 +348,7 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
             ) from exc
         graph.sources[path] = source
         package_code = is_package_code(path, roots)
-        spawns = not package_code and _SPAWN_RE.search(source) is not None
+        spawns = _SPAWN_RE.search(source) is not None
         package = None
         for root in roots:
             name = _module_name(path, root)
@@ -362,6 +368,11 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
         tokens: Set[str] = set()
         for text in found.strings:
             value = text.strip()
+            if package_code and spawns and "." in value:
+                for name in embedded.findall(value):
+                    target = resolve(name)
+                    if target and module_files[target] != path:
+                        graph.spawn_deps[path].add(module_files[target])
             if not package_code:
                 head = value.split(".")[0]
                 named: List[str] = []
@@ -489,7 +500,8 @@ def _requested_fixtures(source: str) -> Set[str]:
     return names
 
 
-def load_map(path: Path) -> Dict[str, Set[str]]:
+def load_map(path: Path) -> Tuple[Dict[str, Set[str]], bool]:
+    """The map, and whether it is too old to be trusted on its own."""
     data = json.loads(path.read_text(encoding="utf-8"))
     if data.get("version") != MAP_VERSION:
         raise SystemExit(
@@ -498,15 +510,18 @@ def load_map(path: Path) -> Dict[str, Set[str]]:
         )
     built = datetime.fromisoformat(data["built_at"])
     age = datetime.now(timezone.utc) - built
-    if age > MAX_MAP_AGE:
+    stale = age > MAX_MAP_AGE
+    if stale:
         print(
             f"::warning::select_tests: the coverage map is {age.days} days old "
-            "(built by the nightly unit run). Tests added to code since then are "
-            "found only through imports. Check why the nightly stopped saving it.",
+            "(built by the nightly unit run), so imports inside functions are "
+            "followed too, which runs more tests. Check why the nightly stopped "
+            "saving it.",
             file=sys.stderr,
         )
     tests = data["tests"]
-    return {src: {tests[i] for i in idx} for src, idx in data["files"].items()}
+    files = {src: {tests[i] for i in idx} for src, idx in data["files"].items()}
+    return files, stale
 
 
 def build_map(coverage_file: Path, repo: Path = REPO_ROOT) -> dict:
@@ -540,7 +555,10 @@ def build_map(coverage_file: Path, repo: Path = REPO_ROOT) -> dict:
 
 
 def affected_files(
-    graph: Graph, changed: Iterable[str], coverage: Optional[Dict[str, Set[str]]]
+    graph: Graph,
+    changed: Iterable[str],
+    coverage: Optional[Dict[str, Set[str]]],
+    stale: bool = False,
 ) -> Set[str]:
     changed = set(changed)
     affected: Set[str] = set(changed)
@@ -554,37 +572,53 @@ def affected_files(
         for scanner, tokens in graph.scanner_tokens.items():
             if any(d in tokens for d in dirs):
                 affected.add(scanner)
-    edges = dict(graph.deps)
-    if coverage is None:
-        for src, targets in graph.lazy_deps.items():
-            edges[src] = set(edges.get(src, ())) | targets
-    rev = _reverse(edges)
-    stack = list(affected)
-    while stack:
-        node = stack.pop()
-        for dependant in rev.get(node, ()):
-            if dependant not in affected:
-                affected.add(dependant)
-                stack.append(dependant)
-    if coverage is not None:
-        for node in list(affected):
-            affected.update(coverage.get(node, ()))
-        # Coverage never sees inside a child process, so a test that runs
-        # `python -m gaia.cli` depends on everything the CLI imports, lazily too.
-        every = {src: set(targets) for src, targets in graph.deps.items()}
-        for src, targets in graph.lazy_deps.items():
+    every = {src: set(targets) for src, targets in graph.deps.items()}
+    for extra in (graph.lazy_deps, graph.spawn_deps):
+        for src, targets in extra.items():
             every.setdefault(src, set()).update(targets)
-        reach: Dict[str, Set[str]] = {}
-        for test, targets in graph.subprocess_targets.items():
-            if test in affected:
-                continue
-            for target in targets:
-                if target not in reach:
-                    reach[target] = _forward(every, target)
-                if reach[target] & affected:
-                    affected.add(test)
-                    break
+    rev_every = _reverse(every)
+    seeds = set(affected)
+    if coverage is None:
+        return _closure(rev_every, seeds)
+    affected = _closure(_reverse(graph.deps), seeds)
+    for node in list(affected):
+        affected.update(coverage.get(node, ()))
+    # Coverage never sees inside a child process, so a file that runs
+    # `python -m gaia.cli` depends on everything the CLI imports, lazily too,
+    # and so does every test that ran that file.
+    reach: Dict[str, Set[str]] = {}
+    spawners = list(graph.subprocess_targets.items()) + list(graph.spawn_deps.items())
+    for src, targets in spawners:
+        if src in affected:
+            continue
+        for target in targets:
+            if target not in reach:
+                reach[target] = _forward(every, target)
+            if reach[target] & affected:
+                affected.add(src)
+                affected.update(coverage.get(src, ()))
+                break
+    # Where the map can't speak, follow every import, as with no map at all:
+    # tests it never ran (added since it was built) and source it never saw.
+    loose = _closure(rev_every, seeds)
+    if stale:
+        return affected | loose
+    mapped_tests = set().union(*coverage.values())
+    affected.update(f for f in loose if f not in mapped_tests)
+    unmapped = {f for f in changed if f.endswith(".py") and f not in coverage}
+    if unmapped:
+        affected |= _closure(rev_every, unmapped)
     return affected
+
+
+def _closure(rev: Dict[str, Set[str]], start: Set[str]) -> Set[str]:
+    seen, stack = set(start), list(start)
+    while stack:
+        for dependant in rev.get(stack.pop(), ()):
+            if dependant not in seen:
+                seen.add(dependant)
+                stack.append(dependant)
+    return seen
 
 
 def _forward(edges: Dict[str, Set[str]], start: str) -> Set[str]:
@@ -627,13 +661,14 @@ def select(
     coverage: Optional[Dict[str, Set[str]]] = None,
     test_root: str = DEFAULT_TEST_ROOT,
     platform_only: bool = False,
+    stale: bool = False,
 ) -> Selection:
     changed = sorted(set(changed))
     all_tests = sorted(p for p in graph.files if is_test_file(p, test_root))
     reason = full_run_reason(changed, graph, graph.repo)
     tests = all_tests
     if reason is None:
-        hit = affected_files(graph, changed, coverage)
+        hit = affected_files(graph, changed, coverage, stale)
         tests = [p for p in all_tests if p in hit]
         if len(tests) > FULL_FRACTION * len(all_tests):
             reason = f"{len(tests)} of {len(all_tests)} test files affected"
@@ -641,8 +676,9 @@ def select(
     if platform_only:
         tests = [p for p in tests if is_platform_sensitive(graph, p)]
     detail = reason or f"{len(changed)} changed file(s)"
-    if coverage is None and reason is None:
-        detail += "; no coverage map, so imports inside functions were followed too"
+    if reason is None and (coverage is None or stale):
+        why = "no coverage map" if coverage is None else "the coverage map is stale"
+        detail += f"; {why}, so imports inside functions were followed too"
     return Selection(
         full=reason is not None and not platform_only,
         reason=detail,
@@ -671,9 +707,10 @@ def changed_since(base: str, repo: Path = REPO_ROOT) -> List[str]:
 def _cmd_select(args: argparse.Namespace) -> int:
     changed = changed_since(args.base) if args.base else args.changed
     coverage = None
+    stale = False
     if args.map:
         if Path(args.map).is_file():
-            coverage = load_map(Path(args.map))
+            coverage, stale = load_map(Path(args.map))
         else:
             print(
                 f"::warning::select_tests: no coverage map at {args.map}; "
@@ -681,7 +718,7 @@ def _cmd_select(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
     graph = build_graph()
-    sel = select(graph, changed, coverage, args.test_root, args.platform_only)
+    sel = select(graph, changed, coverage, args.test_root, args.platform_only, stale)
     kind = "full suite" if sel.full else "selected"
     summary = f"{kind}: {len(sel.tests)} of {sel.total} test files ({sel.reason})"
     print(f"select_tests: {summary}", file=sys.stderr)
