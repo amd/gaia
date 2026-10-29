@@ -336,7 +336,8 @@ def test_a_foreign_deck_with_inherited_sizes_is_measured(out):
     """Text with no explicit size inherits from the layout/master; no false 'tiny font'."""
 
     def make(s, prs, i):
-        s.shapes.title.text = "Clinic hours expanded at four sites"
+        # Short enough to fit the inherited 44pt on one line even with estimated widths.
+        s.shapes.title.text = "Clinic hours expanded"
         s.placeholders[1].text_frame.text = "Saturday hours added"
 
     rep = verify_deck(deck(make, path=out(), layout=1), render=False)

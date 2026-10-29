@@ -106,6 +106,14 @@
     --code-success: #5CC96E;
     --code-warning: #E5B567;
     --code-danger: #F2787C;
+    /* The live slide preview draws the deck's light theme in both app themes. */
+    --slide-paper: #FFFFFF;
+    --slide-ink: #1F2937;
+    --slide-ink-dim: #4B5563;
+    --slide-accent: #0072B2;
+    --slide-on-accent: #FFFFFF;
+    --slide-panel: #F3F4F6;
+    --slide-rule: #D1D5DB;
 
     --bg-primary: #FAF9F7;           /* canvas */
     --bg-secondary: #F6F4F1;         /* header / composer band */
