@@ -262,6 +262,14 @@ it out. It also carries `performance`, the turn's model and tool timings and
 each model call's token counts, when the binary sends it. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Keeping a multi-turn conversation? Send `turns`, not `context`** (contract ≥
+2.25). Send `turns: []` on the first turn so its `final` carries
+`model_messages`, store that with the reply, and send them back, oldest first,
+so the agent sees the tool calls it made and what they returned.
+Text-only `context` loses them, and the agent can't explain its own last turn.
+An empty `turns` list clears a retained session's history. Older binaries
+reject `turns` with `422`.
+
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
 that names what failed and what to do about it.
