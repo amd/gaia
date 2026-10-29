@@ -928,6 +928,10 @@ class FileSearchToolsMixin:
                 if len(matching_files) < 10:
                     for drive in confine_roots(self, drives):
                         drive = Path(drive)
+                        # GAIA_ALLOWED_PATHS can confine "/" and home to the
+                        # same folder; walking it twice would list each hit twice.
+                        if any(drive.is_relative_to(done) for done in walked):
+                            continue
                         logger.debug("Searching %s...", drive)
                         # A sandbox may confine ``/`` to a user-selected child
                         # directory. Only the actual filesystem root has OS

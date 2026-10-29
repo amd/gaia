@@ -1012,3 +1012,119 @@ class TestANamedExtensionOutranksTheDefaultAllowlist:
         result = search_file("*.md")
 
         assert "notes.md" in [Path(f).name for f in result["files"]]
+
+
+def _deep_search_setup(tmp_path, monkeypatch, confined):
+    """Home + an empty project; *confined* replaces confine_roots."""
+    import gaia.agents.tools.file_tools as file_tools_module
+
+    home = (tmp_path / "home").resolve()
+    project = (tmp_path / "project").resolve()
+    home.mkdir()
+    project.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.chdir(project)
+    monkeypatch.setattr(file_tools_module.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(file_tools_module, "search_roots", lambda *_a, **_k: [project])
+    monkeypatch.setattr(file_tools_module, "confine_roots", confined)
+    return file_tools_module, home, project
+
+
+def test_home_first_and_root_confined_to_one_folder_lists_each_hit_once(
+    tmp_path, monkeypatch, registry
+):
+    """GAIA_ALLOWED_PATHS can map both home and / to one folder: walk it once."""
+    allowed = tmp_path / "home" / "Work"
+
+    def confined(_host, roots):
+        # Phase 1's common-locations sweep finds nothing; phase 2 maps to one folder.
+        return [] if Path(roots[0]).name == "Documents" else [allowed]
+
+    _, home, project = _deep_search_setup(tmp_path, monkeypatch, confined)
+    allowed.mkdir()
+    for i in range(3):
+        (allowed / f"invoice_{i}.txt").write_text("x")
+
+    search_file = _register_search_file(_Sandbox(allowed, project))
+    result = search_file("invoice", deep_search=True)
+
+    assert sorted(result["files"]) == sorted(
+        str((allowed / f"invoice_{i}.txt").resolve()) for i in range(3)
+    )
+    assert len(result["files"]) == len(set(result["files"]))
+
+
+def test_home_first_never_widens_past_the_allowed_paths(
+    tmp_path, monkeypatch, registry
+):
+    """When the allowlist excludes home, the home-first walk searches nothing there."""
+    outside = tmp_path / "data"
+
+    def confined(_host, roots):
+        return [outside] if Path(roots[0]) != Path.home() else []
+
+    _, home, project = _deep_search_setup(tmp_path, monkeypatch, confined)
+    outside.mkdir()
+    (home / "invoice_private.txt").write_text("x")
+    (outside / "invoice_ok.txt").write_text("x")
+
+    search_file = _register_search_file(_Sandbox(outside, project))
+    result = search_file("invoice", deep_search=True)
+
+    assert result["files"] == [str((outside / "invoice_ok.txt").resolve())]
+    assert str(home) not in result.get("searched_paths", [])
+
+
+def test_home_first_still_skips_protected_folders(tmp_path, monkeypatch, registry):
+    """The home walk asks the protected-folder guard like every other walk."""
+    import gaia.agents.tools.file_tools as file_tools_module
+
+    def confined(_host, roots):
+        return [Path.home()] if Path(roots[0]) == Path.home() else []
+
+    _, home, project = _deep_search_setup(tmp_path, monkeypatch, confined)
+    (home / "Photos").mkdir()
+    (home / "Photos" / "invoice_guarded.txt").write_text("x")
+    (home / "invoice_open.txt").write_text("x")
+    blocked = []
+
+    class Guard:
+        skipped = []
+
+        def __init__(self, *_a, **_k):
+            pass
+
+        def blocks(self, path):
+            if Path(path).name == "Photos":
+                blocked.append(Path(path))
+                return True
+            return False
+
+        def note(self):
+            return ""
+
+    monkeypatch.setattr(file_tools_module, "ProtectedFolders", Guard)
+    search_file = _register_search_file(_Sandbox(home, project))
+    result = search_file("invoice", deep_search=True)
+
+    assert result["files"] == [str((home / "invoice_open.txt").resolve())]
+    assert blocked, "the guard was never consulted for the protected folder"
+
+
+def test_a_user_folder_named_like_an_os_tree_is_still_searched(
+    tmp_path, monkeypatch, registry
+):
+    """The OS-tree skip applies at the filesystem root only, never inside home."""
+
+    def confined(_host, roots):
+        return [Path.home()] if Path(roots[0]) == Path.home() else []
+
+    _, home, project = _deep_search_setup(tmp_path, monkeypatch, confined)
+    for name in ("Library", "System", "usr", "opt"):
+        (home / name).mkdir()
+        (home / name / f"invoice_{name}.txt").write_text("x")
+
+    search_file = _register_search_file(_Sandbox(home, project))
+    result = search_file("invoice", deep_search=True)
+
+    assert len(result["files"]) == 4, result
