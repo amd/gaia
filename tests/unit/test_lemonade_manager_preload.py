@@ -1118,6 +1118,104 @@ def test_cloud_caller_repeat_calls_skip_status_and_warnings(mock_cls, caplog):
     client.load_model.assert_not_called()
 
 
+# Lemonade keeps cloud keys in memory only, so a server this process just
+# reached may have none: without a replay every gateway model 404s.
+GATEWAY_MODEL = "amd.DeepSeek-V4.1-Flash"
+
+
+@pytest.mark.parametrize("model", [CLOUD_MODEL, GATEWAY_MODEL])
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_cloud_caller_replays_the_kept_key(mock_cls, model):
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    mock_cls.return_value = client
+
+    assert LemonadeManager.ensure_ready(quiet=True, model=model) is True
+
+    client._replay_cloud_key.assert_called_once_with(model)
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_cloud_key_is_replayed_after_an_autostart(mock_cls):
+    client = _make_client_mock(_status(running=False))
+    client.get_status.side_effect = [
+        _status(running=False),
+        _status(running=True, context_size=0, loaded_models=[]),
+    ]
+    mock_cls.return_value = client
+
+    with patch.object(LemonadeManager, "_autostart", return_value=True) as start:
+        assert LemonadeManager.ensure_ready(quiet=True, model=GATEWAY_MODEL) is True
+
+    start.assert_called_once()
+    client._replay_cloud_key.assert_called_once_with(GATEWAY_MODEL)
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_cloud_key_is_not_replayed_when_the_autostart_fails(mock_cls):
+    client = _make_client_mock(_status(running=False))
+    mock_cls.return_value = client
+
+    with patch.object(LemonadeManager, "_autostart", return_value=False):
+        assert LemonadeManager.ensure_ready(quiet=True, model=GATEWAY_MODEL) is False
+
+    client._replay_cloud_key.assert_not_called()
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_cloud_key_replay_runs_once_per_ready_server(mock_cls):
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    mock_cls.return_value = client
+
+    LemonadeManager.ensure_ready(quiet=True, model=GATEWAY_MODEL)
+    LemonadeManager.ensure_ready(quiet=True, model=GATEWAY_MODEL)
+
+    client._replay_cloud_key.assert_called_once()
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_local_caller_never_replays_a_cloud_key(mock_cls):
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    client.get_status.side_effect = [
+        _status(running=True, context_size=0, loaded_models=[]),
+        _status(
+            running=True,
+            context_size=65536,
+            loaded_models=[{"id": "Gemma-4-E4B-it-GGUF"}],
+        ),
+    ]
+    mock_cls.return_value = client
+
+    LemonadeManager.ensure_ready(
+        min_context_size=65536, quiet=True, model="Gemma-4-E4B-it-GGUF"
+    )
+
+    client._replay_cloud_key.assert_not_called()
+
+
+@patch("gaia.llm.cloud_keys.ensure_authenticated")
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_failed_key_replay_still_leaves_the_server_ready(mock_cls, ensure_auth, caplog):
+    """The replay is best-effort: the turn's own 404 then names the model."""
+    import types as _types
+
+    from gaia.llm.cloud_keys import CloudKeyError
+    from gaia.llm.lemonade_client import LemonadeClient as RealClient
+
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    client.model = None
+    client.log = logging.getLogger("gaia.llm.lemonade_client")
+    client.cloud_model_provider.return_value = "amd"
+    client._replay_cloud_key = _types.MethodType(RealClient._replay_cloud_key, client)
+    ensure_auth.side_effect = CloudKeyError("no kept key")
+    mock_cls.return_value = client
+
+    with caplog.at_level(logging.WARNING, logger="gaia.llm.lemonade_client"):
+        assert LemonadeManager.ensure_ready(quiet=True, model=GATEWAY_MODEL) is True
+
+    ensure_auth.assert_called_once_with("amd", client=client)
+    assert any("no kept key" in r.getMessage() for r in caplog.records)
+
+
 @patch("gaia.llm.lemonade_manager.LemonadeClient")
 def test_local_caller_after_cloud_caller_still_gets_preload(mock_cls):
     """Switching the UI from a cloud to a local model keeps the #839 preload."""

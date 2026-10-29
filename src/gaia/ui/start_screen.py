@@ -130,14 +130,13 @@ def pick_cards(ctx: Context) -> List[Dict[str, Any]]:
     return cards
 
 
-def working_folder() -> Dict[str, Any]:
+def working_folder(choosable: bool) -> Dict[str, Any]:
     """The folder a new chat's agent works in, as ``_compute_allowed_paths`` grants it.
 
-    ``choosable`` says whether a new chat can be given another folder.
+    *choosable* says whether a new chat can be given another folder
+    (:func:`gaia.ui.session_environment.takes_folders`).
     """
     from gaia.ui import _chat_helpers as chat
-    from gaia.ui.security import FLAGSHIP_AGENT_ID
-    from gaia.ui.session_environment import relayed
 
     cwd = Path.cwd().resolve()
     if chat._unsafe_directory_grant_reason(cwd):
@@ -148,7 +147,7 @@ def working_folder() -> Dict[str, Any]:
         "path": str(folder),
         "name": folder.name or str(folder),
         "gaia_folder": own,
-        "choosable": not relayed({"agent_type": FLAGSHIP_AGENT_ID}),
+        "choosable": choosable,
     }
 
 
@@ -175,11 +174,11 @@ def _mail_connected() -> bool:
     return False
 
 
-def start_screen(db, skills: List[Dict[str, Any]]) -> Dict[str, Any]:
+def start_screen(db, skills: List[Dict[str, Any]], choosable: bool) -> Dict[str, Any]:
     """The cards and working folder for a new chat; *skills* is ``/api/skills``."""
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
 
-    folder = working_folder()
+    folder = working_folder(choosable)
     ctx = Context(
         skills=frozenset(s["name"] for s in skills),
         indexed_documents=sum(

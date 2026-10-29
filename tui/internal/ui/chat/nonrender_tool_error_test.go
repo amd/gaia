@@ -42,7 +42,8 @@ func TestFailedNonRenderToolSurfacesItsErrorText(t *testing.T) {
 		!strings.Contains(got, "gaia connectors connect google") {
 		t.Errorf("the tool's own remedy was lost: %q", got)
 	}
-	if !strings.Contains(got, "failed") {
+	// "error" while the turn may still retry past it; "failed" once it ends on it.
+	if !strings.Contains(got, "└ error") {
 		t.Errorf("a failure must say so in words, not colour alone: %q", got)
 	}
 }

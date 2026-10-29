@@ -830,7 +830,8 @@ class LemonadeProvider(LLMClient):
         finish_reason = choice.get("finish_reason", "")
         self._last_finish_reason = finish_reason or None
         tool_calls = message.get("tool_calls")
-        self._last_reasoning = message.get("reasoning_content") or None
+        reasoning = message.get("reasoning_content") or None
+        self._last_reasoning = reasoning
 
         if tool_calls:
             logger.debug(
@@ -859,7 +860,7 @@ class LemonadeProvider(LLMClient):
             )
 
         content = message.get("content") or ""
-        if not content and finish_reason == "stop" and self._last_reasoning:
+        if not content and finish_reason == "stop" and reasoning:
             # Some llama.cpp builds route a completed answer into
             # ``reasoning_content``. A reply cut off by the token limit
             # (``finish_reason="length"``) is left empty on purpose — that text
@@ -869,7 +870,7 @@ class LemonadeProvider(LLMClient):
                 "treating 'reasoning_content' as the answer (model=%s)",
                 effective_model,
             )
-            content = self._last_reasoning
+            content = reasoning
             self._last_reasoning = None
         logger.debug(
             "tool_call_path=%s model_id=%s tool_calling_flag=%s finish_reason=%s",
