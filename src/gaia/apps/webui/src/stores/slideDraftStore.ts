@@ -9,6 +9,7 @@
 import { create } from 'zustand';
 import type { StreamEvent } from '../types';
 import { clampWidth, useSessionPanelStore } from './sessionPanelStore';
+import { outlineToMarkdown } from '../utils/slideMarkdown';
 
 export type SlideDraftStatus = 'preparing' | 'writing' | 'building' | 'retrying' | 'done' | 'failed';
 
@@ -23,6 +24,9 @@ export interface SlideDraft {
 
 const SLIDE_SKILL = 'slide-decks';
 const DRAFT_TOOL = `${SLIDE_SKILL}/build_deck_from_markdown`;
+/** The JSON-outline build: drawn from its outline once the call is made. */
+const OUTLINE_TOOL = `${SLIDE_SKILL}/build_deck`;
+const BUILD_TOOLS = [DRAFT_TOOL, OUTLINE_TOOL];
 const SLIDE_PANEL_WIDTH = 600;
 
 interface SlideDraftState {
@@ -69,7 +73,10 @@ export function followSlideEvent(sessionId: string, event: StreamEvent): boolean
         begin(sessionId, { status: 'preparing' });
     } else if (event.type === 'tool_args' && event.tool === DRAFT_TOOL && typeof args.markdown === 'string') {
         begin(sessionId, { status: 'building', markdown: args.markdown });
-    } else if (event.type === 'tool_result' && event.tool === DRAFT_TOOL) {
+    } else if (event.type === 'tool_args' && event.tool === OUTLINE_TOOL) {
+        const markdown = outlineToMarkdown(args.outline);
+        if (markdown) begin(sessionId, { status: 'building', markdown });
+    } else if (event.type === 'tool_result' && BUILD_TOOLS.includes(event.tool ?? '')) {
         if (finished(useSlideDraftStore.getState().drafts[sessionId])) return false;
         const data = ((event as { data?: unknown }).data ?? {}) as { path?: string };
         useSlideDraftStore.getState().update(

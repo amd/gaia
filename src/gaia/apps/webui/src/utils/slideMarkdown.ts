@@ -24,6 +24,7 @@ export interface DraftSlide {
     rows?: string[][];
     chart?: string;
     source?: string;
+    takeaway?: string;
 }
 
 const LATEX: Record<string, string> = {
@@ -111,6 +112,8 @@ export function parseSlides(md: string): DraftSlide[] {
         if (m) { cur.axis = plainText(m[1]); continue; }
         m = s.match(/^source\s*:\s*(.+)$/i);
         if (m) { cur.source = plainText(m[1]); continue; }
+        m = s.match(/^(?:takeaway|decision|ask|bottom line)\s*:\s*(.+)$/i);
+        if (m) { cur.takeaway = plainText(m[1]); continue; }
         if (/^###\s/.test(s)) {
             cur.items.push({ title: plainText(s.replace(/^###\s+/, '')), bullets: [] });
             continue;
@@ -138,4 +141,76 @@ export function parseSlides(md: string): DraftSlide[] {
     // A one-slide deck is built without its cover; the preview shows what is built.
     const content = slides.filter((s) => s.layout !== 'cover');
     return content.length === 1 ? content : slides;
+}
+
+type Json = Record<string, unknown>;
+
+const str = (v: unknown): string => (v == null ? '' : String(v));
+const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : v == null ? [] : [v]);
+
+function bulletLines(v: unknown, indent = ''): string[] {
+    return list(v).flatMap((b) => {
+        if (Array.isArray(b)) return bulletLines(b, indent + '  ');
+        if (b && typeof b === 'object') {
+            const o = b as Json;
+            return [`${indent}- ${str(o.text ?? o.title)}`, ...bulletLines(o.bullets, indent + '  ')];
+        }
+        return [`${indent}- ${str(b)}`];
+    });
+}
+
+const FENCE = '`'.repeat(3);
+
+/**
+ * A build_deck JSON outline as the Markdown above, so the preview draws decks
+ * built either way. Slide types the preview cannot draw keep their title.
+ */
+export function outlineToMarkdown(outline: unknown): string {
+    let o: unknown = outline;
+    if (typeof o === 'string') {
+        try {
+            o = JSON.parse(o);
+        } catch {
+            return '';
+        }
+    }
+    if (!o || typeof o !== 'object') return '';
+    const out: string[] = [];
+    for (const raw of list((o as Json).slides)) {
+        if (!raw || typeof raw !== 'object') continue;
+        const s = raw as Json;
+        const type = str(s.type).toLowerCase();
+        const title = str(s.title ?? s.headline ?? s.heading);
+        if (type === 'title' || type === 'cover') {
+            out.push(`# ${title}`, str(s.subtitle), '');
+            continue;
+        }
+        out.push(`## ${title}`);
+        if (type === 'diagram') {
+            out.push(`Diagram: ${str(s.diagram ?? s.layout) || 'boxes'}`);
+            for (const it of list(s.items ?? s.steps ?? s.stages)) {
+                const item = (it && typeof it === 'object' ? it : { title: it }) as Json;
+                out.push(`### ${str(item.title)}`, ...bulletLines(item.bullets ?? (item.text ? [item.text] : [])));
+            }
+            const axis = s.x_axis && typeof s.x_axis === 'object' ? (s.x_axis as Json).label : s.x_axis;
+            if (axis) out.push(`Axis: ${str(axis)}`);
+        } else if (type === 'table') {
+            const cols = list(s.columns).map(str);
+            if (cols.length) out.push(`| ${cols.join(' | ')} |`, `|${cols.map(() => '---').join('|')}|`);
+            for (const r of list(s.rows)) out.push(`| ${list(r).map(str).join(' | ')} |`);
+        } else if (type === 'chart') {
+            out.push(`${FENCE}chart ${str(s.chart_type)}`, FENCE);
+        } else if (type === 'kpi') {
+            for (const k of list(s.kpis ?? s.items)) {
+                const kpi = (k && typeof k === 'object' ? k : {}) as Json;
+                out.push(`- ${str(kpi.label)}: ${str(kpi.value)}`);
+            }
+        } else {
+            out.push(...bulletLines(s.bullets ?? s.points ?? s.items));
+        }
+        if (s.takeaway) out.push(`Takeaway: ${str(s.takeaway)}`);
+        if (s.source) out.push(`Source: ${str(s.source)}`);
+        out.push('');
+    }
+    return out.join('\n');
 }

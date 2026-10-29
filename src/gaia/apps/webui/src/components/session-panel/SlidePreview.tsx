@@ -83,6 +83,7 @@ function Slide({ slide, n }: { slide: DraftSlide; n: number }) {
         <div className="sd-slide" aria-label={`Slide ${n}: ${slide.title}`}>
             {slide.layout !== 'cover' && <div className="sd-title">{slide.title}</div>}
             <div className="sd-body"><SlideBody slide={slide} /></div>
+            {slide.takeaway && <div className="sd-takeaway">{slide.takeaway}</div>}
             {slide.source && <div className="sd-source">Source: {slide.source}</div>}
         </div>
     );

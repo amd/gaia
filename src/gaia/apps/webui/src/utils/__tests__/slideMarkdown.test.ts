@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from 'vitest';
-import { parseSlides, plainText } from '../slideMarkdown';
+import { outlineToMarkdown, parseSlides, plainText } from '../slideMarkdown';
 
 const STAGES = '# Deck\n\n## Personal AI grows\nDiagram: process\n### Assist\n- Summarize email\n### Delegate\n- Plan the day\n### Autonomy\n- Deep research\nAxis: More compute\n';
 
@@ -34,5 +34,45 @@ describe('parseSlides', () => {
 describe('plainText', () => {
     it('turns LaTeX arrows into symbols and leaves prices alone', () => {
         expect(plainText('A $\\rightarrow$ B, $5 and $10')).toBe('A → B, $5 and $10');
+    });
+});
+
+describe('outlineToMarkdown', () => {
+    it('draws a build_deck outline like the same deck in Markdown', () => {
+        const outline = {
+            slides: [
+                { type: 'title', title: 'Deck', subtitle: 'Q3' },
+                {
+                    type: 'diagram',
+                    diagram: 'process',
+                    title: 'Personal AI grows',
+                    items: [{ title: 'Assist', bullets: ['Summarize email'] }, { title: 'Delegate' }, { title: 'Autonomy' }],
+                    x_axis: { label: 'More compute' },
+                    takeaway: 'Fund the NPU work',
+                },
+                { type: 'table', title: 'Laptops', columns: ['Model', 'RAM'], rows: [['A', '16 GB']] },
+            ],
+        };
+        const [cover, stages, table] = parseSlides(outlineToMarkdown(outline));
+        expect(cover.layout).toBe('cover');
+        expect(stages.layout).toBe('process');
+        expect(stages.items.map((i) => i.title)).toEqual(['Assist', 'Delegate', 'Autonomy']);
+        expect(stages.axis).toBe('More compute');
+        expect(stages.takeaway).toBe('Fund the NPU work');
+        expect(table.rows).toEqual([['Model', 'RAM'], ['A', '16 GB']]);
+    });
+
+    it('accepts the outline as JSON text and ignores what is not an outline', () => {
+        expect(outlineToMarkdown(JSON.stringify({ slides: [{ type: 'bullets', title: 'Plan', bullets: ['Ship'] }] }))).toContain('- Ship');
+        expect(outlineToMarkdown('not json')).toBe('');
+        expect(outlineToMarkdown(null)).toBe('');
+    });
+});
+
+describe('takeaway', () => {
+    it('is the band line, not a bullet', () => {
+        const [slide] = parseSlides('## West led\n- Revenue up\nTakeaway: Keep funding West\n');
+        expect(slide.takeaway).toBe('Keep funding West');
+        expect(slide.bullets).toEqual(['Revenue up']);
     });
 });
