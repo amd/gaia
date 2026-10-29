@@ -283,3 +283,44 @@ class TestScheduleResults:
     def test_results_not_found(self, client):
         resp = client.get("/api/schedules/nonexistent/results")
         assert resp.status_code == 404
+
+
+class TestRunScheduleNow:
+    """POST /api/schedules/{name}/run (#5718)."""
+
+    def test_run_now(self, client):
+        client.post(
+            "/api/schedules",
+            json={"name": "now", "interval": "every 1h", "prompt": "N"},
+        )
+        resp = client.post("/api/schedules/now/run")
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "now"
+
+    def test_run_now_unknown(self, client):
+        assert client.post("/api/schedules/missing/run").status_code == 404
+
+    def test_run_now_while_running_is_409(self, app_with_scheduler):
+        _, scheduler, _ = app_with_scheduler
+        client = TestClient(app_with_scheduler[0])
+        client.post(
+            "/api/schedules",
+            json={"name": "busy", "interval": "every 1h", "prompt": "B"},
+        )
+        scheduler._tasks["busy"]._executing = True
+        try:
+            resp = client.post("/api/schedules/busy/run")
+            assert resp.status_code == 409
+            assert "already running" in resp.json()["detail"]
+            listed = client.get("/api/schedules/busy").json()
+            assert listed["running"] is True
+        finally:
+            scheduler._tasks["busy"]._executing = False
+
+    def test_run_now_name_is_exact(self, client):
+        client.post(
+            "/api/schedules",
+            json={"name": "exact", "interval": "every 1h", "prompt": "E"},
+        )
+        assert client.post("/api/schedules/EXACT/run").status_code == 404
+        assert client.post("/api/schedules/exac/run").status_code == 404
