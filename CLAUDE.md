@@ -668,6 +668,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `skill_learning` | `gaia.agents.tools.skill_learning_tools.SkillLearningToolsMixin` | Persist lessons learned while running a skill |
 | `audio` | `gaia.agents.tools.audio_tools.AudioToolsMixin` | Transcribe audio/video via Lemonade, then label speakers |
 | `wait` | `gaia.agents.tools.wait_tools.WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
+| `guide` | `gaia.agents.tools.guide_tools.GuideToolsMixin` | Recipe, workout, how-to and checklist cards (`guide` render) |
 | `reasoning_effort` | `gaia.agents.tools.reasoning_tools.ReasoningEffortToolsMixin` | `set_reasoning_effort` low/medium/high per step, on models that grade reasoning (gpt-oss) |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.

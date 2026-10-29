@@ -557,6 +557,17 @@ FULL_BUNDLES = [
             "recording."
         ),
     ),
+    ToolBundle(
+        name="guide",
+        members=frozenset(
+            {"show_recipe", "show_workout", "show_how_to", "show_checklist"}
+        ),
+        description=(
+            "Show a recipe, workout, how-to or checklist as a card: cooking "
+            "and baking, exercise routines, fixing or setting something up, "
+            "and shopping, packing or to-do lists."
+        ),
+    ),
 ]
 
 # Bundle members a healthy ``full`` registry may legitimately lack. Handed to
@@ -568,8 +579,8 @@ FULL_BUNDLES = [
 #    on PATH; ChatAgent skips it rather than register a tool whose backend
 #    always fails. (``search_web`` is NOT optional here: the browser mixin
 #    registers it unconditionally for this profile.)
-# 2. Subclass-provided mixins -- the skill-library, skill-learning, and
-#    code-index tools come from GaiaAgent, so a plain ChatAgent on
+# 2. Subclass-provided mixins -- the skill-library, skill-learning,
+#    code-index, and guide tools come from GaiaAgent, so a plain ChatAgent on
 #    prompt_profile="full" has none.
 # 3. Memory. MemoryMixin registers nothing when the embedder is unreachable, so
 #    a degraded-but-running agent has a store and no memory tools. Selection
@@ -621,6 +632,10 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "generate_image",
         "list_sd_models",
         "get_generation_history",
+        "show_recipe",
+        "show_workout",
+        "show_how_to",
+        "show_checklist",
     }
 )
 

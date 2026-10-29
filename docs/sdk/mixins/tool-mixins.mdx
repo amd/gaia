@@ -51,6 +51,7 @@ mixin and calling its `register_*_tools()` method. Each row is the exact
 | `skill_learning` | `from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin` | Persist lessons learned while running a skill |
 | `audio` | `from gaia.agents.tools.audio_tools import AudioToolsMixin` | Transcribe audio/video via Lemonade, then label speakers |
 | `wait` | `from gaia.agents.tools.wait_tools import WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
+| `guide` | `from gaia.agents.tools.guide_tools import GuideToolsMixin` | `show_recipe`, `show_workout`, `show_how_to`, `show_checklist`: draw the answer as a `guide` card in the Agent UI |
 | `reasoning_effort` | `from gaia.agents.tools.reasoning_tools import ReasoningEffortToolsMixin` | `set_reasoning_effort` low/medium/high per step, on models that grade reasoning (gpt-oss) |
 
 The sections below show usage patterns for the most common mixins; the
