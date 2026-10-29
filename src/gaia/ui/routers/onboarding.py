@@ -228,19 +228,24 @@ async def onboarding_preflight() -> PreflightReport:
 def new_chat_start(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
     """A new chat's task cards and working folder, from what is set up here.
 
-    When the agent can't list its skills it can't run a task either, so
-    there are no cards, and ``skills_error`` carries why.
+    When the agent can't list its skills, or be asked whether it takes
+    folders, it can't run a task either, so there are no cards, the folder
+    can't be changed, and ``skills_error`` carries why.
     """
     from gaia.ui.routers.skills import list_skills
+    from gaia.ui.security import FLAGSHIP_AGENT_ID
+    from gaia.ui.session_environment import EnvironmentChangeError, takes_folders
     from gaia.ui.start_screen import start_screen, working_folder
 
     try:
         skills = list_skills()["skills"]
-    except HTTPException as e:
-        logger.warning("New-chat cards unavailable: %s", e.detail)
+        choosable = takes_folders(FLAGSHIP_AGENT_ID)
+    except (HTTPException, EnvironmentChangeError) as e:
+        detail = str(e.detail if isinstance(e, HTTPException) else e)
+        logger.warning("New-chat cards unavailable: %s", detail)
         return {
             "cards": [],
-            "working_folder": working_folder(),
-            "skills_error": str(e.detail),
+            "working_folder": working_folder(choosable=False),
+            "skills_error": detail,
         }
-    return {**start_screen(db, skills), "skills_error": None}
+    return {**start_screen(db, skills, choosable), "skills_error": None}

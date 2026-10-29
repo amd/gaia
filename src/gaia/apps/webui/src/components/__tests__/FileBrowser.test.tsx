@@ -49,7 +49,7 @@ beforeEach(() => {
 });
 
 it('closes on Escape', async () => {
-    render(<FileBrowser />);
+    render(<FileBrowser onStartChat={vi.fn()} />);
     await screen.findByText('report.pdf');
 
     fireEvent.keyDown(document, { key: 'Escape' });
@@ -59,7 +59,7 @@ it('closes on Escape', async () => {
 
 describe('FileBrowser row selection', () => {
     it('clicking a file row selects it and enables Index Selected and Ask Agent', async () => {
-        render(<FileBrowser />);
+        render(<FileBrowser onStartChat={vi.fn()} />);
 
         // Wait for the directory listing to load
         const fileName = await screen.findByText('report.pdf');
@@ -88,7 +88,7 @@ describe('FileBrowser row selection', () => {
     });
 
     it('clicking the preview icon previews without selecting the file', async () => {
-        render(<FileBrowser />);
+        render(<FileBrowser onStartChat={vi.fn()} />);
 
         const fileName = await screen.findByText('report.pdf');
         const row = fileName.closest('.fb-entry') as HTMLElement;
@@ -116,7 +116,7 @@ describe('FileBrowser row selection', () => {
     });
 
     it('checkbox toggles selection on and off (regression guard)', async () => {
-        render(<FileBrowser />);
+        render(<FileBrowser onStartChat={vi.fn()} />);
 
         const fileName = await screen.findByText('notes.txt');
         const row = fileName.closest('.fb-entry') as HTMLElement;
@@ -163,7 +163,7 @@ describe('FileBrowser search truncation', () => {
             searched_locations: ['/home/user/Documents'],
             truncated,
         });
-        render(<FileBrowser />);
+        render(<FileBrowser onStartChat={vi.fn()} />);
         await screen.findByText('report.pdf');
         const input = screen.getByPlaceholderText('Search files on your PC...');
         fireEvent.change(input, { target: { value: 'report' } });
@@ -200,7 +200,7 @@ describe('FileBrowser Index Selected', () => {
     });
 
     async function indexNotes() {
-        render(<FileBrowser />);
+        render(<FileBrowser onStartChat={vi.fn()} />);
         const row = (await screen.findByText('notes.txt')).closest('.fb-entry') as HTMLElement;
         fireEvent.click(within(row).getByRole('checkbox'));
         fireEvent.click(screen.getByRole('button', { name: /Index Selected/i }));
@@ -223,6 +223,48 @@ describe('FileBrowser Index Selected', () => {
     });
 });
 
+describe('FileBrowser Ask Agent', () => {
+    const DOC = {
+        id: 'doc-1', filename: 'notes.txt', filepath: '/home/user/docs/notes.txt', file_size: 512,
+        chunk_count: 1, indexed_at: '', last_accessed_at: null, sessions_using: 0, indexing_status: 'complete',
+    };
+
+    beforeEach(() => {
+        useChatStore.setState({ sessions: [], documents: [], draftDocumentIds: [], pendingPrompt: null });
+        mockedApi.uploadDocumentByPath.mockResolvedValue(DOC as never);
+        mockedApi.attachDocument.mockResolvedValue(undefined as never);
+        mockedApi.listDocuments.mockResolvedValue({
+            documents: [DOC] as never, total: 1, total_size_bytes: 512, total_chunks: 1,
+        });
+    });
+
+    async function askAboutNotes(onStartChat = vi.fn().mockResolvedValue(true)) {
+        render(<FileBrowser onStartChat={onStartChat} />);
+        const row = (await screen.findByText('notes.txt')).closest('.fb-entry') as HTMLElement;
+        fireEvent.click(within(row).getByRole('checkbox'));
+        fireEvent.click(screen.getByRole('button', { name: /Ask Agent/i }));
+        await waitFor(() => expect(useChatStore.getState().showFileBrowser).toBe(false));
+        return onStartChat;
+    }
+
+    it('starts a new chat about the file from the new-chat screen (#5924)', async () => {
+        useChatStore.setState({ currentSessionId: null });
+        const onStartChat = await askAboutNotes();
+        expect(onStartChat).toHaveBeenCalledWith('Please analyze this document for me: notes.txt');
+        // Nothing is left waiting to fire into whichever chat opens next.
+        expect(useChatStore.getState().pendingPrompt).toBeNull();
+        expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-1']);
+    });
+
+    it('sends into the open chat and only that chat', async () => {
+        const onStartChat = await askAboutNotes();
+        expect(onStartChat).not.toHaveBeenCalled();
+        expect(useChatStore.getState().pendingPrompt).toEqual({
+            sessionId: 'session-1', text: 'Please analyze this document for me: notes.txt',
+        });
+    });
+});
+
 describe('FileBrowser hidden entries', () => {
     const HOME: BrowseResponse = {
         current_path: '/home/user',
@@ -237,7 +279,7 @@ describe('FileBrowser hidden entries', () => {
 
     it('hides dot entries until Show hidden is turned on', async () => {
         mockedApi.browseFiles.mockResolvedValue(HOME);
-        render(<FileBrowser />);
+        render(<FileBrowser onStartChat={vi.fn()} />);
         await screen.findByText('Documents');
         expect(screen.queryByText('.config')).toBeNull();
         expect(screen.queryByText('.env')).toBeNull();
@@ -250,7 +292,7 @@ describe('FileBrowser hidden entries', () => {
 
     it('drops a hidden selection when Show hidden is turned off', async () => {
         mockedApi.browseFiles.mockResolvedValue(HOME);
-        render(<FileBrowser />);
+        render(<FileBrowser onStartChat={vi.fn()} />);
         await screen.findByText('Documents');
         const toggle = screen.getByRole('checkbox', { name: 'Show hidden' });
         fireEvent.click(toggle);
@@ -264,7 +306,7 @@ describe('FileBrowser hidden entries', () => {
 
     it('explains a folder that holds only hidden items', async () => {
         mockedApi.browseFiles.mockResolvedValue({ ...HOME, entries: HOME.entries.slice(0, 2) });
-        render(<FileBrowser />);
+        render(<FileBrowser onStartChat={vi.fn()} />);
         expect(await screen.findByText(/Only hidden items here/)).toBeTruthy();
     });
 });
@@ -292,7 +334,7 @@ describe('FileBrowser hidden selections from search', () => {
     const searchAndTick = async (names: string[], showHidden = false) => {
         mockedApi.browseFiles.mockResolvedValue(HOME);
         mockedApi.searchFiles.mockResolvedValue(RESULTS);
-        render(<FileBrowser />);
+        render(<FileBrowser onStartChat={vi.fn()} />);
         await screen.findByText('Documents');
         if (showHidden) fireEvent.click(screen.getByRole('checkbox', { name: 'Show hidden' }));
         const input = screen.getByPlaceholderText('Search files on your PC...');
@@ -328,7 +370,7 @@ describe('FileBrowser hidden selections from search', () => {
             results: [{ ...RESULTS.results[0], path: 'C:' + String.fromCharCode(92) + 'Users' + String.fromCharCode(92) + '.env' }],
             total: 1,
         });
-        render(<FileBrowser />);
+        render(<FileBrowser onStartChat={vi.fn()} />);
         await screen.findByText('Documents');
         const input = screen.getByPlaceholderText('Search files on your PC...');
         fireEvent.change(input, { target: { value: 'e' } });
