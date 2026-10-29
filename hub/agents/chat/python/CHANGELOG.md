@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- An MCP server tool can name the arguments the repeat-call guard compares, in
+  its `_meta` under `ai.amd-gaia/dedup_key`. A server with a bad declaration
+  is refused on its own: it is disconnected, its tools are neither registered
+  nor counted toward `mcp_tool_limit`, the load summary names it with the
+  error, and the servers after it still load. Uses `_admit_mcp_server`, new in
+  core 0.25.1.
 - `gaia chat --index <file>` indexes the named file from any working
   directory. A file outside the folder `gaia chat` ran in was refused as "not
   in allowed paths", the error was only logged, and the agent answered without

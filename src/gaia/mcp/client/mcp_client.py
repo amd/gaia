@@ -5,7 +5,7 @@
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from gaia.logger import get_logger
 
@@ -285,6 +285,14 @@ def mcp_tool_error(result: Any) -> Optional[str]:
     return "\n".join(t for t in texts if t) or "The MCP tool reported an error."
 
 
+#: ``_meta`` key through which an MCP tool declares its ``@tool(dedup_key=...)``.
+MCP_DEDUP_KEY_META = "ai.amd-gaia/dedup_key"
+
+
+class MCPToolDeclarationError(ValueError):
+    """An MCP server declared tool metadata GAIA cannot honor."""
+
+
 @dataclass
 class MCPTool:
     """Represents an MCP tool with its schema.
@@ -296,12 +304,43 @@ class MCPTool:
         annotations: MCP tool annotations (``readOnlyHint``, ``destructiveHint``,
             …). Server-supplied and therefore advisory — see
             :func:`mcp_tool_requires_confirmation` for how far they are trusted.
+        meta: The tool's ``_meta`` object, where servers put metadata the
+            MCP spec does not define (e.g. ``ai.amd-gaia/dedup_key``).
     """
 
     name: str
     description: str
     input_schema: Dict[str, Any]
     annotations: Dict[str, Any] = field(default_factory=dict)
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+    def declared_dedup_key(self, server_name: str) -> Optional[Tuple[str, ...]]:
+        """The argument names this tool's ``_meta`` gives the repeat-call guard.
+
+        Returns:
+            The validated names, or ``None`` when the tool declares none.
+
+        Raises:
+            MCPToolDeclarationError: The declaration is malformed or names an
+                argument the tool does not take.
+        """
+        declared = self.meta.get(MCP_DEDUP_KEY_META)
+        if declared is None:
+            return None
+        # Deferred: the tools module pulls in the agent stack, which only a
+        # server that opts in should pay for.
+        from gaia.agents.base.tools import validate_dedup_key
+
+        properties = self.input_schema.get("properties", {})
+        try:
+            return validate_dedup_key(self.name, declared, properties)
+        except (TypeError, ValueError) as e:
+            raise MCPToolDeclarationError(
+                f"MCP server {server_name!r} declares a bad "
+                f"{MCP_DEDUP_KEY_META} {declared!r}: {e} None of its "
+                "tools were registered; fix the declaration in the "
+                "server's tool _meta."
+            ) from e
 
     def to_gaia_format(
         self, prefix: str, raw_server_name: Optional[str] = None
@@ -597,6 +636,7 @@ class MCPClient:
                     if isinstance(tool.get("annotations"), dict)
                     else {}
                 ),
+                meta=tool["_meta"] if isinstance(tool.get("_meta"), dict) else {},
             )
             for tool in tools_data
         ]

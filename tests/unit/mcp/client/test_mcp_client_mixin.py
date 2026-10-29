@@ -564,6 +564,7 @@ class TestMCPLoadSummary:
         }
         mock_manager.config.get_servers.return_value = {"windows": {}}
         mock_manager.list_servers.return_value = []  # none connected
+        mock_manager.failure.return_value = None
         mock_manager_class.return_value = mock_manager
 
         console = Mock()
