@@ -1875,7 +1875,7 @@ in which case a free one is picked and remembered instead. `start` writes them t
 so the secret never lands in terminal scrollback, shell history or a CI log:
 
 ```
-✅ Embedded Lemonade 2026.43.3 running on http://localhost:62232/api/v1
+✅ Embedded Lemonade 2026.44.1 running on http://localhost:62232/api/v1
    pid 26080   logs: ~/.gaia/lemonade/lemond.log
 
    The instance is private. Load its URL and API key with:
@@ -3412,13 +3412,28 @@ and no scheduled job pending, and the next GAIA command starts a fresh one. Set
 The daemon for `~/.gaia` never idles out. `gaia kill --daemons` finds and stops
 any that are still left.
 
+After an update replaces GAIA, the daemon still running the previous release is
+restarted, with its agents, by the next GAIA command or app launch that starts
+or attaches to it. The daemon records its release in `instance.json`, and a
+client compares that with the version now installed where the daemon runs from.
+A daemon started by a release older than this check is restarted only by a
+client from the same Python environment.
+
+A busy daemon is not restarted: while an agent turn is still running (including
+one waiting on a tool or your approval), a scheduled job is running or due,
+another GAIA app (the terminal app or the Agent UI) is connected, or its model
+server answered a request in the last two minutes, clients keep using it. Each
+command that finds it out of date says so, and the Agent UI shows the same note
+in the chat. A later command restarts it once it is free, or run
+`gaia daemon restart` to restart it now.
+
 **Daemon HTTP surface** (the daemon serves no OpenAPI schema, so this is the
 contract; every route needs `Authorization: Bearer <token>` from
 `~/.gaia/host/instance.json`):
 
 | Route | Purpose |
 |-------|---------|
-| `GET /daemon/v1/status` | pid / port / uptime / API version |
+| `GET /daemon/v1/status` | pid / port / uptime / API version, and `relayed_turns`: agent turns open through the relay |
 | `POST /daemon/v1/lemonade/ensure` | Start GAIA's embedded Lemonade Server if stopped and return where it listens (409 if not managed, 503 on a start failure). Host API ≥ 1.2 |
 | `POST /daemon/v1/lemonade/start` | Start or attach the local model server — GAIA's embedded one when `gaia init` installed it and `LEMONADE_BASE_URL` is unset, otherwise the system install; returns 503 with actionable detail on refusal. Host API ≥ 1.3 |
 | `GET /daemon/v1/lemonade/status` | Whether this daemon supervises a server, its PID, and its log path. Host API ≥ 1.3 |

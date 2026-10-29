@@ -147,6 +147,17 @@ def test_terminal_profile_runs_only_with_the_terminal():
     assert "${SecMain}" in sync.group(1)
 
 
+def test_smoke_test_reports_locks_after_an_unexpected_both_components_rerun():
+    smoke = SMOKE.read_text(encoding="utf-8")
+    assert "function Write-LockDiagnostics([string[]]$Paths)" in smoke
+    assert "Wait-Writable $path -Seconds 5" in smoke
+    assert "no GAIA processes were running after the failed setup" in smoke
+    step = re.search(r"# ── 5\..*?(?=# ── 6\.)", smoke, re.M | re.S)
+    assert step, "smoke-test.ps1 no longer covers rerunning both components"
+    assert "$bothExecutables = @(" in step.group(0)
+    assert "Write-LockDiagnostics $bothExecutables" in step.group(0)
+
+
 def test_exit_codes_are_distinct_and_the_smoke_test_checks_them():
     codes = {
         name: int(value)
@@ -158,6 +169,20 @@ def test_exit_codes_are_distinct_and_the_smoke_test_checks_them():
     smoke = SMOKE.read_text(encoding="utf-8")
     for name in ("EXIT_RUNNING", "EXIT_USAGE", "EXIT_CONFLICT"):
         assert f"-ne {codes[name]})" in smoke, f"smoke-test.ps1 never expects {name}"
+
+
+def test_running_app_refusal_retries_for_a_bounded_time_before_failing():
+    body = re.search(
+        r"^Function AbortIfRunning\n(.*?)^FunctionEnd", _nsi(), re.M | re.S
+    )
+    assert body, "gaia-setup.nsi no longer checks a running app before install"
+    code = body.group(1)
+    assert "StrCpy $R6 20" in code
+    assert "IntOp $R6 $R6 - 1" in code
+    assert "Sleep 500" in code
+    assert "Goto wait_for_file" in code
+    assert 'DetailPrint "Waiting for $R8 to be released..."' in code
+    assert "SetErrorLevel ${EXIT_RUNNING}" in code
 
 
 def test_every_section_is_ordered_ahead_of_the_code_that_names_it():

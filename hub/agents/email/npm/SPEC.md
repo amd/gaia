@@ -252,7 +252,7 @@ emits the canonical event vocabulary.
 |---|---|
 | `POST /v1/email/agent/session` | Create/reset a session (`{ session_id, reset? }`) → `{ created, memory }`. Builds the agent (surfaces failures early). |
 | `POST /v1/email/agent/query` | Run one turn; **SSE** stream (`text/event-stream`) of the loop — `thinking`/`step`/tool/`permission_request`/`error`/terminal `run_complete`. Body `{ session_id, message, memory_enabled? }`. Every agent tool is reachable via natural language. Overlapping turn → **409**. |
-| `POST /v1/email/agent/confirm-tool` | Approve/deny a gated tool the run is blocking on (`{ session_id, approved }`). |
+| `POST /v1/email/agent/confirm-tool` | Approve/deny a gated tool the run is blocking on (`{ session_id, approved }`). 404 when no run is active; 409 when the run has no tool confirmation pending, so the decision was not delivered. |
 | `POST /v1/email/agent/cancel` | Cooperatively cancel the in-flight run. |
 | `DELETE /v1/email/agent/session/{id}` | Evict a session + tear down its agent. |
 | `GET /v1/email/agent/session/{id}/history` | Conversation so far (`turns[]`, oldest first). |
