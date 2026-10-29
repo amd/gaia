@@ -852,6 +852,9 @@ class _FakeClient:
         time.sleep(self.connect_s)
         return self.connects
 
+    def list_tools(self):
+        return []
+
     def disconnect(self):
         self.disconnected.set()
 

@@ -340,3 +340,112 @@ def test_list_tools_keeps_the_meta_object():
     }
     tools = MCPClient("test", transport).list_tools()
     assert [t.meta for t in tools] == [{MCP_DEDUP_KEY_META: ["path"]}, {}, {}]
+
+
+def _connecting_client(tools_by_name: dict):
+    """``MCPClient.from_config`` stand-in whose servers connect and list ``tools``."""
+    made = {}
+
+    def _from_config(name, config, debug=False):
+        client = Mock(last_error=None)
+        client.connect.return_value = True
+        client.list_tools.return_value = list(tools_by_name[name]())
+        made.setdefault(name, []).append(client)
+        return client
+
+    return _from_config, made
+
+
+def _manager_for(*names: str) -> MCPClientManager:
+    manager = MCPClientManager(config=Mock())
+    manager.config.get_servers.return_value = {n: {"command": "x"} for n in names}
+    return manager
+
+
+def test_a_reload_cannot_bring_a_refused_server_back():
+    tools = {
+        "good": lambda: [_mcp_tool("read", {MCP_DEDUP_KEY_META: ["path"]})],
+        "bad": lambda: [
+            _mcp_tool("write", {}),
+            _mcp_tool("read", {MCP_DEDUP_KEY_META: ["pth"]}),
+        ],
+    }
+    from_config, made = _connecting_client(tools)
+    manager = _manager_for("good", "bad")
+
+    with patch.object(MCPClient, "from_config", side_effect=from_config):
+        manager.load_from_config()
+        manager.reload()
+
+    assert manager.list_servers() == ["good"]
+    [status] = [s for s in manager.get_status_report() if s["name"] == "bad"]
+    assert status["connected"] is False
+    assert status["error"].startswith("MCP server 'bad' declares a bad")
+    assert len(made["bad"]) == 2
+    for client in made["bad"]:
+        client.disconnect.assert_called_once()
+
+
+def test_a_fixed_server_loads_on_the_next_reload():
+    declared = {"key": ["pth"]}
+    tools = {"srv": lambda: [_mcp_tool("read", {MCP_DEDUP_KEY_META: declared["key"]})]}
+    from_config, _ = _connecting_client(tools)
+    manager = _manager_for("srv")
+
+    with patch.object(MCPClient, "from_config", side_effect=from_config):
+        manager.load_from_config()
+        assert manager.list_servers() == []
+        declared["key"] = ["path"]
+        manager.reload()
+
+    assert manager.list_servers() == ["srv"]
+    assert manager.failure("srv") is None
+
+
+@pytest.mark.parametrize(
+    "declared", [["pth"], [], "path", [1], [None], {"path": True}, 0]
+)
+def test_every_malformed_declaration_is_refused_at_connect(declared):
+    tools = {"srv": lambda: [_mcp_tool("read", {MCP_DEDUP_KEY_META: declared})]}
+    from_config, made = _connecting_client(tools)
+    manager = _manager_for("srv")
+
+    with patch.object(MCPClient, "from_config", side_effect=from_config):
+        manager.load_from_config()
+
+    assert manager.list_servers() == []
+    assert "declares a bad" in manager.failure("srv")
+    made["srv"][0].disconnect.assert_called_once()
+
+
+def test_a_server_without_declarations_connects_unchanged():
+    tools = {"srv": lambda: [_mcp_tool("read", {}), _mcp_tool("x", {"other": 1})]}
+    from_config, _ = _connecting_client(tools)
+    manager = _manager_for("srv")
+
+    with patch.object(MCPClient, "from_config", side_effect=from_config):
+        manager.load_from_config()
+
+    assert manager.list_servers() == ["srv"]
+
+
+@pytest.mark.parametrize(
+    "error, shown",
+    [
+        ("x" * 300, "x" * 300),
+        ("x" * 301, "x" * 299 + "…"),
+        ("Transport error: boom\nTraceback (most recent call last):\n  ...", None),
+        ("   \n", "failed to connect"),
+    ],
+)
+def test_the_load_summary_keeps_each_error_to_one_line(error, shown):
+    host = _host_with()
+    host._mcp_manager.config.get_servers.return_value = {"srv": {}}
+    host._mcp_manager._failed["srv"] = error
+
+    host._print_mcp_load_summary()
+
+    [line] = [
+        ln for ln in host.console.print_info.call_args[0][0].splitlines() if "srv" in ln
+    ]
+    assert line == f"  ✗ srv ({shown or 'Transport error: boom'})"

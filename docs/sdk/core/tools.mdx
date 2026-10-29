@@ -993,6 +993,8 @@ Notable implementation details:
   `TypeError`. An MCP server declares the same list in a tool's `_meta` under
   `"ai.amd-gaia/dedup_key"`; a bad declaration refuses that server's tools
   with an error naming the server, tool and key, and other servers still load.
+  Reconnecting it (a reload after a connector change) refuses it again until
+  the declaration is fixed.
   The key applies under the tool name the model emits: a call the agent
   resolves from another name (an unprefixed MCP name, different casing) is
   compared on every argument.

@@ -5,20 +5,30 @@
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from gaia.agents.base.tools import _TOOL_REGISTRY, validate_dedup_key
+from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.logger import get_logger
 from gaia.mcp.client.config import MCPConfig
-from gaia.mcp.client.mcp_client import MCPClient, mcp_tool_error
+from gaia.mcp.client.mcp_client import (  # noqa: F401  # pylint: disable=unused-import
+    MCP_DEDUP_KEY_META,
+    MCPClient,
+    MCPToolDeclarationError,
+    mcp_tool_error,
+)
 from gaia.mcp.client.mcp_client_manager import MCPClientManager
 
 logger = get_logger(__name__)
 
-#: ``_meta`` key through which an MCP tool declares its ``@tool(dedup_key=...)``.
-MCP_DEDUP_KEY_META = "ai.amd-gaia/dedup_key"
+#: Longest server error the load summary shows; the full text is logged.
+_SUMMARY_ERROR_CHARS = 300
 
 
-class MCPToolDeclarationError(ValueError):
-    """An MCP server declared tool metadata GAIA cannot honor."""
+def _summary_error(error: str) -> str:
+    """First line of ``error``, cut to fit one summary line."""
+    lines = error.strip().splitlines()
+    first = lines[0] if lines else "failed to connect"
+    if len(first) > _SUMMARY_ERROR_CHARS:
+        return first[: _SUMMARY_ERROR_CHARS - 1] + "…"
+    return first
 
 
 class MCPClientMixin:
@@ -245,7 +255,7 @@ class MCPClientMixin:
                     lines.append(f"  ✓ {name} ({n} tool{'s' if n != 1 else ''})")
                 else:
                     error = self._mcp_manager.failure(name) or "failed to connect"
-                    lines.append(f"  ✗ {name} ({error})")
+                    lines.append(f"  ✗ {name} ({_summary_error(error)})")
         else:
             lines.append("No servers configured")
 
@@ -391,19 +401,9 @@ class MCPClientMixin:
         converted = []
         for tool in client.list_tools():
             gaia_tool = tool.to_gaia_format(client.prefix, client.name)
-            declared = tool.meta.get(MCP_DEDUP_KEY_META)
-            if declared is not None:
-                try:
-                    gaia_tool["dedup_key"] = validate_dedup_key(
-                        tool.name, declared, gaia_tool["parameters"]
-                    )
-                except (TypeError, ValueError) as e:
-                    raise MCPToolDeclarationError(
-                        f"MCP server {client.name!r} declares a bad "
-                        f"{MCP_DEDUP_KEY_META} {declared!r}: {e} None of its "
-                        "tools were registered; fix the declaration in the "
-                        "server's tool _meta."
-                    ) from e
+            dedup_key = tool.declared_dedup_key(client.name)
+            if dedup_key is not None:
+                gaia_tool["dedup_key"] = dedup_key
             converted.append((tool, gaia_tool))
         return converted
 
