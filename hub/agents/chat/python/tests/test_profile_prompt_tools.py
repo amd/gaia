@@ -51,3 +51,29 @@ def test_full_profile_advertises_web_and_media(prompts_and_tools):
     prompt, _ = prompts_and_tools["full"]
     assert "search_web" in prompt
     assert "transcribe_media" in prompt
+
+
+def _unsupported_line(prompt):
+    lines = [line for line in prompt.splitlines() if "**UNSUPPORTED:**" in line]
+    assert len(lines) == 1, lines
+    return lines[0]
+
+
+def test_full_profile_unsupported_line_is_unchanged(prompts_and_tools):
+    """The flagship runs "full"; its prompt bytes must not move with this gate."""
+    line = _unsupported_line(prompts_and_tools["full"][0])
+    assert line.endswith(
+        "feature_request.md . Web browsing IS supported via `search_web` / "
+        "`fetch_page` / `download_file`. Image analysis IS supported via "
+        "`analyze_image`. Audio and video recordings ARE supported via "
+        "`transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something "
+        "you cannot process."
+    )
+
+
+def test_data_profile_unsupported_line_keeps_image_analysis(prompts_and_tools):
+    line = _unsupported_line(prompts_and_tools["data"][0])
+    assert line.endswith(
+        "feature_request.md . Image analysis IS supported via `analyze_image`."
+    )
+    assert "search_web" not in line and "transcribe_media" not in line
