@@ -45,6 +45,8 @@ mixin and calling its `register_*_tools()` method. Each row is the exact
 | `browser` | `from gaia.agents.tools.browser_tools import BrowserToolsMixin` | Web search, page fetch, download |
 | `sd` | `from gaia.sd.mixin import SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `from gaia.vlm.mixin import VLMToolsMixin` | Vision LLM / structured extraction |
+| `skills` | `from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
+| `skill_learning` | `from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin` | Persist lessons learned while running a skill |
 | `wait` | `from gaia.agents.tools.wait_tools import WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
 
 The sections below show usage patterns for the most common mixins; the
