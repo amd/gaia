@@ -182,6 +182,83 @@ def test_paths_outside_the_allowed_folders_are_refused(loaded, tmp_path_factory)
     assert not target.exists()
 
 
+@pytest.fixture
+def outside_logo(tmp_path_factory):
+    from PIL import Image
+
+    logo = tmp_path_factory.mktemp("not-allowed-logo") / "logo.png"
+    Image.new("RGB", (40, 20), "red").save(logo)
+    return logo
+
+
+@pytest.mark.parametrize(
+    "where",
+    ["outline_style", "outline_theme", "request_prefs", "template_in_style"],
+)
+def test_a_logo_or_template_outside_the_allowed_folders_is_refused(
+    loaded, work, outside_logo, where
+):
+    agent, _skill, _b = loaded
+    target = work / f"logo-{where}.pptx"
+    outline = json.loads(json.dumps(OUTLINE))
+    args = {}
+    if where == "outline_style":
+        outline["style"] = {"logo_path": str(outside_logo)}
+    elif where == "outline_theme":
+        outline["theme"] = {"logo_path": str(outside_logo)}
+    elif where == "request_prefs":
+        args["prefs"] = {"logo_path": str(outside_logo)}
+    else:
+        outline["style"] = {"template_path": str(outside_logo)}
+    result = run(
+        agent, "build_deck", outline=outline, output_path=str(target), **args
+    )
+    assert result.get("status") == "error", result
+    assert not target.exists()
+
+
+def test_a_logo_inside_the_allowed_folders_still_builds(loaded, work):
+    from PIL import Image
+
+    agent, _skill, _b = loaded
+    logo = work / "inside-logo.png"
+    Image.new("RGB", (40, 20), "blue").save(logo)
+    outline = dict(OUTLINE, style={"logo_path": str(logo)})
+    target = work / "inside-logo.pptx"
+    result = run(agent, "build_deck", outline=outline, output_path=str(target))
+    assert result["status"] == "ok", result
+
+
+def test_an_out_of_scope_logo_is_not_saved_and_a_saved_one_blocks_edits(
+    loaded, work, gaia_home, outside_logo, monkeypatch
+):
+    agent, _skill, _b = loaded
+    monkeypatch.setattr(agent, "_incognito", False, raising=False)
+    refused = run(
+        agent, "update_deck_prefs", changes={"logo_path": str(outside_logo)}
+    )
+    assert refused["saved"] is False and refused["status"] == "error", refused
+    assert not (gaia_home / "skill-preferences" / f"{SKILL}.json").exists()
+
+    deck = work / "edit-target.pptx"
+    assert run(agent, "build_deck", outline=OUTLINE, output_path=str(deck))[
+        "status"
+    ] == "ok"
+    # A logo saved before scope tightened (or written by hand) is still checked.
+    store = gaia_home / "skill-preferences"
+    store.mkdir(parents=True, exist_ok=True)
+    (store / f"{SKILL}.json").write_text(
+        json.dumps({"logo_path": str(outside_logo)}), encoding="utf-8"
+    )
+    before = deck.read_bytes()
+    slide = {"type": "bullets", "title": "Next steps", "bullets": ["Open shop"]}
+    added = run(agent, "add_slide", deck_path=str(deck), slide=slide)
+    assert added["status"] == "error", added
+    replaced = run(agent, "update_slide", deck_path=str(deck), index=2, slide=slide)
+    assert replaced["status"] == "error", replaced
+    assert deck.read_bytes() == before
+
+
 def test_relative_paths_and_bad_outlines_come_back_as_fixable_errors(loaded, work):
     agent, _skill, _b = loaded
     rel = run(agent, "build_deck", outline=OUTLINE, output_path="deck.pptx")

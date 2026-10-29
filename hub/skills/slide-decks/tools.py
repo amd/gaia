@@ -714,6 +714,22 @@ def _input_paths(outline: Dict[str, Any]) -> List[str]:
     return out
 
 
+_FILE_PREFS = ("template_path", "logo_path")
+
+
+def _check_style_files(layer: Any, what: str) -> None:
+    """Scope-check the files a style layer (prefs, outline style or theme) opens."""
+    if not isinstance(layer, dict):
+        return
+    for key in _FILE_PREFS:
+        value = layer.get(key)
+        if value is None or value == "":
+            continue
+        if not isinstance(value, str):
+            raise OutlineError([f"{what} {key} must be a path string."])
+        _readable(value, f"{what} {key}")
+
+
 def _check_inputs(
     outline: Any, prefs: Dict[str, Any], template_path: str
 ) -> Optional[str]:
@@ -722,9 +738,9 @@ def _check_inputs(
         _readable(p, "image")
     if template_path:
         _readable(template_path, "template_path")
-    for key in ("template_path", "logo_path"):
-        if prefs.get(key):
-            _readable(prefs[key], f"preference {key}")
+    _check_style_files(prefs, "preference")
+    _check_style_files(data.get("style"), "style")
+    _check_style_files(data.get("theme"), "theme")
     return None
 
 
@@ -1081,7 +1097,9 @@ def _edit(deck_path: str, run) -> dict:
     try:
         deck = _readable(deck_path, "deck_path")
         check_write(deck)
-        return run(str(deck), _saved_prefs())
+        prefs = _saved_prefs()
+        _check_style_files(prefs, "preference")
+        return run(str(deck), prefs)
     except OutlineError as exc:
         return _error(exc)
     except SkillPermissionError as exc:
@@ -1226,6 +1244,10 @@ def update_deck_prefs(feedback: str = "", changes: Optional[dict] = None) -> dic
                 "error": "; ".join(problems),
                 "problems": problems,
             }
+        try:
+            _check_style_files(wanted, "preference")
+        except (OutlineError, SkillPermissionError) as exc:
+            return {"saved": False, **_error(exc)}
         result = preferences().update(wanted)
         return {
             "saved": bool(result.saved),
