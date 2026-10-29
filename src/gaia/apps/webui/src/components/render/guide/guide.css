@@ -215,6 +215,42 @@
     justify-content: center;
 }
 
+/* An itinerary's days hang off one line, a dot per day. */
+.render-guide__steps.is-timeline { gap: 0; }
+
+.render-guide__steps.is-timeline .render-guide__step { padding-bottom: 14px; }
+.render-guide__steps.is-timeline .render-guide__step:last-child { padding-bottom: 0; }
+
+.render-guide__step-dot {
+    position: relative;
+    flex-shrink: 0;
+    width: 22px;
+    display: flex;
+    justify-content: center;
+}
+
+.render-guide__step-dot::before {
+    content: '';
+    position: relative;
+    z-index: 1;
+    width: 10px;
+    height: 10px;
+    margin-top: 7px;
+    border-radius: var(--radius-full);
+    background: var(--accent-solid);
+    box-shadow: 0 0 0 3px var(--bg-card);
+}
+
+.render-guide__step:not(:last-child) > .render-guide__step-dot::after {
+    content: '';
+    position: absolute;
+    top: 12px;
+    bottom: -12px;
+    left: calc(50% - 1px);
+    width: 2px;
+    background: var(--border-light);
+}
+
 .render-guide__step-body {
     min-width: 0;
     overflow-wrap: anywhere;

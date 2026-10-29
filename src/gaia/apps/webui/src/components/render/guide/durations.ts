@@ -70,13 +70,25 @@ export interface SplitStep {
 
 const MAX_TITLE_WORDS = 6;
 
-/** "Sear the bird: Pat it dry..." splits into a title and body when the lead is short. */
-export function splitTitle(step: string): SplitStep {
-    const m = /^([^:\n]{1,80}):\s+([\s\S]+)$/.exec(step.trim());
-    if (!m) return { title: null, body: step.trim() };
-    const lead = m[1].trim();
-    if (lead.split(/\s+/).length > MAX_TITLE_WORDS || /\d$/.test(lead)) return { title: null, body: step.trim() };
-    return { title: lead, body: m[2].trim() };
+const DAY_LEAD = /^day\s+\d+\b/i;
+const DAY_DASH = /^(day\s+\d+)\s+[-–—]\s+([\s\S]+)$/i;
+
+/**
+ * "Sear the bird: Pat it dry..." splits into a title and body when the lead is short.
+ * A lead ending in a digit ("Bake at 350") is not a title, except a "Day 3" lead when
+ * `dayLeads` is set, which also splits "Day 3 - Sintra" on its dash.
+ */
+export function splitTitle(step: string, dayLeads = false): SplitStep {
+    const text = step.trim();
+    const m = /^([^:\n]{1,80}):\s+([\s\S]+)$/.exec(text);
+    if (m) {
+        const lead = m[1].trim();
+        const shortLead = lead.split(/\s+/).length <= MAX_TITLE_WORDS && !/\d$/.test(lead);
+        if (shortLead || (dayLeads && DAY_LEAD.test(lead))) return { title: lead, body: m[2].trim() };
+    }
+    const day = dayLeads ? DAY_DASH.exec(text) : null;
+    if (day) return { title: day[1], body: day[2].trim() };
+    return { title: null, body: text };
 }
 
 export interface WorkoutSets {

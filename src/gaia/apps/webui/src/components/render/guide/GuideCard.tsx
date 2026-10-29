@@ -6,7 +6,7 @@ import { Check, Copy, Minus, Play, Plus, Printer, Ruler, Share2 } from 'lucide-r
 import { UnsupportedCard } from '../UnsupportedCard';
 import { isGuideWire, parseGuideDoc } from './guideDoc';
 import type { GuideDoc, GuideWire } from './guideDoc';
-import { formatGuideText, itemDisplay, servingsLabel, stepText } from './guideText';
+import { formatGuideText, itemDisplay, servingsLabel, stepText, stepTitle } from './guideText';
 import type { GuideViewState } from './guideText';
 import { canShare, copyGuide, printGuide, shareGuide } from './guideActions';
 import { StepText } from './StepText';
@@ -189,23 +189,30 @@ function Guide({ wire }: { wire: GuideWire }) {
             {doc.steps.length > 0 && features.stepsLabel && (
                 <section className="render-guide__section">
                     <h4 className="render-guide__label">{features.stepsLabel}</h4>
-                    <ol className="render-guide__steps">
-                        {doc.steps.map((step, i) => (
-                            <li key={i} className="render-guide__step">
-                                <span className="render-guide__step-number" aria-hidden="true">{i + 1}</span>
-                                <div className="render-guide__step-body">
-                                    {step.title && <span className="render-guide__step-title">{step.title}</span>}
-                                    <span>
-                                        <StepText
-                                            text={stepText(doc, step.body, system)}
-                                            stepIndex={i}
-                                            timers={timers}
-                                            withTimers={features.timers}
-                                        />
-                                    </span>
-                                </div>
-                            </li>
-                        ))}
+                    <ol className={`render-guide__steps${features.timeline ? ' is-timeline' : ''}`}>
+                        {doc.steps.map((step, i) => {
+                            const title = stepTitle(doc, i);
+                            return (
+                                <li key={i} className="render-guide__step">
+                                    {features.timeline ? (
+                                        <span className="render-guide__step-dot" aria-hidden="true" />
+                                    ) : (
+                                        <span className="render-guide__step-number" aria-hidden="true">{i + 1}</span>
+                                    )}
+                                    <div className="render-guide__step-body">
+                                        {title && <span className="render-guide__step-title">{title}</span>}
+                                        <span>
+                                            <StepText
+                                                text={stepText(doc, step.body, system)}
+                                                stepIndex={i}
+                                                timers={timers}
+                                                withTimers={features.timers}
+                                            />
+                                        </span>
+                                    </div>
+                                </li>
+                            );
+                        })}
                     </ol>
                 </section>
             )}

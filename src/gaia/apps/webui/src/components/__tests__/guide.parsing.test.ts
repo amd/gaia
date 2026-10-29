@@ -150,6 +150,22 @@ describe('durations', () => {
     });
 
     it.each([
+        ['Day 1 - Lisbon: Alfama walk, tram 28', 'Day 1 - Lisbon', 'Alfama walk, tram 28'],
+        ['Day 2: Sintra day trip', 'Day 2', 'Sintra day trip'],
+        ['Day 3 - Porto', 'Day 3', 'Porto'],
+        ['Day 4 – Douro Valley wine tasting and river cruise', 'Day 4', 'Douro Valley wine tasting and river cruise'],
+        ['Fly home', null, 'Fly home'],
+    ])('splitTitle(%s) with day leads', (step, title, body) => {
+        expect(splitTitle(step, true)).toEqual({ title, body });
+    });
+
+    it('keeps a lead ending in a digit untitled outside a timeline', () => {
+        expect(splitTitle('Day 2: Sintra day trip')).toEqual({ title: null, body: 'Day 2: Sintra day trip' });
+        expect(splitTitle('Day 3 - Porto')).toEqual({ title: null, body: 'Day 3 - Porto' });
+        expect(splitTitle('Preheat to 350: then bake', true)).toEqual({ title: null, body: 'Preheat to 350: then bake' });
+    });
+
+    it.each([
         ['3 sets of 12, rest 45 seconds', { sets: 3, reps: 12, holdIndex: null, restIndex: 0 }],
         ['3 x 12', { sets: 3, reps: 12, holdIndex: null, restIndex: null }],
         ['Plank: hold 45 seconds, 3 sets, rest 30 seconds', { sets: 3, reps: null, holdIndex: 0, restIndex: 1 }],
@@ -169,7 +185,33 @@ const recipe: GuideWire = {
     steps: ['Heat the oven: Set it to 425°F.', 'Roast 1 hr 20 min.'],
 };
 
+const itinerary: GuideWire = {
+    kind: 'guide',
+    guideType: 'itinerary',
+    title: 'Two days in Lisbon',
+    servings: null,
+    items: ['Walking shoes'],
+    steps: ['Day 1 - Lisbon: Alfama walk, tram 28', 'Belem and the tower'],
+};
+
 describe('guide document', () => {
+    it('reads an itinerary as titled days with a packing list', () => {
+        expect(isGuideWire(itinerary)).toBe(true);
+        const doc = parseGuideDoc(itinerary);
+        expect(doc.features.timeline).toBe(true);
+        expect(doc.steps[0]).toEqual({ title: 'Day 1 - Lisbon', body: 'Alfama walk, tram 28' });
+        expect(formatGuideText(doc, { servings: null, system: 'us', checked: new Set([0]) })).toBe([
+            'Two days in Lisbon',
+            '',
+            'Packing',
+            '[x] Walking shoes',
+            '',
+            'Days',
+            'Day 1 - Lisbon: Alfama walk, tram 28',
+            'Day 2: Belem and the tower',
+        ].join('\n'));
+    });
+
     it('rejects payloads that break the wire shape', () => {
         expect(isGuideWire(recipe)).toBe(true);
         expect(isGuideWire({ ...recipe, guideType: 'poem' })).toBe(false);

@@ -13,7 +13,7 @@ import { splitTitle } from './durations';
 import { temperatureSystem } from './units';
 import type { UnitSystem } from './units';
 
-export type GuideType = 'recipe' | 'workout' | 'howto' | 'checklist';
+export type GuideType = 'recipe' | 'workout' | 'howto' | 'checklist' | 'itinerary';
 
 export interface GuideWire {
     kind: 'guide';
@@ -34,24 +34,30 @@ export interface GuideFeatures {
     timers: boolean;
     checkItems: boolean;
     startLabel: string | null;
+    /** Steps are days on a timeline, each titled by its "Day N" lead. */
+    timeline: boolean;
 }
 
 export const GUIDE_FEATURES: Readonly<Record<GuideType, GuideFeatures>> = {
     recipe: {
         itemsLabel: 'Ingredients', stepsLabel: 'Steps', scaling: true, units: true,
-        timers: true, checkItems: false, startLabel: 'Start cooking',
+        timers: true, checkItems: false, startLabel: 'Start cooking', timeline: false,
     },
     workout: {
         itemsLabel: 'Equipment', stepsLabel: 'Exercises', scaling: false, units: false,
-        timers: true, checkItems: true, startLabel: 'Start workout',
+        timers: true, checkItems: true, startLabel: 'Start workout', timeline: false,
     },
     howto: {
         itemsLabel: 'Materials & tools', stepsLabel: 'Steps', scaling: false, units: true,
-        timers: true, checkItems: true, startLabel: 'Start',
+        timers: true, checkItems: true, startLabel: 'Start', timeline: false,
     },
     checklist: {
         itemsLabel: 'Items', stepsLabel: null, scaling: false, units: false,
-        timers: false, checkItems: true, startLabel: null,
+        timers: false, checkItems: true, startLabel: null, timeline: false,
+    },
+    itinerary: {
+        itemsLabel: 'Packing', stepsLabel: 'Days', scaling: false, units: false,
+        timers: false, checkItems: true, startLabel: null, timeline: true,
     },
 };
 
@@ -120,7 +126,7 @@ export function parseGuideDoc(wire: GuideWire): GuideDoc {
         raw,
         parsed: features.units || features.scaling ? parseQuantity(raw) : null,
     }));
-    const steps = lines(wire.steps).map(splitTitle);
+    const steps = lines(wire.steps).map((line) => splitTitle(line, features.timeline));
 
     const systems: UnitSystem[] = [];
     if (features.units) {

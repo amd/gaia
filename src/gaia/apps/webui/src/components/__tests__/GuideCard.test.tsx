@@ -25,6 +25,15 @@ const workout = {
     steps: ['Push-ups: 3 sets of 12, rest 45 seconds'],
 };
 
+const itinerary = {
+    kind: 'guide',
+    guideType: 'itinerary',
+    title: 'Two days in Lisbon',
+    servings: null,
+    items: ['Walking shoes'],
+    steps: ['Day 1 - Lisbon: Alfama walk, wait 20 minutes for tram 28', 'Day 2 - Sintra'],
+};
+
 afterEach(() => {
     for (const key of Object.keys(localStorage)) if (key.startsWith('gaia:guide:')) localStorage.removeItem(key);
 });
@@ -94,6 +103,19 @@ describe('GuideCard', () => {
         render(<RenderCard render="guide" data={workout} />);
         expect(screen.getByRole('checkbox', { name: 'Mat' })).toBeChecked();
         expect(screen.getByRole('checkbox', { name: 'Kettlebell' })).not.toBeChecked();
+    });
+
+    it('shows an itinerary as days on a timeline with a packing checklist', () => {
+        render(<RenderCard render="guide" data={itinerary} />);
+        expect(screen.getByText('Packing')).toBeInTheDocument();
+        expect(screen.getByRole('checkbox', { name: 'Walking shoes' })).toBeInTheDocument();
+        expect(screen.getByText('Day 1 - Lisbon')).toBeInTheDocument();
+        expect(screen.getByText('Day 2')).toBeInTheDocument();
+        // No timers, no start button, no step numbers.
+        expect(screen.queryByRole('button', { name: /timer/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /^Start/ })).not.toBeInTheDocument();
+        expect(document.querySelectorAll('.render-guide__step-number')).toHaveLength(0);
+        expect(document.querySelectorAll('.render-guide__step-dot')).toHaveLength(2);
     });
 
     it('counts sets in the guided workout', () => {

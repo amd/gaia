@@ -32,6 +32,11 @@ export function servingsLabel(n: number): string {
     return `${n} ${n === 1 ? 'serving' : 'servings'}`;
 }
 
+/** A timeline day the model left untitled still reads as its day. */
+export function stepTitle(doc: GuideDoc, index: number): string | null {
+    return doc.steps[index].title ?? (doc.features.timeline ? `Day ${index + 1}` : null);
+}
+
 export function formatGuideText(doc: GuideDoc, state: GuideViewState): string {
     const out: string[] = [doc.title];
     if (doc.description) out.push(doc.description);
@@ -51,7 +56,9 @@ export function formatGuideText(doc: GuideDoc, state: GuideViewState): string {
         out.push('', doc.features.stepsLabel);
         doc.steps.forEach((step, i) => {
             const body = stepText(doc, step.body, state.system);
-            out.push(`${i + 1}. ${step.title ? `${step.title}: ${body}` : body}`);
+            const title = stepTitle(doc, i);
+            const line = title ? `${title}: ${body}` : body;
+            out.push(doc.features.timeline ? line : `${i + 1}. ${line}`);
         });
     }
 
