@@ -93,7 +93,7 @@ void printUsage() {
               << "  --no-tui / --tui    Force plain console or the TUI\n"
               << "  --debug, --dev      Log requests to stderr\n"
               << "  --trace             Save each turn's model calls, tool calls and timings as JSON in\n"
-              << "                      ~/.gaia/native/traces (named after --prompt-file when given)\n"
+              << "                      ~/.gaia/native/traces, named after --prompt-file and the time\n"
               << "  --trace-file <f>    Save the trace to <f> instead\n"
               << "  --version           Print the version\n\n"
               << color::BOLD << "Environment:" << color::RESET << "\n"
@@ -277,10 +277,15 @@ int main(int argc, char* argv[]) {
         if (serve || mcp || stdio || printMode) config.silentMode = true;
         if (stdio) config.streaming = config.useNativeToolCalls();
         if (trace && traceFile.empty()) {
-            // Named after the prompt file when there is one, so a batch run maps each trace to its task.
-            const std::string stem = promptFile.empty() ? "trace_" + std::to_string(std::time(nullptr))
-                                                        : fs::u8path(promptFile).stem().u8string();
-            traceFile = (fs::u8path(gaia::gaiaHomeDir()) / "native" / "traces" / (stem + ".json")).u8string();
+            // Folder + prompt file name maps a batch run's traces to tasks; the time keeps runs from overwriting.
+            std::string stem = "trace";
+            if (!promptFile.empty()) {
+                const fs::path p = fs::absolute(fs::u8path(promptFile));
+                stem = p.parent_path().filename().u8string() + "-" + p.stem().u8string();
+            }
+            traceFile = (fs::u8path(gaia::gaiaHomeDir()) / "native" / "traces" /
+                         (stem + "-" + sessionId().substr(7) + ".json"))
+                            .u8string();
         }
         config.traceFile = traceFile;
         if (jsonEvents) {
