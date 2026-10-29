@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The `full` profile's tool loader gains a `guide` bundle for the flagship's
+  four guide-card tools (`show_recipe`, `show_workout`, `show_how_to`,
+  `show_checklist`). They are optional here because only `GaiaAgent`
+  registers them.
 - `get_system_info` reports free disk space (`disk_free_gb`) and available
   memory (`memory_available_gb`), and computes disk use from free space. On a
   Mac it reported only the share macOS's system volume uses, so a nearly full

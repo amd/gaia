@@ -327,7 +327,7 @@ unknown `render` degrades to the generic result card (see §7).
 
 ### 4.3 Generic render primitives (#2108)
 
-Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers five
+Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers six
 **generic primitives** any agent can emit on `tool_result.render` without
 shipping its own frontend component. `data` must match the schema for the key:
 
@@ -338,6 +338,7 @@ shipping its own frontend component. `data` must match the schema for the key:
 | `list` | `{ title?: string, ordered?: boolean, items: Array<string\|number> }` |
 | `image` | `{ src: string, alt?: string, caption?: string }` |
 | `diff` | `{ title?: string, unified: string }` — a unified-diff text; lines are styled by their `+` / `-` / `@@` prefix |
+| `guide` | `{ kind: "guide", guideType: "recipe"\|"workout"\|"howto"\|"checklist", title: string, description: string, notes: string, servings: integer\|null, items: string[], steps: string[] }` — `items` are the ingredients, equipment, materials or checklist entries; `steps` are the recipe steps, exercises or how-to steps, and `[]` for a checklist; `servings` is set only for a recipe. The flagship's `show_recipe`, `show_workout`, `show_how_to` and `show_checklist` emit it |
 
 Rules every receiver implements and every producer can rely on:
 

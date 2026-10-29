@@ -1065,6 +1065,10 @@ class SSEOutputHandler(OutputHandler):
         # #2765: a generic ``table`` card (no new client code) so the thread
         # view renders straight from tool data instead of model prose.
         "get_thread": "table",
+        "show_recipe": "guide",
+        "show_workout": "guide",
+        "show_how_to": "guide",
+        "show_checklist": "guide",
     }
 
     def _render_card_payload(self, data: Any) -> Optional[Dict[str, Any]]:
