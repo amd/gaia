@@ -6,6 +6,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **A skill that clearly fits the request loads before the turn.** Local models
+  often ignored the "skills that match this request" line, so a deck built from
+  documents loaded `office-docs` but not `report-from-sources`. A match scoring
+  at least 0.55 and 0.03 ahead of every other skill now loads first (two per
+  turn at most), and the request opens with "Loaded report-from-sources because
+  it matches this request". On 71 labelled requests it loaded nothing wrong and
+  nothing on the 26 that should match no skill, catching 21% of the needed
+  skills; the rest stay suggestions. A skill that would grant a command-line
+  program, or would push loaded skill bodies past ~6,000 tokens, is only
+  suggested. Auto-load runs only on the `embeddinggemma-300m` embedder it was
+  calibrated on, so the NPU profile only suggests. `GAIA_SKILL_AUTOLOAD=0` or
+  `skill_autoload=False` turns it off.
+
 ### For integrators: contract 2.25
 
 - **The agent remembers its own tool calls across turns** (contract **2.25**,

@@ -466,6 +466,99 @@ With nobody to answer the prompt, the call is refused.
 
 Tunable: `GAIA_SKILL_DISCOVERY` (`0` hides the list).
 
+#### Suggested skills
+
+Smaller local models often skip the catalogue: they load nothing, or only the
+first of two skills a request needs. So at the start of each turn the flagship
+scores the user's message against every listed skill and, when some clearly fit
+and are not loaded yet, adds one line to that turn's context, beside the
+current time at the top of the user's message:
+
+```
+Skills that match this request and are not loaded yet: transcribe-meeting,
+summarize — load them with load_skill before starting.
+```
+
+The line goes in the user's message, not the system prompt. A system prompt
+that changes from turn to turn makes the server re-read the whole conversation.
+
+Mostly it suggests, and the model decides. The per-turn word matcher the
+catalogue replaced loaded the right skill on 0 of 24 tasks; a wrong suggestion
+costs one line the model can ignore. Only a match well above every request that
+should match nothing is loaded for the model (see [Auto-load](#auto-load)).
+
+- **Matching.** The same embedder as skill-body selection scores
+  `name: first line of description` against the current message (cut at 4,000
+  characters). A skill is suggested when it scores at least **0.30** and within
+  **0.02** of the best-scoring skill, loaded skills included — so a request the
+  loaded skill already covers does not pull in a weaker neighbour. At most
+  three are suggested by score. A suggested skill's unloaded `pairs_with`
+  companions follow it only when they score at least **0.40** themselves:
+  pairing is mutual, so `office-docs` pairs with five skills, and adding
+  companions unconditionally cut precision from 0.84 to 0.52.
+- **Calibration.** 71 invented requests over the 20 hub skills
+  (`tests/fixtures/skills/skill_suggestion_cases.json`). 26 of them should get
+  no suggestion, and 19 of those are near misses such as *"what is a pivot
+  table?"* or *"how does RSS work?"*. With `embeddinggemma-300m`: precision
+  0.66, recall 0.91, and 14 of the 26 negatives got a suggestion. All 14 are
+  near misses scoring up to 0.52, as high as real requests (the weakest best
+  match on a positive is 0.30), so no threshold removes them without losing
+  recall. Every hub skill needs
+  labelled requests; the coverage test names any that has none. The scores
+  depend on the embedding model: `nomic-embed-text-v2` measured far worse on
+  the first 37 requests, so recalibrate before changing the embedder. Run
+  `GAIA_SKILL_SUGGEST_CALIBRATE=1 pytest tests/unit/test_skill_suggester.py -k calibration`
+  with `LEMONADE_BASE_URL` naming a running server. It only posts to
+  `/embeddings`, which loads the embedding model if it is not loaded already.
+- **Cost.** Each description is embedded once and cached by content. A turn
+  costs one query embedding.
+- **No embedder.** The turn gets no suggestion and selection pauses for a
+  minute; the reason is logged at debug level. It is never an error, because
+  the catalogue still lists every skill. The same applies with memory off.
+
+Tunable: `GAIA_SKILL_SUGGEST` (`0` turns it off, `1` forces it on) or
+`GaiaAgentConfig(skill_suggestions=False)`; `skill_suggestion_threshold` sets
+the floor. Turning the catalogue off turns suggestions off too.
+
+### Auto-load
+
+Local models often ignore even a correct suggestion: asked to build a deck from
+documents, Qwen3.6-35B-A3B loaded `office-docs` but not the suggested
+`report-from-sources`. So a match strong enough that no labelled negative comes
+near it is loaded before the turn, as if the model had called `load_skill`, and
+the turn's context says so in place of the suggestion:
+
+```
+Loaded report-from-sources because it matches this request — its instructions
+are in the system prompt.
+```
+
+- **When.** A matched skill scoring at least **0.55**, when the best such skill
+  leads every other skill, loaded or not, by **0.03**. At most two per turn;
+  further matches stay suggestions.
+- **Calibration.** On the 71 requests: 11 skills auto-loaded on 10 requests,
+  none outside a request's labels (precision 1.00) and none on any of the 26
+  negatives, for recall 0.21. The highest negative scores 0.524 (*"how does RSS
+  work?"* against `rss-digest`). `test_autoload_calibration_against_the_real_embedder`
+  holds it to precision 0.97 with no negative loaded.
+- **Never loaded for the model.** A skill already loaded; one auto-loaded
+  earlier in the session and since unloaded; one that would grant a
+  command-line program (`shell:execute:<binary>`), since that grant runs its
+  allowed subcommands without a prompt; and one whose body would bring the
+  loaded skill bodies past ~6,000 tokens. These stay suggestions. A load that
+  fails is logged as a warning and stays a suggestion too.
+- **No embedder, no auto-load.** It runs on the same scores as suggestions.
+- **Only on the calibrated embedder.** The 0.55 floor was measured with
+  `embeddinggemma-300m`. On any other embedder, such as the NPU profile's FLM
+  embedder, auto-load is off, even with `GAIA_SKILL_AUTOLOAD=1`, and matches stay
+  suggestions.
+
+The loaded body pins for the next few turns, like an explicit `load_skill`.
+Turn it off with `GAIA_SKILL_AUTOLOAD=0` or
+`GaiaAgentConfig(skill_autoload=False)`, keeping suggestions;
+`skill_autoload_threshold` sets the floor. It is on by default because it
+loaded nothing wrong on the labelled set; turning suggestions off turns it off.
+
 ## Learned changes: the effective skill vs. the shipped one
 
 A skill you install is a **starting point**, not a fixed contract. An agent can
