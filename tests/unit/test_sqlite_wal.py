@@ -13,7 +13,28 @@ from pathlib import Path
 
 import pytest
 
+from gaia.utils import sqlite_wal
 from gaia.utils.sqlite_wal import enable_wal
+
+
+class _Clock:
+    """Time that moves only when enable_wal sleeps, so retries never race the host."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    fake = _Clock()
+    monkeypatch.setattr(sqlite_wal, "time", fake)
+    return fake
 
 
 def _writer_holding(path: Path, mode: str) -> sqlite3.Connection:
@@ -63,26 +84,26 @@ class _Row:
         return self.row
 
 
-def test_a_switch_locked_by_an_opener_that_already_switched_goes_on():
+def test_a_switch_locked_by_an_opener_that_already_switched_goes_on(clock):
     conn = _Conn("database is locked", ["wal"])
     enable_wal(conn)
     assert conn.switches() == 1
 
 
-def test_a_switch_locked_while_the_other_opener_is_still_switching_waits_for_it():
+def test_a_switch_locked_while_the_other_opener_is_still_switching_waits_for_it(clock):
     # The race on Windows: the loser reads "delete" before the winner's switch lands.
     conn = _Conn("database is locked", ["delete", "delete", "delete", "wal"])
     enable_wal(conn)
     assert conn.switches() == 4
 
 
-def test_a_switch_that_frees_up_is_retried_until_it_succeeds():
+def test_a_switch_that_frees_up_is_retried_until_it_succeeds(clock):
     conn = _Conn("database is locked", ["delete"], switch_fails=3)
     enable_wal(conn)
     assert conn.switches() == 4
 
 
-def test_a_locked_mode_read_is_retried_too():
+def test_a_locked_mode_read_is_retried_too(clock):
     locked = sqlite3.OperationalError("database is locked")
     conn = _Conn("database is locked", [locked, locked, "wal"])
     enable_wal(conn)
@@ -90,21 +111,21 @@ def test_a_locked_mode_read_is_retried_too():
 
 
 @pytest.mark.parametrize("mode", ["delete", "truncate", "memory"])
-def test_a_switch_locked_on_a_database_not_in_wal_raises_naming_the_mode(mode):
+def test_a_switch_locked_on_a_database_not_in_wal_raises_naming_the_mode(mode, clock):
     with pytest.raises(sqlite3.OperationalError, match=f"still in {mode} mode"):
         enable_wal(_Conn("database is locked", [mode], busy_ms=50))
 
 
-def test_the_retry_stops_at_the_busy_timeout():
+def test_the_retry_stops_at_the_busy_timeout(clock):
     conn = _Conn("database is locked", ["delete"], busy_ms=150)
-    t0 = time.monotonic()
     with pytest.raises(sqlite3.OperationalError, match=r"within 0\.15 s"):
         enable_wal(conn)
-    assert 0.15 <= time.monotonic() - t0 < 2
+    # The last sleep can start just before the deadline, and is at most 25 ms.
+    assert 0.15 <= clock.now < 0.175
     assert conn.switches() > 1
 
 
-def test_a_zero_busy_timeout_tries_once():
+def test_a_zero_busy_timeout_tries_once(clock):
     conn = _Conn("database is locked", ["delete"], busy_ms=0)
     with pytest.raises(sqlite3.OperationalError, match="1 attempts"):
         enable_wal(conn)
@@ -112,14 +133,14 @@ def test_a_zero_busy_timeout_tries_once():
 
 
 @pytest.mark.parametrize("error", ["disk I/O error", "unable to open database file"])
-def test_other_failures_are_raised_unchanged(error):
+def test_other_failures_are_raised_unchanged(error, clock):
     conn = _Conn(error, ["wal"])
     with pytest.raises(sqlite3.OperationalError, match=f"^{error}$"):
         enable_wal(conn)
     assert conn.switches() == 1
 
 
-def test_a_non_lock_failure_reading_the_mode_is_raised_unchanged():
+def test_a_non_lock_failure_reading_the_mode_is_raised_unchanged(clock):
     conn = _Conn("database is locked", [sqlite3.OperationalError("disk I/O error")])
     with pytest.raises(sqlite3.OperationalError, match="^disk I/O error$"):
         enable_wal(conn)
@@ -166,6 +187,69 @@ def test_memory_store_opens_while_another_process_creates_its_schema(tmp_path):
         store.close()
     finally:
         release.join()
+
+
+@pytest.mark.parametrize("where", ["_SCHEMA_SQL", "_V2_INDEX_SQL"])
+def test_a_memory_schema_that_fails_partway_leaves_nothing_behind(
+    tmp_path, monkeypatch, where
+):
+    # All-or-nothing is what makes a second opener wait for one write, not ~40.
+    from gaia.agents.base import memory_store
+
+    broken = "CREATE INDEX broken ON no_such_table(x)"
+    if where == "_SCHEMA_SQL":
+        monkeypatch.setattr(
+            memory_store, where, memory_store._SCHEMA_SQL + f"\n{broken};\n"
+        )
+    else:
+        monkeypatch.setattr(memory_store, where, [*memory_store._V2_INDEX_SQL, broken])
+    db = tmp_path / "memory.db"
+    with pytest.raises(sqlite3.OperationalError, match="no_such_table"):
+        memory_store.MemoryStore(db)
+    conn = sqlite3.connect(str(db))
+    try:
+        assert conn.execute("SELECT name FROM sqlite_master").fetchall() == []
+    finally:
+        conn.close()
+
+
+def test_an_existing_memory_db_opens_while_another_process_is_writing(tmp_path):
+    from gaia.agents.base.memory_store import MemoryStore
+
+    db = tmp_path / "memory.db"
+    MemoryStore(db).close()
+    holder = sqlite3.connect(str(db), isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    holder.execute("INSERT INTO meta VALUES ('k', 'v')")
+    try:
+        # Never released while the store opens: the open must not need the write lock.
+        MemoryStore(db).close()
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+
+
+def test_a_memory_db_missing_a_trigger_gets_it_back_on_open(tmp_path):
+    from gaia.agents.base.memory_store import MemoryStore
+
+    db = tmp_path / "memory.db"
+    MemoryStore(db).close()
+    conn = sqlite3.connect(str(db))
+    conn.execute("DROP TRIGGER conv_fts_ai")
+    conn.commit()
+    conn.close()
+
+    store = MemoryStore(db)
+    store.store_turn("s1", "user", "the quarterly forecast")
+    store.close()
+    conn = sqlite3.connect(str(db))
+    try:
+        hits = conn.execute(
+            "SELECT rowid FROM conversations_fts WHERE conversations_fts MATCH 'forecast'"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert len(hits) == 1
 
 
 def test_file_index_does_not_rebuild_a_database_that_is_only_locked(tmp_path):
