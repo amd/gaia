@@ -159,7 +159,7 @@ def unaskable_denial_message(tool_name: str) -> str:
 
 def edit_target(tool_args: Any) -> str:
     """Where a file-writing call lands — the same rule the file tools apply
-    (``gaia.agents.tools.file_io_tools._resolve_target``): a relative
+    (``gaia.agents.tools.workspace_paths._resolve_target``): a relative
     ``file_path`` sits under ``project_dir`` when one is given, else under the
     process cwd. It does not know a session workspace, so a host that sets one
     passes args already resolved by the tool's ``target_of``. "" when the call
