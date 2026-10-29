@@ -240,9 +240,9 @@ def test_entry_point_configures_logging(
             getattr(module, func_name)()
         else:
             getattr(module, func_name)(argv)
-    assert gaia_logger.log_manager is not None, (
-        f"{module_name}:{func_name} must call gaia.logger.configure()"
-    )
+    assert (
+        gaia_logger.log_manager is not None
+    ), f"{module_name}:{func_name} must call gaia.logger.configure()"
 
 
 def test_eval_bench_child_configures_logging(unconfigured):
@@ -300,9 +300,7 @@ def test_flagship_frozen_entry_dispatches_scripts_before_configure():
     """``run_python`` scripts must start before GAIA (and its logging) loads."""
     path = REPO_ROOT / "hub" / "agents" / "gaia" / "python" / "packaging" / "server.py"
     source = path.read_text(encoding="utf-8")
-    assert source.index("python_dispatch(sys.argv[1:])") < source.index(
-        "\nconfigure()"
-    )
+    assert source.index("python_dispatch(sys.argv[1:])") < source.index("\nconfigure()")
 
 
 @pytest.mark.parametrize(
