@@ -7181,11 +7181,45 @@ def handle_gateway_command(args):
                 auth_header_prefix=args.auth_header_prefix,
                 allow_insecure_http=args.allow_insecure_http,
             )
+            auth = result.get("auth_state") or {}
+            restored = False
+            remembered = None
+            # The stored token was issued for the previously registered URL and
+            # is not bound to it, so a new URL must drop it: every later
+            # ensure_authenticated() would otherwise hand it to the new gateway.
+            url_changed = base_url.rstrip("/").lower() != (
+                (state.base_url or "").rstrip("/").lower()
+            )
+            dropped = url_changed and recall_token() is not None and forget_token()
+            needs_token = not (auth.get("env_var_set") or auth.get("runtime_key_set"))
+            if needs_token and not url_changed:
+                remembered = recall_token()
+                if remembered:
+                    # A fresh install must also restore a token saved by `gateway auth`.
+                    restored = manager.ensure_authenticated(recall=lambda: remembered)
+                    if restored:
+                        status = manager.status()
+                        needs_token = not (status.env_var_set or status.runtime_key_set)
+                        result["models_discovered"] = status.models_discovered
             print(
                 f"✅ Registered. Models discovered: {result.get('models_discovered', 0)}"
             )
-            auth = result.get("auth_state") or {}
-            if not (auth.get("env_var_set") or auth.get("runtime_key_set")):
+            if restored:
+                print(
+                    "   Restored the remembered gateway token from the OS credential store."
+                )
+            elif remembered:
+                print(
+                    "\n  The remembered gateway token was not accepted — run "
+                    "`gaia gateway auth` with a current one."
+                )
+            elif dropped:
+                print(
+                    "\n  The gateway URL changed, so GAIA forgot the token remembered "
+                    "for the old one — run `gaia gateway auth` with a token for "
+                    "this gateway."
+                )
+            elif needs_token:
                 print(
                     "\n  No token yet — run `gaia gateway auth` so Lemonade can "
                     "discover models."
