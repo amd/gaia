@@ -517,7 +517,8 @@ directory shape, entry points, installed commands and platform quirks, present
 whenever the agent's working directory resolves to a code repository (a VCS
 directory or a recognised manifest at its root). `GAIA_PROJECT_ROOT=<path>`
 picks the project when the working directory is not it. If that repository has
-no code index, the first `search_code_index` builds one;
+no code index, the first `search_code_index` starts building one in the
+background and reports its progress until it lands;
 `GAIA_PROJECT_MAP_AUTO_INDEX=1` builds it in a background thread at task start
 instead. The same repository check also
 makes `run_shell_command` always-on for the session instead of semantically
