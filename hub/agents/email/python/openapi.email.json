@@ -51,6 +51,40 @@
         "title": "ActionItem",
         "type": "object"
       },
+      "AgentQueryRequest": {
+        "additionalProperties": false,
+        "description": "Run one conversational turn against the session's agent.",
+        "properties": {
+          "memory_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional per-turn memory override (#1666). None leaves the session's current setting unchanged; True/False flips it before the turn runs.",
+            "title": "Memory Enabled"
+          },
+          "message": {
+            "description": "The user's natural-language request.",
+            "title": "Message",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Opaque session id; created on first use.",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "message"
+        ],
+        "title": "AgentQueryRequest",
+        "type": "object"
+      },
       "AttachmentMeta": {
         "additionalProperties": false,
         "description": "Metadata for one attachment on a message (schema 2.2, #1542).\n\nMetadata only — no content. On the read path ``attachment_id`` is the\nprovider handle a caller uses to fetch the bytes (Gmail\n``body.attachmentId``); it is null for providers/parts that carry none.",
@@ -253,6 +287,71 @@
         ],
         "title": "AttentionItemKind",
         "type": "string"
+      },
+      "AutonomyLevelRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "level": {
+            "description": "off | suggest | earn_trust | full. 'off' is the kill switch.",
+            "title": "Level",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Session to change autonomy for.",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "level"
+        ],
+        "title": "AutonomyLevelRequest",
+        "type": "object"
+      },
+      "AutonomyRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "max_messages": {
+            "default": 25,
+            "description": "Inbox budget for this cycle.",
+            "maximum": 200.0,
+            "minimum": 1.0,
+            "title": "Max Messages",
+            "type": "integer"
+          },
+          "session_id": {
+            "description": "Session to run one autonomy cycle for.",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "AutonomyRunRequest",
+        "type": "object"
+      },
+      "AutonomyUndoRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "description": "The action_id from a prior autonomy/run 'executed' entry.",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Session whose autonomy action to undo.",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "action_id"
+        ],
+        "title": "AutonomyUndoRequest",
+        "type": "object"
       },
       "BatchItemError": {
         "additionalProperties": false,
@@ -841,6 +940,21 @@
           "status"
         ],
         "title": "CalendarRespondResponse",
+        "type": "object"
+      },
+      "CancelRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "description": "Session whose in-flight run to cancel.",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "CancelRequest",
         "type": "object"
       },
       "DraftReply": {
@@ -2482,6 +2596,47 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "HistoryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "turns": {
+            "items": {
+              "$ref": "#/components/schemas/HistoryTurn"
+            },
+            "title": "Turns",
+            "type": "array"
+          }
+        },
+        "required": [
+          "session_id",
+          "turns"
+        ],
+        "title": "HistoryResponse",
+        "type": "object"
+      },
+      "HistoryTurn": {
+        "additionalProperties": false,
+        "properties": {
+          "assistant": {
+            "title": "Assistant",
+            "type": "string"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user",
+          "assistant"
+        ],
+        "title": "HistoryTurn",
+        "type": "object"
+      },
       "InitLemonadeStatus": {
         "additionalProperties": false,
         "description": "Reachability AND version-compatibility of the local Lemonade Server.",
@@ -2638,6 +2793,51 @@
           "error"
         ],
         "title": "MailboxError",
+        "type": "object"
+      },
+      "MemoryStatusResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "available",
+          "message"
+        ],
+        "title": "MemoryStatusResponse",
+        "type": "object"
+      },
+      "MemoryToggleRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "True to enable memory, False to disable.",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "session_id": {
+            "description": "Session to toggle memory for.",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "enabled"
+        ],
+        "title": "MemoryToggleRequest",
         "type": "object"
       },
       "MessageError": {
@@ -3147,6 +3347,51 @@
         "title": "QueryRespondResponse",
         "type": "object"
       },
+      "SessionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reset": {
+            "default": false,
+            "description": "When true, tears down any existing session and starts fresh.",
+            "title": "Reset",
+            "type": "boolean"
+          },
+          "session_id": {
+            "description": "Session id to create or reset.",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "SessionRequest",
+        "type": "object"
+      },
+      "SessionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "description": "True when a new agent was built.",
+            "title": "Created",
+            "type": "boolean"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/MemoryStatusResponse"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "created",
+          "memory"
+        ],
+        "title": "SessionResponse",
+        "type": "object"
+      },
       "SingleEmailInput": {
         "additionalProperties": false,
         "description": "A single email to triage (AC3 — single-email path).",
@@ -3208,6 +3453,27 @@
           "messages"
         ],
         "title": "ThreadInput",
+        "type": "object"
+      },
+      "ToolConfirmRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "approved": {
+            "description": "True to allow the gated tool, False to deny.",
+            "title": "Approved",
+            "type": "boolean"
+          },
+          "session_id": {
+            "description": "Session with a pending confirmation.",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "approved"
+        ],
+        "title": "ToolConfirmRequest",
         "type": "object"
       },
       "TriageContext": {
@@ -3542,6 +3808,601 @@
         "summary": "Import Forwarded Connection",
         "tags": [
           "email-forward-out"
+        ]
+      }
+    },
+    "/v1/email/agent/autonomy": {
+      "post": {
+        "description": "Set the autonomy level at runtime — pause/resume/kill (``off``).\n\nKilling (``level=\"off\"``) also broadcasts to every OTHER live session in\nthis process (#2624 — adversarial C4): the caller's session_id might not\nbe the one an autonomy cycle is actually running under (CLI default\n``\"cli\"`` vs. an Agent-UI session), and a kill that only reaches the\nnamed session would report success while leaving the real cycle\nuntouched.",
+        "operationId": "set_autonomy_v1_email_agent_autonomy_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutonomyLevelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Set Autonomy V1 Email Agent Autonomy Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Set Autonomy",
+        "tags": [
+          "email-agent"
+        ]
+      }
+    },
+    "/v1/email/agent/autonomy/run": {
+      "post": {
+        "description": "Trigger one observe->decide->act cycle now (the daemon/CLI driver seam).\n\nRuns on a worker thread — the cycle does mailbox I/O and local inference.\nRefuses with HTTP 409 while the session's autonomy level is ``off`` (#2528)\n— without this, \"autonomy is disabled\" and \"autonomy ran and found\nnothing to do\" return the identical 200 shape, and a caller can't tell\nthem apart.",
+        "operationId": "run_autonomy_v1_email_agent_autonomy_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutonomyRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Run Autonomy V1 Email Agent Autonomy Run Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "Autonomy is off for this session — the kill switch refuses the run instead of silently doing nothing (#2528)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Run Autonomy",
+        "tags": [
+          "email-agent"
+        ]
+      }
+    },
+    "/v1/email/agent/autonomy/undo": {
+      "post": {
+        "description": "Undo one autonomy-executed action, feeding a correction to the trust\nledger (#2529).\n\nWithout this the ledger can only ever ratchet trust up — no undo could\nreach it except through the archive-only, conversational\n``undo_archive_batch`` tool. Runs on a worker thread (mailbox I/O).",
+        "operationId": "undo_autonomy_v1_email_agent_autonomy_undo_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutonomyUndoRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Undo Autonomy V1 Email Agent Autonomy Undo Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Undo Autonomy",
+        "tags": [
+          "email-agent"
+        ]
+      }
+    },
+    "/v1/email/agent/autonomy/{session_id}": {
+      "get": {
+        "description": "Inspectable snapshot: level, thresholds, and the earned-trust ledger.\n\nThis is the read-model the ``gaia email autonomy status/trust`` CLI and the\nAgent-UI panel render — autonomy is always explainable, never a black box.",
+        "operationId": "autonomy_status_v1_email_agent_autonomy__session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Autonomy Status V1 Email Agent Autonomy  Session Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Autonomy Status",
+        "tags": [
+          "email-agent"
+        ]
+      }
+    },
+    "/v1/email/agent/cancel": {
+      "post": {
+        "description": "Request cancellation of an in-flight run (cooperative, not a kill).",
+        "operationId": "cancel_run_v1_email_agent_cancel_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cancel Run V1 Email Agent Cancel Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Cancel Run",
+        "tags": [
+          "email-agent"
+        ]
+      }
+    },
+    "/v1/email/agent/confirm-tool": {
+      "post": {
+        "description": "Approve or deny a tool call the agent is blocking on.\n\nThe agent thread blocks in ``SSEOutputHandler.confirm_tool_execution()`` after\nemitting a ``permission_request`` event; this releases it. Mirrors the core\nchat router's ``/api/chat/confirm-tool``.",
+        "operationId": "confirm_tool_v1_email_agent_confirm_tool_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Confirm Tool V1 Email Agent Confirm Tool Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Confirm Tool",
+        "tags": [
+          "email-agent"
+        ]
+      }
+    },
+    "/v1/email/agent/memory": {
+      "post": {
+        "description": "Enable/disable the session agent's memory at runtime (#1666).\n\nExposes ``EmailTriageAgent.set_memory_enabled`` over HTTP. Enabling memory\nthat was never initialized this session (started with GAIA_MEMORY_DISABLED or\nLemonade unreachable) cannot succeed — that is reported with an actionable\nmessage and HTTP 409, never silently ignored.",
+        "operationId": "toggle_memory_v1_email_agent_memory_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryToggleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Toggle Memory",
+        "tags": [
+          "email-agent"
+        ]
+      }
+    },
+    "/v1/email/agent/memory/{session_id}": {
+      "get": {
+        "description": "Report the session agent's current memory state without changing it.",
+        "operationId": "memory_status_v1_email_agent_memory__session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Memory Status",
+        "tags": [
+          "email-agent"
+        ]
+      }
+    },
+    "/v1/email/agent/query": {
+      "post": {
+        "description": "Run one conversational turn and stream the agent loop as SSE.\n\nBuilds the session's agent if needed, optionally applies the per-turn memory\noverride, then runs ``process_query`` on a worker thread with an\n``SSEOutputHandler`` as ``agent.console`` — the same integration the core UI\nuses. Every event the loop emits (thoughts, steps, tool usage,\npermission requests, final answer) is relayed to the client; a terminal\n``run_complete`` event closes the stream.",
+        "operationId": "query_v1_email_agent_query_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentQueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Query",
+        "tags": [
+          "email-agent"
+        ]
+      }
+    },
+    "/v1/email/agent/session": {
+      "post": {
+        "description": "Create (or reset) a session and eagerly build its agent.\n\nBuilding the agent here (rather than lazily on first /query) lets the caller\nsurface a construction failure immediately, and warms memory/backends before\nthe first turn.",
+        "operationId": "create_session_v1_email_agent_session_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Create Session",
+        "tags": [
+          "email-agent"
+        ]
+      }
+    },
+    "/v1/email/agent/session/{session_id}": {
+      "delete": {
+        "description": "Evict a session and tear down its agent.",
+        "operationId": "delete_session_v1_email_agent_session__session_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Session V1 Email Agent Session  Session Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Delete Session",
+        "tags": [
+          "email-agent"
+        ]
+      }
+    },
+    "/v1/email/agent/session/{session_id}/history": {
+      "get": {
+        "description": "Return the session's conversation history (oldest first).",
+        "operationId": "session_history_v1_email_agent_session__session_id__history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Session History",
+        "tags": [
+          "email-agent"
         ]
       }
     },

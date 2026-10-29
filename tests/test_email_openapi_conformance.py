@@ -1159,6 +1159,24 @@ def test_all_documented_paths_covered(committed_spec):
         # test_attention_without_mailbox_returns_503, above.
         ("get", "/v1/email/attention"),
     }
+    # Stateful sidecar session API (#6043). Behavioral coverage lives in
+    # hub/agents/email/python/tests/test_email_agent_routes.py and
+    # test_query_route.py; the published contract must retain every route.
+    expected |= {
+        ("post", "/v1/email/agent/session"),
+        ("delete", "/v1/email/agent/session/{session_id}"),
+        ("get", "/v1/email/agent/session/{session_id}/history"),
+        ("post", "/v1/email/agent/memory"),
+        ("get", "/v1/email/agent/memory/{session_id}"),
+        ("get", "/v1/email/agent/autonomy/{session_id}"),
+        ("post", "/v1/email/agent/autonomy"),
+        ("post", "/v1/email/agent/autonomy/run"),
+        ("post", "/v1/email/agent/autonomy/undo"),
+        ("post", "/v1/email/agent/confirm-tool"),
+        ("post", "/v1/email/agent/cancel"),
+        ("post", "/v1/email/agent/query"),
+    }
+
     assert documented == expected, (
         f"Spec has routes not covered by conformance tests: "
         f"{documented - expected}. Add a conformance test for each new route."

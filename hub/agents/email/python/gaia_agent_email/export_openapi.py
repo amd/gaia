@@ -47,13 +47,10 @@ ARTIFACT_PATH = Path(__file__).resolve().parents[1] / "openapi.email.json"
 
 
 def build_app():
-    """Build a minimal FastAPI app mounting ONLY the email router.
-
-    Mirrors how the product/freeze servers mount the router, so the generated
-    spec matches what a host actually serves.
-    """
+    """Build a minimal app with every public Email Agent sidecar router."""
     from fastapi import FastAPI
     from gaia_agent_email import caller_auth
+    from gaia_agent_email.agent_routes import router as agent_router
     from gaia_agent_email.api_routes import router as email_router
     from gaia_agent_email.connection_intake_routes import (
         router as connection_intake_router,
@@ -65,6 +62,8 @@ def build_app():
         description=OPENAPI_DESCRIPTION,
     )
     app.include_router(email_router)
+    # Stateful session/query/confirmation surface served by the sidecar.
+    app.include_router(agent_router)
     # OAuth forward-out intake (#2154) — part of the frozen sidecar contract
     # (schema 2.5), so it belongs in the published artifact, unlike the
     # playground-only connector routes (include_in_schema=False).

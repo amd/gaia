@@ -91,6 +91,24 @@ _EXPECTED_STREAMING_ROUTES = {
     ("post", "/v1/email/query"),
 }
 
+# Stateful Email Agent routes are served by the sidecar and now included in the
+# published OpenAPI contract. Their response bodies are deliberately flexible
+# dictionaries/SSE rather than the mailbox API's named contract models.
+_EXPECTED_AGENT_ROUTES = {
+    ("post", "/v1/email/agent/session"),
+    ("delete", "/v1/email/agent/session/{session_id}"),
+    ("get", "/v1/email/agent/session/{session_id}/history"),
+    ("post", "/v1/email/agent/memory"),
+    ("get", "/v1/email/agent/memory/{session_id}"),
+    ("get", "/v1/email/agent/autonomy/{session_id}"),
+    ("post", "/v1/email/agent/autonomy"),
+    ("post", "/v1/email/agent/autonomy/run"),
+    ("post", "/v1/email/agent/autonomy/undo"),
+    ("post", "/v1/email/agent/confirm-tool"),
+    ("post", "/v1/email/agent/cancel"),
+    ("post", "/v1/email/agent/query"),
+}
+
 
 @pytest.fixture(scope="module")
 def spec() -> dict:
@@ -176,7 +194,21 @@ def test_documented_routes_match_expected_set(spec):
     documented = {
         (method, path) for path, ops in spec["paths"].items() for method in ops
     }
-    assert documented == set(_EXPECTED_RESPONSE_MODELS) | _EXPECTED_STREAMING_ROUTES
+    assert documented == (
+        set(_EXPECTED_RESPONSE_MODELS)
+        | _EXPECTED_STREAMING_ROUTES
+        | _EXPECTED_AGENT_ROUTES
+    )
+
+
+def test_agent_routes_are_documented_with_request_schemas(spec):
+    for method, path in _EXPECTED_AGENT_ROUTES:
+        operation = spec["paths"][path][method]
+        assert "responses" in operation
+        if method in {"post", "put", "patch"}:
+            assert (
+                "requestBody" in operation
+            ), f"{method.upper()} {path} lacks request schema"
 
 
 def test_query_route_streams_event_stream(spec):
@@ -896,9 +928,7 @@ def test_calendar_view_returns_truncation_signal(client, fake_calendar, monkeypa
             "nextPageToken": "page-2",
         },
     )
-    monkeypatch.setattr(
-        email_routes, "resolve_calendar_backend", lambda: fake_calendar
-    )
+    monkeypatch.setattr(email_routes, "resolve_calendar_backend", lambda: fake_calendar)
 
     resp = client.get("/v1/email/calendar/events")
 
@@ -1965,6 +1995,7 @@ def test_calendar_create_bad_event_after_gate_is_400(client, monkeypatch):
 #     conditional posture: bearer OR none, since the gate no-ops when the
 #     sidecar has no token configured (local dev).
 # ---------------------------------------------------------------------------
+
 
 def test_spec_declares_bearer_security_scheme(spec):
     schemes = spec["components"]["securitySchemes"]
