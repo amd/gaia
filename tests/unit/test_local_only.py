@@ -154,11 +154,73 @@ _SHARED_CASES = json.loads(
 )["cases"]
 
 
+def _case_bytes(case):
+    if "build" in case:
+        b = {k: v for k, v in case["build"].items() if k != "times"}
+        parts = {k: base64.b64decode(v) for k, v in b.items()}
+        return (
+            parts["prefix"] + parts["repeat"] * case["build"]["times"] + parts["suffix"]
+        )
+    if case["content"] is None:
+        return None
+    return base64.b64decode(case["content"])
+
+
 @pytest.mark.parametrize("case", _SHARED_CASES, ids=[c["name"] for c in _SHARED_CASES])
 def test_policy_file_reads_as_the_shared_table_says(policy_file, case):
-    if case["content"] is not None:
-        policy_file.write_bytes(base64.b64decode(case["content"]))
+    content = _case_bytes(case)
+    if content is not None:
+        policy_file.write_bytes(content)
     assert local_only.cloud_blocked() is case["local_only"]
+
+
+def test_the_go_reader_enforces_the_same_limits():
+    go = (
+        Path(__file__).resolve().parents[2]
+        / "tui"
+        / "internal"
+        / "lemonade"
+        / "localonly.go"
+    ).read_text(encoding="utf-8")
+    for name, value in (
+        ("policyMaxBytes", "64 << 10"),
+        ("policyMaxDepth", str(local_only.POLICY_MAX_DEPTH)),
+        ("policyMaxNumberChars", str(local_only.POLICY_MAX_NUMBER_CHARS)),
+    ):
+        assert re.search(rf"\b{name}\s*=\s*{re.escape(value)}\b", go), name
+    assert local_only.POLICY_MAX_BYTES == 64 << 10
+
+
+@pytest.mark.parametrize("error", [RecursionError, MemoryError, TypeError, KeyError])
+def test_no_parser_failure_escapes_the_reader(policy_file, monkeypatch, error):
+    policy_file.write_text('{"network_policy":"cloud_allowed"}', encoding="utf-8")
+
+    def boom(*_a, **_k):
+        raise error("parser blew up")
+
+    monkeypatch.setattr(local_only.json, "loads", boom)
+    assert local_only.effective_policy() is NetworkPolicy.LOCAL_AI_ONLY
+
+
+def test_an_unlocatable_policy_file_fails_closed(monkeypatch):
+    def no_home():
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(local_only, "policy_path", no_home)
+    assert local_only.cloud_blocked()
+
+
+def test_set_policy_repairs_a_file_the_reader_refuses(policy_file):
+    policy_file.write_text(
+        '{"network_policy":"local_ai_only","x":' + "[" * 5000 + "]" * 5000 + "}",
+        encoding="utf-8",
+    )
+    assert local_only.cloud_blocked()
+    local_only.set_policy("cloud_allowed")
+    assert json.loads(policy_file.read_text(encoding="utf-8")) == {
+        "network_policy": "cloud_allowed"
+    }
+    assert not local_only.cloud_blocked()
 
 
 def test_offline_and_unknown_levels_are_refused(policy_file):

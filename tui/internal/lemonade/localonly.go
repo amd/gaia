@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -53,25 +54,86 @@ func expandUser(path string, homeDir func() (string, error)) string {
 	return filepath.Join(home, path[1:])
 }
 
+// Limits every policy file must meet before it is parsed; Python's reader
+// (gaia.llm.local_only) applies the same ones, so a file one JSON parser takes
+// and the other rejects never reads differently in the two.
+// tests/fixtures/local_only_policy_cases.json holds the cases both must pass.
+const (
+	policyMaxBytes       = 64 << 10
+	policyMaxDepth       = 16
+	policyMaxNumberChars = 20
+)
+
+// policyWithinLimits reports whether raw is small, valid UTF-8, nests no
+// deeper than policyMaxDepth and has no number longer than
+// policyMaxNumberChars (not counting a leading minus).
+func policyWithinLimits(raw []byte) bool {
+	if len(raw) > policyMaxBytes || !utf8.Valid(raw) {
+		return false
+	}
+	depth, run := 0, 0
+	var lead byte
+	inString, escaped := false, false
+	for _, b := range raw {
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case b == '\\':
+				escaped = true
+			case b == '"':
+				inString = false
+			}
+			continue
+		}
+		if strings.IndexByte("0123456789+-.eE", b) >= 0 {
+			if run == 0 {
+				lead = b
+			}
+			run++
+			n := run
+			if lead == '-' {
+				n--
+			}
+			if n > policyMaxNumberChars {
+				return false
+			}
+			continue
+		}
+		run = 0
+		switch b {
+		case '"':
+			inString = true
+		case '[', '{':
+			depth++
+			if depth > policyMaxDepth {
+				return false
+			}
+		case ']', '}':
+			depth--
+		}
+	}
+	return true
+}
+
 // LocalOnlyAt reports whether the policy file at path blocks every cloud AI
-// model. A missing file means cloud is allowed; anything Python's reader
-// can't parse as a JSON object counts as Local only. tests/fixtures/
-// local_only_policy_cases.json holds the cases both readers must agree on.
+// model. A missing file means cloud is allowed; a file outside the shared
+// limits, or that isn't a JSON object, counts as Local only.
 func LocalOnlyAt(path string) bool {
 	if path == "" {
 		// No home directory: the user's policy can't be read, so fail closed.
 		return true
 	}
-	raw, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false
 	}
 	if err != nil {
 		return true
 	}
-	// Python decodes the file as strict UTF-8; Go's decoder would quietly
-	// substitute bad bytes and accept it.
-	if !utf8.Valid(raw) {
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, policyMaxBytes+1))
+	if err != nil || !policyWithinLimits(raw) {
 		return true
 	}
 	var policy map[string]json.RawMessage

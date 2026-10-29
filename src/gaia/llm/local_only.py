@@ -92,26 +92,89 @@ def policy_path() -> Path:
 
 _last_read_error: List[Optional[str]] = [None]
 
+#: Limits every policy file must meet before it is parsed. The TUI's Go reader
+#: (tui/internal/lemonade/localonly.go) applies the same ones, so a file one
+#: JSON parser takes and the other rejects never reads differently in the two:
+#: tests/fixtures/local_only_policy_cases.json holds the cases both must pass.
+POLICY_MAX_BYTES = 64 * 1024
+POLICY_MAX_DEPTH = 16
+POLICY_MAX_NUMBER_CHARS = 20
+_NUMBER_CHARS = frozenset("0123456789+-.eE")
+
+
+def _within_limits(raw: bytes) -> str:
+    """The file as text if it meets the shared limits; ``ValueError`` if not."""
+    if len(raw) > POLICY_MAX_BYTES:
+        raise ValueError(f"it is larger than {POLICY_MAX_BYTES} bytes")
+    text = raw.decode("utf-8")
+    depth = run = 0
+    lead = ""
+    in_string = escaped = False
+    for ch in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch in _NUMBER_CHARS:
+            lead = lead if run else ch
+            run += 1
+            if run - (lead == "-") > POLICY_MAX_NUMBER_CHARS:
+                raise ValueError(
+                    f"it has a number longer than {POLICY_MAX_NUMBER_CHARS} characters"
+                )
+            continue
+        run = 0
+        if ch == '"':
+            in_string = True
+        elif ch in "[{":
+            depth += 1
+            if depth > POLICY_MAX_DEPTH:
+                raise ValueError(f"it nests deeper than {POLICY_MAX_DEPTH} levels")
+        elif ch in "]}":
+            depth -= 1
+    return text
+
+
+def _reject_constant(token: str) -> Any:
+    raise ValueError(f"it contains {token}, which JSON doesn't allow")
+
+
+def _load_object(path: Path) -> Dict[str, Any]:
+    """The policy file's JSON object. Raises ``FileNotFoundError`` when absent,
+    and some other exception for anything that isn't a well-formed object."""
+    with open(path, "rb") as f:
+        raw = f.read(POLICY_MAX_BYTES + 1)
+    data = json.loads(_within_limits(raw), parse_constant=_reject_constant)
+    if not isinstance(data, dict):
+        raise ValueError("it is not a JSON object")
+    return data
+
 
 def _read(path: Path) -> NetworkPolicy:
     """Parse the file. Anything unreadable counts as Local only (fail closed)."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        value = data.get(POLICY_KEY, NetworkPolicy.CLOUD_ALLOWED.value)
-        return NetworkPolicy(value)
+        data = _load_object(path)
+        return NetworkPolicy(data.get(POLICY_KEY, NetworkPolicy.CLOUD_ALLOWED.value))
     except FileNotFoundError:
         return NetworkPolicy.CLOUD_ALLOWED
-    except (OSError, ValueError, AttributeError) as e:
-        message = (
-            f"Could not read the network policy in {path} ({e}). Treating it as "
-            f"Local only until the file is fixed or rewritten with "
-            f"`gaia config set network_policy <level>`."
-        )
-        # Read on every request: say it once per problem, not once per call.
-        if message != _last_read_error[0]:
-            _last_read_error[0] = message
-            log.error(message)
-        return NetworkPolicy.LOCAL_AI_ONLY
+    except Exception as e:  # any failure, RecursionError included, fails closed
+        return _fail_closed(f"Could not read the network policy in {path} ({e})")
+
+
+def _fail_closed(reason: str) -> NetworkPolicy:
+    message = (
+        f"{reason}. Treating it as Local only until the file is fixed or "
+        f"rewritten with `gaia config set network_policy <level>`."
+    )
+    # Read on every request: say it once per problem, not once per call.
+    if message != _last_read_error[0]:
+        _last_read_error[0] = message
+        log.error(message)
+    return NetworkPolicy.LOCAL_AI_ONLY
 
 
 def effective_policy() -> NetworkPolicy:
@@ -121,7 +184,11 @@ def effective_policy() -> NetworkPolicy:
     length and Windows mtimes are coarse, so a stat-keyed cache can miss a
     switch to Local only. The file is tiny and inference calls are not.
     """
-    return _read(policy_path())
+    try:
+        path = policy_path()
+    except Exception as e:  # no home directory: the policy can't be read
+        return _fail_closed(f"Could not locate the network policy file ({e})")
+    return _read(path)
 
 
 def cloud_blocked() -> bool:
@@ -147,14 +214,12 @@ def set_policy(value: str) -> NetworkPolicy:
     path = policy_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     data: dict = {}
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                data = {}
-        except (OSError, ValueError):
-            # Rewriting is the documented repair for an unreadable file.
-            data = {}
+    try:
+        data = _load_object(path)
+    except FileNotFoundError:
+        pass
+    except Exception:  # rewriting is the documented repair for a bad file
+        data = {}
     data[POLICY_KEY] = policy.value
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".policy-", suffix=".tmp")
     try:

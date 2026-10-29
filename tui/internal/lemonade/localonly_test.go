@@ -4,6 +4,7 @@
 package lemonade
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -80,9 +81,15 @@ func TestLocalOnlyMatchesPythonOnTheSharedTable(t *testing.T) {
 	}
 	var table struct {
 		Cases []struct {
-			Name      string  `json:"name"`
-			Content   *string `json:"content"`
-			LocalOnly bool    `json:"local_only"`
+			Name    string  `json:"name"`
+			Content *string `json:"content"`
+			Build   *struct {
+				Prefix string `json:"prefix"`
+				Repeat string `json:"repeat"`
+				Times  int    `json:"times"`
+				Suffix string `json:"suffix"`
+			} `json:"build"`
+			LocalOnly bool `json:"local_only"`
 		} `json:"cases"`
 	}
 	if err := json.Unmarshal(raw, &table); err != nil {
@@ -93,11 +100,22 @@ func TestLocalOnlyMatchesPythonOnTheSharedTable(t *testing.T) {
 	}
 	for _, c := range table.Cases {
 		path := filepath.Join(t.TempDir(), "policy.json")
-		if c.Content != nil {
-			data, err := base64.StdEncoding.DecodeString(*c.Content)
+		decode := func(s string) []byte {
+			b, err := base64.StdEncoding.DecodeString(s)
 			if err != nil {
 				t.Fatalf("%s: %v", c.Name, err)
 			}
+			return b
+		}
+		var data []byte
+		switch {
+		case c.Build != nil:
+			data = append(decode(c.Build.Prefix), bytes.Repeat(decode(c.Build.Repeat), c.Build.Times)...)
+			data = append(data, decode(c.Build.Suffix)...)
+		case c.Content != nil:
+			data = decode(*c.Content)
+		}
+		if c.Build != nil || c.Content != nil {
 			if err := os.WriteFile(path, data, 0o600); err != nil {
 				t.Fatal(err)
 			}
