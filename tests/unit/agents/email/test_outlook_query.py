@@ -45,13 +45,17 @@ def test_from_operator_escapes_inner_quotes():
 
 def test_is_unread_becomes_isread_filter():
     result = translate_query("is:unread", now=_NOW)
-    assert result.filter == "isRead eq false"
+    assert result.filter == (
+        "receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false"
+    )
     assert result.search is None
 
 
 def test_is_read_becomes_isread_filter():
     result = translate_query("is:read", now=_NOW)
-    assert result.filter == "isRead eq true"
+    assert result.filter == (
+        "receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq true"
+    )
 
 
 def test_newer_than_days_becomes_ge_cutoff():
@@ -90,7 +94,7 @@ def test_unparseable_duration_raises_same_as_gmail_path():
 def test_is_and_newer_than_combine_with_and():
     result = translate_query("is:unread newer_than:7d", now=_NOW)
     assert result.filter == (
-        "isRead eq false and receivedDateTime ge 2026-08-15T12:00:00Z"
+        "receivedDateTime ge 2026-08-15T12:00:00Z and isRead eq false"
     )
 
 

@@ -478,7 +478,11 @@ class LiveOutlookBackend:
                     params["$search"] = translated.search
                 path = "/me/messages"
             elif _LABEL_UNREAD in labels:
-                params["$filter"] = "isRead eq false"
+                # Graph requires receivedDateTime to lead $filter whenever it
+                # also sorts by that field, even for an unread-only list.
+                params["$filter"] = (
+                    "receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false"
+                )
                 params["$orderby"] = "receivedDateTime desc"
                 path = "/me/mailFolders/inbox/messages"
             elif _LABEL_SENT in labels:

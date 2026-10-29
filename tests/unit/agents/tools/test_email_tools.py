@@ -149,7 +149,9 @@ def test_list_inbox_unread_only_sets_filter():
         return json_response({"value": []})
 
     make_backend(handler).list_inbox(unread_only=True)
-    assert seen["url"].params["$filter"] == "isRead eq false"
+    assert seen["url"].params["$filter"] == (
+        "receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false"
+    )
 
 
 def test_list_inbox_without_unread_sends_no_filter():

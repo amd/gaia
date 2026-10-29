@@ -234,8 +234,11 @@ class TestReadTranslation:
         backend, rec, _ = _backend(lambda r: _ok({"value": []}))
         backend.list_messages(label_ids=["UNREAD"], max_results=5)
         params = parse_qs(urlparse(str(rec.requests[0].url)).query)
-        # MS Graph $filter for unread.
-        assert any("isRead eq false" in v for v in params.get("$filter", []))
+        # Graph requires the sorted property to lead $filter.
+        assert params["$filter"] == [
+            "receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false"
+        ]
+        assert params["$orderby"] == ["receivedDateTime desc"]
 
     def test_list_messages_sent_hits_sentitems_folder(self):
         # The follow-up tracker (#1606) scans SENT; falling through to the
@@ -291,14 +294,20 @@ class TestReadTranslation:
         backend, rec, _ = _backend(lambda r: _ok({"value": []}))
         backend.list_messages(query="is:unread", max_results=5)
         params = parse_qs(urlparse(str(rec.requests[0].url)).query)
-        assert params["$filter"] == ["isRead eq false"]
+        assert params["$filter"] == [
+            "receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false"
+        ]
+        assert params["$orderby"] == ["receivedDateTime desc"]
         assert "$search" not in params
 
     def test_list_messages_is_read_query_routes_to_filter(self):
         backend, rec, _ = _backend(lambda r: _ok({"value": []}))
         backend.list_messages(query="is:read", max_results=5)
         params = parse_qs(urlparse(str(rec.requests[0].url)).query)
-        assert params["$filter"] == ["isRead eq true"]
+        assert params["$filter"] == [
+            "receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq true"
+        ]
+        assert params["$orderby"] == ["receivedDateTime desc"]
 
     def test_list_messages_newer_than_query_routes_to_filter(self):
         # #2996 acceptance criterion: a recency filter actually bounds the
