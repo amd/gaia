@@ -1650,6 +1650,41 @@ class TestMemorySettings:
         assert data["memory_enabled"] is False
         assert data["mcp_memory_enabled"] is True
 
+    def test_put_system_discovery_consent_keeps_db_unchanged_when_json_save_fails(
+        self, client
+    ):
+        """The dashboard must not claim consent changed when its source of truth failed."""
+        with patch(
+            "gaia.agents.base.memory._save_memory_settings",
+            side_effect=RuntimeError("disk full"),
+        ):
+            resp = client.put(
+                "/api/memory/settings", json={"system_discovery_consent": True}
+            )
+
+        assert resp.status_code == 500
+        assert "Could not save system discovery setting" in resp.json()["detail"]
+        assert (
+            client.get("/api/memory/settings").json()["system_discovery_consent"]
+            is False
+        )
+
+
+class TestMemorySettingsFile:
+    def test_save_refuses_to_overwrite_malformed_settings(self, tmp_path, monkeypatch):
+        """A parse failure must preserve unrelated settings instead of replacing the file."""
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "memory_settings.json"
+        malformed = "{not valid json"
+        settings_path.write_text(malformed, encoding="utf-8")
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        with pytest.raises(RuntimeError, match="Could not read memory settings"):
+            memory_module._save_memory_settings({"system_context_enabled": False})
+
+        assert settings_path.read_text(encoding="utf-8") == malformed
+
 
 # ===========================================================================
 # Clear All Memory Endpoint

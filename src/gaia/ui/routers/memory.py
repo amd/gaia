@@ -1827,10 +1827,17 @@ def update_memory_settings(
         )
     if body.system_discovery_consent is not None:
         consented = body.system_discovery_consent
-        db.set_setting(_SYSTEM_DISCOVERY_KEY, "true" if consented else "false")
         from gaia.agents.base.memory import _save_memory_settings
 
-        _save_memory_settings({"system_context_enabled": consented})
+        try:
+            _save_memory_settings({"system_context_enabled": consented})
+        except RuntimeError as exc:
+            cid = _log_server_error("saving system discovery consent failed", exc)
+            raise HTTPException(
+                500,
+                f"Could not save system discovery setting; see server logs (id={cid}).",
+            ) from exc
+        db.set_setting(_SYSTEM_DISCOVERY_KEY, "true" if consented else "false")
         if consented:
             try:
                 refresh_result = _do_system_context_refresh()
