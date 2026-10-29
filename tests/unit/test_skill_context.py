@@ -10,9 +10,13 @@ rightly flags and the loader cannot let through.
 
 from __future__ import annotations
 
+import contextvars
 import sys
 import textwrap
+import threading
+import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -395,6 +399,325 @@ def test_temp_names_cannot_leave_the_folder(agent, tmp_path, allowed):
 
     assert result["status"] == "error"
     assert "leaves" in result["error"]
+
+
+def _file_link(link: Path, target: Path) -> None:
+    """A file symlink, or skip where this account cannot create one."""
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError) as e:
+        pytest.skip(f"cannot create a file symlink here: {e}")
+
+
+def _wait_until(predicate, seconds: float = 15.0) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return predicate()
+
+
+def test_a_path_argument_linking_outside_the_scope_never_reaches_the_tool(
+    agent, tmp_path, allowed, outside
+):
+    _file_link(allowed / "looks-inside.txt", outside)
+    _load(agent, tmp_path, "link-probe", [], "return {'status': 'success'}\n")
+    module = sys.modules["gaia_skill_link_probe_tools"]
+
+    result = agent._execute_tool(
+        "link-probe/probe", {"file_path": str(allowed / "looks-inside.txt")}
+    )
+
+    assert result["status"] == "error"
+    assert module.CALLS == []
+
+
+def test_a_path_argument_through_a_linked_folder_never_reaches_the_tool(
+    agent, tmp_path, allowed, outside
+):
+    try:
+        _link_folder(allowed / "shortcut", outside.parent)
+    except OSError as e:
+        pytest.skip(f"cannot create a folder link here: {e}")
+    _load(agent, tmp_path, "junction-probe", [], "return {'status': 'success'}\n")
+    module = sys.modules["gaia_skill_junction_probe_tools"]
+
+    result = agent._execute_tool(
+        "junction-probe/probe", {"file_path": str(allowed / "shortcut" / "secret.txt")}
+    )
+
+    assert result["status"] == "error"
+    assert module.CALLS == []
+
+
+@pytest.mark.parametrize(
+    "escape",
+    ["{allowed}/../outside/secret.txt", "{allowed}/sub/../../outside/secret.txt"],
+)
+def test_a_traversing_path_argument_never_reaches_the_tool(
+    agent, tmp_path, allowed, outside, escape
+):
+    _load(agent, tmp_path, "dots-probe", [], "return {'status': 'success'}\n")
+    module = sys.modules["gaia_skill_dots_probe_tools"]
+
+    result = agent._execute_tool(
+        "dots-probe/probe", {"file_path": escape.format(allowed=allowed)}
+    )
+
+    assert result["status"] == "error"
+    assert module.CALLS == []
+
+
+def test_open_read_refuses_a_link_found_inside_the_scope(
+    agent, tmp_path, allowed, outside
+):
+    _file_link(allowed / "alias.txt", outside)
+    body = (
+        "name = __import__('pathlib').Path(file_path).parent / 'alias.txt'\n"
+        "ctx.open_read(name).close()\nreturn {'status': 'success'}\n"
+    )
+    _load(agent, tmp_path, "alias-probe", [], body)
+
+    result = agent._execute_tool(
+        "alias-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result["status"] == "error"
+
+
+def test_open_write_refuses_a_dangling_link_out_of_the_scope(
+    agent, tmp_path, allowed, outside
+):
+    planted = outside.parent / "planted.txt"
+    _file_link(allowed / "report.txt", planted)
+    body = (
+        "name = __import__('pathlib').Path(file_path).parent / 'report.txt'\n"
+        "with ctx.open_write(name) as f:\n    f.write('x')\n"
+        "return {'status': 'success'}\n"
+    )
+    _load(agent, tmp_path, "dangle-probe", [], body)
+
+    result = agent._execute_tool(
+        "dangle-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result["status"] == "error"
+    assert not planted.exists()
+
+
+@pytest.mark.parametrize("name", ["{outside}", "sub/../../escape.txt", "."])
+def test_temp_names_are_held_to_the_folder(agent, tmp_path, allowed, outside, name):
+    body = (
+        f"ctx.write_temp_file({name.format(outside=outside)!r}, 'x')\n"
+        "return {'status': 'success'}\n"
+    )
+    _load(agent, tmp_path, "hold-probe", ["scratch:write"], body)
+
+    result = agent._execute_tool(
+        "hold-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result["status"] == "error"
+    assert outside.read_text(encoding="utf-8") == "outside"
+
+
+def test_a_link_planted_in_the_temp_folder_cannot_be_written_through(
+    agent, tmp_path, allowed, outside
+):
+    body = (
+        "root = ctx.temp_dir()\n"
+        f"LINK(root / 'out', __import__('pathlib').Path({str(outside.parent)!r}))\n"
+        "ctx.write_temp_file('out/secret.txt', 'overwritten')\n"
+        "return {'status': 'success'}\n"
+    )
+    _load(agent, tmp_path, "plant-probe", ["scratch:write"], body)
+    sys.modules["gaia_skill_plant_probe_tools"].LINK = _link_folder
+
+    result = agent._execute_tool(
+        "plant-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result["status"] == "error"
+    assert "leaves" in result["error"]
+    assert outside.read_text(encoding="utf-8") == "outside"
+
+
+def test_temp_files_work_when_gaia_home_is_a_link(
+    agent, tmp_path, allowed, monkeypatch
+):
+    real_home = tmp_path / "real-home"
+    real_home.mkdir()
+    try:
+        _link_folder(tmp_path / "linked-home", real_home)
+    except OSError as e:
+        pytest.skip(f"cannot create a folder link here: {e}")
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "linked-home"))
+    body = (
+        "note = ctx.write_temp_file('out/note.txt', 'hi')\n"
+        "return {'status': 'success', 'text': note.read_text()}\n"
+    )
+    _load(agent, tmp_path, "linkhome-probe", ["scratch:write"], body)
+
+    result = agent._execute_tool(
+        "linkhome-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result == {"status": "success", "text": "hi"}
+
+
+def test_a_timed_out_call_deletes_its_temp_folder_once_the_worker_ends(
+    agent, tmp_path, allowed, monkeypatch
+):
+    body = (
+        "import threading, time\n"
+        "folder = ctx.temp_dir()\n"
+        "(folder / 'part.txt').write_text('x')\n"
+        "STATE['folder'] = folder\n"
+        "STATE['go'].wait(30)\n"
+        "(folder / 'late.txt').write_text('still mine')\n"
+        "STATE['wrote_late'] = True\n"
+        "return {'status': 'success'}\n"
+    )
+    _load(agent, tmp_path, "slow-probe", ["scratch:write"], body)
+    module = sys.modules["gaia_skill_slow_probe_tools"]
+    module.STATE = {"go": threading.Event()}
+    monkeypatch.setattr(agent, "_bounded_tool_timeout", lambda *a: 0.3)
+
+    result = agent._execute_tool(
+        "slow-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result.get("timeout") is True, result
+    folder = module.STATE["folder"]
+    assert folder.is_dir(), "deleted under a worker that is still running"
+    module.STATE["go"].set()
+    assert _wait_until(lambda: not folder.exists()), "temp folder leaked"
+    assert module.STATE.get("wrote_late") is True
+
+
+def test_a_finished_call_leaves_no_temp_folder_behind(agent, tmp_path, allowed, home):
+    body = "ctx.temp_dir('a/b')\nreturn {'status': 'success'}\n"
+    _load(agent, tmp_path, "clean-probe", ["scratch:write"], body)
+
+    for _ in range(3):
+        result = agent._execute_tool(
+            "clean-probe/probe", {"file_path": str(allowed / "in.txt")}
+        )
+        assert result["status"] == "success"
+
+    assert list((home / "skill-temp" / "clean-probe").iterdir()) == []
+
+
+def test_a_failing_call_still_deletes_its_temp_folder(agent, tmp_path, allowed, home):
+    body = "ctx.write_temp_file('x.txt', 'x')\nraise RuntimeError('boom')\n"
+    _load(agent, tmp_path, "boom-probe", ["scratch:write"], body)
+
+    result = agent._execute_tool(
+        "boom-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result["status"] == "error"
+    assert list((home / "skill-temp" / "boom-probe").iterdir()) == []
+
+
+@pytest.mark.parametrize("worker_first", [True, False])
+def test_the_temp_folder_is_deleted_by_whichever_finishes_last(
+    home, tmp_path, worker_first
+):
+    skill = SimpleNamespace(
+        name="race", parsed_permissions=lambda: [Permission.parse("scratch:write")]
+    )
+    gate = threading.Event()
+    seen = {}
+
+    def body():
+        seen["folder"] = skill_context.temp_dir()
+        gate.wait(10)
+
+    with skill_context.bind(object(), skill) as call:
+        worker = threading.Thread(
+            target=contextvars.copy_context().run, args=(call.wrap(body),)
+        )
+        worker.start()
+        assert _wait_until(lambda: "folder" in seen)
+        if worker_first:
+            gate.set()
+            worker.join(10)
+    folder = seen["folder"]
+    if not worker_first:
+        assert folder.is_dir()
+        gate.set()
+        worker.join(10)
+    assert not folder.exists()
+
+
+def test_a_cancelled_call_kills_its_program(
+    agent, tmp_path, allowed, python_as_program, monkeypatch
+):
+    body = (
+        "import time\n"
+        "STATE['started'] = time.monotonic()\n"
+        "try:\n"
+        "    ctx.run_program('python', ['-c', 'import time; time.sleep(60)'], "
+        "timeout=120)\n"
+        "except BaseException as e:\n"
+        "    STATE['raised'] = type(e).__name__\n"
+        "    STATE['ended'] = time.monotonic()\n"
+        "    raise\n"
+        "return {'status': 'success'}\n"
+    )
+    _load(agent, tmp_path, "hang-probe", ["program:run:python"], body)
+    module = sys.modules["gaia_skill_hang_probe_tools"]
+    module.STATE = {}
+    monkeypatch.setattr(agent, "_bounded_tool_timeout", lambda *a: 0.5)
+
+    result = agent._execute_tool(
+        "hang-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result.get("timeout") is True, result
+    assert _wait_until(lambda: "ended" in module.STATE, 20)
+    assert module.STATE["raised"] == "ToolCancelled"
+    assert module.STATE["ended"] - module.STATE["started"] < 20
+
+
+def test_run_program_still_times_out_on_its_own(
+    agent, tmp_path, allowed, python_as_program
+):
+    body = (
+        "ctx.run_program('python', ['-c', 'import time; time.sleep(60)'], "
+        "timeout=0.5)\nreturn {'status': 'success'}\n"
+    )
+    _load(agent, tmp_path, "own-timeout-probe", ["program:run:python"], body)
+
+    started = time.monotonic()
+    result = agent._execute_tool(
+        "own-timeout-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result["status"] == "error"
+    assert "timed out" in result["error"]
+    assert time.monotonic() - started < 20
+
+
+def test_run_program_returns_output_and_exit_code(
+    agent, tmp_path, allowed, python_as_program
+):
+    body = (
+        "proc = ctx.run_program('python', ['-c', "
+        '\'import sys; print("out"); print("err", file=sys.stderr); sys.exit(3)\'], '
+        "timeout=60)\n"
+        "return {'status': 'success', 'out': proc.stdout.strip(), "
+        "'err': proc.stderr.strip(), 'code': proc.returncode}\n"
+    )
+    _load(agent, tmp_path, "code-probe", ["program:run:python"], body)
+
+    result = agent._execute_tool(
+        "code-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result == {"status": "success", "out": "out", "err": "err", "code": 3}
 
 
 @pytest.mark.parametrize(("bundled", "asks"), [(True, False), (False, True)])

@@ -443,7 +443,9 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
     for mod in COLLECT_DATA:
         args += ["--collect-data", mod]
     for mod in sorted(
-        set(HIDDEN_IMPORTS) | set(script_hidden_imports()) | set(skill_code_hidden_imports())
+        set(HIDDEN_IMPORTS)
+        | set(script_hidden_imports())
+        | set(skill_code_hidden_imports())
     ):
         args += ["--hidden-import", mod]
     for distribution in COPY_METADATA:

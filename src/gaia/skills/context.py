@@ -31,10 +31,12 @@ these functions act for that agent and that skill::
 - **Programs.** :func:`run_program` starts one executable the manifest names
   (``program:run:<name>``): no shell, stdin closed, an environment holding
   only what a program needs to start (no API keys or tokens), and a timeout.
-  It does not stop the program reaching the network.
+  It is killed when the agent stops waiting for the tool call. It does not
+  stop the program reaching the network.
 - **Temporary files.** :func:`temp_dir`, :func:`write_temp_file` and
   :func:`copy_to_temp` work inside a fresh folder per tool call
-  (``scratch:write``), deleted when the call returns.
+  (``scratch:write``), deleted when the call returns (after a timeout, when
+  the abandoned tool body finishes).
 - **Preferences.** :func:`preferences` reads and writes this skill's saved
   preferences (:mod:`gaia.skills.preferences`).
 
@@ -49,16 +51,19 @@ did not declare.
 from __future__ import annotations
 
 import contextvars
+import functools
 import os
 import platform
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO, Any, Dict, Iterator, List, Optional, Sequence
+from typing import IO, Any, Callable, Dict, Iterator, List, Optional, Sequence
 
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillPermissionError
@@ -67,11 +72,15 @@ from gaia.skills.preferences import (
     SkillPreferenceStore,
     load_schema,
 )
+from gaia.tool_cancellation import ToolCancelled, current_cancel_event
 
 log = get_logger(__name__)
 
 #: Longest a skill may let one program run.
 MAX_PROGRAM_TIMEOUT_S = 900
+
+#: How often a running program checks whether the agent stopped waiting.
+_PROGRAM_POLL_S = 0.25
 
 #: Environment variables passed to a program, when set. Everything else —
 #: API keys, tokens, proxies with credentials — stays in the agent.
@@ -128,6 +137,9 @@ class SkillCall:
     agent: Any
     skill: Any
     _temp_root: Optional[Path] = field(default=None, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _in_flight: bool = field(default=False, repr=False)
+    _released: bool = field(default=False, repr=False)
 
     @property
     def skill_name(self) -> str:
@@ -150,6 +162,56 @@ class SkillCall:
                 "SKILL.md, then reload the skill."
             )
 
+    def wrap(self, tool: Callable[..., Any]) -> Callable[..., Any]:
+        """*tool*, deleting the temporary folder itself if :func:`bind` gave up.
+
+        The worker that runs the tool outlives a timed-out call, so the folder
+        is deleted by whichever finishes last: :func:`bind` or the worker.
+        """
+        with self._lock:
+            self._in_flight = True
+
+        @functools.wraps(tool)
+        def run(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return tool(*args, **kwargs)
+            finally:
+                with self._lock:
+                    self._in_flight = False
+                    abandoned = self._released
+                if abandoned:
+                    self._delete_temp()
+
+        return run
+
+    def _release(self) -> None:
+        """End the call: delete its temporary folder, or leave that to the worker."""
+        with self._lock:
+            self._released = True
+            still_running = self._in_flight
+        if not still_running:
+            self._delete_temp()
+        elif self._temp_root is not None:
+            log.warning(
+                "Skill '%s' timed out; its temporary folder %s is deleted when "
+                "the abandoned call finishes.",
+                self.skill_name,
+                self._temp_root,
+            )
+
+    def _delete_temp(self) -> None:
+        if self._temp_root is None:
+            return
+        try:
+            shutil.rmtree(self._temp_root)
+        except OSError as e:
+            log.warning(
+                "Could not delete skill '%s' temporary folder %s: %s",
+                self.skill_name,
+                self._temp_root,
+                e,
+            )
+
 
 _ACTIVE: contextvars.ContextVar[Optional[SkillCall]] = contextvars.ContextVar(
     "gaia_skill_call", default=None
@@ -160,39 +222,18 @@ _ACTIVE: contextvars.ContextVar[Optional[SkillCall]] = contextvars.ContextVar(
 def bind(agent: Any, skill: Any) -> Iterator[SkillCall]:
     """Make *agent* and *skill* the context of the tool call inside the block.
 
-    Used by ``Agent._execute_tool``. The call's temporary folder is deleted on
-    the way out, unless the call timed out: its worker may still be using it.
+    Used by ``Agent._execute_tool``, which runs the tool through
+    :meth:`SkillCall.wrap`. The call's temporary folder is deleted on the way
+    out or, when the call timed out and its worker still runs, as soon as that
+    worker finishes.
     """
     call = SkillCall(agent=agent, skill=skill)
     token = _ACTIVE.set(call)
-    timed_out = False
     try:
         yield call
-    except BaseException as exc:
-        from gaia.agents.base.agent import ToolExecutionTimeout
-
-        timed_out = isinstance(exc, ToolExecutionTimeout)
-        raise
     finally:
         _ACTIVE.reset(token)
-        if call._temp_root is not None:
-            if timed_out:
-                log.warning(
-                    "Skill '%s' timed out; leaving its temporary folder %s for "
-                    "the still-running call.",
-                    call.skill_name,
-                    call._temp_root,
-                )
-            else:
-                try:
-                    shutil.rmtree(call._temp_root)
-                except OSError as e:
-                    log.warning(
-                        "Could not delete skill '%s' temporary folder %s: %s",
-                        call.skill_name,
-                        call._temp_root,
-                        e,
-                    )
+        call._release()
 
 
 def current() -> SkillCall:
@@ -440,7 +481,8 @@ def _temp_root(call: SkillCall) -> Path:
 
         base = gaia_home() / "skill-temp" / call.skill_name
         base.mkdir(parents=True, exist_ok=True)
-        call._temp_root = Path(tempfile.mkdtemp(prefix="call-", dir=base))
+        # Resolved, so _inside compares like with like when GAIA_HOME is a link.
+        call._temp_root = Path(tempfile.mkdtemp(prefix="call-", dir=base)).resolve()
     return call._temp_root
 
 
@@ -537,6 +579,8 @@ def run_program(
         SkillPermissionError: ``program:run:<name>`` is not declared.
         FileNotFoundError: the program is not installed.
         subprocess.TimeoutExpired: it ran past *timeout* and was killed.
+        ToolCancelled: the agent stopped waiting for the tool call; the
+            program was killed rather than left running unobserved.
     """
     call = current()
     call.require(f"program:run:{name}", f"run '{name}'")
@@ -571,17 +615,38 @@ def run_program(
         len(args),
         timeout,
     )
+    argv = [executable, *args]
+    cancel = current_cancel_event()
     # No shell: the executable is the declared program, resolved to a path.
-    return subprocess.run(
-        [executable, *args],
+    with subprocess.Popen(
+        argv,
         cwd=str(workdir) if workdir is not None else None,
         env=env,
         stdin=subprocess.DEVNULL,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=timeout,
-        check=False,
-    )
+    ) as proc:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                stdout, stderr = proc.communicate(
+                    timeout=max(0.0, min(deadline - time.monotonic(), _PROGRAM_POLL_S))
+                )
+                break
+            except subprocess.TimeoutExpired:
+                cancelled = cancel is not None and cancel.is_set()
+                if not cancelled and time.monotonic() < deadline:
+                    continue
+                proc.kill()
+                proc.communicate()
+                if cancelled:
+                    raise ToolCancelled(
+                        f"Skill '{call.skill_name}' stopped '{name}': the agent "
+                        "stopped waiting for this tool call."
+                    ) from None
+                raise subprocess.TimeoutExpired(argv, timeout) from None
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 
 
 # ----------------------------------------------------------------------

@@ -7025,8 +7025,9 @@ Do NOT wrap conversational replies in JSON.
             skill_scope = bind(self, skill)
 
         try:
-            with skill_scope:
-                result = self._call_tool_bounded(tool, tool_args, tool_name)
+            with skill_scope as skill_call:
+                body = skill_call.wrap(tool) if skill_call is not None else tool
+                result = self._call_tool_bounded(body, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
             self._fold_tool_usage(tool_name, result)
             return result

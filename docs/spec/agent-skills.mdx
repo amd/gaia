@@ -449,14 +449,17 @@ functions act for that agent and that skill:
 | `open_read(path, mode="r", *, encoding=None, errors=None, newline=None)` | — | `open()` for reading (`"r"` or `"rb"`) at the path `check_read` resolved, so a symlink or junction that lands outside the scope is refused. Text defaults to UTF-8, never the locale's. A mode that writes raises `ValueError`. |
 | `open_write(path, mode="w", *, encoding=None, errors=None, newline=None)` | — | Create, replace (`"w"`), create-only (`"x"`) or append (`"a"`), each with `"b"` for bytes, after `check_write` and its overwrite confirmation. Missing parent folders are created. |
 | `list_readable(root, *, recursive=True, include_hidden=False)` | — | The files under a `check_read`-approved folder, sorted. Never prompts per file: secrets and links that resolve outside the scope are left out, and linked folders are not entered. |
-| `run_program(name, args, *, timeout, cwd=None)` | `program:run:<name>` | Starts the named program, found on PATH or in its usual install folder. Runs with no shell, stdin closed, and an environment without the agent's keys and tokens. Returns a `CompletedProcess`. It does **not** block network access. |
-| `temp_dir(sub=None)`, `write_temp_file(name, data)`, `copy_to_temp(path)` | `scratch:write` | A fresh folder under `<gaia_home>/skill-temp/<skill>/`, deleted when the call returns. `copy_to_temp` read-checks its source first. |
+| `run_program(name, args, *, timeout, cwd=None)` | `program:run:<name>` | Starts the named program, found on PATH or in its usual install folder. Runs with no shell, stdin closed, and an environment without the agent's keys and tokens. Returns a `CompletedProcess`. The program is killed at its `timeout`, or as soon as the agent stops waiting for the tool call. It does **not** block network access. |
+| `temp_dir(sub=None)`, `write_temp_file(name, data)`, `copy_to_temp(path)` | `scratch:write` | A fresh folder under `<gaia_home>/skill-temp/<skill>/`, deleted when the call returns. If the call timed out, it is deleted when the abandoned tool body finishes. Names that leave the folder, including through a link planted in it, are refused. `copy_to_temp` read-checks its source first. |
 | `preferences().get()` / `.update(dict)` / `.reset()` | — | The skill's own saved preferences, described below. |
 
 Every path-named argument (`path`, `file_path`, `*_path`, `*_dir`, `*_file`,
 and similar) is read-checked **before** the tool body runs. A skill tool can't
-be pointed outside the agent's scope unless the user approves the path. A tool
-that writes calls `check_write` or `open_write` itself.
+be pointed outside the agent's scope unless the user approves the path. The
+check goes by the argument's name, so a path in an argument named otherwise
+(`source`, `input`, `workbook`) is not pre-checked: pass it through `check_read`
+or `open_read` before using it. A tool that writes calls `check_write` or
+`open_write` itself.
 
 `gaia skill audit` matches these calls against the manifest. A declared
 `run_program("soffice")` passes. An undeclared one, or one naming a program the
