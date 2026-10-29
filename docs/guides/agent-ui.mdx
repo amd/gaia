@@ -305,8 +305,13 @@ Pick the install path that fits you best:
 
 ## The window
 
-The app opens straight to an empty chat: a message box, the model it will use,
-and where that model runs.
+The app opens straight to an empty chat: a greeting and a message box over a
+quiet field of dots laid out like the NPU's tile array. The dots say what GAIA
+is doing: they sweep while a model loads, fill from the bottom up while one
+downloads, and stir under the pointer and with each keystroke. Start typing and
+the message box drops to the bottom of the window; send, and the dots clear away
+so the chat starts on a clean page. With reduced motion turned on in your
+system settings, the dots hold still.
 
 - **Sidebar:** search, New chat, **Memory**, **Scheduled tasks**, **Documents**,
   then your chats. Memory opens as a page; Scheduled tasks and Documents open as
@@ -323,9 +328,16 @@ and where that model runs.
   right now (the place, such as Local or Fireworks AI, above the model's name;
   hover for the full text),
   notifications, mobile access and Settings. Collapse it with `Ctrl+B` (`⌘B` on macOS).
+- **Search chats** (`Ctrl+K`, `⌘K` on macOS): finds a chat by its title or by
+  anything said in it, ignoring case and accents, so `resume` also finds `Résumé`. A chat that
+  matched inside a message shows the line around the match. Use the arrow keys
+  and `Enter` to open a result, `Escape` to clear. Private chats are searched
+  too; the search runs on your PC and nothing is sent anywhere.
 - **Message box:** **+** attaches files (or drag them in), the shield picks the
   permission mode, the model chip picks the model, and Send turns into Stop
-  while GAIA is working.
+  while GAIA is working. In a chat, the folder chip beside the model names the
+  folder GAIA works in; click it to see and manage the chat's folders in the
+  session panel.
 - **Private chat:** the eye button in a chat's header. An open eye means the
   chat is remembered as usual, and a click makes it private. While the chat is
   private the button is filled and shows a crossed-out eye, the same eye that
@@ -347,11 +359,7 @@ and where that model runs.
   including the tokens the whole turn read and wrote across every model call.
   Files the answer names by full path,
   such as a saved deliverable, open in your file explorer when clicked.
-- **A new chat** greets you, shows the folder GAIA works in, and offers up to
-  four tasks: first for what you've set up (indexed documents, a connected
-  mail account), then research, code and summaries, which work on a fresh
-  install, and a check-in once its skill is installed. A task with a subject
-  to fill in is typed into the message box; the others start straight away.
+- **A new chat** greets you and shows the folder GAIA works in.
   Click the folder under the message box to give the chat another folder it
   may read and write from its first message, the same as **Add folder** in the
   session panel. The chat's agent is told which folder the chat is working

@@ -3,8 +3,8 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
-import type { ModelServerInfo } from '../types/api.gen';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import type { SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
 import { getApiBase } from '../utils/apiBase';
@@ -424,6 +424,22 @@ export async function selectModel(model: string): Promise<ActiveModel> {
     return apiFetch('POST', '/providers/select', { model });
 }
 
+/** Check a pasted Hugging Face link; nothing is saved or downloaded. */
+/** `quant` is a quantization or one of its file names. */
+export async function checkCustomModel(url: string, quant?: string): Promise<CustomModelReport> {
+    return apiFetch('POST', '/providers/local/custom/check', { url, quant: quant || null });
+}
+
+/** Add the model a link names to the local model list (downloads on first use). */
+export async function addCustomModel(url: string, quant?: string): Promise<{ report: CustomModelReport }> {
+    return apiFetch('POST', '/providers/local/custom', { url, quant: quant || null });
+}
+
+/** Remove a model the user added, and its download. */
+export async function removeCustomModel(model: string): Promise<CustomModelRemoved> {
+    return apiFetch('DELETE', `/providers/local/custom/${encodeURIComponent(model)}`);
+}
+
 // -- Cloud prices and spending (#5258) ------------------------------------------
 
 export async function getCloudPrices(provider: string): Promise<CloudPriceList> {
@@ -495,6 +511,17 @@ export async function getSession(id: string): Promise<Session> {
 
 export async function pinSession(id: string, pinned: boolean): Promise<Session> {
     return apiFetch('PUT', `/sessions/${id}/pin`, { pinned });
+}
+
+/**
+ * Chats whose title or messages contain `query`, ignoring case and accents.
+ * Eval and scheduled chats count only with `includeAutomated`.
+ */
+export async function searchSessions(
+    query: string, includeAutomated: boolean, signal?: AbortSignal,
+): Promise<SessionSearchResponse> {
+    const params = new URLSearchParams({ q: query, include_automated: String(includeAutomated) });
+    return apiFetch('GET', `/sessions/search?${params}`, undefined, undefined, signal);
 }
 
 /** Clear the chat's unread mark. */
