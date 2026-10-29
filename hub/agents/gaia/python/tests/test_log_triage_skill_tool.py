@@ -21,11 +21,20 @@ TOOL = "log-triage/triage_logs"
 
 
 @pytest.fixture
-def agent(monkeypatch):
+def workspace(tmp_path):
+    folder = tmp_path / "workspace"
+    folder.mkdir()
+    return folder
+
+
+@pytest.fixture
+def agent(monkeypatch, workspace):
     monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
     saved = dict(_TOOL_REGISTRY)
     try:
-        yield GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
+        # Linux's /tmp is outside the default allowlist, so scope to the test folder.
+        config = GaiaAgentConfig(silent_mode=True, allowed_paths=[str(workspace)])
+        yield GaiaAgent(config=config)
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(saved)
@@ -44,14 +53,19 @@ def test_loading_the_skill_adds_exactly_the_triage_tool(agent):
     assert TOOL not in set(agent._tools_registry)
 
 
-def test_the_loaded_tool_runs_through_the_agent(agent, tmp_path):
+def _write_log(folder):
     t0 = datetime(2025, 3, 4, tzinfo=timezone.utc).timestamp()
     lines = []
     for i in range(240):
         ts = datetime.fromtimestamp(t0 + i * 60, tz=timezone.utc)
         lines.append(f"{ts:%Y-%m-%d %H:%M:%S},000 app-0{i % 3} INFO served request {i}")
-    log = tmp_path / "app.log"
+    log = folder / "app.log"
     log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return log
+
+
+def test_the_loaded_tool_runs_through_the_agent(agent, workspace):
+    log = _write_log(workspace)
     agent.load_skill("log-triage")
     try:
         result = agent._execute_tool(TOOL, {"paths": [str(log)]})
@@ -60,3 +74,17 @@ def test_the_loaded_tool_runs_through_the_agent(agent, tmp_path):
     assert result["status"] == "success", result
     assert result["coverage"]["entries"] == 240
     assert result["checks"]["ok"]
+
+
+def test_a_log_outside_the_allowed_folders_is_refused(agent, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    log = _write_log(outside)
+    agent.load_skill("log-triage")
+    try:
+        result = agent._execute_tool(TOOL, {"paths": [str(log)]})
+    finally:
+        agent.unload_skill("log-triage")
+    assert result["status"] == "error", result
+    assert "not in allowed paths" in result["error"]
+    assert "coverage" not in result

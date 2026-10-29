@@ -696,6 +696,28 @@ def test_tool_writes_json_and_csv_beside_the_logs_and_never_overwrites(tmp_path)
     assert (tmp_path / "a.log").read_bytes() == before
 
 
+@pytest.mark.parametrize("name", ["triage.json", "bad.csv", "ids.txt"])
+def test_a_file_created_after_the_check_is_still_not_overwritten(
+    tmp_path, monkeypatch, name
+):
+    """Another writer can create the output between the check and the write."""
+    _steady(tmp_path / "a.log", hours=1)
+    target = tmp_path / name
+    real_refusal = lt._output_refusal
+
+    def check_then_race(out, inputs):
+        refusal = real_refusal(out, inputs)
+        target.write_text("someone else's file\n", encoding="utf-8")
+        return refusal
+
+    monkeypatch.setattr(lt, "_output_refusal", check_then_race)
+    out = _call(paths=[str(tmp_path / "a.log")], output_path=str(target))
+    assert out["status"] == "success"
+    assert not out["output"]["written"]
+    assert "never overwrites" in out["output"]["error"]
+    assert target.read_text(encoding="utf-8") == "someone else's file\n"
+
+
 @pytest.mark.parametrize(
     "name,needle",
     [("notes.md", ".json"), ("a.log", "input logs")],

@@ -3274,7 +3274,7 @@ class TriageResult:
     def write(self, path: Path) -> Dict[str, Any]:
         """Write full detail (``.json``) or the entity list (``.csv`` / ``.txt``)."""
         if path.suffix.lower() == ".txt":
-            with skill_context.open_write(path) as f:
+            with skill_context.open_write(path, "x") as f:
                 for e in sorted(self.entities["flagged"]):
                     f.write(e + "\n")
             return {
@@ -3283,7 +3283,7 @@ class TriageResult:
                 "kind": "entity list (one per line)",
             }
         if path.suffix.lower() == ".csv":
-            with skill_context.open_write(path, newline="") as f:
+            with skill_context.open_write(path, "x", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow(
                     [
@@ -3306,7 +3306,7 @@ class TriageResult:
                 "kind": "entity list (CSV)",
             }
         payload = self.full()
-        with skill_context.open_write(path) as f:
+        with skill_context.open_write(path, "x") as f:
             json.dump(payload, f, indent=1, ensure_ascii=False, default=str)
         return {
             "path": str(path),
@@ -3419,6 +3419,14 @@ def triage_logs(
                 compact["output"] = {"written": True, **result.write(out)}
             except SkillPermissionError as exc:
                 compact["output"] = {"written": False, "error": str(exc)}
+            except FileExistsError:
+                compact["output"] = {
+                    "written": False,
+                    "error": (
+                        f"'{out}' already exists: triage_logs never overwrites a "
+                        "file. Pick a new name."
+                    ),
+                }
             except OSError as exc:
                 log.error("triage_logs could not write %s: %s", out, exc)
                 compact["output"] = {
