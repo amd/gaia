@@ -471,24 +471,38 @@ _GROWS = (
 )
 
 
-def test_a_left_to_right_progression_needs_its_axis_line(tools, tmp_path):
-    """The user's 'from left to right, increase ...' must be the Axis, not a box's text."""
+def test_the_users_growth_list_becomes_the_axis_when_the_model_leaves_it_out(
+    tools, tmp_path
+):
+    """The user wrote what grows; the skill draws it instead of sending a retry."""
+    from pptx import Presentation
+
     skill, fns, _r = tools
     out = str(tmp_path / "ferry.pptx")
+    boxes = _STAGES.replace("Diagram: process\n", "")
     with bind(_Asking(_GROWS), skill):
-        buried = fns["build_deck_from_markdown"](
-            markdown=_STAGES + "**More boats and crossings**\n",
-            output_path=out,
-            expected_slides=1,
+        r = fns["build_deck_from_markdown"](
+            markdown=boxes, output_path=out, expected_slides=1
         )
-        drawn = fns["build_deck_from_markdown"](
+    assert r["status"] == "ok", r
+    assert r["slides_built"][0].endswith("[diagram: process]")
+    assert any("axis" in n for n in r["notes"])
+    arrow = next(
+        s for s in Presentation(out).slides[0].shapes if s.name == "Axis arrow"
+    )
+    assert arrow.text_frame.text == "More boats and crossings"
+
+
+def test_a_model_axis_is_kept_when_it_names_the_list(tools, tmp_path):
+    skill, fns, _r = tools
+    with bind(_Asking(_GROWS), skill):
+        r = fns["build_deck_from_markdown"](
             markdown=_STAGES + "Axis: More boats and crossings\n",
-            output_path=out,
+            output_path=str(tmp_path / "f.pptx"),
             expected_slides=1,
         )
-    assert buried["status"] == "error"
-    assert "'Axis:' line" in buried["problems"][0]
-    assert drawn["status"] == "ok", drawn
+    assert r["status"] == "ok", r
+    assert not any("axis" in n for n in r.get("notes") or [])
 
 
 def test_no_axis_is_needed_without_a_left_to_right_request(tools, tmp_path):

@@ -176,6 +176,31 @@ def _covered(item: str, axis: str) -> bool:
     return not words or any(w[:5] in axis for w in words)
 
 
+#: What a build did on the user's behalf, reported in its result's notes.
+_NOTES: List[str] = []
+
+
+def _items_of(slide: Dict[str, Any]) -> List[Any]:
+    return slide.get("items") or slide.get("steps") or slide.get("stages") or []
+
+
+def _axis_from(listed: List[str]) -> str:
+    """The user's growth list as one short axis line: a word per item."""
+    words = []
+    for item in listed:
+        found = [
+            w
+            for w in re.findall(r"[A-Za-z]+", item)
+            if len(w) >= 4 and w.lower() not in _FILLER
+        ]
+        word = max(found, key=len).lower() if found else item.strip().lower()
+        if word not in words:
+            words.append(word)
+    if len(words) == 1:
+        return f"More {words[0]}"
+    return f"More {', '.join(words[:-1])} and {words[-1]}"
+
+
 def _missing_axis(slides: List[Dict[str, Any]]) -> Optional[str]:
     """Why the slides do not show what the user listed as growing across the stages."""
     try:
@@ -205,6 +230,16 @@ def _missing_axis(slides: List[Dict[str, Any]]) -> Optional[str]:
             f"under 'Diagram: process' and name {named} on an 'Axis:' line."
         )
     axes = [_text_of(s.get("x_axis")).lower() for s in stages if s.get("x_axis")]
+    if not axes and len(stages) == 1 and len(_items_of(stages[0])) <= 6:
+        # The user wrote the list out, so the axis is theirs: add it, not a retry.
+        stage = stages[0]
+        stage["x_axis"] = _axis_from(listed)
+        key = "layout" if "layout" in stage and "diagram" not in stage else "diagram"
+        stage[key] = "process"
+        _NOTES.append(
+            f"Added the user's list as the stages' axis: '{stage['x_axis']}'."
+        )
+        return None
     if not axes:
         return (
             "The user listed what grows across the stages, but the stages slide "
@@ -662,6 +697,7 @@ def _build_from(
                 ]
             )
         slides = data.get("slides") or []
+        _NOTES.clear()
         missing = (
             _missing_axis(slides) or _invented_numbers(slides) or _stray_emoji(slides)
         )
@@ -716,6 +752,8 @@ def _build_from(
                 "they ask for a change."
             )
         result["slides_built"] = _slides_built(data, result)
+        if _NOTES:
+            result["notes"] = [*(result.get("notes") or []), *_NOTES]
         result["style_options"] = _style.style_offer(
             _style.resolve_tokens(request, saved)
         )
