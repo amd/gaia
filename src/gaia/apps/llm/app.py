@@ -15,6 +15,35 @@ from gaia.llm import create_client
 from gaia.llm.lemonade_client import no_thinking_kwargs, resolve_default_chat_model
 from gaia.logger import get_logger
 
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
+
+
+def _without_reasoning(chunks: Iterator[str]) -> Iterator[str]:
+    """Yield streamed text with ``<think>...</think>`` reasoning left out.
+
+    The Lemonade provider wraps a cloud model's reasoning in these tags; this
+    command prints only the answer.
+    """
+    in_think = False
+    for chunk in chunks:
+        while chunk:
+            if in_think:
+                end = chunk.find(_THINK_CLOSE)
+                if end < 0:
+                    break
+                chunk = chunk[end + len(_THINK_CLOSE) :]
+                in_think = False
+            else:
+                start = chunk.find(_THINK_OPEN)
+                if start < 0:
+                    yield chunk
+                    break
+                if start:
+                    yield chunk[:start]
+                chunk = chunk[start + len(_THINK_OPEN) :]
+                in_think = True
+
 
 class LlmApp:
     """Simple LLM application wrapper using LLMClient."""
@@ -105,14 +134,14 @@ def main(
         console.print()
         console.print("[bold cyan]🤖 gaia:[/bold cyan] ", end="")
         full_response = ""
-        for chunk in response:
-            if chunk:  # Skip None chunks
-                print(chunk, end="", flush=True)
-                full_response += chunk
+        for chunk in _without_reasoning(c for c in response if c):
+            print(chunk, end="", flush=True)
+            full_response += chunk
         print()  # Add newline
         console.print()
         return full_response
     else:
+        response = "".join(_without_reasoning([response])).strip()
         console.print()
         console.print(f"[bold cyan]🤖 gaia:[/bold cyan] {response}")
         console.print()
