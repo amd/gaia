@@ -823,7 +823,8 @@ async function agQuery(){
 }
 async function agConfirm(approved){
   $("ag-perm").style.display = "none";
-  try{ await postJSON("/v1/email/agent/confirm-tool", { session_id: agSession(), approved }); }catch(_){}
+  try{ await postJSON("/v1/email/agent/confirm-tool", { session_id: agSession(), approved }); }
+  catch(e){ const out = $("ag-out"); out.textContent += "\n✗ confirm-tool HTTP " + e.status + ": " + (e.body || e.message) + "\n"; }
 }
 async function agCancel(){
   try{ await postJSON("/v1/email/agent/cancel", { session_id: agSession() }); }catch(_){}

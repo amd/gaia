@@ -6,6 +6,38 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### For integrators: contract 2.25
+
+- **The agent remembers its own tool calls across turns** (contract **2.25**,
+  #5701). A caller that pushed history as `context` could send only text, so
+  on the next turn the agent saw its earlier answers but not the commands it
+  ran or their errors, and "why did that fail?" got "I have no record of the
+  tool calls". Send the new `turns` field (`[]` on the first turn) and that
+  turn's `final` carries `model_messages`, the turn as the model saw it, tool
+  calls and results included. Send those back in `turns`, oldest first, and
+  the agent replays them, keeping the newest whole turns that fit its context
+  window. `turns` replaces `context` when sent (a non-empty `context` beside
+  it is a `422`), and `[]` clears a retained session's history. A caller that
+  sends no `turns` gets no `model_messages`, so a `final` stays small for
+  text-only clients. Pre-2.25 binaries refuse the field with `422`, so probe
+  `/version` first.
+
+## [0.3.2]
+
+Released with GAIA 0.25.2, and requires the `gaia`
+Python CLI 0.25.2+ on `PATH`. Integrators: the sidecar contract is now
+**2.24**; clients built for 2.18 keep working, and the new
+`/query` fields are refused with `422` by older binaries, so probe
+`/version` before sending them.
+
+- **Memory downloads its embedding model when it is missing.** On the first
+  start that uses memory, the agent now fetches the required embedding model
+  from Lemonade instead of silently running without memory; the initial
+  download can be about 300 MB.
+- **Unknown or misplaced switches are refused.** `gaia --forse` and
+  `gaia fetch --developer-mode` now exit 2 instead of silently starting the TUI;
+  pass terminal-UI arguments after a bare `--`.
+
 - **The Agent UI's "Under the hood" figures cover GAIA chats.** It said every
   answer was "not measured", because only the agent saw its own step timings.
   `final` now carries `performance` with them: the turn's model and tool
@@ -20,6 +52,34 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shorten that" ran with no record of it. It is now kept: long tool results
   become a short note naming the tool, and its longest messages are cut with
   a note saying how much.
+- **Internet off also stops the mailbox and Agent Hub tools.** With a chat's
+  Internet switched off, GAIA could still read Gmail or Outlook and search or
+  install skills from the Agent Hub, because those tools carry no URL for the
+  check to see. They are now refused with the same message as a web search.
+
+### For integrators: contract 2.24
+
+- **Relative file paths use the chat workspace.** A new `working_directory` field
+  on `/query` tells the agent where bare file names resolve, separately from
+  `allowed_paths`. New and retained sessions use the same workspace for reads,
+  writes, edits and approval prompts. Send it only after `/version` reports
+  contract 2.24 or later.
+
+### For integrators: contract 2.23
+
+- **`/query` takes `internet_off`** (contract **2.23**, #5883). The Agent UI
+  never told the agent when a chat's Internet switch was off, so the switch
+  stayed locked in every GAIA chat on a standard install. `true` refuses web
+  search, page fetches, the browser, connector, mailbox and Agent Hub tools and
+  commands that contact another host, as it does when the agent runs inside the Agent UI. `false`
+  allows them, and omitting it leaves the agent as it is. A retained session
+  keeps the last value. Older binaries `422` the field.
+- **`POST /v1/gaia/sessions/{session_id}/internet`** (contract **2.23**)
+  reaches a turn already running. Without it, a user who turned the internet
+  off mid-turn watched the agent keep searching until the turn ended. Body
+  `{"internet_off": bool}`; the session's next tool call follows it. An
+  unknown session is a `404`, as for `/bypass`. Post it only once `/query`
+  has answered: until then the turn's own `internet_off` replaces it.
 
 ### For integrators: contract 2.22
 
@@ -46,6 +106,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for a GAIA web search, because a `search_web` `tool_result` carried only a
   300-character summary. Its `data` now also carries `sources`, a list of
   `{ title, url }` for each hit. Older binaries never send it.
+
+- **Code search no longer hangs on a large repository.** The first
+  `search_code_index` built the whole index inside one call; on a repository
+  the size of GAIA's (about 115,000 chunks, some 20 minutes) the call hit its
+  15-minute limit, saved nothing, and ended the turn with an empty answer —
+  every time. The build now runs in the background and each search reports its
+  progress until it is done, so the agent falls back to text search meanwhile.
+  `index_codebase` and the task-start auto-index report that build instead
+  of embedding the repository a second time alongside it. The build is shared
+  by every chat on the same repository, so a second chat's search reports it
+  too and its clear is refused until the build is done.
 
 - **An old failure in memory no longer stops a request you make now.** A note
   like "this page returned 503, don't waste tool calls on it" was obeyed as a
