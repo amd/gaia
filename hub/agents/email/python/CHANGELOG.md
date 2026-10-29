@@ -9,6 +9,10 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The email package no longer installs beside an incompatible GAIA core.**
+  Its declared core floor is now 0.25.1, the first release covering the
+  email agent module-level imports, including its guided Outlook setup route.
+  (#4430)
 - **A note the model writes before a tool call no longer shows as
   `[unmapped agent event: commentary]`.** The host's output handler now marks
   that text as `commentary`; the translator drops it, since the words already
