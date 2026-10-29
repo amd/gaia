@@ -959,3 +959,58 @@ def test_check_reachable_refuses_a_url_with_no_host():
 
     with pytest.raises(ValueError):
         gateway.check_reachable("not a url")
+
+
+def test_gateway_install_restores_a_remembered_token_before_reporting_none(
+    monkeypatch, capsys
+):
+    """A saved token must be handed to Lemonade during a fresh registration."""
+    from types import SimpleNamespace
+
+    import gaia.cli as cli
+    from gaia.llm import gateway as gateway_module
+
+    state = SimpleNamespace(base_url="", enabled_models=[], active_model=None)
+    calls = []
+
+    class FakeStatus:
+        env_var_set = False
+        runtime_key_set = True
+        authenticated = True
+        models_discovered = 3
+
+    class FakeManager:
+        def install(self, *args, **kwargs):
+            return {
+                "models_discovered": 0,
+                "auth_state": {"env_var_set": False, "runtime_key_set": False},
+            }
+
+        def ensure_authenticated(self, recall=None):
+            calls.append(recall())
+            return True
+
+        def status(self):
+            return FakeStatus()
+
+    monkeypatch.setattr(
+        gateway_module, "GatewayState", SimpleNamespace(load=lambda: state)
+    )
+    monkeypatch.setattr(gateway_module, "GatewayManager", FakeManager)
+    monkeypatch.setattr(gateway_module, "recall_token", lambda: "remembered-token")
+
+    args = SimpleNamespace(
+        gateway_action="install",
+        base_url="https://gateway.example/v1",
+        skip_probe=True,
+        auth_header_name="Authorization",
+        auth_header_prefix="Bearer ",
+        allow_insecure_http=False,
+    )
+    cli.handle_gateway_command(args)
+
+    output = capsys.readouterr().out
+    assert calls == ["remembered-token"]
+    assert "Models discovered: 3" in output
+    assert "Restored the remembered gateway token" in output
+    assert "No token yet" not in output

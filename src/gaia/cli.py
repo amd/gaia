@@ -7160,10 +7160,10 @@ def handle_gateway_command(args):
                 )
                 if count is None:
                     print(
-                        "✅ Gateway reachable — it wants a token before it lists models"
+                        "? Gateway reachable — it wants a token before it lists models"
                     )
                 else:
-                    print(f"✅ Gateway reachable, advertising {count} model(s)")
+                    print(f"? Gateway reachable, advertising {count} model(s)")
             print(f"Registering '{base_url}' with Lemonade ...")
             result = manager.install(
                 base_url,
@@ -7171,11 +7171,28 @@ def handle_gateway_command(args):
                 auth_header_prefix=args.auth_header_prefix,
                 allow_insecure_http=args.allow_insecure_http,
             )
-            print(
-                f"✅ Registered. Models discovered: {result.get('models_discovered', 0)}"
-            )
             auth = result.get("auth_state") or {}
+            restored = False
             if not (auth.get("env_var_set") or auth.get("runtime_key_set")):
+                remembered = recall_token()
+                if remembered:
+                    # A fresh install must also restore a token saved by `gateway auth`.
+                    restored = manager.ensure_authenticated(recall=lambda: remembered)
+                    if restored:
+                        status = manager.status()
+                        auth = {
+                            "env_var_set": status.env_var_set,
+                            "runtime_key_set": status.runtime_key_set,
+                        }
+                        result["models_discovered"] = status.models_discovered
+            print(
+                f"? Registered. Models discovered: {result.get('models_discovered', 0)}"
+            )
+            if restored:
+                print(
+                    "   Restored the remembered gateway token from the OS credential store."
+                )
+            elif not (auth.get("env_var_set") or auth.get("runtime_key_set")):
                 print(
                     "\n  No token yet — run `gaia gateway auth` so Lemonade can "
                     "discover models."
