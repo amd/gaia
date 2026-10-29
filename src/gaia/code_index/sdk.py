@@ -191,6 +191,8 @@ class CodeIndexSDK:
         self._metadata: Optional[Dict[str, Any]] = None
         self._embedder = None
         self._llm_client = None
+        #: Chunks embedded so far by the running index build, of how many.
+        self.progress: Dict[str, int] = {"embedded": 0, "to_embed": 0}
 
     # ------------------------------------------------------------------
     # Public API
@@ -201,6 +203,7 @@ class CodeIndexSDK:
         Index the repository: discover files, parse, embed, build FAISS index,
         persist atomically.
         """
+        self.progress = {"embedded": 0, "to_embed": 0}
         start = time.time()
 
         self.log.info(f"Indexing repository: {self._repo_root}")
@@ -957,9 +960,11 @@ class CodeIndexSDK:
 
         valid_chunks = []
         valid_embeddings = []
+        self.progress = {"embedded": 0, "to_embed": len(texts)}
 
         for batch_start in range(0, len(texts), BATCH_SIZE):
             raise_if_cancelled()
+            self.progress["embedded"] = batch_start
             batch_texts = texts[batch_start : batch_start + BATCH_SIZE]
             batch_chunks = chunks[batch_start : batch_start + BATCH_SIZE]
             safe_texts = [t[:MAX_EMBED_CHARS] for t in batch_texts]
@@ -1003,6 +1008,7 @@ class CodeIndexSDK:
                         f"Skipping chunk with no embedding: {getattr(chunk, 'file_path', '?')}"
                     )
 
+        self.progress["embedded"] = len(texts)
         if not valid_embeddings:
             return np.array([], dtype=np.float32), []
 

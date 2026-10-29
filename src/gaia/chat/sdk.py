@@ -8,6 +8,7 @@ Gaia Agent SDK - Unified text chat integration with conversation history
 
 import json
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -1206,7 +1207,7 @@ class AgentSDK:
         if documents:
             for doc_path in documents:
                 self.log.info(f"Indexing document: {doc_path}")
-                result = self.rag.index_document(doc_path)
+                result = self._index_named_document(doc_path)
 
                 if isinstance(result, dict) and result.get("success") is True:
                     indexed_count += 1
@@ -1245,7 +1246,14 @@ class AgentSDK:
         if not self.rag_enabled or not self.rag:
             raise ValueError("RAG not enabled. Call enable_rag() first.")
 
-        return bool(self.rag.index_document(document_path).get("success"))
+        return bool(self._index_named_document(document_path).get("success"))
+
+    def _index_named_document(self, document_path: str) -> dict:
+        """Index a file the caller named, granting read access to that file only."""
+        # The RAG validator defaults to the working directory; naming the file is the grant.
+        if os.path.isfile(document_path):
+            self.rag.path_validator.add_allowed_path(document_path)
+        return self.rag.index_document(document_path)
 
     def _estimate_tokens(self, text: str) -> int:
         """
