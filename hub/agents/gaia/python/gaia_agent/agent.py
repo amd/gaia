@@ -482,13 +482,18 @@ class GaiaAgent(
             allowed = getattr(self.config, "allowed_paths", None)
             if allowed is None:
                 allowed = [str(Path.home())]
-            # Through the mixin, so both read the one cached resolution and can
-            # never end up describing two different trees.
-            index_root = self._project_map_root() or _code_search_start(allowed)
-            # The project root is where code search STARTS; allowed_paths is how far
-            # it may reach. Passing one value for both locked a session that began
-            # inside a repo to that repo (#3544).
-            self._init_code_index_state(repo_path=index_root, ceiling_paths=allowed)
+            # A cached UI agent re-registers every turn; re-initialising here
+            # would forget the repo index_codebase moved to.
+            if not hasattr(self, "_code_index_ceilings"):
+                # Through the mixin, so both read the one cached resolution and
+                # can never end up describing two different trees.
+                index_root = self._project_map_root() or _code_search_start(allowed)
+                # The project root is where code search STARTS; allowed_paths is
+                # how far it may reach. Passing one value for both locked a
+                # session that began inside a repo to that repo (#3544).
+                self._init_code_index_state(
+                    repo_path=index_root, ceiling_paths=allowed
+                )
             self.register_code_index_tools()
             self.register_email_tools()
         super()._register_tools()

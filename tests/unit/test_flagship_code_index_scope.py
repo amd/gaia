@@ -93,3 +93,29 @@ def test_with_no_project_a_repository_in_scope_wins(tmp_path):
     )
 
     assert agent._repo_path == str(repo)
+
+
+def test_the_indexed_repo_survives_the_next_turns_re_registration(tmp_path):
+    """The UI re-runs `_register_tools` on a cached agent every turn (#6055)."""
+    projects = tmp_path / "projects"
+    start = projects / "a"
+    picked = projects / "b"
+    start.mkdir(parents=True)
+    picked.mkdir()
+    agent = _register_tools_only(
+        GaiaAgentConfig(allowed_paths=[str(projects)]), str(start)
+    )
+    agent._repo_path = str(picked)  # what index_codebase(repo_path=...) leaves
+
+    with (
+        patch.object(GaiaAgent, "_maybe_build_skill_loader", return_value=None),
+        patch.object(GaiaAgent, "register_skill_library_tools"),
+        patch.object(GaiaAgent, "register_skill_learning_tools"),
+        patch.object(GaiaAgent, "register_code_index_tools"),
+        patch.object(GaiaAgent, "_project_map_root", return_value=str(start)),
+        patch.object(ChatAgent, "_register_tools"),
+    ):
+        agent._register_tools()
+
+    assert agent._repo_path == str(picked)
+    assert agent._code_index_ceilings == (str(projects),)
