@@ -151,6 +151,10 @@ class AgentLoop:
         self._lingering_ticks: Dict[str, asyncio.Future] = {}
         # Track in-flight tick (prevents overlapping runs)
         self._running_lock: Optional[asyncio.Lock] = None
+        # Goal id -> the cooperative stop handles for the tick working on it.
+        # A user can cancel a goal or begin a foreground turn while it runs.
+        self._active_goal_ticks: Dict[str, tuple[threading.Event, Any]] = {}
+        self._active_goal_ticks_lock = threading.Lock()
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -196,6 +200,39 @@ class AgentLoop:
             )
         except asyncio.QueueFull as exc:
             logger.error("Agent trigger queue unexpectedly full: %s", exc)
+
+    def cancel_goal(self, goal_id: str) -> bool:
+        """Tell the in-flight background tick for *goal_id* to stop.
+
+        The GoalStore records cancellation separately; this only reaches the
+        live agent so a cancelled goal stops holding the shared model slot.
+        """
+        with self._active_goal_ticks_lock:
+            active = self._active_goal_ticks.get(goal_id)
+        if active is None:
+            return False
+        self._stop_active_tick(active)
+        return True
+
+    def yield_to_user(self) -> bool:
+        """Stop a background tick so a newly submitted foreground turn can run."""
+        with self._active_goal_ticks_lock:
+            active_ticks = list(self._active_goal_ticks.values())
+        seen = set()
+        for active in active_ticks:
+            if id(active) in seen:
+                continue
+            seen.add(id(active))
+            self._stop_active_tick(active)
+        return bool(active_ticks)
+
+    @staticmethod
+    def _stop_active_tick(active: tuple[threading.Event, Any]) -> None:
+        cancel_event, handler = active
+        cancel_event.set()
+        handler.cancelled.set()
+        # A relayed run can be blocked in a socket read, so wake it as Stop does.
+        handler.close_active_relay_response()
 
     # ── Internal: trigger consumer ────────────────────────────────────────────
 
@@ -434,6 +471,11 @@ class AgentLoop:
         result_holder: Dict[str, Any] = {"error": None}
         # Set on timeout so the agent loop stops at its next step boundary.
         cancel_event = threading.Event()
+        active_tick = (cancel_event, sse_handler)
+        active_goal_ids = [goal.id for goal in goals if getattr(goal, "id", None)]
+        with self._active_goal_ticks_lock:
+            for goal_id in active_goal_ids:
+                self._active_goal_ticks[goal_id] = active_tick
         db = self._db
 
         def _run_agent() -> None:
@@ -531,6 +573,14 @@ class AgentLoop:
                 sse_handler.signal_done()
 
         worker = run_in_own_thread(_run_agent, name=f"gaia-tick-{session_id[:8]}")
+
+        def _clear_active_goals(_worker) -> None:
+            with self._active_goal_ticks_lock:
+                for goal_id in active_goal_ids:
+                    if self._active_goal_ticks.get(goal_id) is active_tick:
+                        self._active_goal_ticks.pop(goal_id, None)
+
+        worker.add_done_callback(_clear_active_goals)
         try:
             done, _ = await asyncio.wait({worker}, timeout=_TICK_TIMEOUT)
             if not done:

@@ -12,6 +12,7 @@ lookup under the wrong type evicts (and disconnects) the user's agent.
 import asyncio
 import sys
 import threading
+import time
 import types
 from unittest.mock import MagicMock
 
@@ -24,7 +25,7 @@ from gaia.ui.database import ChatDatabase
 from gaia.ui.run_manager import run_manager
 from gaia.ui.turn_queue import TurnQueue
 
-_GOAL = types.SimpleNamespace(priority="high", title="t", description="")
+_GOAL = types.SimpleNamespace(id="goal-1", priority="high", title="t", description="")
 
 
 class _FakeAgent:
@@ -237,6 +238,30 @@ async def test_tick_without_a_cached_agent_builds_the_flagship(env, monkeypatch)
     assert config.kwargs["ui_session_id"] == session["id"]
     assert config.kwargs["silent_mode"] is True
     assert len(agent.calls) == 1
+
+
+async def test_cancelling_an_inflight_goal_stops_its_background_tick(env):
+    loop, session, agent = _make("chat")
+    started = threading.Event()
+
+    def wait_for_stop(_message):
+        started.set()
+        while not agent._cancel_event.is_set():
+            time.sleep(0.01)
+        return "stopped"
+
+    agent.process_query = wait_for_stop
+    step = asyncio.create_task(loop._run_step(AgentTrigger("idle_tick", session["id"])))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        assert loop.cancel_goal(_GOAL.id) is True
+        await asyncio.wait_for(step, 5)
+        assert not agent_loop_mod.turn_queue.locked()
+        assert loop._active_goal_ticks == {}
+    finally:
+        if not step.done():
+            loop.cancel_goal(_GOAL.id)
+            await asyncio.wait_for(step, 5)
 
 
 async def test_a_timed_out_tick_stuck_in_a_tool_frees_the_model_not_the_session(
