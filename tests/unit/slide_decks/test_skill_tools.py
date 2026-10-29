@@ -986,6 +986,7 @@ def test_a_new_chat_never_overwrites_another_chats_deck(tools, tmp_path):
     assert first["path"] == again["path"]
     assert other["path"] != first["path"]
     assert other["path"].endswith("(2).pptx")
+    assert any("already exists" in n for n in other.get("notes") or [])
 
 
 def test_status_words_colour_boxes_and_cards_fit_their_text(tools, tmp_path):
@@ -1061,3 +1062,30 @@ def test_italic_markers_do_not_show_on_the_slide(tools, tmp_path):
         if sh.has_text_frame
     )
     assert '"I gave up on day two"' in text and "*" not in text and "_slow_" not in text
+
+
+def test_the_option_a_decision_picks_stands_out_in_its_column(tools, tmp_path):
+    from pptx import Presentation
+
+    skill, fns, _r = tools
+    md = (
+        "## License the speech model now\n\n| | Build in-house | License vendor |\n"
+        "|---|---|---|\n| Time | 9 months | 6 weeks |\n| Control | Full | Vendor lock-in |\n"
+        "\nTakeaway: License now, revisit building in 12 months\n"
+    )
+    out = tmp_path / "d.pptx"
+    with bind(
+        _Asking(
+            "One slide: build takes 9 months, license takes 6 weeks; revisit in 12 months."
+        ),
+        skill,
+    ):
+        r = fns["build_deck_from_markdown"](markdown=md, output_path=str(out))
+    assert r["status"] == "ok", r
+    table = next(
+        sh.table for sh in Presentation(str(out)).slides[0].shapes if sh.has_table
+    )
+    picked = {str(table.cell(i, 2).fill.fore_color.rgb) for i in (1, 2)}
+    other = {str(table.cell(i, 1).fill.fore_color.rgb) for i in (1, 2)}
+    assert len(picked) == 1 and not picked & other
+    assert all(r.font.bold for r in table.cell(1, 2).text_frame.paragraphs[0].runs)

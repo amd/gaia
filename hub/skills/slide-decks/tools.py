@@ -642,6 +642,17 @@ def _fresh_name(p: Path) -> Path:
     while found.exists() and str(found.resolve()) not in mine:
         n += 1
         found = p.with_name(f"{p.stem} ({n}){p.suffix}")
+    if found != p:
+        log.info(
+            "slide-decks: %s exists and this agent (%s) did not write it; saving %s",
+            p,
+            _agent_key(),
+            found.name,
+        )
+        _NOTES.append(
+            f"A deck named '{p.name}' already exists from another chat, so this one "
+            f"is saved as '{found.name}'. Tell the user the file name."
+        )
     return found
 
 

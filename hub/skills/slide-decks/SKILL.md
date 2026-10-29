@@ -214,9 +214,8 @@ metadata:
 
 **Do not write python-pptx code. Build the deck with
 `slide-decks/build_deck_from_markdown` (or `slide-decks/build_deck` for a JSON
-outline), then check it with `slide-decks/verify_deck`.** Hand-written
-python-pptx gets charts as pictures, text off the slide and the wrong slide
-count. Your job is the story and the numbers.
+outline), then check it with `slide-decks/verify_deck`.** Hand-written code
+gets chart pictures and the wrong slide count. Your job is the story and the numbers.
 
 ````markdown
 # Northwind Q3 2026 review
@@ -258,7 +257,7 @@ bullets inside it. `Diagram: process` draws them as left-to-right stages
 (also `cycle`, `pyramid`, `stack`). On a process,
 `Axis:` names what grows along them, never a separate table or slide.
 Use this for stages, steps, levels or options, never a chart of made-up
-scores or a wall of bullets.
+scores or a wall of bullets. Values over stages or time: a chart.
 Keep the user's own names for each stage. Under each, a lead line, then 2-4
 bullets of 2-6 words, with no labels like `Focus:`. Use the user's terms in titles
 without inventing abbreviations. Keep `Axis:` under 10 words.
@@ -272,7 +271,8 @@ without inventing abbreviations. Keep `Axis:` under 10 words.
   `required_items`: short facts and names, not the deck's overall message.
   Never move requested content into the notes: cut other words or split. Notes hold extra detail and the spoken script.
 - **Only numbers the user gave or a tool returned** (compute with
-  `run_python`); data slides name their source.
+  `run_python`); data slides name their source. No data given: build anyway,
+  with an `Evidence to add` box.
 - **On `status: "error"`**, fix every listed problem and call again. Never
   switch to writing code.
 
@@ -292,8 +292,7 @@ without inventing abbreviations. Keep `Axis:` under 10 words.
    `outline_from_blueprint(name, slide_count=N)` and fill every TODO slot.
 4. **Build** with Markdown, or `build_deck` with JSON for timelines, flows,
    2x2 matrices and combo charts. Big decks: 6-8 slides first, then
-   `add_slide`.
-   Leave `output_path` empty unless the user named where to save it.
+   `add_slide`. Leave `output_path` empty unless the user named where to save it.
 5. **Check.** The build result's `verify` is the check. Fix every error it
    lists and rebuild (or `update_slide`) until its `status` is `pass`. Call
    `verify_deck(path, expected_slides=N, required_items=[...])` only after
@@ -312,7 +311,4 @@ without inventing abbreviations. Keep `Axis:` under 10 words.
   or fixing density warnings.
 - `references/brief-and-sources.md` - read when unsure whether to ask the
   user, or when building the key-facts ledger.
-- `references/without-tools.md` - read only when the slide-decks tools are
-  not offered.
-
-`office-docs` covers Word and Excel files.
+- `references/without-tools.md` - read only when these tools are not offered.

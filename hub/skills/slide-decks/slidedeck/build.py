@@ -2247,6 +2247,21 @@ class DeckBuilder:
                     hits.append((m.start(), k))
             if hits:
                 highlight = {min(hits)[1]}
+        hl_col = None
+        if takeaway and not highlight and has_header:
+            # Options as columns ("Build | License"): the one the takeaway picks.
+            hits = []
+            for j in range(1, ncols):
+                head = _plain(str(header[j] or "")).strip()
+                for name in dict.fromkeys([head, head.split(" ")[0]]):
+                    m = len(name) >= 3 and re.search(
+                        rf"(?<!\w){re.escape(name)}(?!\w)", takeaway, re.I
+                    )
+                    if m:
+                        hits.append((m.start(), j))
+                        break
+            if hits:
+                hl_col = min(hits)[1]
         # Status colours only in a column that is mostly status words.
         status_cols = {
             j
@@ -2261,8 +2276,9 @@ class DeckBuilder:
             is_header = has_header and i == 0
             data_i = i - (1 if has_header else 0)
             is_total = t["total_row"] and i == nrows - 1
-            hl = data_i in highlight
+            row_hl = data_i in highlight
             for j in range(ncols):
+                hl = row_hl or (hl_col == j and not is_header)
                 cell = table.cell(i, j)
                 cell.margin_left = cell.margin_right = cell_mx
                 cell.margin_top = cell.margin_bottom = cell_my
