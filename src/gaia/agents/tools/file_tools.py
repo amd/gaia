@@ -65,6 +65,14 @@ from gaia.security import BackupError
 
 logger = get_logger(__name__)
 
+#: Root-level operating-system trees are not useful for an undirected user
+#: search and can consume the whole deep-search budget before the home folder.
+#: These are applied only when walking a filesystem root, never to a named
+#: folder such as ``~/Library``.
+_DEEP_SYSTEM_DIRS = frozenset(
+    {"System", "Library", "private", "usr", "opt", "proc", "sys", "dev", "run", "snap"}
+)
+
 #: Version-control and dependency folders content search does not descend into
 #: (thousands of files, none the user wrote); searching one directly still works.
 _CONTENT_SEARCH_SKIP_DIRS = frozenset(
@@ -641,7 +649,11 @@ class FileSearchToolsMixin:
                 walked = set()
                 guard = ProtectedFolders(self)
 
-                def search_location(location: Path, max_depth: int = 999):
+                def search_location(
+                    location: Path,
+                    max_depth: int = 999,
+                    skip_root_dirs=frozenset(),
+                ):
                     """Search a specific location up to max_depth."""
                     if guard.blocks(location) or not location.exists():
                         return
@@ -687,6 +699,12 @@ class FileSearchToolsMixin:
                                 ):
                                     continue
                                 # Skip build/package directories
+                                if (
+                                    item.is_dir()
+                                    and current_path == location
+                                    and item.name in skip_root_dirs
+                                ):
+                                    continue
                                 if item.is_dir() and item.name in _SKIP_DIRS:
                                     continue
 
@@ -888,6 +906,15 @@ class FileSearchToolsMixin:
 
                 logger.debug("Phase 2: Deep search across drive(s)...")
 
+                # Search the user's home first. A root-first walk can spend its
+                # entire budget in /System, /Library, or /usr before reaching
+                # the files the user actually means by "my computer".
+                for home_root in confine_roots(self, [home]):
+                    logger.debug("Searching home first: %s", home_root)
+                    search_location(home_root, max_depth=999)
+                    if len(matching_files) >= 10:
+                        break
+
                 if platform.system() == "Windows":
                     import string
 
@@ -898,11 +925,25 @@ class FileSearchToolsMixin:
                     ]
                 else:
                     drives = [Path("/")]
-                for drive in confine_roots(self, drives):
-                    logger.debug("Searching %s...", drive)
-                    search_location(drive, max_depth=999)
-                    if len(matching_files) >= 10:
-                        break
+                if len(matching_files) < 10:
+                    for drive in confine_roots(self, drives):
+                        drive = Path(drive)
+                        logger.debug("Searching %s...", drive)
+                        # A sandbox may confine ``/`` to a user-selected child
+                        # directory. Only the actual filesystem root has OS
+                        # trees to skip; a selected folder named Library is data.
+                        skip_root_dirs = (
+                            _DEEP_SYSTEM_DIRS
+                            if drive == Path(drive.anchor)
+                            else frozenset()
+                        )
+                        search_location(
+                            drive,
+                            max_depth=999,
+                            skip_root_dirs=skip_root_dirs,
+                        )
+                        if len(matching_files) >= 10:
+                            break
 
                 # Stop progress indicator
                 if hasattr(self, "console") and hasattr(self.console, "stop_progress"):
