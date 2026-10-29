@@ -82,6 +82,13 @@ def test_gemma_refuses_to_load_a_skill_it_cannot_run(gemma, name):
     assert name not in gemma.loaded_skills
 
 
+@pytest.mark.parametrize("model_id", [NPU_DEFAULT_MODEL_NAME, "gemma4-it-e2b-FLM"])
+def test_npu_gemma_takes_native_tool_calls(model_id):
+    # Tools in JSON text came back from E2B as a bare "```json" reply (#6008).
+    with _agent(model_id) as agent:
+        assert agent._uses_native_tool_calls()
+
+
 def test_a_larger_model_lists_every_skill():
     with _agent(LARGE_DEFAULT_MODEL_NAME) as agent:
         catalog = agent.get_skill_catalog_system_prompt()

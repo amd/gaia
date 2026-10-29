@@ -1608,22 +1608,18 @@ MODELS = {
     # The E2B *FLM* accuracy baseline is a follow-up:
     # baseline_accuracy_e2b.json was recorded on the GGUF build, a different
     # variant.
-    # tool_calling=False: unlike the GGUF builds (native tool calls via
-    # --jinja), the FLM/NPU server 500-errors on an OpenAI ``tools`` payload
-    # ("type must be string, but is object" — verified on hardware). The agent
-    # therefore uses the embedded-JSON tool path for this model. Email triage
-    # itself parses a JSON object from a plain completion (no native tool
-    # calls), so triage is unaffected.
+    # Native tool calls work on FLM v1.0.7, streamed or not. Without them the
+    # flagship's JSON-in-text fallback came back as a bare "```json" (#6008).
     "gemma-4-e2b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id="gemma4-it-e2b-FLM",
         display_name="Gemma 4 E2B (NPU/FLM)",
         min_ctx_size=NPU_CTX_SIZE,
-        tool_calling=False,
+        tool_calling=True,
         feature_tier="compact",
     ),
     # --- NPU twin of the GPU default (FastFlowLM build, a Lemonade built-in) ---
-    # Native tool calls work (FLM v1.0.7), unlike E2B above.
+    # Native tool calls work (FLM v1.0.7), as for E2B above.
     "gemma-4-e4b-npu": ModelRequirement(
         model_type=ModelType.LLM,
         model_id=NPU_DEFAULT_MODEL_NAME,
