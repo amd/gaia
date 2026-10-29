@@ -177,13 +177,17 @@ def live_gaia_sidecar(monkeypatch, tmp_path):
         server.should_exit = True
         raise RuntimeError("flagship sidecar test server never became reachable")
     original_connect = socket.create_connection
+    blocked_connections = []
 
     def connect_only_to_sidecar(address, *args, **kwargs):
-        """Make an accidental model-server connection fail in this fixture."""
+        """Record and reject connections other than the fixture sidecar."""
         host, target_port = address[:2]
         if host == "127.0.0.1" and target_port == port:
             return original_connect(address, *args, **kwargs)
-        raise AssertionError(
+        # httpx reaches this seam. A later assertion is needed because context
+        # measurement intentionally catches connection errors and logs a warning.
+        blocked_connections.append(address)
+        raise OSError(
             "live_gaia_sidecar may connect only to its own loopback port; "
             f"got {address!r}"
         )
@@ -197,6 +201,10 @@ def live_gaia_sidecar(monkeypatch, tmp_path):
         LemonadeManager.reset()
         sr.registry.clear()
         caller_auth.reset()
+        assert not blocked_connections, (
+            "live_gaia_sidecar reached outside the fixture sidecar: "
+            f"{blocked_connections!r}"
+        )
 
 
 @pytest.fixture
