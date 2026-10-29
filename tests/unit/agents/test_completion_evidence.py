@@ -499,6 +499,15 @@ def test_binary_save_requires_its_own_write_but_not_a_text_read(tmp_path):
     assert not gaps(ledger, "Saved to `out.png`.")
 
 
+@pytest.mark.parametrize("tool", ["generate_music", "generate_sound_effect"])
+def test_generated_audio_counts_as_binary_save_evidence(tool, tmp_path):
+    ledger = CompletionEvidence("Save the audio to `sound.wav`", str(tmp_path))
+    ledger.record(tool, {}, {"audio_path": "other.wav"}, True)
+    assert gaps(ledger, "Saved to `sound.wav`.")
+    ledger.record(tool, {}, {"audio_path": "sound.wav"}, True)
+    assert not gaps(ledger, "Saved to `sound.wav`.")
+
+
 def test_refused_mutation_does_not_invalidate_a_completed_save(ledger):
     write(ledger)
     read(ledger)

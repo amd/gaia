@@ -392,6 +392,8 @@ _GAIA_MUTATING_TOOLS = frozenset(
         "index_document",
         "index_directory",
         "generate_image",
+        "generate_music",
+        "generate_sound_effect",
         "write_clipboard",
         "bookmark",
     }
@@ -483,6 +485,9 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "refine_transcript": "Refining transcript",
     "take_screenshot": "Taking screenshot",
     "generate_image": "Generating image",
+    "generate_music": "Generating music",
+    "generate_sound_effect": "Generating sound effect",
+    "list_audio_generation_models": "Listing audio models",
     "analyze_image": "Looking at image",
     "answer_question_about_image": "Reading image",
     "list_sd_models": "Listing image models",

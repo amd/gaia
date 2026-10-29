@@ -71,6 +71,7 @@ from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
+    AudioGenerationToolsMixin,
     AudioToolsMixin,
     BrowserToolsMixin,
     BrowserUseToolsMixin,
@@ -360,7 +361,8 @@ class ChatAgentConfig:
     memory_incognito: bool = False
 
     # Optional capability flags (disabled by default to keep document Q&A focused)
-    enable_sd_tools: bool = False  # Stable Diffusion image generation
+    enable_sd_tools: bool = False  # Lemonade image generation
+    enable_audio_generation_tools: bool = False  # Lemonade music and sound effects
 
     # MCP settings.
     # 50 default is the validated middle ground: covers the 49-tool MCP
@@ -418,6 +420,7 @@ class ChatAgent(
     ScreenshotToolsMixin,
     SDToolsMixin,
     AudioToolsMixin,
+    AudioGenerationToolsMixin,
     WaitToolsMixin,
     FollowUpToolsMixin,
     ReasoningEffortToolsMixin,
@@ -2295,6 +2298,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     exc_info=True,
                 )
 
+        # Music and SFX: flag-gated like image generation; no downloads at init.
+        if getattr(self.config, "enable_audio_generation_tools", False):
+            from gaia.config import GAIA_CONFIG_DIR
+
+            audio_dir = GAIA_CONFIG_DIR / "cache" / "audio" / "generations"
+            try:
+                self.init_audio_generation(output_dir=str(audio_dir))
+            except OSError as err:
+                logger.warning(
+                    "Audio generation unavailable: cannot write %s: %s", audio_dir, err
+                )
+
         # ── Phase 3: Web & System tools ──────────────────────────────────────────
         # Only register web tools for profiles that should browse the internet.
         # Doc/file/data profiles should NOT have fetch_webpage to avoid confusing
@@ -3032,6 +3047,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         for doc in documents:
             try:
                 if os.path.exists(doc):
+                    # Naming a file to index is the grant to read it; a folder is never granted.
+                    if os.path.isfile(doc):
+                        self.path_validator.add_allowed_path(doc)
                     logger.info(f"Indexing document: {doc}")
                     result = self.rag.index_document(doc)
 

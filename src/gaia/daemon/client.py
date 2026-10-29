@@ -464,6 +464,33 @@ def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     if relayed:
         return f"{relayed} agent turn(s) are still running on it"
     try:
+        agents = requests.get(
+            f"{inst.base_url}{API_PREFIX}/agents",
+            headers=headers,
+            timeout=5.0,
+        )
+    except requests.exceptions.RequestException as e:
+        return f"GAIA could not check whether it is busy ({e})"
+    owned_sidecars = set()
+    if agents.status_code != 404:
+        if agents.status_code != 200:
+            return f"GAIA could not check whether it is busy ({_error_detail(agents)})"
+        import psutil
+
+        for agent in agents.json().get("agents") or []:
+            pid = agent.get("pid")
+            if agent.get("state") != "running" or not isinstance(pid, int):
+                continue
+            owned_sidecars.add(pid)
+            try:
+                owned_sidecars.update(
+                    child.pid for child in psutil.Process(pid).children(recursive=True)
+                )
+            except psutil.Error:
+                # A launcher can exit while its packaged child is being
+                # reparented; an unavailable process contributes no children.
+                pass
+    try:
         clients = requests.get(
             f"{inst.base_url}{API_PREFIX}/lemonade/clients",
             headers=headers,
@@ -480,7 +507,11 @@ def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     users = [
         c.get("name") or c.get("kind") or "a GAIA app"
         for c in snapshot.get("clients") or []
-        if any(pid_alive(p) for p in c.get("pids") or [] if p not in ours)
+        if any(
+            pid_alive(p)
+            for p in c.get("pids") or []
+            if p not in ours and p not in owned_sidecars
+        )
     ]
     if users:
         return f"{', '.join(users)} is still using it"

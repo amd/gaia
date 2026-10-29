@@ -1034,6 +1034,13 @@ def _chosen_ctx_size(model: str, base_url: Optional[str]) -> Optional[int]:
     tokens = saved_context_size(model)
     if tokens is None:
         return None
+    if find_model_requirement(model) is None:
+        # No memory figures to check against; only the 32K floor applies.
+        try:
+            check_saved_size(model, tokens, None)
+        except ContextChoiceError as e:
+            raise LemonadeClientError(str(e)) from e
+        return tokens
     try:
         capacity = machine_capacity(base_url)
     except (LemonadeClientError, ModelFitError) as e:
@@ -1660,11 +1667,17 @@ MODELS = {
 
 
 def find_model_requirement(model_id: Optional[str]) -> Optional[ModelRequirement]:
-    """The MODELS entry for ``model_id``, tolerating the ``user.`` namespace."""
+    """The MODELS entry for ``model_id``, tolerating the ``user.`` namespace.
+
+    A model the user added from a Hugging Face link resolves too.
+    """
     for mr in MODELS.values():
         if _model_ids_match(mr.model_id, model_id):
             return mr
-    return None
+    from gaia.llm.custom_models import find_custom_model, requirement_for
+
+    entry = find_custom_model(model_id)
+    return requirement_for(entry) if entry is not None else None
 
 
 # Sampling for a local model with no published profile below: low temperature
@@ -6003,6 +6016,56 @@ class LemonadeClient:
         finally:
             self.model = active_model
 
+    def generate_audio(
+        self,
+        payload: Dict[str, Any],
+        output_path: Union[str, Path],
+        *,
+        timeout: int = 1800,
+    ) -> None:
+        """Stream WAV bytes with the model-slot lease held through the last chunk.
+
+        Lemonade loads a downloaded audio model on the generation request. The
+        lease covers both that implicit load and the full response transfer.
+        Validation and the final atomic rename are the caller's responsibility.
+        """
+        from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
+
+        model = payload.get("model")
+        if not isinstance(model, str) or not model:
+            raise LemonadeClientError("Audio generation requires a model ID.")
+        try:
+            with self._model_slot_lease(model, request_timeout=timeout):
+                with requests.post(
+                    f"{self.base_url}/audio/generations",
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        **self._auth_headers(),
+                    },
+                    timeout=(10, timeout),
+                    stream=True,
+                ) as response:
+                    if response.status_code == 401:
+                        raise LemonadeAuthError("Lemonade rejected the API key (401).")
+                    if response.status_code >= 400:
+                        raise LemonadeClientError(
+                            f"Lemonade audio generation failed ({response.status_code}): "
+                            f"{response.text[:600]}"
+                        )
+                    if "json" in response.headers.get("Content-Type", "").lower():
+                        raise LemonadeClientError(
+                            "Expected WAV audio but received a JSON response from Lemonade."
+                        )
+                    with Path(output_path).open("wb") as output:
+                        for chunk in response.iter_content(chunk_size=64 * 1024):
+                            if chunk:
+                                output.write(chunk)
+        except requests.RequestException as exc:
+            raise LemonadeClientError(f"Lemonade audio request failed: {exc}") from exc
+        except (BrokerUnavailableError, LeaseWaitCancelled) as exc:
+            raise LemonadeClientError(f"Audio model-slot lease failed: {exc}") from exc
+
     # =========================================================================
     # Image Generation (Stable Diffusion)
     # =========================================================================
@@ -7211,7 +7274,10 @@ class LemonadeClient:
         self._wait_model_state(
             model, present=False, deadline_s=PIN_UNLOAD_SETTLE_DEADLINE_S
         )
-        self.load_model(model, auto_download=True, prompt=False, ctx_size=pin)
+        # A test pin must not become the window Lemonade reloads at afterwards.
+        self.load_model(
+            model, auto_download=True, prompt=False, ctx_size=pin, save_options=False
+        )
         settled = self._wait_model_state(
             model, present=True, deadline_s=PIN_LOAD_SETTLE_DEADLINE_S
         )
@@ -7655,7 +7721,7 @@ class LemonadeClient:
         _download_timeout: int = 7200,  # Reserved for future use
         llamacpp_args: Optional[str] = None,
         ctx_size: Optional[int] = None,
-        save_options: bool = False,
+        save_options: Optional[bool] = None,
         prompt: bool = True,
         load_retries: int = DEFAULT_MODEL_LOAD_RETRIES,
     ) -> Dict[str, Any]:
@@ -7716,7 +7782,7 @@ class LemonadeClient:
         _download_timeout: int = 7200,  # Reserved for future use
         llamacpp_args: Optional[str] = None,
         ctx_size: Optional[int] = None,
-        save_options: bool = False,
+        save_options: Optional[bool] = None,
         prompt: bool = True,
         load_retries: int = DEFAULT_MODEL_LOAD_RETRIES,
     ) -> Dict[str, Any]:
@@ -7743,7 +7809,9 @@ class LemonadeClient:
             save_options: If True, persists ctx_size and llamacpp_args to config file.
                          Model will use these settings on future loads.
                          Always on for an embedder whose backend GAIA picks
-                         (:func:`manages_embedder_backend`).
+                         (:func:`manages_embedder_backend`). None (the default)
+                         saves whenever *ctx_size* is given, except on a server
+                         the user runs.
             prompt: If True, prompt user before downloading (default: True).
                    Set to False to download automatically without user confirmation.
             load_retries: Number of times to retry on a TRANSIENT backend-startup
@@ -7817,6 +7885,10 @@ class LemonadeClient:
             # Saved so Lemonade's own auto-loads (``/embeddings``) use it too;
             # never into the config of a server the user runs.
             save_options = not self.is_users_server()
+        elif save_options is None:
+            # Lemonade's auto-load after an eviction would otherwise auto-tune
+            # the window, to 4096 for a model with no saved options.
+            save_options = ctx_size is not None and not self.is_users_server()
         if llamacpp_args:
             request_data["llamacpp_args"] = llamacpp_args
         if ctx_size is not None:

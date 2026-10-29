@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -39,6 +40,9 @@ func TestCheckSkipsAReleaseWithNothingForThisMachine(t *testing.T) {
 	st, err = Check(context.Background())
 	if err != nil || st.Available || st.Latest.Tag != "" {
 		t.Fatalf("arm64 script install offered %q (%v, %v); want nothing", st.Latest.Tag, st.Available, err)
+	}
+	if st.Unsupported.Tag != "v0.26.0" || !strings.Contains(st.Summary(), "no installer for this machine") {
+		t.Errorf("arm64 must hear v0.26.0 is out but not installable here, got %q", st.Summary())
 	}
 
 	// A binary no installer put there is offered only a release with a build
