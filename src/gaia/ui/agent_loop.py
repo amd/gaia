@@ -153,7 +153,9 @@ class AgentLoop:
         self._running_lock: Optional[asyncio.Lock] = None
         # Goal id -> the cooperative stop handles for the tick working on it.
         # A user can cancel a goal or begin a foreground turn while it runs.
-        self._active_goal_ticks: Dict[str, tuple[threading.Event, Any]] = {}
+        self._active_goal_ticks: Dict[
+            str, tuple[threading.Event, Any, threading.Event]
+        ] = {}
         self._active_goal_ticks_lock = threading.Lock()
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
@@ -205,7 +207,9 @@ class AgentLoop:
         """Tell the in-flight background tick for *goal_id* to stop.
 
         The GoalStore records cancellation separately; this only reaches the
-        live agent so a cancelled goal stops holding the shared model slot.
+        live agent so a cancelled goal stops holding the shared model slot. A
+        tick can work on several goals; stopping one pauses the shared tick and
+        leaves its other goals queued for the next run.
         """
         with self._active_goal_ticks_lock:
             active = self._active_goal_ticks.get(goal_id)
@@ -227,8 +231,11 @@ class AgentLoop:
         return bool(active_ticks)
 
     @staticmethod
-    def _stop_active_tick(active: tuple[threading.Event, Any]) -> None:
-        cancel_event, handler = active
+    def _stop_active_tick(
+        active: tuple[threading.Event, Any, threading.Event],
+    ) -> None:
+        cancel_event, handler, stopped_for_foreground = active
+        stopped_for_foreground.set()
         cancel_event.set()
         handler.cancelled.set()
         # A relayed run can be blocked in a socket read, so wake it as Stop does.
@@ -471,7 +478,8 @@ class AgentLoop:
         result_holder: Dict[str, Any] = {"error": None}
         # Set on timeout so the agent loop stops at its next step boundary.
         cancel_event = threading.Event()
-        active_tick = (cancel_event, sse_handler)
+        stopped_for_foreground = threading.Event()
+        active_tick = (cancel_event, sse_handler, stopped_for_foreground)
         active_goal_ids = [goal.id for goal in goals if getattr(goal, "id", None)]
         with self._active_goal_ticks_lock:
             for goal_id in active_goal_ids:
@@ -619,6 +627,11 @@ class AgentLoop:
             logger.error("Could not persist autonomous turn: %s", exc, exc_info=True)
 
         if result_holder["error"]:
+            if stopped_for_foreground.is_set():
+                # A user cancellation or foreground chat paused this shared
+                # tick. GoalStore already records the cancelled goal, while
+                # sibling goals must stay actionable for the next tick.
+                return LoopDirective("idle", reason="tick stopped for user")
             # The goals are still actionable, so continuing would rerun the
             # failure at once until the hourly budget is gone.
             self._fail_goals(goals[:3], result_holder["error"])

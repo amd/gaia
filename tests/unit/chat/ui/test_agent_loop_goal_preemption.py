@@ -16,7 +16,7 @@ def _active_tick():
         cancelled=threading.Event(),
         close_active_relay_response=MagicMock(),
     )
-    return (cancel, handler)
+    return (cancel, handler, threading.Event())
 
 
 def test_cancel_goal_reaches_the_live_tick_and_wakes_relay():
@@ -26,8 +26,9 @@ def test_cancel_goal_reaches_the_live_tick_and_wakes_relay():
 
     assert loop.cancel_goal("goal-1") is True
 
-    cancel, handler = active
+    cancel, handler, stopped_for_foreground = active
     assert cancel.is_set()
+    assert stopped_for_foreground.is_set()
     assert handler.cancelled.is_set()
     handler.close_active_relay_response.assert_called_once_with()
 
@@ -39,8 +40,9 @@ def test_cancel_unknown_goal_does_not_touch_other_ticks():
 
     assert loop.cancel_goal("missing") is False
 
-    cancel, handler = active
+    cancel, handler, stopped_for_foreground = active
     assert not cancel.is_set()
+    assert not stopped_for_foreground.is_set()
     assert not handler.cancelled.is_set()
     handler.close_active_relay_response.assert_not_called()
 
@@ -53,7 +55,8 @@ def test_yield_to_user_stops_each_active_tick_once():
 
     assert loop.yield_to_user() is True
 
-    for cancel, handler in (first, second):
+    for cancel, handler, stopped_for_foreground in (first, second):
         assert cancel.is_set()
+        assert stopped_for_foreground.is_set()
         assert handler.cancelled.is_set()
         handler.close_active_relay_response.assert_called_once_with()
