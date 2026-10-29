@@ -8,6 +8,7 @@ These tools are agent-agnostic and don't depend on specific agent functionality.
 """
 
 import ast
+import codecs
 import csv
 import fnmatch
 import heapq
@@ -57,6 +58,7 @@ from gaia.agents.tools.search_scope import (
     search_roots,
 )
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
+from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.filesystem.name_match import fold_name, strip_accents
 from gaia.logger import get_logger
 from gaia.security import BackupError
@@ -150,12 +152,24 @@ _BINARY_SUFFIXES = frozenset(
 
 
 def _looks_like_text(path: Path) -> bool:
-    """No NUL byte in the first 4 KB, which is how grep tells text from binary."""
+    """No NUL in the first 4 KB, which is how grep tells text from binary.
+
+    UTF-16/32 text is full of NUL bytes, so a file with one of their BOMs is
+    judged on its decoded characters instead.
+    """
     try:
         with open(path, "rb") as f:
-            return b"\x00" not in f.read(4096)
-    except OSError:
+            head = f.read(4096)
+    except OSError as exc:
+        logger.debug("Could not sniff %s: %s", path, exc)
         return False
+    for boms, encoding in (
+        ((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE), "utf-32"),
+        ((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE), "utf-16"),
+    ):
+        if head.startswith(boms):
+            return "\x00" not in head.decode(encoding, errors="ignore")
+    return b"\x00" not in head
 
 
 def _read_exact(path) -> str:
@@ -242,11 +256,6 @@ def _python_syntax_error(source: str, filename: str) -> str | None:
     except (SyntaxError, ValueError) as e:  # ValueError: source has null bytes
         return str(e)
     return None
-
-
-def _resolved_target(args: Dict[str, Any]) -> Path:
-    """The file write_file / edit_file act on, resolved as they resolve it."""
-    return Path(args["file_path"]).expanduser().resolve()
 
 
 DATE_RANGE_FORMATS = (
@@ -364,21 +373,33 @@ class FileSearchToolsMixin:
 
     def _search_roots(self) -> List[Path]:
         """Where a filesystem search should look — see ``search_scope`` (#3576)."""
-        return search_roots(self)
+        workspace = _workspace_default(self)
+        return search_roots(
+            self,
+            preferred_workspace=Path(workspace) if workspace else None,
+        )
 
-    def _resolve_search_directory(self, directory: str):
+    def _resolve_search_directory(self, directory: str, allow_file: bool = False):
         """``(path, None)`` for a directory the model named, or ``(None, error)``.
 
         A relative directory ("tui/internal", ".") means a folder in the
         user's workspace, not one under whatever directory this process
         happens to have been spawned in, so it is resolved against the search
-        roots, most specific first.
+        roots, most specific first. With *allow_file*, a relative file
+        resolves the same way.
         """
         scope = Path(directory).expanduser()
         if scope.is_absolute():
             return scope.resolve(), None
         workspace = self._search_roots()
-        matched = next((r for r in workspace if (r / scope).is_dir()), None)
+        matched = next(
+            (
+                r
+                for r in workspace
+                if (r / scope).is_dir() or (allow_file and (r / scope).is_file())
+            ),
+            None,
+        )
         if matched is None:
             # Safe to be specific: no absolute path was supplied, so this is
             # not an existence oracle.
@@ -943,7 +964,9 @@ class FileSearchToolsMixin:
                 if search_root is None:
                     roots = self._search_roots()
                 else:
-                    roots = [Path(search_root).expanduser().resolve()]
+                    roots = [
+                        _resolve_target(search_root, None, _workspace_default(self))
+                    ]
                     # Before the existence probe, as in read_file.
                     denied = self._read_access_error(str(roots[0]))
                     if denied:
@@ -1026,7 +1049,6 @@ class FileSearchToolsMixin:
 
             Automatically detects file type and provides appropriate analysis:
             - Python files (.py): Syntax validation + symbol extraction (functions/classes)
-            - Markdown files (.md): Headers + code blocks + links
             - Word (.docx), PDF and Excel (.xlsx): extracted text, in parts when
               long; continue at next_offset until it is null
             - Other text files: Raw content
@@ -1039,7 +1061,7 @@ class FileSearchToolsMixin:
             Returns:
                 Dictionary with file content and type-specific metadata
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(_resolve_target(file_path, None, _workspace_default(self)))
             try:
                 # Enforce the --allowed-paths sandbox on reads. Checked before
                 # the existence probe so paths outside the sandbox can't be used
@@ -1179,25 +1201,10 @@ class FileSearchToolsMixin:
                         result["is_valid"] = False
                         result["errors"] = [str(e)]
 
-                # Markdown file - extract structure
-                elif ext == ".md":
+                # No extracted headers/code blocks/links: they repeat the content
+                # and push a long document past the result truncation cap.
+                elif ext in (".md", ".mdx"):
                     result["file_type"] = "markdown"
-
-                    # Extract headers
-                    headers = re.findall(r"^#{1,6}\s+(.+)$", content, re.MULTILINE)
-                    result["headers"] = headers
-
-                    # Extract code blocks
-                    code_blocks = re.findall(r"```(\w*)\n(.*?)```", content, re.DOTALL)
-                    result["code_blocks"] = [
-                        {"language": lang, "code": code} for lang, code in code_blocks
-                    ]
-
-                    # Extract links
-                    links = re.findall(r"\[([^\]]+)\]\(([^)]+)\)", content)
-                    result["links"] = [
-                        {"text": text, "url": url} for text, url in links
-                    ]
 
                 # Other text files
                 else:
@@ -1223,11 +1230,15 @@ class FileSearchToolsMixin:
 
             Searches actual file contents on disk, not RAG indexed documents.
             A relative directory (including the default ".") is a folder in
-            the workspace. file_pattern filters file names, e.g. "*.py".
+            the workspace; a file path searches that one file. file_pattern
+            filters file names, e.g. "*.py". Credentials and keys (.env,
+            id_rsa, *.pem...) are never searched.
             """
             try:
                 # Relative to the workspace, not this process's cwd (#3576).
-                directory, unresolved = self._resolve_search_directory(directory or ".")
+                directory, unresolved = self._resolve_search_directory(
+                    directory or ".", allow_file=True
+                )
                 if unresolved:
                     return unresolved
                 # Enforce the --allowed-paths sandbox before the existence probe
@@ -1242,17 +1253,6 @@ class FileSearchToolsMixin:
                     return {
                         "status": "error",
                         "error": f"Directory not found: {directory}",
-                    }
-
-                # rglob over a file yields nothing, which would read as
-                # "no matches" instead of "you passed the wrong path".
-                if not directory.is_dir():
-                    return {
-                        "status": "error",
-                        "error": (
-                            f"Path is not a directory: {directory}. Pass the folder "
-                            "to search, or use read_file for a single file."
-                        ),
                     }
 
                 # Text file extensions to search
@@ -1289,17 +1289,25 @@ class FileSearchToolsMixin:
                     while name_pattern.startswith("**/"):
                         name_pattern = name_pattern[3:]
 
-                def wanted(file_path: Path) -> bool:
+                # Paths, not a count: the regex-miss retry walks the tree again.
+                protected = set()
+
+                def named(file_path: Path) -> bool:
+                    """Picked by file_pattern, or not a known binary type."""
                     if name_pattern:
                         if "/" in name_pattern:
                             rel = file_path.relative_to(directory).as_posix()
                             return fnmatch.fnmatch(rel, name_pattern)
                         return fnmatch.fnmatch(file_path.name, name_pattern)
-                    suffix = file_path.suffix.lower()
-                    if suffix in text_extensions:
-                        return True
-                    if suffix in _BINARY_SUFFIXES:
+                    return file_path.suffix.lower() not in _BINARY_SUFFIXES
+
+                def wanted(file_path: Path, by_pattern: bool) -> bool:
+                    # The read gate runs before the binary sniff opens the file.
+                    if not readable_entry(self, file_path):
+                        protected.add(file_path)
                         return False
+                    if by_pattern or file_path.suffix.lower() in text_extensions:
+                        return True
                     # Unlisted types (.ts, .go, .R, .toml, no extension...):
                     # text unless the first block holds a NUL byte.
                     return _looks_like_text(file_path)
@@ -1307,10 +1315,18 @@ class FileSearchToolsMixin:
                 def candidates():
                     """Files to search, lazily, so a search that fills up early
                     never walks (or sniffs) the rest of the tree."""
+                    if directory.is_file():
+                        if directory.suffix.lower() not in _BINARY_SUFFIXES and wanted(
+                            directory, by_pattern=False
+                        ):
+                            yield directory
+                        return
                     for file_path in search_scope.walk_files(
                         directory, budget, skip_dirs=_CONTENT_SEARCH_SKIP_DIRS
                     ):
-                        if wanted(file_path):
+                        if named(file_path) and wanted(
+                            file_path, by_pattern=bool(name_pattern)
+                        ):
                             yield file_path
 
                 matches = []
@@ -1335,10 +1351,7 @@ class FileSearchToolsMixin:
                     return None if at == -1 else (at, at + len(_search_plain))
 
                 def search_file(file_path: Path):
-                    """Search within a single file."""
-                    # A link out of the folder, or a secret in it, is not grepped.
-                    if not readable_entry(self, file_path):
-                        return True
+                    """Search within a single file that candidates() let through."""
                     try:
                         with open(
                             file_path,
@@ -1404,7 +1417,12 @@ class FileSearchToolsMixin:
                         "message": f"Found {len(matches)} matches in {files_searched} files",
                     }
                 else:
-                    if not files_searched and not budget.truncated:
+                    if not files_searched and directory.is_file():
+                        message = (
+                            f"Nothing was searched: {directory} is not a text "
+                            "file this tool can search."
+                        )
+                    elif not files_searched and not budget.truncated:
                         which = (
                             f"matching '{file_pattern}'" if file_pattern else "of text"
                         )
@@ -1427,6 +1445,13 @@ class FileSearchToolsMixin:
                         "directory": str(directory),
                         "message": message,
                     }
+                if protected:
+                    result["files_skipped_protected"] = len(protected)
+                    result["message"] += (
+                        f". {len(protected)} file(s) were not searched because "
+                        "they hold credentials or keys, or lead outside the "
+                        "allowed folders"
+                    )
                 if budget.truncated:
                     result["truncated"] = True
                     result["unfinished_paths"] = list(budget.unfinished_paths)
@@ -1445,9 +1470,12 @@ class FileSearchToolsMixin:
                     "operation": "search_file_content",
                 }
 
+        def _workspace_target(args: Dict[str, Any]) -> Path:
+            return _resolve_target(args["file_path"], None, _workspace_default(self))
+
         @tool(
             atomic=True,
-            preflight=read_first_preflight(self, _resolved_target, "overwriting"),
+            preflight=read_first_preflight(self, _workspace_target, "overwriting"),
         )
         def write_file(
             file_path: str, content: str, create_dirs: bool = True
@@ -1466,7 +1494,7 @@ class FileSearchToolsMixin:
             6. Backup creation before overwrite
             7. Audit logging of all write operations
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(_resolve_target(file_path, None, _workspace_default(self)))
             try:
                 resolved_path = Path(file_path).resolve()
                 content_size = len(content.encode("utf-8"))
@@ -1790,7 +1818,7 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
-            preflight=read_first_preflight(self, _resolved_target),
+            preflight=read_first_preflight(self, _workspace_target),
         )
         def edit_file(
             file_path: str, old_content: str, new_content: str
@@ -1813,7 +1841,7 @@ class FileSearchToolsMixin:
             4. Backup creation before edit
             5. Audit logging
             """
-            file_path = os.path.expanduser(file_path)
+            file_path = str(_resolve_target(file_path, None, _workspace_default(self)))
             try:
                 import difflib
 
@@ -2009,7 +2037,9 @@ class FileSearchToolsMixin:
                 if directory_path is None:
                     directory_path = str(Path.home())
 
-                dir_path = Path(directory_path).expanduser().resolve()
+                dir_path = _resolve_target(
+                    directory_path, None, _workspace_default(self)
+                )
 
                 # Before the existence probe, as in read_file.
                 denied = self._read_access_error(str(dir_path))
@@ -2162,7 +2192,7 @@ class FileSearchToolsMixin:
                 Dictionary with file metadata and optional preview
             """
             try:
-                fp = Path(file_path).expanduser()
+                fp = _resolve_target(file_path, None, _workspace_default(self))
 
                 # Enforce the --allowed-paths sandbox: get_file_info returns a
                 # content preview, so it must honor the same read boundary.
@@ -2342,7 +2372,8 @@ class FileSearchToolsMixin:
                 Dictionary with analysis results based on the requested type
             """
             try:
-                fp = Path(file_path).expanduser()
+                raw_path = Path(file_path).expanduser()
+                fp = _resolve_target(file_path, None, _workspace_default(self))
 
                 def _resolve_indexed_basename(target: Path):
                     """Return an already-indexed document Path whose basename
@@ -2363,7 +2394,7 @@ class FileSearchToolsMixin:
                     not Path(file_path).is_absolute()
                     and len(Path(file_path).parts) == 1
                 ):
-                    attached = _resolve_indexed_basename(fp)
+                    attached = _resolve_indexed_basename(raw_path)
                 if (
                     attached is not None
                     and attached.is_file()
