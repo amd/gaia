@@ -201,6 +201,10 @@ jobs:
                                   pyfakefs keyring httpx respx matplotlib "pymupdf<2" cvss responses \
                                   faiss-cpu pypdf python-docx python-pptx openpyxl reportlab slack-sdk
           uv pip install --system -e ".[api]"
+          # The relay-document tests start the real gaia-agent sidecar on a
+          # loopback port. Install both hub packages so those tests run rather
+          # than being skipped by their optional-package guard.
+          uv pip install --system -e "hub/agents/chat/python" -e "hub/agents/gaia/python"
 
       - name: Check no test file skips wholesale
         # A file that skips at collection runs none of its tests; each one must
@@ -490,6 +494,10 @@ jobs:
                                   pyfakefs keyring httpx respx matplotlib "pymupdf<2" cvss responses \
                                   faiss-cpu pypdf python-docx python-pptx openpyxl reportlab slack-sdk
           uv pip install --system -e ".[api]"
+          # The relay-document tests start the real gaia-agent sidecar on a
+          # loopback port. Install both hub packages so those tests run rather
+          # than being skipped by their optional-package guard.
+          uv pip install --system -e "hub/agents/chat/python" -e "hub/agents/gaia/python"
 
       - name: Validate packaging integrity
         run: |
@@ -537,6 +545,10 @@ jobs:
                                   pyfakefs keyring httpx respx matplotlib "pymupdf<2" cvss responses \
                                   faiss-cpu pypdf python-docx python-pptx openpyxl reportlab slack-sdk
           uv pip install --system -e ".[api]"
+          # The relay-document tests start the real gaia-agent sidecar on a
+          # loopback port. Install both hub packages so those tests run rather
+          # than being skipped by their optional-package guard.
+          uv pip install --system -e "hub/agents/chat/python" -e "hub/agents/gaia/python"
 
       - name: Validate packaging integrity
         shell: bash

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import socket
 import threading
 import time
 from pathlib import Path
@@ -106,11 +107,17 @@ def live_gaia_sidecar(monkeypatch, tmp_path):
     from gaia_agent import server as server_mod
     from gaia_agent import session_registry as sr
 
+    import gaia.ui.turn_insights as turn_insights
     from gaia.daemon.sidecars.manager import find_free_port
+    from gaia.llm.lemonade_manager import LemonadeManager
 
     caller_auth.reset()
+    LemonadeManager.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    # Context measurement is exercised by the relay after every turn. Keep it
+    # local: the document contract does not need a real Lemonade health check.
+    monkeypatch.setattr(turn_insights, "_loaded_chat_model", lambda *_args: None)
 
     # Keep history sizing local on both sides of the relay. Otherwise the UI
     # or sidecar can reach a shared Lemonade server before a relayed turn.
@@ -169,11 +176,25 @@ def live_gaia_sidecar(monkeypatch, tmp_path):
     else:
         server.should_exit = True
         raise RuntimeError("flagship sidecar test server never became reachable")
+    original_connect = socket.create_connection
+
+    def connect_only_to_sidecar(address, *args, **kwargs):
+        """Make an accidental model-server connection fail in this fixture."""
+        host, target_port = address[:2]
+        if host == "127.0.0.1" and target_port == port:
+            return original_connect(address, *args, **kwargs)
+        raise AssertionError(
+            "live_gaia_sidecar may connect only to its own loopback port; "
+            f"got {address!r}"
+        )
+
+    monkeypatch.setattr(socket, "create_connection", connect_only_to_sidecar)
     try:
         yield base_url, agents, server_mod.API_VERSION
     finally:
         server.should_exit = True
         thread.join(timeout=5)
+        LemonadeManager.reset()
         sr.registry.clear()
         caller_auth.reset()
 
