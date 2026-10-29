@@ -4,142 +4,95 @@
 
 .agent-activity {
     width: 100%;
-    margin-bottom: 6px;
-}
-
-/* ── Summary bar — subtle by default, expands on hover ─────────────
-   Most chat turns don't require the user to inspect the agent's
-   internal steps; the previous loud panel-with-border was eating
-   visual attention every turn for content the user rarely opens.
-   Now it sits quietly inline (no border, dim text, smaller) and only
-   asserts itself on hover/focus, matching the access pattern. The
-   "active/done" state and error variant still escalate visibility
-   so an in-flight or failed run is obvious. */
-.agent-summary-bar {
-    display: inline-flex;
-    align-items: center;
-    justify-content: flex-start;
-    width: auto;
-    max-width: 100%;
-    gap: 6px;
-    padding-block: 2px;
-    padding-inline: 4px 8px;
-    border-radius: var(--radius-xs);
-    background: transparent;
-    border: 1px solid transparent;
-    font-size: 13px;
-    font-family: var(--font-sans);
-    color: var(--text-secondary);
-    opacity: 0.85;
-    transition: opacity var(--duration-fast) var(--ease),
-                background var(--duration-fast) var(--ease),
-                border-color var(--duration-fast) var(--ease),
-                color var(--duration-fast) var(--ease);
-    cursor: pointer;
-}
-.agent-summary-bar:hover,
-.agent-summary-bar:focus-visible {
-    opacity: 1;
-    background: var(--bg-tertiary);
-    border-color: var(--border);
-    color: var(--text-secondary);
-}
-/* When activity is currently streaming or has errors, force full
-   opacity — the user genuinely needs to see those states. */
-.agent-activity.active .agent-summary-bar,
-.agent-activity.has-errors .agent-summary-bar,
-.agent-activity.has-policy-alerts .agent-summary-bar {
-    opacity: 1;
-}
-/* Once expanded, the bar is the title for the panel below it — keep
-   it visible at full opacity even on mouse-out so the user has
-   continuous orientation. */
-.agent-activity:has(.flow-expanded) .agent-summary-bar {
-    opacity: 1;
-    background: var(--bg-tertiary);
-    border-color: var(--border);
-    color: var(--text-secondary);
-}
-
-.agent-summary-left {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-}
-
-.agent-summary-right {
-    display: flex;
-    align-items: center;
-    color: var(--text-muted);
-    transition: transform var(--duration-fast) var(--ease);
-}
-
-.agent-summary-text {
-    font-weight: 500;
-    flex-shrink: 0;
-}
-
-.agent-icon-done { color: var(--text-muted); }
-.agent-icon-error { color: var(--danger); }
-.agent-activity.has-policy-alerts .agent-icon-done { color: var(--accent-yellow); }
-
-/* @keyframes spin defined in global index.css */
-
-/* No visual difference between active/done states — bar stays stable */
-
-/* ── Flow wrapper — animated expand/collapse ─────────────────── */
-.agent-flow-wrap {
-    display: grid;
-    /* grid-template-rows trick for smooth height animation */
-    grid-template-rows: 1fr;
-    transition: grid-template-rows var(--duration-slow) var(--ease),
-                opacity var(--duration-slow) var(--ease),
-                margin-top var(--duration-slow) var(--ease);
-    opacity: 1;
-    margin-top: 6px;
-}
-
-.agent-flow-wrap.flow-collapsed {
-    grid-template-rows: 0fr;
-    opacity: 0;
-    margin-top: 0;
-    pointer-events: none;
-}
-
-.agent-flow-wrap > .agent-flow {
-    overflow: hidden;
-    min-height: 0;
-}
-
-/* ── Flow container ──────────────────────────────────────────── */
-.agent-flow {
-    padding: 8px 12px;
-    border-radius: var(--radius-xs);
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
+    margin-bottom: 10px;
     display: flex;
     flex-direction: column;
     gap: 6px;
-    animation: flowSlideDown var(--duration-slow) var(--ease);
 }
 
-@keyframes flowSlideDown {
-    from { opacity: 0; transform: translateY(-6px); }
-    to { opacity: 1; transform: translateY(0); }
-}
+.agent-icon-error { color: var(--danger); }
 
-/* ── Flow: Thinking text ─────────────────────────────────────── */
-.flow-thought {
+/* ── Timeline: notes in full, steps between them ───────────────── */
+.agent-timeline {
     display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* A note the agent wrote mid-turn reads like the answer it leads to. */
+/* Motion marks what is arriving now; opening a saved turn or a folded run never replays it. */
+.agent-activity.active .flow-note {
+    animation: thoughtSlideIn var(--duration) var(--ease);
+}
+.flow-note > :first-child { margin-top: 0; }
+.flow-note > :last-child { margin-bottom: 0; }
+
+.flow-steps {
+    display: flex;
+    flex-direction: column;
     align-items: flex-start;
+    gap: 2px;
+}
+
+.flow-steps-summary {
+    display: inline-flex;
+    align-items: center;
     gap: 6px;
-    padding: 3px 0;
-    font-size: 12px;
+    max-width: 100%;
+    padding: 3px 8px 3px 4px;
+    margin-left: -4px;
+    border-radius: var(--radius-xs);
+    font-size: 13px;
     font-family: var(--font-sans);
     color: var(--text-secondary);
-    line-height: 1.5;
-    animation: thoughtSlideIn var(--duration) var(--ease);
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+.flow-steps-summary:hover,
+.flow-steps-summary:focus-visible {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+.flow-steps-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+.flow-steps-done { color: var(--text-muted); flex-shrink: 0; }
+
+.flow-steps-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+}
+/* A run opened from its summary hangs off it, so it reads as that run's detail. */
+.flow-steps.open:not(.live) .flow-steps-rows {
+    margin: 2px 0 2px 6px;
+    padding-left: 10px;
+    border-left: 1px solid var(--border);
+}
+
+.flow-warning {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.flow-warning > svg {
+    flex-shrink: 0;
+    color: var(--accent-yellow);
+}
+
+.flow-live-line {
+    padding: 2px 0;
+}
+.flow-live-line .thinking-indicator {
+    font-size: 12px;
 }
 
 @keyframes thoughtSlideIn {
@@ -147,35 +100,31 @@
     to { opacity: 1; transform: translateX(0); }
 }
 
-.flow-thought.active {
-    color: var(--text-secondary);
-}
-
-.flow-thought-text {
-    font-style: italic;
-    word-break: break-word;
-}
-
 /* @keyframes fadeIn defined in global index.css */
 
 /* ── Flow: Reasoning, folded behind a one-line toggle ───────────── */
-.flow-reasoning-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
+.flow-reasoning {
     width: 100%;
-    padding: 3px 0;
-    font-size: 12px;
+}
+.flow-reasoning-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 8px 3px 4px;
+    margin-left: -4px;
+    border-radius: var(--radius-xs);
+    font-size: 13px;
     font-family: var(--font-sans);
     color: var(--text-secondary);
-    text-align: start;
+    text-align: left;
     cursor: pointer;
 }
 .flow-reasoning-toggle:hover {
     color: var(--text-primary);
+    background: var(--bg-tertiary);
 }
-.flow-reasoning-count {
-    color: var(--text-muted);
+.flow-reasoning.live .flow-reasoning-toggle {
+    color: var(--text-primary);
 }
 
 .flow-thought-hacker {
@@ -211,8 +160,22 @@
     height: 1.1em;
     background: var(--accent);
     vertical-align: text-bottom;
-    margin-inline-start: 1px;
+    margin-left: 1px;
     animation: cursorBlink var(--duration-blink) var(--ease-step) infinite;
+}
+
+/* Live reasoning shows its last lines, fading out at the top, until opened. */
+.flow-thought-hacker.peek {
+    max-height: 4.8em;
+    overflow: hidden;
+    margin: 2px 0 0 20px;
+    padding: 0;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    -webkit-mask-image: linear-gradient(to bottom, transparent, currentColor 45%);
+    mask-image: linear-gradient(to bottom, transparent, currentColor 45%);
 }
 
 /* @keyframes cursorBlink is defined globally in index.css */
@@ -221,10 +184,10 @@
 
 /* ── Flow: Tool Card ─────────────────────────────────────────── */
 .flow-tool {
+    width: 100%;
     border-radius: var(--radius-xs);
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border);
-    transition: border-color var(--duration-fast) var(--ease);
+}
+.flow-steps.live .flow-tool {
     animation: toolSlideIn var(--duration) var(--ease) both;
 }
 
@@ -233,18 +196,11 @@
     to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-.flow-tool:nth-child(1) { animation-delay: 0s; }
-.flow-tool:nth-child(2) { animation-delay: var(--stagger); }
-.flow-tool:nth-child(3) { animation-delay: calc(var(--stagger) * 2); }
-.flow-tool:nth-child(4) { animation-delay: calc(var(--stagger) * 3); }
-.flow-tool:nth-child(5) { animation-delay: calc(var(--stagger) * 4); }
 
-.flow-tool.active {
-    border-color: color-mix(in srgb, var(--accent) 25%, transparent);
-}
-
-.flow-tool.error {
-    border-color: color-mix(in srgb, var(--danger) 25%, transparent);
+/* Picking up a skill changes how the agent works from here, so it stands out. */
+.flow-tool.skill .flow-tool-left > svg:not(.flow-tool-spinner),
+.flow-tool.skill .flow-tool-label {
+    color: var(--accent);
 }
 
 .flow-tool-header {
@@ -253,11 +209,14 @@
     justify-content: space-between;
     width: 100%;
     gap: 8px;
-    padding: 5px 10px;
+    padding: 3px 6px 3px 4px;
+    margin-left: -4px;
+    width: calc(100% + 4px);
+    border-radius: var(--radius-xs);
     font-size: 13px;
     font-family: var(--font-sans);
     color: var(--text-secondary);
-    text-align: start;
+    text-align: left;
     transition: background var(--duration-fast) var(--ease);
     cursor: pointer;
 }
@@ -277,7 +236,7 @@
     transition: transform var(--duration) var(--ease), color var(--duration) var(--ease);
     flex-shrink: 0;
 }
-.flow-tool-left > svg:not(.flow-tool-spinner) {
+.flow-steps.live .flow-tool-left > svg:not(.flow-tool-spinner) {
     animation: toolStatusPop var(--duration) var(--ease);
 }
 
@@ -305,13 +264,15 @@
 }
 
 .flow-tool-label {
-    font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: var(--text-primary);
+    color: var(--text-secondary);
     font-size: 13px;
     min-width: 0;
+}
+.flow-tool.active .flow-tool-label {
+    color: var(--text-primary);
 }
 
 /* ×N: identical calls merged into one row */
@@ -412,7 +373,7 @@
     font-size: 12px;
     color: var(--text-muted);
     white-space: nowrap;
-    margin-inline-end: 4px;
+    margin-right: 4px;
 }
 
 /* Chevron */
@@ -425,25 +386,19 @@
 .flow-tool-chevron.expanded {
     transform: rotate(90deg);
 }
-/* The chevron inside is mirrored right to left, so it turns the other way to point down. */
-.flow-tool-chevron.expanded:dir(rtl) {
-    transform: rotate(-90deg);
-}
 
 /* Tool detail (expanded) */
 .flow-tool-detail {
-    padding: 0 10px 8px;
+    margin: 2px 0 6px 20px;
+    padding: 4px 10px 8px;
     display: flex;
     flex-direction: column;
     gap: 6px;
-    animation: detailExpand var(--duration) var(--ease);
+    animation: fadeIn var(--duration-fast) var(--ease);
     overflow: hidden;
-    border-top: 1px solid var(--border-light);
-}
-
-@keyframes detailExpand {
-    from { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; }
-    to { opacity: 1; max-height: 500px; }
+    border-radius: var(--radius-xs);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
 }
 
 /* ── Flow: Plan ──────────────────────────────────────────────── */
@@ -477,7 +432,7 @@
     border: none;
     padding: 0;
     cursor: pointer;
-    text-align: start;
+    text-align: left;
     margin-bottom: 0;
 }
 .flow-plan-toggle:hover {
@@ -488,7 +443,7 @@
     font-size: 12px;
     font-weight: 400;
     color: var(--text-muted);
-    margin-inline-start: 2px;
+    margin-left: 2px;
 }
 
 .flow-plan-list {
@@ -530,9 +485,9 @@
 .plan-icon-stopped { color: var(--text-muted); }
 .plan-icon-pending { color: var(--text-muted); opacity: 0.6; }
 
-/* The live checklist sits under the summary bar while the turn runs. */
+/* The live checklist sits under the timeline while the turn runs. */
 .agent-activity > .flow-plan {
-    margin-top: 6px;
+    margin-top: 2px;
 }
 
 /* ── Flow: Error ─────────────────────────────────────────────── */
@@ -547,6 +502,10 @@
     font-size: 12px;
     font-family: var(--font-mono);
     color: var(--danger);
+}
+
+.flow-steps.live .flow-error,
+.flow-steps.live .flow-policy-alert {
     animation: errorSlideIn var(--duration-slow) var(--ease);
 }
 
@@ -566,7 +525,6 @@
     background: color-mix(in srgb, var(--accent-yellow) 6%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-yellow) 22%, transparent);
     font-family: var(--font-mono);
-    animation: errorSlideIn var(--duration-slow) var(--ease);
 }
 
 [data-theme="dark"] .flow-policy-alert {
@@ -590,7 +548,7 @@
 }
 
 .flow-policy-alert-decision {
-    margin-inline-start: auto;
+    margin-left: auto;
     padding: 1px 6px;
     border-radius: var(--radius-xs);
     background: color-mix(in srgb, var(--accent-yellow) 14%, transparent);
@@ -748,7 +706,7 @@
     text-decoration-style: dashed;
 }
 .tool-result-path svg {
-    margin-inline-end: 3px;
+    margin-right: 3px;
     vertical-align: -1px;
 }
 .tool-result-path:hover {
@@ -844,9 +802,6 @@
 }
 .chunk-chevron.expanded {
     transform: rotate(90deg);
-}
-.chunk-chevron.expanded:dir(rtl) {
-    transform: rotate(-90deg);
 }
 
 .chunk-body {
@@ -1018,8 +973,7 @@
 }
 
 .cmd-stdout {
-    padding-block: 4px 8px;
-    padding-inline: 22px 10px;
+    padding: 4px 10px 8px 22px;
     margin: 0;
     color: var(--text-code);
     white-space: pre-wrap;
@@ -1043,8 +997,7 @@
 }
 
 .cmd-stderr {
-    padding-block: 4px 8px;
-    padding-inline: 22px 10px;
+    padding: 4px 10px 8px 22px;
     margin: 0;
     color: var(--code-danger);
     white-space: pre-wrap;
@@ -1065,8 +1018,7 @@
 }
 
 .cmd-empty {
-    padding-block: 6px 8px;
-    padding-inline: 22px 10px;
+    padding: 6px 10px 8px 22px;
     color: var(--text-code-dim);
     font-style: italic;
 }
@@ -1077,17 +1029,13 @@
         animation: none;
     }
 
-    .agent-flow-wrap {
-        transition: none;
-    }
-
-    .agent-flow,
-    .flow-thought,
+    .agent-activity.active .flow-note,
     .flow-thought-hacker,
-    .flow-tool,
+    .flow-steps.live .flow-tool,
     .flow-tool-detail,
     .flow-plan,
-    .flow-error {
+    .flow-steps.live .flow-error,
+    .flow-steps.live .flow-policy-alert {
         animation: none;
     }
 
@@ -1097,19 +1045,12 @@
     }
 
     .flow-tool-left > svg,
-    .flow-tool-left > svg:not(.flow-tool-spinner) {
+    .flow-steps.live .flow-tool-left > svg:not(.flow-tool-spinner) {
         animation: none;
         transition: none;
     }
 
     .flow-tool-chevron {
         transition: none;
-    }
-}
-
-/* ── Responsive ───────────────────────────────────────────────── */
-@media (max-width: 768px) {
-    .agent-activity {
-        padding: 0 16px;
     }
 }
