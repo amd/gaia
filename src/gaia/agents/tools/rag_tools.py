@@ -1851,11 +1851,26 @@ class RAGToolsMixin:
                         "error": f"Invalid summary_type '{summary_type}'. Valid types: {', '.join(valid_types)}",
                     }
 
-                # Get type-specific instruction
+                # Keep the tool's real styles aligned with summarize/SKILL.md.
+                # The caller may reshape this draft for other named styles.
                 type_instructions = {
-                    "brief": "Create a concise 2-3 paragraph summary highlighting the most important points and main themes.",
-                    "detailed": "Create a comprehensive summary covering all major topics, key points, and important details. Organize by sections if applicable.",
-                    "bullets": "Create a bullet-point summary of the key points, organizing related items together. Use sub-bullets for details.",
+                    "brief": (
+                        "Write at most three complete sentences with only two or "
+                        "three essential, concrete takeaways. Use no headings or "
+                        "Markdown bullets, and do not begin with filler such as "
+                        "'Overall' or 'In summary'."
+                    ),
+                    "detailed": (
+                        "Write a comprehensive summary covering every major topic, "
+                        "key point, and important detail in full paragraphs. Do not "
+                        "use bullets."
+                    ),
+                    "bullets": (
+                        "Write only a flat Markdown bullet list with at most three "
+                        "top-level bullets. Keep each bullet under 20 words and to "
+                        "one idea; use no headings, numbering, paragraphs, or nested "
+                        "sub-bullets."
+                    ),
                 }
 
                 summary_instruction = type_instructions[summary_type]
@@ -1976,25 +1991,10 @@ Document content:
 
 CRITICAL GROUNDING RULE: Only include information that is explicitly present in the document content above. Do NOT add, infer, or extrapolate any facts, figures, or details that do not appear verbatim or near-verbatim in the document text. If a metric (e.g., net income, cash flow, retention rate) is not mentioned in the document, do not include it.
 
-Generate a well-structured summary with the following format:
+Return only the requested summary body; do not add document metadata or a generic
+heading/template that conflicts with the requested style.
 
-# Document Summary: {Path(target_file).name}
-
-## Document Information
-- **File**: {Path(target_file).name}
-- **Pages**: {num_pages}
-- **Total Words**: ~{total_words:,}
-
-## Overview
-[2-3 sentence overview of what this document is — only from document content]
-
-## Key Content
-[Main content organized by topics/sections — only facts from the document, reference page numbers where applicable]
-
-## Key Takeaways
-[Bullet points of the most important points — only from the document, no extrapolation]
-
-Use the {summary_type} style for the content sections."""
+{summary_instruction}"""
 
                     # Use chat SDK to generate summary
                     try:
@@ -2007,7 +2007,11 @@ Use the {summary_type} style for the content sections."""
                             "document": str(Path(target_file).name),
                             "total_words": total_words,
                             "sections_processed": 1,
-                            "instruction": "Present the summary to the user. The summary includes document metadata, structured sections, and page references.",
+                            "instruction": (
+                                "Present this as a draft in the requested summary style. "
+                                "If the user asked for an unsupported shape such as executive "
+                                "or action items, reshape the draft before replying."
+                            ),
                         }
                     except Exception as e:
                         logger.error(f"Error generating summary: {e}")
@@ -2071,26 +2075,11 @@ Section summaries:
 
 CRITICAL GROUNDING RULE: Only synthesize information that appears in the section summaries above. Do NOT add, infer, or extrapolate any facts, figures, or details not present in the summaries. Every claim in your output must be traceable to one of the section summaries.
 
-Synthesize these into a single, well-structured summary using this format:
+Return only the requested summary body; do not add document metadata or a generic
+heading/template that conflicts with the requested style. Preserve any useful page
+references from the section summaries.
 
-# Document Summary: {Path(target_file).name}
-
-## Document Information
-- **File**: {Path(target_file).name}
-- **Pages**: {num_pages}
-- **Total Words**: ~{total_words:,}
-- **Sections Processed**: {len(section_summaries)}
-
-## Overview
-[2-3 sentence overview synthesizing all sections]
-
-## Key Content
-[Main content organized by topics - consolidate from all section summaries, reference page numbers]
-
-## Key Takeaways
-[Bullet points of the most important points from across all sections]
-
-Use the {summary_type} style. Ensure page references from section summaries are preserved."""
+{summary_instruction}"""
 
                 try:
                     final_summary = _summary_text(self.rag.chat, final_prompt)
@@ -2103,7 +2092,11 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         "total_words": total_words,
                         "sections_processed": len(section_summaries),
                         "section_summaries": section_summaries,
-                        "instruction": "Present the formatted summary to the user. The summary includes document metadata, organized sections with page references, and key takeaways.",
+                        "instruction": (
+                            "Present this as a draft in the requested summary style. "
+                            "If the user asked for an unsupported shape such as executive "
+                            "or action items, reshape the draft before replying."
+                        ),
                     }
                 except Exception as e:
                     logger.error(f"Error synthesizing final summary: {e}")

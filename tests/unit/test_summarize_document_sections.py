@@ -30,10 +30,12 @@ class _Chat:
 
     def __init__(self, on_send=None, finish_reasons=()):
         self.calls = []
+        self.prompts = []
         self._on_send = on_send
         self._finish_reasons = list(finish_reasons)
 
     def send(self, prompt, **kwargs):
+        self.prompts.append(prompt)
         self.calls.append(kwargs)
         if self._on_send:
             self._on_send()
@@ -116,6 +118,35 @@ def test_a_thinking_model_summarizes_with_thinking_off(summarize):
     tool(file_path=DOC, summary_type="brief")
 
     assert chat.calls[0]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+@pytest.mark.parametrize(
+    ("summary_type", "required", "forbidden"),
+    [
+        (
+            "brief",
+            ("at most three complete sentences", "no headings or Markdown bullets"),
+            ("## Key Takeaways", "Create a concise 2-3 paragraph"),
+        ),
+        (
+            "bullets",
+            ("at most three top-level bullets", "under 20 words", "nested sub-bullets"),
+            ("## Key Takeaways", "Use sub-bullets"),
+        ),
+    ],
+)
+def test_business_summary_styles_match_the_skill_contract(
+    summarize, summary_type, required, forbidden
+):
+    chat = _Chat()
+    tool = summarize(chat, pages=1)
+
+    result = tool(file_path=DOC, summary_type=summary_type)
+
+    assert result["status"] == "success"
+    [prompt] = chat.prompts
+    assert all(text in prompt for text in required)
+    assert all(text not in prompt for text in forbidden)
 
 
 def test_a_summary_cut_off_at_the_limit_is_an_error_not_a_summary(summarize):
