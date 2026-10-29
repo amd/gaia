@@ -81,6 +81,8 @@ func (m ChatModel) WithStartupModel(kind StartupModelKind, provider, model strin
 // Call after WithModelMemory.
 func (m ChatModel) WithRelayedModel(kind StartupModelKind, provider, model string) ChatModel {
 	m.startup = startupModel{}
+	// The model id too, as a relayed switch sets it: /cost prices by it.
+	m.modelID = model
 	m.modelDisplay = model
 	m.modelBackend = provider
 	m.modelRemote = true

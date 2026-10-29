@@ -14,17 +14,32 @@ export function spokenDuration(ms: number): string {
     return secs ? `${mins} min ${secs} s` : `${mins} min`;
 }
 
-/** "Answered in 40 s on your GPU · first word in 1 s", or null with nothing to say. */
-export function answerSummary(latencyMs: number | undefined, stats: InferenceStats | undefined): string | null {
+/** How a turn that never finished its answer ended. */
+export type TurnEnding = 'stopped' | 'interrupted';
+
+const ENDED_AFTER: Record<TurnEnding, string> = { stopped: 'Stopped after', interrupted: 'Interrupted after' };
+
+/** "Answered in 40 s on your GPU · first word in 1 s", or null with nothing to say.
+ *  A turn that never finished says how it ended instead of claiming an answer. */
+export function answerSummary(
+    latencyMs: number | undefined,
+    stats: InferenceStats | undefined,
+    ended?: TurnEnding,
+): string | null {
     const parts: string[] = [];
     if (latencyMs != null && latencyMs > 0) {
-        parts.push(`Answered in ${spokenDuration(latencyMs)}${stats?.place ? ` ${stats.place}` : ''}`);
+        const lead = ended ? ENDED_AFTER[ended] : 'Answered in';
+        parts.push(`${lead} ${spokenDuration(latencyMs)}${stats?.place ? ` ${stats.place}` : ''}`);
     } else if (stats?.place) {
-        parts.push(`Answered ${stats.place}`);
+        parts.push(`${ended ? 'Ran' : 'Answered'} ${stats.place}`);
     }
     if (stats?.time_to_first_token != null && stats.time_to_first_token > 0) {
         const first = `first word in ${spokenDuration(stats.time_to_first_token * 1000)}`;
         parts.push(parts.length ? first : first[0].toUpperCase() + first.slice(1));
+    }
+    // The agent's own count, the figure the TUI and evals report.
+    if (stats?.steps != null && stats.steps > 0) {
+        parts.push(`${stats.steps} step${stats.steps !== 1 ? 's' : ''}`);
     }
     return parts.length ? parts.join(' · ') : null;
 }
@@ -46,9 +61,9 @@ export function exactStats(latencyMs: number | undefined, stats: InferenceStats 
 }
 
 /** The answer footer in plain words; a click shows the exact numbers. */
-export function AnswerStats({ latencyMs, stats }: { latencyMs?: number; stats?: InferenceStats }) {
+export function AnswerStats({ latencyMs, stats, ended }: { latencyMs?: number; stats?: InferenceStats; ended?: TurnEnding }) {
     const [open, setOpen] = useState(false);
-    const summary = answerSummary(latencyMs, stats);
+    const summary = answerSummary(latencyMs, stats, ended);
     const exact = exactStats(latencyMs, stats);
     if (!summary && exact.length === 0) return null;
     return (

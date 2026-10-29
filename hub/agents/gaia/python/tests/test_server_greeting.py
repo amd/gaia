@@ -1,6 +1,6 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""``POST /v1/gaia/greeting`` (contract 2.19).
+"""``POST /v1/gaia/greeting`` (contract 2.26).
 
 The Agent UI opens a new chat on a greeting the agent writes. An installed
 GAIA runs the agent as this sidecar, so the greeting has to come from here:
@@ -79,7 +79,7 @@ def _events(response):
 
 def test_the_contract_advertises_the_greeting():
     major, minor = (int(x) for x in server_mod.API_VERSION.split(".")[:2])
-    assert (major, minor) >= (2, 19)
+    assert (major, minor) >= (2, 26)
 
 
 def test_the_greeting_streams_and_leaves_no_session(built):

@@ -49,6 +49,10 @@ _QUERY_CONNECT_TIMEOUT = 10.0
 # sidecar timeout — a hung sidecar would make Cancel as slow as not cancelling.
 _CANCEL_TIMEOUT = 10.0
 
+# Internet switch POST timeout: it runs under the chat's switch lock, so a hung
+# sidecar must not stall the toggle (and every later flip) for the general timeout.
+_SWITCH_TIMEOUT = 10.0
+
 
 def _extract_detail(resp) -> str:
     """Pull the sidecar's actionable message from a non-2xx response.
@@ -226,6 +230,29 @@ class SidecarProxy:
                 f"access: {exc}"
             ) from exc
 
+    def set_internet(self, session_id: str, internet_off: bool) -> dict:
+        """Turn the sidecar session's internet on or off (contract >= 2.23).
+
+        Raises on any failure, including the 404 for a session the sidecar has
+        not created yet.
+        """
+        import requests
+
+        path = f"{self.prefix}/sessions/{session_id}/internet"
+        try:
+            resp = self._session.post(
+                f"{self.base_url}{path}",
+                json={"internet_off": bool(internet_off)},
+                timeout=_SWITCH_TIMEOUT,
+            )
+            self._raise_for_status(resp, path)
+            return resp.json()
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to switch the "
+                f"internet: {exc}"
+            ) from exc
+
     def query_stream(
         self,
         body: dict,
@@ -266,7 +293,7 @@ class SidecarProxy:
         read_timeout: float = 300.0,
         on_response: Optional[Callable[[Any], None]] = None,
     ) -> Iterator[Dict[str, Any]]:
-        """Stream ``POST /v1/<agent>/greeting`` (flagship, contract >= 2.19).
+        """Stream ``POST /v1/<agent>/greeting`` (flagship, contract >= 2.26).
 
         Same framing, failure and ``on_response`` rules as :meth:`query_stream`.
         """

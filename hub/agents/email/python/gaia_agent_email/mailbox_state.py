@@ -245,6 +245,15 @@ def inspect_provider(provider: str, *, probe: bool = True) -> Dict[str, Any]:
     granted = list(conn.get("scopes") or [])
     result["scopes"] = granted
 
+    if conn.get("error") == "busy":
+        # Mid-save by another GAIA operation: not gone, just not judgeable now.
+        result["state"] = STATE_ERROR
+        result["detail"] = (
+            f"The {label} connection is being saved by another GAIA operation "
+            "right now. Retry in a moment."
+        )
+        return result
+
     if conn.get("error") == "configuration":
         # A stored connection whose OAuth client credentials are gone (never
         # entered, rotated, or wiped). The store can't even report its scopes,

@@ -156,6 +156,7 @@ describe('Settings › Model', () => {
         fireEvent.click(await screen.findByRole('radio', { name: /Fireworks AI/ }));
         const card = await screen.findByRole('region', { name: 'Fireworks AI' });
         expect(await within(card).findByText('$0.15 in · $0.50 out per 1M tokens')).toBeInTheDocument();
+        fireEvent.click(within(card).getByRole('button', { name: 'Show all models' }));
         expect(within(card).getByText('price unknown')).toBeInTheDocument();
     });
 });
@@ -174,6 +175,9 @@ describe('ModelChip', () => {
         render(<ModelChip />);
         fireEvent.click(screen.getByRole('button', { name: /Gemma|Model/ }));
         const dialog = await screen.findByRole('dialog', { name: 'Choose a model' });
-        expect(await within(dialog).findByText('#2 cheapest · $0.15 in · $0.50 out per 1M tokens')).toBeInTheDocument();
+        fireEvent.mouseEnter(await within(dialog).findByRole('button', { name: /^About glm-5p3-flash/i }));
+        const bubble = await screen.findByRole('tooltip');
+        expect(bubble).toHaveTextContent('#2 cheapest');
+        expect(bubble).toHaveTextContent('$0.15 in · $0.50 out per 1M tokens');
     });
 });

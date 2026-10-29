@@ -59,6 +59,7 @@ class _HappyFakeAgent:
     def __init__(self):
         self.conversation_history = []
         self.console = None
+        self.streaming = False  # GaiaAgentConfig's default; the route turns it on
         self._cancel_event = None
         self.seen_query = None
         self.seen_history = None
@@ -297,6 +298,23 @@ def test_query_streams_canonical_sequence(app_client, monkeypatch):
     assert events[-1] == {"type": "final", "answer": "Triaged 5 emails."} or (
         events[-1]["type"] == "final" and events[-1]["answer"] == "Triaged 5 emails."
     )
+
+
+def test_query_turns_streaming_on_for_the_agent(app_client, monkeypatch):
+    """#5728: the email agent's /query streams like the flagship's does.
+
+    The config default is off and the route never turned it on, so a relayed turn
+    showed "Waiting on the model" until the whole answer landed, and a stopped
+    turn kept no text.
+    """
+    fake = _HappyFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+
+    resp = app_client.post("/v1/email/query", json=_req())
+
+    assert resp.status_code == 200
+    _parse_sse(resp.text)  # drain
+    assert fake.streaming is True
 
 
 def test_query_pushes_context_as_history(app_client, monkeypatch):
@@ -1005,3 +1023,52 @@ def test_cancel_ends_an_email_turn_waiting_for_the_model(monkeypatch):
     t.join(timeout=10)
 
     assert fake.cancelled is True
+
+
+# ---------------------------------------------------------------------------
+# Pushed history is re-fit to this agent's own prompt and window
+# ---------------------------------------------------------------------------
+
+
+class _PromptHeavyFakeAgent(_HappyFakeAgent):
+    """A large prompt on a 32K window: what the host could not budget for."""
+
+    def __init__(self):
+        super().__init__()
+        self.model_id = "Qwen3.6-35B-A3B-GGUF"
+        self.system_prompt = "word " * 10_000
+        self._openai_tools = []
+
+
+def _pushed_context(turns, words):
+    messages = []
+    for n in range(turns):
+        messages.append({"role": "user", "content": f"q{n} " + "data " * words})
+        messages.append({"role": "assistant", "content": f"a{n}"})
+    return messages
+
+
+def test_pushed_history_too_big_beside_the_prompt_is_refit(app_client, monkeypatch):
+    from gaia.agents.base import history
+
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.resolve_ctx_size", lambda **_kw: 32768
+    )
+    fake = _PromptHeavyFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    query = "next?"
+    own = history.history_budget(fake, query)
+    # Sized from the budget: the token estimator differs between machines.
+    words = 1_000 * own // (4 * history.turn_cost(_pushed_context(1, 1_000)))
+    turn = history.turn_cost(_pushed_context(1, words))
+    context = _pushed_context(own // turn + 1, words)
+
+    resp = app_client.post("/v1/email/query", json=_req(query=query, context=context))
+
+    assert resp.status_code == 200
+    seen = fake.seen_history
+    assert 0 < len(seen) < len(context)
+    assert seen == context[-len(seen) :]
+    assert seen[0]["role"] == "user"
+    warnings = [e for e in _parse_sse(resp.text) if "out of the model's view" in str(e)]
+    assert len(warnings) == 1

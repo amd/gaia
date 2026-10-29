@@ -2,7 +2,7 @@
 name: data-explore
 description: Load messy tabular data into SQL scratchpad tables and answer questions with real queries instead of eyeballing. Use when the user has a CSV, spreadsheet, export, or pasted table and asks for totals, trends, outliers, or a breakdown.
 license: MIT
-version: 1.0.0
+version: 1.0.1
 metadata:
   gaia:
     security_tier: community
@@ -11,6 +11,8 @@ metadata:
       - insert_data
       - query_data
       - list_tables
+    pairs_with:
+      - office-docs
     provenance:
       source: starter-pack
 ---

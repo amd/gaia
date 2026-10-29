@@ -10,9 +10,10 @@
 The public homepage only shows numbers with a real, public source of truth:
 GitHub stars/forks/release-asset download counts, and npm registry downloads
 (`website/src/data/github.ts`). The website's download buttons link GitHub
-release assets, so those clicks are in the release-asset count. What is still
-missing is every install that never touches GitHub: `install.sh` /
-`install.ps1`, `gaia init` and `gaia hub install` fetch from a Cloudflare R2
+release assets, so those clicks are in the release-asset count, and so is the
+terminal binary `install.sh` / `install.ps1` fetch. What is still missing is
+every agent install: those scripts' flagship agent download, `gaia init` and
+`gaia hub install` fetch from a Cloudflare R2
 bucket via `workers/agent-hub`'s `serveObject`
 (`workers/agent-hub/src/index.ts`), which has **zero request tracking today**:
 no counter, no Analytics Engine binding, no Logpush. The public stats row

@@ -404,7 +404,7 @@ def test_a_sidecar_flagship_greets_through_its_daemon(monkeypatch, tmp_path):
     proxy, warmer = _sidecar_flagship(
         monkeypatch,
         tmp_path,
-        "2.19",
+        "2.26",
         [
             {"type": "status", "phase": "priming"},
             {"type": "chunk", "content": "Welcome back. "},
@@ -427,7 +427,7 @@ def test_a_sidecar_greeting_failure_is_raised(monkeypatch, tmp_path):
     _sidecar_flagship(
         monkeypatch,
         tmp_path,
-        "2.19",
+        "2.26",
         [{"type": "error", "message": "Local Lemonade Server is not reachable."}],
     )
     with pytest.raises(RuntimeError, match="not reachable"):
@@ -436,7 +436,7 @@ def test_a_sidecar_greeting_failure_is_raised(monkeypatch, tmp_path):
 
 def test_a_sidecar_stream_that_ends_early_is_an_error(monkeypatch, tmp_path):
     _sidecar_flagship(
-        monkeypatch, tmp_path, "2.19", [{"type": "chunk", "content": "Hel"}]
+        monkeypatch, tmp_path, "2.26", [{"type": "chunk", "content": "Hel"}]
     )
     with pytest.raises(RuntimeError, match="ended without an answer"):
         greeting.write_greeting(_Db(), lambda _t: None)
@@ -444,7 +444,7 @@ def test_a_sidecar_stream_that_ends_early_is_an_error(monkeypatch, tmp_path):
 
 def test_leaving_the_chat_unblocks_a_quiet_sidecar(monkeypatch, tmp_path):
     """A user's message must not wait out a greeting stuck on the model."""
-    proxy, _ = _sidecar_flagship(monkeypatch, tmp_path, "2.19", [])
+    proxy, _ = _sidecar_flagship(monkeypatch, tmp_path, "2.26", [])
     closed = threading.Event()
 
     class _Resp:
@@ -475,7 +475,7 @@ def test_the_sidecars_timing_reaches_the_warm_up_status(monkeypatch, tmp_path):
     _, warmer = _sidecar_flagship(
         monkeypatch,
         tmp_path,
-        "2.19",
+        "2.26",
         [{"type": "done", "text": "Hi.", "seconds": 4.2, "prompt_tokens": 19812}],
     )
     greeting.write_greeting(_Db(), lambda _t: None)
@@ -491,7 +491,7 @@ def test_a_sidecar_too_old_to_greet_says_chat_still_works(
     with pytest.raises(greeting.GreetingUnavailable) as raised:
         greeting.write_greeting(_Db(), lambda _t: None)
     message = str(raised.value)
-    assert "predates contract 2.19" in message and "Chat works" in message
+    assert "predates contract 2.26" in message and "Chat works" in message
     assert "gaia init" not in message
     assert proxy.bodies == []
 
@@ -611,9 +611,9 @@ def test_the_greeting_is_never_logged(monkeypatch, caplog):
 
 @pytest.mark.parametrize(
     "version, expected",
-    [("2.19", True), ("3.0", True), ("2.18", False), (None, False)],
+    [("2.26", True), ("3.0", True), ("2.25", False), ("2.19", False), ("2.18", False), (None, False)],
 )
-def test_the_flagship_greets_from_contract_2_19(version, expected):
+def test_the_flagship_greets_from_contract_2_26(version, expected):
     from gaia.ui.email_sidecar.profiles import (
         EMAIL_PROFILE,
         GAIA_PROFILE,

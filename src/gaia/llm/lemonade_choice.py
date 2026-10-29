@@ -256,8 +256,12 @@ class ProbeResult:
             "message": self.message(),
         }
 
-    def message(self) -> str:
-        """One plain sentence and the next step."""
+    def message(self, *, in_use: bool = False) -> str:
+        """One plain sentence and the next step.
+
+        ``in_use``: GAIA is already set to this server, so the way back to its
+        own is a next step. Before a switch GAIA still runs its own, so it isn't.
+        """
         if self.status == OK:
             return f"Lemonade Server v{self.version} is running at {self.url}."
         if self.status == NEEDS_KEY:
@@ -274,16 +278,19 @@ class ProbeResult:
             return (
                 f"The Lemonade Server at {self.url} is v{self.version}; GAIA needs "
                 f"v{self.minimum} or newer. Upgrade it from "
-                "https://lemonade-server.ai, or " + SWITCH_BACK_HINT + "."
+                "https://lemonade-server.ai"
+                + (", or " + SWITCH_BACK_HINT if in_use else "")
+                + "."
             )
         if self.status == NOT_LEMONADE:
             return (
                 f"Something answers at {self.url}, but it is not a Lemonade "
                 f"Server ({self.detail}). Check the address and port."
             )
+        next_step = SWITCH_BACK_HINT if in_use else "check the address and port"
         return (
-            f"No Lemonade Server is answering at {self.url} ({self.detail}). "
-            "Start it, or " + SWITCH_BACK_HINT + "."
+            f"No Lemonade Server is answering at {self.url}: {self.detail}. "
+            f"Start it, or {next_step}."
         )
 
 
@@ -317,11 +324,12 @@ def probe(
             f"{base}/health", headers=headers, timeout=timeout, allow_redirects=False
         )
     except requests.exceptions.RequestException as e:
+        log.debug("Lemonade probe of %s/health failed: %r", base, e)
         return ProbeResult(
             base,
             UNREACHABLE,
             minimum=minimum,
-            detail=_short(e),
+            detail=_unreachable_reason(e),
             timed_out=isinstance(e, requests.exceptions.ReadTimeout),
         )
     if response.status_code in (401, 403):
@@ -350,9 +358,41 @@ def probe(
     return ProbeResult(base, OK, version=version, minimum=minimum)
 
 
-def _short(error: Exception) -> str:
-    text = str(error).splitlines()[0] if str(error) else type(error).__name__
-    return text[:160]
+def _unreachable_reason(error: Exception) -> str:
+    """Why nothing answered, in plain words a person can act on."""
+    import socket
+
+    import requests
+
+    # SSLError and ConnectTimeout are ConnectionErrors too: check them first.
+    if isinstance(error, requests.exceptions.SSLError):
+        return "the secure (HTTPS) connection could not be set up"
+    if isinstance(error, requests.exceptions.ConnectTimeout):
+        return "nothing accepted the connection in time"
+    if isinstance(error, requests.exceptions.ReadTimeout):
+        return "it accepted the connection but did not answer in time"
+    if isinstance(error, requests.exceptions.ConnectionError):
+        for cause in _causes(error):
+            if isinstance(cause, ConnectionRefusedError):
+                return "nothing is listening on that port"
+            if isinstance(cause, socket.gaierror):
+                return "the host name could not be found"
+    return "the connection failed"
+
+
+def _causes(error: BaseException):
+    """*error* and what it wraps: urllib3 nests the socket error a few deep."""
+    seen = set()
+    stack = [error]
+    while stack:
+        current = stack.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        yield current
+        stack.extend((current.__cause__, current.__context__))
+        stack.append(getattr(current, "reason", None))
+        stack.extend(a for a in current.args if isinstance(a, BaseException))
 
 
 @dataclass(frozen=True)
@@ -754,7 +794,8 @@ def set_mode(mode: str) -> Optional[ProbeResult]:
         )
     result = probe(cfg.lemonade_base_url, _stored_key(cfg))
     if not result.usable:
-        raise LemonadeChoiceError(result.message(), result.status)
+        in_use = cfg.lemonade_mode == MODE_EXTERNAL
+        raise LemonadeChoiceError(result.message(in_use=in_use), result.status)
     cfg.lemonade_mode = MODE_EXTERNAL
     cfg.save()
     return result
@@ -790,7 +831,7 @@ def set_url(url: Optional[str]) -> Optional[ProbeResult]:
                 NEEDS_KEY,
             )
         if not result.usable:
-            raise LemonadeChoiceError(result.message(), result.status)
+            raise LemonadeChoiceError(result.message(in_use=True), result.status)
     if base != cfg.lemonade_base_url and cfg.lemonade_api_key_stored:
         _forget_key()
         cfg.lemonade_api_key_stored = False

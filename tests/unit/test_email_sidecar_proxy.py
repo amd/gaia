@@ -811,7 +811,7 @@ def test_cross_thread_close_unblocks_parked_read_promptly_real_socket():
         server_thread.join(timeout=5.0)
 
 
-# -- greeting_stream (flagship, contract 2.19) -----------------------------------
+# -- greeting_stream (flagship, contract 2.26) -----------------------------------
 
 
 def test_greeting_stream_posts_to_the_greeting_route_and_parses_events():

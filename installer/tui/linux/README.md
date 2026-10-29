@@ -33,9 +33,27 @@ dist/gaia-1.4.0.x86_64.rpm
   `gaia-tui` and `gaia-agent`, no extension. The script copies them; it does not
   build them.
 - `--out` is created if absent.
-- `--version` must be `MAJOR.MINOR.PATCH`, digits only. RPM forbids `-` in a
-  version, so a semver prerelease suffix is rejected up front with that reason
-  rather than failing later inside `rpmbuild`.
+- `--version` is `MAJOR.MINOR.PATCH`, or `MAJOR.MINOR.PATCH-rc.N` for a release
+  candidate. Any other suffix is rejected up front rather than failing later
+  inside `rpmbuild`.
+
+### Release candidate versions
+
+A candidate's file names keep the release's own spelling, so they match the
+Windows setup and `installer/tui/artifacts.py`. The version *inside* both
+packages uses a tilde instead, because RPM forbids `-` and because dpkg and rpm
+both sort a tilde before the bare version. A final then installs over its
+candidates as an ordinary upgrade:
+
+| Release | Files | Package version (deb and rpm) |
+| --- | --- | --- |
+| `v0.25.1-rc4` | `gaia_0.25.1-rc.4_amd64.deb`, `gaia-0.25.1-rc.4.x86_64.rpm` | `0.25.1~rc.4` |
+| `v0.25.1` | `gaia_0.25.1_amd64.deb`, `gaia-0.25.1.x86_64.rpm` | `0.25.1` |
+
+`0.25.1~rc.4` sorts after `0.25.0` and before `0.25.1`, and `rc.10` after
+`rc.9`. `--print-package-version` prints the package version for a `--version`
+without building anything. The macOS `.pkg` keeps `0.25.1-rc.4`: macOS
+Installer does not version-gate plain files, so it needs no respelling.
 
 There is no flag to build only one of the two. If `rpmbuild` is missing or the
 rpm step fails, the whole run exits non-zero — a release with a `.deb` and no

@@ -30,6 +30,7 @@ import respx
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConnectionRevokedError,
+    ConnectorsError,
 )
 from gaia.connectors.providers import _registry
 from gaia.connectors.store import (
@@ -161,6 +162,51 @@ class TestRefresh:
 
         entry = _cache[_cache_key("google", "default")]
         assert entry.expires_at - time.monotonic() > 3000
+
+
+class TestRefreshErrorPayload:
+    @pytest.mark.parametrize("status_code", [400, 401])
+    @pytest.mark.parametrize("error_type", [AttributeError, RuntimeError])
+    @respx.mock
+    async def test_unexpected_json_error_propagates(
+        self, seeded_microsoft_connection, monkeypatch, status_code, error_type
+    ):
+        error = error_type("unexpected response parsing failure")
+
+        def broken_json(self, **kwargs):
+            raise error
+
+        respx.post(MS_TOKEN_URL).mock(
+            return_value=httpx.Response(status_code, text="invalid response")
+        )
+        monkeypatch.setattr(httpx.Response, "json", broken_json)
+
+        with pytest.raises(error_type) as exc:
+            await get_or_refresh("microsoft")
+
+        assert exc.value is error
+
+    @pytest.mark.parametrize(
+        "status_code, error_type, message",
+        [
+            (400, ConnectorsError, "unknown"),
+            (401, AuthRequiredError, "invalid_client"),
+        ],
+    )
+    @respx.mock
+    async def test_malformed_json_preserves_refresh_error(
+        self, seeded_microsoft_connection, status_code, error_type, message
+    ):
+        respx.post(MS_TOKEN_URL).mock(
+            return_value=httpx.Response(status_code, text="not JSON")
+        )
+
+        with pytest.raises(error_type, match=message) as exc:
+            await get_or_refresh("microsoft")
+
+        assert type(exc.value) is error_type
+        if status_code == 401:
+            assert exc.value.reason is AuthRequiredError.Reason.REAUTH_REQUIRED
 
 
 class TestRefreshTokenRotation:

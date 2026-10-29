@@ -8,7 +8,7 @@ and tools are read into the model's cache. So a greeting that arrives proves
 the stack works, and the user's first question starts answering at once.
 
 A flagship built in this process greets here; one that runs as its daemon
-sidecar greets through ``POST /v1/gaia/greeting`` (contract >= 2.19). Either
+sidecar greets through ``POST /v1/gaia/greeting`` (contract >= 2.26). Either
 way it runs as the process's warm-up (:meth:`PrefixWarmer.run_now`): a chat
 turn that starts meanwhile waits for it instead of racing it for the model.
 

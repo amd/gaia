@@ -152,7 +152,8 @@ func (l localRunner) Check(ctx context.Context, cfg Config) Report {
 	var models []gaiainit.Model
 	rep := l.walk(ctx, cfg, &models)
 	if l.asksWhereChatRuns() && len(rep.Steps()) > 0 {
-		rep = withChatStep(rep, chatOptions(downloadSize(models), l.localFit(ctx, rep, models)))
+		options := chatOptions(downloadSize(models), l.localFit(ctx, rep, models))
+		rep = withChatStep(rep, withGatewayReach(ctx, options))
 	}
 	return rep
 }
@@ -608,7 +609,11 @@ var downloadedLocalModels = func(ctx context.Context) ([]lemonade.Model, error) 
 // checkPickedModel confirms the chosen local model is on disk; setup was told
 // to leave the chat model alone, so nothing else would notice it missing.
 func (l localRunner) checkPickedModel(ctx context.Context, row Row) Row {
-	picked := l.pickedLocalModel()
+	return checkLocalModelDownloaded(ctx, l.pickedLocalModel(), row)
+}
+
+// checkLocalModelDownloaded confirms a local model the user picked is on disk.
+func checkLocalModelDownloaded(ctx context.Context, picked string, row Row) Row {
 	models, err := downloadedLocalModels(ctx)
 	if err != nil {
 		row.State = StateUnknown
@@ -641,9 +646,6 @@ func (l localRunner) checkPickedModel(ctx context.Context, row Row) Row {
 var listedCloudModels = func(ctx context.Context, provider string) ([]lemonade.Model, error) {
 	return lemonade.New("").Models(ctx, provider)
 }
-
-// runsInCloud reports that this launch chats on a cloud model.
-func (c Config) runsInCloud() bool { return lemonade.IsCloudID(c.Model) }
 
 // checkCloudModel confirms the Lemonade GAIA talks to can serve the chosen
 // cloud model. Provider settings live in each server, so a provider connected on
