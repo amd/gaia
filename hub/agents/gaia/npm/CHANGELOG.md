@@ -14,6 +14,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reply with no image, an unreadable one, or a single flat colour (SDXL can
   return an all-black frame) counted as success. Each is now an error naming
   what came back, and success gives the saved file's path.
+- **Memory downloads its embedding model when it is missing.** On the first
+  start that uses memory, the agent now fetches the required embedding model
+  from Lemonade instead of silently running without memory; the initial
+  download can be about 300 MB.
 - **Unknown or misplaced switches are refused.** `gaia --forse` and
   `gaia fetch --developer-mode` now exit 2 instead of silently starting the TUI;
   pass terminal-UI arguments after a bare `--`.

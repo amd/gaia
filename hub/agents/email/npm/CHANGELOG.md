@@ -9,6 +9,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
 - **No stray "unmapped agent event" line.** A sentence the model wrote before
   checking your mail showed up in the Agent UI as
   `[unmapped agent event: commentary]`. It no longer does.
+- **Memory downloads its embedding model when it is missing.** On the first
+  start that uses memory, the agent now fetches the required embedding model
+  from Lemonade instead of silently running without memory; the initial
+  download can be about 300 MB.
+- **Sensitive credentials stay out of memory and the conversation log.** PINs,
+  card numbers, SSNs and other credential-shaped text are not saved as
+  memories, and logged turns replace matching spans with `[secret removed]`.
 - **Connect prompts name the right Settings tab.** They sent users to a
   "Connections" tab in Settings, which the Agent UI doesn't have; they now say
   "Settings → Connectors".
