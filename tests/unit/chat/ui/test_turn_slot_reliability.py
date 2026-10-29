@@ -768,6 +768,40 @@ async def test_answered_relayed_turn_requeues_at_the_front_and_says_so(runtime):
         await _cleanup(rt, a, b, c)
 
 
+async def test_stopping_an_answered_relayed_turn_waiting_in_line(runtime):
+    rt = runtime
+    sidecar = _ParkingSidecar("permission")
+    a = rt.db.create_session(model="M-GGUF", agent_type="gaia")["id"]
+    b_release = threading.Event()
+    b, _ = _seed(rt.db, lambda _agent: b_release.wait(5) and "B")
+    try:
+        with _relay_through(sidecar):
+            await _start_detached(await _send(rt, a, "run echo"))
+            run_a = rt.manager.get(a)
+            await _until(
+                lambda: run_a.handler is not None and run_a.handler.waiting_on()
+            )
+            await _until(lambda: rt.queue.holder is None)
+
+            await _start_detached(await _send(rt, b, "long"))
+            await _until(lambda: rt.queue.holder == b)
+            _answer_relayed(run_a.handler, "permission")
+            await _until(lambda: rt.queue.waiting() == [a])
+
+            await chat.cancel_stream(chat.CancelStreamRequest(session_id=a))
+            await asyncio.wait_for(run_a.task, 5)
+
+        events = _events(run_a)
+        assert events[-1].get("cancelled") is True
+        assert not [event for event in events if event.get("type") == "agent_error"]
+        assert rt.queue.holder == b, "a stopped turn never retakes the model"
+        assert rt.queue.waiting() == []
+    finally:
+        b_release.set()
+        sidecar.answered.set()
+        await _cleanup(rt, a, b)
+
+
 async def test_stopping_a_relayed_turn_while_it_waits_on_the_user(runtime):
     rt = runtime
     sidecar = _ParkingSidecar("permission")
