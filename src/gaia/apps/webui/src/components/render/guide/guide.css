@@ -274,6 +274,28 @@
     white-space: pre-line;
 }
 
+.render-guide__tip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+    padding: 8px 8px 8px 12px;
+    border: 1px solid var(--accent-ring);
+    border-radius: var(--radius-md);
+    background: var(--accent-dim);
+    color: var(--text-primary);
+    font-size: var(--fs-label);
+}
+
+.render-guide__tip > svg {
+    flex: none;
+    color: var(--accent-solid);
+}
+
+.render-guide__tip > span {
+    flex: 1;
+}
+
 /* ── timer chip ──────────────────────────────────────────────────────── */
 
 .render-guide-chip {

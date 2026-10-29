@@ -35,7 +35,7 @@ const itinerary = {
 };
 
 afterEach(() => {
-    for (const key of Object.keys(localStorage)) if (key.startsWith('gaia:guide:')) localStorage.removeItem(key);
+    for (const key of Object.keys(localStorage)) if (key.startsWith('gaia:guide')) localStorage.removeItem(key);
 });
 
 describe('GuideCard', () => {
@@ -127,5 +127,35 @@ describe('GuideCard', () => {
         expect(within(dialog).getByText('Set 2 of 3')).toBeInTheDocument();
         // Finishing a set starts the rest.
         expect(within(dialog).getByRole('button', { name: 'Pause 45 seconds timer' })).toBeInTheDocument();
+    });
+
+    it('shows a one-time tip that dismissing hides on every card', () => {
+        render(
+            <>
+                <RenderCard render="guide" data={recipe} />
+                <RenderCard render="guide" data={workout} />
+            </>,
+        );
+        expect(screen.getAllByRole('note')).toHaveLength(2);
+
+        fireEvent.click(screen.getAllByLabelText('Dismiss tip')[0]);
+
+        expect(screen.queryAllByRole('note')).toHaveLength(0);
+        expect(localStorage.getItem('gaia:guide-tip-dismissed')).toBe('1');
+    });
+
+    it('drops the tip once a control it points at is used', () => {
+        render(<RenderCard render="guide" data={recipe} />);
+        expect(screen.getByRole('note')).toHaveTextContent('Change the servings');
+
+        fireEvent.click(screen.getByLabelText('More servings'));
+
+        expect(screen.queryByRole('note')).toBeNull();
+    });
+
+    it('shows no tip on a card with nothing hidden', () => {
+        render(<RenderCard render="guide" data={itinerary} />);
+
+        expect(screen.queryByRole('note')).toBeNull();
     });
 });

@@ -36,28 +36,33 @@ export interface GuideFeatures {
     startLabel: string | null;
     /** Steps are days on a timeline, each titled by its "Day N" lead. */
     timeline: boolean;
+    /** Shown once, under the first card with hidden controls, until dismissed. */
+    tip: string | null;
 }
 
 export const GUIDE_FEATURES: Readonly<Record<GuideType, GuideFeatures>> = {
     recipe: {
         itemsLabel: 'Ingredients', stepsLabel: 'Steps', scaling: true, units: true,
         timers: true, checkItems: false, startLabel: 'Start cooking', timeline: false,
+        tip: 'Change the servings, switch units, tap a time to start a timer, or press Start cooking for one step at a time.',
     },
     workout: {
         itemsLabel: 'Equipment', stepsLabel: 'Exercises', scaling: false, units: false,
         timers: true, checkItems: true, startLabel: 'Start workout', timeline: false,
+        tip: 'Tap a time to start a timer, or press Start workout for one exercise at a time with sets and rest.',
     },
     howto: {
         itemsLabel: 'Materials & tools', stepsLabel: 'Steps', scaling: false, units: true,
         timers: true, checkItems: true, startLabel: 'Start', timeline: false,
+        tip: 'Tick off what you have, or press Start for one step at a time.',
     },
     checklist: {
         itemsLabel: 'Items', stepsLabel: null, scaling: false, units: false,
-        timers: false, checkItems: true, startLabel: null, timeline: false,
+        timers: false, checkItems: true, startLabel: null, timeline: false, tip: null,
     },
     itinerary: {
         itemsLabel: 'Packing', stepsLabel: 'Days', scaling: false, units: false,
-        timers: false, checkItems: true, startLabel: null, timeline: true,
+        timers: false, checkItems: true, startLabel: null, timeline: true, tip: null,
     },
 };
 

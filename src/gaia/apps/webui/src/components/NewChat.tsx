@@ -9,6 +9,7 @@ import { ModelChip } from './ModelChip';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PrivateChip } from './PrivateChip';
 import { StartCards } from './StartCards';
+import { TryChips } from './TryChips';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
@@ -256,6 +257,11 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         inputRef.current?.focus();
     }, [attachments, send]);
 
+    const fillPrompt = useCallback((prompt: string) => {
+        setText(prompt);
+        inputRef.current?.focus();
+    }, []);
+
     const folder = start?.working_folder;
 
     return (
@@ -283,6 +289,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
                 {start && <StartCards cards={start.cards} onPick={pick} disabled={starting || sending} />}
+                <TryChips onPick={fillPrompt} disabled={starting || sending} />
                 {startError && <SuggestionsUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>
         </main>

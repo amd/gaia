@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Copy, Minus, Play, Plus, Printer, Ruler, Share2 } from 'lucide-react';
+import { Check, Copy, Lightbulb, Minus, Play, Plus, Printer, Ruler, Share2, X } from 'lucide-react';
 import { UnsupportedCard } from '../UnsupportedCard';
 import { isGuideWire, parseGuideDoc } from './guideDoc';
 import type { GuideDoc, GuideWire } from './guideDoc';
@@ -12,6 +12,7 @@ import { canShare, copyGuide, printGuide, shareGuide } from './guideActions';
 import { StepText } from './StepText';
 import { GuidedView } from './GuidedView';
 import { useTimers } from './useTimers';
+import { dismissGuideTip, useGuideTipDismissed } from './guideTip';
 import type { UnitSystem } from './units';
 import './guide.css';
 
@@ -55,6 +56,7 @@ function Guide({ wire }: { wire: GuideWire }) {
     const [guided, setGuided] = useState(false);
     const [notice, setNotice] = useState<string | null>(null);
     const timers = useTimers();
+    const tipDismissed = useGuideTipDismissed();
     const state: GuideViewState = { servings, system, checked };
     const { features } = doc;
 
@@ -105,7 +107,10 @@ function Guide({ wire }: { wire: GuideWire }) {
                         <button
                             type="button"
                             className="render-guide__icon"
-                            onClick={() => setServings((n) => Math.max(1, (n ?? 1) - 1))}
+                            onClick={() => {
+                                dismissGuideTip();
+                                setServings((n) => Math.max(1, (n ?? 1) - 1));
+                            }}
                             disabled={servings <= 1}
                             aria-label="Fewer servings"
                         >
@@ -117,7 +122,10 @@ function Guide({ wire }: { wire: GuideWire }) {
                         <button
                             type="button"
                             className="render-guide__icon"
-                            onClick={() => setServings((n) => Math.min(MAX_SERVINGS, (n ?? 1) + 1))}
+                            onClick={() => {
+                                dismissGuideTip();
+                                setServings((n) => Math.min(MAX_SERVINGS, (n ?? 1) + 1));
+                            }}
                             disabled={servings >= MAX_SERVINGS}
                             aria-label="More servings"
                         >
@@ -130,7 +138,10 @@ function Guide({ wire }: { wire: GuideWire }) {
                         <button
                             type="button"
                             className="render-guide__tool"
-                            onClick={() => setSystem(other)}
+                            onClick={() => {
+                                dismissGuideTip();
+                                setSystem(other);
+                            }}
                             aria-label={`Units: ${SYSTEM_LABEL[system]}. Switch to ${SYSTEM_LABEL[other]}`}
                             title={`Switch to ${SYSTEM_LABEL[other]} units`}
                         >
@@ -151,7 +162,10 @@ function Guide({ wire }: { wire: GuideWire }) {
                     </button>
                 </div>
                 {features.startLabel && doc.steps.length > 0 && (
-                    <button type="button" className="render-guide__start" onClick={() => setGuided(true)}>
+                    <button type="button" className="render-guide__start" onClick={() => {
+                        dismissGuideTip();
+                        setGuided(true);
+                    }}>
                         <Play size={14} />
                         {features.startLabel}
                     </button>
@@ -223,6 +237,16 @@ function Guide({ wire }: { wire: GuideWire }) {
                     <h4 className="render-guide__label">Notes</h4>
                     <p>{stepText(doc, doc.notes, system)}</p>
                 </aside>
+            )}
+
+            {features.tip && !tipDismissed && (
+                <div className="render-guide__tip" role="note">
+                    <Lightbulb size={15} aria-hidden="true" />
+                    <span>{features.tip}</span>
+                    <button type="button" className="render-guide__icon" onClick={dismissGuideTip} aria-label="Dismiss tip">
+                        <X size={14} />
+                    </button>
+                </div>
             )}
 
             {guided && (

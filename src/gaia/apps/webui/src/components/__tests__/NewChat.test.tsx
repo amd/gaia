@@ -122,6 +122,20 @@ describe('NewChat while GAIA is starting', () => {
     });
 });
 
+describe('NewChat try chips', () => {
+    it('fills the box with an example that ends in a card, without sending it', () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+
+        expect(screen.getByLabelText('Message')).toHaveValue('Give me a banana bread recipe');
+        expect(screen.getByLabelText('Message')).toHaveFocus();
+        expect(onSend).not.toHaveBeenCalled();
+    });
+});
+
 describe('NewChat while the chat is being created (#5712)', () => {
     beforeEach(() => {
         useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus, messageQueues: {}, currentSessionId: null });
