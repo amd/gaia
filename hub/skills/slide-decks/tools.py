@@ -887,10 +887,11 @@ def export_slide_image(
     output_path: str = "",
     width: int = 1920,
 ) -> dict:
-    """Save a built slide as a PNG (default) or JPEG; the way to give a picture of a slide.
+    """Save a built slide as a PNG (default) or JPEG, only when the user asks for an image.
 
     Build the deck first, then export it. Never draw a slide with image
-    generation: this is the real slide, text and charts as built.
+    generation: this is the real slide, text and charts as built. A deck
+    request without an image ask needs no export.
 
     Args:
         deck_path: The .pptx to draw, from a build result's path.
