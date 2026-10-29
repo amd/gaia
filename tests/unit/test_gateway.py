@@ -970,7 +970,9 @@ def test_gateway_install_restores_a_remembered_token_before_reporting_none(
     import gaia.cli as cli
     from gaia.llm import gateway as gateway_module
 
-    state = SimpleNamespace(base_url="", enabled_models=[], active_model=None)
+    state = SimpleNamespace(
+        base_url="https://gateway.example/v1", enabled_models=[], active_model=None
+    )
     calls = []
 
     class FakeStatus:
@@ -1025,7 +1027,9 @@ def test_gateway_install_keeps_no_token_hint_without_a_remembered_token(
     import gaia.cli as cli
     from gaia.llm import gateway as gateway_module
 
-    state = SimpleNamespace(base_url="", enabled_models=[], active_model=None)
+    state = SimpleNamespace(
+        base_url="https://gateway.example/v1", enabled_models=[], active_model=None
+    )
 
     class FakeManager:
         def install(self, *args, **kwargs):
@@ -1068,7 +1072,9 @@ def test_gateway_install_reports_when_the_remembered_token_is_rejected(
     import gaia.cli as cli
     from gaia.llm import gateway as gateway_module
 
-    state = SimpleNamespace(base_url="", enabled_models=[], active_model=None)
+    state = SimpleNamespace(
+        base_url="https://gateway.example/v1", enabled_models=[], active_model=None
+    )
     calls = []
 
     class FakeManager:
@@ -1103,3 +1109,141 @@ def test_gateway_install_reports_when_the_remembered_token_is_rejected(
     assert "The remembered gateway token was not accepted" in output
     assert "No token yet" not in output
     assert "Restored the remembered gateway token" not in output
+
+
+def _run_gateway_install(monkeypatch, *, saved_url, install_url, manager_cls, token):
+    from types import SimpleNamespace
+
+    import gaia.cli as cli
+    from gaia.llm import gateway as gateway_module
+
+    state = SimpleNamespace(base_url=saved_url, enabled_models=[], active_model=None)
+    monkeypatch.setattr(
+        gateway_module, "GatewayState", SimpleNamespace(load=lambda: state)
+    )
+    monkeypatch.setattr(gateway_module, "GatewayManager", manager_cls)
+    monkeypatch.setattr(gateway_module, "recall_token", lambda: token)
+    cli.handle_gateway_command(
+        SimpleNamespace(
+            gateway_action="install",
+            base_url=install_url,
+            skip_probe=True,
+            auth_header_name="Authorization",
+            auth_header_prefix="Bearer ",
+            allow_insecure_http=False,
+        )
+    )
+
+
+class _NoRestoreManager:
+    def install(self, *args, **kwargs):
+        return {
+            "models_discovered": 0,
+            "auth_state": {"env_var_set": False, "runtime_key_set": False},
+        }
+
+    def ensure_authenticated(self, recall=None):
+        raise AssertionError("a token must never be handed to a different gateway")
+
+
+@pytest.mark.parametrize(
+    "install_url",
+    [
+        "https://evil.example/v1",
+        "https://gateway.example/v2",
+        "http://gateway.example/v1",
+        "https://gateway.example.evil/v1",
+    ],
+)
+def test_gateway_install_never_sends_the_remembered_token_to_a_new_url(
+    monkeypatch, capsys, install_url
+):
+    secret = "sk-remembered-secret-123"
+    _run_gateway_install(
+        monkeypatch,
+        saved_url="https://gateway.example/v1",
+        install_url=install_url,
+        manager_cls=_NoRestoreManager,
+        token=secret,
+    )
+    output = capsys.readouterr().out
+    assert "The gateway URL changed" in output
+    assert "Restored the remembered" not in output
+    assert secret not in output
+
+
+@pytest.mark.parametrize(
+    "install_url", ["https://gateway.example/v1/", "HTTPS://Gateway.Example/v1"]
+)
+def test_gateway_install_restores_despite_trailing_slash_or_case(
+    monkeypatch, capsys, install_url
+):
+    secret = "sk-remembered-secret-123"
+    sent = []
+
+    class Status:
+        env_var_set = False
+        runtime_key_set = True
+        models_discovered = 2
+
+    class Manager(_NoRestoreManager):
+        def ensure_authenticated(self, recall=None):
+            sent.append(recall())
+            return True
+
+        def status(self):
+            return Status()
+
+    _run_gateway_install(
+        monkeypatch,
+        saved_url="https://gateway.example/v1",
+        install_url=install_url,
+        manager_cls=Manager,
+        token=secret,
+    )
+    output = capsys.readouterr().out
+    assert sent == [secret]
+    assert "Restored the remembered gateway token" in output
+    assert secret not in output
+
+
+def test_gateway_install_with_env_token_does_not_touch_the_credential_store(
+    monkeypatch, capsys
+):
+    class Manager(_NoRestoreManager):
+        def install(self, *args, **kwargs):
+            return {
+                "models_discovered": 4,
+                "auth_state": {"env_var_set": True, "runtime_key_set": False},
+            }
+
+    def boom():
+        raise AssertionError("credential store must not be read")
+
+    from gaia.llm import gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "recall_token", boom)
+    from types import SimpleNamespace
+
+    import gaia.cli as cli
+
+    state = SimpleNamespace(
+        base_url="https://gateway.example/v1", enabled_models=[], active_model=None
+    )
+    monkeypatch.setattr(
+        gateway_module, "GatewayState", SimpleNamespace(load=lambda: state)
+    )
+    monkeypatch.setattr(gateway_module, "GatewayManager", Manager)
+    cli.handle_gateway_command(
+        SimpleNamespace(
+            gateway_action="install",
+            base_url=None,
+            skip_probe=True,
+            auth_header_name="Authorization",
+            auth_header_prefix="Bearer ",
+            allow_insecure_http=False,
+        )
+    )
+    output = capsys.readouterr().out
+    assert "Models discovered: 4" in output
+    assert "No token yet" not in output
