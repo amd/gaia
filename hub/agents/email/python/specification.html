@@ -298,9 +298,11 @@ td:nth-child(3) {
     <code>error</code> {detail, status}. The stream is terminated by <b>exactly one
     <code>final</code> or <code>error</code></b>. Lines beginning <code>:</code>
     are heartbeat comments and carry no payload. When <code>phase</code> is
-    <code>model_queue</code>, <code>queue</code> reports <code>event</code>,
+    <code>model_queue</code>, <code>queue</code> reports <code>event</code>
+    (<code>queued</code>, then <code>granted</code>), <code>scope</code>,
     <code>position</code>, <code>queue_length</code>, <code>holder</code>,
-    <code>holder_model</code>, and <code>waited_s</code>.</p>
+    <code>holder_model</code>, <code>held_for_s</code>, <code>waited_s</code>,
+    and <code>model</code>; a field the wait cannot know is omitted.</p>
   <p class="desc"><b>Mid-run questions (#2469):</b> the agent can ask the user
     something <i>while it runs</i> — most importantly to set up or repair mailbox
     access instead of printing a shell command. It emits <code>needs_input</code>
