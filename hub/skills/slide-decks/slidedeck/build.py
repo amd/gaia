@@ -3632,11 +3632,13 @@ class DeckBuilder:
             )
             half = min(xs[k] - left, right - xs[k], Inches(1.6))
             lo, hi = int(max(left, xs[k] - half)), int(min(right, xs[k] + half))
-            if k == 0 or k == n - 1:  # an end label may lean inwards
+            if k == 0 or k == n - 1:  # an end label leans inwards
+                # Its outward room is only the edge pad; size it by the inward room.
+                inward = min((right - xs[k]) if k == 0 else (xs[k] - left), Inches(1.6))
                 lo, hi = (
-                    (int(left), int(min(right, left + 2 * half)))
+                    (int(left), int(min(right, xs[k] + inward)))
                     if k == 0
-                    else (int(max(left, right - 2 * half)), int(right))
+                    else (int(max(left, xs[k] - inward)), int(right))
                 )
             return lo, hi
 

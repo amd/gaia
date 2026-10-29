@@ -996,3 +996,36 @@ def test_whole_number_charts_in_the_thousands_get_separators(tmp_path):
     )
     assert chart.plots[0].series[0].values == (20000.0, 6400.0)
     assert "#,##0" in chart.part.blob.decode("utf-8", "ignore")
+
+
+def test_markdown_timeline_puts_dated_milestones_on_a_line_with_readable_ends(
+    tmp_path,
+):
+    from pptx import Presentation
+    from pptx.util import Inches
+    from slidedeck.build import build_deck
+    from slidedeck.markdown import outline_from_markdown
+
+    md = (
+        "## Launch lands in April\nDiagram: timeline\n"
+        "### Feb 3 — Beta opens\n- 500 customers\n"
+        "### Week 1 — Adoption check\n- 40% enable it\n"
+        "### Apr 14 — General availability\n- Triage time falls\n"
+    )
+    outline = outline_from_markdown(md)
+    slide = outline["slides"][0]
+    assert slide["type"] == "timeline"
+    assert [(m["date"], m["title"]) for m in slide["milestones"]] == [
+        ("Feb 3", "Beta opens"),
+        ("Week 1", "Adoption check"),
+        ("Apr 14", "General availability"),
+    ]
+    out = tmp_path / "t.pptx"
+    r = build_deck(outline, str(out))
+    assert r["verify"]["status"] == "pass", r["verify"]["issues"]
+    labels = [
+        s
+        for s in Presentation(str(out)).slides[0].shapes
+        if s.name.startswith("Milestone") and not s.name.endswith("marker")
+    ]
+    assert all(s.width > Inches(1.5) for s in labels)

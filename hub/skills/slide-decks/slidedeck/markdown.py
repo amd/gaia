@@ -532,6 +532,14 @@ def _diagram_slide(
         slide["footnote"] = "; ".join(
             x for x in (slide.get("footnote"), " ".join(lines)) if x
         )
+    if kind in ("timeline", "roadmap", "milestones"):
+        # "### Feb 3 — Beta opens": the date, then what happens on it.
+        for it in items:
+            parts = re.split(r"\s+[—–-]\s+|:\s+", it["title"], maxsplit=1)
+            it["date"] = parts[0].strip()
+            it["title"] = parts[1].strip() if len(parts) > 1 else ""
+        slide.update({"type": "timeline", "milestones": items})
+        return slide
     slide.update({"type": "diagram", "diagram": kind, "items": items})
     return slide
 

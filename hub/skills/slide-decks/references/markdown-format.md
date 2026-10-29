@@ -17,6 +17,11 @@ into slides, builds them and checks them in one call.
   shape: `boxes` (the default), `process` (left-to-right stages), `cycle`,
   `pyramid` or `stack`. With `Diagram:` and no `###` headings, each top-level
   bullet is a box and its sub-bullets are the detail.
+- `Diagram: timeline` draws dated milestones on a line: write each heading as
+  `### Feb 3 — Beta opens` (date, a dash, what happens), its bullets beneath.
+  Use it for launch plans and dated roadmaps instead of boxes.
+- A `##` slide with bullets and a `> quote` shows the quote in a panel beside
+  them; a `##` title with only one short line is a statement slide.
 - On a process, `Axis: More cost and effort` draws one arrow under the stages
   naming what grows from left to right. A list of what increases across the
   stages goes here, not in a separate table or slide. An `Axis:` line on a
