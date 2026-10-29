@@ -66,7 +66,11 @@ $tuiArp    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerm
 $uiGuid    = '071ff68a-44b8-5d94-b099-f93e99d1c3f3'
 $uiKey     = "HKCU:\Software\$uiGuid"
 $uiArp     = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$uiGuid"
-$uiDefault = "$env:LOCALAPPDATA\Programs\gaia-desktop"
+$uiDefault = "$env:LOCALAPPDATA\Programs\gaia-ui"
+# The desktop app's names before it became gaia-ui; an upgrade keeps the old folder.
+$uiLegacyDefault = "$env:LOCALAPPDATA\Programs\gaia-desktop"
+$uiExe       = 'gaia-ui.exe'
+$uiLegacyExe = 'gaia-desktop.exe'
 $desktop   = [Environment]::GetFolderPath('Desktop')
 $startMenu = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
 $runKey    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
@@ -107,6 +111,13 @@ function Wait-Gone([string]$Path, [int]$Seconds = 120) {
 function Ui-Dir {
     if (-not (Test-Path $uiKey)) { return $null }
     return (Get-ItemProperty -Path $uiKey -Name InstallLocation -ErrorAction SilentlyContinue).InstallLocation
+}
+
+# The installed app's executable: the upgrade journey first runs a release
+# that predates the rename.
+function Ui-Exe([string]$Dir) {
+    foreach ($n in $uiExe, $uiLegacyExe) { if ($Dir -and (Test-Path "$Dir\$n")) { return "$Dir\$n" } }
+    return $null
 }
 
 function Wants([string]$Component) {
@@ -152,11 +163,12 @@ function Check-TuiVersion([string[]]$Expected) {
 # ── The Agent UI ──────────────────────────────────────────────────────────────
 function Start-AgentUi {
     $dir = Ui-Dir
-    if (-not $dir -or -not (Test-Path "$dir\gaia-desktop.exe")) { Fail "no installed gaia-desktop.exe to launch (InstallLocation: '$dir')" }
+    $exe = Ui-Exe $dir
+    if (-not $exe) { Fail "no installed $uiExe to launch (InstallLocation: '$dir')" }
     # gaia init downloads Lemonade and several GB of models; that needs hardware
     # and is covered elsewhere. Everything up to a serving backend is under test.
     $env:GAIA_SKIP_GAIA_INIT = '1'
-    $p = Start-Process -FilePath "$dir\gaia-desktop.exe" -WindowStyle Hidden -PassThru
+    $p = Start-Process -FilePath $exe -WindowStyle Hidden -PassThru
     Set-Content -Path "$work\app.pid" -Value $p.Id
     Start-Sleep -Seconds 10
     if ($p.HasExited) { Get-Content "$gaiaHome\electron-main.log" -Tail 50 -ErrorAction SilentlyContinue; Fail "the app exited within 10s of launch (exit $($p.ExitCode))" }
@@ -198,7 +210,7 @@ function Wait-AgentUiHealth {
 function Stop-AgentUi {
     $backendPid = Get-Content "$gaiaHome\backend.pid" -ErrorAction SilentlyContinue
     if ($backendPid) { & taskkill.exe /T /F /PID $backendPid 2>&1 | Out-Null }
-    & taskkill.exe /T /F /IM gaia-desktop.exe 2>&1 | Out-Null
+    foreach ($n in $uiExe, $uiLegacyExe) { & taskkill.exe /T /F /IM $n 2>&1 | Out-Null }
     Get-Process | Where-Object { $_.Path -and $_.Path -like "$gaiaHome\venv\*" } | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 3
 }
@@ -273,13 +285,13 @@ function Uninstall-Tui {
 }
 function Uninstall-Ui {
     if (-not (Test-Path $uiArp)) { return }
-    $dir = Ui-Dir
+    $exe = Ui-Exe (Ui-Dir)
     $quiet = (Get-ItemProperty -Path $uiArp -Name QuietUninstallString).QuietUninstallString
     Write-Host "desktop app quiet uninstall: $quiet"
     $u = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', $quiet -PassThru -Wait
     if ($u.ExitCode -ne 0) { Fail "the desktop app's uninstaller exited $($u.ExitCode)" }
     Wait-Gone $uiArp
-    if ($dir) { Wait-Gone "$dir\gaia-desktop.exe" }
+    if ($exe) { Wait-Gone $exe }
 }
 
 function Setup-Name { return Asset-Name 'win-setup' }
@@ -367,7 +379,8 @@ switch ($Step) {
         } elseif (Test-Path $tuiDir) { Fail "$tuiDir exists though the terminal was not chosen" }
         if (Wants 'ui') {
             $dir = Ui-Dir
-            if (-not $dir -or -not (Test-Path "$dir\gaia-desktop.exe")) { Fail "the desktop app is not installed (InstallLocation: '$dir')" }
+            if (-not $dir -or -not (Test-Path "$dir\$uiExe")) { Fail "the desktop app is not installed (InstallLocation: '$dir')" }
+            if (Test-Path "$dir\$uiLegacyExe") { Fail "the upgrade left the old $uiLegacyExe behind in $dir" }
         } elseif (Test-Path $uiKey) { Fail 'the desktop app was installed though it was not chosen' }
     }
 
@@ -426,7 +439,7 @@ switch ($Step) {
     'quit' {
         Stop-AgentUi
         $left = Get-Process -ErrorAction SilentlyContinue | Where-Object {
-            $_.ProcessName -eq 'gaia-desktop' -or ($_.Path -and $_.Path -like "$gaiaHome\venv\*")
+            $_.ProcessName -in @('gaia-ui', 'gaia-desktop') -or ($_.Path -and $_.Path -like "$gaiaHome\venv\*")
         }
         if ($left) { Fail "still running after the app was stopped: $(($left | ForEach-Object { "$($_.Id) $($_.Path)" }) -join '; ')" }
     }
@@ -459,7 +472,7 @@ switch ($Step) {
             $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path -ErrorAction SilentlyContinue).Path
             if ($regPath -like "*$gaiaHome*") { $problems += 'the user PATH still names the sandbox .gaia' }
         } else {
-            foreach ($p in $tuiDir, $tuiArp, $uiArp, $uiDefault, "$desktop\GAIA.lnk", "$desktop\GAIA Terminal UI.lnk",
+            foreach ($p in $tuiDir, $tuiArp, $uiArp, $uiDefault, $uiLegacyDefault, "$desktop\GAIA.lnk", "$desktop\GAIA Terminal UI.lnk",
                            "$startMenu\GAIA.lnk", "$startMenu\GAIA\GAIA Terminal UI.lnk", $fragment) {
                 if (Test-Path $p) { $problems += "left behind: $p" }
             }
@@ -469,7 +482,7 @@ switch ($Step) {
             if (Test-Path $uiKey) { Write-Host "::warning::$uiKey survived the uninstall" }
         }
         $running = Get-Process -ErrorAction SilentlyContinue | Where-Object {
-            $_.ProcessName -in @('gaia-desktop', 'gaia-tui', 'gaia-agent') -or ($_.Path -and $_.Path -like "$gaiaHome\venv\*")
+            $_.ProcessName -in @('gaia-ui', 'gaia-desktop', 'gaia-tui', 'gaia-agent') -or ($_.Path -and $_.Path -like "$gaiaHome\venv\*")
         }
         foreach ($r in $running) { $problems += "still running: $($r.ProcessName) ($($r.Path))" }
         # Kept on purpose: user data in ~\.gaia and Lemonade Server (the setup

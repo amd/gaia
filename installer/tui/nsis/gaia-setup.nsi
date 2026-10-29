@@ -106,7 +106,9 @@ Unicode true
 !define UI_GUID           "071ff68a-44b8-5d94-b099-f93e99d1c3f3"
 !define UI_INSTALL_KEY    "Software\${UI_GUID}"
 !define UI_UNINST_KEY     "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UI_GUID}"
-!define UI_EXE            "gaia-desktop.exe"
+!define UI_EXE            "gaia-ui.exe"
+; The exe before it became gaia-ui: an upgrade can find that one running.
+!define LEGACY_UI_EXE     "gaia-desktop.exe"
 !define UI_SETUP_NAME     "gaia-agent-ui-setup.exe"
 
 ; The developer build (installer/nsis/gaia.nsi) puts its own gaia-tui on PATH
@@ -980,6 +982,8 @@ Function Preflight
     ReadRegStr $R7 HKCU "${UI_INSTALL_KEY}" "InstallLocation"
     ${If} $R7 != ""
       StrCpy $R8 "${UI_EXE}"
+      Call AbortIfRunning
+      StrCpy $R8 "${LEGACY_UI_EXE}"
       Call AbortIfRunning
     ${EndIf}
   ${EndIf}

@@ -265,15 +265,15 @@ module.exports = async function afterPack(context) {
     // happen in native code before V8 — too early to be affected by JS.
     // --no-sandbox must be in the binary's own argv[] at process start.
     //
-    // Solution: rename gaia-desktop → .gaia-desktop-bin and write a thin
-    // POSIX shell wrapper named gaia-desktop that prepends --no-sandbox.
-    // AppRun (AppImage) and the DEB .desktop Exec= both call gaia-desktop,
+    // Solution: rename gaia-ui → .gaia-ui-bin and write a thin
+    // POSIX shell wrapper named gaia-ui that prepends --no-sandbox.
+    // AppRun (AppImage) and the DEB .desktop Exec= both call gaia-ui,
     // so every launch path gets the flag regardless of how the AppImage is
     // invoked (double-click, shell, .desktop, xdg-open, CI xvfb-run).
     //
     // The DEB .desktop already carries --no-sandbox via executableArgs —
     // passing it twice is harmless (Chromium ignores duplicate switches).
-    const execName = "gaia-desktop";
+    const execName = context.packager.executableName;
     const binaryPath = path.join(root, execName);
     const realBinaryName = `.${execName}-bin`;
     const realBinaryPath = path.join(root, realBinaryName);

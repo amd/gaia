@@ -383,11 +383,11 @@ class TestJourney:
             results,
             tmp_path,
             ["install", "launch"],
-            {"install": (0, "", "gaia-desktop is not on PATH")},
+            {"install": (0, "", "gaia-ui is not on PATH")},
         )
         assert out.returncode == 1
         assert data["phases"]["launch"]["status"] == "pass"
-        assert data["findings"] == ["gaia-desktop is not on PATH"]
+        assert data["findings"] == ["gaia-ui is not on PATH"]
 
     def test_a_known_finding_is_reported_and_does_not_fail(self, results, tmp_path):
         known = [
@@ -403,7 +403,7 @@ class TestJourney:
             results,
             tmp_path,
             ["install"],
-            {"install": (0, "", "`gaia-desktop` is not on PATH")},
+            {"install": (0, "", "`gaia-ui` is not on PATH")},
             known,
         )
         assert out.returncode == 0, out.stdout

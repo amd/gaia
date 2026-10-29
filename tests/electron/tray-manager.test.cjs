@@ -1176,6 +1176,38 @@ describe("start at login", () => {
     });
   });
 
+  test("Linux: an entry naming an executable an update renamed is pointed at this one", () => {
+    setPlatform("linux");
+    electronMock.app.isPackaged = true;
+    const prevXdg = process.env.XDG_CONFIG_HOME;
+    const prevAppImage = process.env.APPIMAGE;
+    process.env.XDG_CONFIG_HOME = "/home/u/.config";
+    delete process.env.APPIMAGE;
+    const prevGetPath = electronMock.app.getPath;
+    electronMock.app.getPath = jest.fn((name) => (name === "exe" ? "/opt/GAIA/.gaia-ui-bin" : prevGetPath(name)));
+    const stale = '[Desktop Entry]\nType=Application\nExec="/opt/GAIA/.gaia-desktop-bin"\n';
+    fs.readFileSync.mockImplementation((file) => (String(file).endsWith(".desktop") ? stale : "{}"));
+    try {
+      const mgr = newTray(createMockWindow());
+      mgr.syncLoginItem();
+      const entry = fs.writeFileSync.mock.calls.find((c) => String(c[0]).endsWith(".desktop"));
+      expect(entry[1]).toContain('Exec="/opt/GAIA/.gaia-ui-bin"');
+      expect(mgr.startOnLogin).toBe(true);
+
+      fs.writeFileSync.mockClear();
+      fs.readFileSync.mockImplementation((file) => (String(file).endsWith(".desktop") ? entry[1] : "{}"));
+      mgr.syncLoginItem();
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    } finally {
+      delete electronMock.app.isPackaged;
+      electronMock.app.getPath = prevGetPath;
+      fs.readFileSync.mockImplementation(() => "{}");
+      if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevXdg;
+      if (prevAppImage !== undefined) process.env.APPIMAGE = prevAppImage;
+    }
+  });
+
   test("Linux writes an XDG autostart entry, and removes it again", async () => {
     setPlatform("linux");
     const path = require("path");

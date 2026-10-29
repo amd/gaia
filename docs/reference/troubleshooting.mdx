@@ -757,7 +757,7 @@ error. To run the chat model in the cloud instead, see
     Turn GPU acceleration off:
     ```bash
     GAIA_DISABLE_GPU=1 ./gaia-agent-ui-*.AppImage   # AppImage
-    GAIA_DISABLE_GPU=1 gaia-desktop                 # .deb install
+    GAIA_DISABLE_GPU=1 gaia-ui                      # .deb install
     ```
     To make it stick, export `GAIA_DISABLE_GPU=1` in your shell profile
     (covers terminal launches), and add it to the `Exec=` line of the
@@ -776,7 +776,7 @@ error. To run the chat model in the cloud instead, see
     run it under XWayland:
     ```bash
     ./gaia-agent-ui-*.AppImage --ozone-platform=x11   # AppImage
-    gaia-desktop --ozone-platform=x11                 # .deb install
+    gaia-ui --ozone-platform=x11                      # .deb install
     ```
     To keep it, add `--ozone-platform=x11` to the desktop entry's `Exec=`
     line, using the same `~/.local/share/applications/` copy for the

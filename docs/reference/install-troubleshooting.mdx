@@ -16,7 +16,7 @@ This guide covers common problems people encounter when installing GAIA. If your
 
 ## macOS: Gatekeeper blocks the app {#gatekeeper}
 
-**Symptom**: A dialog appears saying **"gaia-desktop" Not Opened** — "Apple could not verify gaia-desktop is free of malware…" with only **Move to Trash** and **Done** buttons. Or on older macOS: "GAIA cannot be opened because the developer cannot be verified."
+**Symptom**: A dialog appears saying **"gaia-ui" Not Opened** — "Apple could not verify gaia-ui is free of malware…" with only **Move to Trash** and **Done** buttons. Or on older macOS: "GAIA cannot be opened because the developer cannot be verified."
 
 **Cause**: The DMG is ad-hoc signed but not notarized with an Apple Developer ID (we're working on notarization — see [#733](https://github.com/amd/gaia/issues/733)).
 
@@ -25,7 +25,7 @@ This guide covers common problems people encounter when installing GAIA. If your
 1. Click **Done** in the dialog (do not click "Move to Trash").
 2. Open **System Settings → Privacy & Security**.
 3. Scroll down to the Security section. You will see:
-   > "gaia-desktop" was blocked from use because it is not from an identified developer.
+   > "gaia-ui" was blocked from use because it is not from an identified developer.
 4. Click **Open Anyway**.
 5. Enter your Mac password when prompted.
 6. The app opens. macOS remembers this choice for future launches.
@@ -130,14 +130,16 @@ Subsequent launches work fully offline.
 **Windows (PowerShell)**:
 ```powershell
 $env:HTTPS_PROXY = "http://proxy.example.com:8080"
-& "$env:LOCALAPPDATA\Programs\GAIA\gaia-desktop.exe"
+& "$env:LOCALAPPDATA\Programs\gaia-ui\gaia-ui.exe"
 ```
+
+An install upgraded from a release that named the app `gaia-desktop` keeps its folder: use `Programs\gaia-desktop\gaia-ui.exe` instead.
 
 **macOS/Linux**:
 ```bash
 HTTPS_PROXY=http://proxy.example.com:8080 open -a "GAIA"
 # or just (Linux .deb / AppImage):
-HTTPS_PROXY=http://proxy.example.com:8080 gaia-desktop
+HTTPS_PROXY=http://proxy.example.com:8080 gaia-ui
 ```
 
 ### Corporate proxy with TLS inspection — "unable to get issuer certificate"
@@ -154,12 +156,12 @@ corporate root CA explicitly:
 **Windows (PowerShell)** — export the root CA from `certmgr.msc` as Base-64 `.cer`/`.pem`, then:
 ```powershell
 $env:NODE_EXTRA_CA_CERTS = "C:\path\to\corp-root-ca.pem"
-& "$env:LOCALAPPDATA\Programs\GAIA\gaia-desktop.exe"
+& "$env:LOCALAPPDATA\Programs\gaia-ui\gaia-ui.exe"
 ```
 
 **macOS/Linux**:
 ```bash
-NODE_EXTRA_CA_CERTS=/path/to/corp-root-ca.pem gaia-desktop
+NODE_EXTRA_CA_CERTS=/path/to/corp-root-ca.pem gaia-ui
 ```
 
 `NODE_EXTRA_CA_CERTS` covers GAIA's own network checks. The download step runs
@@ -171,7 +173,7 @@ reliable combination behind a TLS-inspecting proxy:
 export HTTPS_PROXY=http://proxy.example.com:8080
 export NODE_EXTRA_CA_CERTS=/path/to/corp-root-ca.pem
 export SSL_CERT_FILE=/path/to/corp-root-ca.pem
-gaia-desktop
+gaia-ui
 ```
 
 ### Antivirus interference
