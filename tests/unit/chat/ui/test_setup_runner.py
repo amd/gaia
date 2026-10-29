@@ -293,6 +293,23 @@ def test_describe_reads_the_download_size(line, size):
     assert progress is not None and progress.size == size
 
 
+def test_setup_output_removes_ansi_codes_from_the_model_and_details_log():
+    run = sr.SetupRun(False)
+    runner = sr.SetupRunner()
+
+    runner._consume(run, "\x1b[1;34mStep 1/5: Starting Lemonade Server...\x1b[0m")
+    runner._consume(
+        run,
+        "   Chat model: Gemma-\x1b[1;36m4\x1b[0m-E4B-it-GGUF (default_model)",
+    )
+
+    assert run.chat_model == "Gemma-4-E4B-it-GGUF"
+    assert run.log == [
+        "Step 1/5: Starting Lemonade Server...",
+        "Chat model: Gemma-4-E4B-it-GGUF (default_model)",
+    ]
+
+
 def test_describe_reads_the_chat_model_setup_chose():
     progress = sr.describe(
         "   Chat model: Qwen3.6-35B-A3B-GGUF — this PC has 32 GB for models (AMD iGPU)"

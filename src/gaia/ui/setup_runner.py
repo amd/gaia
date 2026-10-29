@@ -458,7 +458,13 @@ class SetupRunner:
                     stdin=subprocess.DEVNULL,
                     # Rich wraps a pipe at 80 columns, which would cut the
                     # error line shown as the failure reason mid-sentence.
-                    env={**os.environ, "COLUMNS": str(_UNWRAPPED_COLUMNS)},
+                    env={
+                        **os.environ,
+                        "COLUMNS": str(_UNWRAPPED_COLUMNS),
+                        # Setup output is shown in the browser, not a terminal.
+                        "NO_COLOR": "1",
+                        "CLICOLOR": "0",
+                    },
                     **windows_hidden_popen_kwargs(),
                 )
             except OSError as e:
@@ -565,7 +571,8 @@ class SetupRunner:
                 )
 
     def _consume(self, run: SetupRun, line: str) -> None:
-        line = line.strip()
+        # Defend the browser-facing log against a program that ignores NO_COLOR.
+        line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line).strip()
         if not line:
             return
         progress = describe(line)
