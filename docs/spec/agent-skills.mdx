@@ -548,6 +548,10 @@ are in the system prompt.
   loaded skill bodies past ~6,000 tokens. These stay suggestions. A load that
   fails is logged as a warning and stays a suggestion too.
 - **No embedder, no auto-load.** It runs on the same scores as suggestions.
+- **Only on the calibrated embedder.** The 0.55 floor was measured with
+  `embeddinggemma-300m`. On any other embedder, such as the NPU profile's FLM
+  embedder, auto-load is off, even with `GAIA_SKILL_AUTOLOAD=1`, and matches stay
+  suggestions.
 
 The loaded body pins for the next few turns, like an explicit `load_skill`.
 Turn it off with `GAIA_SKILL_AUTOLOAD=0` or

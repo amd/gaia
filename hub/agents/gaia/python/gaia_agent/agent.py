@@ -75,6 +75,7 @@ from gaia.agents.base.skill_suggester import (
     render_suggestion,
     suggest_env_override,
 )
+from gaia.agents.registry import DEFAULT_EMBEDDING_MODEL
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
@@ -576,6 +577,16 @@ class GaiaAgent(
         autoload = autoload_env_override()
         if autoload is None:
             autoload = bool(getattr(self.config, "skill_autoload", True))
+        embedder = self._active_embedding_model()
+        if autoload and embedder != DEFAULT_EMBEDDING_MODEL:
+            # The threshold's scores are embedder-specific; a wrong load costs a skill body.
+            logger.info(
+                "[skills] auto-load off: its threshold is calibrated for %s, "
+                "not the active embedder %s",
+                DEFAULT_EMBEDDING_MODEL,
+                embedder,
+            )
+            autoload = False
         return SkillSuggester(
             embed_fn=self._embed_text,
             embed_batch_fn=self._embed_texts_batch,

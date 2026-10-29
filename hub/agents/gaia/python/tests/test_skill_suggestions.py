@@ -22,6 +22,7 @@ from gaia.agents.base.skill_suggester import (
     SkillMatches,
     SkillSuggester,
 )
+from gaia.agents.registry import DEFAULT_EMBEDDING_MODEL, get_embedding_model_for_device
 
 
 def _never(_text):
@@ -216,6 +217,35 @@ def test_autoload_env_wins_over_config(monkeypatch, raw, on):
     monkeypatch.setenv("GAIA_SKILL_AUTOLOAD", raw)
     suggester = agent._maybe_build_skill_suggester()
     assert (suggester.autoload_threshold is not None) is on
+
+
+def test_autoload_stays_on_with_the_calibrated_embedder(monkeypatch):
+    agent = _agent(monkeypatch)
+    agent._embedding_model = DEFAULT_EMBEDDING_MODEL
+    suggester = agent._maybe_build_skill_suggester()
+    assert suggester.autoload_threshold == pytest.approx(DEFAULT_AUTOLOAD_THRESHOLD)
+
+
+@pytest.mark.parametrize(
+    "embedder",
+    [
+        get_embedding_model_for_device("npu"),
+        "nomic-embed-text-v2-moe-GGUF",
+        DEFAULT_EMBEDDING_MODEL.removeprefix("user."),
+        DEFAULT_EMBEDDING_MODEL.upper(),
+    ],
+)
+@pytest.mark.parametrize("env", [None, "1"])
+def test_autoload_off_for_an_uncalibrated_embedder(monkeypatch, embedder, env):
+    """The threshold is embedder-specific, so even an explicit opt-in cannot
+    auto-load on scores it was never measured against; suggestions stay."""
+    agent = _agent(monkeypatch)
+    if env is not None:
+        monkeypatch.setenv("GAIA_SKILL_AUTOLOAD", env)
+    agent._embedding_model = embedder
+    suggester = agent._maybe_build_skill_suggester()
+    assert suggester is not None
+    assert suggester.autoload_threshold is None
 
 
 def test_no_autoload_without_suggestions(monkeypatch):
