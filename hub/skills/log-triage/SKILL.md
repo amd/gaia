@@ -115,4 +115,5 @@ timeouts are baseline: steady across the whole range."*
 - `references/postmortem.md` - read when writing the report, for what each
   section must contain.
 - `references/fallback-python.md` - read only when `triage_logs` is not
-  available or a file stays unparsed with `timestamp_regex`.
+  available or a file stays unparsed with `timestamp_regex`. It inventories
+  with `list_files`, samples with `read_file` and parses with `run_python`.

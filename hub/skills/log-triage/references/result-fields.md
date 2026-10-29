@@ -34,9 +34,9 @@ Read the result in this order.
 ## Next steps
 
 - **Read before the first burst line.** `next_step` names it:
-  `read_file(file_path, start_line=line - 30, end_line=line + 10)`. Causes come
-  before their symptoms; a flood of timeouts after a hardware fault is the
-  effect.
+  `read_file(file_path, start_line=max(1, line - 30), end_line=line + 10)`.
+  Causes come before their symptoms; a flood of timeouts after a hardware fault
+  is the effect.
 - **Narrow when it helps.** `glob="*.log"` for a mixed folder, `bucket="1min"`
   for a short incident, `entity_regex` for the id the user asked about,
   `output_path` (a new `.csv` or `.txt` for the entity list, `.json` for full
