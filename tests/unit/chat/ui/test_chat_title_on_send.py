@@ -463,7 +463,7 @@ LOCAL_MODEL = "Gemma-4-E4B-it-GGUF"
 
 
 def _health(slots):
-    args = "--parallel 2 --kv-unified" if slots == 2 else ""
+    args = f"--parallel {slots} --kv-unified" if slots > 1 else ""
     return {
         "status": "ok",
         "all_models_loaded": [
@@ -543,30 +543,41 @@ def test_a_busy_model_is_waited_out(local_lemonade, monkeypatch):
 # ── Titled when the turn starts ──────────────────────────────────────────
 
 
-def _relayed_local_turn(monkeypatch, http, slots):
-    """Run one relayed turn; returns the title the chat had before the answer."""
-    import time
+def _relayed_turn(monkeypatch, http, model, slots=None):
+    """Run one relayed turn on *model*.
+
+    Returns what the chat looked like once its turn-start title task had
+    finished but before the answer was sent, and its title after the turn.
+    """
+    import threading
+
+    turn_start_done = threading.Event()
+    real_retitle = ch._maybe_update_session_title
+
+    async def _retitle(*args, at_turn_start=False, **kwargs):
+        try:
+            await real_retitle(*args, at_turn_start=at_turn_start, **kwargs)
+        finally:
+            if at_turn_start:
+                turn_start_done.set()
+
+    monkeypatch.setattr(ch, "_maybe_update_session_title", _retitle)
 
     seen = {}
     db = ChatDatabase(":memory:")
-    db.set_setting("custom_model", LOCAL_MODEL)
+    db.set_setting("custom_model", model)
     session = db.create_session(title="New Task", agent_type="gaia")
     sid = session["id"]
 
     def _fake_dispatch(sse_handler, request, history_pairs, model_id, agent, **kw):
-        # A long answer: give a turn-start title time to land first.
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline and db.get_session(sid)["title"] in (
-            PROVISIONAL,
-            "New Task",
-        ):
-            time.sleep(0.05)
+        seen["turn_start_ran"] = turn_start_done.wait(10)
         seen["title"] = db.get_session(sid)["title"]
         seen["title_calls"] = len(_title_calls(http))
         sse_handler._emit({"type": "answer", "content": "Tea began in China."})
 
     monkeypatch.setattr(ch, "_dispatch_sidecar_query", _fake_dispatch)
-    http.add(responses.GET, f"{LEMONADE}/health", json=_health(slots))
+    if slots is not None:
+        http.add(responses.GET, f"{LEMONADE}/health", json=_health(slots))
     http.add(
         responses.POST,
         f"{LEMONADE}/chat/completions",
@@ -587,23 +598,182 @@ def _relayed_local_turn(monkeypatch, http, slots):
     return seen, db.get_session(sid)["title"]
 
 
-def test_a_new_chat_is_titled_while_its_first_answer_runs(
-    monkeypatch, local_lemonade, sidecar_flagship
+@pytest.mark.parametrize("model", [CLOUD_MODEL, "amd.gpt-oss-120b"])
+def test_a_cloud_chat_is_titled_while_its_first_answer_runs(
+    monkeypatch, local_lemonade, sidecar_flagship, model
 ):
-    seen, final = _relayed_local_turn(monkeypatch, local_lemonade, slots=2)
+    seen, final = _relayed_turn(monkeypatch, local_lemonade, model)
 
-    assert seen["title"] == "History of Tea Essay"
+    assert seen == {
+        "turn_start_ran": True,
+        "title": "History of Tea Essay",
+        "title_calls": 1,
+    }
     assert final == "History of Tea Essay"
     # Titled from the question alone: no answer existed yet.
     (body,) = _title_calls(local_lemonade)
+    assert body["model"] == model
     assert "Assistant:" not in body["messages"][0]["content"]
 
 
-def test_a_one_slot_model_is_titled_after_the_answer(
+@pytest.mark.parametrize("slots", [1, 2, 4])
+def test_a_local_chat_is_titled_only_after_the_answer(
+    monkeypatch, local_lemonade, sidecar_flagship, slots
+):
+    """A local title at turn start could take the model before the answer's
+    first call, so the first token would wait for the title. A side slot
+    keeps the conversation's cache, not the answer's place in line."""
+    seen, final = _relayed_turn(monkeypatch, local_lemonade, LOCAL_MODEL, slots)
+
+    assert seen == {"turn_start_ran": True, "title": PROVISIONAL, "title_calls": 0}
+    assert final == "History of Tea Essay"
+    (body,) = _title_calls(local_lemonade)
+    assert "Assistant: Tea began in China." in body["messages"][0]["content"]
+
+
+def test_a_turn_start_title_never_asks_a_local_model(local_lemonade):
+    """Not even for its slots: the gate is the model's kind, not how it is loaded."""
+    db, sid = _provisional_chat()
+
+    asyncio.run(
+        ch._maybe_update_session_title(
+            db, sid, ESSAY, "", LOCAL_MODEL, at_turn_start=True
+        )
+    )
+
+    assert len(local_lemonade.calls) == 0
+    assert db.get_session(sid)["title"] == PROVISIONAL
+
+
+# ── A busy one-slot model is not waited on into the next turn ────────────
+
+
+def _busy_lease(monkeypatch):
+    """A model lease that is never granted; returns the list of lease attempts."""
+    from contextlib import contextmanager
+
+    from gaia.daemon.broker_client import BrokerUnavailableError
+
+    attempts = []
+
+    @contextmanager
+    def _always_busy(model, **_kw):
+        attempts.append(model)
+        raise BrokerUnavailableError(
+            f"no model-slot lease for '{model}': not granted within its "
+            "30s wait limit",
+            status_code=504,
+        )
+        yield None  # pragma: no cover
+
+    monkeypatch.setattr("gaia.daemon.broker_client.model_lease", _always_busy)
+    monkeypatch.setattr(ch, "_TITLE_BUSY_RETRY_S", 0, raising=False)
+    return attempts
+
+
+def test_a_busy_one_slot_model_is_waited_for_once(local_lemonade, monkeypatch):
+    """A title still waiting minutes later would land between the next turn's
+    steps and evict the conversation's cache from the model's only slot."""
+    attempts = _busy_lease(monkeypatch)
+    local_lemonade.add(responses.GET, f"{LEMONADE}/health", json=_health(1))
+    db, sid = _provisional_chat()
+
+    asyncio.run(ch._maybe_update_session_title(db, sid, ESSAY, "Tea", LOCAL_MODEL))
+
+    assert attempts == [LOCAL_MODEL]
+    assert _title_calls(local_lemonade) == []
+    assert db.get_session(sid)["title"] == PROVISIONAL
+    # Not a failed try: the chat's next turn asks again.
+    assert sid not in ch._AUTO_TITLE_RUNNING
+    assert ch._AUTO_TITLE_FAILURES.get(sid, 0) == 0
+
+
+def test_a_busy_model_whose_slots_cannot_be_read_is_waited_for_once(
+    local_lemonade, monkeypatch
+):
+    attempts = _busy_lease(monkeypatch)
+    local_lemonade.add(responses.GET, f"{LEMONADE}/health", status=500)
+    db, sid = _provisional_chat()
+
+    asyncio.run(ch._maybe_update_session_title(db, sid, ESSAY, "Tea", LOCAL_MODEL))
+
+    assert attempts == [LOCAL_MODEL]
+    assert db.get_session(sid)["title"] == PROVISIONAL
+
+
+def test_a_busy_model_with_a_side_slot_is_waited_out_to_the_limit(
+    local_lemonade, monkeypatch
+):
+    attempts = _busy_lease(monkeypatch)
+    local_lemonade.add(responses.GET, f"{LEMONADE}/health", json=_health(2))
+    db, sid = _provisional_chat()
+
+    asyncio.run(ch._maybe_update_session_title(db, sid, ESSAY, "Tea", LOCAL_MODEL))
+
+    assert attempts == [LOCAL_MODEL] * ch._TITLE_BUSY_TRIES
+    assert db.get_session(sid)["title"] == PROVISIONAL
+
+
+# ── An answer sent as the agent exits is never dropped ───────────────────
+
+
+def test_an_answer_sent_as_the_agent_exits_is_kept(
     monkeypatch, local_lemonade, sidecar_flagship
 ):
-    """With no side slot, a title would evict the conversation's cache mid-turn."""
-    seen, final = _relayed_local_turn(monkeypatch, local_lemonade, slots=1)
+    """The stream's poll of the agent's queue timed out, and in that instant
+    the agent answered and exited: the stream saw it gone, dropped the
+    answer, and saved the turn as empty."""
+    import queue
+    import threading
 
-    assert seen == {"title": PROVISIONAL, "title_calls": 0}
-    assert final == "History of Tea Essay"
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    answer_sent = threading.Event()
+    producer = {}
+
+    class _AnswersDuringThePoll(queue.Queue):
+        def get(self, block=True, timeout=None):
+            if "thread" in producer and self.empty():
+                agent = producer.pop("thread")
+                answer_sent.set()
+                agent.join(10)
+                assert not agent.is_alive()
+                raise queue.Empty
+            return super().get(block, timeout)
+
+    class _Handler(SSEOutputHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.event_queue = _AnswersDuringThePoll()
+
+    def _fake_dispatch(sse_handler, request, history_pairs, model_id, agent, **kw):
+        producer["thread"] = threading.current_thread()
+        assert answer_sent.wait(10)
+        sse_handler._emit({"type": "answer", "content": "Tea began in China."})
+
+    monkeypatch.setattr("gaia.ui.sse_handler.SSEOutputHandler", _Handler)
+    monkeypatch.setattr(ch, "_dispatch_sidecar_query", _fake_dispatch)
+    monkeypatch.setattr(ch, "_maybe_update_session_title", AsyncMock())
+
+    db = ChatDatabase(":memory:")
+    db.set_setting("custom_model", LOCAL_MODEL)
+    session = db.create_session(title="New Task", agent_type="gaia")
+    db.begin_turn(session["id"], ESSAY)
+    request = ChatRequest(
+        session_id=session["id"], message=ESSAY, stream=True, agent_type="gaia"
+    )
+
+    async def _drive():
+        return [
+            e
+            async for e in ch._stream_chat_impl(
+                SimpleNamespace(handler=None), db, session, request
+            )
+        ]
+
+    events = "".join(asyncio.run(_drive()))
+
+    assert '"content": "Tea began in China."' in events
+    messages = db.get_messages(session["id"])
+    assert messages[-1]["role"] == "assistant"
+    assert messages[-1]["content"] == "Tea began in China."

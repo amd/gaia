@@ -566,14 +566,14 @@ _classify_chat_exception = classify_lemonade_exception
 # question at once (_set_provisional_title), so it has a name even if nobody
 # is watching when the answer finishes. A background task then asks the model
 # the turn runs on (the default chat model if that one is a safety classifier)
-# for a 3-6 word title and updates the session: as the turn starts, from the
-# question alone, when the model can answer beside the turn (a cloud model, or
-# a local one with a side slot); otherwise after the turn ends. It fires only
-# while the title is a placeholder ("New Chat" /
-# "New Task" / "Untitled") or still the provisional one: once named, a chat
-# keeps its name, so the sidebar never drifts to the latest question. The
-# title is always drawn from the chat's first question, even if that turn was
-# stopped.
+# for a 3-6 word title and updates the session. A cloud model is asked as the
+# turn starts, from the question alone; a local one only after the turn ends,
+# because a local title could take the model before the answer's first call
+# and delay its first token. It fires only while the title is a placeholder
+# ("New Chat" / "New Task" / "Untitled") or still the provisional one: once
+# named, a chat keeps its name, so the sidebar never drifts to the latest
+# question. The title is always drawn from the chat's first question, even if
+# that turn was stopped.
 #
 # Skipped when:
 #   * The session's title_is_custom flag is set — an explicit user/API title
@@ -594,7 +594,9 @@ _AUTO_TITLE_MAX_TRIES = 3
 _AUTO_TITLE_NO_TOPIC: dict[str, int] = {}
 _AUTO_TITLE_MAX_NO_TOPIC = 10
 #: While another request holds the model, a title waits this many times (30 s
-#: each), this many seconds apart, then leaves it to the chat's next turn.
+#: each), this many seconds apart (~6 min in all), then leaves it to the chat's
+#: next turn. A one-slot local model waits once: a later title could land
+#: between steps of the next turn and evict the conversation's cache.
 _TITLE_BUSY_TRIES = 8
 _TITLE_BUSY_RETRY_S = 15
 
@@ -845,28 +847,16 @@ async def _generate_session_title(
     return title[:64]
 
 
-async def _can_title_beside_turn(base_url: str, model_id: str) -> bool:
-    """True when *model_id* can write a title while a turn runs on it.
+async def _has_side_slot(base_url: str, model_id: str) -> bool:
+    """True when local *model_id* is loaded with a slot beside the conversation's."""
+    from gaia.llm.lemonade_client import SIDE_SLOT, LemonadeClient, LemonadeClientError
 
-    A cloud model can. A local one needs a side slot: on its one slot the
-    title would evict the conversation's cache, and the turn would re-read
-    its whole prompt.
-    """
-    from gaia.llm.lemonade_client import (
-        SIDE_SLOT,
-        LemonadeClient,
-        LemonadeClientError,
-        cloud_model_provider,
-    )
-
-    if cloud_model_provider(model_id):
-        return True
     try:
         client = LemonadeClient(base_url=base_url, verbose=False)
         slots = await asyncio.to_thread(client.slot_count, model_id)
     except (LemonadeClientError, OSError) as exc:
         logger.info(
-            "Auto-title: could not read %s's slots (%s); titling after the turn",
+            "Auto-title: could not read %s's slots (%s); waiting for it once",
             model_id,
             exc,
         )
@@ -878,6 +868,8 @@ async def _title_when_model_free(
     base_url: str, model_id: str, user_msg: str, assistant_msg: str, latest_msg: str
 ) -> Optional[str]:
     """:func:`_generate_session_title`, waiting out a model another request holds."""
+    from gaia.llm.lemonade_client import cloud_model_provider
+
     request = dict(
         base_url=base_url,
         model_id=model_id,
@@ -885,7 +877,12 @@ async def _title_when_model_free(
         assistant_msg=assistant_msg,
         latest_msg=latest_msg,
     )
-    for _ in range(_TITLE_BUSY_TRIES - 1):
+    tries = _TITLE_BUSY_TRIES
+    if not cloud_model_provider(model_id) and not await _has_side_slot(
+        base_url, model_id
+    ):
+        tries = 1
+    for _ in range(tries - 1):
         try:
             return await _generate_session_title(**request)
         except _TitleModelBusy:
@@ -921,7 +918,7 @@ async def _maybe_update_session_title(
     """Best-effort background task: re-title the session if the rules say so.
 
     Called fire-and-forget as each turn starts (*at_turn_start*, skipped
-    unless the model can answer beside the turn) and after it finishes —
+    unless the model is a cloud one) and after it finishes —
     never blocks the user's response. *model_id* is the model the turn runs
     on, so a local chat is never titled by a cloud model. A failure is logged
     with its reason, and the chat keeps its provisional title until a later
@@ -952,13 +949,13 @@ async def _maybe_update_session_title(
     if not title_model:
         return
 
-    # Use the same Lemonade endpoint the chat just used.
-    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+    from gaia.llm.lemonade_client import cloud_model_provider, resolve_lemonade_base_url
     from gaia.llm.lemonade_manager import LemonadeManager
 
-    base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
-    if at_turn_start and not await _can_title_beside_turn(base_url, title_model):
+    if at_turn_start and not cloud_model_provider(title_model):
         return
+    # Use the same Lemonade endpoint the chat just used.
+    base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
 
     with _AUTO_TITLE_LOCK:
         if (
@@ -4553,7 +4550,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 yield event_data
 
             except queue.Empty:
-                if not producer.is_alive():
+                # The agent can answer and exit between the poll and this check.
+                if not producer.is_alive() and sse_handler.event_queue.empty():
                     break
                 if sse_handler.cancelled.is_set():
                     # Stopped: give the agent a moment to wind down, no more.
