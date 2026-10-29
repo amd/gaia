@@ -1,0 +1,474 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+/* The `guide` card and its full-screen guided view. Prefixed `render-guide`
+ * like every card style, since these sheets are global. */
+
+.render-guide {
+    background: var(--bg-card);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    padding: 18px 20px;
+    color: var(--text-primary);
+    font-size: var(--fs-ui);
+    line-height: 1.55;
+}
+
+.render-guide__header { margin-bottom: 12px; }
+
+.render-guide__title {
+    margin: 0;
+    font-size: var(--fs-title);
+    font-weight: 600;
+    line-height: 1.3;
+}
+
+.render-guide__description {
+    margin: 4px 0 0;
+    color: var(--text-secondary);
+    font-size: var(--fs-body);
+}
+
+/* ── toolbar ─────────────────────────────────────────────────────────── */
+
+.render-guide__toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 10px 0;
+    border-top: 1px solid var(--border-light);
+    border-bottom: 1px solid var(--border-light);
+}
+
+.render-guide__servings {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-full);
+    padding: 2px;
+}
+
+.render-guide__servings-count {
+    min-width: 82px;
+    text-align: center;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+}
+
+.render-guide__tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.render-guide__icon,
+.render-guide__tool {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    height: 30px;
+    min-width: 30px;
+    border-radius: var(--radius-full);
+    color: var(--text-secondary);
+    font-size: var(--fs-label);
+    font-weight: 500;
+    transition: background var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+
+.render-guide__tool { padding: 0 10px; }
+
+.render-guide__icon:hover:not(:disabled),
+.render-guide__tool:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.render-guide__icon:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.render-guide__start {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 34px;
+    padding: 0 16px;
+    border-radius: var(--radius-full);
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
+    font-size: var(--fs-ui);
+    font-weight: 600;
+    box-shadow: var(--shadow-sm);
+    transition: background var(--duration-fast) var(--ease), transform var(--duration-fast) var(--ease);
+}
+
+.render-guide__start:hover {
+    background: var(--accent-fill-hover);
+    transform: translateY(-1px);
+}
+
+.render-guide__start:active {
+    transform: none;
+    box-shadow: var(--shadow-press);
+    transition-duration: var(--duration-press);
+}
+
+.render-guide__notice {
+    margin: 0;
+    min-height: 0;
+    color: var(--text-secondary);
+    font-size: var(--fs-label);
+}
+
+.render-guide__notice:not(:empty) { padding-top: 6px; }
+
+/* ── sections ────────────────────────────────────────────────────────── */
+
+.render-guide__section { margin-top: 16px; }
+
+.render-guide__label {
+    margin: 0 0 8px;
+    font-size: var(--fs-body);
+    font-weight: 600;
+}
+
+.render-guide__items {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 6px;
+}
+
+.render-guide__item {
+    padding-left: 14px;
+    position: relative;
+    overflow-wrap: anywhere;
+}
+
+.render-guide__item::before {
+    content: '';
+    position: absolute;
+    left: 2px;
+    top: 0.7em;
+    width: 4px;
+    height: 4px;
+    border-radius: var(--radius-full);
+    background: var(--text-muted);
+}
+
+.render-guide__item:has(.render-guide__check) { padding-left: 0; }
+.render-guide__item:has(.render-guide__check)::before { content: none; }
+
+.render-guide__qty {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.render-guide__check {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.render-guide__check input {
+    margin: 3px 0 0;
+    accent-color: var(--accent-solid);
+    flex-shrink: 0;
+}
+
+.render-guide__item.is-checked .render-guide__check span {
+    color: var(--text-muted);
+    text-decoration: line-through;
+}
+
+.render-guide__steps {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 12px;
+}
+
+.render-guide__step {
+    display: flex;
+    gap: 12px;
+}
+
+.render-guide__step-number {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    margin-top: 1px;
+    border-radius: var(--radius-full);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: var(--fs-caption);
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.render-guide__step-body {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.render-guide__step-title {
+    display: block;
+    font-weight: 600;
+}
+
+.render-guide__notes {
+    margin-top: 16px;
+    padding: 12px 14px;
+    border-radius: var(--radius-md);
+    background: var(--bg-recessed);
+}
+
+.render-guide__notes p {
+    margin: 0;
+    color: var(--text-secondary);
+    white-space: pre-line;
+}
+
+/* ── timer chip ──────────────────────────────────────────────────────── */
+
+.render-guide-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 20px;
+    padding: 0 7px;
+    margin: 0 1px;
+    vertical-align: 1px;
+    border-radius: var(--radius-full);
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
+    font-size: var(--fs-caption);
+    font-weight: 600;
+    line-height: 1;
+    transition: background var(--duration-fast) var(--ease);
+}
+
+.render-guide-chip:hover { background: var(--accent-fill-hover); }
+
+.render-guide-chip__clock { font-variant-numeric: tabular-nums; }
+
+.render-guide-chip.is-done {
+    background: var(--accent-green-dim);
+    color: var(--accent-green);
+}
+
+/* ── guided view ─────────────────────────────────────────────────────── */
+
+/* The code surface tokens are dark in both themes, which is the point. */
+.render-guided {
+    position: fixed;
+    inset: 0;
+    z-index: 150;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-code);
+    color: var(--text-code);
+    font-family: var(--font-sans);
+    padding: 20px max(16px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+
+.render-guided:focus-visible { outline: 2px solid var(--code-accent); outline-offset: -2px; }
+
+/* The global ring is the page accent, which is too dark to see on this surface in light theme. */
+.render-guided button:focus-visible,
+.render-guided summary:focus-visible { outline: 2px solid var(--code-accent); outline-offset: 2px; }
+
+.render-guided__top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.render-guided__heading {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.render-guided__guide-title {
+    color: var(--text-code-dim);
+    font-size: var(--fs-ui);
+    font-weight: 500;
+}
+
+.render-guided__items summary {
+    cursor: pointer;
+    color: var(--code-accent);
+    font-size: var(--fs-ui);
+}
+
+.render-guided__items ul {
+    margin: 8px 0 0;
+    padding: 10px 14px 10px 28px;
+    max-height: 40vh;
+    overflow-y: auto;
+    border-radius: var(--radius-md);
+    background: var(--bg-code-raised);
+    border: 1px solid var(--border-code);
+    font-size: var(--fs-ui);
+    line-height: 1.6;
+}
+
+.render-guided__stage {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    text-align: center;
+    max-width: var(--content-w);
+    width: 100%;
+    margin: 0 auto;
+    overflow-y: auto;
+    padding: 24px 0;
+}
+
+.render-guided__step-title {
+    margin: 0;
+    font-size: 26px;
+    font-weight: 600;
+    line-height: 1.25;
+}
+
+.render-guided__step-text {
+    margin: 0;
+    font-size: 21px;
+    line-height: 1.6;
+    color: var(--text-code);
+    overflow-wrap: anywhere;
+}
+
+.render-guided__step-text .render-guide-chip {
+    height: 26px;
+    padding: 0 10px;
+    font-size: var(--fs-ui);
+    vertical-align: 3px;
+    background: var(--bg-code-raised);
+    color: var(--code-accent);
+    border: 1px solid var(--border-code);
+}
+
+.render-guided__step-text .render-guide-chip.is-done { color: var(--code-success); }
+
+.render-guided__sets {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--text-code-dim);
+    font-size: var(--fs-body);
+}
+
+.render-guided__timer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+}
+
+.render-guided__clock {
+    font-size: clamp(56px, 16vw, 112px);
+    font-weight: 300;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+}
+
+.render-guided__timer.is-done .render-guided__clock { color: var(--code-success); }
+.render-guided__timer.is-paused .render-guided__clock { color: var(--text-code-dim); }
+
+.render-guided__timer-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.render-guided__button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 40px;
+    padding: 0 18px;
+    border-radius: var(--radius-full);
+    background: var(--bg-code-raised);
+    border: 1px solid var(--border-code);
+    color: var(--text-code);
+    font-size: var(--fs-body);
+    font-weight: 500;
+    transition: border-color var(--duration-fast) var(--ease);
+}
+
+.render-guided__button:hover:not(:disabled) { border-color: var(--code-accent); }
+
+.render-guided__button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.render-guided__button.is-primary {
+    color: var(--code-accent);
+    border-color: var(--code-accent);
+}
+
+.render-guided__nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.render-guided__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-full);
+    color: var(--text-code);
+    transition: background var(--duration-fast) var(--ease);
+}
+
+.render-guided__icon:hover:not(:disabled) { background: var(--bg-code-raised); }
+
+.render-guided__icon:disabled {
+    opacity: 0.3;
+    cursor: default;
+}
+
+.render-guided__progress {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    color: var(--text-code-dim);
+    font-size: var(--fs-ui);
+    font-variant-numeric: tabular-nums;
+}
+
+.render-guided__note { font-size: var(--fs-caption); }
+
+@media (max-width: 520px) {
+    .render-guide { padding: 14px 14px; }
+    .render-guide__start {
+        margin-left: 0;
+        width: 100%;
+        justify-content: center;
+    }
+    .render-guided__step-title { font-size: 21px; }
+    .render-guided__step-text { font-size: 18px; }
+}
