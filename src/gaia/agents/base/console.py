@@ -1672,7 +1672,9 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                         info += f"[dim]Size: {img.width}x{img.height} | Format: {img.format} | File: {path.stat().st_size:,} bytes[/dim]"
                         if caption:
                             self.console.print(
-                                Panel(info, title=f"🖼️  {caption}", border_style="cyan"),
+                                Panel(
+                                    info, title=f"🖼️  {caption}", border_style="cyan"
+                                ),
                                 justify="center",
                             )
                         else:

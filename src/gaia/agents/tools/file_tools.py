@@ -2397,7 +2397,6 @@ class FileSearchToolsMixin:
                     attached = _resolve_indexed_basename(raw_path)
                 if (
                     attached is not None
-                    and not fp.exists()
                     and attached.is_file()
                     and read_access_error(self, str(attached), prompt_user=False)
                     is None
