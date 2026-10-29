@@ -113,6 +113,7 @@ module_skips:
       - tests/unit/test_skill_tools_same_turn.py
       - tests/unit/test_tool_admission_order.py
       - tests/unit/test_tool_loader_disambiguation.py
+      - tests/unit/test_profilespec_characterization.py
 
   - reason: Needs the gaia-agent (flagship) wheel, which test_unit.yml does not install.
     runs_in: test_gaia_agent.yml
@@ -122,6 +123,7 @@ module_skips:
       - tests/unit/test_execute_python_file_cwd.py
       - tests/unit/test_flagship_code_index_scope.py
       - tests/unit/test_stdio_permission_control.py
+      - tests/unit/test_tool_loader_token_budget.py
 
   - reason: Needs the [mcp] extra, which test_unit.yml does not install.
     runs_in: test_agent_mcp_server.yml
