@@ -38,7 +38,7 @@ def _bookmarks(db_path):
 
 
 class _FailsOnce:
-    """A connection whose next statement matching ``prefix`` raises, once."""
+    """A connection whose next statements matching ``prefix`` raise the pending errors."""
 
     def __init__(self, conn, prefix, pending):
         self._conn = conn
