@@ -120,7 +120,7 @@ class CanonicalTranslator:
         etype = event.get("type")
 
         # tool_args merges into the buffered tool_call; every other event first
-        # flushes any pending tool_call (an argument-less tool), then maps.
+        # flushes any pending tool_call (its producer sent no tool_args), then maps.
         if etype == "tool_args":
             return self._on_tool_args(event)
 
@@ -166,7 +166,7 @@ class CanonicalTranslator:
         return {"type": "tool_call", "tool": tool, "args": args}
 
     def _on_tool_start(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
-        # Flush a previous, arg-less pending tool_call before buffering this one.
+        # Flush a previous pending tool_call that never got its tool_args.
         out = self._flush_pending()
         self._pending_tool = {"tool": event.get("tool") or "unknown", "args": {}}
         return out
@@ -348,6 +348,10 @@ class CanonicalTranslator:
         # retries. Surface as a status line, not an error (spec §6.2).
         return [{"type": "status", "message": str(event.get("message", ""))}]
 
+    def _on_commentary(self, _event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        # Its text already went out as tokens; the host's handler re-derives it.
+        return []
+
     def _on_agent_created(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Registry-refresh signal with no chat-stream meaning — dropped from the
         # /query stream by contract decision (spec §6.2). It belongs on a host
@@ -361,6 +365,7 @@ class CanonicalTranslator:
         "thinking": _on_thinking,
         "plan": _on_plan,
         "chunk": _on_chunk,
+        "commentary": _on_commentary,
         "tool_start": _on_tool_start,
         "tool_result": _on_tool_result,
         "tool_end": _on_tool_end,

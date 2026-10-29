@@ -27,9 +27,23 @@ class TurnRecording:
     """
 
     def __init__(self, session_id: str):
+        self.session_id = session_id
         self._cm = file_snapshots.recording_turn(session_id)
         self.recorder = self._cm.__enter__()
         self._closed = False
+        #: The turn a sidecar records this turn's changes under, when relayed.
+        self.relayed_turn_id: Optional[str] = None
+
+    def relay(self) -> str:
+        """A turn id for the sidecar that runs this turn to record it under."""
+        self.relayed_turn_id = file_snapshots.new_turn_id()
+        return self.relayed_turn_id
+
+    def _relayed_dir(self):
+        if self.relayed_turn_id is None:
+            return None
+        path = file_snapshots.snapshots_root() / self.session_id / self.relayed_turn_id
+        return path if path.is_dir() else None
 
     def close(self) -> Optional[str]:
         """End the turn and apply retention; returns a warning for the user."""
@@ -41,11 +55,14 @@ class TurnRecording:
         except file_snapshots.SnapshotError as e:
             logger.error("Undo history for this turn is incomplete: %s", e)
             return f"Undo may not work for this turn: {e}"
-        if not self.recorder.has_changes:
+        relayed = self._relayed_dir()
+        if not self.recorder.has_changes and relayed is None:
             return None
         try:
             days, mb = retention()
-            file_snapshots.prune(days, mb * 1024 * 1024, keep=self.recorder.dir)
+            file_snapshots.prune(
+                days, mb * 1024 * 1024, keep=relayed or self.recorder.dir
+            )
         except (OSError, GaiaConfigError, file_snapshots.SnapshotError) as e:
             logger.error("Could not apply the undo-history limits: %s", e)
             return (
@@ -64,11 +81,15 @@ class TurnRecording:
             return None
         try:
             self.recorder.link_message(message_id)
+            if self.relayed_turn_id is not None:
+                file_snapshots.link_turn_message(
+                    self.session_id, self.relayed_turn_id, message_id
+                )
         except OSError as e:
             logger.error("Could not tie undo history to message %s: %s", message_id, e)
             return (
                 f"Undo won't be offered for this answer: GAIA could not save "
                 f"which turn it belongs to ({e}). The copies are in "
-                f"{self.recorder.dir}."
+                f"{self._relayed_dir() or self.recorder.dir}."
             )
         return None

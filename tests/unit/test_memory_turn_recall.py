@@ -114,7 +114,7 @@ class TestRelevantMemoriesAreSurfaced:
 
         ctx = host.get_memory_dynamic_context()
 
-        assert "Stored memories that may bear on this message:" in ctx
+        assert "Stored memories that may bear on this message (dated notes" in ctx
         assert (
             "  - [note] toybox tests need TOYBOX_CLOCK=frozen or they fail "
             "(learned 2026-06-03, last confirmed 2026-09-20)"

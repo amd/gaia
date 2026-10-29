@@ -67,6 +67,7 @@ export interface ApiSchemas {
   LimitRequest: LimitRequest;
   LoadModelRequest: LoadModelRequest;
   LoadedModelInfo: LoadedModelInfo;
+  McpOutputResponse: McpOutputResponse;
   MemorySettingsBody: MemorySettingsBody;
   MessageListResponse: MessageListResponse;
   MessageResponse: MessageResponse;
@@ -218,7 +219,10 @@ export interface AgentStepResponse {
   id: number;
   label: string;
   latencyMs?: number | null;
+  mcpOutput?: McpOutputResponse | null;
   mcpServer?: string | null;
+  mcpServerLabel?: string | null;
+  mcpTool?: string | null;
   narration?: string | null;
   planNarrations?: string[] | null;
   planSteps?: string[] | null;
@@ -253,6 +257,13 @@ export interface FileListResponse {
     [k: string]: unknown | undefined;
   }[];
   total?: number;
+}
+/**
+ * The text an MCP tool returned, capped for the tool row.
+ */
+export interface McpOutputResponse {
+  text?: string;
+  truncated?: boolean;
 }
 /**
  * Request to attach a document to a session.
@@ -384,6 +395,7 @@ export interface CreateSessionRequest {
   agent_type?: string | null;
   device?: string | null;
   document_ids?: string[];
+  folders?: string[];
   mail_provider?: string | null;
   model?: string | null;
   private?: boolean;
@@ -420,6 +432,7 @@ export interface DocumentListResponse {
  */
 export interface DocumentResponse {
   chunk_count: number;
+  error_kind?: string | null;
   file_size: number;
   filename: string;
   filepath: string;
@@ -610,6 +623,7 @@ export interface IndexFolderResponse {
   errors?: string[];
   failed?: number;
   indexed?: number;
+  skipped?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];
@@ -959,15 +973,18 @@ export interface ScheduleListResponse {
  */
 export interface ScheduleResponse {
   created_at?: string | null;
+  description: string;
   error_count?: number;
   id: string;
   interval_seconds: number;
+  last_error?: string | null;
   last_result?: string | null;
   last_run_at?: string | null;
   name: string;
   next_run_at?: string | null;
   prompt: string;
   run_count?: number;
+  running?: boolean;
   schedule_config?: string | null;
   session_id?: string | null;
   status: string;
@@ -1086,9 +1103,11 @@ export interface SettingsUpdateRequest {
   dynamic_tools?: boolean | null;
 }
 /**
- * ``skip_chat_model`` when the chat runs on a cloud provider.
+ * ``skip_chat_model`` when the chat runs on a cloud provider;
+ * ``gaia_lemonade`` to set up GAIA's own server instead of the user's.
  */
 export interface SetupRunRequest {
+  gaia_lemonade?: boolean;
   skip_chat_model?: boolean;
 }
 export interface StartAgentServerRequest {
@@ -1130,6 +1149,7 @@ export interface SystemStatus {
   model_size_gb?: number | null;
   probe_warnings?: string[];
   processor_name?: string | null;
+  setup_error?: string | null;
   start_command?: string | null;
   start_instruction?: string | null;
   time_to_first_token?: number | null;

@@ -14,6 +14,7 @@ from any ``test_memory_*.py`` file so the per-test mocks take effect.
 
 import os
 import socket
+import sys
 import tempfile
 from pathlib import Path
 
@@ -73,6 +74,47 @@ def _isolate_gaia_config(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
 
 
+#: The home this run started with; a test that moves it keeps ``<its home>/.gaia``.
+_RUN_HOME = Path.home()
+
+
+def _patch_default_gaia_home(mp, default_gaia_home) -> None:
+    from gaia import config as config_mod
+    from gaia.connectors import _refresh_lock
+
+    mp.setattr(config_mod, "default_gaia_home", default_gaia_home)
+    # Bound at import; the connector lock is the one writer among those names.
+    mp.setattr(_refresh_lock, "default_gaia_home", default_gaia_home)
+
+
+# Session scope: module- and class-scoped fixtures build agents (and their
+# databases) before any function-scoped fixture runs.
+@pytest.fixture(scope="session", autouse=True)
+def _session_gaia_home(tmp_path_factory):
+    """Keep ``gaia_home()`` -- edit backups, the audit log, databases -- off the
+    developer's real ``~/.gaia``.
+
+    Only the ``~/.gaia`` fallback moves. GAIA_HOME and GAIA_CONFIG_DIR still win,
+    and a test that patches ``Path.home`` or sets HOME/USERPROFILE still gets
+    ``<that home>/.gaia``: setting GAIA_HOME here would override both.
+    """
+    isolated = tmp_path_factory.mktemp("home") / ".gaia"
+
+    def default_gaia_home() -> Path:
+        home = Path.home()
+        return isolated if home == _RUN_HOME else home / ".gaia"
+
+    with pytest.MonkeyPatch.context() as mp:
+        _patch_default_gaia_home(mp, default_gaia_home)
+        yield default_gaia_home
+
+
+@pytest.fixture(autouse=True)
+def _isolate_gaia_home(_session_gaia_home, monkeypatch):
+    """Re-applied per test: a test that reloads ``gaia.config`` drops the patch."""
+    _patch_default_gaia_home(monkeypatch, _session_gaia_home)
+
+
 _DAEMON_SPAWN_MESSAGE = (
     "Unit test tried to spawn a real GAIA daemon (gaia.daemon.client."
     "_spawn_and_wait). Mock the daemon boundary instead — e.g. monkeypatch "
@@ -93,26 +135,43 @@ def _isolate_daemon_home(tmp_path_factory):
         yield
 
 
-# Spawn attempts made outside any test's own guard, e.g. by a thread a test
-# left running: (the test running at the time, or "between tests").
+# Spawn attempts made outside any test's own guard: one line per attempt
+# naming the test running at the time, the thread, and the test code calling.
 _STRAY_SPAWN_ATTEMPTS: list = []
+_TESTS_DIR = os.path.join(
+    os.path.normcase(os.path.dirname(os.path.dirname(__file__))), ""
+)
+
+
+def _describe_stray_spawn() -> str:
+    """Where a spawn the per-test guard did not cover came from."""
+    import threading
+    import traceback
+
+    test = os.environ.get("PYTEST_CURRENT_TEST", "between tests")
+    thread = threading.current_thread().name
+    caller = "no test code on its stack"
+    for frame in reversed(traceback.extract_stack()):
+        path = os.path.normcase(frame.filename)
+        if path.startswith(_TESTS_DIR) and os.path.basename(path) != "conftest.py":
+            caller = f"called from {frame.filename}:{frame.lineno} in {frame.name}"
+            break
+    return f"{test} on thread {thread}, {caller}"
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _forbid_daemon_spawn_all_session():
     """Refuse the real daemon spawn for the whole session, not just inside tests.
 
-    The per-test guard below is undone at each test's teardown, so a thread a
-    test leaves running (an app's start-up job, a worker) could reach the real
-    spawn between tests and leave a daemon running after the session. This
-    keeps it refused, and fails the session if anything tried.
+    The per-test guard below is only active while a test runs, so a class- or
+    module-scoped fixture (set up before it) or a thread a test leaves running
+    could reach the real spawn and leave a daemon behind. This keeps it
+    refused, and fails the session naming where each attempt came from.
     """
     from gaia.daemon import client
 
     def _refuse(*_args, **_kwargs):
-        _STRAY_SPAWN_ATTEMPTS.append(
-            os.environ.get("PYTEST_CURRENT_TEST", "between tests")
-        )
+        _STRAY_SPAWN_ATTEMPTS.append(_describe_stray_spawn())
         raise RuntimeError(_DAEMON_SPAWN_MESSAGE)
 
     with pytest.MonkeyPatch.context() as mp:
@@ -120,8 +179,10 @@ def _forbid_daemon_spawn_all_session():
         yield
     if _STRAY_SPAWN_ATTEMPTS:
         raise RuntimeError(
-            f"{_DAEMON_SPAWN_MESSAGE} A thread left running by an earlier test "
-            f"tried it {len(_STRAY_SPAWN_ATTEMPTS)} time(s), during: "
+            f"{_DAEMON_SPAWN_MESSAGE} It was tried {len(_STRAY_SPAWN_ATTEMPTS)} "
+            "time(s) outside the per-test guard. On MainThread during a test's "
+            "setup, a class-, module- or session-scoped fixture did it; on any "
+            "other thread, a thread an earlier test left running did. Attempts: "
             + "; ".join(sorted(set(_STRAY_SPAWN_ATTEMPTS)))
         )
 
@@ -219,6 +280,18 @@ def _enable_memory_for_memory_tests(request, monkeypatch):
     module_path = getattr(request.module, "__file__", "") or ""
     if "test_memory_" in os.path.basename(module_path):
         monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_user_turns(monkeypatch):
+    """Give each test its own process-wide user-turn count and idle clock.
+
+    A test that fails between starting and finishing a turn would otherwise
+    hold every later test's memory extraction.
+    """
+    memory = sys.modules.get("gaia.agents.base.memory")
+    if memory is not None:
+        monkeypatch.setattr(memory, "_USER_TURNS", memory._UserTurns())
 
 
 # ── Real Lemonade guard ────────────────────────────────────────────────────
@@ -385,6 +458,31 @@ def _forbid_real_lemonade_all_session():
         )
 
 
+_LEMONADE_ENV_VARS = ("LEMONADE_BASE_URL", "LEMONADE_HOST", "LEMONADE_PORT")
+# The caller's values, for the tests that opt in to keeping them.
+_CALLER_LEMONADE_ENV: dict = {}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _unroutable_lemonade_all_session():
+    """Aim the whole session at an unroutable Lemonade, without automatic leases.
+
+    Class- and module-scoped fixtures run before any per-test guard; an agent
+    built there would otherwise follow GAIA's real Lemonade and ask the daemon
+    to start it.
+    """
+    from gaia.llm import lemonade_service
+
+    _CALLER_LEMONADE_ENV.update({k: os.environ.get(k) for k in _LEMONADE_ENV_VARS})
+    with pytest.MonkeyPatch.context() as mp:
+        if os.environ.get(_REAL_LEMONADE_OPT_IN_ENV) != "1":
+            mp.setenv("LEMONADE_BASE_URL", _UNROUTABLE_LEMONADE_URL)
+            mp.delenv("LEMONADE_HOST", raising=False)
+            mp.delenv("LEMONADE_PORT", raising=False)
+        mp.setattr(lemonade_service, "_AUTO_LEASED", True)
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _forbid_real_lemonade(request, monkeypatch):
     """Point unit tests at an unroutable Lemonade, and fail one that reaches a real one.
@@ -394,7 +492,17 @@ def _forbid_real_lemonade(request, monkeypatch):
     when GAIA_TEST_ALLOW_REAL_LEMONADE=1 is set as well.
     """
     opted_in = any(request.node.get_closest_marker(m) for m in _REAL_LEMONADE_MARKERS)
-    if not opted_in and os.environ.get(_REAL_LEMONADE_OPT_IN_ENV) != "1":
+    if opted_in:
+        for name, value in _CALLER_LEMONADE_ENV.items():
+            # Undo only what the session fixture planted; a value set since is deliberate.
+            planted = _UNROUTABLE_LEMONADE_URL if name == "LEMONADE_BASE_URL" else None
+            if os.environ.get(name) != planted:
+                continue
+            if value is None:
+                monkeypatch.delenv(name, raising=False)
+            else:
+                monkeypatch.setenv(name, value)
+    elif os.environ.get(_REAL_LEMONADE_OPT_IN_ENV) != "1":
         monkeypatch.setenv("LEMONADE_BASE_URL", _UNROUTABLE_LEMONADE_URL)
         monkeypatch.delenv("LEMONADE_HOST", raising=False)
         monkeypatch.delenv("LEMONADE_PORT", raising=False)

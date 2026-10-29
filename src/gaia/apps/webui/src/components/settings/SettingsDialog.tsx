@@ -5,6 +5,7 @@ import { lazy, Suspense, useEffect, useRef } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { useChatStore, type SettingsSection } from '../../stores/chatStore';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { GeneralSettings } from './GeneralSettings';
 import { ModelSettings } from './ModelSettings';
 import { PermissionsSettings } from './PermissionsSettings';
@@ -41,6 +42,7 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
 
     const isOpen = section !== null;
     useEscapeToClose(isOpen, close);
+    useFocusTrap(panel, isOpen);
     useEffect(() => {
         if (!isOpen) return;
         returnFocus.current = document.activeElement;

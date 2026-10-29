@@ -126,6 +126,11 @@
     background: var(--accent-dim);
 }
 
+.setup-choice.is-disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .setup-choice-title {
     display: block;
     font-size: 14px;

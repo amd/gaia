@@ -122,6 +122,47 @@ def test_list_reports_a_broken_skill_and_exits_nonzero(run, skills_dir):
     assert "broken" in err
 
 
+def test_list_warns_on_a_broken_claude_import_without_failing(
+    run, skills_dir, tmp_path
+):
+    """Someone else's malformed ~/.claude/skills entry is a warning, not exit 4."""
+    copy_fixture("bare-standard", skills_dir)
+    broken = tmp_path / "fake-home" / ".claude" / "skills" / "theirs"
+    broken.mkdir(parents=True)
+    (broken / "SKILL.md").write_text(
+        "---\nname: theirs\ndescription: x\nversion: '1.0'\n---\nbody\n",
+        encoding="utf-8",
+    )
+
+    rc, out, err = run("list")
+    assert rc == 0
+    assert "bare-standard" in out
+    assert "imported skill folder(s) were skipped" in err
+    assert "theirs" in err
+    assert "failed to load" not in err
+
+    rc, out, _ = run("list", "--json")
+    assert rc == 0
+    payload = json.loads(out)
+    assert payload["errors"] == {}
+    assert list(payload["import_errors"]) == [str(broken)]
+
+
+def test_list_still_fails_on_a_broken_user_skill_beside_a_broken_import(
+    run, skills_dir, tmp_path
+):
+    (skills_dir / "mine").mkdir()
+    (skills_dir / "mine" / "SKILL.md").write_text("not a skill\n", encoding="utf-8")
+    theirs = tmp_path / "fake-home" / ".claude" / "skills" / "theirs"
+    theirs.mkdir(parents=True)
+    (theirs / "SKILL.md").write_text("not a skill\n", encoding="utf-8")
+
+    rc, _, err = run("list")
+    assert rc == 4
+    assert "1 skill folder(s) failed to load" in err
+    assert "1 imported skill folder(s) were skipped" in err
+
+
 def test_list_surfaces_shadowed_copies(run, skills_dir, tmp_path):
     """Precedence is auditable, not silent."""
     claude = tmp_path / "fake-home" / ".claude" / "skills"

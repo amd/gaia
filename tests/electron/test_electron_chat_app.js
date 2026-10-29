@@ -952,7 +952,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have accessible names on sidebar buttons', () => {
-      expect(sidebarContent).toContain('title="New chat (Ctrl+Shift+O)"');
+      expect(sidebarContent).toContain("title={`New chat (${formatShortcut('Mod+Shift+O')})`}");
       expect(sidebarContent).toContain('aria-label="Settings"');
       expect(sidebarContent).toContain('aria-label="Search chats"');
       expect(sidebarContent).toContain("aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}");
@@ -989,7 +989,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have search with aria-label', () => {
-      expect(sidebarContent).toContain('aria-label="Search chats (Ctrl+K)"');
+      expect(sidebarContent).toContain("aria-label={`Search chats (${formatShortcut('Mod+K')})`}");
     });
   });
 
@@ -1155,12 +1155,16 @@ describe('Chat App Integration', () => {
     });
 
     it('should convert policy_alert events into policy steps and notifications', () => {
-      expect(chatContent).toContain("case 'policy_alert'");
-      expect(chatContent).toContain("type: 'policy_alert'");
-      expect(chatContent).toContain('ruleIds: event.rule_ids ?? []');
-      expect(chatContent).toContain('policyVersion: event.policy_version');
-      expect(chatContent).toContain('receiptId: event.receipt_id');
-      expect(chatContent).toContain('setPolicyToast');
+      const stepsContent = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/utils/streamSteps.ts'),
+        'utf8'
+      );
+      expect(stepsContent).toContain("case 'policy_alert'");
+      expect(stepsContent).toContain("type: 'policy_alert'");
+      expect(stepsContent).toContain('ruleIds: event.rule_ids ?? []');
+      expect(stepsContent).toContain('policyVersion: event.policy_version');
+      expect(stepsContent).toContain('receiptId: event.receipt_id');
+      expect(chatContent).toContain('showPolicyToast');
       expect(chatContent).toContain('View receipt');
       expect(chatContent).toContain('Receipt unavailable');
     });
