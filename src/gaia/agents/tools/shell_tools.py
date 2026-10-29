@@ -49,7 +49,7 @@ from gaia.agents.tools.shell_deletes import (
     split_exact,
 )
 from gaia.agents.tools.shell_session import ShellSession
-from gaia.agents.tools.workspace_paths import _workspace_default
+from gaia.agents.tools.workspace_paths import _workspace_default, _workspace_target
 from gaia.env import child_env
 from gaia.tool_cancellation import tool_cancelled
 
@@ -3313,11 +3313,12 @@ class ShellToolsMixin:
         """``(folder, explicit)`` a call runs in, or None when it names no real one."""
         working_directory = _expand_home(working_directory)
         if working_directory:
-            if not isinstance(working_directory, str) or not os.path.isdir(
-                working_directory
-            ):
+            if not isinstance(working_directory, str):
                 return None
-            return str(Path(working_directory).resolve()), True
+            working_directory = str(_workspace_target(self, working_directory))
+            if not os.path.isdir(working_directory):
+                return None
+            return working_directory, True
         return self._live_session_cwd(), False
 
     def _live_session_cwd(self) -> str:
@@ -4637,40 +4638,41 @@ class ShellToolsMixin:
                         "hint": "Rate limiting prevents excessive command execution",
                     }
 
-                # Validate working directory if specified
+                # Validate an explicit directory after resolving it from the
+                # chat workspace; keep the original argument for approval keys.
                 if working_directory:
-                    if not os.path.exists(working_directory):
+                    cwd = str(_workspace_target(self, working_directory))
+                    if not os.path.exists(cwd):
                         return {
                             **NOT_EXECUTED,
                             "status": "error",
-                            "error": f"Working directory not found: {working_directory}",
+                            "error": f"Working directory not found: {cwd}",
                             "has_errors": True,
                         }
 
-                    if not os.path.isdir(working_directory):
+                    if not os.path.isdir(cwd):
                         return {
                             **NOT_EXECUTED,
                             "status": "error",
-                            "error": f"Path is not a directory: {working_directory}",
+                            "error": f"Path is not a directory: {cwd}",
                             "has_errors": True,
                         }
 
                     # Outside full access the line's verdict judges the
                     # folder, before the prompt, so it can be approved there.
-                    if bypass and not self._path_allowed(working_directory):
+                    if bypass and not self._path_allowed(cwd):
                         hint = (
-                            self.path_validator.scratch_hint(working_directory)
+                            self.path_validator.scratch_hint(cwd)
                             if hasattr(self, "path_validator")
                             else ""
                         )
                         return {
                             **NOT_EXECUTED,
                             "status": "error",
-                            "error": f"Access denied: {working_directory} is not in allowed paths.{hint}",
+                            "error": f"Access denied: {cwd} is not in allowed paths.{hint}",
                             "has_errors": True,
                         }
 
-                    cwd = str(Path(working_directory).resolve())
                     session_scoped = False
                 else:
                     # An explicit working_directory is a one-shot override that

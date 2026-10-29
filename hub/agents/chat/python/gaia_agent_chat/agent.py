@@ -86,7 +86,11 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.agents.tools.rag_tools import documents_still_indexing
-from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
+from gaia.agents.tools.workspace_paths import (
+    _resolve_target,
+    _workspace_default,
+    _workspace_target,
+)
 from gaia.env import child_env
 from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
 from gaia.llm.lemonade_client import (
@@ -1182,7 +1186,9 @@ class ChatAgent(
             "current_base_url",
             None,
         )
-        label = _endpoint_label(live() if callable(live) else resolve_lemonade_base_url())
+        label = _endpoint_label(
+            live() if callable(live) else resolve_lemonade_base_url()
+        )
         if not label:
             return "The configured model server"
         return f"The model server at {label}"
@@ -1931,7 +1937,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except ValueError as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
 
-                file_path = str(_resolve_target(file_path, None, _workspace_default(self)))
+                file_path = str(
+                    _resolve_target(file_path, None, _workspace_default(self))
+                )
                 if not self.path_validator.is_path_allowed(file_path):
                     return {
                         "status": "error",
@@ -2751,7 +2759,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 ts = time.strftime("%Y%m%d_%H%M%S")
                 output_path = str(tts_dir / f"speech_{ts}.wav")
             else:
-                output_path = os.path.expanduser(output_path)
+                output_path = str(_workspace_target(self, output_path))
                 denied = write_access_error(self, output_path)
                 if denied:
                     return denied
