@@ -28,6 +28,13 @@ into slides, builds them and checks them in one call.
   is only a `>` block is a quote slide.
 - `Source: ...` adds the source line, `Note: ...` a footnote, and `Notes:`
   (or `Speaker notes:`) starts the speaker notes.
+- `Takeaway: ...` (or `Decision:`, `Ask:`) draws the one line to act on as a
+  dark band above the footer. Use it on the slide that carries the ask.
+- Two to four short top-level bullets with no sub-bullets are drawn as cards
+  side by side. Write each as `**Heading** detail` or `Heading: detail` and
+  the heading becomes the card's title.
+- Every number on a slide must be one the user gave or a tool returned; compute
+  shares, growth and totals with `run_python`. Otherwise leave numbers out.
 - `Must show: a; b; c` before the first slide lists the `required_items`:
   what the request needs visible on the slides.
 

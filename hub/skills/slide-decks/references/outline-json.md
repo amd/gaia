@@ -13,7 +13,8 @@ diagrams, timelines, combo charts, or a blueprint outline.
 ]}
 ```
 
-Every slide has a `type` and may add `notes` and `source`.
+Every slide has a `type` and may add `notes`, `source`, `subtitle` and
+`takeaway` (the one line to act on, drawn as a dark band above the footer).
 
 | Type | Fields |
 |---|---|
