@@ -133,8 +133,17 @@ class SkillCall:
 
     @property
     def request(self) -> str:
-        """The user message the agent is answering, or "" outside a turn."""
-        return str(getattr(self.agent, "_current_query", "") or "")
+        """The user message the agent is answering, or "" outside a turn.
+
+        Without the memory context the agent prepends: that is earlier chats'
+        text, not what the user asked now.
+        """
+        agent = self.agent
+        return str(
+            getattr(agent, "_original_user_input", None)
+            or getattr(agent, "_current_query", "")
+            or ""
+        )
 
     def sources(self) -> List[str]:
         """What the user said and what other tools returned this conversation.

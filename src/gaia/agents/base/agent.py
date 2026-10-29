@@ -9383,7 +9383,13 @@ Do NOT wrap conversational replies in JSON.
 
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
-        Agent.note_seen(self, "user", {}, user_input)
+        # The user's own words: memory recall prepends past chats' text, not theirs.
+        Agent.note_seen(
+            self,
+            "user",
+            {},
+            getattr(self, "_original_user_input", None) or user_input,
+        )
         self._single_tool_done = False
         self._turn_seq += 1
         self._denied_effects = DeniedEffects(os.getcwd())

@@ -427,3 +427,17 @@ def test_the_record_keeps_only_the_latest_entries():
     seen = agent.seen_sources()
     assert len(seen) == Agent.SEEN_SOURCES_MAX
     assert seen[-1][2] == str(Agent.SEEN_SOURCES_MAX + 4)
+
+
+def test_the_request_is_the_users_words_not_the_memory_context():
+    """Recall prepends earlier chats' text; it must not count as the user's."""
+    from gaia.skills.context import SkillCall
+
+    agent = _bare_agent()
+    agent._current_query = (
+        "[GAIA Memory Context]\nEarlier deck: index under 200 MB, 98% accuracy"
+        "\n\nMake a 5-slide roadmap deck"
+    )
+    agent._original_user_input = "Make a 5-slide roadmap deck"
+    call = SkillCall(agent=agent, skill=None)
+    assert call.request == "Make a 5-slide roadmap deck"
