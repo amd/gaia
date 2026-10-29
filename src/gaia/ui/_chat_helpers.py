@@ -744,7 +744,7 @@ async def _generate_session_title(
 
     prompt = (
         "Summarise the user's task in 3 to 6 plain words for a tab/window "
-        "title.  Reply with ONLY the title, no quotes, no trailing "
+        "title, in the language the user wrote in.  Reply with ONLY the title, no quotes, no trailing "
         "punctuation, no leading verbs like 'Task:' or 'Title:'.\n\n"
         f"User: {user_msg[:400]}\n"
         f"Assistant: {(assistant_msg or '')[:200]}\n"

@@ -1225,6 +1225,23 @@ class TestSessionTitleRequest:
         sent = self._sent_kwargs(LARGE_DEFAULT_MODEL_NAME)
         assert sent["chat_template_kwargs"] == {"enable_thinking": False}
 
+    def test_the_title_is_asked_for_in_the_users_language(self):
+        """An Arabic question got an English sidebar title."""
+        from gaia.ui import _chat_helpers as ch
+
+        client = _resident_title_client("Gemma-4-E4B-it-GGUF", "خطة رحلة")
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1",
+                    "Gemma-4-E4B-it-GGUF",
+                    "خطط لرحلة",
+                    "ok",
+                )
+            )
+        prompt = client.chat_completions.call_args.args[1][0]["content"]
+        assert "in the language the user wrote in" in prompt
+
     def test_other_models_get_no_template_switch(self):
         sent = self._sent_kwargs("Gemma-4-E4B-it-GGUF")
         assert "chat_template_kwargs" not in sent

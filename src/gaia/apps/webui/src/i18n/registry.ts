@@ -78,12 +78,16 @@ export function localeOptionLabel(meta: LocaleMeta): string {
 /** A message used as a param, so each language fills in its own wording of it. */
 export interface MessageRef {
     readonly ref: MessageKey;
+    readonly params?: Params;
 }
 
-export const ref = (key: MessageKey): MessageRef => ({ ref: key });
+export const ref = (key: MessageKey, params?: Params): MessageRef => ({ ref: key, params });
 
 export type Param = string | number | MessageRef;
-export type Params = Readonly<Record<string, Param>>;
+export type Params = { readonly [name: string]: Param };
+
+/** A message in one language with no English brackets, for assembling a longer line. */
+export type Say = (key: MessageKey, params?: Params) => string;
 
 /** `isolateText`: wrap string params (names, folders, paths) so their own direction can't spill into the label. */
 function fill(locale: Locale, key: MessageKey, params: Params | undefined, isolateText = false): string {
@@ -92,7 +96,7 @@ function fill(locale: Locale, key: MessageKey, params: Params | undefined, isola
         if (value === undefined) {
             throw new Error(`Message "${key}" needs a {${name}} param, and the caller passed none.`);
         }
-        if (typeof value === 'object') return fill(locale, value.ref, undefined);
+        if (typeof value === 'object') return fill(locale, value.ref, value.params, isolateText);
         return isolateText && typeof value === 'string' ? `${FSI}${value}${PDI}` : String(value);
     });
 }
@@ -103,11 +107,20 @@ function fill(locale: Locale, key: MessageKey, params: Params | undefined, isola
  * brackets and final punctuation to the wrong end ("Good) (?evening").
  */
 export function translate(code: string, key: MessageKey, params?: Params): string {
+    return compose(code, (say) => say(key, params));
+}
+
+/**
+ * A line `build` assembles from several messages, written once per language and
+ * bracketed once: "فهرس المستندات، استعلم في ملف (Indexed documents, queried file)",
+ * not a bracket after every piece.
+ */
+export function compose(code: string, build: (say: Say) => string): string {
     const locale = getLocale(code);
     const rtl = locale.meta.dir === 'rtl';
-    const own = fill(locale, key, params, rtl);
+    const own = build((key, params) => fill(locale, key, params, rtl));
     if (!locale.meta.showEnglishInBrackets || locale === en) return own;
-    const english = fill(en, key, params, rtl);
+    const english = build((key, params) => fill(en, key, params, rtl));
     if (own === english) return own;
     return `${isolate(own, locale.meta.dir)}${BRACKET_JOIN}${isolate(`(${english})`, 'ltr')}`;
 }

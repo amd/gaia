@@ -48,7 +48,7 @@ import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { useChatDraft } from '../hooks/useSavedDraft';
-import { useT } from '../i18n/useT';
+import { getT, useT } from '../i18n/useT';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -1012,7 +1012,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     const store = useChatStore.getState();
                     const tool = [...store.agentSteps].reverse().find((s) => s.type === 'tool');
                     if (event.narration && tool?.active && store.livePhase === 'tool') {
-                        store.setLiveStatus(toolRowText(tool), 'tool');
+                        store.setLiveStatus(toolRowText(tool, getT()), 'tool');
                     }
                     return;
                 }
@@ -1098,7 +1098,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.type === 'tool_start') {
                         toolOccurredRef.current = true;
                         // The model's phase ended with the call; say a tool runs, not the model.
-                        useChatStore.getState().setLiveStatus(toolRowText(step), 'tool');
+                        useChatStore.getState().setLiveStatus(toolRowText(step, getT()), 'tool');
                     }
                 }
             },
