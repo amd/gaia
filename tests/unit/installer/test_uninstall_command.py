@@ -185,6 +185,7 @@ class TestBuildPlan:
             gaia / "gaia.log.lock",
             gaia / "electron-install-state.json",
             gaia / "electron-install.log",
+            gaia / "electron-install.log.prev",
             gaia / "electron-main.log",
             gaia / "electron-updater.log",
             gaia / "electron-startup-failures.json",
@@ -194,6 +195,20 @@ class TestBuildPlan:
         ]
         assert plan.stop_daemon
         assert plan.clear_credentials
+
+    def test_purge_removes_file_snapshots_and_the_previous_install_log(self, fake_home):
+        """Undo snapshots are copies of the user's own files; purge leaves none."""
+        plan = uc.build_plan(
+            venv=False,
+            purge=True,
+            purge_lemonade=False,
+            purge_models=False,
+            home=fake_home,
+        )
+        gaia = fake_home / ".gaia"
+        paths = plan.unique_paths()
+        assert gaia / "snapshots" in paths
+        assert gaia / "electron-install.log.prev" in paths
 
     def test_purge_includes_rotated_gaia_logs(self, fake_home, fs):
         gaia = fake_home / ".gaia"
@@ -2209,3 +2224,68 @@ class TestCredentialStore:
         assert _REAL_CLEAR_CREDENTIALS(printer=captured) is False
         assert "keychain locked" in captured.text
         assert "[removed]" not in captured.text
+
+
+class TestTheLemonadeCheckDidNotRun:
+    """A crashed probe is not evidence that Lemonade is absent (#5772)."""
+
+    def test_a_failed_check_is_reported_instead_of_nothing_to_do(self, monkeypatch):
+        from gaia.installer import lemonade_installer
+
+        monkeypatch.setattr(
+            lemonade_installer.LemonadeInstaller,
+            "check_installation",
+            lambda self: lemonade_installer.LemonadeInfo(
+                installed=False,
+                error="registry read failed",
+                check_failed=True,
+            ),
+        )
+        captured = _Capture()
+
+        assert uc._remove_lemonade(printer=captured) is False
+
+        assert "installation check failed: registry read failed" in captured.text
+        assert "nothing to do" not in captured.text
+        assert "uninstalled" not in captured.text
+
+    def test_an_absent_lemonade_is_still_nothing_to_do(self, monkeypatch):
+        from gaia.installer import lemonade_installer
+
+        monkeypatch.setattr(
+            lemonade_installer.LemonadeInstaller,
+            "check_installation",
+            lambda self: lemonade_installer.LemonadeInfo(
+                installed=False,
+                error="Lemonade Server not found",
+            ),
+        )
+        captured = _Capture()
+
+        assert uc._remove_lemonade(printer=captured) is True
+        assert "not installed" in captured.text
+
+    def test_a_failed_check_turns_the_run_into_completed_with_errors(
+        self, fake_home, monkeypatch
+    ):
+        from gaia.installer import lemonade_installer
+
+        _seed_gaia_tree(fake_home)
+        monkeypatch.setattr(
+            lemonade_installer.LemonadeInstaller,
+            "check_installation",
+            lambda self: lemonade_installer.LemonadeInfo(
+                installed=False,
+                error="registry read failed",
+                check_failed=True,
+            ),
+        )
+        captured = _Capture()
+
+        exit_code = uc.run(
+            _ns(purge=True, purge_lemonade=True, yes=True), printer=captured
+        )
+
+        assert exit_code == uc.EXIT_FS_ERROR, captured.text
+        assert "completed with errors" in captured.text
+        assert "gaia uninstall: done." not in captured.text

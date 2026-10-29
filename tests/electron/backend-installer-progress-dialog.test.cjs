@@ -21,6 +21,7 @@ jest.mock("../../src/gaia/apps/webui/services/backend-installer.cjs", () => ({
   getLogPath: jest.fn(() => "/mock/home/.gaia/install.log"),
   getStatePath: jest.fn(() => "/mock/home/.gaia/install-state.json"),
   ensureBackend: jest.fn(),
+  log: jest.fn(),
 }));
 
 class FakeWindow extends EventEmitter {
@@ -108,13 +109,15 @@ describe("createProgressWindow", () => {
     expect(window.webContents.send).toHaveBeenCalledTimes(1);
     expect(window.webContents.send).toHaveBeenCalledWith(dialog.IPC_PROGRESS_EVENT, {
       stage: "venv",
+      label: "Setting up GAIA",
       percent: 40,
       message: "Creating venv",
     });
 
-    onProgress("install", 70, "Installing gaia");
+    onProgress("install-package", 70, "Installing gaia");
     expect(window.webContents.send).toHaveBeenLastCalledWith(dialog.IPC_PROGRESS_EVENT, {
-      stage: "install",
+      stage: "install-package",
+      label: "Installing GAIA",
       percent: 70,
       message: "Installing gaia",
     });
@@ -131,6 +134,87 @@ describe("createProgressWindow", () => {
 
     expect(window.isDestroyed()).toBe(true);
     expect(window.webContents.send).not.toHaveBeenCalled();
+  });
+});
+
+/** Run the page's script against a stub DOM; returns the elements and the progress listener. */
+function runPageScript(html) {
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const el = () => ({ textContent: "", style: {}, classList: { remove: jest.fn() } });
+  const elements = { stage: el(), fill: el(), percent: el(), message: el() };
+  let listener = null;
+  const window = { gaiaInstall: { onProgress: (cb) => { listener = cb; } } };
+  const document = { getElementById: (id) => elements[id] };
+  require("vm").runInNewContext(script, { window, document, console, Math });
+  return { elements, send: (payload) => listener(payload) };
+}
+
+describe("progress page", () => {
+  const WIN_LOG = "C:\\Users\\Kalin\\gaia-fresh-home\\.gaia\\electron-install.log";
+
+  test("the footer shows the log path as it is on disk, single backslashes", () => {
+    const { dialog } = load();
+    const html = dialog.buildProgressHtml({ logPath: WIN_LOG });
+
+    const shown = html.match(/Log: <code>([^<]*)<\/code>/)[1];
+    expect(shown).toBe(WIN_LOG);
+    expect(html).not.toContain("\\\\Users");
+  });
+
+  test("HTML in the log path is escaped, not rendered", () => {
+    const { dialog } = load();
+    const html = dialog.buildProgressHtml({ logPath: "C:\\a&b\\<i>\\install.log" });
+
+    expect(html).toContain("Log: <code>C:\\a&amp;b\\&lt;i&gt;\\install.log</code>");
+  });
+
+  test("the first screen has no installer jargon", () => {
+    const { dialog } = load();
+    const html = dialog.buildProgressHtml({ logPath: WIN_LOG });
+    const body = html.slice(html.indexOf("<body>"), html.indexOf("<script>"));
+
+    expect(body).not.toMatch(/backend|pre-flight/i);
+    expect(html).not.toMatch(/text-transform:\s*uppercase/);
+  });
+
+  test("the page shows the stage's label, never its id", () => {
+    const { dialog } = load();
+    const { elements, send } = runPageScript(dialog.buildProgressHtml({ logPath: WIN_LOG }));
+
+    send({ stage: "gaia-init", label: "Getting the AI model ready", percent: 70, message: "Downloading" });
+
+    expect(elements.stage.textContent).toBe("Getting the AI model ready");
+    expect(elements.message.textContent).toBe("Downloading");
+    expect(elements.percent.textContent).toBe("70%");
+  });
+});
+
+describe("stageLabel", () => {
+  const { STAGES } = jest.requireActual(INSTALLER_PATH);
+
+  test.each(Object.values(STAGES))("installer stage %s has a plain label", (stage) => {
+    const { installer, dialog } = load();
+
+    const label = dialog.stageLabel(stage);
+
+    expect(label).toBe(dialog.STAGE_LABELS[stage]);
+    expect(label.toLowerCase()).not.toContain(stage);
+    expect(installer.log).not.toHaveBeenCalled();
+  });
+
+  test("the gaia init stage reads as getting the model ready", () => {
+    const { dialog } = load();
+    expect(dialog.stageLabel("gaia-init")).toBe("Getting the AI model ready");
+  });
+
+  test("an unknown stage shows a neutral label and is logged once", () => {
+    const { installer, dialog } = load();
+
+    expect(dialog.stageLabel("fetch-widgets")).toBe("Setting up GAIA");
+    expect(dialog.stageLabel("fetch-widgets")).toBe("Setting up GAIA");
+
+    expect(installer.log).toHaveBeenCalledTimes(1);
+    expect(installer.log.mock.calls[0][0]).toMatch(/"fetch-widgets" has no label/);
   });
 });
 

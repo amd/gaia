@@ -526,38 +526,98 @@ function Install-FlagshipAgent {
     return [bool]$ok
 }
 
+# The user environment key Add-ToPath edits. Tests point it at a scratch key.
+$USER_ENV_KEY = "Environment"
+
+function Get-NormalizedPathEntry {
+    param([string]$Entry)
+    return [Environment]::ExpandEnvironmentVariables($Entry.Trim().Trim('"')).TrimEnd('\', '/')
+}
+
+function Get-RawUserPath {
+    # Unexpanded: writing back an expanded %USERPROFILE% would freeze it to this machine.
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($USER_ENV_KEY, $false)
+    if ($null -eq $key) { return "" }
+    try {
+        return [string]$key.GetValue(
+            "Path", "",
+            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    }
+    finally {
+        $key.Close()
+    }
+}
+
+function Set-RawUserPath {
+    param([string]$Value)
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($USER_ENV_KEY)
+    try {
+        # REG_EXPAND_SZ, as Windows creates it: REG_SZ leaves %VARS% unexpanded.
+        $key.SetValue("Path", $Value, [Microsoft.Win32.RegistryValueKind]::ExpandString)
+    }
+    finally {
+        $key.Close()
+    }
+}
+
+function Send-EnvironmentChange {
+    # A raw registry write, unlike SetEnvironmentVariable, tells no one; new
+    # terminals launched from Explorer would keep the old PATH until sign-out.
+    if (-not ("GaiaInstaller.EnvBroadcast" -as [type])) {
+        Add-Type -Namespace GaiaInstaller -Name EnvBroadcast -MemberDefinition @'
+[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam,
+    string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+'@
+    }
+    $result = [UIntPtr]::Zero
+    # HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG, 5 s.
+    $null = [GaiaInstaller.EnvBroadcast]::SendMessageTimeout(
+        [IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, "Environment", 2, 5000, [ref]$result)
+}
+
 function Add-ToPath {
     Write-Step "Adding GAIA to PATH..."
 
     # Both dirs: the venv holds the Python CLI, $GAIA_BIN holds the terminal hub.
     $wanted = @("$GAIA_VENV\Scripts", $GAIA_BIN)
-    $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $missing = @($wanted | Where-Object { $currentPath -notlike "*$_*" })
-
-    if ($missing.Count -eq 0) {
-        Write-Success "GAIA is already in PATH"
-        return
-    }
 
     try {
+        $currentPath = Get-RawUserPath
         # Split/filter first: an empty element (from a trailing ";") is resolved
         # as the current directory by every process that reads this PATH.
-        $existing = @($currentPath -split ";" | Where-Object { $_ })
-        $newPath = ($existing + $missing) -join ";"
-        [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+        $existing = @($currentPath -split ";" | Where-Object { $_.Trim() })
+        $present = @($existing | ForEach-Object { Get-NormalizedPathEntry $_ })
+        $missing = @($wanted | Where-Object { $present -notcontains (Get-NormalizedPathEntry $_) })
 
-        # Update current session PATH
-        $session = @($env:PATH -split ";" | Where-Object { $_ })
-        $env:PATH = ($session + $missing) -join ";"
+        if ($missing.Count -eq 0) {
+            Write-Success "GAIA is already in PATH"
+            return
+        }
 
-        Write-Success "Added GAIA to PATH"
+        Set-RawUserPath -Value (($existing + $missing) -join ";")
     }
     catch {
-        Write-GaiaWarning "Failed to add GAIA to PATH automatically"
+        Write-GaiaWarning "Failed to add GAIA to PATH automatically: $_"
         Write-Host "Please add the following directories to your PATH manually:" -ForegroundColor $COLOR_YELLOW
         foreach ($dir in $wanted) {
             Write-Host "  $dir" -ForegroundColor $COLOR_YELLOW
         }
+        return
+    }
+
+    # Update current session PATH
+    $session = @($env:PATH -split ";" | Where-Object { $_ })
+    $env:PATH = ($session + $missing) -join ";"
+    Write-Success "Added GAIA to PATH"
+
+    # Separate: the PATH is already saved, so a failure here must not say otherwise.
+    try {
+        Send-EnvironmentChange
+    }
+    catch {
+        Write-GaiaWarning "PATH saved, but Windows could not be notified: $_"
+        Write-Host "  Sign out and back in before opening a new terminal." -ForegroundColor $COLOR_YELLOW
     }
 }
 

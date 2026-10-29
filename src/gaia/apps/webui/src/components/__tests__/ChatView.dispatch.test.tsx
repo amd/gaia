@@ -46,6 +46,8 @@ beforeEach(() => {
         isLoadingMessages: false,
         pendingPrompt: null,
         systemStatus: null,
+        messageQueues: {},
+        queueHolds: {},
     });
 });
 
@@ -66,5 +68,55 @@ describe('ChatView dispatch', () => {
         expect(call[0]).toBe(SESSION.id);
         expect(call[1]).toBe('triage my inbox');
         expect(typeof (call[2] as api.StreamCallbacks).onChunk).toBe('function');
+    });
+
+    it('queues a message the busy chat refused instead of showing the refusal as a reply (#5712)', async () => {
+        mockedApi.sendMessageStream.mockImplementation((_sid, _text, callbacks) => {
+            const busy = Object.assign(new Error('A chat request is already in progress for this session.'), { httpStatus: 409 });
+            queueMicrotask(() => (callbacks as api.StreamCallbacks).onError?.(busy));
+            return new AbortController();
+        });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'hello' } });
+            fireEvent.click(screen.getByLabelText('Send'));
+            await new Promise((r) => setTimeout(r, 0));
+        });
+
+        const { messages, messageQueues, queueHolds } = useChatStore.getState();
+        expect(messages.some((m) => m.role === 'assistant')).toBe(false);
+        expect(messageQueues[SESSION.id]?.map((m) => [m.text, m.state])).toEqual([['hello', 'queued']]);
+        expect(queueHolds[SESSION.id]).toBe(true);
+        expect(screen.getByText('GAIA is still busy in this chat. Trying again in a few seconds.')).toBeInTheDocument();
+    });
+
+    it('sends the opening message ahead of one queued while the chat was created (#5712)', async () => {
+        useChatStore.setState({
+            pendingPrompt: { sessionId: SESSION.id, text: 'first' },
+            messageQueues: { [SESSION.id]: [{ id: 1, text: 'second', state: 'queued' }] },
+        });
+
+        await act(async () => {
+            render(<ChatView sessionId={SESSION.id} />);
+            await new Promise((r) => setTimeout(r, 0));
+        });
+
+        expect(mockedApi.sendMessageStream).toHaveBeenCalledTimes(1);
+        expect(mockedApi.sendMessageStream.mock.calls[0][1]).toBe('first');
+        expect(useChatStore.getState().messageQueues[SESSION.id]?.map((m) => m.text)).toEqual(['second']);
+    });
+
+    it('leaves a message meant for another chat unsent (#5924)', async () => {
+        const meant = { sessionId: 'another-chat', text: 'not for this chat' };
+        useChatStore.setState({ pendingPrompt: meant });
+
+        await act(async () => {
+            render(<ChatView sessionId={SESSION.id} />);
+            await new Promise((r) => setTimeout(r, 0));
+        });
+
+        expect(mockedApi.sendMessageStream).not.toHaveBeenCalled();
+        expect(useChatStore.getState().pendingPrompt).toEqual(meant);
     });
 });

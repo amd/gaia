@@ -49,8 +49,8 @@ _TEST_SUCCESS_CLAIMS = re.compile(
 #: behaviour it exists to encourage. "Still" is not on the list: "the existing
 #: tests still pass" is a claim.
 _NEGATION = re.compile(
-    r"\b(not|n't|never|unable|could ?n[o']t|fail(s|ed|ing)?|except|"
-    r"unverified|did ?n[o']t|without running|but)\b",
+    r"n't\b|n’t\b|\b(not|never|unable|could ?n[o'’]t|fail(s|ed|ing)?|except|"
+    r"unverified|did ?n[o'’]t|without running|but)\b",
     re.IGNORECASE,
 )
 

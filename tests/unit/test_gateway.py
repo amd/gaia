@@ -220,6 +220,9 @@ class TestAuth:
             "enabled_models",
             "active_model",
             "non_streaming_models",
+            "tool_calling_models",
+            "no_tool_calling_models",
+            "tool_calling_probe_failures",
             "unavailable_models",
         }
 
@@ -933,7 +936,7 @@ def test_check_reachable_dials_the_gateway_host_on_443(monkeypatch):
     assert all(t == gateway.REACH_TIMEOUT for _, t in dialed)
 
 
-def test_check_reachable_raises_no_network_for_an_unresolvable_host(monkeypatch):
+def test_check_reachable_names_the_vpn_for_an_unresolvable_host(monkeypatch):
     import socket
 
     from gaia.llm import gateway
@@ -945,7 +948,9 @@ def test_check_reachable_raises_no_network_for_an_unresolvable_host(monkeypatch)
     with pytest.raises(gateway.GatewayUnreachable) as exc:
         gateway.check_reachable(None)
     assert exc.value.host == "llm-api.amd.com"
-    assert str(exc.value).startswith("No network available")
+    assert (
+        str(exc.value) == "Can't reach llm-api.amd.com. It needs AMD's network or VPN"
+    )
     assert "key" not in str(exc.value).lower()
 
 

@@ -8,6 +8,7 @@ Manages sessions, messages, documents, and their relationships using SQLite.
 
 import json
 import logging
+import math
 import sqlite3
 import threading
 import uuid
@@ -71,6 +72,23 @@ PLACEHOLDER_TITLES = {
 }
 
 
+def non_finite_field(value: Any, path: str = "") -> Optional[str]:
+    """The dotted path of the first Infinity or NaN inside *value*, else None."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return path or "value"
+    if isinstance(value, dict):
+        items = ((f"{path}.{k}" if path else str(k), v) for k, v in value.items())
+    elif isinstance(value, list):
+        items = ((f"{path}[{i}]", v) for i, v in enumerate(value))
+    else:
+        return None
+    for child_path, child in items:
+        found = non_finite_field(child, child_path)
+        if found:
+            return found
+    return None
+
+
 def is_placeholder_title(title: str | None) -> bool:
     """True when the title is an auto-generated default, not a user choice."""
     return (title or "").strip().lower() in PLACEHOLDER_TITLES
@@ -95,7 +113,8 @@ CREATE TABLE IF NOT EXISTS documents (
     chunk_count INTEGER DEFAULT 0,
     indexed_at TEXT DEFAULT (datetime('now')),
     last_accessed_at TEXT,
-    last_error TEXT
+    last_error TEXT,
+    error_kind TEXT
 );
 
 -- Sessions (conversations)
@@ -179,7 +198,8 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     run_count        INTEGER DEFAULT 0,
     error_count      INTEGER DEFAULT 0,
     session_id       TEXT,
-    schedule_config  TEXT
+    schedule_config  TEXT,
+    last_error       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS schedule_results (
@@ -342,6 +362,9 @@ class ChatDatabase:
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
         self._add_column("documents", "file_mtime", "REAL")
         self._add_column("documents", "last_error", "TEXT")
+        # Why a failure is permanent (corrupted, encrypted, empty, empty_file,
+        # unsupported_workbook); NULL otherwise.
+        self._add_column("documents", "error_kind", "TEXT")
         # The server indexing it, so a restart can tell a dead index from a live one.
         self._add_column("documents", "indexing_owner", "TEXT")
         # Per-session incognito mode and agent selection.
@@ -381,6 +404,8 @@ class ChatDatabase:
         self._add_column("sessions", "pinned", "INTEGER NOT NULL DEFAULT 0")
         self._add_column("sessions", "unread", "INTEGER NOT NULL DEFAULT 0")
         self._add_column("sessions", "last_run_status", "TEXT")
+        # The last run's error text, or NULL when it succeeded.
+        self._add_column("scheduled_tasks", "last_error", "TEXT")
         self._add_column(
             "sessions",
             "kind",
@@ -1010,6 +1035,17 @@ class ChatDatabase:
                 ) from exc
             performance = stats.get("performance") if isinstance(stats, dict) else None
             if isinstance(performance, dict):
+                # Rows saved before totals were checked can hold Infinity/NaN.
+                bad = non_finite_field(performance)
+                if bad:
+                    logger.warning(
+                        "Skipping turn performance of message %s in chat %s: "
+                        "%s is not finite",
+                        row["id"],
+                        session_id,
+                        bad,
+                    )
+                    continue
                 turns.append(
                     {
                         "message_id": row["id"],
@@ -1461,6 +1497,7 @@ class ChatDatabase:
         status: str,
         chunk_count: int | None = None,
         last_error: str | None = _UNSET,
+        error_kind: str | None = None,
     ) -> bool:
         """Update a document's indexing status and optionally its chunk count.
 
@@ -1472,6 +1509,8 @@ class ChatDatabase:
                         Omit (default) to leave the existing value unchanged.
                         Pass None to clear the column (SQL NULL).
                         Pass a string to store that error message.
+            error_kind: Stored with ``last_error`` whenever that is written, so
+                        a stale kind never outlives the error it described.
 
         Returns:
             True if the document was found and updated.
@@ -1490,7 +1529,11 @@ class ChatDatabase:
             if status == "complete":
                 parts.append("last_error = ?")
                 params.append(None)
+                parts.append("error_kind = ?")
+                params.append(None)
             elif last_error is not _UNSET:
+                parts.append("error_kind = ?")
+                params.append(error_kind if last_error is not None else None)
                 parts.append("last_error = ?")
                 if (
                     isinstance(last_error, str)
@@ -1518,7 +1561,7 @@ class ChatDatabase:
             ids = [row["id"] for row in rows if owner_is_gone(row["indexing_owner"])]
             self._conn.executemany(
                 "UPDATE documents SET indexing_status = 'failed', last_error = ?, "
-                "last_accessed_at = ? WHERE id = ?",
+                "error_kind = NULL, last_accessed_at = ? WHERE id = ?",
                 [(error, self._now(), doc_id) for doc_id in ids],
             )
         return ids
@@ -1696,13 +1739,15 @@ class ChatDatabase:
         error_count: int = 0,
         session_id: str | None = None,
         schedule_config: str | None = None,
+        last_error: str | None = None,
     ) -> None:
         """Update the mutable fields of a scheduled task row."""
         with self._transaction():
             self._conn.execute(
                 """UPDATE scheduled_tasks
                    SET status = ?, last_run_at = ?, next_run_at = ?, last_result = ?,
-                       run_count = ?, error_count = ?, session_id = ?, schedule_config = ?
+                       run_count = ?, error_count = ?, session_id = ?, schedule_config = ?,
+                       last_error = ?
                    WHERE id = ?""",
                 (
                     status,
@@ -1713,6 +1758,7 @@ class ChatDatabase:
                     error_count,
                     session_id,
                     schedule_config,
+                    last_error,
                     task_id,
                 ),
             )

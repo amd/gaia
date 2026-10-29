@@ -9,6 +9,7 @@ import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/c
 import type { SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
+import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
 
 const API_BASE = getApiBase();
 
@@ -76,6 +77,20 @@ export class ApiError extends Error {
     }
 }
 
+/** Starlette's bare body or the UI server's catch-all ("Internal server error") — no cause. */
+function isBareInternalError(detail: string): boolean {
+    return detail.trim().toLowerCase() === 'internal server error';
+}
+
+/**
+ * False when a 500 carries no real cause: a bare "Internal Server Error",
+ * a proxy HTML page, or a raw JSON body with an empty or missing `detail`.
+ */
+function hasUsefulServerDetail(detail: string): boolean {
+    const text = detail.trim();
+    return text !== '' && !isBareInternalError(text) && !/^[<{[]/.test(text);
+}
+
 function getFriendlyError(status: number, detail: string): string {
     switch (status) {
         case 403: return detail || 'Access denied.';
@@ -85,7 +100,7 @@ function getFriendlyError(status: number, detail: string): string {
         // filepath, not a missing file. See issue #728.
         case 404: return detail || 'The requested item was not found.';
         case 413: return detail || 'File too large to process.';
-        case 500: return 'Server error. Please try again.';
+        case 500: return hasUsefulServerDetail(detail) ? detail : 'Server error. Please try again.';
         case 502: return 'Service unavailable. Is the backend running?';
         case 503: return detail || 'Service unavailable.';
         default: return detail || `Request failed (HTTP ${status})`;
@@ -285,8 +300,9 @@ export async function checkSetup(skipChatModel = false): Promise<SetupCheck> {
     return apiFetch('GET', `/setup/check?skip_chat_model=${skipChatModel}`);
 }
 
-export async function startSetup(skipChatModel: boolean): Promise<SetupRunStatus> {
-    return apiFetch('POST', '/setup/run', { skip_chat_model: skipChatModel });
+/** `gaiaLemonade` sets up, and saves, GAIA's own Lemonade Server instead of the user's. */
+export async function startSetup(skipChatModel: boolean, gaiaLemonade = false): Promise<SetupRunStatus> {
+    return apiFetch('POST', '/setup/run', { skip_chat_model: skipChatModel, gaia_lemonade: gaiaLemonade });
 }
 
 export async function getSetupStatus(): Promise<SetupRunStatus> {
@@ -352,6 +368,30 @@ export async function connectProvider(
     body: ConnectProviderBody,
 ): Promise<ProviderInfo & { remembered: boolean; remember_error: string | null }> {
     return apiFetch('POST', `/providers/${encodeURIComponent(provider)}/connect`, body);
+}
+
+/** How often a connect held up by an OS credential prompt asks again. */
+export const CONNECT_RETRY_MS = 2000;
+
+/**
+ * Connect, waiting out an OS credential-store prompt: a 409 means the OS is
+ * still asking the user, so say so and ask again until they answer.
+ */
+export async function connectProviderWaitingForOs(
+    provider: string,
+    body: ConnectProviderBody,
+    onWaiting: (message: string) => void,
+    stopped: () => boolean = () => false,
+): Promise<ProviderInfo & { remembered: boolean; remember_error: string | null }> {
+    for (;;) {
+        try {
+            return await connectProvider(provider, body);
+        } catch (err) {
+            if (!(err instanceof ApiError) || err.httpStatus !== 409 || stopped()) throw err;
+            onWaiting(err.detail);
+            await new Promise((resolve) => setTimeout(resolve, CONNECT_RETRY_MS));
+        }
+    }
 }
 
 export async function forgetProviderKey(provider: string): Promise<{ removed: boolean }> {
@@ -435,7 +475,7 @@ export async function listSessions(): Promise<{ sessions: Session[]; total: numb
     return { sessions: [...byId.values()], total };
 }
 
-export async function createSession(data: Partial<Session> = {}): Promise<Session> {
+export async function createSession(data: Partial<Session> & { folders?: string[] } = {}): Promise<Session> {
     return apiFetch('POST', '/sessions', data);
 }
 
@@ -444,7 +484,9 @@ export async function updateSession(id: string, data: { title?: string; title_is
 }
 
 export async function deleteSession(id: string): Promise<void> {
-    return apiFetch('DELETE', `/sessions/${id}`);
+    await apiFetch('DELETE', `/sessions/${id}`);
+    // Unsent text must not outlive the chat it was typed into.
+    clearSavedDraft(chatDraftKey(id));
 }
 
 export async function getSession(id: string): Promise<Session> {
@@ -533,7 +575,7 @@ export interface StreamCallbacks {
 
 /** Agent event types that represent activity rather than content. */
 const AGENT_EVENT_TYPES = new Set([
-    'status', 'step', 'thinking', 'plan',
+    'status', 'step', 'thinking', 'commentary', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
     'permission_request', 'needs_confirmation', 'needs_input', 'policy_alert',
     'followup_taken', 'followup_returned', 'context_usage',
@@ -705,7 +747,7 @@ async function consumeSSEResponse(
         log.stream.error(`SSE connection failed: HTTP ${res.status}`, errText);
         // The server's own words when it gave any, never a raw JSON body.
         const detail = parseErrorDetail(errText);
-        const message = detail && detail !== 'Internal Server Error' ? detail : getFriendlyError(res.status, detail);
+        const message = detail && !isBareInternalError(detail) ? detail : getFriendlyError(res.status, detail);
         callbacks.onError(new ApiError(message, res.status, detail, parseErrorStatus(errText)));
         return;
     }
@@ -930,7 +972,8 @@ export async function uploadDocumentBlob(file: File): Promise<Document> {
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
-        throw new Error(getFriendlyError(res.status, parseErrorDetail(errorText)));
+        const detail = parseErrorDetail(errorText);
+        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
     }
 
     const data = await res.json();
@@ -1017,9 +1060,10 @@ export async function uploadFile(file: File): Promise<{
     });
 
     if (!res.ok) {
-        const errorText = await res.text().catch(() => 'Upload failed');
+        const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
-        throw new Error(`Upload failed: ${errorText}`);
+        const detail = parseErrorDetail(errorText);
+        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
     }
 
     const data = await res.json();
@@ -1103,6 +1147,11 @@ export async function createSchedule(name: string, interval: string, prompt: str
 
 export async function updateSchedule(name: string, status: string): Promise<Schedule> {
     return apiFetch('PUT', `/schedules/${encodeURIComponent(name)}`, { status });
+}
+
+/** Run a schedule once now; its next scheduled time stays as it was. */
+export async function runScheduleNow(name: string): Promise<Schedule> {
+    return apiFetch('POST', `/schedules/${encodeURIComponent(name)}/run`);
 }
 
 export async function deleteSchedule(name: string): Promise<void> {

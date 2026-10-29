@@ -30,7 +30,9 @@ from .. import permissions as session_permissions
 from .._chat_helpers import (
     _set_provisional_title,
     _spawn_background,
+    model_context_messages,
     stuck_producer,
+    turn_takes_the_line,
 )
 from ..database import ChatDatabase
 from ..dependencies import get_db
@@ -92,7 +94,8 @@ async def send_message(
     """Send a message and get a response (streaming or non-streaming).
 
     Concurrency is controlled at two levels:
-    1. Every turn waits in one visible line for the model (``turn_queue``).
+    1. Every turn on a local model waits in one visible line for it
+       (``turn_queue``); a cloud turn doesn't.
        A streamed turn waits inside its detached run and reports its place
        in line; a non-streamed one waits here, its message already saved,
        until it reaches the model or is stopped with ``/api/chat/cancel``.
@@ -144,8 +147,9 @@ async def send_message(
         try:
             question_id = db.begin_turn(sid, request.message)
             _set_provisional_title(db, sid, request.message)
-            await turn_queue.acquire(sid)
-            holds_turn = True
+            if turn_takes_the_line(db, session, request.agent_type):
+                await turn_queue.acquire(sid)
+                holds_turn = True
         except TurnCancelled:
             db.add_message(sid, "assistant", "Cancelled.", ends_turn=True)
             session_lock.release()
@@ -621,19 +625,21 @@ async def cancel_stream(request: CancelStreamRequest):
     """
     from .._chat_helpers import _active_sse_handlers
 
+    handler = _active_sse_handlers.get(request.session_id)
+    if handler:
+        # Mark a resumed relay cancelled before withdrawing its queued hand-back.
+        handler.cancelled.set()
+        turn_queue.cancel(request.session_id)
+        # #2109: an email-relay turn can be parked in a blocking socket read that
+        # the cancelled flag alone can't interrupt — force it to error out now.
+        handler.close_active_relay_response()
+        return {"status": "ok", "cancelled": True}
     # A turn still waiting in line has no handler yet; withdraw it instead.
     if turn_queue.cancel(request.session_id):
         return {"status": "ok", "cancelled": True}
-    handler = _active_sse_handlers.get(request.session_id)
-    if not handler:
-        raise HTTPException(
-            status_code=404, detail="No active chat session found for this session ID"
-        )
-    handler.cancelled.set()
-    # #2109: an email-relay turn can be parked in a blocking socket read that
-    # the cancelled flag alone can't interrupt — force it to error out now.
-    handler.close_active_relay_response()
-    return {"status": "ok", "cancelled": True}
+    raise HTTPException(
+        status_code=404, detail="No active chat session found for this session ID"
+    )
 
 
 @router.get("/api/chat/active")
@@ -742,10 +748,16 @@ async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db))
     """How full the model's context is for this chat's next message, by kind."""
     if not db.get_session(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
-    from .._chat_helpers import cached_session_agent, model_turns
+    from .._chat_helpers import cached_session_agent, model_turns, relayed_context
 
     agent = cached_session_agent(session_id)
     if agent is None:
+        # A relayed chat's agent lives in the sidecar, which measures each turn.
+        relayed = relayed_context(session_id)
+        if relayed is not None and "usage" in relayed:
+            return {"available": True, **relayed["usage"]}
+        if relayed is not None:
+            return {"available": False, "reason": relayed["reason"]}
         # Measuring needs the chat's agent, which lives in memory between turns.
         answered = db.latest_message_id(session_id, role="assistant") is not None
         return {
@@ -757,22 +769,12 @@ async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db))
                 else "Measured once GAIA has answered in this chat."
             ),
         }
-    from ..turn_insights import (
-        context_categories,
-        context_state,
-        measure_context,
-        tools_by_load,
-    )
+    from ..turn_insights import panel_context
 
     def _measure():
-        usage = measure_context(
+        return panel_context(
             agent, model_turns(agent, db, session_id), getattr(agent, "model_id", None)
         )
-        usage["categories"] = context_categories(usage)
-        usage["tool_loading"] = tools_by_load(agent)
-        usage["model"] = getattr(agent, "model_id", None)
-        usage["context_state"] = context_state(agent)
-        return usage
 
     return {"available": True, **(await asyncio.to_thread(_measure))}
 
@@ -868,7 +870,7 @@ async def retry_with(
         await turn_queue.acquire(sid)
         try:
             earlier, question, recorded = answer_retry.split_latest_turn(
-                db.get_context_messages(sid), record
+                model_context_messages(db, sid), record
             )
             messages = answer_retry.build_retry_messages(
                 earlier, question, resolve_ctx_size(request.model)

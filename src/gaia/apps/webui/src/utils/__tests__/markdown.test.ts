@@ -34,3 +34,35 @@ describe('safeUrlTransform', () => {
         expect(safeUrlTransform(url)).toBe('');
     });
 });
+
+describe('safeUrlTransform — chat upload links', () => {
+    it('keeps an upload link same-origin when the backend serves the app', () => {
+        expect(safeUrlTransform('/api/files/uploads/0b9e7a52-1c2d.png')).toBe(
+            '/api/files/uploads/0b9e7a52-1c2d.png',
+        );
+    });
+
+    it.each([
+        // Traversal or a nested path
+        '/api/files/uploads/../../secrets.txt',
+        '/api/files/uploads/..',
+        '/api/files/uploads/sub/x.png',
+        '/api/files/uploads/%2e%2e%2fx.png',
+        '/api/files/uploads/.hidden',
+        '/api/files/uploads/',
+        // Extra parts after the file name
+        '/api/files/uploads/x.png?y=1',
+        '/api/files/uploads/x.png#y',
+        '/api/files/uploads/x.png/',
+        // Other app routes and look-alikes
+        '/api/files/x.png',
+        '/api/sessions',
+        '//api/files/uploads/x.png',
+        '/API/files/uploads/x.png',
+        'api/files/uploads/x.png',
+        ' /api/files/uploads/x.png',
+        '/api/files/uploads/x.png\\evil',
+    ])('still neutralises %s', (url) => {
+        expect(safeUrlTransform(url)).toBe('');
+    });
+});

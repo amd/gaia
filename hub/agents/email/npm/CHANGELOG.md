@@ -6,6 +6,45 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **No stray "unmapped agent event" line.** A sentence the model wrote before
+  checking your mail showed up in the Agent UI as
+  `[unmapped agent event: commentary]`. It no longer does.
+- **Memory downloads its embedding model when it is missing.** On the first
+  start that uses memory, the agent now fetches the required embedding model
+  from Lemonade instead of silently running without memory; the initial
+  download can be about 300 MB.
+- **Sensitive credentials stay out of memory and the conversation log.** PINs,
+  card numbers, SSNs and other credential-shaped text are not saved as
+  memories, and logged turns replace matching spans with `[secret removed]`.
+- **Connect prompts name the right Settings tab.** They sent users to a
+  "Connections" tab in Settings, which the Agent UI doesn't have; they now say
+  "Settings → Connectors".
+- **A tool decision that reached no prompt is no longer reported as
+  delivered.** `POST /v1/email/agent/confirm-tool` answered `ok` even when
+  nothing was waiting for the decision (already answered, timed out, or never
+  asked). It now answers 409.
+- **One very long turn no longer vanishes from the conversation.** A turn
+  bigger than the whole history budget was dropped from what the model saw
+  next, answer included. It is now kept with its longest messages cut and a
+  note saying how much.
+- **SKILL.md examples include authorization headers.** The stateful-agent
+  and autonomy code examples in SKILL.md now send the session token required
+  by the sidecar, and the gotchas note lists `/v1/email/health` and
+  `/v1/email/version` as exempt.
+
+- **Answers stream as they are written.** `/v1/email/query` now emits `token`
+  events while the model writes, so a relayed turn shows text live instead of
+  "Waiting on the model", cancelling the run cuts the model call short, and a
+  stopped turn keeps what was written.
+- **A long conversation no longer overflows a small model window.** The
+  agent used the history you pushed as-is, so on a 32K window (an NPU model)
+  it plus the agent's own prompt could exceed the window and fail the turn.
+  It now keeps the newest whole turns that fit and says so in a `status`
+  event when older ones drop out of view.
+- **Token counts are exact in the published binary, offline too.** The
+  binary could not load its tokenizer and counted tokens by an estimate that
+  overcounts. The tokenizer and its data now ship inside the binary, so it
+  no longer downloads anything to count tokens.
 - **A mailbox connection being saved is reported as transient.** When another
   GAIA process or request is mid-save on the mailbox connection, a mailbox
   route now answers `502` with a detail saying the connection "is being saved

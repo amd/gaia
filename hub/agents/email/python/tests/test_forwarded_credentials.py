@@ -67,7 +67,7 @@ def test_get_missing_credential_raises_loudly():
 
 def test_missing_credential_error_names_the_cli_not_just_the_ui():
     # A headless user must be able to unblock from the message (#2347): it names
-    # the connect + grant CLI commands, not only "Settings -> Connections".
+    # the connect + grant CLI commands, not only "Settings -> Connectors".
     with pytest.raises(ConnectorsError) as exc:
         forwarded_credentials.get_forwarded_token("google", ["s1"])
     msg = str(exc.value)

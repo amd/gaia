@@ -9,6 +9,60 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The email package no longer installs beside an incompatible GAIA core.**
+  Its declared core floor is now 0.25.1, the first release covering the
+  email agent module-level imports, including its guided Outlook setup route.
+  (#4430)
+- **A note the model writes before a tool call no longer shows as
+  `[unmapped agent event: commentary]`.** The host's output handler now marks
+  that text as `commentary`; the translator drops it, since the words already
+  went out as `token` events.
+- **Memory downloads its embedding model when it is missing.** On the first
+  start that uses memory, the agent now fetches the required embedding model
+  from Lemonade instead of silently running without memory; the initial
+  download can be about 300 MB.
+- **Sensitive credentials stay out of memory and the conversation log.** PINs,
+  card numbers, SSNs and other credential-shaped text are not saved as
+  memories, and logged turns replace matching spans with `[secret removed]`.
+- **Connect prompts name the right Settings tab.** The agent sent users to a
+  "Connections" tab in Settings, which the Agent UI doesn't have; it now says
+  "Settings → Connectors".
+- **A tool decision that reached no prompt is no longer reported as delivered.**
+  `POST /v1/email/agent/confirm-tool` answered `ok` even when nothing was
+  waiting for the decision (already answered, timed out, or never asked). It now
+  answers 409, like the flagship agent's tool decision route. (#4889)
+- **One very long turn no longer vanishes from the conversation.** A pushed
+  turn bigger than the whole history budget was dropped, answer included. It is
+  now kept with its longest messages cut and a note saying how much.
+- **A follow-up about a thread shown last turn now works in the TUI.** Find a
+  thread, then ask who said what in it: the second question used to fail,
+  because the host pushes back only the conversation's words and the thread id
+  never made it into the next turn. The model guessed one, and Gmail rejected
+  `[ID of Northgate migration sync — phase 2 sequencing]` with a 400. A
+  session-scoped agent (a `/v1/email/query` caller that sends `session_id`, as
+  the TUI does) now remembers the last 10 threads `get_thread` and
+  `summarize_thread` showed, and hands them back with the history as
+  `- [thread] <subject> (thread_id <id>)` lines, the subjects fenced as
+  untrusted. It also remembers each thread's mailbox, so the follow-up routes
+  without a `mailbox` argument. The Agent UI relay doesn't send `session_id`
+  yet, so it doesn't get this. Both tools now refuse an id that can't be a
+  thread id before calling the mail API, with `thread_id '<id>' is not a thread
+  id. Call search_messages first and pass the thread_id from its result.`
+  (#2834)
+- **Pushed history that doesn't fit the model's window no longer overflows
+  it.** `/v1/email/query` used the `context` the host pushed as-is, but the
+  host sizes it without seeing this agent's prompt and tools. On a 32K window
+  (an NPU model) the two together could exceed the window and fail the turn.
+  The agent now keeps the newest whole turns that fit beside its prompt and
+  streams a `status` event when older ones drop out of view.
+- **Outlook messages show their real age and the newest one is replied to.**
+  The Outlook backend handed downstream Graph's ISO-8601 `receivedDateTime` in
+  the `internalDate` field, which every consumer reads as epoch milliseconds
+  and turned into 0. Every message looked like it arrived at the epoch, so the
+  needs-you ages were empty, the "newest message in the thread" reply target
+  never fired, and the recency order of the needs-review list was lost. The
+  backend now emits epoch milliseconds, using one timestamp parser shared with
+  the follow-up tools.
 - **A mailbox another GAIA operation is saving is reported as busy, not as
   missing permissions.** While the daemon, the Agent UI or the CLI is mid-save
   on a connection, the connection listing returns it marked `"error": "busy"`

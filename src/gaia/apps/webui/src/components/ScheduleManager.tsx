@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState, useCallback, useRef, useId } from 'react';
-import { X, Plus, Clock, Play, Pause, Trash2, ChevronDown, ChevronUp, MessageSquare } from 'lucide-react';
+import { X, Plus, Clock, Play, Pause, Trash2, ChevronDown, ChevronUp, MessageSquare, Zap } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useScheduleStore } from '../stores/scheduleStore';
 import { log } from '../utils/logger';
@@ -14,14 +14,6 @@ import './ScheduleManager.css';
 
 /** How long the Delete button waits for its "Confirm?" click. */
 export const CONFIRM_DELETE_MS = 8000;
-
-/** Format an interval in seconds to a human-readable string. */
-function formatInterval(seconds: number): string {
-    if (seconds < 60) return `${seconds}s`;
-    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-    if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
-    return `${Math.round(seconds / 86400)}d`;
-}
 
 /** Format an ISO date string to a relative or short time. */
 function formatTime(iso: string | null, now?: Date): string {
@@ -91,7 +83,7 @@ function formatDays(days: number[]): string {
 }
 
 function ScheduleCard({ schedule }: { schedule: Schedule }) {
-    const { selectedSchedule, selectSchedule, updateScheduleStatus, deleteSchedule, results, resultsLoading, loadSchedules, loadResults } = useScheduleStore();
+    const { selectedSchedule, selectSchedule, updateScheduleStatus, runScheduleNow, deleteSchedule, results, resultsLoading, loadSchedules, loadResults } = useScheduleStore();
     const { setCurrentSession, setShowSchedules } = useChatStore();
     const isSelected = selectedSchedule === schedule.name;
     const [confirmDelete, setConfirmDelete] = useState(false);
@@ -149,6 +141,12 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
         updateScheduleStatus(schedule.name, newStatus);
     }, [schedule.name, schedule.status, updateScheduleStatus]);
 
+    const handleRunNow = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation();
+        log.ui.info(`Schedule "${schedule.name}": run now`);
+        void runScheduleNow(schedule.name);
+    }, [schedule.name, runScheduleNow]);
+
     const handleDelete = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
         clearConfirmTimer();
@@ -184,18 +182,29 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
             </div>
             <div className="schedule-card-prompt">{schedule.prompt}</div>
             <div className="schedule-card-meta">
-                <span><Clock size={11} /> {formatInterval(schedule.interval_seconds)}</span>
+                <span title={schedule.description}><Clock size={11} /> {schedule.description}</span>
                 <span>Runs: {schedule.run_count}</span>
                 {schedule.error_count > 0 && <span>Errors: {schedule.error_count}</span>}
                 <span>Last: {formatTime(schedule.last_run_at)}</span>
                 <span>Next: {formatNextRun(schedule.next_run_at, now)}</span>
             </div>
+            {schedule.last_error && (
+                <div className="schedule-card-error">Last run failed: {schedule.last_error}</div>
+            )}
             <div className="schedule-card-actions">
                 {schedule.session_id && (
                     <button className="btn-sm chat" onClick={handleOpenChat} title="Open chat session">
                         <MessageSquare size={11} /> Open Chat
                     </button>
                 )}
+                <button
+                    className="btn-sm"
+                    onClick={handleRunNow}
+                    disabled={schedule.running}
+                    title="Run it once now, to try it. Its next scheduled run stays as it is."
+                >
+                    <Zap size={11} /> {schedule.running ? 'Running…' : 'Run now'}
+                </button>
                 <button className="btn-sm" onClick={handleToggleStatus} title={schedule.status === 'active' ? 'Pause' : 'Resume'}>
                     {schedule.status === 'active' ? <><Pause size={11} /> Pause</> : <><Play size={11} /> Resume</>}
                 </button>

@@ -1401,6 +1401,36 @@ class EmailTriageAgent(
         if message_id:
             self._message_mailbox[message_id] = provider
 
+    def _history_for_request(self) -> List[Dict[str, Any]]:
+        """History, with the shown threads attached to the last user turn.
+
+        A user turn, not a new message: some chat templates reject two user
+        messages in a row, and grounding ignores assistant text as evidence.
+        """
+        history = super()._history_for_request()
+        surfaced = self.surfaced_threads_context()
+        if not surfaced:
+            return history
+        for index in range(len(history) - 1, -1, -1):
+            message = history[index]
+            if message.get("role") == "user" and isinstance(
+                message.get("content"), str
+            ):
+                history[index] = {
+                    **message,
+                    "content": f"{message['content']}\n\n{surfaced}",
+                }
+                return history
+        if history and history[0].get("role") == "assistant":
+            # Trimming left no user turn; leading with one keeps the order valid.
+            return [{"role": "user", "content": surfaced}, *history]
+        logger.warning(
+            "no user turn to carry %d shown thread(s); a follow-up may not "
+            "resolve them",
+            len(self._surfaced_thread_map()),
+        )
+        return history
+
     def _backend_for_message(
         self, message_id: str, explicit_mailbox: Optional[str] = None
     ):
