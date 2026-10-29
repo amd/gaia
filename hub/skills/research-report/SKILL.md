@@ -2,7 +2,7 @@
 name: research-report
 description: Research a topic on the open web and write a cited Markdown report. Use when the user asks for a report, a literature scan, a competitive landscape, or a "what's the current state of X" answer that needs sources.
 license: MIT
-version: 1.0.0
+version: 1.0.1
 metadata:
   gaia:
     security_tier: community
@@ -14,6 +14,8 @@ metadata:
       - write_file
       - index_document
       - query_documents
+    pairs_with:
+      - office-docs
     provenance:
       source: starter-pack
 ---

@@ -264,8 +264,32 @@ def test_a_server_error_that_is_not_a_connection_failure_is_reported_as_is(
     vlm = _vlm(available=False)
     vlm.client.health_check.side_effect = LemonadeClientError("401 unauthorized")
     with patch("gaia.llm.VLMClient", return_value=vlm):
-        with pytest.raises(ImageExtractionError, match="returned an error: 401"):
+        with pytest.raises(ImageExtractionError, match="returned an error: 401") as e:
             _sdk(tmp_path)._extract_text_from_image(str(_image(tmp_path)))
+    assert "Check the Lemonade Server log" in str(e.value)
+
+
+def test_an_image_full_of_nul_bytes_is_read_not_refused_as_binary(tmp_path):
+    rag = _sdk(tmp_path)
+    path = tmp_path / "scan.png"
+    path.write_bytes(PNG_SIGNATURE + b"\x00" * 4096)
+    with (
+        patch.object(rag, "_extract_text_from_image", return_value=("t", {})) as img,
+        patch.object(rag, "_refuse_binary") as refuse,
+    ):
+        rag._extract_text_from_file(str(path))
+    img.assert_called_once()
+    refuse.assert_not_called()
+
+
+@pytest.mark.parametrize("ext", [".heic", ".ico", ".bak"])
+def test_an_unsupported_image_format_is_still_refused_as_binary(tmp_path, ext):
+    path = tmp_path / f"photo{ext}"
+    path.write_bytes(PNG_SIGNATURE + b"\x00" * 64)
+    with pytest.raises(ValueError, match="binary file") as e:
+        _sdk(tmp_path)._extract_text_from_file(str(path))
+    assert not isinstance(e.value, ImageExtractionError)
+    assert "images (PNG, JPG" in str(e.value)
 
 
 # ---------------------------------------------------------------------------

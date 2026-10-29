@@ -25,7 +25,7 @@ requires-python = ">=3.10"
 # come from `gaia init --profile chat`'s own `_install_pip_extras()` step
 # into the ACTIVE interpreter, not from this wheel's install -- do not "fix"
 # this by adding `[rag]` here (#2358).
-dependencies = ["amd-gaia>=0.25.1"]
+dependencies = ["amd-gaia>=0.25.2"]
 
 [project.entry-points."gaia.agent"]
 chat = "gaia_agent_chat:build_chat"

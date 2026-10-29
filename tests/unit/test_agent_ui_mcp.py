@@ -3,6 +3,7 @@
 
 """Unit tests for agent_ui_mcp error normalization and routing."""
 
+import json as json_module
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -262,3 +263,49 @@ class TestStreamChatModelPin:
             _model_pin()
         assert "GAIA_EVAL_AGENT_PROVIDER" in str(excinfo.value)
         assert "claude" in str(excinfo.value)
+
+
+class TestStreamChatEventLog:
+    """The eval judge reads event_log as what the agent actually did."""
+
+    @staticmethod
+    def _run(events):
+        from gaia.mcp.servers.agent_ui_mcp import _stream_chat
+
+        def _fake_post(url, json=None, stream=False, timeout=None, headers=None):
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            lines = [f"data: {json_module.dumps(e)}" for e in events]
+            resp.iter_lines.return_value = iter(lines + ["data: [DONE]"])
+            return resp
+
+        with patch("gaia.mcp.servers.agent_ui_mcp.requests.post", _fake_post):
+            return _stream_chat("http://localhost:4200", "sess-1", "hi")["event_log"]
+
+    def test_a_no_argument_call_shows_no_args_line(self):
+        log = self._run(
+            [
+                {"type": "tool_start", "tool": "list_skills"},
+                {
+                    "type": "tool_args",
+                    "tool": "list_skills",
+                    "args": {},
+                    "detail": "Listing your skills",
+                },
+            ]
+        )
+        assert log == ["[tool] list_skills"]
+
+    def test_real_arguments_are_still_shown(self):
+        log = self._run(
+            [
+                {"type": "tool_start", "tool": "read_file"},
+                {
+                    "type": "tool_args",
+                    "tool": "read_file",
+                    "args": {"file_path": "a.txt"},
+                    "detail": "file_path: a.txt",
+                },
+            ]
+        )
+        assert log == ["[tool] read_file", "  args: file_path: a.txt"]

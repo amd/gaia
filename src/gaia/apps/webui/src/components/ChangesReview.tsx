@@ -1,11 +1,12 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Loader2, X } from 'lucide-react';
 import * as api from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import type { FileDiff, TurnChanges } from '../types/changes';
 import { DiffCard } from './render/DiffCard';
 
@@ -31,6 +32,8 @@ export function ChangesReview({ sessionId, turn, onClose }: {
     const [files, setFiles] = useState<FileDiff[] | null>(null);
     const [error, setError] = useState<string | null>(null);
     useEscapeToClose(true, onClose);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useFocusTrap(dialogRef, true);
 
     useEffect(() => {
         let live = true;
@@ -44,7 +47,7 @@ export function ChangesReview({ sessionId, turn, onClose }: {
     // Portaled: opened from a message, a transformed ancestor would otherwise
     // clip the fixed backdrop to the chat column.
     return createPortal(
-        <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Review changes">
+        <div ref={dialogRef} className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Review changes">
             <div className="modal-panel changes-review" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
                     <h3>Changes in this turn</h3>

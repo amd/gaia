@@ -27,7 +27,7 @@ import statistics
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -888,6 +888,18 @@ def build_scenario_prompt(
     backend uses its default agent.
     """
     scenario_yaml = yaml.dump(scenario_data, default_flow_style=False)
+    # One local calendar date per prompt. The deadline is fourteen calendar
+    # days later, and both tokens are filled from that single sample so a
+    # midnight boundary cannot give the simulator and the judge different
+    # dates. Exact str.replace of these two literals only — not format() and
+    # not a template engine — so unrelated braces stay as written. The agent
+    # clock is left alone; only the scenario text carries the reference date.
+    eval_today = date.today()
+    eval_deadline = eval_today + timedelta(days=14)
+    scenario_yaml = scenario_yaml.replace(
+        "{{eval_today_plus_14_days}}", eval_deadline.isoformat()
+    )
+    scenario_yaml = scenario_yaml.replace("{{eval_today}}", eval_today.isoformat())
     manifest_json = json.dumps(manifest_data, indent=2)
 
     corpus_root = str(CORPUS_DIR / "documents").replace("\\", "/")

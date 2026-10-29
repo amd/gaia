@@ -877,7 +877,8 @@ def render_endpoint_spec_html() -> str:
   <p class="desc">Approve or deny a tool the agent is blocking on (send / forward /
     delete / quarantine / calendar-create). Body:
     <code>{ "session_id": str, "approved": bool }</code>. The run resumes when this
-    returns. 404 when no run is awaiting confirmation.</p>
+    returns. 404 when no run is active; 409 when the run has no tool
+    confirmation pending, so the decision was not delivered.</p>
 </div>
 
 <div class="endpoint-block">
@@ -1006,6 +1007,15 @@ def render_endpoint_spec_html() -> str:
     drive-by web-page access. Non-browser clients send no Origin and are
     unaffected.</li>
 </ul>
+
+<h2>Transient connection errors</h2>
+<p class="body-t">When another GAIA process or request is mid-save on the mailbox
+  connection, a mailbox route answers <strong>HTTP 502</strong> with a detail saying
+  the connection &ldquo;is being saved by another GAIA operation&rdquo;. The
+  <code class="inl">/v1/email/agent/*</code> routes answer the same case with
+  <strong>HTTP 503</strong> and a <code class="inl">Retry-After</code> header. Both are
+  transient, not a broken mailbox: retry shortly and don&rsquo;t prompt the user to
+  reconnect.</p>
 
 <h2>Endpoints</h2>
 

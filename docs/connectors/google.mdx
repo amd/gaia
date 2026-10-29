@@ -184,7 +184,7 @@ explains how to copy or download the credentials.
 ## Step 5 — Paste credentials into GAIA
 
 1. Launch the Agent UI: `gaia chat --ui`.
-2. Click **Settings** (gear) → **Connections**.
+2. Click **Settings** (gear) → **Connectors**.
 3. Click the **Google** tile to expand it.
 4. Paste the **Client ID** and **Client Secret** from Step 4.
 5. Click **Save & Connect**.
@@ -311,7 +311,7 @@ it (**Step 6**). Until the per-agent grant lands, the agent surfaces:
 
 ```
 AGENT_NOT_GRANTED: this agent isn't granted these scopes on google: …
-Open Settings → Connections → google → Per-agent grants and grant them.
+Open Settings → Connectors → google → Per-agent grants and grant them.
 ```
 
 Fix it in the UI (Google tile → **Per-agent grants**) or run the
@@ -368,8 +368,7 @@ fixes this without testing it.
 ### `Error 400: invalid_grant` after a long while
 
 Refresh tokens expire if your app stays in Testing mode for more than
-seven days without use. Reconnect from the Agent UI's Connections
-panel — it will issue a new refresh token.
+seven days without use. Reconnect from **Settings → Connectors** in the Agent UI — it will issue a new refresh token.
 
 ### `client_secret is missing`
 
@@ -381,7 +380,7 @@ and reconnect from the UI to reset.
 
 Two places — both work:
 
-- **From GAIA**: Settings → Connections → Google → **Disconnect**.
+- **From GAIA**: Settings → Connectors → Google → **Disconnect**.
   Removes the refresh token from the keyring; the next API call
   errors with `NOT_CONNECTED`.
 - **From Google**: Follow Google's

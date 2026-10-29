@@ -138,6 +138,9 @@ class RAGSDK:
                 Any format. Index it again once the program lets go.
             "cache_busy": another GAIA process holds this document's cache.
             "embedding_unavailable": the embedder or Lemonade could not run.
+                Two booleans come with it: "lemonade_unreachable" (Lemonade
+                Server could not be reached at all) and "embedder_busy" (the
+                server timed out, busy with another model or app).
         """
         ...
 
