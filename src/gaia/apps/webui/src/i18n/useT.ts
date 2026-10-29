@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useChatStore } from '../stores/chatStore';
-import { compose, pluralKey, translate, withHint, type MessageKey, type Params, type PluralKey, type Say } from './registry';
+import { compose, pluralKey, translate, translateBare, withHint, type MessageKey, type Params, type PluralKey, type Say } from './registry';
 
 export interface Translate {
     (key: MessageKey, params?: Params): string;
@@ -12,6 +12,8 @@ export interface Translate {
     hint: (label: string, hint: string) => string;
     /** A line built from several messages, bracketed once; see `compose` in registry.ts. */
     compose: (build: (say: Say) => string) => string;
+    /** The chosen language only, no English brackets; for connecting words inside a line. */
+    bare: (key: MessageKey, params?: Params) => string;
     locale: string;
 }
 
@@ -25,6 +27,7 @@ export function translator(code: string): Translate {
         fn.plural = (base, n, params) => translate(code, pluralKey(base, n), { n, ...params });
         fn.hint = (label, hint) => withHint(code, label, hint);
         fn.compose = (build) => compose(code, build);
+        fn.bare = (key, params) => translateBare(code, key, params);
         fn.locale = code;
         t = fn;
         cache.set(code, t);

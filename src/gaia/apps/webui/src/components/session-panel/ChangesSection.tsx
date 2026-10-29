@@ -22,6 +22,8 @@ import { untrackedWarning } from '../../utils/untrackedWork';
 import { DiffCard } from '../render/DiffCard';
 import { PanelSection } from './PanelSection';
 import type { ChatFileChange, GitRepo, SessionChanges, SessionGit } from '../../types/sessionPanel';
+import { ref, type MessageKey } from '../../i18n/registry';
+import { tEn, useT, type Translate } from '../../i18n/useT';
 
 function plural(n: number, one: string, many = `${one}s`): string {
     return `${n} ${n === 1 ? one : many}`;
@@ -37,16 +39,26 @@ function baseName(path: string): string {
     return parts[parts.length - 1] ?? path;
 }
 
+/** "4 files" as a message param, so each language words its own count. */
+const filesRef = (n: number) => ref(n === 1 ? 'chg.files.one' : 'chg.files.other', { n });
+
 /** "4 files changed, +120 −8". */
-export function totalText(changes: SessionChanges): string {
+export function totalText(changes: SessionChanges, t: Translate = tEn): string {
     const { files, additions, deletions } = changes.totals;
-    return `${plural(files, 'file')} changed, +${additions} −${deletions}`;
+    return t('chg.total', { files: filesRef(files), add: additions, del: deletions });
 }
 
-const CHANGE_LABEL: Record<ChatFileChange['change'], string> = {
+/** The badge the (English-only) review dialog shows. */
+const CHANGE_BADGE: Record<ChatFileChange['change'], string> = {
     edited: 'Edited',
     created: 'Created',
     deleted: 'Deleted',
+};
+
+const CHANGE_LABEL: Record<ChatFileChange['change'], MessageKey> = {
+    edited: 'chg.edited',
+    created: 'chg.created',
+    deleted: 'chg.deleted',
 };
 
 interface ChangesSectionProps {
@@ -56,6 +68,7 @@ interface ChangesSectionProps {
 }
 
 export function ChangesSection({ sessionId, busy, onJumpToMessage }: ChangesSectionProps) {
+    const t = useT();
     const [changes, setChanges] = useState<SessionChanges | null>(null);
     const [error, setError] = useState<string | null>(null);
     // Kept here: after Undo all the list empties, and the result must stay readable.
@@ -83,10 +96,12 @@ export function ChangesSection({ sessionId, busy, onJumpToMessage }: ChangesSect
     return (
         <PanelSection
             id="changes"
-            title="Changes"
-            summary={changes && !empty ? `${plural(changes.totals.files, 'file')} · +${changes.totals.additions} −${changes.totals.deletions}` : null}
+            title={t('chg.title')}
+            summary={changes && !empty
+                ? t('chg.summary', { files: filesRef(changes.totals.files), add: changes.totals.additions, del: changes.totals.deletions })
+                : null}
         >
-            {error && <p className="sp-error">Couldn't total this chat's changes: {error}</p>}
+            {error && <p className="sp-error">{t('chg.error', { error })}</p>}
             {changes && !empty && (
                 <ChangesBody
                     sessionId={sessionId}
@@ -112,6 +127,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
     onUndone: (text: string) => void;
     onJumpToMessage: (messageId: number) => boolean;
 }) {
+    const t = useT();
     const [reviewing, setReviewing] = useState(false);
     const [phase, setPhase] = useState<UndoPhase>('idle');
     const [message, setMessage] = useState<string | null>(null);
@@ -144,12 +160,12 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
     return (
         <div className="sp-changes">
             <p className="sp-changes-total" aria-live="polite">
-                <strong>{totalText(changes)}</strong>
+                <strong>{totalText(changes, t)}</strong>
                 {changes.totals.uncounted > 0 && (
-                    <span className="sp-meta"> · {plural(changes.totals.uncounted, 'binary or large file')} not line-counted</span>
+                    <span className="sp-meta"> · {t.plural('chg.uncounted', changes.totals.uncounted)}</span>
                 )}
             </p>
-            {changes.pending && <p className="sp-meta">A reply is still running; its changes are added when it ends.</p>}
+            {changes.pending && <p className="sp-meta">{t('chg.pending')}</p>}
             <ul className="sp-list">
                 {changes.files.map((f) => {
                     const latest = f.message_ids[f.message_ids.length - 1];
@@ -158,12 +174,12 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
                             <div className="sp-item-text">
                                 <span className="sp-item-name" title={f.path}>{baseName(f.path)}</span>
                                 <span className="sp-meta">
-                                    {CHANGE_LABEL[f.change]}
+                                    {t(CHANGE_LABEL[f.change])}
                                     {f.additions != null && <> · <span className="sp-add">+{f.additions}</span> <span className="sp-del">−{f.deletions}</span></>}
-                                    {f.message_ids.length > 1 && ` · ${plural(f.message_ids.length, 'turn')}`}
+                                    {f.message_ids.length > 1 && ` · ${t('chg.turns', { n: f.message_ids.length })}`}
                                 </span>
                                 {f.changed_since && (
-                                    <span className="sp-warn-text"><AlertTriangle size={11} aria-hidden="true" /> Changed outside GAIA: {f.changed_since}</span>
+                                    <span className="sp-warn-text"><AlertTriangle size={11} aria-hidden="true" /> {t('chg.outside', { when: f.changed_since })}</span>
                                 )}
                             </div>
                             {latest != null && (
@@ -171,8 +187,8 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
                                     type="button"
                                     className="btn-icon-sm"
                                     onClick={() => onJumpToMessage(latest)}
-                                    aria-label={`Go to the last turn that changed ${baseName(f.path)}`}
-                                    title="Go to turn"
+                                    aria-label={t('chg.goToLast', { name: baseName(f.path) })}
+                                    title={t('sp.goToTurn')}
                                 >
                                     <CornerDownRight size={12} />
                                 </button>
@@ -188,7 +204,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
             )}
             <div className="sp-actions-row">
                 <button type="button" className="sp-action" onClick={() => setReviewing(true)}>
-                    <FileDiffIcon size={12} aria-hidden="true" /> Review changes
+                    <FileDiffIcon size={12} aria-hidden="true" /> {t('chg.review')}
                 </button>
                 {phase !== 'confirm' && phase !== 'conflict' && (
                     <button
@@ -196,18 +212,18 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
                         className="sp-action"
                         onClick={() => setPhase('confirm')}
                         disabled={phase === 'working' || busy}
-                        title={busy ? 'Wait for the reply to finish' : undefined}
+                        title={busy ? t('chg.wait') : undefined}
                     >
-                        <Undo2 size={12} aria-hidden="true" /> {phase === 'working' ? 'Undoing…' : 'Undo all'}
+                        <Undo2 size={12} aria-hidden="true" /> {phase === 'working' ? t('chg.undoing') : t('chg.undoAll')}
                     </button>
                 )}
             </div>
             {phase === 'confirm' && (
-                <div className="sp-confirm" role="group" aria-label="Confirm undo all">
-                    Put {plural(count, 'file')} back the way {count === 1 ? 'it was' : 'they were'} before this chat? Every turn's file changes are undone.
+                <div className="sp-confirm" role="group" aria-label={t('chg.confirmLabel')}>
+                    {t(count === 1 ? 'chg.confirm.one' : 'chg.confirm.other', { files: filesRef(count) })}
                     <span className="sp-actions-row">
-                        <button type="button" className="sp-action is-danger" onClick={() => void undoAll(false)}>Undo all</button>
-                        <button type="button" className="sp-action" onClick={() => setPhase('idle')}>Cancel</button>
+                        <button type="button" className="sp-action is-danger" onClick={() => void undoAll(false)}>{t('chg.undoAll')}</button>
+                        <button type="button" className="sp-action" onClick={() => setPhase('idle')}>{t('sp.cancel')}</button>
                     </span>
                 </div>
             )}
@@ -217,9 +233,9 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
                     {phase === 'conflict' && (
                         <span className="sp-actions-row">
                             <button type="button" className="sp-action is-danger" onClick={() => void undoAll(true)}>
-                                Undo anyway and lose those changes
+                                {t('chg.undoAnyway')}
                             </button>
-                            <button type="button" className="sp-action" onClick={() => { setPhase('idle'); setMessage(null); }}>Keep them</button>
+                            <button type="button" className="sp-action" onClick={() => { setPhase('idle'); setMessage(null); }}>{t('chg.keep')}</button>
                         </span>
                     )}
                 </div>
@@ -257,7 +273,7 @@ function ChatChangesReview({ changes, onClose }: { changes: SessionChanges; onCl
                             <DiffCard
                                 data={{
                                     title: file.path,
-                                    badge: CHANGE_LABEL[file.change],
+                                    badge: CHANGE_BADGE[file.change],
                                     note: note(file),
                                     unified: file.binary || file.too_large ? '' : file.unified,
                                 }}
@@ -271,6 +287,7 @@ function ChatChangesReview({ changes, onClose }: { changes: SessionChanges; onCl
 }
 
 function GitActions({ sessionId, busy, onCommitted }: { sessionId: string; busy: boolean; onCommitted: () => void }) {
+    const t = useT();
     const [git, setGit] = useState<SessionGit | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [dialog, setDialog] = useState<{ kind: 'commit' | 'pr'; repo: GitRepo } | null>(null);
@@ -289,7 +306,7 @@ function GitActions({ sessionId, busy, onCommitted }: { sessionId: string; busy:
     useTurnEnd(busy, load);
     useUndoEvents(sessionId, load);
 
-    if (error) return <p className="sp-error">Couldn't check for a git repository: {error}</p>;
+    if (error) return <p className="sp-error">{t('chg.gitError', { error })}</p>;
     if (!git || !git.available || git.repos.length === 0) return null;
 
     return (

@@ -125,6 +125,15 @@ export function compose(code: string, build: (say: Say) => string): string {
     return `${isolate(own, locale.meta.dir)}${BRACKET_JOIN}${isolate(`(${english})`, 'ltr')}`;
 }
 
+/**
+ * A message in `code` alone, never bracketed: for a short word joining pieces of a
+ * line, e.g. "of" in "1.2K of 64K tokens", where "من (of)" would only get in the way.
+ */
+export function translateBare(code: string, key: MessageKey, params?: Params): string {
+    const locale = getLocale(code);
+    return fill(locale, key, params, locale.meta.dir === 'rtl');
+}
+
 const BRACKET_JOIN = ' ';
 
 /**
