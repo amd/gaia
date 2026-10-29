@@ -92,3 +92,71 @@ def test_non_streamed_reasoning_is_not_printed(capsys):
 
     assert answer == "PONG"
     assert "hmm" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        ["<think>", "plan...", "</think>"],
+        ["<think>", "cut off mid-thought"],
+        ["<think>", "plan", "</think>", "\n\n", "  "],
+    ],
+)
+def test_streamed_reasoning_only_fails_loudly(chunks):
+    """A budget spent entirely reasoning names --max-tokens instead of a blank line."""
+    from gaia.apps.llm import app as llm_app
+
+    with patch.object(llm_app, "LlmApp") as cls:
+        cls.return_value.query.return_value = iter(chunks)
+        with pytest.raises(RuntimeError, match="--max-tokens"):
+            llm_app.main(query="ping", stream=True, max_tokens=512)
+
+
+@pytest.mark.parametrize(
+    "raw", ["<think>hmm</think>", "<think>never closed", "<think>a</think> \n"]
+)
+def test_non_streamed_reasoning_only_fails_loudly(raw):
+    from gaia.apps.llm import app as llm_app
+
+    with patch.object(llm_app, "LlmApp") as cls:
+        cls.return_value.query.return_value = raw
+        with pytest.raises(RuntimeError, match="512-token budget"):
+            llm_app.main(query="ping", stream=False, max_tokens=512)
+
+
+@pytest.mark.parametrize("stream", [True, False])
+def test_an_empty_reply_without_reasoning_is_not_blamed_on_reasoning(stream):
+    from gaia.apps.llm import app as llm_app
+
+    with patch.object(llm_app, "LlmApp") as cls:
+        cls.return_value.query.return_value = iter([""]) if stream else ""
+        assert llm_app.main(query="ping", stream=stream) == ""
+
+
+def test_streamed_answer_after_reasoning_has_no_leading_blank_lines(capsys):
+    """Streamed and non-streamed paths trim the answer the same way."""
+    from gaia.apps.llm import app as llm_app
+
+    chunks = ["<think>", "x", "</think>", "\n\n", "  PO", "NG"]
+    with patch.object(llm_app, "LlmApp") as cls:
+        cls.return_value.query.return_value = iter(chunks)
+        assert llm_app.main(query="ping", stream=True) == "PONG"
+
+
+def test_whitespace_inside_the_answer_is_kept():
+    from gaia.apps.llm import app as llm_app
+
+    chunks = ["Hello", " ", "\n", "world"]
+    with patch.object(llm_app, "LlmApp") as cls:
+        cls.return_value.query.return_value = iter(chunks)
+        assert llm_app.main(query="ping", stream=True) == "Hello \nworld"
+
+
+def test_angle_brackets_that_are_not_think_tags_pass_through():
+    from gaia.apps.llm.app import _without_reasoning
+
+    chunks = ["a < b", " and <thinking> is", " not </think> a tag"]
+    assert (
+        "".join(_without_reasoning(chunks))
+        == "a < b and <thinking> is not </think> a tag"
+    )
