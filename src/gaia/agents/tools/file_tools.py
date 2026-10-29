@@ -65,10 +65,9 @@ from gaia.security import BackupError
 
 logger = get_logger(__name__)
 
-#: Root-level operating-system trees are not useful for an undirected user
-#: search and can consume the whole deep-search budget before the home folder.
-#: These are applied only when walking a filesystem root, never to a named
-#: folder such as ``~/Library``.
+#: Root-level operating-system trees a deep search walks last, so they cannot
+#: spend the budget before user folders. Applied only at a filesystem root,
+#: never to a named folder such as ``~/Library``.
 _DEEP_SYSTEM_DIRS = frozenset(
     {"System", "Library", "private", "usr", "opt", "proc", "sys", "dev", "run", "snap"}
 )
@@ -652,7 +651,8 @@ class FileSearchToolsMixin:
                 def search_location(
                     location: Path,
                     max_depth: int = 999,
-                    skip_root_dirs=frozenset(),
+                    defer_root_dirs=frozenset(),
+                    deferred=None,
                 ):
                     """Search a specific location up to max_depth."""
                     if guard.blocks(location) or not location.exists():
@@ -698,13 +698,15 @@ class FileSearchToolsMixin:
                                     (".", "$", "Windows", "Program Files")
                                 ):
                                     continue
-                                # Skip build/package directories
                                 if (
-                                    item.is_dir()
+                                    deferred is not None
                                     and current_path == location
-                                    and item.name in skip_root_dirs
+                                    and item.name in defer_root_dirs
+                                    and item.is_dir()
                                 ):
+                                    deferred.append(item)
                                     continue
+                                # Skip build/package directories
                                 if item.is_dir() and item.name in _SKIP_DIRS:
                                     continue
 
@@ -935,17 +937,24 @@ class FileSearchToolsMixin:
                         logger.debug("Searching %s...", drive)
                         # A sandbox may confine ``/`` to a user-selected child
                         # directory. Only the actual filesystem root has OS
-                        # trees to skip; a selected folder named Library is data.
-                        skip_root_dirs = (
-                            _DEEP_SYSTEM_DIRS
-                            if drive == Path(drive.anchor)
-                            else frozenset()
-                        )
+                        # trees to defer; a selected folder named Library is data.
+                        deferred: List[Path] = []
                         search_location(
                             drive,
                             max_depth=999,
-                            skip_root_dirs=skip_root_dirs,
+                            defer_root_dirs=(
+                                _DEEP_SYSTEM_DIRS
+                                if drive == Path(drive.anchor)
+                                else frozenset()
+                            ),
+                            deferred=deferred,
                         )
+                        # Walked last, not skipped: one the budget never reaches
+                        # is reported in unfinished_paths, not counted as searched.
+                        for os_tree in deferred:
+                            if len(matching_files) >= 10:
+                                break
+                            search_location(os_tree, max_depth=999)
                         if len(matching_files) >= 10:
                             break
 

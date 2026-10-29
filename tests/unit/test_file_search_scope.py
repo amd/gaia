@@ -1128,3 +1128,59 @@ def test_a_user_folder_named_like_an_os_tree_is_still_searched(
     result = search_file("invoice", deep_search=True)
 
     assert len(result["files"]) == 4, result
+
+
+def _root_with_os_tree(tmp_path, monkeypatch):
+    """A fake filesystem root holding an OS tree and a user folder, home empty."""
+    import gaia.agents.tools.file_tools as file_tools_module
+
+    drive = (tmp_path / "drive").resolve()
+    (drive / "usr" / "share").mkdir(parents=True)
+    (drive / "data").mkdir()
+    os_hit = drive / "usr" / "share" / "invoice_os.txt"
+    data_hit = drive / "data" / "invoice_data.txt"
+    os_hit.write_text("x")
+    data_hit.write_text("x")
+
+    def confined(_host, roots):
+        if Path(roots[0]) == Path.home():
+            return [Path.home()]
+        return [drive] if Path(roots[0]) == Path("/") else []
+
+    _, home, project = _deep_search_setup(tmp_path, monkeypatch, confined)
+    # Treat the fake drive as a filesystem root so its OS trees are deferred.
+    real_anchor = Path.anchor
+    monkeypatch.setattr(
+        Path,
+        "anchor",
+        property(lambda p: str(p) if p == drive else real_anchor.fget(p)),
+    )
+    search_file = _register_search_file(_Sandbox(home, project, drive))
+    return file_tools_module, search_file, drive, os_hit, data_hit
+
+
+def test_os_trees_are_searched_last_not_skipped(tmp_path, monkeypatch, registry):
+    """With budget left, a file under /usr is still found — after user folders."""
+    _, search_file, _drive, os_hit, data_hit = _root_with_os_tree(tmp_path, monkeypatch)
+
+    result = search_file("invoice", deep_search=True)
+
+    assert result["files"] == [str(data_hit.resolve()), str(os_hit.resolve())]
+    assert not result.get("truncated")
+
+
+def test_an_os_tree_the_budget_never_reached_is_reported_unfinished(
+    tmp_path, monkeypatch, registry
+):
+    """Running out of budget before an OS tree must not read as a full search."""
+    from gaia.agents.tools import search_scope
+
+    _, search_file, drive, os_hit, data_hit = _root_with_os_tree(tmp_path, monkeypatch)
+    # Enough for the root listing and the user folder, not all of the deferred /usr.
+    monkeypatch.setattr(search_scope, "SEARCH_ENTRY_BUDGET", 4)
+
+    result = search_file("invoice", deep_search=True)
+
+    assert str(os_hit.resolve()) not in result["files"]
+    assert result.get("truncated") is True
+    assert str(drive / "usr") in result["unfinished_paths"]
