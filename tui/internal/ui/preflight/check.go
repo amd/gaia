@@ -773,13 +773,18 @@ func probeInit(ctx context.Context, t Transport, cfg Config, rep *Report) (State
 	setRow(rep, lemonade)
 
 	// --- AI model -----------------------------------------------------------
-	// The sidecar reports on its default LOCAL chat model, which a launch on a
-	// cloud model never loads — so ask whether the cloud model can answer.
-	if cfg.runsInCloud() {
-		row, listed := checkCloudModel(ctx, cfg.Model, model)
+	// The sidecar reports on GAIA's default chat model, which a cloud launch never
+	// loads, so ask whether the cloud model can answer. A cloud default_model
+	// arrives as the sidecar's model, not cfg.Model.
+	chat := cfg.Model
+	if chat == "" && gaiaLemonade.IsCloudID(body.Model.ID) {
+		chat = body.Model.ID
+	}
+	if gaiaLemonade.IsCloudID(chat) {
+		row, listed := checkCloudModel(ctx, chat, model)
 		if listed {
 			row.State = StateOK
-			row.Line = "chat uses " + cfg.Model
+			row.Line = "chat uses " + chat
 		}
 		setRow(rep, row)
 		return row.State, false
