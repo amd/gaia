@@ -387,3 +387,20 @@ def test_several_processes_opening_one_new_memory_db_all_succeed(
             child.stdin.close()
             child.wait(timeout=30)
     assert not failed, f"{len(failed)} of {procs * rounds} opens failed: {failed[0]}"
+
+
+def test_chat_database_retries_wal_switch_while_another_process_releases(tmp_path):
+    """Agent UI chat.db uses the same bounded WAL opener as other stores."""
+    from gaia.ui.database import ChatDatabase
+
+    db_path = tmp_path / "chat.db"
+    holder = _writer_holding(db_path, "DELETE")
+    release = threading.Timer(0.5, lambda: holder.execute("COMMIT"))
+    release.start()
+    try:
+        db = ChatDatabase(str(db_path))
+        assert db._conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        db.close()
+    finally:
+        release.join()
+        holder.close()

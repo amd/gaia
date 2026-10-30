@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
 - **The agent ships as one Python package.** `ChatAgent`, the class the agent
   builds on, moved into `gaia-agent-gaia` (`gaia_agent.chat_agent`), so the
   binary and a pip install no longer need `gaia-agent-chat`. Prompts and tools
@@ -13,6 +15,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `chat`, `doc` or `file` agents get this agent instead; Agent UI chats saved
   under them stay read-only. MCP settings saved for `installed:chat` no
   longer apply (#6099).
+
+### Fixed
+
+- **A repository indexed with `index_codebase` stays the code-search folder**
+  (#6055). In the Agent UI, each new turn reset code search to the session's
+  starting folder, so the next `search_code_index` looked in the wrong place
+  instead of the repository just indexed. The repository is still dropped if
+  the allowed folders no longer contain it.
 
 ## [0.3.3]
 

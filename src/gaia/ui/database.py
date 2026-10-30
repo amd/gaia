@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from gaia.config import GaiaConfig, gaia_home
 from gaia.utils.process_owner import current_owner, owner_is_gone
+from gaia.utils.sqlite_wal import enable_wal
 
 from .chat_search import fold, snippet
 
@@ -258,7 +259,8 @@ class ChatDatabase:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
-        self._conn.execute("PRAGMA journal_mode = WAL")
+        self._conn.execute("PRAGMA busy_timeout = 5000")
+        enable_wal(self._conn)
         self._init_schema()
         logger.info("Chat database initialized: %s", db_path)
 
