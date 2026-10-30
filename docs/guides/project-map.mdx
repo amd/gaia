@@ -137,6 +137,56 @@ export GAIA_PROJECT_ROOT=/home/me/Work/my-service
 A `GAIA_PROJECT_ROOT` that does not exist raises at startup rather than being
 quietly ignored.
 
+## Project instructions and skills
+
+The agent reads the project's own instructions the way Claude Code does:
+
+- **`AGENTS.md` and `CLAUDE.md`** at the project root go into the system prompt
+  whole, under `==== PROJECT INSTRUCTIONS ====`, as the project's rules for how
+  to work in it. They are marked as coming from the repository, not the user:
+  they never override the user's request, the agent's safety rules, or when a
+  tool must ask before it runs. Both are read when both exist (`AGENTS.md`
+  first); an identical copy is shown once. A hosted model gets up to 60,000
+  characters; a local model gets half of what it allows one tool result (about
+  15,000 on NPU, 30,000 on GPU), so a long file cannot crowd a small window.
+  Past the cap, the agent gets the first whole lines and the line to continue
+  from with `read_file`.
+- **`.claude/skills/<name>/SKILL.md`** under the project root are listed in the
+  skill catalogue, so the agent can load one by name when the work matches. A
+  Claude Code skill GAIA's own format would reject — an uppercase or underscored
+  name, a name that differs from its folder, a missing or very long description
+  — still loads, with a warning in the log saying what was relaxed. Skills in
+  `~/.claude/skills` stay loadable by name but unlisted.
+
+Both come from the root chosen below. Outside a project, a working directory
+that holds an `AGENTS.md` or `CLAUDE.md` still has it read, but the agent never
+searches upward for one, and never reads one from the home directory or from
+GAIA's own source tree. An `AGENTS.md` or `CLAUDE.md` that is a link to a file
+outside the project is named in the prompt but not read. The instructions are
+read once per session, so editing the file mid-session takes effect in the next
+session.
+
+A project skill never grants itself anything when loaded: a `.claude/skills`
+folder arrives with a clone, so its tools and shell-binary permissions stay
+deferred. A tool-providing one is refused when the agent asks to load it. To
+trust one, copy it into your own skills, which take precedence over the
+project's copy, then promote it:
+
+```bash
+gaia skill import .claude/skills/<name>   # add --allow-experimental if it ships tools.py
+gaia skill promote <name>
+```
+
+When the session has a mapped project (its root, found from any subfolder; never
+GAIA's own source), the flagship also gets a short
+**working in a code repository** section: ground every claim in code read this
+session and search the whole repository before saying something is missing or
+counting it; follow a change across callers, tests, docs and its inverse path; verify
+commands and paths a change documents; fix root causes rather than the reported example and run only
+the tests that cover the change; and check the deliverable against the task's
+and project's rules before finishing. It is general practice, not any one
+repository's rules, and is left out in fast mode.
+
 ## Caching
 
 The map is built once per root and reused. It is rebuilt when a fingerprint over

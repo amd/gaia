@@ -31,7 +31,6 @@ src/gaia/hub/catalog.py:home_join 1
 src/gaia/installer/uninstall_command.py:home_join 5
 src/gaia/llm/lemonade_client.py:home_join 1
 src/gaia/llm/lemonade_embedded.py:home_join 1
-src/gaia/logger.py:home_join 1
 src/gaia/mcp/servers/tui_mcp.py:home_join 1
 src/gaia/messaging/slack/adapter.py:home_join 1
 src/gaia/messaging/slack/cli.py:home_join 1
@@ -39,6 +38,5 @@ src/gaia/messaging/slack/onboarding.py:home_join 1
 src/gaia/messaging/telegram.py:tilde_path 2
 src/gaia/schedule/store.py:tilde_path 1
 src/gaia/security.py:home_join 1
-src/gaia/skills/manager.py:home_join 1
 src/gaia/ui/utils.py:home_join 1
 src/gaia/web/tavily.py:home_join 1
