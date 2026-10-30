@@ -359,8 +359,9 @@ def interactive_mode(agent: ChatAgent):
                         print("Usage: /watch <directory_path>")
                         print("Example: /watch /path/to/documents")
                         continue
-                    result = agent.process_query(f"Watch the directory: {arg}")
-                    print(f"\n{result['result']}")
+                    # The agent streams its answer; reprinting it would echo a
+                    # denial naming a credential folder (CodeQL #1049).
+                    agent.process_query(f"Watch the directory: {arg}")
 
                 elif command == "/list":
                     # Directly access indexed files from RAG system
