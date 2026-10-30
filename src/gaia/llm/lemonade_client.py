@@ -55,6 +55,7 @@ from gaia.llm.lemonade_launcher import (
     get_installed_version,
     resolve_lemonade,
 )
+from gaia.llm.local_only import guard_inference
 from gaia.llm.model_server_info import EMBEDDER_ON_CPU_WITH_ROCM, embedder_avoids_rocm
 from gaia.llm.retry import (
     HOSTED_REPLY_TIMEOUT_ENV,
@@ -1667,11 +1668,17 @@ MODELS = {
 
 
 def find_model_requirement(model_id: Optional[str]) -> Optional[ModelRequirement]:
-    """The MODELS entry for ``model_id``, tolerating the ``user.`` namespace."""
+    """The MODELS entry for ``model_id``, tolerating the ``user.`` namespace.
+
+    A model the user added from a Hugging Face link resolves too.
+    """
     for mr in MODELS.values():
         if _model_ids_match(mr.model_id, model_id):
             return mr
-    return None
+    from gaia.llm.custom_models import find_custom_model, requirement_for
+
+    entry = find_custom_model(model_id)
+    return requirement_for(entry) if entry is not None else None
 
 
 # Sampling for a local model with no published profile below: low temperature
@@ -4965,6 +4972,7 @@ class LemonadeClient:
         )
         return api_call()
 
+    @guard_inference()
     def chat_completions(
         self,
         model: str,
@@ -5689,6 +5697,7 @@ class LemonadeClient:
         finally:
             self._record_retries(state)
 
+    @guard_inference()
     def completions(
         self,
         model: str,
@@ -5936,6 +5945,7 @@ class LemonadeClient:
         finally:
             self._record_retries(state)
 
+    @guard_inference(default_model=lambda self: self.model or DEFAULT_EMBEDDING_MODEL)
     def embeddings(
         self,
         input_texts: Union[str, List[str]],
@@ -6010,6 +6020,57 @@ class LemonadeClient:
         finally:
             self.model = active_model
 
+    @guard_inference()
+    def generate_audio(
+        self,
+        payload: Dict[str, Any],
+        output_path: Union[str, Path],
+        *,
+        timeout: int = 1800,
+    ) -> None:
+        """Stream WAV bytes with the model-slot lease held through the last chunk.
+
+        Lemonade loads a downloaded audio model on the generation request. The
+        lease covers both that implicit load and the full response transfer.
+        Validation and the final atomic rename are the caller's responsibility.
+        """
+        from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
+
+        model = payload.get("model")
+        if not isinstance(model, str) or not model:
+            raise LemonadeClientError("Audio generation requires a model ID.")
+        try:
+            with self._model_slot_lease(model, request_timeout=timeout):
+                with requests.post(
+                    f"{self.base_url}/audio/generations",
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        **self._auth_headers(),
+                    },
+                    timeout=(10, timeout),
+                    stream=True,
+                ) as response:
+                    if response.status_code == 401:
+                        raise LemonadeAuthError("Lemonade rejected the API key (401).")
+                    if response.status_code >= 400:
+                        raise LemonadeClientError(
+                            f"Lemonade audio generation failed ({response.status_code}): "
+                            f"{response.text[:600]}"
+                        )
+                    if "json" in response.headers.get("Content-Type", "").lower():
+                        raise LemonadeClientError(
+                            "Expected WAV audio but received a JSON response from Lemonade."
+                        )
+                    with Path(output_path).open("wb") as output:
+                        for chunk in response.iter_content(chunk_size=64 * 1024):
+                            if chunk:
+                                output.write(chunk)
+        except requests.RequestException as exc:
+            raise LemonadeClientError(f"Lemonade audio request failed: {exc}") from exc
+        except (BrokerUnavailableError, LeaseWaitCancelled) as exc:
+            raise LemonadeClientError(f"Audio model-slot lease failed: {exc}") from exc
+
     # =========================================================================
     # Image Generation (Stable Diffusion)
     # =========================================================================
@@ -6026,6 +6087,7 @@ class LemonadeClient:
         "SDXL-Turbo": {"steps": 4, "cfg_scale": 1.0, "size": "512x512"},
     }
 
+    @guard_inference()
     def generate_image(
         self,
         prompt: str,
@@ -6926,6 +6988,7 @@ class LemonadeClient:
             self.log.error(f"Failed to ensure model downloaded: {e}")
             return False
 
+    @guard_inference()
     def responses(
         self,
         model: str,

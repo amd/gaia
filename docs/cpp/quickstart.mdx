@@ -8,7 +8,7 @@ icon: "rocket"
 
 - **Native performance** — compiled binary, no interpreter overhead
 - **Easy integration** — add to any CMake project via FetchContent, git submodule, or find_package ([Integration Guide](/cpp/integration))
-- **Any LLM backend** — works with [Lemonade](https://lemonade-server.ai), llama.cpp, Ollama, vLLM, OpenAI, or any OpenAI-compatible server ([details](/cpp/integration#using-alternative-llm-backends))
+- **Any LLM backend** — works with [Lemonade](https://lemonade-server.ai), llama.cpp, Ollama, vLLM, or any OpenAI-compatible server that needs no API key ([details](/cpp/integration#using-alternative-llm-backends))
 - **Full MCP support** — connects to any MCP server via stdio transport
 - **Full agent loop** — planning, tool execution, error recovery, multi-step plans
 
@@ -73,7 +73,7 @@ icon: "rocket"
     ```
 
     <Note>
-    **Not using Lemonade?** Any OpenAI-compatible server works — llama.cpp, Ollama, vLLM, or a cloud endpoint. Just set `AgentConfig::baseUrl` and `AgentConfig::modelId`. See the [Integration Guide](/cpp/integration#using-alternative-llm-backends) for configuration examples.
+    **Not using Lemonade?** Any OpenAI-compatible server works — llama.cpp, Ollama, vLLM, or a hosted endpoint that needs no API key (the C++ client sends no auth header). Just set `AgentConfig::baseUrl` and `AgentConfig::modelId`. See the [Integration Guide](/cpp/integration#using-alternative-llm-backends) for configuration examples.
     </Note>
   </Step>
 

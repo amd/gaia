@@ -190,3 +190,128 @@ def test_an_older_sidecar_is_not_asked_to_record(relayed, monkeypatch):
     _run_relayed_turn(db, session)
     assert sent == [None]
     assert fs.list_turns(session["id"]) == []
+
+
+class _EmptyEditingAgent(_EditingAgent):
+    def process_query(self, _message, **_kwargs):
+        fs.before_change(self.target, "edit_file")
+        self.target.write_bytes(b"edited before an empty reply")
+        return ""
+
+
+def _error_turn(db, session, target, monkeypatch, backend_problem):
+    agent = _EmptyEditingAgent("M-GGUF", target)
+    helpers._store_agent(session["id"], "M-GGUF", [], agent, "chat")
+    monkeypatch.setattr(helpers, "_empty_answer_backend_problem", backend_problem)
+    request = ChatRequest(session_id=session["id"], message="edit it", stream=True)
+
+    async def drain():
+        run = types.SimpleNamespace(handler=None)
+        async for _ in helpers._stream_chat_impl(run, db, session, request):
+            pass
+
+    asyncio.run(drain())
+    (turn,) = fs.list_turns(session["id"])
+    assistant = [m for m in db.get_messages(session["id"]) if m["role"] == "assistant"]
+    assert assistant
+    assert turn["message_id"] == assistant[-1]["id"]
+    assert turn["files"][0]["path"] == str(target)
+
+
+def test_empty_backend_error_turn_links_file_changes_for_undo(setup, monkeypatch):
+    db, session, target = setup
+
+    async def backend_problem(*_args):
+        return "backend failed"
+
+    _error_turn(db, session, target, monkeypatch, backend_problem)
+
+
+def test_unexpected_error_turn_links_file_changes_for_undo(setup, monkeypatch):
+    db, session, target = setup
+
+    async def backend_problem(*_args):
+        raise RuntimeError("health check failed")
+
+    _error_turn(db, session, target, monkeypatch, backend_problem)
+
+
+def _collect(db, session, request):
+    events = []
+
+    async def drain():
+        run = types.SimpleNamespace(handler=None)
+        async for line in helpers._stream_chat_impl(run, db, session, request):
+            events.append(line)
+
+    asyncio.run(drain())
+    return events
+
+
+def test_a_turn_that_fails_before_its_agent_starts_saves_its_error_quietly(
+    setup, monkeypatch, caplog
+):
+    """No recording exists yet, so the error path must not trip over one."""
+    db, session, _target = setup
+
+    def broken_handler(*_a, **_k):
+        raise RuntimeError("could not open the stream")
+
+    monkeypatch.setattr("gaia.ui.sse_handler.SSEOutputHandler", broken_handler)
+    request = ChatRequest(session_id=session["id"], message="edit it", stream=True)
+
+    events = _collect(db, session, request)
+
+    assert any('"type": "error"' in e for e in events)
+    assistant = [m for m in db.get_messages(session["id"]) if m["role"] == "assistant"]
+    assert len(assistant) == 1
+    assert "Could not persist chat error" not in caplog.text
+    assert fs.list_turns(session["id"]) == []
+
+
+def test_unexpected_error_turn_warns_when_undo_cannot_be_linked(setup, monkeypatch):
+    db, session, target = setup
+    from gaia.ui.turn_changes import TurnRecording
+
+    monkeypatch.setattr(
+        TurnRecording, "link_message", lambda _self, _mid: "Undo won't be offered"
+    )
+    agent = _EmptyEditingAgent("M-GGUF", target)
+    helpers._store_agent(session["id"], "M-GGUF", [], agent, "chat")
+
+    async def backend_problem(*_args):
+        raise RuntimeError("health check failed")
+
+    monkeypatch.setattr(helpers, "_empty_answer_backend_problem", backend_problem)
+    request = ChatRequest(session_id=session["id"], message="edit it", stream=True)
+
+    events = _collect(db, session, request)
+
+    warning = next(i for i, e in enumerate(events) if "Undo won't be offered" in e)
+    error = next(i for i, e in enumerate(events) if '"type": "error"' in e)
+    assert warning < error
+
+
+def test_an_error_turn_that_changed_nothing_offers_no_undo(setup, monkeypatch):
+    db, session, target = setup
+
+    class _EmptyAgent(_EditingAgent):
+        def process_query(self, _message, **_kwargs):
+            return ""
+
+    helpers._store_agent(
+        session["id"], "M-GGUF", [], _EmptyAgent("M-GGUF", target), "chat"
+    )
+
+    async def backend_problem(*_args):
+        return "backend failed"
+
+    monkeypatch.setattr(helpers, "_empty_answer_backend_problem", backend_problem)
+    request = ChatRequest(session_id=session["id"], message="hi", stream=True)
+
+    events = _collect(db, session, request)
+
+    assert any('"type": "error"' in e for e in events)
+    assert not any("Undo won't be offered" in e for e in events)
+    assert fs.list_turns(session["id"]) == []
+    assert target.read_bytes() == b"original"

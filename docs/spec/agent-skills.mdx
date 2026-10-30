@@ -396,9 +396,13 @@ A skill that ships **inside GAIA** — the flagship's starter pack in
 `hub/skills/<name>/` and its own `gaia_agent/skills/` — needs no promote. It
 loads from the `agent-bundled` root, which has no `skill-lock.json`, so its
 `tools.py` registers on the first `load_skill` and its `scripts/` are on disk
-beside it. In a checkout the flagship reads `hub/skills` in place; the frozen
-binary carries the pack under `gaia_agent/skills`, and the build fails if a
-bundled skill's code imports a module the binary would not contain.
+beside it. In a checkout the flagship reads `hub/skills` in place, and only
+when it runs from that checkout's `hub/agents/gaia/python/`: an installed
+package never treats a folder beside it as bundled. The frozen binary carries
+the pack under `gaia_agent/skills`, and the build fails if a bundled skill's
+code imports a module the binary would not contain. An import inside a `try`
+that catches `ImportError`, or under `if TYPE_CHECKING:`, is optional: it is
+bundled when installed and never fails the build.
 
 The review a promote would do happens before the skill ships instead: CI audits
 every bundled skill that ships code and fails unless `gaia skill audit` returns

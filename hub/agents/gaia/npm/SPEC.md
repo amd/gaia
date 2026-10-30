@@ -258,7 +258,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.25"`                  |
+| Contract version   | `API_VERSION = "2.26"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -277,6 +277,8 @@ the header.
 | `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
 | `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
 | `POST` | `/v1/gaia/sessions/{session_id}/internet` | Turn one session's internet on or off from its next tool call, including in a turn already running (≥ 2.23) |
+| `GET`  | `/v1/gaia/sessions/{session_id}/grants` | The session's "always" answers, `{ key, label }` each (≥ 2.26) |
+| `DELETE` | `/v1/gaia/sessions/{session_id}/grants` | Revoke one (`?key=`) or all of them (≥ 2.26) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
 #### `/query` request body
@@ -340,8 +342,8 @@ the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
 
 `internet_off` (contract ≥ 2.23) is `true` when the caller's chat has the
 Internet switched off and `false` when it is on. With `true` the turn refuses
-web search and page fetches, the browser, connector (MCP), mailbox and Agent
-Hub tools and any call or shell command that contacts a host other than the agent's own machine, and
+web search and page fetches, the browser, connector (MCP) and Agent Hub
+tools, mailbox reads, and any call or shell command that contacts a host other than the agent's own machine, and
 the refusal tells the model the internet is off for this chat. A retained
 session keeps the last value, so send it every turn; omit it to leave the
 agent as it is. Pre-2.23 binaries `422` the field, so a caller whose chat has
@@ -662,7 +664,7 @@ keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model
 remotely, so a local server URL alone does not establish local inference.
 
-`--bypass-permissions` turns off more than the prompt. It also lifts the shell
+`--full-access` turns off more than the prompt. It also lifts the shell
 tool's own guardrails for the session: the shell-only operators — redirection
 (`>`, `>>`, `<`), backgrounding (`&`), substitution (`` ` ``, `$()`) and the
 newline — parse and run, chaining (`&&`, `||`, `;`, `|`) already ran by

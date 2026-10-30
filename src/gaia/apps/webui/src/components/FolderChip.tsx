@@ -3,8 +3,10 @@
 
 import { ChevronDown, Folder, X } from 'lucide-react';
 import { useFolderPicker } from '../hooks/useFolderPicker';
+import { useSessionEnvironment } from '../hooks/useSessionEnvironment';
 import { useChatStore } from '../stores/chatStore';
 import type { StartScreen } from '../types';
+import './FolderChip.css';
 
 type WorkingFolder = StartScreen['working_folder'];
 
@@ -68,5 +70,25 @@ export function FolderChip({ folder, disabled }: { folder: WorkingFolder; disabl
             {error && <span className="new-chat-folder-error" role="alert">{error}</span>}
             {picker}
         </>
+    );
+}
+
+/** The folder a chat started in, beside the model in its composer; opens the panel where it can be changed. */
+export function SessionFolderChip({ sessionId, onOpen }: { sessionId: string; onOpen: () => void }) {
+    const { env } = useSessionEnvironment(sessionId);
+    const folder = env?.folders.find((f) => f.source === 'working_folder');
+    if (!folder) return null;
+    const name = baseName(folder.path);
+    return (
+        <button
+            type="button"
+            className="composer-chip folder-chip"
+            title={`GAIA works in ${folder.path}`}
+            aria-label={`Working folder ${name}, show the chat's folders`}
+            onClick={onOpen}
+        >
+            <Folder size={13} aria-hidden="true" />
+            <span className="composer-chip-label">{name}</span>
+        </button>
     );
 }

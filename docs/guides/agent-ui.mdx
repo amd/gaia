@@ -109,7 +109,8 @@ queue above the message box, then goes out as its own turn as soon as the reply
 ends, in the order you typed. To add a detail to the work already running, press
 **Add to this reply** on a queued message: GAIA reads it at its next step
 without starting over, though it may not answer it separately. If the reply
-ends before reading it, it goes back in the queue. Press Stop and anything still
+ends before reading it, it goes back in the queue. If the reply can't take it,
+the message says so and waits to go out when the reply ends. Press Stop and anything still
 queued goes back into the message box.
 
 Each chat keeps its own queue. Switch to another chat and the queued messages
@@ -305,8 +306,13 @@ Pick the install path that fits you best:
 
 ## The window
 
-The app opens straight to an empty chat: a message box, the model it will use,
-and where that model runs.
+The app opens straight to an empty chat: a greeting and a message box over a
+quiet field of dots laid out like the NPU's tile array. The dots say what GAIA
+is doing: they sweep while a model loads, fill from the bottom up while one
+downloads, and stir under the pointer and with each keystroke. Start typing and
+the message box drops to the bottom of the window; send, and the dots clear away
+so the chat starts on a clean page. With reduced motion turned on in your
+system settings, the dots hold still.
 
 - **Sidebar:** search, New chat, **Memory**, **Scheduled tasks**, **Documents**,
   then your chats. Memory opens as a page; Scheduled tasks and Documents open as
@@ -323,9 +329,16 @@ and where that model runs.
   right now (the place, such as Local or Fireworks AI, above the model's name;
   hover for the full text),
   notifications, mobile access and Settings. Collapse it with `Ctrl+B` (`⌘B` on macOS).
+- **Search chats** (`Ctrl+K`, `⌘K` on macOS): finds a chat by its title or by
+  anything said in it, ignoring case and accents, so `resume` also finds `Résumé`. A chat that
+  matched inside a message shows the line around the match. Use the arrow keys
+  and `Enter` to open a result, `Escape` to clear. Private chats are searched
+  too; the search runs on your PC and nothing is sent anywhere.
 - **Message box:** **+** attaches files (or drag them in), the shield picks the
   permission mode, the model chip picks the model, and Send turns into Stop
-  while GAIA is working.
+  while GAIA is working. In a chat, the folder chip beside the model names the
+  folder GAIA works in; click it to see and manage the chat's folders in the
+  session panel.
 - **Private chat:** the eye button in a chat's header. An open eye means the
   chat is remembered as usual, and a click makes it private. While the chat is
   private the button is filled and shows a crossed-out eye, the same eye that
@@ -347,11 +360,7 @@ and where that model runs.
   including the tokens the whole turn read and wrote across every model call.
   Files the answer names by full path,
   such as a saved deliverable, open in your file explorer when clicked.
-- **A new chat** greets you, shows the folder GAIA works in, and offers up to
-  four tasks: first for what you've set up (indexed documents, a connected
-  mail account), then research, code and summaries, which work on a fresh
-  install, and a check-in once its skill is installed. A task with a subject
-  to fill in is typed into the message box; the others start straight away.
+- **A new chat** greets you and shows the folder GAIA works in.
   Click the folder under the message box to give the chat another folder it
   may read and write from its first message, the same as **Add folder** in the
   session panel. The chat's agent is told which folder the chat is working
@@ -435,6 +444,10 @@ Open **Settings → Model** (or the model chip in the message box):
 | **Fireworks AI** | An API key | Sent to Fireworks AI (usage may be charged) |
 | **AMD LLM Gateway** | A gateway key (and URL, if not the default) | Sent to your gateway |
 
+- With [Local only](/reference/cli#local-only) on (`gaia config set network_policy local_ai_only`),
+  connecting Fireworks AI or the gateway and selecting a cloud model are refused
+  with a message saying so, and a saved cloud model isn't restored. Settings has no
+  switch for it yet; use the command.
 - Keys are masked, go only to GAIA's local model server and your OS credential
   store, and are refused over mobile access. When a key is already set (in the
   environment or from the TUI) the screen says so; leave the field blank to keep
@@ -545,6 +558,10 @@ too, from agent contract 2.14. It stops asking, but its shell guardrails stay
 on, so those commands still reach you as a confirmation. If the mode can't be
 passed on when a turn starts, that turn stops with an error, so it never runs
 with full access you turned off.
+
+From agent contract 2.26 it offers **Always allow** as well. Its grants are
+listed and revoked with the chat's own, and one the chat doesn't list (say,
+from before the Agent UI restarted) is revoked before the next reply runs.
 
 ## The session panel
 

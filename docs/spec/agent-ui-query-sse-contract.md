@@ -83,6 +83,13 @@ net-new agent instrumentation.
 | `session_id` | string, `^[A-Za-z0-9_-]{1,128}$` | no | Opaque conversation id, host-minted once per conversation and reused across turns (#2829). **Send only to a peer at contract ≥ 2.12** — an older sidecar 422s the unknown field (see §7). Omitted ⇒ today's stateless behaviour: a throwaway agent per call. Present ⇒ the run resolves the SAME agent every other turn on this id used, so a reference to something an earlier turn surfaced (e.g. "reply to number 1") can resolve. See §2.4. |
 | `reasoning` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.22** — an older sidecar 422s the unknown field (see §7). `true` streams the model's reasoning as `reasoning` events (§4) instead of folding it into `status` lines, for a client that shows reasoning on its own. Omitted ⇒ `false`, today's behaviour. |
 | `documents` | array of strings (absolute file paths) | no | **Flagship (`gaia`) only, contract ≥ 2.16** (#4166) — the email agent and an older flagship 422 the unknown field (see §7). The files the user attached to this conversation. Send the whole set on every turn; the agent indexes the ones it has not indexed yet before the turn runs, so a file attached mid-conversation is read on the next turn. Each path is granted as that exact file — never its folder — and a relative path is a 422. A file that is missing, a folder, or a secret the path policy refuses is named as not indexed in the turn's `index_documents` step, and the turn still runs. See §2.5. |
+| `allowed_paths` | array of absolute path strings | no | **Flagship (`gaia`) only, contract ≥ 2.18** — the email agent and an older flagship 422 the unknown field (see §7). Caller-computed conversation scope. A new session gets exactly this scope; a retained session gains newly supplied entries and keeps what the user granted; `GAIA_ALLOWED_PATHS` can only narrow it. A relative path is a 422. This is an access allowlist, not the chat working directory. Omitted ⇒ the agent's default scope. |
+| `memory` | `"on"` \| `"private"` \| `"off"` | no | **Flagship (`gaia`) only, contract ≥ 2.18** — the email agent and an older flagship 422 the unknown field (see §7). Controls whether this turn may write memory. `private` and `off` suppress all writes, including errors and lessons. Send it every turn when the caller owns the setting; omit it to retain the agent's current mode. |
+| `changes_turn_id` | string matching `^\d{14}-[0-9a-f]{8}$` | no | **Flagship (`gaia`) only, contract ≥ 2.19** — the email agent and older flagship 422 the unknown field (see §7). Records file changes for this turn's Undo history. Requires `session_id`; omit it to record no changes. |
+| `surface` | `"agent_ui"` \| `"tui"` \| `"cli"` | no | **Flagship (`gaia`) only, contract ≥ 2.20** — identifies the front-end so provider errors and feature wording fit the caller. Omit for headless callers. |
+| `internet_off` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.23** — when true, blocks tools and commands that contact another host for this retained session. Send it every turn when the caller owns the setting; omit it to retain the current mode. |
+| `working_directory` | string (absolute path) | no | **Flagship (`gaia`) only, contract ≥ 2.24** — chat workspace for resolving relative file paths. It is separate from `allowed_paths`, which controls access. Relative paths are rejected with 422. |
+| `turns` | array of arrays of objects | no | **Flagship (`gaia`) only, contract ≥ 2.25** — earlier turns as the model saw them, including tool calls and results. Send `turns` instead of `context`; `context` must then be `[]`. `turns: []` clears retained history and enables `final.model_messages`. |
 
 ```jsonc
 // JSON Schema (draft 2020-12) — request body
@@ -112,8 +119,35 @@ net-new agent instrumentation.
     "can_answer_questions": { "type": "boolean", "default": false },
     "session_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$" },
     "documents": { "type": "array", "items": { "type": "string" } },
+    "allowed_paths": { "type": "array", "items": { "type": "string" } },
+    "memory": { "enum": ["on", "private", "off"] },
+    "changes_turn_id": { "type": "string", "pattern": "^\\d{14}-[0-9a-f]{8}$" },
+    "surface": { "enum": ["agent_ui", "tui", "cli"] },
+    "internet_off": { "type": "boolean" },
+    "working_directory": { "type": "string" },
+    "turns": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "role": { "enum": ["user", "assistant", "system", "tool"] }
+          }
+        }
+      }
+    },
     "reasoning": { "type": "boolean", "default": false }
-  }
+  },
+  "dependentRequired": {
+    "changes_turn_id": ["session_id"]
+  },
+  "allOf": [
+    {
+      "if": { "required": ["turns"] },
+      "then": { "properties": { "context": { "maxItems": 0 } } }
+    }
+  ]
 }
 ```
 
@@ -188,7 +222,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 | `reasoning` | `{delta}` | stream the model's reasoning, apart from the answer. Sent only when the request asked for it (`reasoning: true`, contract ≥ 2.22); pieces keep their own spacing, so a client joins them as they come |
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
-| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
+| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
 | `final` | `{answer, usage?, failed?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done |
 | `error` | `{detail, status}` | surface the actionable error verbatim; terminal |
@@ -501,6 +535,22 @@ moment the next turn starts.
 
 **Send only to a peer at contract ≥ 2.15**; an older sidecar 404s the path
 itself, which a client must not misread as "the run ended" (see §7).
+
+### 5.3 Listing and revoking "always" answers (schema 2.26, flagship)
+
+**`GET /v1/gaia/sessions/{session_id}/grants`** →
+`{session_id, grants: [{key, label}]}` and
+**`DELETE /v1/gaia/sessions/{session_id}/grants[?key=<key>]`** → the same shape
+after revoking one grant, or all without `key`.
+
+An `always` answer to `needs_confirmation` is held by the session, so a host
+that offers it must be able to show the user what it granted and take it back.
+`label` is the prompt's `always_scope`; `key` is the handle to revoke it by.
+The list includes answers given in a turn still running, and a revoke applies
+from the very next gated call, including one in that turn. An unknown session,
+or a `key` the session does not hold, is a `404`. **Offer `always` only to a
+peer at contract ≥ 2.26**: an older one grants it with no way to list or revoke
+it.
 
 ---
 
