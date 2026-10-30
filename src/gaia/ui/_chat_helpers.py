@@ -25,6 +25,7 @@ import re as _re
 import sqlite3
 import threading
 import time as _time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Optional, Tuple
@@ -63,6 +64,8 @@ from gaia.ui.email_sidecar.profiles import (
     confirmations_supported,
     context_supported,
     documents_supported,
+    followups_supported,
+    grants_supported,
     internet_supported,
     memory_supported,
     profile_for,
@@ -1913,12 +1916,13 @@ def _relayed_documents(rag_file_paths: list, attached: list) -> list:
     Images are left out: the sidecar indexes what it is sent, and an image is
     read by vision, not indexed.
     """
-    from .routers.files import IMAGE_EXTENSIONS
+    from .routers.files import PREVIEWABLE_IMAGE_EXTENSIONS
 
     extra = [
         p
         for p in attached
-        if p not in rag_file_paths and Path(p).suffix.lower() not in IMAGE_EXTENSIONS
+        if p not in rag_file_paths
+        and Path(p).suffix.lower() not in PREVIEWABLE_IMAGE_EXTENSIONS
     ]
     return list(rag_file_paths) + extra
 
@@ -2456,6 +2460,7 @@ def _dispatch_sidecar_query(
     withheld: list | None = None,
     working_directory: str | None = None,
     memory: str = "on",
+    record_followup: Callable[[str], None] | None = None,
     internet_off: bool = False,
     hold_internet_off: Callable[[], ContextManager[bool]] | None = None,
     recording: TurnRecording | None = None,
@@ -2463,6 +2468,10 @@ def _dispatch_sidecar_query(
     turns: list | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
+
+    *record_followup* saves a message the user added mid-turn to the chat. A
+    sidecar that takes such messages gets them while it runs; otherwise the
+    chat is told up front, so it does not offer to add one.
 
     *documents* are the session's attached file paths. A sidecar that takes
     them gets them on every turn; one that should but is too old to stops
@@ -2722,8 +2731,51 @@ def _dispatch_sidecar_query(
         )
         return
 
+    from gaia.ui.email_sidecar import grants as relayed_grants
     from gaia.ui.email_sidecar.profiles import full_access_supported
 
+    answers_confirmations = confirmations_supported(profile, handle.api_version)
+    offers_always = bool(
+        session_id
+        and answers_confirmations
+        and grants_supported(profile, handle.api_version)
+    )
+    if offers_always:
+        try:
+            relayed_grants.reconcile(proxy, session_id)
+        except SidecarError as exc:
+            sse_handler._emit(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        f"Couldn't check what the {profile.display_name} agent "
+                        f"may do without asking in this chat, so this turn was "
+                        f"stopped: {exc}. Send the message again; if it keeps "
+                        "failing, restart the agent from its card."
+                    ),
+                }
+            )
+            return
+
+    run_id = str(uuid.uuid4())
+    inbox = None
+    if (
+        session_id
+        and record_followup is not None
+        and followups_supported(profile, handle.api_version)
+    ):
+
+        def _followup_taken(text: str) -> None:
+            record_followup(text)
+            sse_handler._emit({"type": "followup_taken", "text": text})
+
+        inbox = followups.open_relay_inbox(
+            session_id,
+            lambda text: proxy.followup(run_id, text),
+            _followup_taken,
+        )
+    else:
+        sse_handler._emit({"type": "followup_unavailable"})
     try:
         if ignores_internet and hold_internet_off is not None:
             # Read under the switch's lock, so a later flip to off ends this turn.
@@ -2738,6 +2790,7 @@ def _dispatch_sidecar_query(
             sse_handler,
             proxy,
             query=query,
+            run_id=run_id,
             context=context,
             model_id=model_id,
             # The chat's own mode, read per turn: the in-process path applies it
@@ -2750,7 +2803,8 @@ def _dispatch_sidecar_query(
             ),
             profile=profile,
             session_id=session_id,
-            answers_confirmations=confirmations_supported(profile, handle.api_version),
+            answers_confirmations=answers_confirmations,
+            offers_always=offers_always,
             documents=relayed_documents,
             allowed_paths=relayed_scope,
             working_directory=relayed_working_directory,
@@ -2775,6 +2829,8 @@ def _dispatch_sidecar_query(
         )
     finally:
         sse_handler.relay_ignores_internet = False
+        if inbox is not None:
+            followups.close_relay_inbox(session_id, inbox)
     if session_id and profile.min_context_api_version is not None:
         record_relayed_context(
             session_id,
@@ -4324,6 +4380,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         withheld=relayed_env["withheld"],
                         working_directory=working_directory,
                         memory=_memory_mode(session, db),
+                        record_followup=lambda text: db.add_message(
+                            session_id, "user", text
+                        ),
                         internet_off=relayed_env["internet_off"],
                         hold_internet_off=functools.partial(
                             held_internet_off, db, session_id

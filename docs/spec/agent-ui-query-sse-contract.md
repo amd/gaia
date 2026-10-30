@@ -222,7 +222,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 | `reasoning` | `{delta}` | stream the model's reasoning, apart from the answer. Sent only when the request asked for it (`reasoning: true`, contract ≥ 2.22); pieces keep their own spacing, so a client joins them as they come |
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
-| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
+| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
 | `final` | `{answer, usage?, failed?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done |
 | `error` | `{detail, status}` | surface the actionable error verbatim; terminal |
@@ -537,6 +537,22 @@ moment the next turn starts.
 
 **Send only to a peer at contract ≥ 2.15**; an older sidecar 404s the path
 itself, which a client must not misread as "the run ended" (see §7).
+
+### 5.3 Listing and revoking "always" answers (schema 2.26, flagship)
+
+**`GET /v1/gaia/sessions/{session_id}/grants`** →
+`{session_id, grants: [{key, label}]}` and
+**`DELETE /v1/gaia/sessions/{session_id}/grants[?key=<key>]`** → the same shape
+after revoking one grant, or all without `key`.
+
+An `always` answer to `needs_confirmation` is held by the session, so a host
+that offers it must be able to show the user what it granted and take it back.
+`label` is the prompt's `always_scope`; `key` is the handle to revoke it by.
+The list includes answers given in a turn still running, and a revoke applies
+from the very next gated call, including one in that turn. An unknown session,
+or a `key` the session does not hold, is a `404`. **Offer `always` only to a
+peer at contract ≥ 2.26**: an older one grants it with no way to list or revoke
+it.
 
 ---
 
