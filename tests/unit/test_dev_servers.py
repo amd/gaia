@@ -888,3 +888,19 @@ def test_static_server_answers_device_and_nul_names_with_404_and_keeps_serving(
     _root, port = static_site
     assert fetch(port, path)[0] == 404
     assert fetch(port, "/") == (200, b"<h1>Home</h1>")
+
+
+def test_the_static_server_starts_without_looking_up_the_host_name(
+    tmp_path, monkeypatch
+):
+    # The name lookup http.server makes can stall for many seconds on macOS.
+    from gaia.browser import static_server
+
+    def no_lookup(*_args):
+        raise AssertionError("getfqdn called")
+
+    monkeypatch.setattr(static_server.socket, "getfqdn", no_lookup)
+    for server in static_server.serve_loopback(
+        str(tmp_path), dev_servers._free_loopback_port(0)
+    ):
+        server.server_close()

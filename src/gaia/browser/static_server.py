@@ -18,6 +18,7 @@ import errno
 import os
 import re
 import socket
+import socketserver
 import sys
 import threading
 from functools import partial
@@ -91,14 +92,22 @@ class StaticHandler(SimpleHTTPRequestHandler):
         sys.stderr.write(f"{self.address_string()} {format % args}\n")
 
 
-class _IPv6Server(ThreadingHTTPServer):
+class _LoopbackServer(ThreadingHTTPServer):
+    def server_bind(self) -> None:
+        # HTTPServer looks up the host's full name here, which can stall for
+        # many seconds on macOS; a loopback server has no use for it.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+class _IPv6Server(_LoopbackServer):
     address_family = socket.AF_INET6
 
 
 def serve(directory: str, port: int, host: str = "127.0.0.1") -> ThreadingHTTPServer:
     """A server bound to ``host``:``port``, not yet serving."""
     handler = partial(StaticHandler, directory=directory, port=port)
-    server_class = _IPv6Server if ":" in host else ThreadingHTTPServer
+    server_class = _IPv6Server if ":" in host else _LoopbackServer
     return server_class((host, port), handler)
 
 
