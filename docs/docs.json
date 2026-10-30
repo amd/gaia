@@ -440,7 +440,8 @@
               "plans/tool-loader",
               "plans/nightly-benchmarks",
               "plans/eval-hillclimbing",
-              "plans/release-train"
+              "plans/release-train",
+              "plans/release-eval-hardening"
             ]
           },
           {
